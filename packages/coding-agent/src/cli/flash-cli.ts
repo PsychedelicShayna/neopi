@@ -322,10 +322,14 @@ async function capture(argv: readonly string[]): Promise<string> {
 	return stdout.trim();
 }
 
-/** Run a command, ignoring failure (teardown paths). */
+/** Run a command, ignoring every failure including a missing binary (teardown paths). */
 async function runQuiet(argv: readonly string[]): Promise<void> {
-	const child = Bun.spawn([...argv], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
-	await child.exited;
+	try {
+		const child = Bun.spawn([...argv], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+		await child.exited;
+	} catch {
+		// Teardown must never crash because a cleanup helper is absent.
+	}
 }
 
 // =============================================================================
@@ -669,6 +673,16 @@ async function unwind(teardown: Teardown): Promise<void> {
 		process.stderr.write(
 			`\n${chalk.cyan("==>")} Unmounting — flushing remaining data to the stick; USB is slow, this can take minutes. Do not unplug.\n`,
 		);
+		// pacstrap -K spawns a gpg-agent for the target's pacman keyring; the
+		// daemon outlives the install with open files inside the mount and made
+		// both field runs fail their unmount with EBUSY. Kill it before trying.
+		const mnt = teardown.mounts[0];
+		if (mnt !== undefined) {
+			await runQuiet(["gpgconf", "--homedir", path.join(mnt, "etc/pacman.d/gnupg"), "--kill", "all"]);
+			await runQuiet(["fuser", "-k", "-TERM", "-m", mnt]);
+			// Give the evicted holders a beat to release their fds.
+			await new Promise(resolve => setTimeout(resolve, 1500));
+		}
 	}
 	for (const mount of [...teardown.mounts].reverse()) {
 		const child = Bun.spawn(["umount", "-R", mount], { stdin: "ignore", stdout: "ignore", stderr: "inherit" });
