@@ -12,7 +12,6 @@
  * exported for tests.
  */
 
-import { spawnSync } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import chalk from "@oh-my-pi/pi-utils/chalk";
@@ -269,11 +268,18 @@ function logCommand(argv: readonly string[]): void {
 	process.stderr.write(`${chalk.dim(`  $ ${argv.join(" ")}`)}\n`);
 }
 
-/** Run a command with inherited stdio; throw on any exit code not allowed (default: 0 only). */
+/**
+ * Run a command with inherited stdio. Throws on a disallowed exit code unless
+ * `warnOnly`, which degrades failure to a loud warning and a `false` return.
+ *
+ * Doctrine (issue #47, operator ruling): after the expensive steps have run,
+ * an abort must serve a real integrity need — otherwise warn and continue. A
+ * partial stick the operator can finish by hand beats a torn-down one.
+ */
 async function run(
 	argv: readonly string[],
-	options: { stdinData?: string; allowedExitCodes?: readonly number[] } = {},
-): Promise<void> {
+	options: { stdinData?: string; allowedExitCodes?: readonly number[]; warnOnly?: boolean } = {},
+): Promise<boolean> {
 	logCommand(argv);
 	const child = Bun.spawn([...argv], {
 		stdin: options.stdinData === undefined ? "inherit" : "pipe",
@@ -285,9 +291,12 @@ async function run(
 		child.stdin?.end();
 	}
 	const code = await child.exited;
-	if (code !== 0 && !options.allowedExitCodes?.includes(code)) {
-		throw new FlashError(`${argv[0]} exited with code ${code}`);
+	if (code === 0 || options.allowedExitCodes?.includes(code)) return true;
+	if (options.warnOnly) {
+		process.stderr.write(chalk.yellow(`flash: ${argv[0]} exited with code ${code} — continuing without it\n`));
+		return false;
 	}
+	throw new FlashError(`${argv[0]} exited with code ${code}`);
 }
 
 /** Run a command and capture trimmed stdout; throw on nonzero exit. */
@@ -444,7 +453,7 @@ async function flash(cmd: FlashCommandArgs): Promise<void> {
 	}
 
 	process.stderr.write(
-		`\n${chalk.green("Done.")} ${device.path} now boots your harness (BIOS + UEFI).\n` +
+		`\n${chalk.green("Done.")} ${device.path} now boots your harness (BIOS + UEFI) and is safe to unplug.\n` +
 			`Passphrase at boot, auto-login as ${user.name}, then: omp\n`,
 	);
 }
@@ -530,7 +539,9 @@ async function flashDevice(
 	await fs.writeFile(path.join(mnt, "etc/vconsole.conf"), "KEYMAP=us\n");
 	await fs.appendFile(path.join(mnt, "etc/locale.gen"), "en_US.UTF-8 UTF-8\n");
 	await fs.writeFile(path.join(mnt, "etc/locale.conf"), "LANG=en_US.UTF-8\n");
-	await run(["arch-chroot", mnt, "locale-gen"]);
+	// Locale generation is cosmetic; a stick without generated locales still
+	// boots and runs the harness.
+	await run(["arch-chroot", mnt, "locale-gen"], { warnOnly: true });
 	await fs.rm(path.join(mnt, "etc/localtime"), { force: true });
 	await fs.symlink("/usr/share/zoneinfo/UTC", path.join(mnt, "etc/localtime"));
 
@@ -542,16 +553,18 @@ async function flashDevice(
 	const luksUuid = await capture(["blkid", "--match-tag", "UUID", "--output", "value", luks]);
 	const grubDefaultsPath = path.join(mnt, "etc/default/grub");
 	await fs.writeFile(grubDefaultsPath, rewriteGrubDefaults(await fs.readFile(grubDefaultsPath, "utf8"), luksUuid));
-	await run(["arch-chroot", mnt, "grub-install", "--target=i386-pc", device.path]);
-	await run([
-		"arch-chroot",
-		mnt,
-		"grub-install",
-		"--target=x86_64-efi",
-		"--efi-directory=/boot",
-		"--removable",
-		"--no-nvram",
-	]);
+	// Each GRUB target alone still yields a bootable stick (UEFI-only or
+	// BIOS-only); abort only when BOTH fail.
+	const biosBootOk = await run(["arch-chroot", mnt, "grub-install", "--target=i386-pc", device.path], {
+		warnOnly: true,
+	});
+	const efiBootOk = await run(
+		["arch-chroot", mnt, "grub-install", "--target=x86_64-efi", "--efi-directory=/boot", "--removable", "--no-nvram"],
+		{ warnOnly: true },
+	);
+	if (!biosBootOk && !efiBootOk) {
+		throw new FlashError("both GRUB targets failed; the stick cannot boot");
+	}
 	await run(["arch-chroot", mnt, "grub-mkconfig", "-o", "/boot/grub/grub.cfg"]);
 
 	logStep(`Creating user ${user.name} (autologin tty1, passwordless sudo)`);
@@ -564,7 +577,9 @@ async function flashDevice(
 		path.join(gettyDir, "autologin.conf"),
 		`[Service]\nExecStart=\nExecStart=-/sbin/agetty --autologin ${user.name} --noclear %I $TERM\n`,
 	);
-	await run(["arch-chroot", mnt, "systemctl", "enable", "NetworkManager", "systemd-timesyncd"]);
+	// Enabling services can be redone from the booted stick with one command;
+	// never worth aborting a finished install over.
+	await run(["arch-chroot", mnt, "systemctl", "enable", "NetworkManager", "systemd-timesyncd"], { warnOnly: true });
 
 	logStep("Installing harness binary");
 	const binDest = path.join(mnt, "usr/local/bin/omomp");
@@ -576,9 +591,10 @@ async function flashDevice(
 	const homeDest = path.join(mnt, "home", user.name);
 	const ompDest = path.join(homeDest, ".omp");
 	await fs.mkdir(ompDest, { recursive: true });
-	// A live ~/.omp loses files mid-copy (running harness instances churn it);
-	// rsync reports that as exit 24 after finishing everything else. Benign here.
-	await run(["rsync", ...buildOmpRsyncArgs(sourceOmp, ompDest, cmd.flags.slim)], { allowedExitCodes: [24] });
+	// 24 = files vanished mid-copy (live ~/.omp churns; expected), 23 = some
+	// files unreadable/partial. A missing file under ~/.omp must NEVER abort
+	// the flash — rsync copied everything else.
+	await run(["rsync", ...buildOmpRsyncArgs(sourceOmp, ompDest, cmd.flags.slim)], { allowedExitCodes: [23, 24] });
 
 	const sshExists = await fs.access(sourceSsh).then(
 		() => true,
@@ -586,16 +602,33 @@ async function flashDevice(
 	);
 	if (sshExists) {
 		logStep("Copying ~/.ssh");
-		await run(["rsync", "-a", `${sourceSsh}/`, `${path.join(homeDest, ".ssh")}/`], { allowedExitCodes: [24] });
+		await run(["rsync", "-a", `${sourceSsh}/`, `${path.join(homeDest, ".ssh")}/`], { allowedExitCodes: [23, 24] });
 		await fs.chmod(path.join(homeDest, ".ssh"), 0o700);
 	}
 
 	logStep("Forcing ASCII symbol preset (console has no nerd fonts)");
-	const stickSettings = await Settings.loadIsolated({ agentDir: path.join(ompDest, "agent") });
-	stickSettings.set("symbolPreset", "ascii");
-	await stickSettings.flush();
+	try {
+		const stickSettings = await Settings.loadIsolated({ agentDir: path.join(ompDest, "agent") });
+		stickSettings.set("symbolPreset", "ascii");
+		await stickSettings.flush();
+	} catch (error) {
+		process.stderr.write(
+			chalk.yellow(
+				`flash: could not force symbolPreset=ascii (${String(error)}); run "omp config set symbolPreset ascii" on the stick\n`,
+			),
+		);
+	}
 
-	await run(["arch-chroot", mnt, "chown", "-R", `${user.name}:${user.name}`, `/home/${user.name}`]);
+	const chownOk = await run(["arch-chroot", mnt, "chown", "-R", `${user.name}:${user.name}`, `/home/${user.name}`], {
+		warnOnly: true,
+	});
+	if (!chownOk) {
+		process.stderr.write(
+			chalk.yellow(
+				`flash: fix ownership from the booted stick with: sudo chown -R ${user.name}:${user.name} /home/${user.name}\n`,
+			),
+		);
+	}
 }
 
 /** Whether target is currently a mountpoint. */
@@ -605,6 +638,11 @@ async function isMounted(target: string): Promise<boolean> {
 }
 
 async function unwind(teardown: Teardown): Promise<void> {
+	if (teardown.mounts.length > 0) {
+		process.stderr.write(
+			`\n${chalk.cyan("==>")} Unmounting — flushing remaining data to the stick; USB is slow, this can take minutes. Do not unplug.\n`,
+		);
+	}
 	for (const mount of [...teardown.mounts].reverse()) {
 		const child = Bun.spawn(["umount", "-R", mount], { stdin: "ignore", stdout: "ignore", stderr: "inherit" });
 		if ((await child.exited) !== 0 && (await isMounted(mount))) {
@@ -614,9 +652,10 @@ async function unwind(teardown: Teardown): Promise<void> {
 	if (teardown.mapper) await runQuiet(["cryptsetup", "close", teardown.mapper]);
 	// Remove the scratch mountpoint only once nothing is mounted there, and
 	// NEVER recursively: a failed unmount here once let a recursive delete eat
-	// the stick's freshly written filesystem through the live mount.
+	// the stick's freshly written filesystem through the live mount. umount
+	// itself flushes the stick's filesystems; a global sync(2) on a busy host
+	// would only stall the exit for unrelated writers.
 	if (teardown.mountRoot && !(await isMounted(teardown.mountRoot))) {
 		await fs.rmdir(teardown.mountRoot).catch(() => {});
 	}
-	spawnSync("sync");
 }
