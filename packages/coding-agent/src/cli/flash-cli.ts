@@ -114,6 +114,7 @@ export const REQUIRED_HOST_TOOLS: readonly [tool: string, pkg: string][] = [
 	["arch-chroot", "arch-install-scripts"],
 	["rsync", "rsync"],
 	["getent", "glibc"],
+	["mountpoint", "util-linux"],
 	["udevadm", "systemd"],
 ];
 
@@ -597,11 +598,25 @@ async function flashDevice(
 	await run(["arch-chroot", mnt, "chown", "-R", `${user.name}:${user.name}`, `/home/${user.name}`]);
 }
 
+/** Whether target is currently a mountpoint. */
+async function isMounted(target: string): Promise<boolean> {
+	const child = Bun.spawn(["mountpoint", "-q", target], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+	return (await child.exited) === 0;
+}
+
 async function unwind(teardown: Teardown): Promise<void> {
 	for (const mount of [...teardown.mounts].reverse()) {
-		await runQuiet(["umount", "-R", mount]);
+		const child = Bun.spawn(["umount", "-R", mount], { stdin: "ignore", stdout: "ignore", stderr: "inherit" });
+		if ((await child.exited) !== 0 && (await isMounted(mount))) {
+			process.stderr.write(`flash: could not unmount ${mount}; leaving it mounted for manual cleanup\n`);
+		}
 	}
 	if (teardown.mapper) await runQuiet(["cryptsetup", "close", teardown.mapper]);
-	if (teardown.mountRoot) await fs.rm(teardown.mountRoot, { recursive: true, force: true }).catch(() => {});
+	// Remove the scratch mountpoint only once nothing is mounted there, and
+	// NEVER recursively: a failed unmount here once let a recursive delete eat
+	// the stick's freshly written filesystem through the live mount.
+	if (teardown.mountRoot && !(await isMounted(teardown.mountRoot))) {
+		await fs.rmdir(teardown.mountRoot).catch(() => {});
+	}
 	spawnSync("sync");
 }
