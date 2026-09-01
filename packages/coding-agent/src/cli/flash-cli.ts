@@ -64,6 +64,10 @@ export const STICK_PACKAGES: readonly string[] = [
 	"sudo",
 	// Network: wired DHCP, Wi-Fi, USB phone tethering — all through NetworkManager
 	"networkmanager",
+	// iPhone USB tethering: ipheth is in the kernel, but the trust/pairing
+	// handshake needs the usbmuxd daemon. Android RNDIS/NCM needs nothing extra.
+	"usbmuxd",
+	"libimobiledevice",
 	// Harness runtime: python for the eval kernel's recreatable env
 	"python",
 	// P2V toolkit
