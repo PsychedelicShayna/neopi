@@ -94,6 +94,9 @@ export const STICK_PACKAGES: readonly string[] = [
 	"usbutils",
 	"pciutils",
 	"ethtool",
+	// Readable console on high-DPI panels (ter-132b); kbd's fonts come free
+	// via systemd, terminus does not.
+	"terminus-font",
 ];
 
 /** Host tools the flash needs, mapped to the Arch package that owns them. */
