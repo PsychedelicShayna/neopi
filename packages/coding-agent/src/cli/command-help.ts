@@ -45,6 +45,11 @@ export const dryBalanceHelp = {
 	description: "Dry-run OAuth account balancing across random session ids",
 } satisfies CommandMetadata;
 
+export const flashHelp = {
+	description:
+		"Flash a USB stick into a bootable, LUKS-encrypted Arch system carrying this harness and your credentials",
+} satisfies CommandMetadata;
+
 export const galleryHelp = {
 	description: "Preview tool, composer, and status-line renderers in a deterministic visual gallery",
 } satisfies CommandMetadata;
