@@ -466,9 +466,27 @@ async function flashDevice(
 	await run(["udevadm", "settle"]);
 
 	logStep("Creating LUKS2 container");
-	await run(["cryptsetup", "luksFormat", "--type", "luks2", "--batch-mode", "--key-file=-", luks], {
-		stdinData: passphrase,
-	});
+	// Cap the argon2id memory cost: cryptsetup benchmarks the *flashing* host,
+	// and a workstation-sized cost can make the stick unopenable on the old,
+	// small-RAM machines it exists for. 256 MiB unlocks anywhere.
+	await run(
+		[
+			"cryptsetup",
+			"luksFormat",
+			"--type",
+			"luks2",
+			"--pbkdf",
+			"argon2id",
+			"--pbkdf-memory",
+			"262144",
+			"--batch-mode",
+			"--key-file=-",
+			luks,
+		],
+		{
+			stdinData: passphrase,
+		},
+	);
 	const mapper = `${MAPPER_NAME_PREFIX}-${process.pid.toString(36)}`;
 	await run(["cryptsetup", "open", "--key-file=-", luks, mapper], { stdinData: passphrase });
 	teardown.mapper = mapper;

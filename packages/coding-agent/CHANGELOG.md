@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `omp flash <device>`: turn a USB stick into a bootable, LUKS-encrypted minimal Arch Linux system carrying this exact harness binary, your `~/.omp` credentials/state, and `~/.ssh`. Hybrid BIOS+UEFI boot, auto-login with the harness on PATH, NetworkManager for wired/Wi-Fi/USB-tethered networking, and a baked-in imaging toolkit. Local model caches and logs never ship; `--slim` also drops sessions and the python env to fit 8 GB-class sticks.
+
 ## [18.0.11] - 2026-08-29
 
 ### Added
