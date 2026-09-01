@@ -68,6 +68,9 @@ export const STICK_PACKAGES: readonly string[] = [
 	"libimobiledevice",
 	// Harness runtime: python for the eval kernel's recreatable env
 	"python",
+	// pi_natives links libopus.so.0 (voice); without it omp dies at loadNative.
+	// Found the hard way on the first field boot.
+	"opus",
 	// P2V toolkit
 	"ddrescue",
 	"ntfs-3g",
