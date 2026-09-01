@@ -169,15 +169,23 @@ export function assessDevice(info: DeviceInfo, force: boolean): { ok: true } | {
 }
 
 /**
- * Insert the `encrypt` hook before `filesystems` in /etc/mkinitcpio.conf so
- * the initramfs can open the LUKS root. Idempotent.
+ * Pin the initramfs hook set to the udev flavor with `encrypt`, replacing
+ * whatever HOOKS line the installed mkinitcpio.conf ships. Modern Arch
+ * defaults to systemd-style hooks (systemd, sd-vconsole); merely inserting
+ * `encrypt` there builds fine but the legacy hook never RUNS under
+ * systemd-init — no passphrase prompt, no /dev/mapper/omproot, boot times
+ * out into locked-root emergency. Field-diagnosed on the first laptop boot.
+ * The pinned udev set is the one that consumes our cryptdevice= cmdline.
  */
+const STICK_HOOKS =
+	"HOOKS=(base udev autodetect microcode modconf kms keyboard keymap consolefont block encrypt filesystems fsck)";
+
 export function rewriteMkinitcpioHooks(contents: string): string {
-	return contents.replace(/^HOOKS=\((.*)\)$/m, (line, hooks: string) => {
-		if (/\bencrypt\b/.test(hooks)) return line;
-		if (!/\bfilesystems\b/.test(hooks)) return `HOOKS=(${hooks} encrypt)`;
-		return `HOOKS=(${hooks.replace(/\bfilesystems\b/, "encrypt filesystems")})`;
-	});
+	if (/^HOOKS=\(.*\)$/m.test(contents)) {
+		return contents.replace(/^HOOKS=\(.*\)$/m, STICK_HOOKS);
+	}
+	const body = contents.length === 0 || contents.endsWith("\n") ? contents : `${contents}\n`;
+	return `${body}${STICK_HOOKS}\n`;
 }
 
 /**

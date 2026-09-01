@@ -66,20 +66,31 @@ describe("assessDevice", () => {
 });
 
 describe("rewriteMkinitcpioHooks", () => {
-	const stock =
-		"MODULES=()\nHOOKS=(base udev autodetect microcode modconf kms keyboard keymap consolefont block filesystems fsck)\n";
+	const pinned =
+		"HOOKS=(base udev autodetect microcode modconf kms keyboard keymap consolefont block encrypt filesystems fsck)";
 
-	test("inserts encrypt before filesystems", () => {
-		expect(rewriteMkinitcpioHooks(stock)).toContain("block encrypt filesystems fsck");
+	test("replaces the modern systemd-style default (the field boot failure)", () => {
+		const modern =
+			"MODULES=()\nHOOKS=(base systemd autodetect microcode modconf kms keyboard sd-vconsole block filesystems fsck)\n";
+		const out = rewriteMkinitcpioHooks(modern);
+		expect(out).toContain(pinned);
+		expect(out).not.toContain("systemd");
+		expect(out).toContain("MODULES=()");
+	});
+
+	test("replaces the legacy udev-style default", () => {
+		const legacy =
+			"MODULES=()\nHOOKS=(base udev autodetect microcode modconf kms keyboard keymap consolefont block filesystems fsck)\n";
+		expect(rewriteMkinitcpioHooks(legacy)).toContain(pinned);
 	});
 
 	test("is idempotent", () => {
-		const once = rewriteMkinitcpioHooks(stock);
+		const once = rewriteMkinitcpioHooks("HOOKS=(base systemd block filesystems)\n");
 		expect(rewriteMkinitcpioHooks(once)).toBe(once);
 	});
 
-	test("appends encrypt when filesystems is absent", () => {
-		expect(rewriteMkinitcpioHooks("HOOKS=(base udev block)\n")).toContain("HOOKS=(base udev block encrypt)");
+	test("appends the pinned line when no HOOKS line exists", () => {
+		expect(rewriteMkinitcpioHooks("MODULES=()")).toBe(`MODULES=()\n${pinned}\n`);
 	});
 });
 
