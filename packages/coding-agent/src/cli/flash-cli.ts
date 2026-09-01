@@ -268,8 +268,11 @@ function logCommand(argv: readonly string[]): void {
 	process.stderr.write(`${chalk.dim(`  $ ${argv.join(" ")}`)}\n`);
 }
 
-/** Run a command with inherited stdio; throw on nonzero exit. */
-async function run(argv: readonly string[], options: { stdinData?: string } = {}): Promise<void> {
+/** Run a command with inherited stdio; throw on any exit code not allowed (default: 0 only). */
+async function run(
+	argv: readonly string[],
+	options: { stdinData?: string; allowedExitCodes?: readonly number[] } = {},
+): Promise<void> {
 	logCommand(argv);
 	const child = Bun.spawn([...argv], {
 		stdin: options.stdinData === undefined ? "inherit" : "pipe",
@@ -281,7 +284,9 @@ async function run(argv: readonly string[], options: { stdinData?: string } = {}
 		child.stdin?.end();
 	}
 	const code = await child.exited;
-	if (code !== 0) throw new FlashError(`${argv[0]} exited with code ${code}`);
+	if (code !== 0 && !options.allowedExitCodes?.includes(code)) {
+		throw new FlashError(`${argv[0]} exited with code ${code}`);
+	}
 }
 
 /** Run a command and capture trimmed stdout; throw on nonzero exit. */
@@ -570,7 +575,9 @@ async function flashDevice(
 	const homeDest = path.join(mnt, "home", user.name);
 	const ompDest = path.join(homeDest, ".omp");
 	await fs.mkdir(ompDest, { recursive: true });
-	await run(["rsync", ...buildOmpRsyncArgs(sourceOmp, ompDest, cmd.flags.slim)]);
+	// A live ~/.omp loses files mid-copy (running harness instances churn it);
+	// rsync reports that as exit 24 after finishing everything else. Benign here.
+	await run(["rsync", ...buildOmpRsyncArgs(sourceOmp, ompDest, cmd.flags.slim)], { allowedExitCodes: [24] });
 
 	const sshExists = await fs.access(sourceSsh).then(
 		() => true,
@@ -578,7 +585,7 @@ async function flashDevice(
 	);
 	if (sshExists) {
 		logStep("Copying ~/.ssh");
-		await run(["rsync", "-a", `${sourceSsh}/`, `${path.join(homeDest, ".ssh")}/`]);
+		await run(["rsync", "-a", `${sourceSsh}/`, `${path.join(homeDest, ".ssh")}/`], { allowedExitCodes: [24] });
 		await fs.chmod(path.join(homeDest, ".ssh"), 0o700);
 	}
 
