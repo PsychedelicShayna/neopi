@@ -15,7 +15,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import chalk from "@oh-my-pi/pi-utils/chalk";
-import { Settings } from "../config/settings";
 
 // =============================================================================
 // Types
@@ -188,6 +187,21 @@ export function rewriteGrubDefaults(contents: string, luksUuid: string): string 
 		return contents.replace(/^GRUB_CMDLINE_LINUX=.*$/m, `GRUB_CMDLINE_LINUX="${cmdline}"`);
 	}
 	return `${contents}\nGRUB_CMDLINE_LINUX="${cmdline}"\n`;
+}
+
+/**
+ * Force `symbolPreset: ascii` in the copied config.yml with a plain text
+ * edit — it is one top-level yaml key. Loading the full Settings stack here
+ * once opened the copied agent database inside the mounted stick, took a
+ * minute, held the fd past the copy, and made the flash's own unmount fail
+ * with EBUSY.
+ */
+export function forceAsciiSymbolPreset(contents: string): string {
+	if (/^symbolPreset:/m.test(contents)) {
+		return contents.replace(/^symbolPreset:.*$/m, "symbolPreset: ascii");
+	}
+	const body = contents.length === 0 || contents.endsWith("\n") ? contents : `${contents}\n`;
+	return `${body}symbolPreset: ascii\n`;
 }
 
 /** Missing host tools as [tool, package] pairs; empty means ready. */
@@ -608,9 +622,22 @@ async function flashDevice(
 
 	logStep("Forcing ASCII symbol preset (console has no nerd fonts)");
 	try {
-		const stickSettings = await Settings.loadIsolated({ agentDir: path.join(ompDest, "agent") });
-		stickSettings.set("symbolPreset", "ascii");
-		await stickSettings.flush();
+		const agentDest = path.join(ompDest, "agent");
+		await fs.mkdir(agentDest, { recursive: true });
+		let configPath = path.join(agentDest, "config.yml");
+		for (const name of ["config.yml", "config.yaml"]) {
+			const candidate = path.join(agentDest, name);
+			const exists = await fs.access(candidate).then(
+				() => true,
+				() => false,
+			);
+			if (exists) {
+				configPath = candidate;
+				break;
+			}
+		}
+		const existing = await fs.readFile(configPath, "utf8").catch(() => "");
+		await fs.writeFile(configPath, forceAsciiSymbolPreset(existing));
 	} catch (error) {
 		process.stderr.write(
 			chalk.yellow(

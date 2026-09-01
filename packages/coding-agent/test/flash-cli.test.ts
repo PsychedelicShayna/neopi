@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	assessDevice,
 	buildOmpRsyncArgs,
+	forceAsciiSymbolPreset,
 	missingHostTools,
 	partitionPath,
 	resolveSourceBinary,
@@ -127,5 +128,24 @@ describe("STICK_PACKAGES", () => {
 		for (const pkg of ["grub", "efibootmgr", "mkinitcpio", "linux-firmware", "networkmanager"]) {
 			expect(STICK_PACKAGES).toContain(pkg);
 		}
+	});
+});
+
+describe("forceAsciiSymbolPreset", () => {
+	test("replaces an existing top-level key without touching neighbors", () => {
+		const out = forceAsciiSymbolPreset("setupVersion: 2\nsymbolPreset: nerd\ndarkTheme: catppuccin\n");
+		expect(out).toBe("setupVersion: 2\nsymbolPreset: ascii\ndarkTheme: catppuccin\n");
+	});
+
+	test("appends when the key is absent", () => {
+		expect(forceAsciiSymbolPreset("setupVersion: 2\n")).toBe("setupVersion: 2\nsymbolPreset: ascii\n");
+	});
+
+	test("handles an empty or missing config", () => {
+		expect(forceAsciiSymbolPreset("")).toBe("symbolPreset: ascii\n");
+	});
+
+	test("adds a newline before appending to an unterminated file", () => {
+		expect(forceAsciiSymbolPreset("setupVersion: 2")).toBe("setupVersion: 2\nsymbolPreset: ascii\n");
 	});
 });
