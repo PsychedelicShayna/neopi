@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added per-message steering interruption modes so queued guidance can wait for running tools or interrupt immediately without changing the session preference.
+
 ## [18.2.5] - 2026-09-17
 
 ### Fixed

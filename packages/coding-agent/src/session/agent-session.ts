@@ -848,8 +848,8 @@ export class AgentSession {
 	 *  it again right before enqueueing into IrcBridge, so a record started for the outgoing
 	 *  session cannot land in a different session's queue after the transition. Deliberately
 	 *  distinct from #promptGeneration, which also changes on a plain abort() — asides must still
-	 *  enqueue and fold/resume normally across an in-session interrupt, only a session identity
-	 *  change should drop them. */
+	 *  enqueue and fold/resume normally across an in-session interrupt; only a conversation
+	 *  replacement should drop them. */
 	#sessionGeneration = 0;
 	/** Settles when switchSession commits or restores its previous generation on rollback.
 	 *  newSession never rolls its generation back, so it does not delay stale aside/SDK calls. */
@@ -2504,6 +2504,38 @@ export class AgentSession {
 
 	/** Emit an event to all listeners */
 	#emit(event: AgentSessionEvent): void {
+		if (event.type === "agent_end" && event.isTerminal !== false) {
+			const sessionGeneration = this.#sessionGeneration;
+			const promptSequence = this.#promptSequence;
+			this.#advisors.onPrimaryRunEnd();
+			// Return to the current subscriber gate before waiting: the released
+			// cards enter that same FIFO and must finish before terminal listeners
+			// can dispose the session.
+			const delivery = this.#advisors.waitForPendingCardEvents().then(() => {
+				if (
+					this.#isDisposed ||
+					sessionGeneration !== this.#sessionGeneration ||
+					promptSequence !== this.#promptSequence
+				)
+					return;
+				const willContinue =
+					this.agent.state.isStreaming ||
+					(!this.#abortInProgress &&
+						!this.#queuedMessageDrainBlocked &&
+						this.#canAutoContinueForFollowUp() &&
+						this.agent.hasQueuedMessages());
+				this.#emitToListeners(willContinue ? { ...event, isTerminal: false } : event);
+				// Terminal listeners can enqueue a steer after the synchronous settle
+				// drain already ran. Drain their work just as the old inline fanout did.
+				this.#drainStrandedQueuedMessages();
+			});
+			this.#trackPostPromptTask(delivery);
+			return;
+		}
+		this.#emitToListeners(event);
+	}
+
+	#emitToListeners(event: AgentSessionEvent): void {
 		// Copy array before iteration to avoid mutation during iteration.
 		const listeners = [...this.#eventListeners];
 		for (const l of listeners) {
@@ -5157,6 +5189,7 @@ export class AgentSession {
 		//     re-deliver stale tool output into the cleared conversation
 		//     (mirrors newSession()).
 		this.#promptGeneration++;
+		this.#sessionGeneration++;
 		await this.#cancelPostPromptTasks();
 		this.#cancelOwnAsyncJobs();
 
@@ -7066,6 +7099,7 @@ export class AgentSession {
 			this.#tools.clearTurnSystemPromptOverride();
 			this.#usagePreflightReadyForNextModelCall = false;
 			this.#endInFlight();
+			if (!options?.skipPostPromptRecoveryWait) await this.#waitForPostPromptRecovery(generation);
 		}
 	}
 
@@ -7601,6 +7635,7 @@ export class AgentSession {
 			this.#usagePreflightReadyForNextModelCall = false;
 			this.#recovery.setAcceptTerminalEmptyStop(false);
 			this.#endInFlight();
+			await this.#waitForPostPromptRecovery();
 		}
 	}
 
@@ -7614,6 +7649,7 @@ export class AgentSession {
 		options?: {
 			triggerTurn?: boolean;
 			deliverAs?: "steer" | "followUp" | "nextTurn" | "aside";
+			steeringInterruptMode?: "immediate" | "wait";
 			queueChipText?: string;
 			acceptTerminalEmptyStop?: boolean;
 		},
@@ -7738,6 +7774,7 @@ export class AgentSession {
 		options?: {
 			triggerTurn?: boolean;
 			deliverAs?: "steer" | "followUp" | "nextTurn" | "aside";
+			steeringInterruptMode?: "immediate" | "wait";
 			queueChipText?: string;
 			acceptTerminalEmptyStop?: boolean;
 		},
@@ -7751,6 +7788,7 @@ export class AgentSession {
 			| {
 					triggerTurn?: boolean;
 					deliverAs?: "steer" | "followUp" | "nextTurn" | "aside";
+					steeringInterruptMode?: "immediate" | "wait";
 					queueChipText?: string;
 					acceptTerminalEmptyStop?: boolean;
 			  }
@@ -7786,6 +7824,7 @@ export class AgentSession {
 			| {
 					triggerTurn?: boolean;
 					deliverAs?: "steer" | "followUp" | "nextTurn" | "aside";
+					steeringInterruptMode?: "immediate" | "wait";
 					queueChipText?: string;
 					acceptTerminalEmptyStop?: boolean;
 			  }
@@ -7839,7 +7878,7 @@ export class AgentSession {
 			if (options?.deliverAs === "followUp") {
 				this.agent.followUp(normalizedAppMessage);
 			} else {
-				this.agent.steer(normalizedAppMessage);
+				this.agent.steer(normalizedAppMessage, { interruptMode: options?.steeringInterruptMode });
 			}
 			onAccepted?.();
 			this.#scheduleIdleQueueDrain();

@@ -59,8 +59,6 @@ import {
 	buildAdvisorQuarantineSourceText,
 	formatAdvisorBatchContent,
 	getOrCreateAdvisorProviderSessionId,
-	isAdvisorInterruptImmuneTurnActive,
-	isInterruptingSeverity,
 	quarantineAdvisorUnsafeOutput,
 	resolveAdvisorDeliveryChannel,
 	resolveAdvisorMaxNotesPerUpdate,
@@ -343,6 +341,7 @@ export interface SessionAdvisorsOptions {
 export interface AdvisorMessageDeliveryOptions {
 	triggerTurn?: boolean;
 	deliverAs?: "steer" | "followUp" | "nextTurn";
+	steeringInterruptMode?: "immediate" | "wait";
 	queueChipText?: string;
 	acceptTerminalEmptyStop?: boolean;
 }
@@ -451,10 +450,9 @@ export class SessionAdvisors {
 	#advisorAutoResumeSuppressed = false;
 	#preserveAdvisorAdvice = false;
 	#preserveTerminalYieldAdvice = false;
-	/** Keeps terminal non-blocker advice on the visible card route during unwind. */
+	/** Preserve late non-blockers while a terminal answer unwinds. */
 	#terminalUnwindActive = false;
-	#advisorPrimaryTurnsCompleted = 0;
-	#advisorInterruptImmuneTurnStart: number | undefined;
+	#primaryTurnActive = false;
 	#pendingAdvisorCardEvents = new Set<Promise<void>>();
 	#advisorYieldQueueUnsubscribe: (() => void) | undefined;
 
@@ -487,13 +485,8 @@ export class SessionAdvisors {
 		const terminalBoundary = willContinue !== true;
 		if (terminalBoundary) this.#terminalUnwindActive = true;
 		try {
-			this.#advisorPrimaryTurnsCompleted++;
 			for (const advisor of this.#advisors) {
 				if (advisor.runtime.disposed) continue;
-				// Only the terminal primary boundary owns the deferred flush. Continuing
-				// tool turns must keep partial-work critiques withheld. The flush never
-				// resets the per-update budget — no new advisor update starts here.
-				if (willContinue !== true) advisor.adviseTool.flushDeferredNotes();
 				try {
 					advisor.runtime.onTurnEnd(messages, { willContinue });
 				} catch (error) {
@@ -710,11 +703,6 @@ export class SessionAdvisors {
 		return this.#advisorRuntimeMatchesCurrentConfig();
 	}
 
-	/** Whether concern/blocker delivery is inside the post-interrupt immunity window. */
-	isInterruptImmuneTurnActive(): boolean {
-		return this.#isAdvisorInterruptImmuneTurnActive();
-	}
-
 	/** Latest aggregate recorder-close barrier. */
 	recorderClosed(): Promise<void> {
 		return this.#advisorRecorderClosed;
@@ -742,32 +730,12 @@ export class SessionAdvisors {
 
 	// Advisor runtime lifecycle
 	// -------------------------------------------------------------------------
-	#advisorImmuneTurnLimit(): number {
-		const immuneTurns = this.#host.settings.get("advisor.immuneTurns") as number;
-		if (!Number.isFinite(immuneTurns) || immuneTurns <= 0) return 0;
-		return Math.trunc(immuneTurns);
-	}
 	#advisorMaxNotesPerUpdate(config?: AdvisorConfig): number {
 		return resolveAdvisorMaxNotesPerUpdate(
 			config?.maxNotesPerUpdate,
 			this.#advisorSharedMaxNotesPerUpdate,
 			this.#host.settings.get("advisor.maxNotesPerUpdate"),
 		);
-	}
-
-	#isAdvisorInterruptImmuneTurnActive(): boolean {
-		return isAdvisorInterruptImmuneTurnActive({
-			completedTurns: this.#advisorPrimaryTurnsCompleted,
-			immuneTurnStart: this.#advisorInterruptImmuneTurnStart,
-			immuneTurns: this.#advisorImmuneTurnLimit(),
-		});
-	}
-
-	// The next primary turn number starts the immune-turn window. While the
-	// interrupting steer is still in flight, completedTurns is lower than this
-	// start, so duplicate concern/blocker advice is also downgraded.
-	#recordAdvisorInterruptDelivered(): void {
-		this.#advisorInterruptImmuneTurnStart = this.#advisorPrimaryTurnsCompleted + 1;
 	}
 
 	/** Rebind one advisor to the active primary conversation's provider identity. */
@@ -807,9 +775,6 @@ export class SessionAdvisors {
 	 * `/btw`, `/tree`, and session switch/resume. Beyond {@link AdvisorRuntime.reset}
 	 * (which only re-primes the advisor's transcript view and is also fired by
 	 * within-conversation rewrites like compaction/shake/rewind), this clears the
-	 * session-level interrupt latches so the prior conversation's cooldown cannot
-	 * leak into the new one: the post-interrupt immune-turn window
-	 * (`#advisorPrimaryTurnsCompleted`, `#advisorInterruptImmuneTurnStart`) and the
 	 * user-interrupt auto-resume suppression flag. It also drops advisor deliveries
 	 * still queued against the prior conversation — pending asides in the yield
 	 * queue (advisor entries use `skipIdleFlush`, so they linger until the next
@@ -836,8 +801,6 @@ export class SessionAdvisors {
 			a.adviseTool.resetDeliveredNotes();
 			this.#attachAdvisorRecorderFeed(a);
 		}
-		this.#advisorPrimaryTurnsCompleted = 0;
-		this.#advisorInterruptImmuneTurnStart = undefined;
 		this.#advisorAutoResumeSuppressed = false;
 		this.#host.yieldQueue.clear("advisor");
 		this.#host.extractQueuedAdvisorCards();
@@ -1238,13 +1201,11 @@ export class SessionAdvisors {
 				maintainContext: (incoming, signal) => this.#maintainAdvisorContext(advisorRef, incoming, signal),
 				obfuscator: this.#host.obfuscator,
 				getModelIdentity: () => formatModelString(advisorRef.agent.state.model),
-				beginAdvisorUpdate: inProgress => {
+				beginAdvisorUpdate: () => {
 					advisorRef.recorder.beginTurn();
-					// Flushes the deferred backlog on the in-progress→completed
-					// transition (notes already cleared admission when reserved) and
-					// resets the guard's per-update budget for this prompt's live
-					// notes — both owned by the tool now.
-					advisorRef.adviseTool.beginUpdate(inProgress);
+					// A model stop is provisional until the primary session finishes
+					// queue draining and recovery. Only its final end releases nits.
+					advisorRef.adviseTool.beginUpdate(this.#primaryTurnActive);
 				},
 				onTurnError: (error, failedMessages, signal) =>
 					this.#recoverAdvisorTurn(advisorRef, error, failedMessages, signal),
@@ -1345,14 +1306,13 @@ export class SessionAdvisors {
 	 * Route one accepted advice note from `advisor` to the primary. Concern and
 	 * blocker interrupt the running agent through the steering channel; once the
 	 * loop has yielded, `triggerTurn` resumes it. After a terminal text answer with
-	 * no queued work, late non-blocker advice (a nit or concern) is preserved as a
-	 * visible advisor card, while a blocker wakes the primary to acknowledge work
-	 * it handed off incorrectly. After a deliberate user interrupt auto-resume is
-	 * suppressed while idle/unwinding (the note becomes a preserved card re-entering
-	 * on resume); a live-streaming turn is steered in directly. A plain nit rides
-	 * the non-interrupting YieldQueue aside during streaming. The emission guard
-	 * has already accepted the note; rejected calls never enter this route and
-	 * receive their specific policy outcome from `AdviseTool`.
+	 * no queued work, a concern is preserved as a visible advisor card, while a
+	 * blocker wakes the primary to acknowledge work it handed off incorrectly.
+	 * After a deliberate user interrupt auto-resume is suppressed while idle/unwinding
+	 * (the note becomes a preserved card re-entering on resume); a live-streaming turn is
+	 * steered in directly. A plain nit is published as a visible card only after
+	 * AdviseTool releases it at the terminal boundary. Rejected calls never
+	 * enter this route and receive their specific policy outcome from `AdviseTool`.
 	 */
 	#hasTerminalTextAnswerWithoutQueuedWork(): boolean {
 		if (this.#host.agent.hasQueuedMessages() || this.#host.hasPendingNextTurnMessages()) return false;
@@ -1370,7 +1330,6 @@ export class SessionAdvisors {
 		// The implicit single ("default") advisor stamps no source name, so its
 		// agent-facing `<advisory>` bytes stay identical to the pre-multi-advisor path.
 		const source = advisor.slug ? advisor.name : undefined;
-		const interrupting = isInterruptingSeverity(severity);
 		const terminalAnswerNoQueuedWork = this.#hasTerminalTextAnswerWithoutQueuedWork();
 		const terminalUnwindPreserve = this.#terminalUnwindActive && severity !== "blocker" && terminalAnswerNoQueuedWork;
 		const channel = resolveAdvisorDeliveryChannel({
@@ -1383,12 +1342,7 @@ export class SessionAdvisors {
 			streaming: this.#host.agent.state.isStreaming && !this.#preserveTerminalYieldAdvice && !terminalUnwindPreserve,
 			aborting: this.#host.abortInProgress(),
 			terminalAnswerNoQueuedWork,
-			interruptImmuneTurnActive: interrupting && this.#isAdvisorInterruptImmuneTurnActive(),
 		});
-		if (channel === "aside") {
-			this.#host.yieldQueue.enqueue("advisor", { note, severity, advisor: source });
-			return;
-		}
 		const notes: AdvisorNote[] = [{ note, severity, advisor: source }];
 		const content = formatAdvisorBatchContent(notes);
 		const details = { notes } satisfies AdvisorMessageDetails;
@@ -1428,15 +1382,14 @@ export class SessionAdvisors {
 			});
 			return;
 		}
-		// Arm the post-interrupt immune window only now that a turn is actually
-		// being steered/triggered. A merely preserved card never interrupts, so
-		// arming earlier would downgrade the next `advisor.immuneTurns` worth of
-		// real concerns/blockers to skip-idle-flush asides (#5628 review).
-		this.#recordAdvisorInterruptDelivered();
 		void this.#host
 			.sendCustomMessage(
 				{ customType: "advisor", content, display: true, attribution: "agent", details },
-				{ deliverAs: "steer", triggerTurn: true },
+				{
+					deliverAs: "steer",
+					triggerTurn: true,
+					steeringInterruptMode: severity === "blocker" ? "immediate" : "wait",
+				},
 			)
 			.catch(err => logger.debug("advisor delivery failed", { err: String(err) }));
 	}
@@ -2097,9 +2050,17 @@ export class SessionAdvisors {
 
 	/** Restore normal advisor routing when a kept-alive subagent starts new work. */
 	onPrimaryTurnStart(): void {
+		this.#primaryTurnActive = true;
+		for (const advisor of this.#advisors) advisor.adviseTool.setPrimaryTurnActive();
 		if (!this.#preserveTerminalYieldAdvice) return;
 		this.#preserveTerminalYieldAdvice = false;
 		this.#preserveAdvisorAdvice = false;
+	}
+
+	/** Release nits only after the session has ruled out every continuation. */
+	onPrimaryRunEnd(): void {
+		this.#primaryTurnActive = false;
+		for (const advisor of this.#advisors) advisor.adviseTool.flushDeferredNotes();
 	}
 
 	async #waitForPendingAdvisorCardEvents(timeoutMs: number): Promise<boolean> {

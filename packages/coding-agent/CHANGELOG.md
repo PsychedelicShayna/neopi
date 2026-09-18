@@ -19,6 +19,13 @@
 - Receipt-based messages queued during compaction now hold the pending resume until delivery or cancellation settles.
 - Directly constructed sessions now share and release eval kernels using their configured parent session and owner.
 
+### Changed
+
+- Advisor concerns now arrive between tool batches without cancelling running tools, blockers interrupt immediately, and nits appear only after the full primary turn ends.
+
+### Removed
+
+- Removed `advisor.immuneTurns`; each advisor severity now retains its delivery timing without a cooldown downgrade.
 
 ## [18.2.5] - 2026-09-17
 

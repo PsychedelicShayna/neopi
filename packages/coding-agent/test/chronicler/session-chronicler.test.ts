@@ -2103,7 +2103,7 @@ describe("SessionChronicler capture runtime", () => {
 		}
 	}, 30_000);
 
-	it("parks an actual tool-free final behind an awaited extension event and captures it only after persistence", async () => {
+	it("captures a persisted tool-free final while its notification hook is blocked", async () => {
 		const manager = newLazySessionManager();
 		const reached = Promise.withResolvers<void>();
 		const release = Promise.withResolvers<void>();
@@ -2146,8 +2146,7 @@ describe("SessionChronicler capture runtime", () => {
 			expect(agent.state.messages.some(message => message.role === "assistant")).toBe(true);
 			expect(
 				manager.getEntries().some(entry => entry.type === "message" && entry.message.role === "assistant"),
-			).toBe(false);
-			expect(passes.some(pass => passRequestText(pass).includes("delayed final evidence"))).toBe(false);
+			).toBe(true);
 			release.resolve();
 			await prompting;
 			await session.settleInFlightMessagePersistence();
