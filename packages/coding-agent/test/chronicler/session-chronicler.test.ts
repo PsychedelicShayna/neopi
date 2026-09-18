@@ -40,7 +40,7 @@ import { AdvisorTranscriptRecorder } from "../../src/advisor/transcript-recorder
 import { createAgentSession } from "../../src/sdk";
 import { AgentSession } from "../../src/session/agent-session";
 import { SecretObfuscator } from "../../src/secrets/obfuscator";
-import { estimateToolSchemaTokens } from "../../src/modes/utils/context-usage";
+import { estimateToolSchemaTokens } from "@oh-my-pi/pi-tui/status-line/context-usage";
 import { SessionChronicler, type SessionChroniclerHost } from "../../src/chronicler/session-chronicler";
 import { type CaptureCheckpoint, ChroniclerStore, chroniclerStoreIO } from "../../src/chronicler/store";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";

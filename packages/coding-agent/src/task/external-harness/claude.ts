@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import type { Usage } from "@oh-my-pi/pi-ai";
-import type { AgentProgress, SingleResult } from "../types";
+import type { AgentProgress, SingleResult } from "@oh-my-pi/pi-tui/tools/task";
 import { type ExternalHarnessAdapter, type ExternalHarnessInput, externalHarnessEnv } from "./types";
 
 const PYTHON = "/home/shayna/.omp/python-env/bin/python";

@@ -778,8 +778,10 @@ export function getCommitCacheDbPath(): string {
 }
 
 /** Get the legacy Pi extension parse cache database path. */
-export function getLegacyPiExtensionCacheDbPath(): string {
-	return dirs.rootSubdir(path.join("cache", "legacy-pi-extension-cache.db"), "cache");
+export function getLegacyPiExtensionCacheDbPath(schemaVersion?: number): string {
+	const filename =
+		schemaVersion === undefined ? "legacy-pi-extension-cache.db" : `legacy-pi-extension-cache-v${schemaVersion}.db`;
+	return dirs.rootSubdir(path.join("cache", filename), "cache");
 }
 
 /**

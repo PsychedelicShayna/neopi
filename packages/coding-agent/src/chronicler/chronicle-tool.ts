@@ -3,7 +3,7 @@ import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import chronicleDescription from "../prompts/chronicler/chronicle-tool.md" with { type: "text" };
 import finishDescription from "../prompts/chronicler/finish-tool.md" with { type: "text" };
 import readDescription from "../prompts/chronicler/read-tool.md" with { type: "text" };
-import { ToolError } from "../tools/tool-errors";
+import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import {
 	type BeatRecord,
 	type CaptureBatch,

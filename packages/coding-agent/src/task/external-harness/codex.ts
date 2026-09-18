@@ -1,6 +1,6 @@
 import { readFile, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
-import type { AgentProgress, SingleResult } from "../types";
+import type { AgentProgress, SingleResult } from "@oh-my-pi/pi-tui/tools/task";
 import { type ExternalHarnessAdapter, type ExternalHarnessInput, externalHarnessEnv } from "./types";
 
 const MAX_FRAME_BYTES = 4 * 1024 * 1024;
