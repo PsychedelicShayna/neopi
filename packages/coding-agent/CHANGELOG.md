@@ -25,6 +25,8 @@
 
 ### Removed
 
+- Removed the fork Ruby/Julia eval extension to avoid its startup and maintenance overhead; Python and JavaScript eval remain available.
+
 - Removed `advisor.immuneTurns`; each advisor severity now retains its delivery timing without a cooldown downgrade.
 
 ## [18.2.5] - 2026-09-17

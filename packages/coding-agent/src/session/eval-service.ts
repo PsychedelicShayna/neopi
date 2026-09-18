@@ -3,8 +3,7 @@ import type { ExtensionEvalBackend } from "../extensibility/extensions/types";
 import type { ToolSession } from "../tools";
 
 const EVAL_BACKEND_TOKEN = /^[a-z][a-z0-9_-]*$/;
-// Only the host's own backends are reserved. Ruby and Julia moved out to the
-// omomp-eval-langs extension, so `rb`/`ruby`/`jl`/`julia` are registrable.
+// Reserve only built-in backends; extensions may register other language tokens.
 const BUILTIN_EVAL_TOKENS = new Set(["py", "python", "js", "javascript"]);
 
 interface RegisteredBackend {

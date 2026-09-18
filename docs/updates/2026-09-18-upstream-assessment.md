@@ -78,3 +78,14 @@ PR #64 was rechecked with `git merge-tree` against the advisor-integrated candid
 The original installed `omomp` was backed up to `~/.local/state/omomp-updates/2026-09-18-1825/omomp-18.1.15`, with source and binary hashes in `manifest.json`. The new executable was atomically installed only at `~/.local/bin/omomp`. The live `omp` SHA-256 remains `9c76485c4e65875678b88c7926c7e6891d488796676f359de9c4df584c886fc9`.
 
 Desktop notification was attempted after the recommendation became concrete, but the installed `notify-send` failed with an undefined libnotify symbol. The recommendation and progress were delivered in the conversation; the notification utility was not modified.
+
+
+## Final decision: retire Ruby/Julia
+
+After refreshing the fork extension links, the full installed configuration stalled in extension loading for 40 seconds. Isolated probes identified `omomp-eval-langs`; each of the other four fork extensions loaded successfully. Investigation found that the loader follows type-only source imports into host implementation graphs. Experimental host-bridge injection and loader filtering were not shipped: the operator explicitly chose to retire Ruby/Julia instead of maintaining the extension.
+
+Removed the nine-file Ruby/Julia extension (3,927 lines) from the fork. Its installed symlink was moved outside extension discovery into the update backup directory. Future extension deployment from this branch will not reinstall it. Python/JavaScript and the generic third-party eval registration API remain. This reduces the extension source and startup surface; no meaningful compiled-binary size reduction is claimed.
+
+Final installed 18.2.5 probes, with the remaining four fork extensions and existing user configuration, reached RPC `get_state` in **1.460 s** and **1.441 s**. Extension loading took **0.106 s** and **0.094 s**, respectively. These individual timings supersede the earlier candidate timings above for the delivered configuration. The final compiled/installed worker smoke passed. Extension installer, registration-recovery, and eval fallback tests: **20 pass, zero failures, 65 assertions**. Earlier workspace checks and 1,329-test integration run cover the unchanged core implementation.
+
+Final installed binary SHA-256: `fa41d2e46dfc380bc035667a00aabad0b532badfb1fa0b62b35cc3b8a211c497`. The live upstream `omp` hash is unchanged. The original fork binary backup remains available.
