@@ -23,6 +23,7 @@ import type {
 	UserMessage,
 } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
+import { copyPerCallContextMessage } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { isRecord, logger, prompt } from "@oh-my-pi/pi-utils";
 import { COLLAB_PROMPT_MESSAGE_TYPE } from "@oh-my-pi/pi-wire";
 import userInterjectionTemplate from "../prompts/steering/user-interjection.md" with { type: "text" };
@@ -254,6 +255,7 @@ function normalizeSessionMessageForProviderReplay(message: AgentMessage): unknow
 				meta: message.meta
 					? {
 							truncation: normalizeProviderReplayValue(message.meta.truncation),
+							artifactError: message.meta.artifactError,
 							limits: normalizeProviderReplayValue(message.meta.limits),
 							diagnostics: message.meta.diagnostics
 								? normalizeProviderReplayValue({
@@ -273,7 +275,19 @@ function normalizeSessionMessageForProviderReplay(message: AgentMessage): unknow
 				output: message.output,
 				exitCode: message.exitCode,
 				cancelled: message.cancelled,
-				meta: normalizeProviderReplayValue(message.meta),
+				meta: message.meta
+					? {
+							truncation: normalizeProviderReplayValue(message.meta.truncation),
+							artifactError: message.meta.artifactError,
+							limits: normalizeProviderReplayValue(message.meta.limits),
+							diagnostics: message.meta.diagnostics
+								? normalizeProviderReplayValue({
+										summary: message.meta.diagnostics.summary,
+										messages: message.meta.diagnostics.messages,
+									})
+								: undefined,
+						}
+					: undefined,
 				excludeFromContext: message.excludeFromContext,
 			};
 		case "pythonExecution":
@@ -284,7 +298,19 @@ function normalizeSessionMessageForProviderReplay(message: AgentMessage): unknow
 				output: message.output,
 				exitCode: message.exitCode,
 				cancelled: message.cancelled,
-				meta: normalizeProviderReplayValue(message.meta),
+				meta: message.meta
+					? {
+							truncation: normalizeProviderReplayValue(message.meta.truncation),
+							artifactError: message.meta.artifactError,
+							limits: normalizeProviderReplayValue(message.meta.limits),
+							diagnostics: message.meta.diagnostics
+								? normalizeProviderReplayValue({
+										summary: message.meta.diagnostics.summary,
+										messages: message.meta.diagnostics.messages,
+									})
+								: undefined,
+						}
+					: undefined,
 				excludeFromContext: message.excludeFromContext,
 			};
 		case "custom":
@@ -438,6 +464,10 @@ export interface SkillPromptDetails {
 	name: string;
 	path: string;
 	args?: string;
+	/** The draft as submitted with its `/skill:<name>` token in place. A leading
+	 *  token renders as a skill callout, a mid-prompt token as an inline chip in
+	 *  a plain user bubble. Absent on sessions recorded before chips existed. */
+	prompt?: string;
 	lineCount: number;
 	/** Internal: compact label shown for a queued custom message. Optional —
 	 *  non-streaming skill prompts never set it. Stripped from persisted
@@ -757,6 +787,7 @@ function wrapSteeringUserMessage(message: SteeringUserMessage): UserMessage {
 					attribution: "user",
 					timestamp: message.timestamp,
 				};
+	copyPerCallContextMessage(userMessage, message);
 	if (typeof message.content === "string") {
 		if (message.content.length === 0) return message.role === "user" ? message : userMessage;
 		return { ...userMessage, content: renderSteeringEnvelope(message.content) };
@@ -1205,6 +1236,11 @@ interface ConvertArrayMemo {
 let convertGeneration = 0;
 const convertArrayCache = new WeakMap<AgentMessage[], ConvertArrayMemo>();
 
+/** Drop the outer-array shortcut when an owner replaces a live history in place. */
+export function invalidateConvertToLlmArrayCache(messages: AgentMessage[]): void {
+	convertArrayCache.delete(messages);
+}
+
 registerMessageCacheInvalidator(message => {
 	convertCache.delete(message);
 	convertGeneration++;
@@ -1338,6 +1374,7 @@ function convertOneCached(m: AgentMessage, interruptedNext: boolean): Message[] 
 	const cached = convertCache.get(m);
 	if (cached !== undefined && cached.interruptedNext === interruptedNext) return cached.fragment;
 	const fragment = convertOne(m, interruptedNext);
+	for (const message of fragment) copyPerCallContextMessage(message, m);
 	convertCache.set(m, { interruptedNext, fragment });
 	return fragment;
 }
