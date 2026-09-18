@@ -6,16 +6,16 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
-import { theme } from "../theme/theme";
+import { theme } from "@oh-my-pi/pi-tui/theme/theme";
 import {
 	matchesSelectCancel,
 	matchesSelectDown,
 	matchesSelectPageDown,
 	matchesSelectPageUp,
 	matchesSelectUp,
-} from "../utils/keybinding-matchers";
-import { keyHint, rawKeyHint } from "./keybinding-hints";
-import { bottomBorder, divider, row as overlayRow, topBorder } from "./overlay-box";
+} from "@oh-my-pi/pi-tui/keybinding-matchers";
+import { keyHint, rawKeyHint } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
+import { bottomBorder, divider, row as overlayRow, topBorder } from "@oh-my-pi/pi-tui/chrome/overlay-box";
 
 /** A volatile, complete snapshot of rows displayed by a dashboard. */
 export interface DashboardDataSource<Row extends { id: string }> {

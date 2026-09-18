@@ -23,7 +23,7 @@ import { AdvisorTranscriptRecorder, deriveAdvisorTelemetry } from "../advisor";
 import type { ModelRegistry } from "../config/model-registry";
 import { formatModelString, resolveChroniclerRoleSelection } from "../config/model-resolver";
 import type { SettingPath, Settings } from "../config/settings";
-import { estimateToolSchemaTokens } from "../modes/utils/context-usage";
+import { estimateToolSchemaTokens } from "@oh-my-pi/pi-tui/status-line/context-usage";
 import contextTemplate from "../prompts/chronicler/context.md" with { type: "text" };
 import systemTemplate from "../prompts/chronicler/system.md" with { type: "text" };
 import type { SecretObfuscator } from "../secrets/obfuscator";
@@ -35,7 +35,7 @@ import {
 	resolveThinkingLevelForModel,
 	shouldDisableReasoning,
 	toReasoningEffort,
-} from "../thinking";
+} from "@oh-my-pi/pi-tui/thinking";
 import { CHRONICLER_TOOL_SCHEMAS, ChronicleTool, FinishChronicleTool, ReadChronicleTool } from "./chronicle-tool";
 import type { ChronicleEntry } from "./render";
 import { renderChronicleDelta } from "./render";

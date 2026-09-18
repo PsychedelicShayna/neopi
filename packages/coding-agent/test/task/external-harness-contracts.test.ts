@@ -1,10 +1,10 @@
+import type { SingleResult } from "@oh-my-pi/pi-tui/tools/task";
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
 import {
 	type AgentDefinition,
-	type SingleResult,
 	type SubagentLifecyclePayload,
 	TASK_SUBAGENT_LIFECYCLE_CHANNEL,
 } from "@oh-my-pi/pi-coding-agent/task/types";

@@ -31,7 +31,7 @@ import {
 	concreteThinkingLevel,
 	parseConfiguredThinkingLevel,
 	toReasoningEffort,
-} from "../thinking";
+} from "@oh-my-pi/pi-tui/thinking";
 
 /** The registry surfaces selector validation needs; tests can stub them. */
 export type AgentSelectorModelRegistry = Pick<ModelRegistry, "getAvailable" | "hasConfiguredAuth">;

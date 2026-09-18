@@ -1,4 +1,5 @@
-import type { AgentDefinition, AgentProgress, ParentSessionMetadata, SingleResult } from "../types";
+import type { AgentDefinition, ParentSessionMetadata } from "../types";
+import type { AgentProgress, SingleResult } from "@oh-my-pi/pi-tui/tools/task";
 
 /** Filesystem boundary prepared by OMP for an external harness invocation. */
 export interface ExternalHarnessIsolationContext {
