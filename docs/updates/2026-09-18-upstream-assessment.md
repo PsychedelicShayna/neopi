@@ -57,3 +57,24 @@ Upstream now persists message-end events independently of slow notification hook
 - Remaining targeted coverage gaps from review: IRC arriving during the asynchronous terminal-card drain, and per-message override retention through an actual preparation-claim failure. Existing source inspection and adjacent tests support correctness; these exact combined races are not proven by this run.
 
 Build and installed-startup evidence is recorded below after binary validation. Native builds use six Cargo jobs. Local compilation uses `OMP_BUILD_BYTECODE=0` because the installed Bun canary produced invalid bytecode executables in the earlier update trial.
+
+## Binary and startup validation
+
+The 18.2.5 native addon and compiled binary built successfully. The binary reports `omp/18.2.5` and passes `--smoke-test` (worker and tiny-subprocess wiring). Bytecode was explicitly disabled; extension deployment was deferred until installation.
+
+No-prompt RPC probes used the existing user configuration and original checkout cwd, streamed `PI_DEBUG_STARTUP=1` markers, and measured a response to `get_state` rather than merely the early `ready` event:
+
+| Executable | Result | Extension phase |
+| --- | --- | --- |
+| Installed upstream omp 18.2.1 | Session creation at 1.515 s (initial marker-only probe) | 1.187 s |
+| Old installed omomp 18.1.15 | No `get_state` response within 40 s; terminated during extension loading | No completion marker |
+| Compiled candidate, cold schema-v2 cache | `get_state` at 13.487 s | 12.117 s |
+| Same candidate, warm cache | `get_state` at 3.142 s | 1.745 s |
+
+These are individual real-configuration probes, not controlled medians; native compilation overlapped the old-fork probe. The candidate logs contain zero extension cache schema errors. The versioned cache has 2,358 rows and is about 1.0 MiB. Cold parsing still costs time, while subsequent launches can reuse the cache.
+
+PR #64 was rechecked with `git merge-tree` against the advisor-integrated candidate and adds no textual conflict. Its Nix derivations were not built in this update.
+
+The original installed `omomp` was backed up to `~/.local/state/omomp-updates/2026-09-18-1825/omomp-18.1.15`, with source and binary hashes in `manifest.json`. The new executable was atomically installed only at `~/.local/bin/omomp`. The live `omp` SHA-256 remains `9c76485c4e65875678b88c7926c7e6891d488796676f359de9c4df584c886fc9`.
+
+Desktop notification was attempted after the recommendation became concrete, but the installed `notify-send` failed with an undefined libnotify symbol. The recommendation and progress were delivered in the conversation; the notification utility was not modified.
