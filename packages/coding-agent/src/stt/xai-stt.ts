@@ -29,8 +29,8 @@ export async function transcribeXaiAudio(options: XaiSttOptions): Promise<string
 	}
 
 	const form = new FormData();
-	form.append("file", options.audio, options.filename ?? "dictation.wav");
 	form.append("model", XAI_STT_MODEL);
+	form.append("file", options.audio, options.filename ?? "dictation.wav");
 	if (options.language?.trim()) form.append("language", options.language.trim());
 
 	const timeoutSignal = AbortSignal.timeout(XAI_STT_TIMEOUT_MS);
