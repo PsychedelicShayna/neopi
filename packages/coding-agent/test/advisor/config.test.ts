@@ -21,7 +21,7 @@ describe("discoverAdvisorConfigs", () => {
 	beforeEach(async () => {
 		tmp = await fsp.mkdtemp(path.join(os.tmpdir(), "omp-advisor-config-"));
 		await fsp.mkdir(path.join(tmp, ".git"));
-		// Empty agent dir so the user-level search path can't pick up a real ~/.omp/WATCHDOG.yml.
+		// Empty agent dir so the user-level search path can't pick up a real ~/.npi/WATCHDOG.yml.
 		agentDir = await fsp.mkdtemp(path.join(os.tmpdir(), "omp-advisor-agentdir-"));
 	});
 
@@ -311,11 +311,11 @@ describe("WATCHDOG.yml file round-trip", () => {
 	});
 
 	it("resolves project and user scope paths", () => {
-		expect(advisorConfigFilePath("project", { projectDir: "/repo", agentDir: "/home/.omp" })).toBe(
+		expect(advisorConfigFilePath("project", { projectDir: "/repo", agentDir: "/home/.npi" })).toBe(
 			path.join("/repo", "WATCHDOG.yml"),
 		);
-		expect(advisorConfigFilePath("user", { projectDir: "/repo", agentDir: "/home/.omp" })).toBe(
-			path.join("/home/.omp", "WATCHDOG.yml"),
+		expect(advisorConfigFilePath("user", { projectDir: "/repo", agentDir: "/home/.npi" })).toBe(
+			path.join("/home/.npi", "WATCHDOG.yml"),
 		);
 	});
 });

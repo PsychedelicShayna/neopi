@@ -9,46 +9,60 @@ This repo contains multiple packages, but **`packages/coding-agent/`** is the pr
 ## Binary install (HARD RULE)
 
 - **NEVER replace, overwrite, move, or reinstall the live `omp` binary** on
-  `PATH` (typically `~/.local/bin/omp`). That is Shayna's daily driver. Touching
-  it is a page-out, not a convenience.
-- When this fork is built for local use, install the artifact as a **separate**
-  binary named **`omomp`** — same name as this directory
-  (e.g. `~/.local/bin/omomp`). Not `om-omp`, not `omp`.
-- Allowed: write `packages/coding-agent/dist/omp` (build output), copy that to
-  `omomp`, run via `bun run dev` / `bun --cwd=packages/coding-agent src/cli.ts`.
+  `PATH` (typically `~/.local/bin/omp`). That is the upstream daily driver.
+  Touching it is a page-out, not a convenience.
+- This fork's product name is **NeoPi**. When it is built for local use,
+  install the artifact as a **separate** binary named **`npi`**
+  (e.g. `~/.local/bin/npi`). Not `omomp`, not `om-omp`, not `omp`.
+  `omomp` is the previous install name; do not create new installs under it.
+- Allowed: write `packages/coding-agent/dist/omp` (upstream build-output
+  name; leave it), copy that to `npi`, run via `bun run dev` /
+  `bun --cwd=packages/coding-agent src/cli.ts`.
 - Forbidden without an explicit order that names `omp` as the install target:
   `install … omp`, `cp … ~/.local/bin/omp`, `ln -sf … omp`, package-manager
   global install onto the `omp` name, or any "replace the live binary" step.
 - If a previous mistake left a backup (e.g. `omp-*-backup-*`), restore `omp`
-  from it immediately and keep fork builds only on `omomp`.
-- Installing `omomp` includes the fork extensions. After the binary is in
+  from it immediately and keep fork builds only on `npi`.
+- Installing `npi` includes the fork extensions. After the binary is in
   place, run `bun scripts/install-omomp-extensions.ts` so every
   `extensions/*` directory is symlinked into the active profile's agent
-  `extensions/` dir (`getAgentDir()`; default `~/.omp/agent/extensions`).
+  `extensions/` dir (`getAgentDir()`; default `~/.npi/agent/extensions`).
   Honors `PI_CONFIG_DIR`, `OMP_PROFILE`, and — on the default profile —
-  `PI_CODING_AGENT_DIR`. Same-named dest directories are renamed aside,
-  not deleted. The installer never removes unrelated user extensions.
-  `bun setup` and a local `packages/coding-agent` `bun run build` already
-  run it. An automatic post-build deploy failure warns and leaves the
-  binary in place; the explicit installer and `bun setup` still fail.
+  `PI_CODING_AGENT_DIR`. Those env names stay. The default directory does not.
+  Same-named dest directories are renamed aside, not deleted. The installer
+  never removes unrelated user extensions. `bun setup` and a local
+  `packages/coding-agent` `bun run build` already run it. An automatic
+  post-build deploy failure warns and leaves the binary in place; the
+  explicit installer and `bun setup` still fail.
+
+## Config directory
+
+- NeoPi does not share a config directory with upstream `omp`. The default
+  home root is `~/.npi` (XDG: `$XDG_*_HOME/npi`). The default project root is
+  `.npi/`. There is no silent copy from `~/.omp`.
+- Internal package names (`@oh-my-pi/*`) and env var names stay, so an
+  upstream sync does not have to rename every `omp` identifier. Do not
+  "fix" the config constants back to `.omp` / `omp`.
 
 ## Fork self-update
 
-- Running the installed binary as exactly `omomp update` is fork-specific: it
+- Running the installed binary as exactly `npi update` is fork-specific: it
   launches a normal interactive agent session with
   `packages/coding-agent/src/prompts/omomp-update.md` as the initial user
   request. The agent updates this checkout, resolves conflicts, validates,
-  builds, installs only `omomp`, deploys extensions, and commits the result.
+  builds, installs only `npi`, deploys extensions, and commits the result.
+  Basename `omomp` still routes the same way so an old install does not fall
+  through to the upstream updater.
 - The rewrite is intentionally gated by the executable basename and exact
   argument list. `omp update` remains the upstream updater, while
-  `omomp update --check`, `omomp update --help`, and other update arguments keep
+  `npi update --check`, `npi update --help`, and other update arguments keep
   the upstream command behavior rather than silently becoming prompts.
 - A manual fork update follows the same contract: preserve and commit relevant
   dirty work, create a recovery ref, fetch `upstream` and its tags, merge the
-  latest release state into `omomp`, resolve conflicts without dropping fork
-  behavior, run focused tests and required checks, then build with
+  latest release state into the fork branch, resolve conflicts without dropping
+  fork behavior, run focused tests and required checks, then build with
   `bun --cwd=packages/coding-agent run build`.
-- Install `packages/coding-agent/dist/omp` at the existing `omomp` path only,
+- Install `packages/coding-agent/dist/omp` at the existing `npi` path only,
   then run `bun scripts/install-omomp-extensions.ts` and smoke-test the
   installed executable. Never use `bun setup`, `scripts/link-omp.sh`, or the
   upstream update installer for this flow because they can target `omp`.

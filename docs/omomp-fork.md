@@ -1,6 +1,6 @@
-# omomp fork
+# NeoPi fork record
 
-This tree is [PsychedelicShayna/omomp](https://github.com/PsychedelicShayna/omomp), a fork of [can1357/oh-my-pi](https://github.com/can1357/oh-my-pi). Upstream still ships as `omp`. This checkout installs as a separate binary named `omomp`. Do not overwrite a live `omp` on `PATH`. The hard rule lives in `AGENTS.md`.
+This tree is [PsychedelicShayna/omomp](https://github.com/PsychedelicShayna/omomp), a fork of [can1357/oh-my-pi](https://github.com/can1357/oh-my-pi). The product name is NeoPi. The binary is `npi`. Upstream still ships as `omp`. Do not overwrite a live `omp` on `PATH`. The hard rule lives in `AGENTS.md`. The GitHub repository is still named `omomp` until it is renamed to `neopi`; do not retarget `origin` before that rename exists. This filename is historical.
 
 This note records committed fork work only. Dirty live-controller experiments in the working tree are not shipped history.
 

@@ -195,7 +195,7 @@ describe("default OMOMP extension paths", () => {
 			return stdout;
 		};
 
-		const configDir = process.env.PI_CONFIG_DIR || ".omp";
+		const configDir = process.env.PI_CONFIG_DIR || ".npi";
 		expect(await destFor({ OMP_PROFILE: "omomp-ext-review" })).toBe(
 			path.join(os.homedir(), configDir, "profiles", "omomp-ext-review", "agent", "extensions"),
 		);

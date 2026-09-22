@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Database } from "bun:sqlite";
 import chalk from "@oh-my-pi/pi-utils/chalk";
+import { CONFIG_DIR_NAME } from "@oh-my-pi/pi-utils";
 import { type PortableBundle, validatePortableBundle } from "./portable-bundle";
 
 export interface FlashCommandArgs {
@@ -506,10 +507,17 @@ async function walkManifest(root: string, current: string = root): Promise<Paylo
 async function stagePayload(user: PayloadUser): Promise<StagedPayload> {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omomp-payload-"));
 	const stagedHome = path.join(root, "home");
-	const sourceOmp = path.join(user.home, ".omp");
-	const sourceAgent = path.join(sourceOmp, "agent");
+	const sourcePreferred = path.join(user.home, CONFIG_DIR_NAME);
+	const sourceLegacy = path.join(user.home, ".omp");
+	let sourceOmp = sourcePreferred;
+	let sourceAgent = path.join(sourcePreferred, "agent");
 	const skipped: string[] = [];
 	const warnings: string[] = [];
+	if (!(await exists(sourceAgent)) && (await exists(path.join(sourceLegacy, "agent")))) {
+		sourceOmp = sourceLegacy;
+		sourceAgent = path.join(sourceLegacy, "agent");
+		warnings.push(`seeded from ${sourceLegacy}; stick config is ${CONFIG_DIR_NAME}`);
+	}
 	if (!(await exists(sourceAgent))) throw new FlashError(`${sourceAgent} does not exist; nothing to carry`);
 
 	try {
@@ -517,7 +525,9 @@ async function stagePayload(user: PayloadUser): Promise<StagedPayload> {
 			if (!entry.scopes.includes("seed")) continue;
 			const sourceRoot = entry.root === "agent" ? sourceAgent : sourceOmp;
 			const destinationRoot =
-				entry.root === "agent" ? path.join(stagedHome, ".omp", "agent") : path.join(stagedHome, ".omp");
+				entry.root === "agent"
+					? path.join(stagedHome, CONFIG_DIR_NAME, "agent")
+					: path.join(stagedHome, CONFIG_DIR_NAME);
 			const source = path.join(sourceRoot, entry.source);
 			const destination = path.join(destinationRoot, entry.source);
 			if (!(await exists(source))) {
@@ -538,7 +548,7 @@ async function stagePayload(user: PayloadUser): Promise<StagedPayload> {
 		if (await exists(sourceSsh)) await copySelected(sourceSsh, path.join(stagedHome, ".ssh"), skipped);
 		else skipped.push("~/.ssh");
 
-		const agentDir = path.join(stagedHome, ".omp", "agent");
+		const agentDir = path.join(stagedHome, CONFIG_DIR_NAME, "agent");
 		await fs.mkdir(agentDir, { recursive: true });
 		const yml = path.join(agentDir, "config.yml");
 		const yaml = path.join(agentDir, "config.yaml");
@@ -891,10 +901,10 @@ async function phasePayloadInstalled(target: MountedTarget, user: PayloadUser, p
 			`rsync exited with ${copied.code}, but every staged payload entry verified`,
 		);
 	}
-	await fs.mkdir(path.join(home, ".omp"), { recursive: true });
+	await fs.mkdir(path.join(home, CONFIG_DIR_NAME), { recursive: true });
 	await fs.copyFile(
 		path.join(payload.root, "payload-manifest.json"),
-		path.join(home, ".omp", "portable-payload-manifest.json"),
+		path.join(home, CONFIG_DIR_NAME, "portable-payload-manifest.json"),
 	);
 	await mustRun(["arch-chroot", target.root, "chown", "-R", `${user.name}:${user.name}`, `/home/${user.name}`]);
 }

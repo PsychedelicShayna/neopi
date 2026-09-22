@@ -683,7 +683,7 @@ export const SETTINGS_SCHEMA = {
 				{
 					value: "project",
 					label: "Per-project",
-					description: "Save project role models in .omp/config.yml; missing project roles use global defaults",
+					description: "Save project role models in .npi/config.yml; missing project roles use global defaults",
 				},
 			],
 		},

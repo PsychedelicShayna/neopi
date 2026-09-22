@@ -55,9 +55,9 @@ describe("skillful setting and /skillful session toggle", () => {
 		originalHome = process.env.HOME;
 		tempHomeDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-skillful-home-"));
 		process.env.HOME = tempHomeDir;
-		fs.mkdirSync(path.join(tempDir, ".omp", "skills", "test-skill"), { recursive: true });
+		fs.mkdirSync(path.join(tempDir, ".npi", "skills", "test-skill"), { recursive: true });
 		fs.writeFileSync(
-			path.join(tempDir, ".omp", "skills", "test-skill", "SKILL.md"),
+			path.join(tempDir, ".npi", "skills", "test-skill", "SKILL.md"),
 			`---\nname: test-skill\ndescription: A test skill for the skillful toggle.\n---\n# Test Skill\n`,
 		);
 	});

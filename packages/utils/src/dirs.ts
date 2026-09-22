@@ -1,14 +1,20 @@
 /**
- * Centralized path helpers for omp config directories.
+ * Centralized path helpers for NeoPi config directories.
  *
- * Uses PI_CONFIG_DIR (default ".omp") for the config root and
- * PI_CODING_AGENT_DIR to override the agent directory.
+ * Fork default: config root `.npi`, app name `npi`. Upstream still uses `.omp`
+ * / `omp`. Env names stay `PI_CONFIG_DIR`, `OMP_PROFILE`, and
+ * `PI_CODING_AGENT_DIR` so syncs do not rewrite the resolver. `PI_CONFIG_DIR`
+ * overrides the home config root. `PI_CODING_AGENT_DIR` overrides the agent
+ * directory.
  *
  * On Linux, if XDG_DATA_HOME / XDG_STATE_HOME / XDG_CACHE_HOME environment
  * variables are set, paths are redirected to XDG-compliant locations under
- * $XDG_*_HOME/omp/. This requires running `omp config migrate` first to
+ * $XDG_*_HOME/npi/. This requires running `npi config migrate` first to
  * move data to the new locations. No filesystem existence checks are performed
- * — if the env var is set, omp trusts that the migration has been done.
+ * — if the env var is set, the process trusts that the migration has been done.
+ *
+ * Comments further down may still say `~/.omp`. Those are the same slots.
+ * The defaults are the constants below.
  */
 
 import * as fs from "node:fs";
@@ -17,11 +23,11 @@ import * as path from "node:path";
 import { engines, version } from "../package.json" with { type: "json" };
 import { isEnoent, isEnotdir } from "./fs-error";
 
-/** App name (e.g. "omp") */
-export const APP_NAME: string = "omp";
+/** App name used for the process title, XDG segment, and log prefix. */
+export const APP_NAME: string = "npi";
 
-/** Config directory name (e.g. ".omp") */
-export const CONFIG_DIR_NAME: string = ".omp";
+/** Config directory name relative to home and to a project (".npi"). */
+export const CONFIG_DIR_NAME: string = ".npi";
 
 /** Ordered main settings filenames: canonical write target first, legacy-compatible YAML fallback second. */
 export const MAIN_CONFIG_FILENAMES = ["config.yml", "config.yaml"] as const;
@@ -30,7 +36,7 @@ export const MAIN_CONFIG_FILENAMES = ["config.yml", "config.yaml"] as const;
 export const VERSION: string = version;
 
 /** Default User-Agent header string (e.g. "omp/17.2.12") */
-export const USER_AGENT = `omp/${VERSION}`;
+export const USER_AGENT = `${APP_NAME}/${VERSION}`;
 
 /** Minimum Bun version */
 export const MIN_BUN_VERSION: string = engines.bun.replace(/[^0-9.]/g, "");
