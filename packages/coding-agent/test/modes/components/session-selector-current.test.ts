@@ -1,5 +1,5 @@
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { SessionSelectorComponent } from "@oh-my-pi/pi-tui/overlays/session-selector";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import { SESSION_DELETE_REARM_MS, SessionSelectorComponent } from "@oh-my-pi/pi-tui/overlays/session-selector";
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import type { SessionInfo } from "@oh-my-pi/pi-coding-agent/session/session-listing";
 
@@ -191,5 +191,61 @@ describe("SessionSelectorComponent current session marker", () => {
 		expect(rendered).not.toContain("Charlie live");
 		expect(sessionSection(rendered, "Alpha")).not.toContain("current");
 		expect(sessionSection(rendered, "Other project")).not.toContain("current");
+	});
+});
+
+describe("SessionSelectorComponent delete keys", () => {
+	const alpha = createSession("alpha", "Alpha", "2024-01-02T00:00:00Z");
+	const bravo = createSession("bravo", "Bravo", "2024-01-01T00:00:00Z");
+	const DELETE = "\x1b[3~";
+	const BACKSPACE = "\x7f";
+	const REPEAT_GAP_MS = 30;
+
+	beforeEach(() => {
+		vi.useFakeTimers();
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	function makeSelector() {
+		const selector = new SessionSelectorComponent(
+			[alpha, bravo],
+			() => {},
+			() => {},
+			() => {},
+			{ getTerminalRows: () => 100, onDelete: async () => true },
+		);
+		const dialogOpen = () => stripAnsi(selector.render(120).join("\n")).includes("Delete session?");
+		return { selector, dialogOpen };
+	}
+
+	it("never deletes a session with Backspace, even on an empty filter", () => {
+		const { selector, dialogOpen } = makeSelector();
+		for (const ch of "al") selector.handleInput(ch);
+		for (let i = 0; i < 6; i++) {
+			vi.advanceTimersByTime(REPEAT_GAP_MS);
+			selector.handleInput(BACKSPACE);
+		}
+		vi.advanceTimersByTime(SESSION_DELETE_REARM_MS * 2);
+		selector.handleInput(BACKSPACE);
+		expect(dialogOpen()).toBe(false);
+	});
+
+	it("does not roll a held Delete that empties the filter into a session delete", () => {
+		const { selector, dialogOpen } = makeSelector();
+		for (const ch of "alp") selector.handleInput(ch);
+		selector.handleInput("\x1b[H"); // Home: forward-delete from the start
+		// Held Delete: three chars erased, then auto-repeat keeps arriving on the empty filter.
+		for (let i = 0; i < 8; i++) {
+			vi.advanceTimersByTime(REPEAT_GAP_MS);
+			selector.handleInput(DELETE);
+		}
+		expect(dialogOpen()).toBe(false);
+		// Released, then a fresh Delete press: now it asks to delete the session.
+		vi.advanceTimersByTime(SESSION_DELETE_REARM_MS);
+		selector.handleInput(DELETE);
+		expect(dialogOpen()).toBe(true);
 	});
 });

@@ -297,6 +297,13 @@ const FUZZY_SCAN_INLINE_COUNT = 100;
 const FUZZY_SCAN_CHUNK_COUNT = 150;
 
 /**
+ * Idle time (ms) a Delete press needs after the previous Delete/Backspace before it may delete a
+ * session. Held-key auto-repeat that empties the filter keeps refreshing the stamp, so it cannot
+ * roll over into a delete request; the user has to release the key and press Delete again.
+ */
+export const SESSION_DELETE_REARM_MS = 500;
+
+/**
  * Custom session list component with multi-line items and search
  */
 class SessionList<T extends SessionSelectorEntry> implements Component {
@@ -317,6 +324,8 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 	readonly #getTerminalRows: () => number;
 
 	onDeleteRequest?: (session: T) => void;
+	/** Monotonic time of the last Delete/Backspace press, for {@link SESSION_DELETE_REARM_MS}. */
+	#lastEraseKeyAt = Number.NEGATIVE_INFINITY;
 
 	#allSessions: T[];
 	#showCwd: boolean;
@@ -747,21 +756,23 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 	}
 
 	handleInput(keyData: string): void {
-		// Delete key — or Backspace on an empty search query — request delete
-		// confirmation from the parent. macOS laptops have no dedicated Forward
-		// Delete key: Fn+Backspace is the only way to send \e[3~, and many macOS
-		// terminals (Terminal.app, some iTerm2 profiles) deliver \x7f for that
-		// combo instead. Regular Backspace on an empty query means "delete
-		// session"; with a typed query it stays bound to the search Input so users
-		// can still edit their filter text.
-		if (
-			matchesKey(keyData, "delete") ||
-			(matchesKey(keyData, "backspace") && this.#searchInput.getValue().length === 0)
-		) {
-			const selected = this.#menu.selectedItem;
-			if (selected && this.onDeleteRequest) {
-				this.onDeleteRequest(selected);
+		// Backspace only ever edits the filter. Delete forward-deletes filter text; on an empty
+		// filter it requests session deletion, but only as a fresh press — never as the
+		// continuation of Delete/Backspace presses (auto-repeat included) that were erasing text.
+		const isDelete = matchesKey(keyData, "delete");
+		if (isDelete || matchesKey(keyData, "backspace")) {
+			const now = performance.now();
+			const sinceLastErase = now - this.#lastEraseKeyAt;
+			this.#lastEraseKeyAt = now;
+			if (isDelete && this.#searchInput.getValue().length === 0) {
+				const selected = this.#menu.selectedItem;
+				if (sinceLastErase >= SESSION_DELETE_REARM_MS && selected && this.onDeleteRequest) {
+					this.onDeleteRequest(selected);
+				}
+				return;
 			}
+			this.#searchInput.handleInput(keyData);
+			this.#filterSessions(this.#searchInput.getValue());
 			return;
 		}
 		// Up arrow
@@ -1094,7 +1105,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 	/** Blank · keybinding hint · bottom border. Rendered by {@link render}. */
 	#footerLines(width: number): string[] {
 		const scopeHint = this.#scope === "all" ? "current folder" : "all projects";
-		const hint = theme.fg("muted", `[Del/⌫ delete · Enter select · Tab ${scopeHint} · Esc cancel]`);
+		const hint = theme.fg("muted", `[Del delete · Enter select · Tab ${scopeHint} · Esc cancel]`);
 		return [row("", width), row(hint, width), row("", width), bottomBorder(width)];
 	}
 
