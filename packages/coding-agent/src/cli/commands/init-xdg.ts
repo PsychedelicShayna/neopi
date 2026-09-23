@@ -14,7 +14,11 @@ export async function initXdg(): Promise<void> {
 	const stateHome = process.env.XDG_STATE_HOME || path.join(os.homedir(), ".local/state");
 	const cacheHome = process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache");
 
-	const dirs = [path.join(dataHome, XDG_DIR_NAME), path.join(stateHome, XDG_DIR_NAME), path.join(cacheHome, XDG_DIR_NAME)];
+	const dirs = [
+		path.join(dataHome, XDG_DIR_NAME),
+		path.join(stateHome, XDG_DIR_NAME),
+		path.join(cacheHome, XDG_DIR_NAME),
+	];
 
 	for (const dir of dirs) {
 		await fs.mkdir(dir, { recursive: true });

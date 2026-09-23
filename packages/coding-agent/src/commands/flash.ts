@@ -1,4 +1,4 @@
-/** Turn a whole disk into a bootable, encrypted portable OMOMP system. */
+/** Turn a whole disk into a bootable, encrypted portable NeoPi system. */
 
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import { flashHelp as commandHelp } from "../cli/command-help";
@@ -15,11 +15,11 @@ export default class Flash extends Command {
 
 	static flags = {
 		resume: Flags.boolean({
-			description: "Resume an incomplete OMOMP flash without repartitioning or formatting",
+			description: "Resume an incomplete NeoPi flash without repartitioning or formatting",
 			default: false,
 		}),
 		force: Flags.boolean({
-			description: "Allow a non-removable disk or deliberately replace an existing OMOMP stick",
+			description: "Allow a non-removable disk or deliberately replace an existing NeoPi stick",
 			default: false,
 		}),
 		user: Flags.string({
@@ -28,8 +28,8 @@ export default class Flash extends Command {
 	};
 
 	static examples = [
-		"# Flash a removable disk\n  sudo omomp flash /dev/sdc",
-		"# Resume an interrupted flash\n  sudo omomp flash --resume /dev/sdc",
+		"# Flash a removable disk\n  sudo npi flash /dev/sdc",
+		"# Resume an interrupted flash\n  sudo npi flash --resume /dev/sdc",
 	];
 
 	async run(): Promise<void> {

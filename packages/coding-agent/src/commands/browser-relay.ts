@@ -1,6 +1,7 @@
 /**
  * `omp browser-relay` — drive the user's own Chrome tabs.
  */
+import { APP_NAME, PRODUCT_NAME } from "@oh-my-pi/pi-utils";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import {
 	BROWSER_RELAY_ACTIONS,
@@ -27,16 +28,16 @@ export default class BrowserRelay extends Command {
 			description: "Extension install directory (install; default ~/.omp/browser-relay/extension)",
 		}),
 		"no-group": Flags.boolean({
-			description: "Don't gather controllable tabs into an 'omp' tab group",
+			description: `Don't gather controllable tabs into an '${PRODUCT_NAME}' tab group`,
 			default: false,
 		}),
 		verbose: Flags.boolean({ char: "v", description: "Log relay traffic summaries to stderr", default: false }),
 	};
 
 	static examples = [
-		"omp browser-relay install    # write the Chrome extension to disk + setup steps",
-		"omp browser-relay            # serve the relay on the default port",
-		"omp browser-relay -p 9333 --token s3cret",
+		`${APP_NAME} browser-relay install    # write the Chrome extension to disk + setup steps`,
+		`${APP_NAME} browser-relay            # serve the relay on the default port`,
+		`${APP_NAME} browser-relay -p 9333 --token s3cret`,
 	];
 
 	async run(): Promise<void> {

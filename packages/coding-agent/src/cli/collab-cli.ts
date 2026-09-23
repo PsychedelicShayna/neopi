@@ -3,7 +3,7 @@
  * Listing returns metadata only; capabilities travel over authenticated IPC
  * only when a caller requests a link.
  */
-import { formatAge } from "@oh-my-pi/pi-utils";
+import { APP_NAME, formatAge } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import {
 	COLLAB_REGISTRY_VERSION,
@@ -82,7 +82,7 @@ export async function runCollabListCommand(
 		print(`${host.instanceId}  ${session}  ${chalk.dim(cwd)}`);
 		print(`  ${chalk.dim(details.join(" · "))}`);
 	}
-	print(chalk.dim("Get a link: omp collab link <instanceId|pid> [--view]"));
+	print(chalk.dim(`Get a link: ${APP_NAME} collab link <instanceId|pid> [--view]`));
 }
 
 export async function runCollabLinkCommand(

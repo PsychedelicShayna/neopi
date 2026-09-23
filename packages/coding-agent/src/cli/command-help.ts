@@ -1,13 +1,14 @@
+import { PRODUCT_NAME } from "@oh-my-pi/pi-utils/dirs";
 import type { CommandMetadata } from "@oh-my-pi/pi-utils/cli";
 
 export const acpHelp = {
-	description: "Run Oh My Pi as an ACP (Agent Client Protocol) server over stdio",
+	description: `Run ${PRODUCT_NAME} as an ACP (Agent Client Protocol) server over stdio`,
 } satisfies CommandMetadata;
 
 export const agentsHelp = { description: "Manage bundled task agents" } satisfies CommandMetadata;
 
 export const authBrokerHelp = {
-	description: "Manage the omp auth-broker (credential vault)",
+	description: `Manage the ${PRODUCT_NAME} auth-broker (credential vault)`,
 } satisfies CommandMetadata;
 
 export const authGatewayHelp = {
@@ -51,7 +52,7 @@ export const dryBalanceHelp = {
 } satisfies CommandMetadata;
 
 export const flashHelp = {
-	description: "Flash a bootable, encrypted portable OMOMP system onto a whole disk",
+	description: `Flash a bootable, encrypted portable ${PRODUCT_NAME} system onto a whole disk`,
 } satisfies CommandMetadata;
 
 export const galleryHelp = {
@@ -119,7 +120,7 @@ export const sshHelp = { description: "Manage SSH host configurations" } satisfi
 export const statsHelp = { description: "View usage statistics" } satisfies CommandMetadata;
 
 export const streamHelp = {
-	description: "Broadcast local omp session screens and chat to your public live channel",
+	description: `Broadcast local ${PRODUCT_NAME} session screens and chat to your public live channel`,
 } satisfies CommandMetadata;
 
 export const tinyModelsHelp = {
