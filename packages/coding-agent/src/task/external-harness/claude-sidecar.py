@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded NDJSON bridge from OMP to claude_agent_sdk 0.2.128."""
+"""Bounded NDJSON bridge from NeoPi to claude_agent_sdk 0.2.128."""
 
 import asyncio
 import dataclasses

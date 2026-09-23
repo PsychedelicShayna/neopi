@@ -1,7 +1,7 @@
 /**
  * Usage CLI command handler.
  *
- * Handles `omp usage` — fetches provider usage reports for every
+ * Handles `npi usage` — fetches provider usage reports for every
  * authenticated account and prints a detailed per-account breakdown
  * (limits, windows, reset times, plan metadata). Accounts whose
  * credentials produced no usage report are listed too, so the output
@@ -570,7 +570,7 @@ function formatReloginDeadline(
 }
 
 /**
- * Tombstones worth a row in `omp usage`: OAuth credentials torn down
+ * Tombstones worth a row in `npi usage`: OAuth credentials torn down
  * automatically (refresh failure, upstream invalidation). Rows the user
  * replaced or deleted deliberately are lifecycle noise, not lost capacity.
  */
@@ -907,7 +907,7 @@ function collectStoredAccounts(authStorage: AuthStorage): UsageAccountIdentity[]
  * `hasUsageProvider` is injected (in practice {@link AuthStorage.usageProviderFor})
  * so custom/broker resolvers stay authoritative — no provider list is duplicated
  * here. An explicit `--provider` request bypasses the cull, so
- * `omp usage --provider xai` can still confirm the stored credential has no
+ * `npi usage --provider xai` can still confirm the stored credential has no
  * usage endpoint.
  */
 export function selectReportableAccounts(

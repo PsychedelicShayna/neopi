@@ -2121,7 +2121,7 @@ export class SessionManager {
 		await this.#rewriteAtomically();
 	}
 
-	/** Persist this session's transcript as a newly identified OMP session. */
+	/** Persist this session's transcript as a newly identified NeoPi session. */
 	async persistCopy(
 		options?: { sessionDir?: string; suppressBreadcrumb?: boolean },
 		storage: SessionStorage = new FileSessionStorage(),

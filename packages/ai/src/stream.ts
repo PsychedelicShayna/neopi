@@ -874,7 +874,7 @@ export function getEnvApiKeyName(provider: string): string | undefined {
 
 /**
  * Enumerate every provider that has an env-var fallback for `getEnvApiKey`.
- * Used by `omp auth-broker migrate --include-env` to discover env-sourced keys
+ * Used by `npi auth-broker migrate --include-env` to discover env-sourced keys
  * that should be uploaded to the broker.
  */
 export function listProvidersWithEnvKey(): string[] {
@@ -1507,7 +1507,7 @@ export function streamSimple<TApi extends Api>(
  * Forward a model-configured `User-Agent` override across the pi-native wire.
  * The model itself never crosses the wire — the client sends only `modelId`
  * and the gateway resolves its own model — so without this the gateway's
- * resolved Bedrock model always sends the default `omp/<version>` UA even
+ * resolved Bedrock model always sends the default `npi/<version>` UA even
  * when the client's local model config set an override. Only the single
  * header is forwarded, not the rest of `model.headers` (which may carry
  * unrelated local config), and only when the caller hasn't already set their

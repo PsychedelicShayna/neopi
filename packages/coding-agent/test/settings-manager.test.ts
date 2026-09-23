@@ -1906,6 +1906,7 @@ describe("Settings", () => {
 			["fast dictation model", "stt.modelName", "fast", { dictation: "local/whisper-base" }, {}],
 			["balanced dictation model", "stt.modelName", "balanced", { dictation: "local/whisper-small" }, {}],
 			["turbo dictation model", "stt.modelName", "turbo", { dictation: "local/whisper-large-v3-turbo" }, {}],
+			["xAI dictation model", "stt.modelName", "xai", { dictation: "xai-oauth/grok-stt,xai/grok-stt" }, {}],
 			[
 				"older web search preference",
 				"providers.webSearch",
@@ -2014,7 +2015,7 @@ describe("Settings", () => {
 					tinyModel: "lfm2.5-230m",
 					memoryModel: "lfm2-1.2b",
 				},
-				stt: { modelName: "fast" },
+				stt: { modelName: "xai" },
 			});
 
 			const settings = await Settings.init({ cwd: projectDir, agentDir });

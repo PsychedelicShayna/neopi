@@ -1,14 +1,14 @@
 /**
- * Centralized path helpers for omp config directories.
+ * Centralized path helpers for NeoPi config directories.
  *
  * Uses PI_CONFIG_DIR (default ".omp") for the config root and
  * PI_CODING_AGENT_DIR to override the agent directory.
  *
  * On Linux, if XDG_DATA_HOME / XDG_STATE_HOME / XDG_CACHE_HOME environment
  * variables are set, paths are redirected to XDG-compliant locations under
- * $XDG_*_HOME/omp/. This requires running `omp config migrate` first to
+ * $XDG_*_HOME/omp/. This requires running `npi config migrate` first to
  * move data to the new locations. No filesystem existence checks are performed
- * — if the env var is set, omp trusts that the migration has been done.
+ * — if the env var is set, NeoPi trusts that the migration has been done.
  */
 
 import * as fs from "node:fs";
@@ -113,7 +113,7 @@ function readProfileFromEnvSafe(): string | undefined {
 	}
 }
 
-/** Profile-independent config root (~/.omp), shared by every omp profile. */
+/** Profile-independent config root (~/.omp), shared by every NeoPi profile. */
 export function getBaseConfigRoot(): string {
 	return path.join(os.homedir(), getConfigDirName());
 }
@@ -314,7 +314,7 @@ export function getConfigAgentDirName(): string {
 type XdgCategory = "data" | "state" | "cache";
 
 /**
- * Resolves and caches all omp directory paths. On Linux, when XDG environment
+ * Resolves and caches all NeoPi directory paths. On Linux, when XDG environment
  * variables are set, paths are redirected under $XDG_*_HOME/omp/. A new
  * instance is created whenever the agent directory changes, which naturally
  * invalidates all cached paths.
@@ -341,7 +341,7 @@ class DirResolver {
 		const isDefault = this.agentDir === defaultAgent;
 
 		// XDG is a Linux convention. On supported platforms, default profile state
-		// resolves under $XDG_*_HOME/omp once `omp config init-xdg` has migrated
+		// resolves under $XDG_*_HOME/omp once `npi config init-xdg` has migrated
 		// the user's data. Named profiles follow a stricter rule: the XDG choice
 		// is keyed on the profile-specific XDG path, never the base app root.
 		//
@@ -654,8 +654,8 @@ export function getRemoteDir(): string {
  * empty/whitespace input or a path that is still relative after expansion.
  *
  * A worktree base is process-global and consumed by both creation
- * (PR checkout, task isolation) and cleanup (`omp worktree`). A relative value
- * would resolve against whatever cwd happened to launch `omp`, so checkout and
+ * (PR checkout, task isolation) and cleanup (`npi worktree`). A relative value
+ * would resolve against whatever cwd happened to launch `npi`, so checkout and
  * cleanup could disagree — we refuse it rather than silently bind it to cwd.
  */
 function resolveWorktreeBase(value: string | undefined): string | undefined {
@@ -671,7 +671,7 @@ let worktreesDirOverride: string | undefined;
 
 /**
  * Relocate the base directory for agent-managed worktrees (PR checkouts, task
- * isolation, and `omp worktree` cleanup all read the same base). Driven by the
+ * isolation, and `npi worktree` cleanup all read the same base). Driven by the
  * `worktree.base` setting in coding-agent; pass `undefined`/empty to clear and
  * fall back to `OMP_WORKTREE_DIR` or the `~/.omp/wt` default.
  *

@@ -5,7 +5,7 @@ import { taskSubprocessRenderer } from "@oh-my-pi/pi-tui/tools/subprocess";
  * Task tool - Delegate tasks to specialized agents.
  *
  * Discovers agent definitions from:
- *   - Bundled agents (shipped with omp-coding-agent)
+ *   - Bundled agents (shipped with npi-coding-agent)
  *   - ~/.omp/agent/agents/*.md (user-level)
  *   - .omp/agents/*.md (project-level)
  *

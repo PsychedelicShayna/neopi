@@ -1,12 +1,12 @@
 /**
- * omp auth-gateway HTTP server.
+ * NeoPi auth-gateway HTTP server.
  *
  * Accepts any provider-format request (OpenAI chat-completions, Anthropic
  * messages, OpenAI Responses) and dispatches through pi-ai's `streamSimple()`
  * — which handles credential injection, anthropic-beta headers, codex
  * websocket transport, and all the per-provider intricacies. The gateway is
- * pure protocol translation: foreign wire → omp Context → pi-ai stream() →
- * omp events → foreign wire.
+ * pure protocol translation: foreign wire → NeoPi Context → pi-ai stream() →
+ * NeoPi events → foreign wire.
  *
  * Endpoints:
  *   GET  /healthz                          → unauth; ok + version
@@ -122,7 +122,7 @@ function deriveSessionId(modelId: string, context: Context): string {
 	const first = context.messages?.[0];
 	if (first) {
 		// Strip timestamp / provider metadata so the hash is stable across turns
-		// of the same conversation (omp re-stamps every parsed Message). role +
+		// of the same conversation (NeoPi re-stamps every parsed Message). role +
 		// content is what's actually on the wire.
 		parts.push(JSON.stringify({ role: first.role, content: first.content }));
 	}
@@ -719,7 +719,7 @@ async function handleCredentialsCheck(storage: AuthStorage, signal: AbortSignal)
 /**
  * Row shape for `GET /v1/models`. Beyond the OpenAI-standard `id`/`object`/
  * `owned_by`, rows advertise the catalog metadata OpenAI-compatible clients
- * (omp's own proxy discovery, Zed's openai_compatible provider, ...) read to
+ * (NeoPi's own proxy discovery, Zed's openai_compatible provider, ...) read to
  * size and capability-gate discovered models: `context_length`,
  * `max_output_tokens`, `input_modalities`, and `supports_tools` (only emitted
  * when the catalog explicitly reports `false`; absent means usable). `kind` is
@@ -822,7 +822,7 @@ export function startAuthGateway(opts: AuthGatewayBootOptions): AuthGatewayServe
 					return withCors(await handlePiNative(opts, req, peer, sessionStates), req);
 				}
 
-				// TypeSafe System One judgments (jev). TypeSafe SDKs and omp's own
+				// TypeSafe System One judgments (jev). TypeSafe SDKs and NeoPi's own
 				// judge point `TYPESAFE_BASE_URL` at the gateway; OpenRouter SDKs
 				// reach the same handler through their Decisions path.
 				if (req.method === "POST" && (pathname === "/v1/systemone" || pathname === "/alpha/decisions")) {

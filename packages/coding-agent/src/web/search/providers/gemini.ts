@@ -19,9 +19,9 @@ import {
 } from "@oh-my-pi/pi-ai";
 import { parseCloudflareAiGatewayCredential } from "@oh-my-pi/pi-catalog/wire/cloudflare-ai-gateway";
 import { getAntigravityUserAgent, getGeminiCliHeaders } from "@oh-my-pi/pi-catalog/wire/gemini-headers";
-import { APP_NAME, fetchWithRetry, USER_AGENT } from "@oh-my-pi/pi-utils";
+import { fetchWithRetry, USER_AGENT } from "@oh-my-pi/pi-utils";
 
-import type { SearchCitation, SearchResponse, SearchSource } from "../types";
+import type { SearchCitation, SearchResponse, SearchSource } from "@oh-my-pi/pi-tui/tools/web-search";
 import type { ModelRegistry } from "../../../config/model-registry";
 import { SearchProviderError } from "../../../web/search/types";
 import { formatQuery, GOOGLE_QUERY_SYNTAX, parseSearchQuery, type StructuredQuery } from "../query";

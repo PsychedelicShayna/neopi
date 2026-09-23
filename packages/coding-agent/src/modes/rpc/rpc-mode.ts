@@ -1470,8 +1470,8 @@ export async function runRpcMode(
 			case "get_available_thinking_levels": {
 				// Pi-compatible discovery: the selectable levels for the live model,
 				// including `off` (which `set_thinking_level` accepts but the
-				// effort-only helper excludes). OMP-only `auto`/`inherit` are
-				// intentionally omitted — that selector stays an OMP dialect.
+				// effort-only helper excludes). NeoPi-only `auto`/`inherit` are
+				// intentionally omitted — that selector stays a NeoPi dialect.
 				return success(id, "get_available_thinking_levels", {
 					levels: [ThinkingLevel.Off, ...session.getAvailableThinkingLevels()],
 				});
@@ -1709,7 +1709,7 @@ export async function runRpcMode(
 			// reaper (releaseTabsForOwner) and other bounded teardown run before
 			// the process exits. dispose() also emits `session_shutdown`, so we
 			// must NOT emit it separately here or the event fires twice. Skipping
-			// dispose left OMP-owned Chromium alive after RPC shutdown (#5643).
+			// dispose left NeoPi-owned Chromium alive after RPC shutdown (#5643).
 			await disposeAndExit();
 		},
 	});

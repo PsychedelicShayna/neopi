@@ -1,10 +1,10 @@
-"""Harbor agent that runs the LOCAL oh-my-pi (`omp`) build inside task containers.
+"""Harbor agent that runs the LOCAL NeoPi (`npi`) build inside task containers.
 
 Unlike Harbor's built-in `pi` agent (which `npm i -g @mariozechner/pi-coding-agent`),
 this runs the working tree at `/work/pi`. Install modes (`OMP_BENCH_INSTALL`):
 
   * `source` (default): the runner bind-mounts the repo read-only plus a
-    prebuilt linux `node_modules` tree and a linux `bun` binary; omp runs
+    prebuilt linux `node_modules` tree and a linux `bun` binary; npi runs
     straight from `packages/coding-agent/src/cli.ts`. Zero-network setup, and
     host TS edits apply to the next trial with no rebuild (Rust natives load
     from the in-tree `packages/natives/native/*.node` prebuilds).
@@ -12,7 +12,7 @@ this runs the working tree at `/work/pi`. Install modes (`OMP_BENCH_INSTALL`):
     (bundles every workspace TS package into `dist/cli.js`) and hands us the
     tarball path; we upload it, install Bun, `bun install` the bundle's
     external deps + the platform native addon, and run `bun .../dist/cli.js`.
-  * binary (`--binary`): a self-contained compiled omp binary is uploaded.
+  * binary (`--binary`): a self-contained compiled npi binary is uploaded.
 
 Auth never enters the container: a generated `~/.omp/agent/models.yml` routes the
 configured providers' `baseUrl` at the host's pm2 auth-gateway (default
@@ -231,7 +231,7 @@ class OmpLocal(BaseInstalledAgent):
         ]
         self._thinking = _env("OMP_BENCH_THINKING")
         self._auto_approve = _truthy(_env("OMP_BENCH_AUTO_APPROVE", "1"))
-        # Extra CLI args forwarded verbatim to the in-container omp invocation,
+        # Extra CLI args forwarded verbatim to the in-container npi invocation,
         # JSON-array-encoded by the runner (OMP_BENCH_AGENT_ARGS) so multi-word
         # values survive without a second layer of shell quoting.
         self._agent_args = self._parse_agent_args()
@@ -241,13 +241,13 @@ class OmpLocal(BaseInstalledAgent):
         # web_search auth can't route through the gateway (dedicated provider creds);
         # off by default so search-using tasks don't false-negative on 401s.
         self._web_search = _truthy(_env("OMP_BENCH_WEB_SEARCH", "0"))
-        # omp tool allowlist (`--tools`); empty keeps omp's default tool set.
+        # npi tool allowlist (`--tools`); empty keeps NeoPi's default tool set.
         self._tools = [t for t in _env("OMP_BENCH_TOOLS", "").split(",") if t]
         # Extra settings for the container config.yml: {"edit.mode": "sloppy", ...}.
         raw_settings = _env("OMP_BENCH_SETTINGS")
         self._settings: dict[str, object] = json.loads(raw_settings) if raw_settings else {}
         # Extra env (PI_* dialect knobs, explicit --env) the runner forwards into
-        # the in-container omp run, JSON-encoded in OMP_BENCH_FORWARD_ENV.
+        # the in-container npi run, JSON-encoded in OMP_BENCH_FORWARD_ENV.
         self._forward_env = self._parse_forward_env()
         # Source-mount paths (defaults must match the runner's compose overlay).
         self._source_dir = _env("OMP_BENCH_SOURCE_DIR", "/opt/omp/src")
@@ -287,7 +287,7 @@ class OmpLocal(BaseInstalledAgent):
     def _wrap(self, command: str) -> str:
         """Prefix a command with the Bun runtime on PATH.
 
-        omp spawns Bun worker subprocesses at runtime, so `bun` must resolve on
+        npi spawns Bun worker subprocesses at runtime, so `bun` must resolve on
         PATH during `run()` too — not just for the entrypoint.
         """
         bun_dir = os.path.dirname(self._bun)
@@ -350,7 +350,7 @@ class OmpLocal(BaseInstalledAgent):
         await self._write_config(environment)
 
     async def _install_source(self, environment: BaseEnvironment) -> str:
-        """Verify the read-only repo + linux deps mounts and run omp from TS source.
+        """Verify the read-only repo + linux deps mounts and run npi from TS source.
 
         The runner mounts the repo at `self._source_dir`, shadows every host
         `node_modules` with a linux tree, and mounts a linux `bun` binary — so
@@ -377,10 +377,10 @@ class OmpLocal(BaseInstalledAgent):
             environment,
             command=(
                 "set -e; "
-                f"test -x {q(self._source_bun)} || {{ echo 'omp source mode: bun mount missing' >&2; exit 5; }}; "
-                f"test -f {q(cli)} || {{ echo 'omp source mode: repo mount missing' >&2; exit 5; }}; "
+                f"test -x {q(self._source_bun)} || {{ echo 'npi source mode: bun mount missing' >&2; exit 5; }}; "
+                f"test -f {q(cli)} || {{ echo 'npi source mode: repo mount missing' >&2; exit 5; }}; "
                 f"test -d {q(self._source_dir + '/node_modules/@oh-my-pi')} || "
-                "{ echo 'omp source mode: linux deps mount missing' >&2; exit 5; }; "
+                "{ echo 'npi source mode: linux deps mount missing' >&2; exit 5; }; "
                 f"{q(self._source_bun)} --version"
             ),
         )
@@ -417,7 +417,7 @@ class OmpLocal(BaseInstalledAgent):
         return f"{app}/dist/cli.js"
 
     async def _install_binary(self, environment: BaseEnvironment) -> str:
-        """Probe container arch, upload only the matching self-contained omp binary."""
+        """Probe container arch, upload only the matching self-contained npi binary."""
         arch = (
             await self.exec_as_agent(environment, command="uname -m")
         ).stdout.strip()
@@ -429,11 +429,11 @@ class OmpLocal(BaseInstalledAgent):
             raise RuntimeError(f"binary mode: unsupported container arch {arch!r}")
         if not hostbin:
             raise RuntimeError(
-                f"binary mode: no omp binary provided for container arch {arch}"
+                f"binary mode: no npi binary provided for container arch {arch}"
             )
         app_dir = f"{self._home}/.omp-bench"
-        dst = f"{app_dir}/omp"
-        staging = "/tmp/omp-bin"
+        dst = f"{app_dir}/npi"
+        staging = "/tmp/npi-bin"
         await self.exec_as_agent(
             environment, command=f"mkdir -p {shlex.quote(app_dir)}"
         )
@@ -596,7 +596,7 @@ class OmpLocal(BaseInstalledAgent):
             parts.append(f"--tools {shlex.quote(','.join(self._tools))}")
         parts.extend(shlex.quote(arg) for arg in self._agent_args)
         # POSIX positional separator: some task prompts start with "-" (e.g. a
-        # markdown bullet, as in pytorch-model-recovery). Without this, omp parses
+        # markdown bullet, as in pytorch-model-recovery). Without this, npi parses
         # the prompt as an unknown flag and exits 2. `--` forces positional mode.
         parts.append("--")
         parts.append(shlex.quote(instruction))
@@ -604,7 +604,7 @@ class OmpLocal(BaseInstalledAgent):
         # prompt is positional, so close it explicitly; redirect raw JSONL to the
         # mounted agent log dir for populate_context_post_run to parse on the host.
         run = " ".join(parts) + f" < /dev/null > /logs/agent/{_OUTPUT_FILENAME} 2>&1"
-        # Exec env for the omp run. Direct-auth (no-gateway) mode contributes the
+        # Exec env for the npi run. Direct-auth (no-gateway) mode contributes the
         # selected providers' keys (via exec env, never argv); forwarded PI_* /
         # --env knobs apply last so an explicit --env always wins.
         run_env: dict[str, str] = {}

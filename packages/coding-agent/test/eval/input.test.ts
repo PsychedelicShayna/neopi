@@ -64,6 +64,13 @@ describe("eval percent commands", () => {
 		expect(await prepareEvalSource({ language: "py", code }, session(process.cwd()))).toEqual({ code });
 	});
 
+	it("does not interpret extension-language source as a JavaScript package install", async () => {
+		const code = "%bun add extension-owned-syntax";
+		const source = await prepareEvalSource({ language: "custom", code }, session(process.cwd()));
+		expect(source.packages).toBeUndefined();
+		expect(source.code).toBe(code);
+	});
+
 	it("rejects ambiguous commands and installer flags before installing", async () => {
 		const context = session(process.cwd());
 		await expect(prepareEvalSource({ language: "js", code: "%load a.ts\nrun()" }, context)).rejects.toThrow(

@@ -9,7 +9,7 @@ import { normalizePackageRequirements } from "./package-requirements";
 
 /** Code-only eval input; standalone percent commands prepare files or dependencies. */
 export interface EvalSourceInput {
-	language: "py" | "js";
+	language: string;
 	code: string;
 }
 
@@ -33,6 +33,7 @@ export async function prepareEvalSource(
 	signal?: AbortSignal,
 ): Promise<PreparedEvalSource> {
 	throwIfAborted(signal);
+	if (input.language !== "py" && input.language !== "js") return { code: input.code };
 	const command = /^%(load|pip|bun|environment)(?:[ \t]+([\s\S]*))?$/.exec(input.code.trim());
 	if (!command || (input.language === "py" && command[1] !== "load")) return { code: input.code };
 	const rawArgs = command[2] ?? "";

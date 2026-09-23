@@ -3,9 +3,9 @@
  * into the shared store, and maintain `skills.json` / `skills.lock.json`.
  *
  * The `*SkillPackages` / `format*` / `listInstalledSkills` functions return
- * data and report through {@link SkillInstallHooks}, so both the `omp skill`
- * CLI (the exit-code wrappers at the bottom) and the TUI `/skills` command
- * share one implementation.
+ * data and report through {@link SkillInstallHooks}, so both the skill CLI
+ * (the exit-code wrappers at the bottom) and the TUI `/skills` command share
+ * one implementation.
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -149,8 +149,8 @@ export async function storeSkillVersion(
 
 /**
  * Remove store dirs this operation stopped referencing, unless the global or
- * current project lock still uses them. Other projects' dirs are restored on
- * their next `omp skill update` / `omp skill install`.
+ * current project lock still uses them. Other projects' dirs are restored by
+ * their next skill update or install.
  */
 async function pruneReleased(
 	released: ReadonlyArray<{ id: string; version: string }>,

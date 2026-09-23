@@ -1,8 +1,8 @@
 /**
  * Update CLI command handler.
  *
- * Handles `omp update` to check for and install updates.
- * Uses the installer that owns the active omp executable when it can be detected.
+ * Handles `npi update` to check for and install updates.
+ * Uses the installer that owns the active npi executable when it can be detected.
  */
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";

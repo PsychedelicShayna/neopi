@@ -6,11 +6,19 @@ provider "xai" {
 	kind-apis {
 		image "openai-images"
 		tts "xai-tts"
+		stt "xai-stt"
 	}
 	web-search "xai"
 
 	seed api="xai-tts" base-url="https://api.x.ai/v1" bundle="always" {
 		model "grok-tts" name="Grok TTS" {
+			reasoning #false
+			input "text"
+			cost input=0 output=0 cache-read=0 cache-write=0
+			limits
+			supports-tools #false
+		}
+		model "grok-stt" name="Grok STT" api="xai-stt" {
 			reasoning #false
 			input "text"
 			cost input=0 output=0 cache-read=0 cache-write=0
@@ -24,6 +32,9 @@ provider "xai" {
 	}
 	models "grok-tts" {
 		kind "tts"
+	}
+	models "grok-stt" {
+		kind "stt"
 	}
 
 	// Replaces the provider-keyed prompt-cache session-header baseline.

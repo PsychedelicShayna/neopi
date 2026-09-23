@@ -83,6 +83,12 @@ Early binary and deployment work is recorded by `da8bb86645`, `e795702ff4`, `643
 
 [PR #60](https://github.com/PsychedelicShayna/neopi/pull/60) added per-advisor system-prompt overrides. [PR #63](https://github.com/PsychedelicShayna/neopi/pull/63) separated concern, blocker, and nit delivery boundaries while preserving session safety gates.
 
+## xAI dictation
+
+Native xAI batch transcription uses the shared **Dictation** model role: `xai-oauth/grok-stt` for the OAuth provider or `xai/grok-stt` for the API-key provider. An existing legacy xAI selection migrates to the OAuth-first chain `xai-oauth/grok-stt,xai/grok-stt` only when no explicit dictation role is configured. The retired `stt.modelName` selector is no longer a separate control.
+
+Cloud dictation keeps hold-to-talk behavior and writes audio to disk-backed WAV files. The controller retains at most five completed recordings; transcription failures report the retained file's recovery path. These files are temporary: they are removed when they leave the five-recording history or the controller is disposed.
+
 ## Upstream synchronization
 
 Recent release integrations landed through [PR #62](https://github.com/PsychedelicShayna/neopi/pull/62) and [PR #67](https://github.com/PsychedelicShayna/neopi/pull/67). Future integrations follow the origin-snapshot, recovery-ref, conflict-ledger, verification, and PR process in [docs/agents/upstream-sync.md](agents/upstream-sync.md).

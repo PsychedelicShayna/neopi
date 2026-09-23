@@ -3,6 +3,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { connect } from "@stencil-hq/vibemon";
+import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { prepareAgentBinaries } from "./agent";
 import { loadTasks, resolveDataset } from "./dataset";
 import { TbStore, type TbSummaryRow } from "./store";
@@ -63,7 +64,7 @@ interface WorkItem {
 	attempt: number;
 }
 
-const HELP = `Terminal-Bench 2.1 runner (local omp, remote Vibemon microVMs)
+const HELP = `Terminal-Bench 2.1 runner (local NeoPi, remote Vibemon microVMs)
 
 Usage: bun src/tb/cli.ts [options]
 
@@ -77,13 +78,13 @@ Options:
       --epochs <n>              Epochs to run (default 1)
       --forever                 Run epochs until interrupted
       --budget <usd>            Stop scheduling in an epoch after this spend
-      --tools <a,b,c>           omp tool allowlist (default ${DEFAULT_TOOLS.join(",")})
-      --env <KEY[=VALUE]>       Extra env for the omp process only (repeatable; bare KEY forwards the host value)
+      --tools <a,b,c>           ${APP_NAME} tool allowlist (default ${DEFAULT_TOOLS.join(",")})
+      --env <KEY[=VALUE]>       Extra env for the ${APP_NAME} process only (repeatable; bare KEY forwards the host value)
       --jobs-dir <path>         Artifacts directory (default <repo>/runs/tb)
-      --gateway-url <url>       Local omp auth gateway (default http://127.0.0.1:4000)
+      --gateway-url <url>       Local NeoPi auth gateway (default http://127.0.0.1:4000)
       --gateway-token <token>   Gateway token (default no-auth)
       --openrouter-variant <v>  Vendor routing: floor (default), nitro, default, online, exacto
-      --rebuild-agent           Rebuild cached omp binaries
+      --rebuild-agent           Rebuild cached npi binaries
       --vmon-url <url>          vmond gateway URL (default http://xeon.internal:17970)
       --vmon-token <token>      vmond bearer token (default empty)
       --list                    Print resolved task names and exit

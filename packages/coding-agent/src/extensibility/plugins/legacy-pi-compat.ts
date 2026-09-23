@@ -570,9 +570,9 @@ function getExtensionParseCacheDb(): Database | null {
 		try {
 			if (fs.statSync(cachePath).size > EXTENSION_PARSE_CACHE_MAX_BYTES) {
 				// Remove the full WAL set, not just the main db. A leftover
-				// `-wal`/`-shm` pair still owned by a concurrent omp process is
+				// `-wal`/`-shm` pair still owned by a concurrent harness process is
 				// adopted by this fresh connection; when that `-wal` has
-				// uncheckpointed frames (the normal case while another omp is
+				// uncheckpointed frames (the normal case while another process is
 				// writing its own cache entries), `journal_mode=WAL` fails with
 				// SQLITE_IOERR — disabling the parse cache for the whole process
 				// and forcing a reparse of every extension on startup. See #9549.
@@ -1108,7 +1108,7 @@ function toImportSpecifier(resolvedPath: string): string {
 }
 
 /**
- * Rewrite the extension-owned specifiers OMP must host-resolve — legacy
+ * Rewrite the extension-owned specifiers NeoPi must host-resolve — legacy
  * `@(scope)/pi-*`, bare TypeBox packages, package `imports` aliases like
  * `#src/*`, and extension-local bare dependencies — to absolute `file://` URLs
  * or compiled-mode virtual specifiers. Relative siblings and built-in modules
@@ -2132,7 +2132,7 @@ interface ExtensionModuleGraph {
 
 /**
  * Walk the extension's import graph starting at `entryRealPath`, returning the
- * realpath of every reachable source module OMP must rewrite at load time.
+ * realpath of every reachable source module NeoPi must rewrite at load time.
  * Relative imports, package `imports` aliases, and ESM bare dependencies are
  * graph-owned recursively because compiled Bun cannot resolve runtime
  * `node_modules` from those modules. Graph-owned CommonJS modules also own
@@ -2387,7 +2387,7 @@ function prepareGraphCommonJsDefinition(modulePath: string, source: string, targ
 }
 
 /**
- * Linkedom's canvas bridge uses its bundled fallback because OMP does not ship
+ * Linkedom's canvas bridge uses its bundled fallback because NeoPi does not ship
  * native canvas.
  */
 async function prepareGraphCommonJsModule(modulePath: string, source: string): Promise<void> {

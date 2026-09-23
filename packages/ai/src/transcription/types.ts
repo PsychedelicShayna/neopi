@@ -4,7 +4,7 @@ export type TranscriptionResponseFormat = "json" | "verbose_json";
 export type TranscriptionTimestampGranularity = "word" | "segment";
 
 export interface TranscriptionRequest {
-	audio: Uint8Array;
+	audio: Uint8Array | Blob;
 	mimeType: string;
 	fileName?: string;
 	language?: string;

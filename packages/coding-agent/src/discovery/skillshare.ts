@@ -9,7 +9,7 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { getAgentDir, isEnoent, logger, parseFrontmatter } from "@oh-my-pi/pi-utils";
+import { APP_NAME, getAgentDir, isEnoent, logger, parseFrontmatter } from "@oh-my-pi/pi-utils";
 import { registerProvider } from "../capability";
 import { type Skill, type SkillFrontmatter, skillCapability } from "../capability/skill";
 import type { LoadContext, LoadResult } from "../capability/types";
@@ -37,9 +37,9 @@ async function loadLockedSkill(
 	// Ids are validated when the lock is parsed.
 	const { scope, name } = parseSkillId(id)!;
 	const storeDir = getSkillStorePath(scope, name, entry.version);
-	// Only a completed unpack of the locked bytes counts; anything else is restored by `omp skill update`.
+	// Only a completed unpack of the locked bytes counts; anything else is restored by a skill update.
 	if ((await readStoredIntegrity(storeDir)) !== entry.integrity) {
-		logger.debug("Skillshare skill missing from store; run `omp skill update` to restore it", {
+		logger.debug(`Skillshare skill missing from store; run \`${APP_NAME} skill update\` to restore it`, {
 			id,
 			version: entry.version,
 			storeDir,
@@ -97,7 +97,7 @@ export async function loadSkillshareSkills(ctx: LoadContext): Promise<LoadResult
 registerProvider<Skill>(skillCapability.id, {
 	id: SKILLSHARE_PROVIDER_ID,
 	displayName: "Skillshare",
-	description: "Registry skills installed with `omp skill install` (skills.lock.json)",
+	description: `Registry skills installed with \`${APP_NAME} skill install\` (skills.lock.json)`,
 	priority: PRIORITY,
 	load: loadSkillshareSkills,
 });

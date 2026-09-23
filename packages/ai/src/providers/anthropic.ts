@@ -445,7 +445,7 @@ const ANTHROPIC_STOP_SEQUENCES_MAX = 4;
 let warnedStopSequencesTrim = false;
 
 /**
- * A mid-conversation `role: "system"` message omp inserts at a fixed slot in
+ * A mid-conversation `role: "system"` message NeoPi inserts at a fixed slot in
  * the wire history so top-level `tools` and `output_config.effort` can stay
  * byte-stable for preserved thinking and the prompt cache. `messageCount` is
  * the number of wire messages preceding the control; `anchor` fingerprints the
@@ -4082,7 +4082,7 @@ function syncAnthropicControlState(state: AnthropicControlState, messages: reado
  * request's cache breakpoints) while its text is unchanged; the volatile
  * recall suffix always passes through current-turn. A stable-prefix change
  * re-baselines instead of duplicating the prompt as a mid-conversation
- * system message: omp's system prompt is one rendered segment that embeds
+ * system message: NeoPi's system prompt is one rendered segment that embeds
  * the tool roster, so replaying a second copy on every later request would
  * cost the full prompt again per change. The prefix rewrite is absorbed by
  * `prefix_mismatch_behavior: "drop_block"` and one cache miss, while a
@@ -4678,7 +4678,7 @@ function toWellFormedDeep(value: unknown): unknown {
 }
 
 /**
- * Serialize omp {@link Message}s to Anthropic wire messages.
+ * Serialize NeoPi {@link Message}s to Anthropic wire messages.
  *
  * `opts.serverSideFallbackEnabled` — when the CURRENT request itself
  * opts into the server-side-fallback beta chain. Only then may a persisted

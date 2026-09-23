@@ -3316,8 +3316,7 @@ async function executeToolCalls(
 	// completions only wake waits. Queue overrides can request an immediate
 	// interrupt even when the global policy waits.
 	const hasAsidePeek = hasIrcInterrupts !== undefined || hasBackgroundCompletions !== undefined;
-	const watchSteeringWhileRunning =
-		hasSteeringMessages !== undefined || (shouldInterruptImmediately && hasAsidePeek);
+	const watchSteeringWhileRunning = hasSteeringMessages !== undefined || (shouldInterruptImmediately && hasAsidePeek);
 	const eventDrivenSteeringWatch =
 		watchSteeringWhileRunning && config.waitForSteeringMessages !== undefined && hasSteeringMessages !== undefined;
 	const steeringWatchAbortController = new AbortController();

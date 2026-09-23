@@ -208,7 +208,7 @@ function installCursorOverlay(): void {
 		if (document.getElementById("__omp_recording_cursor__")) return;
 		root = document.createElement("div");
 		root.id = "__omp_recording_cursor__";
-		root.setAttribute("aria-label", "OMP recording cursor overlay");
+		root.setAttribute("aria-label", "NeoPi recording cursor overlay");
 		root.setAttribute("aria-hidden", "true");
 		root.setAttribute("inert", "");
 		root.style.cssText = "position:fixed;inset:0;z-index:2147483647;pointer-events:none;overflow:hidden";

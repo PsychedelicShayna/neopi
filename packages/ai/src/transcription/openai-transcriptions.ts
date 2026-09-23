@@ -3,17 +3,13 @@ import type { Api, FetchImpl, Model, Usage } from "@oh-my-pi/pi-catalog/types";
 import { type } from "@oh-my-pi/omptype";
 import { type ApiKey, withAuth } from "../auth-retry";
 import * as AIError from "../error";
+import { transcriptionResponseError } from "./errors";
 import type { TranscriptionRequest, TranscriptionResult, TranscriptionSegment, TranscriptionWord } from "./types";
 
 export interface TranscriptionOptions {
 	apiKey: ApiKey;
 	fetch?: FetchImpl;
 	signal?: AbortSignal;
-}
-
-/** Non-2xx response from an OpenAI-compatible transcription endpoint. */
-export class TranscriptionApiError extends AIError.ProviderHttpError {
-	override readonly name = "TranscriptionApiError";
 }
 
 const upstreamResponseSchema = type({
@@ -55,29 +51,6 @@ function decodeUsage(model: Model<Api>, raw: unknown): { usage: Usage; seconds?:
 	return { usage, seconds: finiteNumber(upstream.seconds) };
 }
 
-async function responseError(response: Response, model: Model<Api>): Promise<TranscriptionApiError> {
-	const text = await response.text();
-	let detail = text;
-	let code: string | undefined;
-	try {
-		const parsed: unknown = JSON.parse(text);
-		if (parsed && typeof parsed === "object" && "error" in parsed) {
-			const error = parsed.error;
-			if (error && typeof error === "object") {
-				const envelope = error as { message?: unknown; code?: unknown; type?: unknown };
-				if (typeof envelope.message === "string") detail = envelope.message;
-				if (typeof envelope.code === "string") code = envelope.code;
-				else if (typeof envelope.type === "string") code = envelope.type;
-			}
-		}
-	} catch {}
-	return new TranscriptionApiError(
-		`${model.provider}/${model.id} transcription API error (${response.status}): ${detail || response.statusText}`,
-		response.status,
-		{ headers: response.headers, code },
-	);
-}
-
 /** Call an OpenAI/OpenRouter-compatible multipart transcription endpoint. */
 export async function transcribeOpenAI(
 	model: Model<Api>,
@@ -106,7 +79,7 @@ export async function transcribeOpenAI(
 				body: form,
 				signal: options.signal,
 			});
-			if (!attempt.ok) throw await responseError(attempt, model);
+			if (!attempt.ok) throw await transcriptionResponseError(attempt, model);
 			return attempt;
 		},
 		{ signal: options.signal },

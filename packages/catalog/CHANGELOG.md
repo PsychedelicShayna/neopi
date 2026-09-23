@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Grok STT models to the xAI and xAI OAuth catalogs.
+
 ## [18.2.11] - 2026-09-23
 
 ### Added

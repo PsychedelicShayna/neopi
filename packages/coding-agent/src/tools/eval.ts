@@ -99,14 +99,11 @@ const evalCellCommonFields = {
 /**
  * Per-call input: a single cell. State persists within a language across
  * separate eval calls and across tool calls, so each call is one logical step
- * and later calls reuse what earlier ones defined. This static schema carries
- * the full language union for typing; {@link buildEvalSchema} narrows the wire
- * copy per session so disabled backends are never advertised to the model.
+ * and later calls reuse what earlier ones defined. The default wire enum contains
+ * the built-in runtimes; session schemas also admit registered extension languages
+ * and omit disabled backends.
  */
-export const evalSchema = type({
-	language: type("'py' | 'js'").describe(describeLanguageField(EVAL_LANGUAGE_ORDER)),
-	...evalCellCommonFields,
-});
+export const evalSchema = buildEvalSchema(EVAL_LANGUAGE_ORDER);
 export type EvalToolParams = typeof evalSchema.infer;
 export type EvalCellInput = EvalToolParams;
 
@@ -114,12 +111,11 @@ export type EvalCellInput = EvalToolParams;
  * Build a session-scoped copy of the eval schema whose `language` enum and field
  * descriptions advertise only the runtimes enabled for this session.
  */
-function buildEvalSchema(langs: readonly string[]): typeof evalSchema {
-	const schema = type({
+function buildEvalSchema(langs: readonly string[]) {
+	return type({
 		language: type.enumerated(...langs).describe(describeLanguageField(langs)),
 		...evalCellCommonFields,
 	});
-	return schema;
 }
 
 export type EvalToolResult = {

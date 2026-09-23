@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-import { untilAborted } from "@oh-my-pi/pi-utils";
+import { APP_NAME, untilAborted } from "@oh-my-pi/pi-utils";
 import type { HTTPRequest, HTTPResponse, Page } from "puppeteer-core";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 
@@ -354,7 +354,7 @@ export class BrowserNetworkManager {
 		const har = {
 			log: {
 				version: "1.2",
-				creator: { name: "omp-browser", version: "1" },
+				creator: { name: `${APP_NAME}-browser`, version: "1" },
 				pages: [],
 				entries,
 			},

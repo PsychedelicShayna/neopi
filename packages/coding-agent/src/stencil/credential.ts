@@ -4,10 +4,10 @@ import { discoverAuthStorage } from "../sdk";
 import type { AuthStorage } from "../session/auth-storage";
 
 /**
- * Bearer credential presented to Stencil services (`omp stream`, `omp clip`,
- * `omp skill`).
+ * Bearer credential presented to Stencil services (`npi stream`, `npi clip`,
+ * `npi skill`).
  *
- * `STENCIL_API_KEY` wins outright (debug and CI: `STENCIL_API_KEY=test omp
+ * `STENCIL_API_KEY` wins outright (debug and CI: `STENCIL_API_KEY=test npi
  * stream …`); otherwise the stencil.so credential stored by `/login` is used
  * and re-resolved on every call so a refreshed access token is sent after a
  * reconnect. `resolve()` returns null when neither exists.

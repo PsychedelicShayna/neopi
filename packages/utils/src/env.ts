@@ -215,7 +215,7 @@ function filterChildShellEnvInternal(
 		}
 		if (runtimeLaunchEnvValues || projectEnvNamesLoadedByOmp.has(key)) {
 			// Strong provenance: the launch environment is known and this name is
-			// absent from it, or OMP itself injected the value — either way it came
+			// absent from it, or NeoPi itself injected the value — either way it came
 			// from a project dotenv file, not the parent shell.
 			const value = result[key];
 			if (value !== undefined) onDotenvValue?.(value);

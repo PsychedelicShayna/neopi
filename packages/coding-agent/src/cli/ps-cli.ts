@@ -1,8 +1,8 @@
 /**
- * CLI handler for `omp ps` — inspect and control processes supervised by the
+ * CLI handler for `npi ps` — inspect and control processes supervised by the
  * daemon broker from outside the harness.
  *
- * A bare `omp ps` on a TTY opens the interactive alt-screen monitor
+ * A bare `npi ps` on a TTY opens the interactive alt-screen monitor
  * (`pi-tui/apps/ps-top`); `--plain`, `--json`, and non-TTY outputs use the static
  * listing. Actions (`stop`, `kill`, `restart`, `logs`, `info`) connect through
  * the regular client, which revives a dead broker so it can re-adopt detached

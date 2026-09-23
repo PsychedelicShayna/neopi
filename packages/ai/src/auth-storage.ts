@@ -185,7 +185,7 @@ export interface StoredCredentialBlock {
 /**
  * Identity slice of a disabled (soft-deleted) credential tombstone — cause and
  * account identity only, never token material. Surfaced so auto-disabled
- * accounts (e.g. an expired Anthropic OAuth grant) stay visible in `omp usage`
+ * accounts (e.g. an expired Anthropic OAuth grant) stay visible in `npi usage`
  * instead of silently vanishing until the user notices missing quota.
  */
 export interface DisabledCredentialSummary {
@@ -625,7 +625,7 @@ export type AuthStorageOptions = {
 	 *
 	 * Examples:
 	 * - `"local ~/.omp/agent/agent.db"`
-	 * - `"broker http://omp.internal:8765"`
+	 * - `"broker http://neopi.internal:8765"`
 	 */
 	sourceLabel?: string;
 	/**
@@ -708,7 +708,7 @@ const DEFAULT_USAGE_REQUEST_TIMEOUT_MS = 10_000;
 const USAGE_REPORT_CACHE_KEY_VERSION_OVERRIDES: Partial<Record<Provider, number>> = {
 	"google-antigravity": 2,
 	zai: 2,
-	// v2: retires cached reports from the OMP-observed spend estimator (dollar
+	// v2: retires cached reports from the NeoPi-observed spend estimator (dollar
 	// units) now that limits come from the upstream percent-based `/usage`
 	// endpoint; the 24h last-good retention would otherwise keep serving them.
 	"opencode-go": 2,
@@ -1515,10 +1515,10 @@ export class AuthStorage {
 	/**
 	 * Adopt credentials another process committed before selecting or rotating.
 	 *
-	 * The store is shared across every omp process, but the pool is an
+	 * The store is shared across every NeoPi process, but the pool is an
 	 * in-process cache refreshed only by this process's own writes. Without
 	 * this a long-running session ranks a stale pool for its whole lifetime:
-	 * `omp auth` in another terminal is invisible, rotation reports no usable
+	 * `npi auth` in another terminal is invisible, rotation reports no usable
 	 * sibling while a freshly added account sits unblocked in SQLite, and the
 	 * turn degrades to the fallback chain. The auth-broker path already polls;
 	 * direct-store sessions had no equivalent.
@@ -7322,7 +7322,7 @@ export class AuthStorage {
 	}
 
 	/**
-	 * Disabled credential tombstones for display surfaces (`omp usage`,
+	 * Disabled credential tombstones for display surfaces (`npi usage`,
 	 * broker `GET /v1/credentials/disabled`). Empty when the backing store
 	 * keeps no tombstones or the remote broker predates the endpoint.
 	 */
@@ -7335,7 +7335,7 @@ export class AuthStorage {
 	 * Force the backing store to revalidate its credential snapshot, then
 	 * reload. Remote broker stores re-fetch the snapshot; local stores are
 	 * always current, so only the reload runs. Callers that pair live
-	 * per-credential data with stored identities (`omp usage`) use this so a
+	 * per-credential data with stored identities (`npi usage`) use this so a
 	 * disk-cached snapshot cannot misattribute fresh reports.
 	 */
 	async revalidateCredentials(): Promise<void> {

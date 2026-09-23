@@ -47,7 +47,7 @@ export type WorkerInitPayload =
 			mode: "headless";
 			browserWSEndpoint: string;
 			safeDir: string;
-			/** Keep the page tied to an OMP-owned worker without pinning a visible window's layout viewport. */
+			/** Keep the page tied to a NeoPi-owned worker without pinning a visible window's layout viewport. */
 			emulateViewport?: boolean;
 			viewport?: { width: number; height: number; deviceScaleFactor?: number };
 			dialogs?: "accept" | "dismiss";
@@ -90,7 +90,7 @@ export type WorkerInitPayload =
 			 * previously force-killed the tab). Never set for first-time Electron attach.
 			 */
 			recover?: boolean;
-			/** Restore focus emulation when recycling an OMP-owned tab, never a borrowed user tab. */
+			/** Restore focus emulation when recycling a NeoPi-owned tab, never a borrowed user tab. */
 			emulateFocus?: boolean;
 			/**
 			 * Whether the worker may raise this tab before capturing a screenshot. Unset

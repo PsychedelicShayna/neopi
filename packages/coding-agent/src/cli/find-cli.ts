@@ -1,6 +1,6 @@
 /**
- * `omp find`: run the semantic `find` tool's cascade from the shell. Same
- * search as the tool, printed as a ranked, colored digest (or JSON).
+ * Run the semantic `find` tool's cascade from the shell. Same search as the
+ * tool, printed as a ranked, colored digest (or JSON).
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";

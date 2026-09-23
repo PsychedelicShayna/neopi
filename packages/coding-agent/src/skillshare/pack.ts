@@ -9,7 +9,7 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isEnoent, parseFrontmatter } from "@oh-my-pi/pi-utils";
+import { APP_NAME, isEnoent, parseFrontmatter } from "@oh-my-pi/pi-utils";
 import { SKILL_DEFAULT_IGNORES, SKILL_LIMITS, SKILL_NAME_MAX, SKILL_NAME_RE } from "@oh-my-pi/pi-wire/skillshare";
 import { validateAgentSkillFrontmatter } from "../discovery/agent-plugin-format";
 import { CREDENTIAL_PATTERNS } from "../secrets/patterns";
@@ -103,7 +103,7 @@ function validateRegistryFrontmatter(frontmatter: Record<string, unknown>): Regi
 	const version = metadata.version;
 	if (version === undefined) {
 		throw new Error(
-			`${SKILL_FILE}: "metadata.version" is required to publish (set it with \`omp skill version patch\`)`,
+			`${SKILL_FILE}: "metadata.version" is required to publish (set it with \`${APP_NAME} skill version patch\`)`,
 		);
 	}
 	if (!SEMVER_RE.test(version)) {

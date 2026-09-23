@@ -303,7 +303,7 @@ export const SETTINGS_SCHEMA = {
 	// ────────────────────────────────────────────────────────────────────────
 	setupVersion: { type: "number", default: 0 },
 
-	// Auth broker — credentials proxied through a remote `omp auth-broker serve`
+	// Auth broker — credentials proxied through a remote `npi auth-broker serve`
 	// host. Hidden from the UI; populate via env vars or hand-edited config.yml.
 	// Env (`OMP_AUTH_BROKER_URL` / `OMP_AUTH_BROKER_TOKEN`) takes precedence so
 	// per-machine overrides remain trivial.
@@ -2391,7 +2391,7 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	// Live streaming (omp stream)
+	// Live streaming (npi stream)
 	"stream.serverUrl": {
 		type: "string",
 		default: DEFAULT_STREAM_URL,
@@ -2415,7 +2415,7 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	// Skill registry (omp skill)
+	// Skill registry (npi skill)
 	"skills.registryUrl": {
 		type: "string",
 		default: DEFAULT_SKILLS_URL,
@@ -2423,8 +2423,7 @@ export const SETTINGS_SCHEMA = {
 			tab: "interaction",
 			group: "Skills",
 			label: "Skill Registry",
-			description:
-				"Skillshare registry used by `omp skill` to install, search, and publish skills (https://host[:port])",
+			description: `Skillshare registry used by \`${APP_NAME} skill\` to install, search, and publish skills (https://host[:port])`,
 		},
 	},
 
@@ -2444,7 +2443,6 @@ export const SETTINGS_SCHEMA = {
 		type: "string",
 		default: "en",
 	},
-
 
 	"stt.submitTrigger": {
 		type: "enum",
@@ -6250,7 +6248,7 @@ export interface SkillsSettings {
 	ignoredSkills?: string[];
 	includeSkills?: string[];
 	disabledExtensions?: string[];
-	/** Skillshare registry base URL (`omp skill`). */
+	/** Skillshare registry base URL (`npi skill`). */
 	registryUrl?: string;
 }
 

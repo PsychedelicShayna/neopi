@@ -6,7 +6,7 @@
  * sticky `strictToolsDisabled` / `fastModeDisabled` /
  * `replayUnsignedThinkingDisabled` flags and dropped-thinking-prefix set,
  * OpenAI's strict-tools and reasoning-effort fallbacks, Codex's WebSocket and
- * turn-state sessions. An in-process omp session owns that `Map` for its whole
+ * turn-state sessions. An in-process NeoPi session owns that `Map` for its whole
  * lifetime, so a grammar-too-large 400 or a fast-mode rejection costs one
  * wasted round-trip per session rather than one per turn.
  *
@@ -165,7 +165,7 @@ function sessionKeys(request: AuthGatewaySessionStateRequest): string[] {
 	);
 	const keys: string[] = [];
 	for (const message of context.messages) {
-		// Role + content only: omp re-stamps `timestamp` and provider metadata on
+		// Role + content only: NeoPi re-stamps `timestamp` and provider metadata on
 		// every parsed message, so hashing those would break the chain on turn
 		// two of every conversation.
 		hash = Bun.hash(JSON.stringify({ role: message.role, content: message.content }), hash);

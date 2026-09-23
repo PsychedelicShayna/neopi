@@ -34,8 +34,8 @@ import { isAnthropicServerToolHistoryBlock, THINKING_BINDING_CONTROLS_BETA } fro
 
 /**
  * Anthropic Messages API (https://docs.anthropic.com/en/api/messages) ↔ pi-ai
- * gateway translation. Inbound: foreign HTTP body → omp Context. Outbound:
- * omp AssistantMessage[Stream] → Anthropic-shaped JSON / SSE.
+ * gateway translation. Inbound: foreign HTTP body → NeoPi Context. Outbound:
+ * NeoPi AssistantMessage[Stream] → Anthropic-shaped JSON / SSE.
  */
 
 import type { AuthGatewayStreamControl, AuthGatewayParsedRequest as ParsedRequest } from "../auth-gateway/types";
@@ -225,7 +225,7 @@ function walkAssistantContent(
 					// verbatim, so retain each opaque block instead of flattening it.
 					out.push({ type: "anthropicServerTool", block: { ...block } });
 				} else {
-					// Other server tools use distinct result block types that omp
+					// Other server tools use distinct result block types that NeoPi
 					// cannot yet replay atomically. Flatten both sides rather than
 					// persisting a lone server_tool_use without its matching result.
 					const unknown = block as { type: string };

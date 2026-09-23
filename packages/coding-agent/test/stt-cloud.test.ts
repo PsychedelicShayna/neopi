@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import * as transcription from "@oh-my-pi/pi-ai/transcription";
 import type { TranscriptionResult } from "@oh-my-pi/pi-ai/transcription";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
@@ -7,6 +10,7 @@ import { Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as asrClient from "@oh-my-pi/pi-coding-agent/stt/asr-client";
 import * as downloader from "@oh-my-pi/pi-coding-agent/stt/downloader";
 import { STTController } from "@oh-my-pi/pi-coding-agent/stt/stt-controller";
+import { setAgentDir } from "@oh-my-pi/pi-utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 const ZERO_USAGE = {
@@ -43,23 +47,36 @@ function registryFor(model: Model) {
 		getAvailable: () => [model],
 		getAll: () => [model],
 		resolver: vi.fn(() => vi.fn().mockResolvedValue("cloud-key")),
+		getProviderBaseUrl: () => undefined,
+		find: (provider: string, modelId: string) =>
+			provider === model.provider && modelId === model.id ? model : undefined,
+		resolveModelHeaders: async () => undefined,
+		getProviderHeaders: async () => undefined,
 	};
+}
+
+async function readAudioBytes(audio: Uint8Array | Blob): Promise<Uint8Array> {
+	return audio instanceof Uint8Array ? audio : new Uint8Array(await audio.arrayBuffer());
 }
 
 describe("STTController cloud transcription", () => {
 	let state: SettingsTestState | undefined;
+	let tmp = "";
 	let controller: STTController | undefined;
 
 	beforeEach(async () => {
 		state = beginSettingsTest();
 		await Settings.init({ inMemory: true });
 		settings.set("stt.submitTrigger", "never");
+		tmp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-stt-cloud-test-"));
+		setAgentDir(tmp);
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		controller?.dispose();
 		controller = undefined;
 		restoreSettingsTestState(state);
+		await fs.rm(tmp, { recursive: true, force: true });
 	});
 
 	it("buffers microphone PCM into a valid mono 16-bit WAV and commits the cloud transcript", async () => {
@@ -100,12 +117,12 @@ describe("STTController cloud transcription", () => {
 		expect(registry.resolver).toHaveBeenCalledWith(model, "session-1");
 		expect(callOptions.signal).toBeInstanceOf(AbortSignal);
 
-		const wav = request.audio;
-		const view = new DataView(wav.buffer, wav.byteOffset, wav.byteLength);
-		expect(new TextDecoder().decode(wav.subarray(0, 4))).toBe("RIFF");
-		expect(view.getUint32(4, true)).toBe(wav.byteLength - 8);
-		expect(new TextDecoder().decode(wav.subarray(8, 12))).toBe("WAVE");
-		expect(new TextDecoder().decode(wav.subarray(12, 16))).toBe("fmt ");
+		const bytes = await readAudioBytes(request.audio);
+		const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+		expect(new TextDecoder().decode(bytes.subarray(0, 4))).toBe("RIFF");
+		expect(view.getUint32(4, true)).toBe(bytes.byteLength - 8);
+		expect(new TextDecoder().decode(bytes.subarray(8, 12))).toBe("WAVE");
+		expect(new TextDecoder().decode(bytes.subarray(12, 16))).toBe("fmt ");
 		expect(view.getUint32(16, true)).toBe(16);
 		expect(view.getUint16(20, true)).toBe(1);
 		expect(view.getUint16(22, true)).toBe(1);
@@ -113,10 +130,10 @@ describe("STTController cloud transcription", () => {
 		expect(view.getUint32(28, true)).toBe(32_000);
 		expect(view.getUint16(32, true)).toBe(2);
 		expect(view.getUint16(34, true)).toBe(16);
-		expect(new TextDecoder().decode(wav.subarray(36, 40))).toBe("data");
+		expect(new TextDecoder().decode(bytes.subarray(36, 40))).toBe("data");
 		expect(view.getUint32(40, true)).toBe(10);
 		expect(Array.from({ length: 5 }, (_, index) => view.getInt16(44 + index * 2, true))).toEqual([
-			-32_768, -16_384, 0, 16_383, 32_767,
+			-32_768, -16_384, 0, 16_384, 32_767,
 		]);
 		expect(editor.commitVolatileText).toHaveBeenCalledWith("cloud transcript");
 		expect(options.onStateChange.mock.calls.map(([next]) => next)).toEqual(["recording", "transcribing", "idle"]);

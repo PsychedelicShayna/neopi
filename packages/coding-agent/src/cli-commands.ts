@@ -295,11 +295,11 @@ export function isSubcommand(first: string | undefined): boolean {
 }
 
 // Documented-looking plugin/marketplace verbs that are NOT registered top-level
-// commands. Without a guard `resolveCliArgv` rewrites e.g. `omp marketplace add
-// xyz` to `omp launch marketplace add xyz`, silently forwarding the argv to the
+// commands. Without a guard `resolveCliArgv` rewrites e.g. `npi marketplace add
+// xyz` to `npi launch marketplace add xyz`, silently forwarding the argv to the
 // model as a prompt instead of managing plugins (#4845; same class as the
 // `list`/`remove` leak fixed in #2935 and the `install` leak in #1496/#1498).
-// The real commands live under `omp plugin <action>`; each entry maps a verb to
+// The real commands live under `npi plugin <action>`; each entry maps a verb to
 // a hint pointing there. See {@link reservedTopLevelWordMessage} for when a hint
 // fires vs. when the argv still falls through to `launch`.
 const RESERVED_TOP_LEVEL_WORDS: Record<string, string> = {
@@ -314,8 +314,8 @@ const RESERVED_TOP_LEVEL_WORDS: Record<string, string> = {
 	disable: `\`${APP_NAME} disable\` is not a top-level command. Use \`${APP_NAME} plugin disable <name@marketplace>\` to disable a plugin, or run \`${APP_NAME} launch disable\` if you meant to send "disable" as a prompt.`,
 };
 
-// Sub-actions that make `omp marketplace <sub>` unambiguously a management
-// command even when multi-word (the reporter's `omp marketplace add xyz`,
+// Sub-actions that make `npi marketplace <sub>` unambiguously a management
+// command even when multi-word (the reporter's `npi marketplace add xyz`,
 // #4845). Mirrors the switch in `handleMarketplace` (cli/plugin-cli.ts).
 const MARKETPLACE_SUBCOMMANDS: Record<string, true> = { add: true, remove: true, rm: true, update: true, list: true };
 
@@ -323,11 +323,11 @@ const MARKETPLACE_SUBCOMMANDS: Record<string, true> = { add: true, remove: true,
  * Hint for a reserved plugin/marketplace verb used as a top-level command, or
  * `undefined` when the argv should fall through to `launch`.
  *
- * A bare verb (`omp marketplace`) always hints. A multi-word invocation only
+ * A bare verb (`npi marketplace`) always hints. A multi-word invocation only
  * hints when the arguments follow the documented plugin grammar — a marketplace
- * sub-action (`omp marketplace add …`) or a `name@marketplace` plugin id
- * (`omp uninstall foo@bar`) — so genuine prompts that merely begin with one of
- * these words (`omp list all my files`, `omp upgrade the deps`) still launch.
+ * sub-action (`npi marketplace add …`) or a `name@marketplace` plugin id
+ * (`npi uninstall foo@bar`) — so genuine prompts that merely begin with one of
+ * these words (`npi list all my files`, `npi upgrade the deps`) still launch.
  *
  * Flags (`-…`) and `@file` arguments in the verb slot are never management
  * commands; those fall through to the default `launch` command.
@@ -416,11 +416,11 @@ export function resolveCliArgv(argv: string[]): ResolvedCliArgv {
 	}
 	if (isSubcommand(first)) return { argv };
 	// A subcommand can hide behind leading global option flags
-	// (`omp --approval-mode=yolo acp`). `run` dispatches strictly on argv[0], so
+	// (`npi --approval-mode=yolo acp`). `run` dispatches strictly on argv[0], so
 	// hoist the subcommand to the front. Launch-shaped commands share the launch
 	// flag surface, so their leading flags are forwarded and applied; every other
 	// subcommand parses only its own flags, so launch-global flags placed before
-	// it (`omp --cwd <dir> update`) are stripped rather than forwarded into a
+	// it (`npi --cwd <dir> update`) are stripped rather than forwarded into a
 	// crash (#8891). Genuine launch prompts (no trailing subcommand) are untouched.
 	const subIndex = leadingSubcommandIndex(argv);
 	if (subIndex >= 0) {

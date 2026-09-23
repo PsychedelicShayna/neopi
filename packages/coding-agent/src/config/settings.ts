@@ -309,7 +309,7 @@ const SETTINGS_GROUP_ONLY_PREFIXES: Readonly<Record<string, true>> = (() => {
  * Drop entries from capability-provided project settings whose non-object
  * value would shadow an entire settings group. `.claude/settings.json` is
  * shared with other tools, and a foreign leaf like `"tui": "fullscreen"`
- * deep-merges over omp's `tui` group, silently replacing every `tui.*`
+ * deep-merges over NeoPi's `tui` group, silently replacing every `tui.*`
  * setting for sessions rooted in that project. Values at schema leaves,
  * unknown keys, and well-formed nested objects pass through unchanged.
  */

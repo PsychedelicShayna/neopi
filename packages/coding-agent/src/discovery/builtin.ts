@@ -1,7 +1,7 @@
 /**
  * Builtin Provider (.omp)
  *
- * Primary provider for OMP native configs. Supports all capabilities.
+ * Primary provider for NeoPi native configs. Supports all capabilities.
  */
 import * as path from "node:path";
 import { getAgentDir, logger, parseFrontmatter, PRODUCT_NAME, tryParseJson } from "@oh-my-pi/pi-utils";

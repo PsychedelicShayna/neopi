@@ -43,7 +43,7 @@ export interface DiscoverAuthStorageOptions {
 	accountPool?: AuthBrokerAccountPool;
 }
 
-/** Path to the local bearer token file. Created by `omp auth-broker token`. */
+/** Path to the local bearer token file. Created by `npi auth-broker token`. */
 export function getAuthBrokerTokenFilePath(): string {
 	return path.join(getConfigRootDir(), "auth-broker.token");
 }

@@ -1146,7 +1146,7 @@ export function registerPluginCacheInvalidator(invalidator: () => void): void {
  * List all installed Claude Code plugin roots from its active plugin cache and
  * ~/.omp/plugins/installed_plugins.json, plus the nearest project registry when present.
  *
- * Results are cached per Claude and OMP config directories, project registry, and canonical active project.
+ * Results are cached per Claude and NeoPi config directories, project registry, and canonical active project.
  */
 export async function listClaudePluginRoots(
 	home: string,
@@ -1229,12 +1229,12 @@ export async function listClaudePluginRoots(
 		}
 	}
 
-	// ── OMP installed plugins registry ───────────────────────────────────────
-	// OMP registry is authoritative: its entries replace Claude's entries for the same plugin ID.
+	// ── NeoPi installed plugins registry ──────────────────────────────────────
+	// NeoPi registry is authoritative: its entries replace Claude's entries for the same plugin ID.
 	// In production `home` is `os.homedir()`, so `getPluginsDir(home)` resolves to the
 	// same XDG-aware path the marketplace writer uses (reads and writes always agree).
 	// Tests pass a temp dir, which short-circuits the resolver for deterministic isolation.
-	// Computed before the cache lookup because isolated SDK homes select distinct OMP registries.
+	// Computed before the cache lookup because isolated SDK homes select distinct NeoPi registries.
 	const ompContent = await readFile(ompRegistryPath);
 	if (ompContent) {
 		const ompRegistry = parseClaudePluginsRegistry(ompContent);
@@ -1250,7 +1250,7 @@ export async function listClaudePluginRoots(
 				const pluginName = pluginId.slice(0, atIndex);
 				const marketplace = pluginId.slice(atIndex + 1);
 
-				// OMP is authoritative: drop all Claude-sourced entries for this plugin ID
+				// NeoPi is authoritative: drop all Claude-sourced entries for this plugin ID
 				const filtered = roots.filter(r => r.id !== pluginId);
 				roots.length = 0;
 				roots.push(...filtered);
@@ -1280,7 +1280,7 @@ export async function listClaudePluginRoots(
 		}
 	}
 
-	// ── Project-scoped OMP registry ────────────────────────────────────────
+	// ── Project-scoped NeoPi registry ─────────────────────────────────────────
 	// Loaded from the nearest .omp/plugins/installed_plugins.json relative to cwd.
 	// Project entries take precedence over user entries for the same plugin ID.
 	if (resolvedProjectPath) {
@@ -1397,7 +1397,7 @@ export function getPreloadedPluginRoots(): readonly ClaudePluginRoot[] {
 
 /**
  * Inject synthetic plugin roots from --plugin-dir paths.
- * These are prepended to the cache with highest precedence (before OMP/Claude entries).
+ * These are prepended to the cache with highest precedence (before NeoPi/Claude entries).
  * Must be called before any listClaudePluginRoots() access.
  */
 export async function injectPluginDirRoots(home: string, dirs: string[], cwd?: string): Promise<void> {

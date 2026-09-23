@@ -6,11 +6,14 @@ import { compileCompatRules } from "../scripts/compat-compiler";
 
 const RULES_DIR = path.join(import.meta.dir, "../src/compat/rules");
 
-async function resolvedSeedModels(providerId: "openai" | "openrouter") {
+async function resolvedSeedModels(
+	providerId: "openai" | "openrouter" | "xai" | "xai-oauth",
+	api = "openai-transcriptions",
+) {
 	const rules = await compileCompatRules(RULES_DIR);
 	const seed = rules.providers[providerId]?.seed;
 	if (!seed) throw new Error(`${providerId} has no catalog seed`);
-	return seed.models.filter(row => row.api === "openai-transcriptions").map(row => buildModel(row as ModelSpec));
+	return seed.models.filter(row => row.api === api).map(row => buildModel(row as ModelSpec));
 }
 
 describe("cloud transcription catalog policy", () => {
@@ -35,6 +38,16 @@ describe("cloud transcription catalog policy", () => {
 		for (const model of models) {
 			expect(model.kind).toBe("stt");
 			expect(model.api).toBe("openai-transcriptions");
+		}
+	});
+
+	test("xAI providers expose Grok STT only through the native STT runner", async () => {
+		for (const provider of ["xai", "xai-oauth"] as const) {
+			const models = await resolvedSeedModels(provider, "xai-stt");
+			expect(models.map(model => model.id)).toEqual(["grok-stt"]);
+			expect(models[0]?.kind).toBe("stt");
+			expect(models[0]?.api).toBe("xai-stt");
+			expect(models[0]?.baseUrl).toBe("https://api.x.ai/v1");
 		}
 	});
 });

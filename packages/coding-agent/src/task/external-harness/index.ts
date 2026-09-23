@@ -24,7 +24,7 @@ export function assertExternalHarnessCapabilities(agent: AgentDefinition): void 
 		}
 	}
 }
-/** Select an external runtime; native OMP execution deliberately returns undefined. */
+/** Select an external runtime; native NeoPi execution deliberately returns undefined. */
 export function getExternalHarnessAdapter(
 	harness: "omp" | "claude" | "codex" | undefined,
 ): ExternalHarnessAdapter | undefined {

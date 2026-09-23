@@ -72,7 +72,7 @@ export interface ClearCookiesOptions {
 	names?: string[];
 }
 
-/** One origin's Web Storage entries in an omp storage state file. */
+/** One origin's Web Storage entries in a NeoPi storage state file. */
 export interface StorageStateOrigin {
 	/** Serialized origin. */
 	origin: string;
@@ -82,7 +82,7 @@ export interface StorageStateOrigin {
 	sessionStorage?: Array<{ name: string; value: string }>;
 }
 
-/** Playwright-compatible browser state with sessionStorage as an omp extension. */
+/** Playwright-compatible browser state with sessionStorage as a NeoPi extension. */
 export interface BrowserStorageState {
 	/** Serialized browser cookies. */
 	cookies: BrowserCookie[];

@@ -37,7 +37,7 @@
  * **Coverage limits:**
  * - TS/TSX only — intercepting `node_modules` CJS `.js`/`.cjs` and forcing ESM
  *   breaks their default-export detection, so they are left to Bun's default path.
- * - **Dev runs only.** In the compiled `omp` binary every module is pre-bundled
+ * - **Dev runs only.** In the compiled `npi` binary every module is pre-bundled
  *   into bunfs, so `onLoad` never fires; profile with a `bun --preload` dev run.
  */
 import { readFileSync } from "node:fs";

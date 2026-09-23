@@ -7,11 +7,12 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { resolveRoleChain } from "../config/model-resolver";
 import { roleCandidatePool } from "../config/model-roles";
 import { type Settings, settings } from "../config/settings";
+import { resolveXAIHttpTransport, type XAIHttpProvider, type XAIHttpTransportRegistry } from "../lib/xai-http";
 import { type SttStreamHandle, sttClient } from "./asr-client";
 import { downloadSttModel, isSttModelCached } from "./downloader";
 import { resolveSttModelSpec, type SttModelKey } from "./models";
 import { evaluateSubmitTrigger } from "./submit-trigger";
-import { encodePcm16Wav } from "./wav";
+import { WavFileRecorder } from "./wav-file-recorder";
 
 export type SttState = "idle" | "recording" | "transcribing";
 
@@ -37,7 +38,7 @@ interface CaptureHandle {
 
 type CaptureFactory = (onAudio: (error: Error | null, samples: Float32Array) => void) => CaptureHandle;
 
-interface SttRegistry extends ModelBrowserRegistry {
+interface SttRegistry extends ModelBrowserRegistry, XAIHttpTransportRegistry {
 	resolver(model: Model<Api>, sessionId?: string): ApiKeyResolver;
 }
 
@@ -71,7 +72,8 @@ export class STTController {
 
 	// Buffered cloud capture.
 	#cloudModel: Model<Api> | null = null;
-	#cloudAudio: Float32Array[] = [];
+	#cloudFile: WavFileRecorder | null = null;
+	readonly #retainedCloudFiles: WavFileRecorder[] = [];
 
 	/** Creates a controller; tests may replace the hardware capture boundary. */
 	constructor();
@@ -212,7 +214,7 @@ export class STTController {
 
 	async #start(editor: Editor, options: ToggleOptions): Promise<void> {
 		let model = this.#resolveModel();
-		if (model?.api === "openai-transcriptions") {
+		if (model?.api === "openai-transcriptions" || model?.api === "xai-stt") {
 			this.#startBuffered(editor, options, model);
 			return;
 		}
@@ -224,7 +226,7 @@ export class STTController {
 		let modelKey = await this.#ensureDeps(options, this.#resolveModelKey(model));
 		if (!modelKey) return;
 		model = this.#resolveModel();
-		if (model?.api === "openai-transcriptions") {
+		if (model?.api === "openai-transcriptions" || model?.api === "xai-stt") {
 			this.#startBuffered(editor, options, model);
 			return;
 		}
@@ -253,11 +255,20 @@ export class STTController {
 		this.#streamUtterance = "";
 		this.#streamAbort = new AbortController();
 		this.#cloudModel = model;
-		this.#cloudAudio = [];
 
 		try {
+			const file = new WavFileRecorder();
+			this.#cloudFile = file;
 			this.#streamRecorder = this.#createCapture((error, samples) => {
 				if (this.#disposed || this.#cloudModel !== model || this.#state !== "recording") return;
+				if (!error) {
+					try {
+						file.append(samples);
+						return;
+					} catch (cause) {
+						error = cause instanceof Error ? cause : new Error(String(cause));
+					}
+				}
 				if (error) {
 					logger.error("Native microphone capture failed", { error: error.message });
 					const recorder = this.#streamRecorder;
@@ -276,7 +287,6 @@ export class STTController {
 					options.showWarning(error.message);
 					return;
 				}
-				if (samples.length > 0) this.#cloudAudio.push(samples.slice());
 			});
 		} catch (err) {
 			this.#streamAbort?.abort();
@@ -294,8 +304,9 @@ export class STTController {
 	async #stopBuffered(options: ToggleOptions): Promise<void> {
 		const model = this.#cloudModel;
 		const recorder = this.#streamRecorder;
+		const file = this.#cloudFile;
 		const abort = this.#streamAbort;
-		if (!model || !abort || !this.#registry) {
+		if (!model || !file || !abort || !this.#registry) {
 			this.#cleanupCloud();
 			this.#setState("idle", options);
 			return;
@@ -314,29 +325,47 @@ export class STTController {
 
 		let failed = false;
 		let finalText = "";
+		let recordingPath: string | undefined;
 		try {
-			const language = this.#settings.get("stt.language");
-			const result = await transcribeAudio(
-				model,
-				{
-					audio: encodePcm16Wav(this.#cloudAudio),
-					mimeType: "audio/wav",
-					fileName: "dictation.wav",
-					responseFormat: "json",
-					...(language && { language }),
-				},
-				{
-					apiKey: this.#registry.resolver(model, this.#getSessionId?.()),
-					signal: abort.signal,
-				},
-			);
-			finalText = result.text.trim();
+			if (!file.empty) {
+				recordingPath = file.finalize();
+				this.#cloudFile = null;
+				this.#retainedCloudFiles.push(file);
+				if (this.#retainedCloudFiles.length > 5) this.#retainedCloudFiles.shift()?.dispose();
+				const language = this.#settings.get("stt.language");
+				let requestModel = model;
+				if (model.api === "xai-stt") {
+					const transport = await resolveXAIHttpTransport(
+						this.#registry,
+						model.provider as XAIHttpProvider,
+						model.id,
+					);
+					if (transport.baseURL !== model.baseUrl || transport.headers !== model.headers) {
+						requestModel = { ...model, baseUrl: transport.baseURL, headers: transport.headers };
+					}
+				}
+				const result = await transcribeAudio(
+					requestModel,
+					{
+						audio: Bun.file(recordingPath),
+						mimeType: "audio/wav",
+						fileName: "dictation.wav",
+						responseFormat: "json",
+						...(language && { language }),
+					},
+					{
+						apiKey: this.#registry.resolver(requestModel, this.#getSessionId?.()),
+						signal: abort.signal,
+					},
+				);
+				finalText = result.text.trim();
+			}
 		} catch (err) {
 			failed = true;
 			if (!this.#disposed) {
 				const msg = err instanceof Error ? err.message : "Transcription failed";
-				options.showWarning(msg);
-				logger.error("STT cloud transcription failed", { error: msg });
+				options.showWarning(recordingPath ? `${msg}. Recording retained at ${recordingPath}` : msg);
+				logger.error("STT cloud transcription failed", { error: msg, recordingPath });
 			}
 		}
 		if (this.#disposed) {
@@ -351,7 +380,8 @@ export class STTController {
 
 	#cleanupCloud(): void {
 		this.#cloudModel = null;
-		this.#cloudAudio = [];
+		this.#cloudFile?.dispose();
+		this.#cloudFile = null;
 		this.#streamRecorder = null;
 		this.#streamEditor = null;
 		this.#streamCommitted = false;
@@ -506,6 +536,7 @@ export class STTController {
 
 	dispose(): void {
 		this.#disposed = true;
+		this.#holdOwned = false;
 		if (this.#streamAbort) {
 			this.#streamAbort.abort();
 			this.#streamAbort = null;
@@ -517,8 +548,9 @@ export class STTController {
 			// best effort cleanup
 		}
 		this.#cleanupStream();
-		this.#cloudModel = null;
-		this.#cloudAudio = [];
+		this.#cleanupCloud();
+		for (const file of this.#retainedCloudFiles) file.dispose();
+		this.#retainedCloudFiles.length = 0;
 		this.#state = "idle";
 		this.#resolvedModelKey = null;
 	}

@@ -2,10 +2,51 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as transcription from "@oh-my-pi/pi-ai/transcription";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import type { Model, ModelSpec } from "@oh-my-pi/pi-catalog/types";
 import { Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { STTController } from "@oh-my-pi/pi-coding-agent/stt/stt-controller";
+import { STTController, type STTControllerDependencies } from "@oh-my-pi/pi-coding-agent/stt/stt-controller";
 import { setAgentDir } from "@oh-my-pi/pi-utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
+
+const ZERO_USAGE = {
+	input: 0,
+	output: 0,
+	cacheRead: 0,
+	cacheWrite: 0,
+	totalTokens: 0,
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+
+function xaiSttModel(): Model<"xai-stt"> {
+	return buildModel({
+		id: "grok-stt",
+		name: "Grok STT",
+		api: "xai-stt",
+		provider: "xai",
+		baseUrl: "https://api.x.ai/v1",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: null,
+		maxTokens: null,
+		kind: "stt",
+	} satisfies ModelSpec<"xai-stt">);
+}
+
+function registryFor(model: Model): STTControllerDependencies["registry"] {
+	return {
+		getError: () => undefined,
+		getAvailable: () => [model],
+		getAll: () => [model],
+		resolver: () => () => "test-key",
+		getProviderBaseUrl: () => undefined,
+		find: (provider, modelId) => (provider === model.provider && modelId === model.id ? model : undefined),
+		resolveModelHeaders: async () => undefined,
+		getProviderHeaders: async () => undefined,
+	};
+}
 
 /** The space-hold push-to-talk gesture and the `app.stt.toggle` chord drive the same controller.
  *  The gesture has explicit start and release edges, so it must own the capture it starts and keep
@@ -17,6 +58,7 @@ describe("STTController push-to-talk hold ownership", () => {
 	let controller: STTController | undefined;
 	let onAudio: ((error: Error | null, samples: Float32Array) => void) | undefined;
 	const stopCapture = vi.fn();
+	const model = xaiSttModel();
 
 	function makeEditor() {
 		return {
@@ -38,10 +80,21 @@ describe("STTController push-to-talk hold ownership", () => {
 		};
 	}
 
+	function makeController(): STTController {
+		controller = new STTController(
+			callback => {
+				onAudio = callback;
+				return { stop: stopCapture };
+			},
+			{ settings, registry: registryFor(model) },
+		);
+		return controller;
+	}
+
 	beforeEach(async () => {
 		state = beginSettingsTest();
 		await Settings.init({ inMemory: true });
-		settings.set("stt.modelName", "xai");
+		settings.setModelRole("dictation", "xai/grok-stt");
 		settings.set("stt.language", "en");
 		tmp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-stt-hold-test-"));
 		setAgentDir(tmp);
@@ -56,17 +109,11 @@ describe("STTController push-to-talk hold ownership", () => {
 		await fs.rm(tmp, { recursive: true, force: true });
 	});
 
-	function makeController(transcribe: ReturnType<typeof vi.fn>) {
-		controller = new STTController(callback => {
-			onAudio = callback;
-			return { stop: stopCapture };
-		}, transcribe);
-		return controller;
-	}
-
 	it("leaves a chord-started recording alone across a full hold gesture", async () => {
-		const transcribe = vi.fn(async () => "chord dictation");
-		const stt = makeController(transcribe);
+		const transcribe = vi
+			.spyOn(transcription, "transcribeAudio")
+			.mockResolvedValue({ text: "chord dictation", usage: ZERO_USAGE });
+		const stt = makeController();
 		const editor = makeEditor();
 		const options = makeOptions();
 
@@ -87,12 +134,14 @@ describe("STTController push-to-talk hold ownership", () => {
 		expect(stt.state).toBe("idle");
 		expect(stopCapture).toHaveBeenCalledTimes(1);
 		expect(transcribe).toHaveBeenCalledTimes(1);
-		expect(editor.insertText).toHaveBeenCalledWith("chord dictation");
+		expect(editor.commitVolatileText).toHaveBeenCalledWith("chord dictation");
 	});
 
 	it("records and transcribes a hold it started itself", async () => {
-		const transcribe = vi.fn(async () => "held dictation");
-		const stt = makeController(transcribe);
+		const transcribe = vi
+			.spyOn(transcription, "transcribeAudio")
+			.mockResolvedValue({ text: "held dictation", usage: ZERO_USAGE });
+		const stt = makeController();
 		const editor = makeEditor();
 		const options = makeOptions();
 
@@ -104,12 +153,14 @@ describe("STTController push-to-talk hold ownership", () => {
 		expect(stt.state).toBe("idle");
 		expect(stopCapture).toHaveBeenCalledTimes(1);
 		expect(transcribe).toHaveBeenCalledTimes(1);
-		expect(editor.insertText).toHaveBeenCalledWith("held dictation");
+		expect(editor.commitVolatileText).toHaveBeenCalledWith("held dictation");
 	});
 
 	it("ignores a release after the chord already stopped the held capture", async () => {
-		const transcribe = vi.fn(async () => "held dictation");
-		const stt = makeController(transcribe);
+		const transcribe = vi
+			.spyOn(transcription, "transcribeAudio")
+			.mockResolvedValue({ text: "held dictation", usage: ZERO_USAGE });
+		const stt = makeController();
 		const editor = makeEditor();
 		const options = makeOptions();
 
@@ -124,9 +175,9 @@ describe("STTController push-to-talk hold ownership", () => {
 	});
 
 	it("stays inert when a transcription is still settling", async () => {
-		let release: ((text: string) => void) | undefined;
-		const transcribe = vi.fn(() => new Promise<string>(resolve => (release = resolve)));
-		const stt = makeController(transcribe);
+		const result = Promise.withResolvers<transcription.TranscriptionResult>();
+		const transcribe = vi.spyOn(transcription, "transcribeAudio").mockReturnValue(result.promise);
+		const stt = makeController();
 		const editor = makeEditor();
 		const options = makeOptions();
 
@@ -137,10 +188,10 @@ describe("STTController push-to-talk hold ownership", () => {
 
 		await stt.holdStart(editor, options);
 		expect(stt.state).toBe("transcribing");
-		expect(transcribe).toHaveBeenCalledTimes(1);
 
-		release?.("held dictation");
+		result.resolve({ text: "held dictation", usage: ZERO_USAGE });
 		await pending;
+		expect(transcribe).toHaveBeenCalledTimes(1);
 		expect(stt.state).toBe("idle");
 	});
 });

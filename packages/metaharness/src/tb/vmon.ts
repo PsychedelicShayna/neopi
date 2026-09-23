@@ -179,7 +179,7 @@ function adaptRpcProcess(process: Process): RpcAgentProcess {
 export class TrialVm {
 	/** Stable sandbox name used by every lifecycle call. */
 	readonly name: string;
-	/** Guest CPU architecture selecting the matching omp binary. */
+	/** Guest CPU architecture selecting the matching npi binary. */
 	readonly arch: GuestArch;
 	/** OCI image working directory probed after boot. */
 	readonly workdir: string;

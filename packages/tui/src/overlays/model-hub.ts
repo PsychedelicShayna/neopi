@@ -326,8 +326,8 @@ export class ModelHubComponent implements Component {
 		}
 
 		// Reconcile catalogs in the background. This is online discovery only —
-		// it must not re-run `!command` credential helpers (F5 / `omp models
-		// refresh` pass refreshCommandCredentials for that). A --models scope is
+		// it must not re-run `!command` credential helpers (F5 / `npi models
+		// refresh` passes refreshCommandCredentials for that). A --models scope is
 		// registry-independent, so the reload would only repeat the hydration
 		// above.
 		if (this.#scopedModels.length === 0) {

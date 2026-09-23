@@ -114,7 +114,7 @@ function readTinyModelSetting(path: "providers.tinyModelDevice" | "providers.tin
 		const value = settings.get(path);
 		return typeof value === "string" ? value : undefined;
 	} catch {
-		// Settings may be uninitialized (e.g. `omp --smoke-test`); fall back to env/default.
+		// Settings may be uninitialized (e.g. `npi --smoke-test`); fall back to env/default.
 		return undefined;
 	}
 }
@@ -346,7 +346,7 @@ export interface WorkerLaunch {
 	spawn(endpoint: string, logPath: string): Promise<SpawnedWorker>;
 }
 
-/** Detach a worker so it outlives this omp process; its output goes to a per-worker log file. */
+/** Detach a worker so it outlives this NeoPi process; its output goes to a per-worker log file. */
 function spawnDetached(
 	cmd: string[],
 	cwd: string | undefined,
@@ -458,7 +458,7 @@ async function logTail(logPath: string): Promise<string> {
 
 /**
  * Connect to the worker serving `modelKey`, spawning it when absent or
- * replacing it when its launch tag is stale. A concurrent omp process may win
+ * replacing it when its launch tag is stale. A concurrent NeoPi process may win
  * the spawn race; our child then fails to bind and exits while the probe
  * adopts the winner.
  */

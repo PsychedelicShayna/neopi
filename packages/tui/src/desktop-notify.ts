@@ -176,7 +176,7 @@ export function sendDesktopNotification(message: string | TerminalNotification):
 	try {
 		// `.unref()` lets the event loop exit while the notifier is still running.
 		// Without it, an unresponsive D-Bus activation (slow `notify-send`, hung
-		// `gdbus` waiting on a stalled session bus) would keep `omp` alive past
+		// `gdbus` waiting on a stalled session bus) would keep NeoPi alive past
 		// the renderer's shutdown — a completion toast must never delay process
 		// exit. Ignored stdio alone does not detach the child from the parent's
 		// reference count.

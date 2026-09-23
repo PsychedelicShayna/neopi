@@ -21,6 +21,12 @@ export interface XAIHttpTransport {
 	headers?: Record<string, string>;
 }
 
+/** Registry operations used to resolve an already-selected xAI model's transport. */
+export type XAIHttpTransportRegistry = Pick<
+	ModelRegistry,
+	"getAll" | "getProviderBaseUrl" | "find" | "resolveModelHeaders" | "getProviderHeaders"
+>;
+
 /**
  * Resolve the HTTP base URL for an xAI tool call.
  *
@@ -52,7 +58,7 @@ export interface XAIHttpTransport {
  * same model id ships under both descriptors.
  */
 function resolveXAIBaseURL(
-	modelRegistry: ModelRegistry,
+	modelRegistry: Pick<XAIHttpTransportRegistry, "getAll" | "getProviderBaseUrl">,
 	provider: XAIHttpProvider,
 	modelId: string | undefined,
 ): string {
@@ -79,7 +85,7 @@ function resolveXAIBaseURL(
  * Resolve an xAI tool endpoint and its provider/model header overrides.
  */
 export async function resolveXAIHttpTransport(
-	modelRegistry: ModelRegistry,
+	modelRegistry: XAIHttpTransportRegistry,
 	provider: XAIHttpProvider,
 	modelId?: string,
 ): Promise<XAIHttpTransport> {

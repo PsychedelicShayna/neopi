@@ -56,7 +56,7 @@ export interface PuppeteerBrowserHandle extends BrowserHandleCommon {
 	browser: Browser;
 	cdpUrl?: string;
 	pid?: number;
-	/** OMP-owned temp Chromium profile directory removed on dispose (process-local headless launches). */
+	/** NeoPi-owned temp Chromium profile directory removed on dispose (process-local headless launches). */
 	userDataDir?: string;
 	/** Broker daemon backing this handle; dispose disconnects instead of closing, kill routes to the broker. */
 	sharedDaemon?: { name: string; projectDir: string };
@@ -177,7 +177,7 @@ async function openBrowserHandle(kind: BrowserKind, opts: AcquireBrowserOptions)
 		};
 	}
 	if (kind.kind === "headless") {
-		// Every real omp process (session, subagent, worker — anything with a CLI
+		// Every real NeoPi process (session, subagent, worker — anything with a CLI
 		// worker host) MUST go through the project-shared broker-owned Chromium:
 		// per-process launches are what produced launch storms and orphaned
 		// process trees. The process-local launch survives only for hosts that
@@ -369,7 +369,7 @@ async function disposeBrowserHandle(handle: BrowserHandle, opts: ReleaseBrowserO
 				if (proc?.pid !== undefined) await gracefulKillTreeOnce(proc.pid).catch(() => undefined);
 			}
 		}
-		// OMP owns the profile directory (puppeteer's temp cleanup is disabled by
+		// NeoPi owns the profile directory (puppeteer's temp cleanup is disabled by
 		// our explicit --user-data-dir), so remove it now the process tree has
 		// exited. Tolerant of the Windows lock-held window (issue #7058).
 		if (handle.userDataDir) await removeUserDataDir(handle.userDataDir);
@@ -440,7 +440,7 @@ async function openSharedHeadlessHandle(
 			protocolTimeout: BROWSER_PROTOCOL_TIMEOUT_MS,
 		});
 		// Attaching to the shared daemon is the natural point to sweep targets
-		// left behind by omp processes that died without teardown — bounds
+		// left behind by NeoPi processes that died without teardown — bounds
 		// accumulation without a background timer. Best-effort and detached so a
 		// slow reap never delays the open (issue #10022).
 		void reapOrphanSharedTargets(browser, { projectDir: shared.projectDir, daemonName: shared.daemonName });

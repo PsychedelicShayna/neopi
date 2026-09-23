@@ -459,9 +459,9 @@ export interface LaunchHeadlessOptions extends HeadlessLaunchFeatures {
 export interface LaunchHeadlessResult {
 	browser: Browser;
 	/**
-	 * OMP-owned temporary Chromium profile directory to remove after the browser
+	 * NeoPi-owned temporary Chromium profile directory to remove after the browser
 	 * process tree exits, or `undefined` when the caller supplied its own
-	 * `--user-data-dir` (which OMP must not delete).
+	 * `--user-data-dir` (which NeoPi must not delete).
 	 */
 	userDataDir?: string;
 }
@@ -586,7 +586,7 @@ export async function resolveSharedBrowserLaunchSpec(opts: {
 }
 
 /**
- * Remove an OMP-owned headless Chromium profile directory, tolerating the brief
+ * Remove a NeoPi-owned headless Chromium profile directory, tolerating the brief
  * window on Windows in which Chromium (or an orphaned browser subprocess) still
  * holds the profile lock. The shared temp remover centralizes retry handling
  * for EBUSY/EPERM/ENOTEMPTY; if the directory is still busy afterwards we warn

@@ -1,16 +1,16 @@
 import { PRODUCT_NAME } from "@oh-my-pi/pi-utils/dirs";
 /**
- * OMP extension-package sub-discovery provider.
+ * NeoPi extension-package sub-discovery provider.
  *
  * When a user configures an extension via `extensions:` (in settings) or
  * `--extension`/`-e` (on the CLI), the docs promise that the package's
  * sibling directories — `skills/`, `hooks/pre|post/`, `tools/`, `commands/`,
- * `rules/`, `prompts/`, and `.mcp.json` — are picked up by omp's standard
- * discovery surfaces. The native `omp` provider in `builtin.ts` only walks
+ * `rules/`, `prompts/`, and `.mcp.json` — are picked up by NeoPi's standard
+ * discovery surfaces. The native NeoPi provider in `builtin.ts` only walks
  * `.omp/` and `~/.omp/agent/`, so without this provider those sub-trees are
  * silently ignored.
  *
- * Provider priority is set below the native `omp` provider (100) so an
+ * Provider priority is set below the native NeoPi provider (100) so an
  * extension package never shadows the user's own `.omp/` configuration on
  * dedup.
  *

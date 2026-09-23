@@ -23,6 +23,10 @@ const registry: STTControllerDependencies["registry"] = {
 	getAvailable: () => DICTATION_MODELS,
 	getAll: () => DICTATION_MODELS,
 	resolver: () => () => "test-key",
+	getProviderBaseUrl: () => undefined,
+	find: (provider, modelId) => DICTATION_MODELS.find(m => m.provider === provider && m.id === modelId),
+	resolveModelHeaders: async () => undefined,
+	getProviderHeaders: async () => undefined,
 };
 
 async function touch(file: string): Promise<void> {
@@ -202,6 +206,10 @@ describe("STTController preflight", () => {
 			getAvailable: () => [],
 			getAll: () => [],
 			resolver: () => () => "test-key",
+			getProviderBaseUrl: () => undefined,
+			find: () => undefined,
+			resolveModelHeaders: async () => undefined,
+			getProviderHeaders: async () => undefined,
 		};
 		const isCached = vi.spyOn(downloader, "isSttModelCached").mockResolvedValue(true);
 		vi.spyOn(downloader, "downloadSttModel").mockReturnValue(new Promise<void>(() => {}));

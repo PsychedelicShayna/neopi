@@ -227,7 +227,7 @@ function collectDevinFamilyLane(lanes: Map<string, DevinFamilyLane>, config: Cli
 	// effort label; its explicit Thinking axis decides whether the route is off.
 	if (thinking === false) effort = "off";
 
-	// Family label as an OMP id: "GPT-5.6 Sol" -> "gpt-5-6-sol".
+	// Family label as a NeoPi id: "GPT-5.6 Sol" -> "gpt-5-6-sol".
 	const baseId = label
 		.toLowerCase()
 		.replace(/[^a-z0-9]+/g, "-")

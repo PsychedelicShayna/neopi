@@ -22,11 +22,13 @@
 - Extension parse caches are isolated by schema so concurrently installed upstream and fork versions cannot invalidate each other.
 - Receipt-based messages queued during compaction now hold the pending resume until delivery or cancellation settles.
 - Directly constructed sessions now share and release eval kernels using their configured parent session and owner.
+- Custom eval runtimes keep control of their own percent-command syntax.
 
 ### Changed
 
 - Fork extensions now use NeoPi names and migrate existing persona, loadout, REPL, and live-persona state on first read.
 - Use `npi update` for the fork's PR-based update workflow and `npi flash` for portable builds.
+- xAI dictation now uses the Dictation model role while retaining hold-to-talk and recoverable disk-backed recordings.
 - Advisor concerns now arrive between tool batches without cancelling running tools, blockers interrupt immediately, and nits appear only after the full primary turn ends.
 
 ### Removed

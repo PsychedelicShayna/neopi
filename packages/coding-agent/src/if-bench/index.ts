@@ -1,5 +1,5 @@
 /**
- * `omp if-bench` — instruction-following and working-memory benchmark.
+ * `npi if-bench` — instruction-following and working-memory benchmark.
  *
  * One cacheable conversation per model: turn N issues N glyph actions over the
  * array the model itself reported last turn, while a `nya{1,N}` directive

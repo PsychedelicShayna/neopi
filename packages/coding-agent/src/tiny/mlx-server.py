@@ -1,7 +1,7 @@
 # MLX tiny-model worker: one process per local model, owning that model's
 # socket and speaking the same JSON-lines protocol as the ONNX worker
 # (`title-protocol.ts`). Started by `title-client.ts` from the mlx-lm venv;
-# serves every omp process on the machine; exits on its own once idle.
+# serves every NeoPi process on the machine; exits on its own once idle.
 #
 # Requests (one object per line):
 #   {"type": "ping", "id"}                        -> pong (with the launch tag)

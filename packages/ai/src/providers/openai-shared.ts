@@ -326,7 +326,7 @@ export function resolveOpenAIRequestSetup(
 	if (options.defaultBaseUrl !== undefined) {
 		baseUrl = baseUrl ?? ($env.OPENAI_BASE_URL?.trim() || options.defaultBaseUrl);
 	}
-	// Attribute xAI traffic as omp unless a User-Agent is already set.
+	// Attribute xAI traffic as NeoPi unless a User-Agent is already set.
 	if (model.provider === "xai" || model.provider === "xai-oauth") {
 		setHeaderIfAbsent(headers, "User-Agent", USER_AGENT);
 	}
@@ -1778,7 +1778,7 @@ export function convertResponsesInputContent(
 /**
  * Map freeform custom-tool wire names back to the internal tool name for
  * providers that only accept function_call / function_call_output.
- * Built once per request; `apply_patch` → `edit` is the OMP default.
+ * Built once per request; `apply_patch` → `edit` is the NeoPi default.
  */
 function buildCustomToolWireNameMap(tools: readonly Tool[] | undefined): ReadonlyMap<string, string> | undefined {
 	if (!tools?.length) return undefined;

@@ -13,6 +13,10 @@ const registry: STTControllerDependencies["registry"] = {
 	getAvailable: () => DICTATION_MODELS,
 	getAll: () => DICTATION_MODELS,
 	resolver: () => () => "test-key",
+	getProviderBaseUrl: () => undefined,
+	find: (provider, modelId) => DICTATION_MODELS.find(m => m.provider === provider && m.id === modelId),
+	resolveModelHeaders: async () => undefined,
+	getProviderHeaders: async () => undefined,
 };
 
 describe("STT Submit Trigger Evaluation", () => {
