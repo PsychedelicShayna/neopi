@@ -225,6 +225,42 @@ describe("installNeopiExtensions", () => {
 		const leftovers = (await fs.readdir(dest)).filter(name => name.includes(".tmp") || name.includes("pre-symlink"));
 		expect(leftovers).toEqual([]);
 	});
+
+	test("quarantine marker blocks activation and preserves the legacy link, until the marker is removed", async () => {
+		const source = await tempDir("neopi-ext-src-");
+		const dest = await tempDir("neopi-ext-dest-");
+		const oldCheckout = await tempDir("omomp-old-checkout-");
+		await writeExtension(source, "neopi-persona");
+		await writeExtension(source, "neopi-repl");
+		const legacySource = await writeExtension(path.join(oldCheckout, "extensions"), "omomp-repl");
+		const legacyDest = path.join(dest, "omomp-repl");
+		await fs.symlink(legacySource, legacyDest);
+		const marker = path.join(dest, ".neopi-repl.quarantined");
+		await Bun.write(marker, "");
+
+		const first = await installNeopiExtensions({ sourceDir: source, destDir: dest });
+
+		expect(first.quarantined).toEqual(["neopi-repl"]);
+		expect(first.installed).toEqual(["neopi-persona"]);
+		expect(first.retired).toEqual([]);
+		expect(formatNeopiExtensionsResult(first)).toMatch(/quarantined.*neopi-repl/);
+		await expect(fs.lstat(path.join(dest, "neopi-repl"))).rejects.toMatchObject({ code: "ENOENT" });
+		expect(await fs.readlink(legacyDest)).toBe(legacySource);
+		expect(await fs.realpath(path.join(dest, "neopi-persona"))).toBe(
+			await fs.realpath(path.join(source, "neopi-persona")),
+		);
+		expect((await fs.lstat(marker)).isFile()).toBe(true);
+
+		await fs.rm(marker);
+		const second = await installNeopiExtensions({ sourceDir: source, destDir: dest });
+
+		expect(second.quarantined).toEqual([]);
+		expect(second.installed).toEqual(["neopi-repl"]);
+		expect(second.unchanged).toEqual(["neopi-persona"]);
+		expect(second.retired).toEqual(["omomp-repl"]);
+		expect(await fs.realpath(path.join(dest, "neopi-repl"))).toBe(await fs.realpath(path.join(source, "neopi-repl")));
+		await expect(fs.lstat(legacyDest)).rejects.toMatchObject({ code: "ENOENT" });
+	});
 });
 
 describe("default NeoPi extension paths", () => {

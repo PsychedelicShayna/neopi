@@ -8,6 +8,12 @@
  * a hard-coded source list. Unrelated entries in dest are left untouched;
  * known legacy extension symlinks are retired after their replacements activate.
  * A same-named dest directory is renamed aside, never deleted.
+ *
+ * A hidden marker file `.<name>.quarantined` in `destDir` quarantines a
+ * source extension: activation is skipped entirely and its legacy
+ * counterpart (if any) is left alone, since no replacement went active.
+ * Markers are never created or removed by this script; only their presence
+ * is checked. Removing a marker lets the next installation proceed normally.
  */
 import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
@@ -28,6 +34,7 @@ export interface InstallNeopiExtensionsResult {
 	installed: string[];
 	refreshed: string[];
 	unchanged: string[];
+	quarantined: string[];
 	retired: string[];
 	backups: NeopiExtensionBackup[];
 }
@@ -65,6 +72,21 @@ export function defaultNeopiExtensionsSourceDir(repoRoot: string): string {
 
 export function defaultNeopiExtensionsDestDir(agentDir?: string): string {
 	return path.join(agentDir ?? getAgentDir(), "extensions");
+}
+
+/**
+ * A source extension is quarantined when `<destDir>/.<name>.quarantined`
+ * exists. Detected with `lstat` so a dangling symlink still counts; ENOENT
+ * means not quarantined, any other error propagates.
+ */
+async function isExtensionQuarantined(destDir: string, name: string): Promise<boolean> {
+	try {
+		await fs.lstat(path.join(destDir, `.${name}.quarantined`));
+		return true;
+	} catch (error) {
+		if (isEnoent(error)) return false;
+		throw error;
+	}
 }
 
 /** Directory names under `sourceDir` that should be deployed. Hidden names and files are ignored. */
@@ -198,6 +220,8 @@ async function ensureManagedSymlink(source: string, dest: string): Promise<Manag
  * directories are renamed aside and reported, not removed. Once a NeoPi
  * counterpart is active, retire its known legacy symlink only when the target
  * has the expected extensions/<legacy-name> shape. Leave other entries alone.
+ * Quarantined extensions (see `isExtensionQuarantined`) are skipped entirely:
+ * neither activated nor counted toward retiring their legacy counterpart.
  */
 export async function installNeopiExtensions(
 	options: InstallNeopiExtensionsOptions,
@@ -211,15 +235,22 @@ export async function installNeopiExtensions(
 		installed: [],
 		refreshed: [],
 		unchanged: [],
+		quarantined: [],
 		backups: [],
 		retired: [],
 	};
+	const activeNames = new Set<string>();
 	for (const name of names) {
+		if (await isExtensionQuarantined(destDir, name)) {
+			result.quarantined.push(name);
+			continue;
+		}
+		activeNames.add(name);
 		const outcome = await ensureManagedSymlink(path.join(sourceDir, name), path.join(destDir, name));
 		result[outcome.status].push(name);
 		if (outcome.backup) result.backups.push({ name, path: outcome.backup });
 	}
-	result.retired = await retireLegacyExtensions(destDir, new Set(names));
+	result.retired = await retireLegacyExtensions(destDir, activeNames);
 	return result;
 }
 
@@ -228,6 +259,9 @@ export function formatNeopiExtensionsResult(result: InstallNeopiExtensionsResult
 		result.installed.length ? `linked ${result.installed.join(", ")}` : undefined,
 		result.refreshed.length ? `refreshed ${result.refreshed.join(", ")}` : undefined,
 		result.unchanged.length ? `already current ${result.unchanged.join(", ")}` : undefined,
+		result.quarantined.length
+			? `quarantined ${result.quarantined.length}: ${result.quarantined.join(", ")}`
+			: undefined,
 		result.retired.length ? `retired ${result.retired.length}: ${result.retired.join(", ")}` : undefined,
 		result.backups.length
 			? `kept ${result.backups.map(backup => `${backup.name} at ${backup.path}`).join(", ")}`

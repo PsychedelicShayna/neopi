@@ -69,6 +69,10 @@ An unregistered `agent` value shaped like `provider/model[:effort]` or `@role[:e
 
 NeoPi builds `packages/coding-agent/dist/npi` and installs only as `npi`. `scripts/install-neopi-extensions.ts` manages the fork extension links without deleting unrelated user extensions. Exact argv `npi update` launches the fork-specific interactive update request from `packages/coding-agent/src/prompts/npi-update.md`; extra update flags retain ordinary updater behavior.
 
+The installer and post-build hook honor a hidden `.<extension-name>.quarantined` marker in the destination extensions directory (by default `~/.omp/agent/extensions`). A marked extension is not linked or refreshed, and its legacy counterpart is not retired. The installer reports quarantined names without removing their markers.
+
+To quarantine an active extension, move its link out of the extensions directory and create the corresponding marker, for example `.neopi-repl.quarantined`. The marker prevents reinstallation; it does not disable an already-present link. Remove the marker and rerun `bun scripts/install-neopi-extensions.ts` to restore deployment.
+
 Early binary and deployment work is recorded by `da8bb86645`, `e795702ff4`, `64380829e2`, `05380db554`, and `bc1c74703d`. Current policy supersedes their historical command names; follow `AGENTS.md` and `docs/agents/upstream-sync.md`.
 
 ## Portable flash and RAM operation

@@ -19,6 +19,7 @@
 - Added `tui.titleSpinner` (`braille` | `dots` | `line`, default `braille`) to pick the terminal-title working-state spinner glyphs alongside the existing `tui.titleState` on/off toggle.
 ### Fixed
 
+- Fork extension installs and rebuilds now respect explicit quarantine markers instead of reactivating disabled extensions.
 - Extension parse caches are isolated by schema so concurrently installed upstream and fork versions cannot invalidate each other.
 - Receipt-based messages queued during compaction now hold the pending resume until delivery or cancellation settles.
 - Directly constructed sessions now share and release eval kernels using their configured parent session and owner.
