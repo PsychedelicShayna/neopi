@@ -184,6 +184,31 @@ describe("AgentSession.switchSession previous-context build", () => {
 		expect(sessionManager.getSessionFile()).toBe(previousSessionFile);
 		expect(sessionManager.getCwd()).toBe(sourceDir.path());
 	});
+	it("resumes a session whose recorded project directory was deleted in the current cwd", async () => {
+		const sourceDir = TempDir.createSync("@pi-switch-deleted-source-");
+		const deletedProject = TempDir.createSync("@pi-switch-deleted-project-");
+		const targetSessions = TempDir.createSync("@pi-switch-deleted-sessions-");
+		tempDirs.push(sourceDir, deletedProject, targetSessions);
+
+		const { session, sessionManager } = buildSession(sourceDir);
+		sessionManager.appendMessage({ role: "user", content: "source", timestamp: 1 });
+		await sessionManager.flush();
+		const targetManager = SessionManager.create(deletedProject.path(), targetSessions.path());
+		targetManager.appendMessage({ role: "user", content: "target", timestamp: 2 });
+		await targetManager.ensureOnDisk();
+		await targetManager.flush();
+		const targetSessionFile = targetManager.getSessionFile();
+		await targetManager.close();
+		await deletedProject.remove();
+
+		const onCwdChange = vi.fn(async () => true);
+		const switched = await session.switchSession(targetSessionFile!, { onCwdChange });
+
+		expect(switched).toBe(true);
+		expect(onCwdChange).not.toHaveBeenCalled();
+		expect(sessionManager.getSessionFile()).toBe(targetSessionFile);
+		expect(sessionManager.getCwd()).toBe(sourceDir.path());
+	});
 	it("rejects callback-free switches across project directories", async () => {
 		const sourceDir = TempDir.createSync("@pi-switch-no-callback-source-");
 		const targetDir = TempDir.createSync("@pi-switch-no-callback-target-");
