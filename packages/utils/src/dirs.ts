@@ -15,7 +15,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { engines, version } from "../package.json" with { type: "json" };
-import { isEnoent, isEnotdir } from "./fs-error";
+import { isEexist, isEnoent, isEnotdir } from "./fs-error";
 
 /** Executable name used in CLI output and launch commands. */
 export const APP_NAME: string = "npi";
@@ -976,6 +976,32 @@ function adoptLegacyFile(legacyPath: string, targetPath: string): void {
 		// Opportunistic: a copy race or unwritable XDG dir falls back to a fresh
 		// file at the new path — the pre-adoption behavior.
 	}
+}
+
+/**
+ * Read renamed JSON state, adopting a legacy file on the same filesystem only
+ * when the new path is absent. Hard-link activation cannot replace newer state.
+ */
+export async function readJsonWithLegacyFile(targetPath: string, legacyPath: string): Promise<unknown> {
+	const file = Bun.file(targetPath);
+	try {
+		return await file.json();
+	} catch (error) {
+		if (!isEnoent(error)) throw error;
+	}
+	try {
+		await fs.promises.link(legacyPath, targetPath);
+	} catch (error) {
+		// A concurrent loader may have adopted and removed the legacy file.
+		if (isEexist(error) || isEnoent(error)) return file.json();
+		throw error;
+	}
+	try {
+		await fs.promises.unlink(legacyPath);
+	} catch (error) {
+		if (!isEnoent(error)) throw error;
+	}
+	return file.json();
 }
 
 /** Get the secret placeholder key path (~/.omp/agent/secret-placeholder.key; XDG default: $XDG_STATE_HOME/omp/secret-placeholder.key). Adopts a legacy key on first XDG resolution. */

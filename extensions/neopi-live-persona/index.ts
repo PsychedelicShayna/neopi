@@ -1,17 +1,23 @@
-// omomp-live-persona: named instruction sets for the live voice model.
-// Command-surface twin of omomp-persona. The store, validation, and resolver
+// neopi-live-persona: named instruction sets for the live voice model.
+// Command-surface twin of neopi-persona. The store, validation, and resolver
 // live in the fork at packages/coding-agent/src/live/personas.ts so the live
 // controller resolves the exact same state file
-// (<agentDir>/omomp-live-personas.json); this extension is only the command UX.
-import type { ExtensionAPI, ExtensionCommandContext } from "/home/shayna/omp/packages/coding-agent/src/extensibility/extensions/types.ts";
+// (<agentDir>/neopi-live-personas.json); this extension is only the command UX.
+import type {
+	ExtensionAPI,
+	ExtensionCommandContext,
+} from "../../packages/coding-agent/src/extensibility/extensions/types.ts";
 import type { LivePersonaFeature } from "../../packages/coding-agent/src/live/personas.ts";
 import { createLivePersonaFeature, DEFAULT_LIVE_PERSONA } from "../../packages/coding-agent/src/live/personas.ts";
 import { output, report, words } from "./util.ts";
 
-/** Reflect the current selection in the footer, mirroring omomp-persona's status line. */
+/** Reflect the current selection in the footer, mirroring neopi-persona's status line. */
 async function syncStatus(personas: LivePersonaFeature, ctx: ExtensionCommandContext): Promise<void> {
 	const data = await personas.data();
-	ctx.ui.setStatus("omomp-live-persona", data.active === DEFAULT_LIVE_PERSONA ? undefined : `live persona: ${data.active}`);
+	ctx.ui.setStatus(
+		"neopi-live-persona",
+		data.active === DEFAULT_LIVE_PERSONA ? undefined : `live persona: ${data.active}`,
+	);
 }
 
 async function livePersonaUse(personas: LivePersonaFeature, ctx: ExtensionCommandContext, name: string): Promise<void> {
@@ -22,7 +28,11 @@ async function livePersonaUse(personas: LivePersonaFeature, ctx: ExtensionComman
 	});
 }
 
-async function livePersonaDelete(personas: LivePersonaFeature, ctx: ExtensionCommandContext, name: string): Promise<void> {
+async function livePersonaDelete(
+	personas: LivePersonaFeature,
+	ctx: ExtensionCommandContext,
+	name: string,
+): Promise<void> {
 	await report(ctx, async () => {
 		const result = await personas.delete(name);
 		await syncStatus(personas, ctx);
@@ -31,11 +41,18 @@ async function livePersonaDelete(personas: LivePersonaFeature, ctx: ExtensionCom
 }
 
 /** Clone-and-tweak flow: pick a source, name the copy, optionally edit right away. */
-async function livePersonaClone(personas: LivePersonaFeature, ctx: ExtensionCommandContext, source?: string): Promise<void> {
+async function livePersonaClone(
+	personas: LivePersonaFeature,
+	ctx: ExtensionCommandContext,
+	source?: string,
+): Promise<void> {
 	let from = source;
 	if (!from) {
 		const data = await personas.data();
-		from = await ctx.ui.select("Clone from", data.items.map(item => item.name));
+		from = await ctx.ui.select(
+			"Clone from",
+			data.items.map(item => item.name),
+		);
 		if (!from) return;
 	}
 	const name = await ctx.ui.input("New live persona name");
@@ -47,7 +64,11 @@ async function livePersonaClone(personas: LivePersonaFeature, ctx: ExtensionComm
 }
 
 /** Edit flow using the built-in editor, prefilled with the current instructions. */
-async function livePersonaEdit(personas: LivePersonaFeature, ctx: ExtensionCommandContext, existingName?: string): Promise<void> {
+async function livePersonaEdit(
+	personas: LivePersonaFeature,
+	ctx: ExtensionCommandContext,
+	existingName?: string,
+): Promise<void> {
 	const name = existingName ?? (await ctx.ui.input("Live persona name"));
 	if (!name) return;
 	let current: string;
@@ -70,7 +91,9 @@ async function livePersonaMenu(personas: LivePersonaFeature, ctx: ExtensionComma
 		const options = [
 			...data.items.map(item => ({
 				label: `${item.active ? "● " : "  "}${item.name}`,
-				description: item.builtin ? "built-in default (immutable, clone to customize)" : `${item.instructions.length} chars`,
+				description: item.builtin
+					? "built-in default (immutable, clone to customize)"
+					: `${item.instructions.length} chars`,
 			})),
 			{ label: "✚ Clone persona", description: "Create a new live persona from an existing one" },
 		];
@@ -94,17 +117,25 @@ async function livePersonaMenu(personas: LivePersonaFeature, ctx: ExtensionComma
 			...(item.builtin
 				? []
 				: [
-					{ label: "Edit", description: "Modify the instruction text" },
-					{ label: "Delete", description: "Remove this persona" },
-				]),
+						{ label: "Edit", description: "Modify the instruction text" },
+						{ label: "Delete", description: "Remove this persona" },
+					]),
 		]);
 		if (!action) continue; // back to list
 
 		switch (action) {
-			case "Use": await livePersonaUse(personas, ctx, personaName); break;
-			case "Show": await report(ctx, () => personas.show(personaName)); break;
-			case "Clone": await livePersonaClone(personas, ctx, personaName); break;
-			case "Edit": await livePersonaEdit(personas, ctx, personaName); break;
+			case "Use":
+				await livePersonaUse(personas, ctx, personaName);
+				break;
+			case "Show":
+				await report(ctx, () => personas.show(personaName));
+				break;
+			case "Clone":
+				await livePersonaClone(personas, ctx, personaName);
+				break;
+			case "Edit":
+				await livePersonaEdit(personas, ctx, personaName);
+				break;
 			case "Delete": {
 				if (await ctx.ui.confirm("Delete live persona", `Delete '${personaName}'?`)) {
 					await livePersonaDelete(personas, ctx, personaName);
@@ -115,7 +146,7 @@ async function livePersonaMenu(personas: LivePersonaFeature, ctx: ExtensionComma
 	}
 }
 
-export default function omomp_live_persona(api: ExtensionAPI): void {
+export default function neopi_live_persona(api: ExtensionAPI): void {
 	const personas = createLivePersonaFeature();
 
 	api.registerCommand("live-persona", {
@@ -128,12 +159,14 @@ export default function omomp_live_persona(api: ExtensionAPI): void {
 				return;
 			}
 			switch (command) {
-				case "list": return report(ctx, () => personas.list());
+				case "list":
+					return report(ctx, () => personas.list());
 				case "show": {
 					if (!first) return output(ctx, "Usage: /live-persona show <name>", true);
 					return report(ctx, () => personas.show(first));
 				}
-				case "status": return report(ctx, () => personas.status());
+				case "status":
+					return report(ctx, () => personas.status());
 				case "use": {
 					if (!first) return output(ctx, "Usage: /live-persona use <name>", true);
 					return livePersonaUse(personas, ctx, first);
@@ -155,7 +188,11 @@ export default function omomp_live_persona(api: ExtensionAPI): void {
 					return;
 				}
 				default:
-					return output(ctx, "Usage: /live-persona list|show <name>|clone <source> [name]|edit [name]|use <name>|delete <name>|status", true);
+					return output(
+						ctx,
+						"Usage: /live-persona list|show <name>|clone <source> [name]|edit [name]|use <name>|delete <name>|status",
+						true,
+					);
 			}
 		},
 	});
