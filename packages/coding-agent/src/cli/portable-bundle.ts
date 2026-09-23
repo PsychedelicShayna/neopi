@@ -6,7 +6,7 @@ import * as path from "node:path";
 export const PORTABLE_COMPILE_TARGET = "bun-linux-x64-baseline" as const;
 export const PORTABLE_COMPATIBILITY_TIER = "linux-x64-baseline" as const;
 export const PORTABLE_NATIVE_FILENAME = "pi_natives.linux-x64-baseline.node" as const;
-export const PORTABLE_WRAPPER_FILENAME = "omomp-ram-wrapper.sh" as const;
+export const PORTABLE_WRAPPER_FILENAME = "npi-ram-wrapper.sh" as const;
 
 export interface PortableBundleManifest {
 	readonly schemaVersion: 1;
@@ -14,7 +14,7 @@ export interface PortableBundleManifest {
 	readonly nativesVersion: string;
 	readonly compatibilityTier: typeof PORTABLE_COMPATIBILITY_TIER;
 	readonly compileTarget: typeof PORTABLE_COMPILE_TARGET;
-	readonly binary: { readonly filename: "omomp"; readonly sha256: string };
+	readonly binary: { readonly filename: "npi"; readonly sha256: string };
 	readonly native: { readonly filename: typeof PORTABLE_NATIVE_FILENAME; readonly sha256: string };
 	readonly wrapper: { readonly filename: typeof PORTABLE_WRAPPER_FILENAME; readonly sha256: string };
 	readonly nativeBuildRoute: "bazel" | "cargo";
@@ -36,7 +36,7 @@ export class PortableBundleError extends Error {}
 const RECOVERY =
 	"Build a portable bundle first:\n" +
 	"  bun run build:portable\n" +
-	"  sudo packages/coding-agent/dist/portable/omomp flash <device>";
+	"  sudo packages/coding-agent/dist/portable/npi flash <device>";
 
 function isSha256(value: unknown): value is string {
 	return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
@@ -59,7 +59,7 @@ function parseManifest(value: unknown): PortableBundleManifest {
 		!Array.isArray(manifest.embeddedNativeVariants) ||
 		manifest.embeddedNativeVariants.length !== 1 ||
 		manifest.embeddedNativeVariants[0] !== "baseline" ||
-		binary?.filename !== "omomp" ||
+		binary?.filename !== "npi" ||
 		!isSha256(binary.sha256) ||
 		native?.filename !== PORTABLE_NATIVE_FILENAME ||
 		!isSha256(native.sha256) ||
@@ -81,9 +81,7 @@ export async function resolvePortableBundleDirectory(
 	env: NodeJS.ProcessEnv = process.env,
 	execPath: string = process.execPath,
 ): Promise<string> {
-	return env.OMOMP_PORTABLE_BUNDLE
-		? path.resolve(env.OMOMP_PORTABLE_BUNDLE)
-		: path.dirname(await fs.realpath(execPath));
+	return env.NPI_PORTABLE_BUNDLE ? path.resolve(env.NPI_PORTABLE_BUNDLE) : path.dirname(await fs.realpath(execPath));
 }
 
 export async function validatePortableBundle(

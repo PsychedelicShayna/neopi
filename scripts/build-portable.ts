@@ -11,7 +11,7 @@ const packageDir = path.join(repoRoot, "packages/coding-agent");
 const nativeDir = path.join(repoRoot, "packages/natives/native");
 const baselineNativeName = "pi_natives.linux-x64-baseline.node";
 const compileTarget = "bun-linux-x64-baseline" as const;
-const wrapperName = "omomp-ram-wrapper.sh" as const;
+const wrapperName = "npi-ram-wrapper.sh" as const;
 
 export interface PortableManifest {
 	readonly schemaVersion: 1;
@@ -19,7 +19,7 @@ export interface PortableManifest {
 	readonly nativesVersion: string;
 	readonly compatibilityTier: "linux-x64-baseline";
 	readonly compileTarget: typeof compileTarget;
-	readonly binary: { readonly filename: "omomp"; readonly sha256: string };
+	readonly binary: { readonly filename: "npi"; readonly sha256: string };
 	readonly native: { readonly filename: typeof baselineNativeName; readonly sha256: string };
 	readonly wrapper: { readonly filename: typeof wrapperName; readonly sha256: string };
 	readonly nativeBuildRoute: "bazel" | "cargo";
@@ -135,7 +135,7 @@ export async function buildPortable(): Promise<PortableManifest> {
 		assertBaselineEmbedding(await Bun.file(path.join(nativeDir, "embedded-addon.js")).text());
 		const { compileCodingAgent } = await import("../packages/coding-agent/scripts/compile-binary");
 
-		const binaryPath = path.join(stagingDir, "omomp");
+		const binaryPath = path.join(stagingDir, "npi");
 		await compileCodingAgent({
 			repoRoot,
 			entrypoint: path.join(packageDir, "src/cli.ts"),
@@ -157,7 +157,7 @@ export async function buildPortable(): Promise<PortableManifest> {
 			nativesVersion: nativesManifest.version,
 			compatibilityTier: "linux-x64-baseline",
 			compileTarget,
-			binary: { filename: "omomp", sha256: await sha256(binaryPath) },
+			binary: { filename: "npi", sha256: await sha256(binaryPath) },
 			native: { filename: baselineNativeName, sha256: await sha256(nativePath) },
 			wrapper: { filename: wrapperName, sha256: await sha256(wrapperPath) },
 			nativeBuildRoute,

@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { Database } from "bun:sqlite";
 import { buildRamFilter } from "../packages/coding-agent/src/cli/flash-cli";
 
-const wrapper = path.join(import.meta.dir, "omomp-ram-wrapper.sh");
+const wrapper = path.join(import.meta.dir, "npi-ram-wrapper.sh");
 const temps: string[] = [];
 afterEach(async () => Promise.all(temps.splice(0).map(temp => fs.rm(temp, { recursive: true, force: true }))));
 
@@ -18,12 +18,12 @@ interface Fixture {
 }
 
 async function fixture(): Promise<Fixture> {
-	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omomp-ram-test-"));
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "npi-ram-test-"));
 	temps.push(root);
 	const persistent = path.join(root, "persistent");
 	const ram = path.join(root, "ram");
 	const bundle = path.join(root, "bundle");
-	const binary = path.join(root, "fake-omomp");
+	const binary = path.join(root, "fake-npi");
 	await fs.mkdir(persistent, { recursive: true });
 	await fs.mkdir(bundle, { recursive: true });
 	await fs.writeFile(path.join(bundle, "ram-filter.rules"), buildRamFilter());
@@ -41,10 +41,10 @@ async function run(f: Fixture, args: string[], extra: Record<string, string> = {
 			...process.env,
 			HOME: f.root,
 			PI_CODING_AGENT_DIR: f.persistent,
-			OMOMP_RAM_ROOT: f.ram,
-			OMOMP_REAL_BINARY: f.binary,
-			OMOMP_PORTABLE_BUNDLE: f.bundle,
-			OMOMP_RAM_SYNC: "never",
+			NPI_RAM_ROOT: f.ram,
+			NPI_REAL_BINARY: f.binary,
+			NPI_PORTABLE_BUNDLE: f.bundle,
+			NPI_RAM_SYNC: "never",
 			...extra,
 		},
 		stdin: "ignore",
@@ -58,24 +58,24 @@ async function run(f: Fixture, args: string[], extra: Record<string, string> = {
 	};
 }
 
-describe("omomp RAM wrapper", () => {
+describe("npi RAM wrapper", () => {
 	test("copies once, reuses warm state, refreshes, and preserves child status", async () => {
 		const f = await fixture();
 		await fs.writeFile(path.join(f.persistent, "config.yml"), "first\n");
 		expect((await run(f, ["show"])).stdout).toBe("first\n");
 		await fs.writeFile(path.join(f.persistent, "config.yml"), "second\n");
 		expect((await run(f, ["show"])).stdout).toBe("first\n");
-		expect((await run(f, ["show"], { OMOMP_RAM_REFRESH: "1" })).stdout).toBe("second\n");
+		expect((await run(f, ["show"], { NPI_RAM_REFRESH: "1" })).stdout).toBe("second\n");
 		expect((await run(f, ["exit7"])).code).toBe(7);
-		expect((await run(f, ["show"], { OMOMP_RAM_MAX_BYTES: "1" })).stdout).toBe("second\n");
+		expect((await run(f, ["show"], { NPI_RAM_MAX_BYTES: "1" })).stdout).toBe("second\n");
 	});
 
 	test("refuses the size cap before creating a partial profile", async () => {
 		const f = await fixture();
 		await fs.writeFile(path.join(f.persistent, "config.yml"), "too large");
-		const result = await run(f, ["show"], { OMOMP_RAM_MAX_BYTES: "1" });
+		const result = await run(f, ["show"], { NPI_RAM_MAX_BYTES: "1" });
 		expect(result.code).toBe(75);
-		expect(result.stderr).toContain("OMOMP_RAM_DISABLE=1");
+		expect(result.stderr).toContain("NPI_RAM_DISABLE=1");
 		const initialized = [...new Bun.Glob("**/.initialized").scanSync(f.ram)];
 		expect(initialized).toEqual([]);
 	});
@@ -94,7 +94,7 @@ describe("omomp RAM wrapper", () => {
 		seed.close();
 		await fs.writeFile(path.join(f.persistent, "agent.db-wal"), "stale");
 		await fs.writeFile(path.join(f.persistent, "agent.db-shm"), "stale");
-		const result = await run(f, ["mutate"], { OMOMP_RAM_SYNC: "always" });
+		const result = await run(f, ["mutate"], { NPI_RAM_SYNC: "always" });
 		expect(result.code).toBe(0);
 		expect(await fs.readFile(path.join(f.persistent, "sessions/work/new.jsonl"), "utf8")).toBe("session");
 		expect(await fs.readFile(path.join(f.persistent, "blobs/new"), "utf8")).toBe("blob");

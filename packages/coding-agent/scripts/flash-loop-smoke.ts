@@ -12,10 +12,10 @@ if (!username || username === "root") throw new Error("pass --user <non-root-pay
 
 const repoRoot = path.resolve(import.meta.dir, "../../..");
 const bundle = path.join(repoRoot, "packages/coding-agent/dist/portable");
-const binary = path.join(bundle, "omomp");
+const binary = path.join(bundle, "npi");
 if (!(await Bun.file(binary).exists())) throw new Error("run bun run build:portable first");
-const passphrase = process.env.OMOMP_FLASH_TEST_PASSPHRASE || "omomp-loop-smoke";
-const work = await fs.mkdtemp(path.join(os.tmpdir(), "omomp-flash-loop-"));
+const passphrase = process.env.NPI_FLASH_TEST_PASSPHRASE || "npi-loop-smoke";
+const work = await fs.mkdtemp(path.join(os.tmpdir(), "npi-flash-loop-"));
 const image = path.join(work, "stick.img");
 let loop = "";
 let mapper = "";
@@ -55,7 +55,7 @@ try {
 	const stateMount = path.join(work, "state");
 	await fs.mkdir(stateMount);
 	await run(["mount", esp, stateMount]);
-	const statePath = path.join(stateMount, "omomp-flash-state.json");
+	const statePath = path.join(stateMount, "npi-flash-state.json");
 	const state = JSON.parse(await fs.readFile(statePath, "utf8")) as { completedPhases: string[] };
 	state.completedPhases = ["partitioned", "formatted", "base-installed"];
 	await fs.writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`);
@@ -67,7 +67,7 @@ try {
 	if ((await run(["blkid", "-o", "value", "-s", "UUID", luks])) !== luksUuid)
 		throw new Error("LUKS UUID changed on resume");
 
-	mapper = `omomp-loop-${process.pid}`;
+	mapper = `npi-loop-${process.pid}`;
 	await run(["cryptsetup", "open", "--key-file=-", luks, mapper], passphrase);
 	mountRoot = path.join(work, "mounted");
 	await fs.mkdir(mountRoot);
@@ -75,13 +75,13 @@ try {
 	await run(["mount", esp, path.join(mountRoot, "boot")]);
 	for (const relative of [
 		"boot/grub/grub.cfg",
-		"boot/omomp-flash-state.json",
+		"boot/npi-flash-state.json",
 		"etc/mkinitcpio.conf",
 		"etc/systemd/system/getty@tty1.service.d/autologin.conf",
-		"usr/local/lib/omomp-portable/manifest.json",
-		"usr/local/lib/omomp-portable/pi_natives.linux-x64-baseline.node",
-		"usr/local/lib/omomp-portable/ram-filter.rules",
-		"usr/local/bin/omomp",
+		"usr/local/lib/npi-portable/manifest.json",
+		"usr/local/lib/npi-portable/pi_natives.linux-x64-baseline.node",
+		"usr/local/lib/npi-portable/ram-filter.rules",
+		"usr/local/bin/npi",
 	]) {
 		await requireFile(relative);
 	}
