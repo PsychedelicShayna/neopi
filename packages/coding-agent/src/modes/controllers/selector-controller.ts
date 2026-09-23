@@ -2044,7 +2044,14 @@ export class SelectorController {
 		// Clear and re-render the chat
 		await this.ctx.renderInitialMessages({ clearTerminalHistory: true });
 		await this.ctx.reloadTodos();
-		this.ctx.showStatus(movedProject ? `Resumed session in ${shortenPath(newCwd)}` : "Resumed session");
+		const recordedCwd = this.ctx.sessionManager.getRecordedCwd();
+		if (recordedCwd && normalizePathForComparison(recordedCwd) !== normalizePathForComparison(newCwd)) {
+			this.ctx.showStatus(
+				`Resumed session in ${shortenPath(newCwd)}; its original directory ${shortenPath(recordedCwd)} no longer exists`,
+			);
+		} else {
+			this.ctx.showStatus(movedProject ? `Resumed session in ${shortenPath(newCwd)}` : "Resumed session");
+		}
 		return true;
 	}
 

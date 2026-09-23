@@ -1,4 +1,4 @@
-import { PRODUCT_NAME } from "@oh-my-pi/pi-utils/dirs";
+import { directoryIsMissing, PRODUCT_NAME } from "@oh-my-pi/pi-utils/dirs";
 /**
  * AgentSession - Core abstraction for agent lifecycle and session management.
  *
@@ -10010,7 +10010,14 @@ export class AgentSession {
 						if (!(await options.onCwdChange(newCwd, previousSessionState.cwd))) {
 							throw SESSION_CWD_CHANGE_REJECTED;
 						}
-					} else if (path.resolve(recordedCwd) !== path.resolve(previousSessionState.cwd)) {
+					} else if (
+						path.resolve(recordedCwd) !== path.resolve(previousSessionState.cwd) &&
+						!(await directoryIsMissing(recordedCwd))
+					) {
+						// The recorded project exists but cannot be entered (permission
+						// denied); resuming here would run tools against the wrong project.
+						// A deleted project has nowhere else to run, so setSessionFile's
+						// runtime-only fallback to the current cwd stands.
 						throw SESSION_CWD_CHANGE_REJECTED;
 					}
 				}
