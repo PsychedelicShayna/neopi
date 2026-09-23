@@ -12,7 +12,7 @@
 
 - Added independent, opt-in Chronicler capture with a built-in model role, per-session sourced markdown beats, bounded background passes, and immutable completed-batch checkpoints that recover without crash-replay duplicates. Local memory can remain enabled; task subagents do not capture.
 - Added per-advisor base system prompt editing in `/advisor configure`, with Backspace to restore the bundled default.
-- Added `omomp flash` to build and install an attested x86-64 baseline portable
+- Added `npi flash` to build and install an attested x86-64 baseline portable
   system with encrypted storage, resumable phases, a bounded profile, and
   explicit tmpfs persistence.
 - Added the `retry.waitForUsageReset` setting: when a provider reports usage-limit exhaustion with a reset time (5-hour or weekly quota windows on any provider), the session sleeps until the reset instead of failing fast past `retry.maxDelayMs`.
