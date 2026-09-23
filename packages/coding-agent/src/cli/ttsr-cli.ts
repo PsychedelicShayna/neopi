@@ -17,7 +17,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { AstMatchStrictness, astMatch, FileType, type GlobMatch, glob } from "@oh-my-pi/pi-natives";
 import chalk from "@oh-my-pi/pi-utils/chalk";
-import { getProjectDir } from "@oh-my-pi/pi-utils/dirs";
+import { APP_NAME, getProjectDir } from "@oh-my-pi/pi-utils/dirs";
 import {
 	BUILTIN_DEFAULTS_PROVIDER_ID,
 	compileRuleCondition,
@@ -406,7 +406,7 @@ async function runTest(args: TtsrTestArgs, json: boolean, cwd: string): Promise<
 	if (rules.length === 0) {
 		const msg = args.rule
 			? "Rule registered but produced no TTSR entry."
-			: `No TTSR rules registered for this project as agent "${agent}". Rules scoped to other agents via \`agents\` are excluded — run \`omp ttsr list\` to see every rule, or pass --agent <name>.`;
+			: `No TTSR rules registered for this project as agent "${agent}". Rules scoped to other agents via \`agents\` are excluded — run \`${APP_NAME} ttsr list\` to see every rule, or pass --agent <name>.`;
 		if (json) {
 			process.stdout.write(`${JSON.stringify({ error: msg })}\n`);
 		} else {

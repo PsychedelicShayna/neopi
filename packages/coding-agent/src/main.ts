@@ -10,6 +10,7 @@ import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
 import { EventLoopKeepalive } from "@oh-my-pi/pi-agent-core/utils/yield";
 import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
 import {
+	APP_NAME,
 	directoryIsMissing,
 	getLogPath,
 	getProjectDir,
@@ -1054,8 +1055,7 @@ export function normalizeContinueSessionArgs(parsed: Args, rawArgs?: readonly st
 	parsed.continue = false;
 	parsed.messages.splice(messageIndex, 1);
 }
-const FORK_NOT_FOUND_HINT =
-	"Run `omp --resume` without an argument to pick from recent sessions, or `omp` to start a new one.";
+const FORK_NOT_FOUND_HINT = `Run \`${APP_NAME} --resume\` without an argument to pick from recent sessions, or \`${APP_NAME}\` to start a new one.`;
 
 function validateSessionPersistenceArgs(parsed: Pick<Args, "continue" | "noSession" | "resume">): void {
 	if (!parsed.noSession) return;
@@ -1124,10 +1124,7 @@ export async function createSessionManager(
 		}
 		const match = await resolveResumableSession(sessionArg, cwd, parsed.sessionDir);
 		if (!match) {
-			throw new SessionResolutionError(
-				`Session "${sessionArg}" not found.`,
-				"Run `omp --resume` without an argument to pick from recent sessions, or `omp` to start a new one.",
-			);
+			throw new SessionResolutionError(`Session "${sessionArg}" not found.`, FORK_NOT_FOUND_HINT);
 		}
 		if (match.scope === "local") {
 			const moveResult = await moveMissingCwdSessionIfNeeded(

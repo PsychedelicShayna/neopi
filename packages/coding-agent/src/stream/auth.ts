@@ -1,3 +1,4 @@
+import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { STREAM_AUTH_ENV, STREAM_AUTH_PROVIDER } from "@oh-my-pi/pi-wire";
 import { discoverAuthStorage } from "../sdk";
 import type { AuthStorage } from "../session/auth-storage";
@@ -23,7 +24,7 @@ export class StreamCredential {
 
 	/** Human guidance for a missing credential. */
 	static get missingMessage(): string {
-		return `omp stream needs a stencil.so account: run omp and use /login → Stencil, or set ${STREAM_AUTH_ENV}`;
+		return `${APP_NAME} stream needs a stencil.so account: run ${APP_NAME} and use /login → Stencil, or set ${STREAM_AUTH_ENV}`;
 	}
 
 	close(): void {

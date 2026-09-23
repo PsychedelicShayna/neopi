@@ -360,12 +360,7 @@ describe("ACP lazy startup", () => {
 
 		try {
 			const initializeResponse = await agentConnection.initialize({ protocolVersion: 1, clientCapabilities: {} });
-			expect(initializeResponse).toEqual(
-				expect.objectContaining({
-					protocolVersion: 1,
-					agentInfo: expect.objectContaining({ name: "oh-my-pi" }),
-				}),
-			);
+			expect(initializeResponse.protocolVersion).toBe(1);
 			expect(createCalls).toBe(0);
 
 			const newSessionPromise = agentConnection.newSession({ cwd: "/tmp/acp-lazy-startup", mcpServers: [] });

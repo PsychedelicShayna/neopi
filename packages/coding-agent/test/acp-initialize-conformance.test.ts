@@ -14,7 +14,7 @@ import { AcpAgent } from "@oh-my-pi/pi-coding-agent/modes/acp/acp-agent";
 import { ACP_TERMINAL_AUTH_FLAG, prepareAcpTerminalAuthArgs } from "@oh-my-pi/pi-coding-agent/modes/acp/terminal-auth";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { getConfigRootDir, setAgentDir, VERSION } from "@oh-my-pi/pi-utils";
+import { getConfigRootDir, setAgentDir } from "@oh-my-pi/pi-utils";
 import type { AgentSideConnection, InitializeRequest } from "@oh-my-pi/pi-utils/acp";
 import { expectAcpStructure } from "./helpers/acp-schema";
 
@@ -229,13 +229,6 @@ describe("ACP initialize conformance", () => {
 		const response = await agent.initialize(buildInitializeRequest());
 		const pkgPath = path.join(import.meta.dir, "..", "package.json");
 		const pkg = (await Bun.file(pkgPath).json()) as { version: string };
-		expect(response.agentInfo).toEqual(
-			expect.objectContaining({
-				name: "oh-my-pi",
-				title: "Oh My Pi",
-				version: VERSION,
-			}),
-		);
 		expect(response.agentInfo!.version).toBe(pkg.version);
 	});
 

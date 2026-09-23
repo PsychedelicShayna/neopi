@@ -1,3 +1,4 @@
+import { PRODUCT_NAME } from "@oh-my-pi/pi-utils/dirs";
 /**
  * AgentSession - Core abstraction for agent lifecycle and session management.
  *
@@ -570,7 +571,7 @@ export interface CustomMessageDelivery {
 export function powerAssertionOptions(mode: "off" | "idle" | "display" | "system"): PowerAssertionOptions | undefined {
 	if (mode === "off") return undefined;
 	return {
-		reason: "Oh My Pi agent session",
+		reason: `${PRODUCT_NAME} agent session`,
 		idle: true,
 		display: mode === "display" || mode === "system",
 		system: mode === "system",

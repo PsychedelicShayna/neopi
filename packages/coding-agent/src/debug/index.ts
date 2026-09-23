@@ -3,6 +3,7 @@
  *
  * Provides tools for debugging, bug report generation, and system diagnostics.
  */
+import { PRODUCT_NAME } from "@oh-my-pi/pi-utils/dirs";
 import * as fs from "node:fs/promises";
 import * as url from "node:url";
 import { getWorkProfile } from "@oh-my-pi/pi-natives";
@@ -471,7 +472,7 @@ export class DebugSelectorComponent extends OverlayPanel {
 		if (!suppressed) {
 			const sessionName = this.ctx.sessionManager.getSessionName();
 			const notification: TerminalNotification = {
-				title: sessionName || "Oh My Pi",
+				title: sessionName || PRODUCT_NAME,
 				body: "Terminal protocol test",
 				type: "test",
 				actions: "focus",

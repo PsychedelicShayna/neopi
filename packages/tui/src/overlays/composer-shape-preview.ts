@@ -7,6 +7,7 @@
  * stand-in, and the `session_name` segment falls back to a stand-in title
  * (passed via `previewTitle`) when the session is unnamed.
  */
+import { PRODUCT_NAME } from "@oh-my-pi/pi-utils";
 import {
 	type Component,
 	type ComposerChromeContext,
@@ -42,7 +43,7 @@ export interface ComposerShapePreviewOptions {
 	status?: ComposerPreviewStatusSource;
 }
 /** Stand-in session title shown while the previewed session is unnamed. */
-const PREVIEW_TITLE = "omp";
+const PREVIEW_TITLE = PRODUCT_NAME;
 
 export function renderComposerShapePreview(
 	shape: ComposerShape,

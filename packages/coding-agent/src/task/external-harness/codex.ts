@@ -1,3 +1,4 @@
+import { PRODUCT_NAME } from "@oh-my-pi/pi-utils/dirs";
 import { readFile, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { AgentProgress, SingleResult } from "@oh-my-pi/pi-tui/tools/task";
@@ -457,7 +458,7 @@ export const codexExternalHarnessAdapter: ExternalHarnessAdapter = {
 			]);
 			const startup = async () => {
 				await request("initialize", {
-					clientInfo: { name: "oh-my-pi", title: "Oh My Pi", version: "1" },
+					clientInfo: { name: "neopi", title: PRODUCT_NAME, version: "1" },
 					capabilities: null,
 				});
 				send({ method: "initialized" });

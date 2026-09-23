@@ -11,7 +11,7 @@
 import { type AuthStorage, type FetchImpl, type OAuthAccess, withOAuthAccess } from "@oh-my-pi/pi-ai";
 import { parseCloudflareAiGatewayCredential } from "@oh-my-pi/pi-catalog/wire/cloudflare-ai-gateway";
 import { getAntigravityUserAgent, getGeminiCliHeaders } from "@oh-my-pi/pi-catalog/wire/gemini-headers";
-import { fetchWithRetry, USER_AGENT } from "@oh-my-pi/pi-utils";
+import { APP_NAME, fetchWithRetry, USER_AGENT } from "@oh-my-pi/pi-utils";
 
 import type { SearchCitation, SearchResponse, SearchSource } from "@oh-my-pi/pi-tui/tools/web-search";
 import { SearchProviderError } from "../../../web/search/types";
@@ -667,7 +667,7 @@ export async function searchGemini(params: GeminiSearchParams): Promise<SearchRe
 			throw new Error(
 				endpoint.isCloudflareGateway
 					? 'No Cloudflare AI Gateway credential found. Configure provider "cloudflare-ai-gateway" or set CLOUDFLARE_AI_GATEWAY_API_KEY.'
-					: "No Gemini credentials found. Set GEMINI_API_KEY, configure an API key for provider \"google\", or login with 'omp /login google-gemini-cli' / 'omp /login google-antigravity' to enable Gemini web search.",
+					: `No Gemini credentials found. Set GEMINI_API_KEY, configure an API key for provider "google", or login with '${APP_NAME} /login google-gemini-cli' / '${APP_NAME} /login google-antigravity' to enable Gemini web search.`,
 			);
 		}
 		result = await callGeminiDeveloperSearch(

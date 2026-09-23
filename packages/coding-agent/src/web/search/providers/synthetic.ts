@@ -6,6 +6,7 @@
  */
 
 import { type ApiKey, type AuthStorage, type FetchImpl, getEnvApiKey, withAuth } from "@oh-my-pi/pi-ai";
+import { APP_NAME } from "@oh-my-pi/pi-utils";
 import type { SearchResponse, SearchSource } from "@oh-my-pi/pi-tui/tools/web-search";
 import { SearchProviderError } from "../../../web/search/types";
 import { formatQuery, parseSearchQuery } from "../query";
@@ -86,8 +87,7 @@ export async function searchSynthetic(params: SearchParamsWithFetch): Promise<Se
 		key => callSyntheticSearch(key, query, params.signal, fetchImpl, params.timeoutMs),
 		{
 			signal: params.signal,
-			missingKeyMessage:
-				"Synthetic credentials not found. Set SYNTHETIC_API_KEY or login with 'omp /login synthetic'.",
+			missingKeyMessage: `Synthetic credentials not found. Set SYNTHETIC_API_KEY or login with '${APP_NAME} /login synthetic'.`,
 		},
 	);
 	const sources: SearchSource[] = [];

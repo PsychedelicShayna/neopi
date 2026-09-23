@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getGlobalDaemonRuntimeDir, isEexist, isEnoent, logger, postmortem } from "@oh-my-pi/pi-utils";
+import { APP_NAME, getGlobalDaemonRuntimeDir, isEexist, isEnoent, logger, postmortem } from "@oh-my-pi/pi-utils";
 import { hostHasInheritableConsole } from "../eval/py/spawn-options";
 import { resolveWorkerSpawnCmd, workerEnvFromParent } from "../subprocess/worker-client";
 import { canonicalProjectDir, daemonBrokerEndpoint, daemonRuntimeDir } from "./paths";
@@ -306,7 +306,7 @@ class SocketDaemonClient implements DaemonBrokerClient {
 		throw new Error(
 			`Failed to start daemon broker at ${this.#endpoint} after ${CONNECT_TIMEOUT_MS / 1000}s: ` +
 				`${lastError?.message ?? "socket unavailable"}. Scope: ${this.#runtimeDir}. ` +
-				"Run `omp --smoke-test` to verify broker startup, or `omp ps` to inspect supervised processes.",
+				`Run \`${APP_NAME} --smoke-test\` to verify broker startup, or \`${APP_NAME} ps\` to inspect supervised processes.`,
 		);
 	}
 

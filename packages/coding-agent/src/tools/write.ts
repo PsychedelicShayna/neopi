@@ -12,7 +12,7 @@ import type {
 	ToolApprovalDecision,
 } from "@oh-my-pi/pi-agent-core";
 
-import { isEnoent, isRecord, prompt, untilAborted } from "@oh-my-pi/pi-utils";
+import { APP_NAME, isEnoent, isRecord, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import {
 	type ArchiveMemberContent,
 	archiveFormatFromPath,
@@ -401,7 +401,7 @@ function assertNotShorterReadProjection(
 	const payloadLength = writeContent === rawContent ? rawPayloadLength : normalizeToLF(writeContent).length;
 	if (payloadLength >= normalizeToLF(currentContent).length) return;
 	throw new ToolError(
-		`Refusing to overwrite '${displayPath}' with an incomplete read projection: the content ends with an omp read truncation notice and covers less than the current source, so it would discard unseen content. Re-read the omitted ranges and write the complete file, or use edit for a partial change.`,
+		`Refusing to overwrite '${displayPath}' with an incomplete read projection: the content ends with an ${APP_NAME} read truncation notice and covers less than the current source, so it would discard unseen content. Re-read the omitted ranges and write the complete file, or use edit for a partial change.`,
 	);
 }
 

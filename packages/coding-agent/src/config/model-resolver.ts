@@ -34,7 +34,7 @@ import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking"
 import { type GeneratedProvider, getBundledModels, modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { DEFAULT_MODEL_PER_PROVIDER } from "@oh-my-pi/pi-catalog/provider-models";
 import { fuzzyMatch } from "@oh-my-pi/pi-tui";
-import { logger } from "@oh-my-pi/pi-utils";
+import { APP_NAME, logger } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import MODEL_PRIO from "../priority.json" with { type: "json" };
 import {
@@ -1919,7 +1919,7 @@ export function resolveCliModel(options: {
 			model: undefined,
 			selector: undefined,
 			warning: undefined,
-			error: `Unknown provider "${cliProvider}". Run "omp models" to see available providers/models.`,
+			error: `Unknown provider "${cliProvider}". Run "${APP_NAME} models" to see available providers/models.`,
 		};
 	}
 
@@ -2004,7 +2004,7 @@ export function resolveCliModel(options: {
 					selector: undefined,
 					thinkingLevel: undefined,
 					warning: resolved.warning,
-					error: `Model "${trimmedModel}" not found. Run "omp models" to see available models.`,
+					error: `Model "${trimmedModel}" not found. Run "${APP_NAME} models" to see available models.`,
 				};
 			}
 		}
@@ -2064,7 +2064,7 @@ export function resolveCliModel(options: {
 			selector: undefined,
 			thinkingLevel: undefined,
 			warning,
-			error: `Model "${display}" not found. Run "omp models" to see available models.`,
+			error: `Model "${display}" not found. Run "${APP_NAME} models" to see available models.`,
 		};
 	}
 

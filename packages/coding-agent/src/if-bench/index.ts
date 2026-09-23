@@ -8,6 +8,7 @@
  * which makes the two failure modes separable from a single reply.
  */
 import { streamSimple } from "@oh-my-pi/pi-ai";
+import { APP_NAME } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import {
 	type BenchRuntime,
@@ -64,7 +65,7 @@ export async function runIfBenchCommand(
 	deps: IfBenchDependencies = {},
 ): Promise<IfBenchSummary> {
 	if (command.models.length === 0) {
-		throw new Error("Pass at least one model selector, e.g. `omp if-bench opus gpt-5.2`");
+		throw new Error(`Pass at least one model selector, e.g. \`${APP_NAME} if-bench opus gpt-5.2\``);
 	}
 	const maxTurns = positiveInteger("turns", command.flags.turns, DEFAULT_TURNS);
 	const arrayLength = positiveInteger("length", command.flags.length, DEFAULT_ARRAY_LENGTH);

@@ -1,3 +1,4 @@
+import { PRODUCT_NAME } from "@oh-my-pi/pi-utils/dirs";
 /**
  * OMP extension-package sub-discovery provider.
  *
@@ -41,7 +42,7 @@ import { listOmpExtensionRoots, type OmpExtensionRoot } from "./omp-extension-ro
 import { resolvePluginStdioPaths } from "./substitute-plugin-root";
 
 const PROVIDER_ID = "omp-plugins";
-const DISPLAY_NAME = "OMP Extension Packages";
+const DISPLAY_NAME = `${PRODUCT_NAME} Extension Packages`;
 const DESCRIPTION =
 	"Sub-discovery (skills, hooks, tools, commands, rules, prompts, .mcp.json) inside extension packages";
 const PRIORITY = 90;

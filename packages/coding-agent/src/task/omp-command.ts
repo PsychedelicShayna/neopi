@@ -1,6 +1,6 @@
 import process from "node:process";
 
-import { $env } from "@oh-my-pi/pi-utils";
+import { $env, APP_NAME } from "@oh-my-pi/pi-utils";
 
 interface OmpCommand {
 	cmd: string;
@@ -8,7 +8,7 @@ interface OmpCommand {
 	shell: boolean;
 }
 
-const DEFAULT_CMD = process.platform === "win32" ? "omp.cmd" : "omp";
+const DEFAULT_CMD = process.platform === "win32" ? `${APP_NAME}.cmd` : APP_NAME;
 const DEFAULT_SHELL = process.platform === "win32";
 
 export function resolveOmpCommand(): OmpCommand {

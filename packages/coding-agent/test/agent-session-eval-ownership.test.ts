@@ -8,7 +8,7 @@ import { AuthStorage } from "../src/session/auth-storage";
 import { SessionManager } from "../src/session/session-manager";
 
 it("fallback eval sessions share the parent kernel and dispose it after the last owner leaves", async () => {
-	using temp = TempDir.createSync("@omomp-eval-ownership-");
+	using temp = TempDir.createSync("@neopi-eval-ownership-");
 	const auth = await AuthStorage.create(":memory:");
 	const registry = new ModelRegistry(auth);
 	const sessions: AgentSession[] = [];

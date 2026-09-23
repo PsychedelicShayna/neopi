@@ -1,3 +1,4 @@
+import { PRODUCT_NAME } from "@oh-my-pi/pi-utils/dirs";
 import type { AskToolDetails, QuestionResult } from "@oh-my-pi/pi-tui/tools/ask";
 /**
  * Ask Tool - Interactive user prompting during execution
@@ -813,7 +814,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 		const method = this.session.settings.get("ask.notify");
 		if (method === "off") return;
 		TERMINAL.sendNotification({
-			title: "Oh My Pi",
+			title: PRODUCT_NAME,
 			body: "Waiting for input",
 			type: "ask",
 			urgency: "normal",

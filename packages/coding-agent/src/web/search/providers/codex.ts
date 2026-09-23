@@ -15,7 +15,7 @@ import {
 	OPENAI_HEADER_VALUES,
 	OPENAI_HEADERS,
 } from "@oh-my-pi/pi-catalog/wire/codex";
-import { $env, readSseJson, USER_AGENT } from "@oh-my-pi/pi-utils";
+import { $env, APP_NAME, readSseJson, USER_AGENT } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../../../config/model-registry";
 import type { SearchResponse, SearchSource } from "@oh-my-pi/pi-tui/tools/web-search";
 import { SearchProviderError } from "../../../web/search/types";
@@ -777,7 +777,7 @@ export async function searchCodex(params: SearchParams): Promise<SearchResponse>
 		});
 		if (!seed) {
 			throw new Error(
-				"No Codex OAuth credentials found. Login with 'omp /login openai-codex' to enable Codex web search.",
+				`No Codex OAuth credentials found. Login with '${APP_NAME} /login openai-codex' to enable Codex web search.`,
 			);
 		}
 
