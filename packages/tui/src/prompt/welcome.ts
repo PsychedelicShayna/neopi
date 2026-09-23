@@ -130,7 +130,7 @@ export interface LspServerInfo {
 }
 
 /**
- * Premium welcome screen with block-based OMP logo and two-column layout.
+ * Premium welcome screen with block-based NeoPi logo and two-column layout.
  */
 export class WelcomeComponent implements Component {
 	#animStart: number | null = null;
@@ -185,10 +185,13 @@ export class WelcomeComponent implements Component {
 		this.#requestRender();
 		this.#animTimer = setInterval(() => {
 			const elapsed = performance.now() - (this.#animStart ?? 0);
+			const requestRender = this.#requestRender;
 			if (elapsed >= INTRO_MS) {
 				this.#stopAnimation();
 			}
-			this.#requestRender?.();
+			// Stopping clears the callback, but the settled frame must still paint
+			// so an oversized startup header can retire into native scrollback.
+			requestRender?.();
 		}, INTRO_TICK_MS);
 	}
 

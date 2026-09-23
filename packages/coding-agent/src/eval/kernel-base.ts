@@ -21,6 +21,8 @@ export type KernelRuntimeEnv = Record<string, string | null>;
 
 export interface KernelExecuteOptions {
 	id?: string;
+	/** Source filename for file-backed execution and tracebacks. */
+	filename?: string;
 	/** Runtime working directory applied immediately before this request executes. */
 	cwd?: string;
 	/** Managed runtime environment variables applied immediately before this request executes. */
@@ -161,7 +163,7 @@ export function isSignalableProcessGroup(pid: number | undefined): pid is number
  * so each runner calls `setsid()` and becomes the leader of its own session and
  * process group. Signalling only the direct PID therefore leaves anything the
  * runner itself spawned behind, and those orphans keep the kernel's pipes open
- * for the remainder of the omp process lifetime (#7714).
+ * for the remainder of the NeoPi process lifetime (#7714).
  *
  * Windows has no process groups, so this is a no-op there and callers keep
  * relying on the direct-PID kill.

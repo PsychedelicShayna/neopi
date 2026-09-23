@@ -1,5 +1,5 @@
 /**
- * `omp render` — draw a session's entire thread through the production
+ * `npi render` — draw a session's entire thread through the production
  * transcript pipeline, headlessly.
  *
  * Replays the session into a real `InteractiveMode` + `TUI` wired to an
@@ -169,7 +169,7 @@ export async function runRenderCommand(args: RenderCommandArgs): Promise<number>
 
 	// Copy before opening: SessionManager.open takes the single-writer lock and
 	// session teardown appends a session_exit entry — neither may touch a live
-	// session file the user has open in another omp.
+	// session file the user has open in another npi.
 	const tempDir = TempDir.createSync("@omp-render-");
 	const workingCopy = path.join(tempDir.path(), path.basename(sourcePath));
 
@@ -269,7 +269,7 @@ export async function runRenderCommand(args: RenderCommandArgs): Promise<number>
 			mode?.stop();
 			await session?.dispose();
 		} catch (err) {
-			logger.debug("omp render teardown failed", { error: String(err) });
+			logger.debug("npi render teardown failed", { error: String(err) });
 		}
 		tempDir.removeSync();
 	}

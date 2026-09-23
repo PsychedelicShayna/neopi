@@ -63,7 +63,7 @@ const LOW_PRIORITY_EXTENSIONS: readonly string[] = [
 	".bak",
 ];
 
-/** Default llm-git thresholds before omp's explicit commit settings are applied. */
+/** Default llm-git thresholds before NeoPi's explicit commit settings are applied. */
 export const DEFAULT_CONVENTIONAL_GENERATION_CONFIG: ConventionalGenerationConfig = {
 	summaryGuideline: 72,
 	summarySoftLimit: 96,

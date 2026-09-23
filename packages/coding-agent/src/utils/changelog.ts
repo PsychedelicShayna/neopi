@@ -138,7 +138,7 @@ export function formatStartupChangelogSummary(selection: StartupChangelogSelecti
 }
 
 /**
- * Parse changelog entries from omp's package asset when available, falling back
+ * Parse changelog entries from NeoPi's package asset when available, falling back
  * to the copy embedded in compiled binaries.
  *
  * The embedded fallback keeps standalone binaries self-contained without

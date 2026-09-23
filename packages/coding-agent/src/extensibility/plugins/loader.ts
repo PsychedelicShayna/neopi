@@ -148,7 +148,7 @@ async function collectPluginsAtRoot(
 	const plugins: ScopedInstalledPlugin[] = [];
 	for (const name of names) {
 		// When a package manifest exists, a lockfile-only entry is legitimate
-		// only for linked plugins (`omp plugin link`, marketplace runtime
+		// only for linked plugins (`npi plugin link`, marketplace runtime
 		// registration), which are symlinks into node_modules. Without a
 		// manifest, retain the established lockfile-only directory layout.
 		if (hasPackageManifest && !depsKeys.includes(name) && !(await isSymlink(path.join(nodeModulesPath, name)))) {
@@ -298,7 +298,7 @@ const PLUGIN_EXTENSION_DIRECTORY_OPTIONS = {
  *     {@link resolveExtensionDirectory} — its own package.json `omp`/`pi`
  *     `extensions`, then a direct index, then a one-level scan of
  *     sub-extensions — matching the pi `extensions/<name>/index.ts` convention
- *     and OMP's configured-directory (`-e`) extension loader
+ *     and NeoPi's configured-directory (`-e`) extension loader
  *   - otherwise (tools/hooks/commands) only a direct index.{ts,js,mjs,cjs}.
  *     The sub-extension scan and the `omp`/`pi` `extensions` manifest are
  *     extensions-specific and must not hijack a non-extension directory entry

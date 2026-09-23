@@ -1,3 +1,4 @@
+import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { runPauseScreen } from "@oh-my-pi/pi-tui/overlays/pause-screen";
 import { shutdownHandlerTui } from "./builtin-lifecycle";
 import { commandConsumed, errorMessage, usage } from "./helpers/parse";
@@ -61,6 +62,15 @@ export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		handleTui: async (_command, runtime) => {
 			runtime.ctx.editor.setText("");
 			await runtime.ctx.handleLiveCommand();
+		},
+	},
+	{
+		name: "record",
+		icon: "export",
+		description: `Start or stop recording this screen to a replayable file (${APP_NAME} play)`,
+		handleTui: async (_command, runtime) => {
+			runtime.ctx.editor.setText("");
+			await runtime.ctx.toggleRecording();
 		},
 	},
 	{

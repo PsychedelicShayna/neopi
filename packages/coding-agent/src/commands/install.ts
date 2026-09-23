@@ -1,10 +1,10 @@
 /**
- * `omp install <target>` — top-level convenience over `omp plugin install` /
- * `omp plugin link`.
+ * `npi install <target>` — top-level convenience over `npi plugin install` /
+ * `npi plugin link`.
  *
  * The docs (omp.sh/docs/extension-authoring) advertise
  *
- *   omp install ./my-extension
+ *   npi install ./my-extension
  *
  * as a third loading mechanism that "symlinks the directory into the plugin
  * set and watches it for changes". Before this command existed, `install` was
@@ -27,7 +27,7 @@ import { type PluginAction, type PluginCommandArgs, runPluginCommand } from "../
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 
 /**
- * Heuristic used to decide whether `omp install <target>` should `link` a
+ * Heuristic used to decide whether `npi install <target>` should `link` a
  * local directory or `install` a remote spec. Exported for tests.
  */
 export function looksLikeLocalPath(target: string, cwd?: string): boolean {

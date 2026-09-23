@@ -332,8 +332,8 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 				return;
 			}
 			if (verb === "list") {
-				// Same registry as `omp collab list`: metadata only, never a link. A
-				// link is a deliberate per-host act (`omp collab link <id> [--view]`),
+				// Same registry as `npi collab list`: metadata only, never a link. A
+				// link is a deliberate per-host act (`npi collab link <id> [--view]`),
 				// so a listing can be shown or logged without granting anything.
 				if (rest.trim()) {
 					ctx.showError(`Usage: /collab list — for links or JSON use \`${APP_NAME} collab link|list\``);
@@ -376,6 +376,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 						host.access,
 						host.relayConnected ? "relay connected" : "relay reconnecting",
 						...(host.inputRequired ? ["input required"] : []),
+						...(host.busy === null ? [] : [host.busy ? "working" : "idle"]),
 						truncateToWidth(sanitizeDisplayLine(shortenPath(host.cwd)), TRUNCATE_LENGTHS.TITLE),
 					].join(", ");
 					lines.push(

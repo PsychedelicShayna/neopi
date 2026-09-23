@@ -380,7 +380,7 @@ function createDashboardServer(port: number, hostname: string): Server<undefined
 			const url = new URL(req.url);
 			const path = url.pathname;
 
-			// The identity header lets another omp session's reuse probe positively
+			// The identity header lets another NeoPi session's reuse probe positively
 			// recognize this dashboard without allowing cross-origin API reads.
 			const dashboardHeaders: Record<string, string> = {
 				[STATS_DASHBOARD_HEADER]: STATS_DASHBOARD_SECURITY_VERSION,
@@ -423,7 +423,7 @@ function createDashboardServer(port: number, hostname: string): Server<undefined
 }
 
 /**
- * Start the HTTP server, reusing a live dashboard or reclaiming a stale omp listener.
+ * Start the HTTP server, reusing a live dashboard or reclaiming a stale NeoPi listener.
  */
 export interface StatsServerHandle {
 	hostname: string;

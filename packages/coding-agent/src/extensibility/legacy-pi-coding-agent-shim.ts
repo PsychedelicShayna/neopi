@@ -771,7 +771,7 @@ export function createReadOnlyTools(cwd: string): ToolDefinition[] {
  *
  * Upstream Pi's `SettingsManager.create(cwd)` is **synchronous** and returns a
  * manager exposing `getGlobalSettings()`/`getProjectSettings()` (plus the typed
- * `get(path)`). OMP's `Settings` is that manager, so the shim resolves the
+ * `get(path)`). NeoPi's `Settings` is that manager, so the shim resolves the
  * active extension session's instance first, then falls back to a live instance
  * matching the requested `cwd`/`agentDir`, or an isolated instance when nothing
  * matches. Returning the promise from `Settings.init()` here broke every pi
@@ -826,7 +826,7 @@ export interface DefaultPackageManagerOptions {
 }
 
 /**
- * Enumerates the extensions OMP would load through the historical package
+ * Enumerates the extensions NeoPi would load through the historical package
  * manager surface used by legacy extensions.
  */
 export class DefaultPackageManager {
@@ -840,7 +840,7 @@ export class DefaultPackageManager {
 		this.#settingsManager = options.settingsManager;
 	}
 
-	/** Resolve enabled extension paths with their OMP plugin provenance. */
+	/** Resolve enabled extension paths with their NeoPi plugin provenance. */
 	async resolve(_onMissing?: (source: string) => Promise<MissingSourceAction>): Promise<ResolvedPaths> {
 		const settings = await this.#settingsManager;
 		const configuredPaths = settings.get("extensions") ?? [];
@@ -894,18 +894,18 @@ export class DefaultPackageManager {
  * import the class at module scope; a missing export takes the whole
  * extension down at parse time (issue #4567).
  *
- * OMP does the same discovery inline inside `createAgentSession()`, so this
+ * NeoPi does the same discovery inline inside `createAgentSession()`, so this
  * shim intentionally does NOT re-implement pi's ResourceLoader plumbing.
  * Instead the loader captures the caller's intent (`no*` flags, `*Override`
  * callbacks, `additional*Paths`, `extensionFactories`, `settingsManager`,
  * `eventBus`) plus the discovery results, and the sibling `createAgentSession`
- * override below translates them into OMP's native session options
+ * override below translates them into NeoPi's native session options
  * (`disableExtensionDiscovery`, prepared/path extension preloads, `extensions`,
  * `skills`, `promptTemplates`, `contextFiles`, `settings`, `eventBus`,
  * `systemPrompt`) before delegating to `../sdk`.
  *
  * The pi surface it emulates is the intersection actually used by real
- * extensions in the wild — themes are silently dropped (OMP has no
+ * extensions in the wild — themes are silently dropped (NeoPi has no
  * session-level themes surface); `extendResources`, `loadProjectTrustExtensions`,
  * and provider-trust hooks are omitted.
  */
@@ -1335,15 +1335,15 @@ export class DefaultResourceLoader implements ResourceLoader {
 }
 
 /**
- * Legacy pi extensions call `createAgentSession({ resourceLoader })`. OMP's
+ * Legacy pi extensions call `createAgentSession({ resourceLoader })`. NeoPi's
  * native option surface has no such field — extension / skill / prompt /
  * context-file discovery are configured directly on the session options — so
  * an untranslated call would silently ignore the loader (including its
- * `noExtensions`/`noSkills` opt-outs), re-run OMP's own discovery, and
+ * `noExtensions`/`noSkills` opt-outs), re-run NeoPi's own discovery, and
  * happily re-load the calling extension into the subagent. That's exactly
  * the recursion the caller passed the loader to prevent.
  *
- * Translate the loader's captured state into OMP's option fields, then
+ * Translate the loader's captured state into NeoPi's option fields, then
  * delegate to the underlying SDK. Explicit fields on `options` override the
  * loader (matches upstream pi semantics — a caller can partially override a
  * shared loader).
@@ -1433,7 +1433,7 @@ export async function createAgentSession(
 /**
  * Synchronous auth storage surface retained for legacy extensions.
  *
- * Modern OMP auth storage is asynchronous, while older provider extensions
+ * Modern NeoPi auth storage is asynchronous, while older provider extensions
  * call `AuthStorage.create().get()` during module initialization.
  */
 export class AuthStorage {
@@ -1481,7 +1481,7 @@ export { getProjectDir } from "@oh-my-pi/pi-utils";
  * `getPackageDir()` contract (extensions do `path.join(getPackageDir(), ...)`
  * to auto-allow bundled docs/resources).
  *
- * omp's canonical `getPackageDir()` (`../config`) returns `undefined` inside a
+ * NeoPi's canonical `getPackageDir()` (`../config`) returns `undefined` inside a
  * `bun --compile` binary — `import.meta.dir` is `/$bunfs/root` and no owning
  * `package.json` exists (issue #1423). Returning `undefined` there would crash
  * every legacy `path.join(getPackageDir(), ...)` at runtime in the shipped
@@ -1545,7 +1545,7 @@ export function findCutPoint(
 /**
  * Legacy `sessionEntryToContextMessages(entry)` export: project one session entry
  * into its LLM/runtime messages. Plain custom/state entries do not participate in
- * context and yield `[]`. omp's `buildSessionContext` only projects whole branches,
+ * context and yield `[]`. NeoPi's `buildSessionContext` only projects whole branches,
  * so this ports upstream Pi's per-entry mapper.
  */
 export function sessionEntryToContextMessages(entry: SessionEntry): AgentMessage[] {
@@ -1598,12 +1598,12 @@ export { Type } from "./legacy-typebox";
 
 // Legacy pi's `@earendil-works/pi-coding-agent` root exported an `is<Tool>ToolResult`
 // family of type guards that narrow a `tool_result` event (`ToolResultEvent`) by
-// tool name. omp removed them from the public API in 10.2.3, and the barrel above
+// tool name. NeoPi removed them from the public API in 10.2.3, and the barrel above
 // does not forward them, so legacy extensions importing them (e.g.
 // `pi-lean-ctx@3.9.18`, which uses `isEditToolResult`/`isWriteToolResult` to
 // invalidate its read cache after a native edit/write) fail Bun's static export
 // check during validation (issue #8161). Restore the full guard family; legacy
-// `find`/`ls` tool results arrive through omp's custom-event branch, so those
+// `find`/`ls` tool results arrive through NeoPi's custom-event branch, so those
 // guards narrow the tool name while leaving their details unknown.
 
 /** Narrow a `tool_result` event to the `bash` tool. */
@@ -1631,7 +1631,7 @@ export function isGrepToolResult(e: ToolResultEvent): e is GrepToolResultEvent {
 	return e.toolName === "grep";
 }
 
-/** Legacy `find` result event represented by omp's custom-event branch. */
+/** Legacy `find` result event represented by NeoPi's custom-event branch. */
 export type FindToolResultEvent = ToolResultEvent & { toolName: "find" };
 
 /** Narrow a `tool_result` event to the legacy `find` tool. */
@@ -1639,7 +1639,7 @@ export function isFindToolResult(e: ToolResultEvent): e is FindToolResultEvent {
 	return e.toolName === "find";
 }
 
-/** Legacy `ls` result event represented by omp's custom-event branch. */
+/** Legacy `ls` result event represented by NeoPi's custom-event branch. */
 export type LsToolResultEvent = ToolResultEvent & { toolName: "ls" };
 
 /** Narrow a `tool_result` event to the legacy `ls` tool. */

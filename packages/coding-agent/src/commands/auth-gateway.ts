@@ -1,5 +1,5 @@
 /**
- * `omp auth-gateway` — run a forward proxy that injects auth from the broker.
+ * `npi auth-gateway` — run a forward proxy that injects auth from the broker.
  */
 
 import { APP_NAME } from "@oh-my-pi/pi-utils";

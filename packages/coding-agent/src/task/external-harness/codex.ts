@@ -179,7 +179,7 @@ async function requireUserSystemd(): Promise<void> {
 	}
 }
 
-/** Codex app-server 0.146.0 adapter. OMP remains the lifecycle and result owner. */
+/** Codex app-server 0.146.0 adapter. NeoPi remains the lifecycle and result owner. */
 export const codexExternalHarnessAdapter: ExternalHarnessAdapter = {
 	async execute(input: ExternalHarnessInput): Promise<SingleResult> {
 		if (input.signal.aborted) {

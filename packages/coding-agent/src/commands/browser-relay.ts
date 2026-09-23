@@ -1,5 +1,5 @@
 /**
- * `omp browser-relay` — drive the user's own Chrome tabs.
+ * `npi browser-relay` — drive the user's own Chrome tabs.
  */
 import { APP_NAME, PRODUCT_NAME } from "@oh-my-pi/pi-utils";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";

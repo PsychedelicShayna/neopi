@@ -290,7 +290,7 @@ export interface FlushResult {
 }
 
 /**
- * Optional per-flush controls. Used by `omp grievances push` to surface
+ * Optional per-flush controls. Used by `npi grievances push` to surface
  * progress to a TTY and to skip the user-facing consent gate (manual
  * pushes are the user's explicit intent, not a side effect of a device write).
  */
@@ -357,7 +357,7 @@ function resolvePushConfig(settings: Settings | undefined, bypassConsent: boolea
 	if (!isAutoQaEnabled(settings)) return null;
 
 	// Consent IS the push opt-in for the auto-flush path. `bypassConsent`
-	// covers explicit user-driven pushes (`omp grievances push`) where the
+	// covers explicit user-driven pushes (`npi grievances push`) where the
 	// user clearly intends to ship regardless of dialog state. The
 	// `PI_AUTO_QA_PUSH` env flag stays as a CI/headless override too.
 	if (!bypassConsent) {

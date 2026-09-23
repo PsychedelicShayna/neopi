@@ -82,7 +82,7 @@ export function StringEnum<T extends string | number>(
 	return schema;
 }
 
-/** Clamp a historical Pi thinking level against OMP's model metadata. */
+/** Clamp a historical Pi thinking level against NeoPi's model metadata. */
 export function clampThinkingLevel<TApi extends Api>(model: Model<TApi>, level: Effort | "off"): Effort | "off" {
 	if (level === "off") return "off";
 	return clampThinkingLevelForModel(model, level) ?? "off";
@@ -92,7 +92,7 @@ export function clampThinkingLevel<TApi extends Api>(model: Model<TApi>, level: 
  * Enumerate the thinking levels a model supports, mirroring historical pi-ai's
  * `getSupportedThinkingLevels` (`@earendil-works/pi-ai` `models.ts`). Upstream
  * returns `["off"]` for non-reasoning models and, for reasoning models, `off`
- * followed by each selectable effort in canonical order; OMP's baked
+ * followed by each selectable effort in canonical order; NeoPi's baked
  * `getSupportedEfforts` supplies that effort ladder directly. Legacy `/thinking`
  * menus (e.g. `@companion-ai/feynman`) call this to list the levels a user may
  * pick for the active model.
@@ -107,7 +107,7 @@ export function getSupportedThinkingLevels<TApi extends Api>(model: Model<TApi>)
  * (`@earendil-works/pi-ai` `utils/retry.ts`). Legacy extensions call
  * {@link isRetryableAssistantError} to decide whether to restart a failed
  * assistant turn, so the wording tables must match the upstream semantics they
- * were authored against rather than OMP's own `Error`-based classifiers.
+ * were authored against rather than NeoPi's own `Error`-based classifiers.
  */
 const NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN =
 	/GoUsageLimitError|FreeUsageLimitError|Monthly usage limit reached|available balance|insufficient_quota|out of budget|quota exceeded|billing/i;
@@ -162,16 +162,16 @@ export function streamSimpleOpenAIResponses(
 }
 /**
  * Compatibility re-exports for runtime helpers that upstream
- * `@earendil-works/pi-ai` exposed from its package root but omp's
+ * `@earendil-works/pi-ai` exposed from its package root but NeoPi's
  * `@oh-my-pi/pi-ai` barrel no longer forwards. Each symbol still exists in the
  * host graph — only its root re-export was dropped — so bridging it here keeps
  * legacy extensions importing it from the pi-ai root resolving through Bun's
- * static named-export check (e.g. `omp plugin install pi-blackhole`).
+ * static named-export check (e.g. `npi plugin install pi-blackhole`).
  *
  * This is the full set derived from an audit of the upstream root surface: the
  * error-classification predicate `isContextOverflow` (now under
- * `@oh-my-pi/pi-ai/error`) and the JSON-repair helpers that omp relocated to
- * `@oh-my-pi/pi-utils`. Upstream root symbols with no omp equivalent are
+ * `@oh-my-pi/pi-ai/error`) and the JSON-repair helpers that NeoPi relocated to
+ * `@oh-my-pi/pi-utils`. Upstream root symbols with no NeoPi equivalent are
  * intentionally not shimmed — the package has diverged and there is nothing to
  * forward.
  */

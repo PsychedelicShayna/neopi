@@ -158,7 +158,7 @@ export function renderSearchResult(
 		if (renderedAnswer.length === 0) {
 			answerLines = [theme.fg("muted", "No answer text returned")];
 		} else if (args?.maxAnswerLines !== undefined && !expanded) {
-			// CLI compact mode (`omp q`) caps the answer; the TUI passes no cap and shows it in full.
+			// CLI compact mode (`npi q`) caps the answer; the TUI passes no cap and shows it in full.
 			// `renderedAnswer` is the Markdown component's shared cache — slice copies before appending.
 			const capped = renderedAnswer.slice(0, args.maxAnswerLines);
 			const remaining = renderedAnswer.length - capped.length;
@@ -289,6 +289,11 @@ export const SEARCH_PROVIDER_OPTIONS = [
 		label: "xAI",
 		description:
 			"Grok web search via xAI Responses API (uses SuperGrok/X Premium+ OAuth via /login xai-oauth, or XAI_API_KEY)",
+	},
+	{
+		value: "openrouter",
+		label: "OpenRouter",
+		description: "OpenRouter plugins-based web search with model-selected grounding",
 	},
 	{ value: "zai", label: "Z.AI", description: "Calls Z.AI webSearchPrime MCP" },
 	{ value: "exa", label: "Exa", description: "API via /login exa or EXA_API_KEY; explicit keyless fallback via MCP" },

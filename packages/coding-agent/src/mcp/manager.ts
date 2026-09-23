@@ -1034,7 +1034,7 @@ export class MCPManager {
 	/**
 	 * Wait for every in-flight connect, tool load, and reconnect to settle.
 	 *
-	 * One-shot callers (e.g. `omp read <mcp-resource>`) discover servers and read
+	 * One-shot callers (e.g. `npi read <mcp-resource>`) discover servers and read
 	 * immediately; a server whose handshake outlasts the {@link connectServers}
 	 * startup race is still tracked in {@link #pendingConnections} /
 	 * {@link #pendingToolLoads} and therefore invisible to

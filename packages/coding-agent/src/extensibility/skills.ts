@@ -160,7 +160,7 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 	}
 	function isSourceEnabled(source: SourceMeta): boolean {
 		const { provider, level } = source;
-		// Managed skills (auto-learn) are OMP-native and discovered unconditionally
+		// Managed skills (auto-learn) are NeoPi-native and discovered unconditionally
 		// — third-party CLI toggles must never silently hide them (cf. #2401). The
 		// master `enabled` flag above still gates them.
 		if (provider === MANAGED_SKILLS_PROVIDER_ID) return true;
@@ -171,7 +171,7 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 		if (provider === "native" && level === "project") return enablePiProject;
 		if (provider === "agents" && level === "user") return enableAgentsUser;
 		if (provider === "agents" && level === "project") return enableAgentsProject;
-		// User-scope claude-plugins skills carry the root's origin (#10743). omp's
+		// User-scope claude-plugins skills carry the root's origin (#10743). NeoPi's
 		// own installs (`omp` registry, `--plugin-dir`) are not the foreign
 		// ~/.claude/plugins tree, so the foreign opt-in gate applies only to
 		// claude-origin roots — parity with allowedRoots() in

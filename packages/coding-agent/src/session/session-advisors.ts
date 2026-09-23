@@ -1661,6 +1661,7 @@ export class SessionAdvisors {
 					from: currentSelector,
 					to: selector.raw,
 					role,
+					reason: `Advisor request failed: ${message}`,
 				});
 				return true;
 			}

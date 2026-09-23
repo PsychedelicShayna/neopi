@@ -1,5 +1,5 @@
 /**
- * `omp auth-gateway` command handlers.
+ * `npi auth-gateway` command handlers.
  *
  * Boots a forward-proxy server that lets less-trusted clients (the macOS
  * usage widget, robomp containers, …) make provider API calls without ever
@@ -32,6 +32,7 @@ import {
 } from "@oh-my-pi/pi-ai/auth-broker";
 import { DEFAULT_AUTH_GATEWAY_BIND, startAuthGateway } from "@oh-my-pi/pi-ai/auth-gateway";
 import { type GeneratedProvider, getBundledModels } from "@oh-my-pi/pi-catalog/models";
+import { type ModelKind, modelKind } from "@oh-my-pi/pi-catalog/types";
 import { APP_NAME, getConfigRootDir, isEnoent, logger, VERSION } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { ModelRegistry } from "../config/model-registry";
@@ -70,7 +71,7 @@ function getTokenFilePath(): string {
 
 async function readToken(): Promise<string | null> {
 	try {
-		const raw = await Bun.file(getTokenFilePath()).text();
+		const raw = await fs.readFile(getTokenFilePath(), "utf8");
 		const trimmed = raw.trim();
 		return trimmed.length > 0 ? trimmed : null;
 	} catch (err) {
@@ -161,6 +162,32 @@ const CATALOG_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 const CREDENTIAL_SYNC_INTERVAL_MS = 10 * 1000;
 
 /**
+ * Catalog kinds the gateway has a route for: chat (`/v1/chat/completions`,
+ * `/v1/messages`, `/v1/responses`, `/v1/pi/stream`), judge (`/v1/systemone`),
+ * image (`/v1/images/*`), tts (`/v1/audio/speech`), stt
+ * (`/v1/audio/transcriptions`), embedding (`/v1/embeddings`), rerank
+ * (`/v1/rerank`), video (`/v1/videos/*`). Other kinds (tiny, search) have no
+ * wire and stay off the served catalog so `/v1/models` never advertises them.
+ */
+const GATEWAY_MODEL_KINDS: readonly ModelKind[] = [
+	"chat",
+	"judge",
+	"image",
+	"tts",
+	"stt",
+	"embedding",
+	"rerank",
+	"video",
+];
+
+/** Every registry model of a kind the gateway can route, bundled catalog order within each kind. */
+export function gatewayRoutableModels(registry: ModelRegistry): Model<Api>[] {
+	const models: Model<Api>[] = [];
+	for (const kind of GATEWAY_MODEL_KINDS) models.push(...registry.getAll(kind));
+	return models;
+}
+
+/**
  * Index resolvable models by the request ids clients may send: the
  * provider-qualified `provider/id` (always) and the bare `id` (first-write-wins
  * fallback for legacy clients). Scoped to providers the gateway holds broker
@@ -245,7 +272,7 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 	// Build the model resolver + catalog from the ModelRegistry — the same
 	// component the TUI/CLI use — scoped to providers we hold credentials for.
 	// `getAll()` is a superset of the bundled catalog (bundled first, then
-	// cached + broker-discovered), so the discovery-only models omp itself
+	// cached + broker-discovered), so the discovery-only models NeoPi itself
 	// reaches become routable through the gateway instead of freezing on the
 	// compiled snapshot. `ignoreLocalModelConfig` keeps the host's `models.yml`
 	// out of the picture: client-side provider overrides (baseUrl/apiKey/headers/
@@ -273,7 +300,7 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 	// for up to a cache TTL. Periodic rebuilds stay cached.
 	const rebuildCatalog = createSerializedRebuilder(async force => {
 		await registry.refresh(force ? "online" : "online-if-uncached");
-		modelById = indexModelsByRequestId(registry.getAll(), providersWithCreds());
+		modelById = indexModelsByRequestId(gatewayRoutableModels(registry), providersWithCreds());
 	});
 	await rebuildCatalog();
 
@@ -527,8 +554,8 @@ const RETRYABLE_MODEL_ERROR_RE =
 	/not[_ -]found|invalid[_ -]model|model[_ -]is[_ -]not[_ -]valid|no longer supported|deprecated|404|decommissioned/i;
 
 /**
- * Rank bundled models for a provider in probe order: cheapest first, then by
- * id for determinism. Filters out non-bearer-auth APIs (Vertex/Bedrock),
+ * Rank bundled chat models for a provider in probe order: cheapest first, then
+ * by id for determinism. Filters out non-bearer-auth APIs (Vertex/Bedrock),
  * pi-native transport (would loop through the gateway), and placeholder /
  * router entries with negative/missing cost.
  */
@@ -536,6 +563,9 @@ function pickProbeCandidates(provider: string): Model<Api>[] {
 	const bundled = getBundledModels(provider as GeneratedProvider);
 	if (bundled.length === 0) return [];
 	const candidates = bundled.filter(model => {
+		// Only chat models answer a chat-completion ping; judge/image/tts/stt
+		// rows would fail the probe regardless of credential health.
+		if (modelKind(model) !== "chat") return false;
 		if (model.transport === "pi-native") return false;
 		if (STRICT_PROBE_SKIPPED_APIS.has(model.api)) return false;
 		if (!model.input.includes("text")) return false;
@@ -654,7 +684,7 @@ function formatCompletionStatus(completion: CredentialCompletionResult | undefin
 }
 
 /**
- * `omp auth-gateway check` — probe each broker-supplied credential and print
+ * `npi auth-gateway check` — probe each broker-supplied credential and print
  * per-credential auth health. Use this when the gateway is returning 401s and
  * you need to find which row in a multi-account pool is the bad one. The
  * aggregate `/v1/usage` endpoint silently drops failed credentials, so a

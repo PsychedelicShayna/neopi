@@ -102,9 +102,15 @@ import type { ForeignSessionInfo, ForeignSessionSource, ForeignSessionStore } fr
 import { resolveResumableSession, type SessionInfo } from "./session/session-listing";
 import { ForkSourceNotFoundError, SessionManager } from "./session/session-manager";
 import { shouldShowStartupSplash } from "./startup-splash";
-import { discoverTitleSystemPromptFile, resolvePromptInput } from "./system-prompt";
+import {
+	discoverSystemPromptOverride,
+	discoverTitleSystemPromptFile,
+	loadSystemPromptTemplateFile,
+	resolvePromptInput,
+} from "./system-prompt";
 import { createPersistedSubagentReviverFactory } from "./task/persisted-revive";
 import { createTelemetryExportConfig, initTelemetryExport, isTelemetryExportEnabled } from "./telemetry-export";
+import { registerLocalInferenceApi } from "./tiny/local-inference-api";
 import { concreteThinkingLevel, parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { LspStartupServerInfo } from "./tools";
 import { sanitizeDisplayWarnings } from "@oh-my-pi/pi-tui/render/render-utils";
@@ -150,7 +156,7 @@ async function loadSessionPicker(): Promise<SessionPicker> {
 				await storage.deleteSessionWithArtifacts(session.path);
 				return true;
 			},
-			loadAllSessions: () => SessionManager.listAll(storage),
+			loadAllSessions: () => SessionManager.listAllForPicker(storage),
 		});
 	};
 }
@@ -224,7 +230,7 @@ const RPC_BACKGROUND_DEFAULTED_SETTING_PATHS: SettingPath[] = [
 ];
 
 // Protocol-mode hosts opt into a small set of paths whose host-default we
-// re-apply at startup so embedders inherit OMP's neutral defaults instead of
+// re-apply at startup so embedders inherit NeoPi's neutral defaults instead of
 // the local user's globally-persisted preferences for interactive use. The
 // guard preserves any explicit configuration — caller `Settings.isolated`
 // overrides, project `.claude/settings.yml`, `--config` overlays, or global
@@ -690,7 +696,7 @@ async function runInteractiveMode(
 			}
 		}
 
-		// `omp join <link>`: dispatch through the same builtin path as a typed
+		// `npi join <link>`: dispatch through the same builtin path as a typed
 		// `/join` so collab guards and error rendering stay in one place.
 		if (joinLink !== undefined) {
 			const executeBuiltinSlashCommand = await loadBuiltinSlashCommandExecutor();
@@ -992,7 +998,7 @@ export interface ScopedModelSink {
  * whose model first materializes through runtime discovery (e.g.
  * `opencode-go/ox-alpha-free` on a fresh launch with no cache row) is absent from
  * the frozen scoped `/models` list even though it is in `enabledModels`, invokable
- * via `--model`, and listed by `omp models find`. Once the initial refresh settles,
+ * via `--model`, and listed by `npi models find`. Once the initial refresh settles,
  * re-resolve the scope and, when the set changed, push the fuller list into the
  * session so the scoped picker and Ctrl+P cycle include it. A scope that resolved
  * to zero models may become active here when the startup discovery pass returned
@@ -1181,21 +1187,6 @@ export async function createSessionManager(
 	return undefined;
 }
 
-/** Discover SYSTEM.md file if no CLI system prompt was provided */
-function discoverSystemPromptFile(): string | undefined {
-	// Check project-local first (.omp/SYSTEM.md, .pi/SYSTEM.md legacy)
-	const projectPath = findConfigFile("SYSTEM.md", { user: false });
-	if (projectPath) {
-		return projectPath;
-	}
-	// If not found, check SYSTEM.md file in the global directory.
-	const globalPath = findConfigFile("SYSTEM.md", { user: true });
-	if (globalPath) {
-		return globalPath;
-	}
-	return undefined;
-}
-
 /** Discover APPEND_SYSTEM.md file if no CLI append system prompt was provided */
 function discoverAppendSystemPromptFile(): string | undefined {
 	const projectPath = findConfigFile("APPEND_SYSTEM.md", { user: false });
@@ -1215,7 +1206,7 @@ export function applyResolvedSystemPromptInputs(
 	resolvedSystemPrompt: string | undefined,
 	resolvedAppendPrompt: string | undefined,
 ): void {
-	if (resolvedSystemPrompt) {
+	if (resolvedSystemPrompt !== undefined) {
 		options.customSystemPrompt = resolvedSystemPrompt;
 	}
 	if (resolvedAppendPrompt) {
@@ -1248,15 +1239,36 @@ export async function buildSessionOptions(
 		options.deadline = Date.now() + parsed.maxTime * 1000;
 	}
 
-	// Auto-discover SYSTEM.md if no CLI system prompt provided
-	const systemPromptSource = parsed.systemPrompt ?? discoverSystemPromptFile();
+	// Explicit prompt inputs win over discovered SYSTEM_TEMPLATE.md/SYSTEM.md.
+	if (parsed.systemPrompt !== undefined && parsed.systemPromptTemplate !== undefined) {
+		throw new Error("--system-prompt and --system-prompt-template cannot be combined");
+	}
+	const cwd = options.cwd;
+	const discoveredOverride =
+		parsed.systemPrompt === undefined && parsed.systemPromptTemplate === undefined
+			? await discoverSystemPromptOverride(cwd)
+			: undefined;
+	const systemPromptSource =
+		parsed.systemPrompt ?? (discoveredOverride?.kind === "text" ? discoveredOverride.path : undefined);
+	const templatePath =
+		parsed.systemPromptTemplate ?? (discoveredOverride?.kind === "template" ? discoveredOverride.path : undefined);
 	const appendPromptSource = parsed.appendSystemPrompt ?? discoverAppendSystemPromptFile();
-	const titleSystemPromptSource = discoverTitleSystemPromptFile();
-	const [resolvedSystemPrompt, resolvedAppendPrompt, titleSystemPrompt] = await Promise.all([
-		resolvePromptInput(systemPromptSource, "system prompt"),
-		resolvePromptInput(appendPromptSource, "append system prompt"),
-		resolvePromptInput(titleSystemPromptSource, "title system prompt"),
-	]);
+	const titleSystemPromptSource = discoverTitleSystemPromptFile(cwd);
+	const [resolvedSystemPrompt, resolvedAppendPrompt, titleSystemPrompt, resolvedSystemPromptTemplate] =
+		await Promise.all([
+			discoveredOverride?.kind === "text"
+				? Promise.resolve(discoveredOverride.content)
+				: resolvePromptInput(systemPromptSource, "system prompt"),
+			resolvePromptInput(appendPromptSource, "append system prompt"),
+			resolvePromptInput(titleSystemPromptSource, "title system prompt"),
+			// Discovered templates arrive pre-loaded from the capability; only
+			// explicit CLI paths hit the strict file loader here.
+			discoveredOverride?.kind === "template" && parsed.systemPromptTemplate === undefined
+				? Promise.resolve(discoveredOverride.content)
+				: templatePath === undefined
+					? Promise.resolve(undefined)
+					: loadSystemPromptTemplateFile(templatePath),
+		]);
 
 	if (sessionManager) {
 		options.sessionManager = sessionManager;
@@ -1275,6 +1287,7 @@ export async function buildSessionOptions(
 			parsed.model !== undefined ||
 			parsed.thinking !== undefined ||
 			parsed.systemPrompt !== undefined ||
+			parsed.systemPromptTemplate !== undefined ||
 			parsed.appendSystemPrompt !== undefined ||
 			parsed.tools !== undefined ||
 			parsed.noTools === true;
@@ -1542,6 +1555,9 @@ export async function buildSessionOptions(
 
 	// System prompt
 	applyResolvedSystemPromptInputs(options, resolvedSystemPrompt, resolvedAppendPrompt);
+	if (resolvedSystemPromptTemplate !== undefined) {
+		options.systemPromptTemplate = resolvedSystemPromptTemplate;
+	}
 	// Replan-driven title refresh resolves the override from this same field on
 	// `AgentSession`, so threading it through `CreateAgentSessionOptions` keeps
 	// both first-input titling (`input-controller.ts`) and replan refresh
@@ -1853,7 +1869,7 @@ export async function runRootCommand(
 		normalizeContinueSessionArgs(parsedArgs, rawArgs);
 
 		// Resolve native resume/fork flags or import one foreign transcript into a
-		// fresh persisted OMP session before constructing the AgentSession.
+		// fresh persisted NeoPi session before constructing the AgentSession.
 		let sessionManager: SessionManager | undefined;
 		let foreignSource: ForeignSessionSource | undefined;
 		try {
@@ -1969,8 +1985,8 @@ export async function runRootCommand(
 		// resolved) rejects a native --resume, so the picker must not run first.
 		if (parsedArgs.resume === true && !parsedArgs.fork && !parsedArgs.noSession) {
 			const folderSessions = await logger.time(
-				"SessionManager.list",
-				SessionManager.list,
+				"SessionManager.listForPicker",
+				SessionManager.listForPicker,
 				cwd,
 				parsedArgs.sessionDir,
 			);
@@ -1981,7 +1997,10 @@ export async function runRootCommand(
 				// silently surfaced other projects' history when the cwd was empty
 				// (issue #3099). The preloaded list also makes the user's Tab switch
 				// instant on the way in.
-				preloadedAllSessions = await logger.time("SessionManager.listAll", SessionManager.listAll);
+				preloadedAllSessions = await logger.time(
+					"SessionManager.listAllForPicker",
+					SessionManager.listAllForPicker,
+				);
 				if (preloadedAllSessions.length === 0) {
 					writeStartupNotice(parsedArgs, `${chalk.dim("No sessions found")}\n`);
 					stopStartupWatchdog();
@@ -2154,7 +2173,7 @@ export async function runRootCommand(
 					process.stderr.write(`${chalk.yellow(`${message}\n`)}`);
 				}
 			}
-			// Fail fast on stale/typo flags (e.g. `omp --list-models`) now that we
+			// Fail fast on stale/typo flags (e.g. `npi --list-models`) now that we
 			// know the real extension flag set. Without this check the unrecognized
 			// token gets silently consumed and any following positional leaks as the
 			// initial prompt — kicking off a real LLM session, MCP connection, and
@@ -2363,6 +2382,7 @@ export async function runRootCommand(
 }
 
 export async function main(args: string[]): Promise<void> {
+	registerLocalInferenceApi();
 	const { runCli } = await import("./cli");
 	await runCli(args.length === 0 ? ["launch"] : args);
 }

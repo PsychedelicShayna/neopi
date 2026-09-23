@@ -59,7 +59,7 @@ function matchesProject(cwd: string | undefined, project: string): boolean {
 /**
  * Collapse conventional worktree sub-paths to their logical project root.
  *
- * Rules are generic: omp internal wt paths are dropped; conventional worktree
+ * Rules are generic: NeoPi internal wt paths are dropped; conventional worktree
  * suffixes (`.wt/`, `-wt/`, `.worktrees/`, `-worktrees/`) are stripped. No
  * author-specific IDE or tool paths are baked in.
  *

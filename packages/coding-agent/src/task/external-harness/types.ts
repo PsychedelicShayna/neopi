@@ -1,7 +1,7 @@
 import type { AgentDefinition, ParentSessionMetadata } from "../types";
 import type { AgentProgress, SingleResult } from "@oh-my-pi/pi-tui/tools/task";
 
-/** Filesystem boundary prepared by OMP for an external harness invocation. */
+/** Filesystem boundary prepared by NeoPi for an external harness invocation. */
 export interface ExternalHarnessIsolationContext {
 	readonly isolated: boolean;
 	readonly worktree?: string;
@@ -49,7 +49,7 @@ export interface ExternalHarnessInput {
 	readonly onProgress: (progress: AgentProgress) => void;
 }
 
-/** Adapter seam for a non-OMP task runtime; OMP retains lifecycle and delivery ownership. */
+/** Adapter seam for a non-NeoPi task runtime; NeoPi retains lifecycle and delivery ownership. */
 export interface ExternalHarnessAdapter {
 	execute(input: ExternalHarnessInput): Promise<SingleResult>;
 }

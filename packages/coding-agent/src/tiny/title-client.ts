@@ -29,13 +29,7 @@ import { connectJsonlSocket, LineParser, writeJsonLine } from "./jsonl-socket";
 import { formatTitleUserMessage } from "./message-preproc";
 import { ensureTinyMlxRuntime, getTinyMlxModelDir, MLX_LM_VERSION } from "./mlx-runtime";
 import MLX_SERVER_SCRIPT from "./mlx-server.py" with { type: "text" };
-import {
-	getTinyLocalModelSpec,
-	isTinyLocalModelKey,
-	isTinyMemoryLocalModelKey,
-	isTinyTitleLocalModelKey,
-	type TinyLocalModelKey,
-} from "./models";
+import { getTinyLocalModelSpec, isTinyLocalModelKey, type TinyLocalModelKey } from "./models";
 import { normalizeGeneratedTitle } from "./text";
 import {
 	TINY_WORKER_ARG,
@@ -55,7 +49,7 @@ import {
 const TITLE_PREFILL = "<title>";
 const TITLE_CLOSE = "</title>";
 const TITLE_MAX_NEW_TOKENS = 20;
-const MEMORY_COMPLETION_DEFAULT_MAX_NEW_TOKENS = 256;
+const COMPLETION_DEFAULT_MAX_NEW_TOKENS = 256;
 const COMPLETION_MAX_NEW_TOKENS = 1024;
 const TINY_TITLE_SYSTEM_PROMPT = prompt.render(titleSystemPrompt);
 const MLX_IDLE_SECONDS = 15 * 60;
@@ -72,7 +66,7 @@ type WorkerHandle = RefCountedWorkerHandle<TinyWorkerRequest, TinyWorkerResponse
 
 type PendingRequest =
 	| { kind: "title"; modelKey: TinyLocalModelKey; source: string; resolve: (title: string | null) => void }
-	| { kind: "completion"; modelKey: TinyLocalModelKey; resolve: (text: string | null) => void }
+	| { kind: "chat"; modelKey: TinyLocalModelKey; resolve: (text: string | null) => void }
 	| { kind: "load"; modelKey: TinyLocalModelKey; resolve: (result: TinyTitleDownloadResult) => void };
 
 export interface TinyTitleDownloadResult {
@@ -96,9 +90,12 @@ export interface TinyTitleGenerateOptions {
 	systemPrompt?: string;
 }
 
-export interface TinyModelCompletionOptions {
+export interface TinyModelChatOptions {
 	maxTokens?: number;
 	signal?: AbortSignal;
+}
+
+export interface TinyModelCompletionOptions extends TinyModelChatOptions {
 	systemPrompt?: string;
 }
 
@@ -117,7 +114,7 @@ function readTinyModelSetting(path: "providers.tinyModelDevice" | "providers.tin
 		const value = settings.get(path);
 		return typeof value === "string" ? value : undefined;
 	} catch {
-		// Settings may be uninitialized (e.g. `omp --smoke-test`); fall back to env/default.
+		// Settings may be uninitialized (e.g. `npi --smoke-test`); fall back to env/default.
 		return undefined;
 	}
 }
@@ -349,7 +346,7 @@ export interface WorkerLaunch {
 	spawn(endpoint: string, logPath: string): Promise<SpawnedWorker>;
 }
 
-/** Detach a worker so it outlives this omp process; its output goes to a per-worker log file. */
+/** Detach a worker so it outlives this NeoPi process; its output goes to a per-worker log file. */
 function spawnDetached(
 	cmd: string[],
 	cwd: string | undefined,
@@ -461,7 +458,7 @@ async function logTail(logPath: string): Promise<string> {
 
 /**
  * Connect to the worker serving `modelKey`, spawning it when absent or
- * replacing it when its launch tag is stale. A concurrent omp process may win
+ * replacing it when its launch tag is stale. A concurrent NeoPi process may win
  * the spawn race; our child then fails to bind and exits while the probe
  * adopts the winner.
  */
@@ -574,7 +571,7 @@ export class TinyTitleClient {
 	 * online / non-local keys and for models already marked failed.
 	 */
 	prewarm(modelKey: string): void {
-		if (!isTinyTitleLocalModelKey(modelKey) || this.#failedModels.has(modelKey)) return;
+		if (!isTinyLocalModelKey(modelKey) || this.#failedModels.has(modelKey)) return;
 		try {
 			this.#ensureWorker(modelKey).handle.send({ type: "ping", id: String(++this.#nextRequestId) });
 		} catch (error) {
@@ -593,7 +590,7 @@ export class TinyTitleClient {
 		optionsOrSignal?: AbortSignal | TinyTitleGenerateOptions,
 	): Promise<string | null> {
 		const options = normalizeTinyTitleGenerateOptions(optionsOrSignal);
-		if (!isTinyTitleLocalModelKey(modelKey)) return null;
+		if (!isTinyLocalModelKey(modelKey)) return null;
 		if (options.signal?.aborted || this.#failedModels.has(modelKey)) return null;
 		const { promise, resolve } = Promise.withResolvers<string | null>();
 		const request: TinyWorkerRequest = {
@@ -609,24 +606,30 @@ export class TinyTitleClient {
 		);
 	}
 
+	async chat(
+		modelKey: string,
+		messages: readonly TinyChatMessage[],
+		options: TinyModelChatOptions = {},
+	): Promise<string | null> {
+		if (!isTinyLocalModelKey(modelKey)) return null;
+		if (options.signal?.aborted || this.#failedModels.has(modelKey)) return null;
+		const requested = options.maxTokens ?? COMPLETION_DEFAULT_MAX_NEW_TOKENS;
+		const { promise, resolve } = Promise.withResolvers<string | null>();
+		const request: TinyWorkerRequest = {
+			type: "chat",
+			id: String(++this.#nextRequestId),
+			messages,
+			maxNewTokens: Math.min(Math.max(1, requested), COMPLETION_MAX_NEW_TOKENS),
+		};
+		return this.#run(request, { kind: "chat", modelKey, resolve }, promise, options.signal, () => resolve(null));
+	}
+
 	async complete(
 		modelKey: string,
 		promptText: string,
 		options: TinyModelCompletionOptions = {},
 	): Promise<string | null> {
-		if (!isTinyMemoryLocalModelKey(modelKey)) return null;
-		if (options.signal?.aborted || this.#failedModels.has(modelKey)) return null;
-		const requested = options.maxTokens ?? MEMORY_COMPLETION_DEFAULT_MAX_NEW_TOKENS;
-		const { promise, resolve } = Promise.withResolvers<string | null>();
-		const request: TinyWorkerRequest = {
-			type: "chat",
-			id: String(++this.#nextRequestId),
-			messages: buildCompletionMessages(promptText, options.systemPrompt),
-			maxNewTokens: Math.min(Math.max(1, requested), COMPLETION_MAX_NEW_TOKENS),
-		};
-		return this.#run(request, { kind: "completion", modelKey, resolve }, promise, options.signal, () =>
-			resolve(null),
-		);
+		return this.chat(modelKey, buildCompletionMessages(promptText, options.systemPrompt), options);
 	}
 
 	async downloadModel(modelKey: string, options: TinyTitleDownloadOptions = {}): Promise<TinyTitleDownloadResult> {
@@ -758,7 +761,7 @@ export class TinyTitleClient {
 		}
 		if (message.type === "text") {
 			if (pending.kind === "title") pending.resolve(extractTinyTitle(message.text, pending.source));
-			else if (pending.kind === "completion") pending.resolve(message.text.trim() || null);
+			else if (pending.kind === "chat") pending.resolve(message.text.trim() || null);
 			return;
 		}
 		if (pending.kind === "load") pending.resolve({ ok: true });
@@ -810,7 +813,7 @@ export class TinyTitleClient {
 
 export const tinyTitleClient = new TinyTitleClient();
 
-/** Alias for the shared tiny-model worker client (titles + memory completions). */
+/** Alias for the shared tiny-model worker client (titles + generic chat completions). */
 export const tinyModelClient = tinyTitleClient;
 
 /** Drop this process's worker connections; the workers themselves keep serving others until idle. */

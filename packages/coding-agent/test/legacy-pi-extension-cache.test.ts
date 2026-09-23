@@ -6,6 +6,7 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 
 const probePath = path.resolve(import.meta.dir, "fixtures", "legacy-pi-extension-cache-probe.ts");
 const healthProbePath = path.resolve(import.meta.dir, "fixtures", "legacy-pi-extension-cache-health-probe.ts");
+const cjsProbePath = path.resolve(import.meta.dir, "fixtures", "legacy-pi-extension-cjs-cache-probe.ts");
 const tempDirs: TempDir[] = [];
 
 async function runProbe(cacheRoot: string, script: string = probePath, args: string[] = []): Promise<string> {
@@ -40,44 +41,66 @@ test("warm extension analysis preserves import rewriting without reparsing", asy
 
 	expect(await runProbe(cacheRoot)).toBe('import value from "./dependency.js?mtime=7";\n');
 
-	expect(await runProbe(cacheRoot, probePath, ["--expect-cache-hit"])).toBe(
-		'import value from "./dependency.js?mtime=7";\n',
+	// Each real load uses a fresh tag; the warm run must still hit the cache.
+	expect(await runProbe(cacheRoot, probePath, ["--expect-cache-hit", "--tag=8"])).toBe(
+		'import value from "./dependency.js?mtime=8";\n',
 	);
 });
 
-test.each([1, 2])(
-	"extension analysis leaves an unversioned schema %i cache readable by its existing owner",
-	async version => {
-		const tempDir = TempDir.createSync("@legacy-pi-extension-cache-isolation-");
-		tempDirs.push(tempDir);
-		const cacheRoot = tempDir.path();
-		const cachePath = path.join(cacheRoot, "omp", "cache", "legacy-pi-extension-cache.db");
-		await fs.mkdir(path.dirname(cachePath), { recursive: true });
-		const legacy = new Database(cachePath, { create: true });
-		try {
-			const extra =
-				version === 1 ? ", commonjs_named_exports TEXT NOT NULL, commonjs_reexport_specifiers TEXT NOT NULL" : "";
-			legacy.run(
-				`CREATE TABLE extension_parse_cache (cache_key TEXT PRIMARY KEY, source_type TEXT NOT NULL, [references] TEXT NOT NULL${extra})`,
-			);
-			legacy.run(`PRAGMA user_version = ${version}`);
-			legacy.run(
-				version === 1
-					? "INSERT INTO extension_parse_cache VALUES ('old', 'module', '[]', '[\"named\"]', '[]')"
-					: "INSERT INTO extension_parse_cache VALUES ('old', 'module', '[]')",
-			);
-			const before = legacy.query("SELECT * FROM extension_parse_cache").all();
-			expect(await runProbe(cacheRoot)).toBe('import value from "./dependency.js?mtime=7";\n');
-			expect(await runProbe(cacheRoot, probePath, ["--expect-cache-hit"])).toBe(
-				'import value from "./dependency.js?mtime=7";\n',
-			);
-			expect(legacy.query("SELECT * FROM extension_parse_cache").all()).toEqual(before);
-			expect(legacy.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version).toBe(version);
-		} finally {
-			legacy.close();
-		}
-	},
-);
+test.each([
+	["legacy-pi-extension-cache.db", 1],
+	["legacy-pi-extension-cache-v2.db", 2],
+] as const)("extension analysis leaves %s schema %i readable by its existing owner", async (filename, version) => {
+	const tempDir = TempDir.createSync("@legacy-pi-extension-cache-isolation-");
+	tempDirs.push(tempDir);
+	const cacheRoot = tempDir.path();
+	const cachePath = path.join(cacheRoot, "omp", "cache", filename);
+	await fs.mkdir(path.dirname(cachePath), { recursive: true });
+	const legacy = new Database(cachePath, { create: true });
+	try {
+		const extra =
+			version === 1 ? ", commonjs_named_exports TEXT NOT NULL, commonjs_reexport_specifiers TEXT NOT NULL" : "";
+		legacy.run(
+			`CREATE TABLE extension_parse_cache (cache_key TEXT PRIMARY KEY, source_type TEXT NOT NULL, [references] TEXT NOT NULL${extra})`,
+		);
+		legacy.run(`PRAGMA user_version = ${version}`);
+		legacy.run(
+			version === 1
+				? "INSERT INTO extension_parse_cache VALUES ('old', 'module', '[]', '[\"named\"]', '[]')"
+				: "INSERT INTO extension_parse_cache VALUES ('old', 'module', '[]')",
+		);
+		const before = legacy.query("SELECT * FROM extension_parse_cache").all();
+		expect(await runProbe(cacheRoot)).toBe('import value from "./dependency.js?mtime=7";\n');
+		expect(await runProbe(cacheRoot, probePath, ["--expect-cache-hit"])).toBe(
+			'import value from "./dependency.js?mtime=7";\n',
+		);
+		expect(legacy.query("SELECT * FROM extension_parse_cache").all()).toEqual(before);
+		expect(legacy.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version).toBe(version);
+	} finally {
+		legacy.close();
+	}
+});
+
+test("warm CommonJS classification of type-less script dependencies does not reparse", async () => {
+	const tempDir = TempDir.createSync("@legacy-pi-extension-cjs-cache-");
+	tempDirs.push(tempDir);
+	const cacheRoot = path.join(tempDir.path(), "cache");
+	await fs.mkdir(path.join(cacheRoot, "omp"), { recursive: true });
+	// No `type` in package.json forces the source-level CommonJS syntax check
+	// on `dep.js`, the path every type-less npm dependency takes.
+	const extensionDir = path.join(tempDir.path(), "extension");
+	await fs.mkdir(extensionDir, { recursive: true });
+	await Bun.write(path.join(extensionDir, "package.json"), '{"name":"cjs-cache-probe"}\n');
+	await Bun.write(path.join(extensionDir, "dep.js"), "module.exports = { value: 42 };\n");
+	await Bun.write(
+		path.join(extensionDir, "index.mjs"),
+		'import dep from "./dep.js";\nexport const result = dep.value;\n',
+	);
+	const entry = path.join(extensionDir, "index.mjs");
+
+	expect(await runProbe(cacheRoot, cjsProbePath, [entry])).toBe("42\n");
+	expect(await runProbe(cacheRoot, cjsProbePath, [entry, "--expect-cache-hit"])).toBe("42\n");
+});
 
 test("legacy extension parse cache opens in WAL mode (#9549)", async () => {
 	const tempDir = TempDir.createSync("@legacy-pi-extension-cache-wal-");
@@ -91,7 +114,7 @@ test("legacy extension parse cache opens in WAL mode (#9549)", async () => {
 	// default delete-journal mode serialized cache writes behind per-entry
 	// journal create/delete + fsync and blocked startup for ~20s under
 	// concurrent omp processes.
-	const cachePath = path.join(cacheRoot, "omp", "cache", "legacy-pi-extension-cache-v2.db");
+	const cachePath = path.join(cacheRoot, "omp", "cache", "legacy-pi-extension-cache-v3.db");
 	const db = new Database(cachePath);
 	try {
 		const mode = db.query<{ journal_mode: string }, []>("PRAGMA journal_mode").get()?.journal_mode;
@@ -105,16 +128,16 @@ test("oversized-cache eviction keeps the parse cache usable when a concurrent pr
 	const tempDir = TempDir.createSync("@legacy-pi-extension-cache-evict-");
 	tempDirs.push(tempDir);
 	const cacheRoot = tempDir.path();
-	const cachePath = path.join(cacheRoot, "omp", "cache", "legacy-pi-extension-cache-v2.db");
+	const cachePath = path.join(cacheRoot, "omp", "cache", "legacy-pi-extension-cache-v3.db");
 	await fs.mkdir(path.dirname(cachePath), { recursive: true });
 
 	// Seed a cache whose main db file exceeds the 8 MiB eviction cap.
 	const seed = new Database(cachePath, { create: true });
 	seed.run(
-		"CREATE TABLE extension_parse_cache (cache_key TEXT PRIMARY KEY, source_type TEXT NOT NULL, [references] TEXT NOT NULL)",
+		"CREATE TABLE extension_parse_cache (cache_key TEXT PRIMARY KEY, source_type TEXT NOT NULL, [references] TEXT NOT NULL, commonjs_syntax INTEGER NOT NULL)",
 	);
-	seed.run("PRAGMA user_version = 2");
-	seed.run("INSERT INTO extension_parse_cache VALUES ('big', 'module', ?)", ["x".repeat(9 * 1024 * 1024)]);
+	seed.run("PRAGMA user_version = 3");
+	seed.run("INSERT INTO extension_parse_cache VALUES ('big', 'module', ?, 0)", ["x".repeat(9 * 1024 * 1024)]);
 	seed.close();
 
 	// A concurrent omp process holds the cache open in WAL mode with
@@ -124,7 +147,7 @@ test("oversized-cache eviction keeps the parse cache usable when a concurrent pr
 	try {
 		concurrent.run("PRAGMA busy_timeout = 5000");
 		concurrent.run("PRAGMA journal_mode=WAL");
-		const insert = concurrent.prepare("INSERT OR REPLACE INTO extension_parse_cache VALUES (?, 'module', ?)");
+		const insert = concurrent.prepare("INSERT OR REPLACE INTO extension_parse_cache VALUES (?, 'module', ?, 0)");
 		for (let i = 0; i < 500; i++) insert.run(`live-${i}`, "y".repeat(4096));
 
 		// The probe opens the cache, sees the oversized main file, and evicts.

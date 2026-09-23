@@ -390,7 +390,7 @@ async function runIpcSubprocessWorker<In, Out>(
 			}
 		} catch {}
 
-		// Note on container environments (Docker/Kubernetes): omp often runs as
+		// Note on container environments (Docker/Kubernetes): NeoPi often runs as
 		// PID 1, so workers start with process.ppid === 1. Treating ppid <= 1 as
 		// an orphan at boot would break containerized workers. Instead, we allow
 		// PID 1 to boot normally and detect post-spawn reparenting dynamically via
@@ -452,9 +452,9 @@ async function runIpcSubprocessWorker<In, Out>(
 /**
  * Hidden subcommand that boots the ONNX tiny-model worker for one model: a
  * detached process owning that model's socket (`OMP_TINY_WORKER_SOCKET`),
- * shared by every omp process on the machine and exiting on its own when
+ * shared by every NeoPi process on the machine and exiting on its own when
  * idle. It exists so `onnxruntime-node` (loaded transitively by
- * `@huggingface/transformers`) never runs in an omp address space — its NAPI
+ * `@huggingface/transformers`) never runs in a NeoPi address space — its NAPI
  * finalizer segfaults Bun on Windows (issue #1606).
  */
 async function runTinyWorker(): Promise<void> {
@@ -476,7 +476,7 @@ export async function runCli(argv: string[]): Promise<void> {
 			// invalid value to avoid an uncaught throw before this try/catch is in
 			// scope (see `readProfileFromEnvSafe` in dirs.ts), and callers may set
 			// OMP_PROFILE after importing this module (profile aliases/tests). Surfacing
-			// validation here turns `OMP_PROFILE=.. omp --version` into a clean error;
+			// validation here turns `OMP_PROFILE=.. npi --version` into a clean error;
 			// calling setProfile keeps every later path helper on the env-selected
 			// profile instead of the default agent directory.
 			setProfile(resolveProfileEnv(process.env.OMP_PROFILE, process.env.PI_PROFILE));
@@ -600,7 +600,7 @@ export async function runCli(argv: string[]): Promise<void> {
 // their entry with `import.meta.main === false`, so the worker-host dispatch
 // is admitted via `!Bun.isMainThread`.
 if (isProcessEntry || !Bun.isMainThread) {
-	// A one-shot CLI run (`omp --help | head`, `omp --version | true`, `omp <sub> | grep -m1`)
+	// A one-shot CLI run (`npi --help | head`, `npi --version | true`, `npi <sub> | grep -m1`)
 	// whose stdout consumer closes before the write drains gets an EPIPE that Bun surfaces as
 	// an unhandled rejection. Treat a vanished stdout peer as an ordinary Unix disconnect
 	// (graceful exit) rather than the fatal path. Interactive launches register their own

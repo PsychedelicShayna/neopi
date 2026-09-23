@@ -482,7 +482,7 @@ export interface ExtensionContext {
 	/** Gracefully shutdown and exit. */
 	shutdown(): void;
 	/**
-	 * Whether the current project/workspace is trusted. OMP performs no
+	 * Whether the current project/workspace is trusted. NeoPi performs no
 	 * project-trust gating — project-level settings and extensions load
 	 * unconditionally — so this always returns `true`. Exposed for
 	 * compatibility with extensions authored against upstream Pi, whose
@@ -534,11 +534,11 @@ export interface ExtensionContext {
 	 * here; extensions written against that API (e.g. Plannotator) feature-detect this method to
 	 * decide whether project-local config is safe to load, and warn when it is absent.
 	 *
-	 * OMP has no equivalent per-directory trust gate: `.omp/extensions`, `.omp/config.yml`, and
+	 * NeoPi has no equivalent per-directory trust gate: `.omp/extensions`, `.omp/config.yml`, and
 	 * other project-local inputs are already discovered and loaded unconditionally (see
 	 * `docs/extension-loading.md`). This method exists for compatibility with that upstream surface
-	 * and always returns `true`, truthfully reflecting that OMP already trusts project-local inputs
-	 * by default -- it does not narrow or widen OMP's own security model.
+	 * and always returns `true`, truthfully reflecting that NeoPi already trusts project-local inputs
+	 * by default -- it does not narrow or widen NeoPi's own security model.
 	 */
 	isProjectTrusted(): boolean;
 }
@@ -775,6 +775,20 @@ export interface BeforeAgentStartEvent {
 	/** Already-normalized user images in delivery order. */
 	images?: ImageContent[];
 	systemPrompt: string[];
+}
+
+/** Fired in the parent session before a subagent (task tool or eval `agent()`) resolves its model. */
+export interface BeforeSubagentSpawnEvent {
+	type: "before_subagent_spawn";
+	/** Agent definition name being spawned. */
+	agent: string;
+	invocationKind: "task" | "eval";
+	/** Pre-expansion role alias the patterns came from (`@task` -> "task"); undefined for explicit selectors. */
+	modelRole?: string;
+	/** Expanded model patterns core would spawn with, in attempt order. */
+	patterns: string[];
+	/** Stable per-spawn key for deterministic selection, when the caller supplies one. */
+	spawnKey?: string;
 }
 
 export type {
@@ -1094,6 +1108,7 @@ export type ExtensionEvent =
 	| BeforeProviderRequestEvent
 	| AfterProviderResponseEvent
 	| BeforeAgentStartEvent
+	| BeforeSubagentSpawnEvent
 	| AgentStartEvent
 	| AgentEndEvent
 	| SessionStopEvent
@@ -1166,6 +1181,17 @@ export interface BeforeAgentStartEventResult {
 	systemPrompt?: string[];
 }
 
+export interface BeforeSubagentSpawnEventResult {
+	/** Replacement model patterns in attempt order (selectors or role aliases). Role identity is preserved. */
+	model?: string | string[];
+	/** Refuse the spawn. */
+	block?: boolean;
+	/** Refusal reason surfaced to the caller. */
+	reason?: string;
+	/** Human-readable routing explanation surfaced with the resolved model. */
+	note?: string;
+}
+
 export type {
 	SessionBeforeBranchResult,
 	SessionBeforeCompactResult,
@@ -1208,6 +1234,8 @@ export type ExtensionServiceTier<Family extends ServiceTierFamily> = Family exte
 
 /**
  * ExtensionAPI passed to extension factory functions.
+ *
+ * Methods retain their extension binding when destructured or passed as callbacks.
  */
 export interface ExtensionAPI {
 	// =========================================================================
@@ -1261,6 +1289,10 @@ export interface ExtensionAPI {
 	): void;
 	on(event: "after_provider_response", handler: ExtensionHandler<AfterProviderResponseEvent>): void;
 	on(event: "before_agent_start", handler: ExtensionHandler<BeforeAgentStartEvent, BeforeAgentStartEventResult>): void;
+	on(
+		event: "before_subagent_spawn",
+		handler: ExtensionHandler<BeforeSubagentSpawnEvent, BeforeSubagentSpawnEventResult>,
+	): void;
 	on(event: "agent_start", handler: ExtensionHandler<AgentStartEvent>): void;
 	on(event: "agent_end", handler: ExtensionHandler<AgentEndEvent>): void;
 	on(event: "session_stop", handler: ExtensionHandler<SessionStopEvent, SessionStopEventResult>): void;

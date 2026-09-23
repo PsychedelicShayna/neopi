@@ -23,6 +23,48 @@ export type KnownApi =
 	| "devin-agent";
 export type Api = KnownApi | (string & {});
 
+/** Catalog kinds used to isolate role-specific runners from session chat models. */
+export const MODEL_KINDS = [
+	"chat",
+	"tiny",
+	"image",
+	"tts",
+	"stt",
+	"search",
+	"judge",
+	"embedding",
+	"rerank",
+	"video",
+] as const;
+/** Technical capability of a catalog model; absent model kinds mean chat. */
+export type ModelKind = (typeof MODEL_KINDS)[number];
+/** Kinds a provider maps to a runner transport through `kind-apis` in its KDL; discovery drops rows of these kinds when the provider declares no API. */
+export const KIND_API_KINDS = ["image", "tts", "stt", "embedding", "rerank", "video"] as const;
+export type KindApiKind = (typeof KIND_API_KINDS)[number];
+/** Grounding transport available to chat models selected by the web role. */
+export type WebSearchGrounding = "gemini" | "anthropic" | "codex" | "xai" | "openrouter";
+/** Non-chat runner protocols accepted by catalog seeds, outside the chat dispatch union. */
+export const RUNNER_APIS = [
+	"local-inference",
+	"web-search",
+	"typesafe",
+	"openrouter-decisions",
+	"openai-images",
+	"openrouter-images",
+	"xai-tts",
+	"openai-speech",
+	"openai-embeddings",
+	"openrouter-rerank",
+	"openrouter-video",
+	"openai-transcriptions",
+	"xai-stt",
+] as const;
+
+/** Resolve a model's kind while preserving chat semantics for existing catalog rows. */
+export function modelKind(model: Pick<Model, "kind">): ModelKind {
+	return model.kind ?? "chat";
+}
+
 /** Canonical thinking transport used by a model. */
 export type ThinkingControlMode =
 	| "effort"
@@ -1125,6 +1167,10 @@ export type ModelTokenizer =
 // Model interface for the unified model system
 export interface Model<TApi extends Api = Api> {
 	id: string;
+	/** Role-specific runner capability; omitted for ordinary chat models. */
+	kind?: ModelKind;
+	/** Grounding transport supported by this chat model. */
+	webSearch?: WebSearchGrounding;
 	/**
 	 * Structured model identity resolved by the compat engine: vendor lineage
 	 * class, product family, and revision. Baked into models.json rows and
@@ -1167,6 +1213,12 @@ export interface Model<TApi extends Api = Api> {
 	name: string;
 	api: TApi;
 	provider: Provider;
+	/**
+	 * Discovery backend whose catalog policy applies when it differs from the
+	 * credential-bearing provider id. Persisted so cached and rebuilt custom
+	 * providers retain their transport backend's policy.
+	 */
+	providerType?: string;
 	baseUrl: string;
 	reasoning: boolean;
 	/**
@@ -1178,7 +1230,7 @@ export interface Model<TApi extends Api = Api> {
 	input: ("text" | "image")[];
 	/**
 	 * Decoder family used for image inputs when it has narrower format support
-	 * than OMP's general image pipeline. `stb` local backends reject WebP.
+	 * than NeoPi's general image pipeline. `stb` local backends reject WebP.
 	 */
 	imageInputDecoder?: "stb";
 	/**
@@ -1221,7 +1273,7 @@ export interface Model<TApi extends Api = Api> {
 	 * the wire field is suppressed.
 	 *
 	 * Use this for proxies (notably Ollama) that forward to a backend whose true
-	 * output limit OMP cannot discover — sending the wrong value triggers 400s
+	 * output limit NeoPi cannot discover — sending the wrong value triggers 400s
 	 * from the upstream provider.
 	 */
 	omitMaxOutputTokens?: boolean;
@@ -1236,11 +1288,11 @@ export interface Model<TApi extends Api = Api> {
 	 * Streaming transport override. When `"pi-native"`, `streamSimple` routes
 	 * the request to the model's `baseUrl` via the auth-gateway's
 	 * `POST /v1/pi/stream` endpoint instead of dispatching the per-API
-	 * provider client. The `baseUrl` must point at an `omp auth-gateway`
+	 * provider client. The `baseUrl` must point at a `npi auth-gateway`
 	 * (or compatible) host; `headers.Authorization` (or `apiKey` resolved by
 	 * the registry) carries the gateway bearer.
 	 *
-	 * Used by containerized omp installs (e.g. robomp slots) to route every
+	 * Used by containerized NeoPi installs (e.g. robomp slots) to route every
 	 * LLM call through a sidecar gateway that holds the real provider
 	 * credentials. The model's other metadata (pricing, context window,
 	 * thinking config, …) still resolves locally; only the streaming

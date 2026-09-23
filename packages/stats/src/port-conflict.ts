@@ -1,13 +1,20 @@
 import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { $which } from "@oh-my-pi/pi-utils";
+import { $which, APP_NAME, PRODUCT_NAME } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 
 const STATS_PROBE_TIMEOUT_MS = 500;
 const PROCESS_EXIT_POLL_MS = 50;
 const PROCESS_EXIT_POLLS = 10;
-const STATS_RUNTIME_IMAGES: Record<string, true> = { bun: true, node: true, omp: true, "omp-stats": true };
+const LEGACY_APP_NAME = "omp";
+const STATS_RUNTIME_IMAGES: Record<string, true> = {
+	bun: true,
+	node: true,
+	[APP_NAME]: true,
+	[LEGACY_APP_NAME]: true,
+	"omp-stats": true,
+};
 
 interface PortHolder {
 	pid: number;
@@ -245,11 +252,12 @@ async function reclaimStatsPort(port: number, hasDashboardIdentity = false): Pro
 		normalizedImage === "omp-stats" ||
 		/(?:^|[/"'\s])omp-stats(?:\.exe)?(?:["'\s]|$)/.test(normalizedCommand) ||
 		/\/packages\/stats\/src\/index\.ts(?:["'\s]|$)/.test(normalizedCommand) ||
-		(normalizedImage === "omp" && /(?:^|\s)stats(?:\s|$)/.test(normalizedCommand)) ||
-		/(?:^|\/)omp(?:\.exe)?["'\s]+stats(?:["'\s]|$)/.test(normalizedCommand);
+		((normalizedImage === APP_NAME || normalizedImage === LEGACY_APP_NAME) &&
+			/(?:^|\s)stats(?:\s|$)/.test(normalizedCommand)) ||
+		/(?:^|\/)(?:npi|omp)(?:\.exe)?["'\s]+stats(?:["'\s]|$)/.test(normalizedCommand);
 	if (!STATS_RUNTIME_IMAGES[normalizedImage] || (!hasStatsIdentity && !hasDashboardIdentity)) {
 		throw new Error(
-			`Port ${port} is in use by ${holder.image} (PID ${holder.pid}), which is not identifiable as an omp stats dashboard; refusing to stop it.`,
+			`Port ${port} is in use by ${holder.image} (PID ${holder.pid}), which is not identifiable as a ${PRODUCT_NAME} stats dashboard; refusing to stop it.`,
 		);
 	}
 

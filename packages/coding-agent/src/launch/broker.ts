@@ -349,7 +349,7 @@ async function holdsLiveForeignLease(pidPath: string, endpoint: string): Promise
  * Claim the one-broker-per-scope lease. The native lock is process-owned, so
  * the OS releases it however the broker dies — a crashed broker can never wedge
  * the scope behind a stale lease again (issue #11080). `broker.pid` stays as
- * human-readable metadata for `omp ps` and dead-scope pruning.
+ * human-readable metadata for `npi ps` and dead-scope pruning.
  */
 async function acquireBrokerLease(runtimeDir: string, endpoint: string): Promise<BrokerLease | null> {
 	const pidPath = path.join(runtimeDir, PID_FILE);
@@ -1144,9 +1144,13 @@ class DaemonBroker {
 			if (generationEnded()) return true;
 			if (pattern) {
 				const match = pattern.exec(record.readinessBuffer);
-				if (!match) return false;
-				matched = match[0].slice(0, 500);
-				return true;
+				if (match) {
+					matched = match[0].slice(0, 500);
+					return true;
+				}
+				// No further output can arrive once the process is gone; blocking
+				// for the full window would hide the exit behind a bogus timeout.
+				return terminalState(record.snapshot.state);
 			}
 			if (operation.for === "exit") return terminalState(record.snapshot.state);
 			// Wake on observed readiness or any terminal state so the wait never
@@ -1462,7 +1466,7 @@ export async function startDaemonBrokerFromEnvironment(options: DaemonBrokerStar
 	const lease = await acquireBrokerLease(runtimeDir, endpoint);
 	if (!lease) return;
 	setProcessName(`${APP_NAME} daemon broker`);
-	// Record the scope's project dir so `omp ps` can map this hash-keyed runtime
+	// Record the scope's project dir so `npi ps` can map this hash-keyed runtime
 	// dir back to its project (and derive the Windows pipe name) offline.
 	void writeDaemonScopeMeta(runtimeDir, projectDir).catch(error => {
 		logger.warn("Failed to record daemon scope metadata", {

@@ -125,6 +125,8 @@ export interface SegmentContext {
 	} | null;
 	collab: CollabStatus | null;
 	stream: { viewers: number } | null;
+	/** A `/record` capture of this screen is running. */
+	recording: boolean;
 	// Cached values for performance (computed once per render)
 	usageStats: {
 		input: number;
@@ -165,7 +167,7 @@ export interface SegmentContext {
 	turnElapsedMs: number | null;
 	/**
 	 * Sampled foreground ANSI for the `pi` brand segment — tweened between dim
-	 * gray (idle) and the accent (working) across turn edges (rust omp's
+	 * gray (idle) and the accent (working) across turn edges (the upstream Rust
 	 * status-band brand fade). Absent in direct-segment fixtures and previews,
 	 * which fall back to the static dim color.
 	 */
@@ -188,6 +190,13 @@ export interface SegmentContext {
 		daily?: { percent: number; resetMinutes?: number };
 		sevenDay?: { percent: number; resetHours?: number };
 		monthly?: { percent: number; resetHours?: number };
+		resetCredits?: {
+			bankedCount: number;
+			redeemableCount: number;
+			expiryHours?: number;
+			expired?: boolean;
+			unavailableReason?: string;
+		};
 	} | null;
 }
 

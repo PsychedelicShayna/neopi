@@ -2,15 +2,15 @@
  * Durable ownership registry for targets in the project-shared broker-owned
  * Chromium (`omp.browser.headless`/`omp.browser.headed`).
  *
- * The shared browser outlives any single omp process, but tab ownership is
+ * The shared browser outlives any single NeoPi process, but tab ownership is
  * otherwise tracked only in that process's memory (`tab-supervisor`'s `tabs`
  * map). When a session ends abnormally (crash, SIGKILL, cleanup timeout) its
  * in-process map dies with it and the pages it opened stay open in the shared
  * Chromium forever, accumulating into multi-GB orphan targets (issue #10022).
  *
  * This module records, on disk under the broker runtime dir, which OS process
- * created each shared-browser page target. Any live omp process can then reap
- * targets whose owning process is gone. It only ever touches OMP-owned
+ * created each shared-browser page target. Any live NeoPi process can then reap
+ * targets whose owning process is gone. It only ever touches NeoPi-owned
  * shared-browser targets — user-owned connected/relay/spawned browsers have no
  * registry and are never scanned.
  *
@@ -34,7 +34,7 @@ export interface SharedTargetScope {
 	daemonName: string;
 }
 
-/** On-disk ownership record: one file per owning omp process. */
+/** On-disk ownership record: one file per owning NeoPi process. */
 interface OwnershipFile {
 	pid: number;
 	updatedAt: number;
@@ -240,7 +240,7 @@ async function updateOwnershipFile(owner: OrphanOwner, targetIds: string[]): Pro
 }
 
 /**
- * Reap shared-browser targets whose owning omp process is gone. Each owner
+ * Reap shared-browser targets whose owning NeoPi process is gone. Each owner
  * file is removed only after every target is confirmed closed/absent; partial
  * failures atomically retain the unresolved ids for the next attach to retry.
  * Failures are logged, never thrown, so cleanup cannot block browser open.

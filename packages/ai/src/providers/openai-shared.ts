@@ -34,6 +34,7 @@ import {
 	structuredCloneJSON,
 	USER_AGENT,
 } from "@oh-my-pi/pi-utils";
+import { NO_AUTH_SENTINEL } from "../auth-retry";
 import * as AIError from "../error";
 import {
 	type Api,
@@ -121,16 +122,6 @@ import type {
 import { applyInferenceHeaders, setHeaderIfAbsent } from "./inference-headers";
 import { transformMessages } from "./transform-messages";
 import { joinTextWithImagePlaceholder, NON_VISION_IMAGE_PLACEHOLDER, partitionVisionContent } from "./vision-guard";
-
-/**
- * Keyless-provider sentinel. Custom providers configured with `auth: none`
- * (models.yml) have no credential, so the coding-agent resolves their API key
- * to this literal instead of a real secret. Providers must treat it as "no
- * credential" and suppress any credential-bearing header (e.g. `Authorization:
- * Bearer …`) rather than forwarding the sentinel on the wire. See #6188; the
- * google-vertex and amazon-bedrock transports apply the same guard inline.
- */
-export const NO_AUTH_SENTINEL = "N/A";
 
 export interface OpenAIModelIdentity {
 	provider: string;
@@ -335,7 +326,7 @@ export function resolveOpenAIRequestSetup(
 	if (options.defaultBaseUrl !== undefined) {
 		baseUrl = baseUrl ?? ($env.OPENAI_BASE_URL?.trim() || options.defaultBaseUrl);
 	}
-	// Attribute xAI traffic as omp unless a User-Agent is already set.
+	// Attribute xAI traffic as NeoPi unless a User-Agent is already set.
 	if (model.provider === "xai" || model.provider === "xai-oauth") {
 		setHeaderIfAbsent(headers, "User-Agent", USER_AGENT);
 	}
@@ -1787,7 +1778,7 @@ export function convertResponsesInputContent(
 /**
  * Map freeform custom-tool wire names back to the internal tool name for
  * providers that only accept function_call / function_call_output.
- * Built once per request; `apply_patch` → `edit` is the OMP default.
+ * Built once per request; `apply_patch` → `edit` is the NeoPi default.
  */
 function buildCustomToolWireNameMap(tools: readonly Tool[] | undefined): ReadonlyMap<string, string> | undefined {
 	if (!tools?.length) return undefined;

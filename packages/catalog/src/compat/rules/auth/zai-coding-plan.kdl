@@ -25,7 +25,7 @@ auth "zai-coding-plan" {
 			email "data.user.email"
 			account-id "data.user.id"
 		}
-		// Business login then provisions/reuses OMP's durable id.secret API key.
+		// Business login then provisions/reuses NeoPi's durable id.secret API key.
 		after-exchange hook="zai-mint-key"
 	}
 	store-as "zai"

@@ -535,20 +535,23 @@ function collectExtensionSpecifierReferences(
 	return references;
 }
 
-const EXTENSION_PARSE_CACHE_SCHEMA_VERSION = 2;
+const EXTENSION_PARSE_CACHE_SCHEMA_VERSION = 3;
 const CREATE_EXTENSION_PARSE_CACHE_TABLE =
-	"CREATE TABLE IF NOT EXISTS extension_parse_cache (cache_key TEXT PRIMARY KEY, source_type TEXT NOT NULL, [references] TEXT NOT NULL)";
+	"CREATE TABLE IF NOT EXISTS extension_parse_cache (cache_key TEXT PRIMARY KEY, source_type TEXT NOT NULL, [references] TEXT NOT NULL, commonjs_syntax INTEGER NOT NULL)";
 const EXTENSION_PARSE_CACHE_MAX_BYTES = 8 * 1024 * 1024;
 const EXTENSION_PARSE_CACHE_MAX_ENTRIES = 10_000;
 
 interface ExtensionSourceAnalysis {
 	readonly sourceType: "script" | "module";
 	readonly references: readonly ExtensionSpecifierReference[];
+	/** Script source with an unshadowed `require(...)`, `exports`, or `module.exports` use. Always false for modules. */
+	readonly hasCommonJsSyntax: boolean;
 }
 
 interface ExtensionParseCacheRow {
 	source_type: "script" | "module";
 	references: string;
+	commonjs_syntax: number;
 }
 
 let extensionParseCacheDb: Database | null | undefined;
@@ -567,9 +570,9 @@ function getExtensionParseCacheDb(): Database | null {
 		try {
 			if (fs.statSync(cachePath).size > EXTENSION_PARSE_CACHE_MAX_BYTES) {
 				// Remove the full WAL set, not just the main db. A leftover
-				// `-wal`/`-shm` pair still owned by a concurrent omp process is
+				// `-wal`/`-shm` pair still owned by a concurrent harness process is
 				// adopted by this fresh connection; when that `-wal` has
-				// uncheckpointed frames (the normal case while another omp is
+				// uncheckpointed frames (the normal case while another process is
 				// writing its own cache entries), `journal_mode=WAL` fails with
 				// SQLITE_IOERR — disabling the parse cache for the whole process
 				// and forcing a reparse of every extension on startup. See #9549.
@@ -641,6 +644,7 @@ function parseCachedAnalysis(row: ExtensionParseCacheRow): ExtensionSourceAnalys
 		return {
 			sourceType: row.source_type,
 			references: references as ExtensionSpecifierReference[],
+			hasCommonJsSyntax: row.commonjs_syntax === 1,
 		};
 	} catch {
 		return null;
@@ -653,8 +657,8 @@ function writeExtensionSourceAnalysis(cacheKey: string, analysis: ExtensionSourc
 			const db = getExtensionParseCacheDb();
 			if (!db) return;
 			db.run(
-				"INSERT OR REPLACE INTO extension_parse_cache (cache_key, source_type, [references]) VALUES (?, ?, ?)",
-				[cacheKey, analysis.sourceType, JSON.stringify(analysis.references)],
+				"INSERT OR REPLACE INTO extension_parse_cache (cache_key, source_type, [references], commonjs_syntax) VALUES (?, ?, ?, ?)",
+				[cacheKey, analysis.sourceType, JSON.stringify(analysis.references), analysis.hasCommonJsSyntax ? 1 : 0],
 			);
 			const count =
 				db.query<{ count: number }, []>("SELECT count(*) AS count FROM extension_parse_cache").get()?.count ?? 0;
@@ -678,7 +682,7 @@ function getExtensionSourceAnalysis(source: string, importerPath: string): Exten
 	try {
 		const row = db
 			?.query<ExtensionParseCacheRow, [string]>(
-				"SELECT source_type, [references] FROM extension_parse_cache WHERE cache_key = ?",
+				"SELECT source_type, [references], commonjs_syntax FROM extension_parse_cache WHERE cache_key = ?",
 			)
 			.get(cacheKey);
 		if (row) {
@@ -695,9 +699,21 @@ function getExtensionSourceAnalysis(source: string, importerPath: string): Exten
 	}
 
 	const ast = parseExtensionSource(source, importerPath);
+	const sourceType = ast.program.sourceType;
 	const analysis: ExtensionSourceAnalysis = {
-		sourceType: ast.program.sourceType,
+		sourceType,
 		references: collectExtensionSpecifierReferences(source, importerPath, ast),
+		hasCommonJsSyntax:
+			sourceType === "script" &&
+			collectScopedAstNodes(ast, node => node.type === "CallExpression" || node.type === "MemberExpression").some(
+				({ node, scope }) => {
+					if (isGlobalRequireCall(node, scope)) return true;
+					if (node.type !== "MemberExpression") return false;
+					return (
+						isUnshadowedExportsTarget(node, scope) || isUnshadowedExportsTarget(asAstNode(node.object), scope)
+					);
+				},
+			),
 	};
 	extensionSourceAnalysisCache.set(cacheKey, analysis);
 	writeExtensionSourceAnalysis(cacheKey, analysis);
@@ -1092,7 +1108,7 @@ function toImportSpecifier(resolvedPath: string): string {
 }
 
 /**
- * Rewrite the extension-owned specifiers OMP must host-resolve — legacy
+ * Rewrite the extension-owned specifiers NeoPi must host-resolve — legacy
  * `@(scope)/pi-*`, bare TypeBox packages, package `imports` aliases like
  * `#src/*`, and extension-local bare dependencies — to absolute `file://` URLs
  * or compiled-mode virtual specifiers. Relative siblings and built-in modules
@@ -1152,8 +1168,12 @@ async function rewriteLegacyExtensionSource(
 			replacements.push({ ...reference, replacement });
 		}
 	}
-	const withImports = applySpecifierReplacements(source, replacements);
-	return rewriteExtensionSpecifiers(withImports, importerPath);
+	// Resolve `require()` targets against the original source rather than the
+	// import-rewritten text: the rewrite embeds a per-load `?mtime=` tag, which
+	// would give every load a fresh parse-cache key and force a Babel reparse.
+	// Import and require references never overlap, so one pass applies both.
+	replacements.push(...(await collectExtensionSpecifierReplacements(source, importerPath)));
+	return applySpecifierReplacements(source, replacements);
 }
 
 /** Test seam for compiled-binary legacy extension source rewriting. */
@@ -1577,24 +1597,17 @@ async function isCommonJsModulePath(
 	if (manifest?.type === "commonjs") {
 		return true;
 	}
-	const parsedSourceType =
-		sourceType ?? getExtensionSourceAnalysis(await Bun.file(modulePath).text(), modulePath).sourceType;
-	if (parsedSourceType === "module") {
+	// A caller-supplied `module` verdict is final; any other outcome needs the
+	// cached analysis (source type plus CommonJS syntax), so read the file once.
+	if (sourceType === "module") {
 		return false;
 	}
-	if (parsedSourceType === "script") {
-		const ast = parseExtensionSource(await Bun.file(modulePath).text(), modulePath);
-		const hasUnshadowedCommonJsSyntax = collectScopedAstNodes(
-			ast,
-			node => node.type === "CallExpression" || node.type === "MemberExpression",
-		).some(({ node, scope }) => {
-			if (isGlobalRequireCall(node, scope)) return true;
-			if (node.type !== "MemberExpression") return false;
-			return isUnshadowedExportsTarget(node, scope) || isUnshadowedExportsTarget(asAstNode(node.object), scope);
-		});
-		if (hasUnshadowedCommonJsSyntax) {
-			return true;
-		}
+	const analysis = getExtensionSourceAnalysis(await Bun.file(modulePath).text(), modulePath);
+	if ((sourceType ?? analysis.sourceType) === "module") {
+		return false;
+	}
+	if (analysis.hasCommonJsSyntax) {
+		return true;
 	}
 	if (inheritedKind) {
 		return inheritedKind === "commonjs";
@@ -1883,16 +1896,16 @@ async function resolveExtensionCommonJsRequire(specifier: string, importerPath: 
 }
 
 /**
- * Rewrite CommonJS graph specifiers that cannot resolve from the bridge's
+ * Resolve the CommonJS graph specifiers that cannot resolve from the bridge's
  * generated function: bare `require()` calls and, for graph-owned CommonJS
  * sources, import specifiers. Resolved targets are retained for synchronous
  * lazy hydration after load-time source caches clear.
  */
-async function rewriteExtensionSpecifiers(
+async function collectExtensionSpecifierReplacements(
 	source: string,
 	importerPath: string,
 	rewriteImports = false,
-): Promise<string> {
+): Promise<Array<ExtensionSpecifierReference & { replacement: string }>> {
 	const references = getExtensionSourceAnalysis(source, importerPath).references;
 	const resolvedSpecifierTargets = new Map<string, string>();
 	const replacements: Array<ExtensionSpecifierReference & { replacement: string }> = [];
@@ -1919,7 +1932,7 @@ async function rewriteExtensionSpecifiers(
 		replacements.push({ ...reference, replacement });
 	}
 	extensionSynchronousSpecifierTargets.set(importerPath, resolvedSpecifierTargets);
-	return applySpecifierReplacements(source, replacements);
+	return replacements;
 }
 
 function rewriteExtensionSpecifiersFromCache(source: string, importerPath: string): string {
@@ -1940,7 +1953,7 @@ function rewriteExtensionSpecifiersFromCache(source: string, importerPath: strin
 /**
  * Whether a module's source contains a bare require that resolves to a native
  * `.node` addon — i.e. a napi-rs style loader that must be hooked into the
- * extension graph so {@link rewriteExtensionSpecifiers} can pin its
+ * extension graph so {@link collectExtensionSpecifierReplacements} can pin its
  * platform-package requires to absolute paths.
  */
 async function moduleRequiresNativeAddon(modulePath: string): Promise<boolean> {
@@ -2119,7 +2132,7 @@ interface ExtensionModuleGraph {
 
 /**
  * Walk the extension's import graph starting at `entryRealPath`, returning the
- * realpath of every reachable source module OMP must rewrite at load time.
+ * realpath of every reachable source module NeoPi must rewrite at load time.
  * Relative imports, package `imports` aliases, and ESM bare dependencies are
  * graph-owned recursively because compiled Bun cannot resolve runtime
  * `node_modules` from those modules. Graph-owned CommonJS modules also own
@@ -2321,7 +2334,10 @@ async function collectExtensionModules(entryRealPath: string): Promise<Extension
 	}
 	for (const [modulePath, source] of modules) {
 		if (commonJsPaths.has(modulePath)) {
-			modules.set(modulePath, await rewriteExtensionSpecifiers(source, modulePath, true));
+			modules.set(
+				modulePath,
+				applySpecifierReplacements(source, await collectExtensionSpecifierReplacements(source, modulePath, true)),
+			);
 		} else if (synchronousSourcePaths.has(modulePath)) {
 			modules.set(modulePath, await rewriteLegacyExtensionSource(source, modulePath));
 		}
@@ -2371,7 +2387,7 @@ function prepareGraphCommonJsDefinition(modulePath: string, source: string, targ
 }
 
 /**
- * Linkedom's canvas bridge uses its bundled fallback because OMP does not ship
+ * Linkedom's canvas bridge uses its bundled fallback because NeoPi does not ship
  * native canvas.
  */
 async function prepareGraphCommonJsModule(modulePath: string, source: string): Promise<void> {

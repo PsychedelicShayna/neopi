@@ -1,10 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { Settings, settings } from "../src/config/settings";
 import * as asrClient from "../src/stt/asr-client";
 import * as downloader from "../src/stt/downloader";
-import { STTController } from "../src/stt/stt-controller";
+import { STTController, type STTControllerDependencies } from "../src/stt/stt-controller";
 import { evaluateSubmitTrigger, type SttSubmitTrigger } from "../src/stt/submit-trigger";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
+
+const DICTATION_MODELS = [getBundledModel("local", "whisper-base")];
+const registry: STTControllerDependencies["registry"] = {
+	getError: () => undefined,
+	getAvailable: () => DICTATION_MODELS,
+	getAll: () => DICTATION_MODELS,
+	resolver: () => () => "test-key",
+	getProviderBaseUrl: () => undefined,
+	find: (provider, modelId) => DICTATION_MODELS.find(m => m.provider === provider && m.id === modelId),
+	resolveModelHeaders: async () => undefined,
+	getProviderHeaders: async () => undefined,
+};
 
 describe("STT Submit Trigger Evaluation", () => {
 	describe("never trigger", () => {
@@ -184,7 +197,6 @@ describe("STTController submit trigger integration", () => {
 			showWarning: vi.fn(),
 			showStatus: vi.fn(),
 			onStateChange: vi.fn(),
-			requestRender: vi.fn(),
 		};
 	}
 
@@ -197,7 +209,7 @@ describe("STTController submit trigger integration", () => {
 		});
 		const editor = makeEditor();
 		const options = makeOptions();
-		controller = new STTController(() => ({ stop: vi.fn() }));
+		controller = new STTController(() => ({ stop: vi.fn() }), { settings, registry });
 
 		await controller.toggle(editor, options);
 		expect(controller.state).toBe("recording");
@@ -210,7 +222,7 @@ describe("STTController submit trigger integration", () => {
 	beforeEach(async () => {
 		state = beginSettingsTest();
 		await Settings.init({ inMemory: true });
-		settings.set("stt.modelName", "fast");
+		settings.setModelRole("dictation", "local/whisper-base");
 		settings.set("stt.submitTrigger", "never");
 		vi.spyOn(downloader, "isSttModelCached").mockResolvedValue(true);
 		vi.spyOn(downloader, "downloadSttModel").mockResolvedValue(undefined);

@@ -102,7 +102,7 @@ export interface CustomToolContext {
 	settings?: Settings;
 	/** Fetch implementation for outbound HTTP; defaults to global fetch when omitted. */
 	fetch?: FetchImpl;
-	/** Calling session's `local://` root mapping for tools that bridge out of the OMP process. */
+	/** Calling session's `local://` root mapping for tools that bridge out of the NeoPi process. */
 	localProtocolOptions?: LocalProtocolOptions;
 	/** Whether to auto-approve all destructive tool operations (--auto-approve CLI flag) */
 	autoApprove?: boolean;

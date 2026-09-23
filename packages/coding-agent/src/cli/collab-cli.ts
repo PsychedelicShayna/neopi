@@ -32,13 +32,13 @@ export interface CollabLinkCommandArgs {
 	registry?: CollabListOptions;
 }
 
-/** Versioned top-level JSON shape for `omp collab list --json`. */
+/** Versioned top-level JSON shape for `npi collab list --json`. */
 export interface CollabListJsonOutput {
 	version: number;
 	hosts: CollabHostSnapshot[];
 }
 
-/** Versioned capability response for `omp collab link --json`. */
+/** Versioned capability response for `npi collab link --json`. */
 export interface CollabLinkJsonOutput extends CollabResolvedLink {
 	version: number;
 }
@@ -78,6 +78,7 @@ export async function runCollabListCommand(
 			`relay ${host.relayConnected ? "connected" : "reconnecting"}`,
 		];
 		if (host.inputRequired) details.push("input required");
+		if (host.busy !== null) details.push(host.busy ? "working" : "idle");
 		print("");
 		print(`${host.instanceId}  ${session}  ${chalk.dim(cwd)}`);
 		print(`  ${chalk.dim(details.join(" · "))}`);

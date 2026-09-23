@@ -168,7 +168,7 @@ const piSegment: StatusLineSegment = {
 		// turn edges; the component samples the tween into `brandFgAnsi`.
 		const fgAnsi = ctx.brandFgAnsi ?? theme.getFgAnsi("dim");
 		// While a turn runs the brand icon becomes a braille spinner plus a
-		// whole-unit turn timer (port of rust omp's status-band active brand).
+		// whole-unit turn timer (port of the upstream Rust status-band active brand).
 		// No trailing pad: the group renderer owns inter-segment spacing, so a
 		// trailing space here would double the gap at the first separator (#11103).
 		const content =
@@ -186,7 +186,7 @@ function brandSpinnerFrame(nowMs = Date.now()): string {
 	return frames[Math.floor(nowMs / SPINNER_ADVANCE_MS) % frames.length] ?? "";
 }
 
-/** Turn timer in omp's brand format: whole seconds → minutes → hours (capped at 99h). */
+/** Turn timer in NeoPi's brand format: whole seconds → minutes → hours (capped at 99h). */
 function brandTimer(elapsedMs: number): string {
 	const seconds = Math.floor(elapsedMs / 1000);
 	if (seconds < 60) return `${seconds}s`;
@@ -758,9 +758,11 @@ const collabSegment: StatusLineSegment = {
 const streamSegment: StatusLineSegment = {
 	id: "stream",
 	render(ctx) {
-		if (!ctx.stream) return { content: "", visible: false };
-		const viewers = statusValue(ctx, `${ctx.stream.viewers}`);
-		return { content: theme.fg("thinkingHigh", `● LIVE ${viewers}`), visible: true };
+		const badges: string[] = [];
+		if (ctx.stream) badges.push(`● LIVE ${statusValue(ctx, `${ctx.stream.viewers}`)}`);
+		if (ctx.recording) badges.push("● REC");
+		if (badges.length === 0) return { content: "", visible: false };
+		return { content: theme.fg("thinkingHigh", badges.join(" ")), visible: true };
 	},
 };
 
@@ -859,7 +861,7 @@ const usageSegment: StatusLineSegment = {
 	id: "usage",
 	render(ctx) {
 		const u = ctx.usage;
-		if (!u || (!u.fiveHour && !u.daily && !u.sevenDay && !u.monthly)) {
+		if (!u || (!u.fiveHour && !u.daily && !u.sevenDay && !u.monthly && !u.resetCredits)) {
 			return { content: "", visible: false };
 		}
 		const parts: string[] = [];
@@ -879,10 +881,27 @@ const usageSegment: StatusLineSegment = {
 			parts.push(formatQuotaWindow(ctx, "7d", u.sevenDay.percent, u.sevenDay.resetHours, "h", "round"));
 		}
 		if (u.monthly) {
-			// Cursor and OpenCode Go (normalize gates monthly to those providers).
-			// Both floor used percents upstream (Cursor's dashboard shows 1.88 →
-			// "1% used"; OpenCode's endpoint already emits floored integers).
+			// Monthly-subscription providers only (the normalizer gates the class).
+			// Cursor and QwenCloud floor used percents upstream (Cursor's dashboard
+			// shows 1.88 → "1% used"; OpenCode's endpoint emits floored integers).
 			parts.push(formatQuotaWindow(ctx, "mo", u.monthly.percent, u.monthly.resetHours, "h", "floor"));
+		}
+		if (u.resetCredits) {
+			const resets = u.resetCredits;
+			let resetText = `✦ ${resets.bankedCount}`;
+			if (resets.redeemableCount !== resets.bankedCount) {
+				resetText += ` (${resets.redeemableCount} usable)`;
+			}
+			if (resets.expiryHours !== undefined) {
+				resetText += ` exp ${formatUsageReset(resets.expiryHours, "h")}`;
+			} else if (resets.expired) {
+				resetText += " expired";
+			}
+			if (resets.redeemableCount === 0 && resets.unavailableReason) {
+				const reason = truncateToWidth(sanitizeStatusText(resets.unavailableReason), TRUNCATE_LENGTHS.SHORT);
+				if (reason) resetText += ` ${reason}`;
+			}
+			parts.push(theme.fg(resets.redeemableCount > 0 ? "success" : "warning", resetText));
 		}
 		const content = withIcon(theme.icon.time, parts.join(theme.sep.dot));
 		return { content, visible: true };

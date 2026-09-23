@@ -21,7 +21,7 @@ export function refreshStatusLine(ctx: InteractiveModeContext): void {
 }
 
 /**
- * Resolve a `/model` / `/switch` selector the way `omp bench` and `--model`
+ * Resolve a `/model` / `/switch` selector the way `npi bench` and `--model`
  * do: exact `provider/id`, fuzzy ids (`opus`), role aliases (`@smol`, `smol`),
  * and `:level` thinking suffixes. Unqualified selectors prefer the session's
  * `--models` scope, else the authenticated set, before the full catalog.
@@ -290,7 +290,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "loop",
 		icon: "loop",
 		description:
-			"Toggle loop mode. While enabled, the next prompt you send re-submits after every yield. Bound it with a count/duration, or gate it with `--until '<cmd>'` / `--while '<cmd>'` — the command's exit status decides whether the next iteration runs. Esc cancels the current iteration; /loop again to disable.",
+			"Toggle loop mode. While enabled, the next prompt you send re-submits after every yield. Bound it with a count/duration, or gate it with `--until '<cmd>'` / `--while '<cmd>'` — the command's exit status decides whether the next iteration runs. Esc suspends the ongoing loop; /loop again to disable.",
 		inlineHint: "[count|duration] [--while|--until '<cmd>'] [prompt]",
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime => {

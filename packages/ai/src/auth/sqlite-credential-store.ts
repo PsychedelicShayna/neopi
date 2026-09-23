@@ -88,7 +88,7 @@ type SerializedCredentialRecord = {
 	identityKey: string | null;
 };
 
-const AUTH_SCHEMA_VERSION = 7;
+const AUTH_SCHEMA_VERSION = 8;
 const SQLITE_NOW_EPOCH = "CAST(strftime('%s','now') AS INTEGER)";
 const LEGACY_CODEX_BLOCK_PROVIDER_KEY = "openai-codex:oauth";
 const LEGACY_CODEX_BLOCK_SCOPE = "shared";
@@ -551,7 +551,7 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	 * Install the per-connection busy handler so lock-taking statements wait for
 	 * a contended writer instead of failing immediately (Bun defaults
 	 * `busy_timeout` to 0). MUST run before the first lock-taking statement on
-	 * the connection: concurrent omp startups race WAL recovery and the leases
+	 * the connection: concurrent NeoPi startups race WAL recovery and the leases
 	 * DDL. Uses the centralized timeout so headless hosts keep their bounded
 	 * busy wait instead of the interactive 5s value. See issues #2421, #7298.
 	 */
@@ -562,7 +562,7 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	#initializeSchema(): void {
 		// Install the busy handler BEFORE any lock-taking statement (incl.
 		// `PRAGMA journal_mode=WAL`, which acquires an exclusive lock during WAL
-		// recovery). Without this, concurrent omp startups can crash here with
+		// recovery). Without this, concurrent NeoPi startups can crash here with
 		// `SQLITE_BUSY` / `SQLITE_BUSY_RECOVERY`. Re-setting when opened via
 		// `open()` (which already installed it) is idempotent. See issue #2421.
 		SqliteAuthCredentialStore.#installBusyTimeout(this.#db);
@@ -970,6 +970,9 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		if (fromVersion < 7) {
 			this.#migrateAuthSchemaV6ToV7();
 		}
+		if (fromVersion < 8) {
+			this.#migrateAuthSchemaV7ToV8();
+		}
 	}
 
 	#migrateAuthSchemaV0ToV1(): void {
@@ -1137,6 +1140,46 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 			`);
 			this.#createAuthCredentialBlockCompatibilityTriggers();
 			this.#writeAuthSchemaVersion(7);
+		});
+		migrate.immediate();
+	}
+
+	#migrateAuthSchemaV7ToV8(): void {
+		const migrate = this.#db.transaction(() => {
+			// SingularityAPI split into two providers — the pay-as-you-go universal
+			// gateway and the slot-reserved lanes — and keys stored under the
+			// retired shared id belong to one or the other by format: the gateway
+			// issues `sk-sapi-...` while the lanes issue plain `sk-...` (both
+			// observed live 2026-09-22), and neither key is accepted by the other
+			// host. Route each stored credential to the product that serves it
+			// instead of orphaning it under an id nothing reads anymore.
+			const select = this.#db.prepare(
+				"SELECT id, credential_type, data FROM auth_credentials WHERE provider = 'singularityapi'",
+			);
+			let rows: Array<{ id: number; credential_type: string; data: string }>;
+			try {
+				rows = select.all() as Array<{ id: number; credential_type: string; data: string }>;
+			} finally {
+				select.finalize();
+			}
+			for (const row of rows) {
+				let provider = "singularityapi-tech";
+				try {
+					const parsed = JSON.parse(row.data) as { key?: unknown };
+					if (typeof parsed.key === "string" && parsed.key.startsWith("sk-sapi-")) {
+						provider = "singularityapi-dev";
+					}
+				} catch {
+					// Unparsable payload takes the lane default; whichever product the
+					// key really belongs to then answers 401 and the owner re-logs in.
+				}
+				this.#db.run("UPDATE auth_credentials SET provider = ? WHERE id = ?", [provider, row.id]);
+				this.#db.run(
+					"UPDATE auth_credential_blocks SET provider_key = ? WHERE credential_id = ? AND provider_key = ?",
+					[`${provider}:${row.credential_type}`, row.id, `singularityapi:${row.credential_type}`],
+				);
+			}
+			this.#writeAuthSchemaVersion(8);
 		});
 		migrate.immediate();
 	}

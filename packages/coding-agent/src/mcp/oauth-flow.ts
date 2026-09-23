@@ -13,14 +13,14 @@ import { getActiveProfile } from "@oh-my-pi/pi-utils/dirs";
 import type { OAuthCredential } from "../session/auth-storage";
 import { buildWellKnownUrls } from "./oauth-discovery";
 
-/** Credential-id prefix for OMP-managed MCP OAuth credentials keyed by profile and server URL. */
+/** Credential-id prefix for NeoPi-managed MCP OAuth credentials keyed by profile and server URL. */
 const MCP_OAUTH_URL_CREDENTIAL_PREFIX = "mcp_oauth:";
 
 /** Credential-id prefix for profile-scoped MCP OAuth credentials (`mcp_oauth:profile:<profile>:<serverUrl>`). */
 const MCP_OAUTH_PROFILE_CREDENTIAL_PREFIX = `${MCP_OAUTH_URL_CREDENTIAL_PREFIX}profile:`;
 
 /**
- * Deterministic credential id for an MCP server URL scoped to an OMP profile.
+ * Deterministic credential id for an MCP server URL scoped to a NeoPi profile.
  *
  * Local profile stores are already separate, but auth-broker storage shares one
  * provider namespace across profiles. Including the profile in the provider key
@@ -33,7 +33,7 @@ export function mcpOAuthCredentialId(serverUrl: string, profile: string | undefi
 	return `${MCP_OAUTH_PROFILE_CREDENTIAL_PREFIX}${profile ?? "default"}:${serverUrl}`;
 }
 
-/** Whether a credential id was minted by OMP's MCP OAuth flows (either era). */
+/** Whether a credential id was minted by NeoPi's MCP OAuth flows (either era). */
 export function isManagedMCPOAuthCredentialId(credentialId: string | undefined): credentialId is string {
 	return (
 		!!credentialId &&
@@ -96,6 +96,11 @@ export interface MCPStoredOAuthCredential extends OAuthCredential {
 
 const DEFAULT_PORT = 3000;
 const CALLBACK_PATH = "/callback";
+
+function isGoogleAuthorizationHost(hostname: string): boolean {
+	const host = hostname.toLowerCase();
+	return host === "accounts.google.com" || host.endsWith(".accounts.google.com");
+}
 
 function hasOAuthScope(scopes: string | null | undefined, scope: string): boolean {
 	return !!scopes && scopes.split(/\s+/).includes(scope);
@@ -271,7 +276,7 @@ interface ResourceIndicatorFilterOptions {
  * (`https://gateway.example.com/my-service/mcp`): servers can use either form
  * as the audience they require for the grant.
  *
- * Plane is stricter for OMP-synthesized fallback resources (e.g. using the
+ * Plane is stricter for NeoPi-synthesized fallback resources (e.g. using the
  * configured server URL `https://mcp.plane.so/http/mcp` as `resource`), so
  * fallback callers opt into `stripSameOriginResource`. Provider-advertised
  * `oauth.resource` values and authorization-URL `?resource=` values keep the
@@ -439,13 +444,20 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 		if (prompt && !params.get("prompt")) {
 			params.set("prompt", prompt);
 		}
+		// Google only mints refresh tokens when access_type=offline is requested;
+		// without it Google-hosted MCP servers can never refresh (#12438).
+		// Other providers ignore the unknown parameter, so scope the default to
+		// Google issuers and never override an explicit value.
+		if (!params.get("access_type") && isGoogleAuthorizationHost(authUrl.hostname)) {
+			params.set("access_type", "offline");
+		}
 		const existingResource = params.get("resource")?.trim();
 		if (this.#resource && !this.config.stripSameOriginResource) {
 			// Protected-resource or authorization-server metadata identifies the
 			// requested audience; a query carried by the endpoint URL does not.
 			params.set("resource", this.#resource);
 		} else if (existingResource) {
-			// An embedded resource outranks OMP's server-URL fallback. Gateway-
+			// An embedded resource outranks NeoPi's server-URL fallback. Gateway-
 			// hosted MCP servers can use origin-only or path-scoped audiences.
 			const filtered = filterResourceIndicator(resolveResourceUri(existingResource), this.config.authorizationUrl);
 			if (filtered) {

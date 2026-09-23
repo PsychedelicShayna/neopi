@@ -36,7 +36,7 @@ const invalidatedClientKeys = new Set<string>();
 const clientReloadBarriers = new Map<string, Promise<unknown>>();
 const fileOperationLocks = new Map<string, Promise<void>>();
 /**
- * URIs whose server overlay OMP has intentionally advanced ahead of the on-disk
+ * URIs whose server overlay NeoPi has intentionally advanced ahead of the on-disk
  * file for an in-flight write/edit: the writethrough syncs the new (and possibly
  * formatted) text to the language server before committing it to disk, so while
  * a write is pending the file on disk is *older* than the overlay. Refcounted by
@@ -56,7 +56,7 @@ let idleCheckInterval: NodeJS.Timeout | null = null;
 const IDLE_CHECK_INTERVAL_MS = 60 * 1000;
 
 // Broker-shared server mode (one language server per project shared by every
-// omp instance through the LSP mux daemon). Off by default so embedders and
+// NeoPi instance through the LSP mux daemon). Off by default so embedders and
 // tests that drive getOrCreateClient directly never touch the daemon broker;
 // the SDK turns it on from the `lsp.shared` setting at session creation.
 let sharedLspEnabled = false;
@@ -383,7 +383,11 @@ function queueWriteMessage(
 		throw err;
 	});
 	client.writeQueue = result.catch(() => {});
-	return result;
+	// Keep the internal queue chained so writes stay serialized, but do not make
+	// this caller wait forever behind an earlier wedged write. `writeMessage`
+	// observes the same signal once this write reaches the sink; until then the
+	// abort race only releases the caller and deliberately leaves the client alive.
+	return untilAborted(signal, result);
 }
 
 // =============================================================================
@@ -1107,6 +1111,7 @@ export async function getOrCreateClient(
 			isReading: false,
 			status: "connecting",
 			lastActivity: Date.now(),
+			startedAt: Date.now(),
 			writeQueue: Promise.resolve(),
 			activeProgressTokens: new Set(),
 			projectLoaded,
@@ -1242,7 +1247,7 @@ function documentSignature(content: string): number | bigint {
 }
 
 /**
- * Mark a file whose server overlay OMP has advanced ahead of disk for an in-flight
+ * Mark a file whose server overlay NeoPi has advanced ahead of disk for an in-flight
  * write. While marked, {@link reconcileFileFromDisk} skips reading disk back into
  * the server, because the on-disk file is the *stale* side until the write commits.
  * Every call MUST be balanced by {@link endPendingDiskWrite}.
@@ -1334,7 +1339,7 @@ export async function ensureFileOpen(client: LspClient, filePath: string, signal
  * Reconcile an already-open document with current disk contents before a semantic query.
  *
  * {@link ensureFileOpen} opens an untracked file but no-ops when the URI is already
- * open, so an external edit — one not routed through OMP's write/edit tools, which
+ * open, so an external edit — one not routed through NeoPi's write/edit tools, which
  * announce their changes via {@link notifyWorkspaceWatchedFiles}/{@link refreshFile} —
  * leaves the server holding the pre-edit document while callers compute query
  * positions from disk. This reads the file and, when its contents diverge from the
@@ -1343,7 +1348,7 @@ export async function ensureFileOpen(client: LspClient, filePath: string, signal
  * {@link ensureFileOpen}; unchanged files send nothing.
  * Returns `true` only when a `didChange` was pushed for a reconciled overlay — the
  * caller can then wait for fresh diagnostics, since the stale ones were dropped.
- * A file with an in-flight OMP write ({@link beginPendingDiskWrite}) is skipped
+ * A file with an in-flight NeoPi write ({@link beginPendingDiskWrite}) is skipped
  * entirely: its overlay leads disk, so reading disk back would revert the server
  * to pre-write content.
  */
@@ -1359,7 +1364,7 @@ export async function reconcileFileFromDisk(
 		return false;
 	}
 
-	// An in-flight OMP write has already synced newer (possibly formatted) text to
+	// An in-flight NeoPi write has already synced newer (possibly formatted) text to
 	// the server ahead of committing it to disk; the on-disk file is the stale side,
 	// so reconciling from it would clobber the overlay. Leave it to the write.
 	if (pendingDiskWrites.has(uri)) {
@@ -1546,7 +1551,9 @@ const WATCHED_FILES_NOTIFY_TIMEOUT_MS = 2_000;
 /**
  * Announce harness-authored filesystem changes to active LSP clients for `cwd`.
  *
- * This covers sibling files that are not open text documents, such as generated
+ * Created or deleted files can change module resolution for otherwise untouched
+ * open documents, so those overlays are refreshed after the watcher notification.
+ * This also covers sibling files that are not open text documents, such as generated
  * CSS modules or type files that another edited document imports immediately.
  *
  * The underlying stdin write drain is self-bounded by
@@ -1580,6 +1587,8 @@ export async function notifyWorkspaceWatchedFiles(
 				});
 			if (clientChanges.length === 0) return;
 			await sendNotification(client, "workspace/didChangeWatchedFiles", { changes: clientChanges }, sendSignal);
+			if (clientChanges.every(change => change.type === FileChangeType.Changed)) return;
+			await Promise.all(Array.from(client.openFiles.keys(), uri => refreshFile(client, uriToFile(uri), sendSignal)));
 		}),
 	);
 	throwIfAborted(signal);

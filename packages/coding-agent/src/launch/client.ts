@@ -500,7 +500,7 @@ export async function daemonClientForGlobal(service: string): Promise<DaemonBrok
 	);
 }
 
-/** Close every project and machine-global broker connection held by this omp process. */
+/** Close every project and machine-global broker connection held by this NeoPi process. */
 export async function closeDaemonClients(): Promise<void> {
 	const pending = [...sharedClients.values()];
 	sharedClients.clear();

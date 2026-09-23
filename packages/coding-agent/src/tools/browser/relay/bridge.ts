@@ -1,7 +1,7 @@
 /**
  * CDP façade over `chrome.debugger`.
  *
- * Puppeteer clients (the omp browser tool: one supervisor connection plus one
+ * Puppeteer clients (the NeoPi browser tool: one supervisor connection plus one
  * per tab worker) connect to this bridge as if it were Chrome's browser
  * debugging endpoint. Chrome only allows a single debugger attachment per tab,
  * so the bridge owns ONE `chrome.debugger` attachment per tab (via the
@@ -39,7 +39,7 @@ interface CdpCommand {
 /**
  * Per-pseudo-session Runtime domain state.
  * - `default`: never toggled Runtime — still receives the relay's legacy
- *   root-event fan-out, so omp's own patched-puppeteer client (which
+ *   root-event fan-out, so NeoPi's own patched-puppeteer client (which
  *   pull-acquires contexts and never sends `Runtime.enable`) keeps getting
  *   `Runtime.executionContextCreated`.
  * - `enabled`: ran `Runtime.enable`; gets the existing-context replay.
@@ -644,6 +644,14 @@ export class RelayBridge {
 			case "Target.getBrowserContexts":
 				this.#reply(conn, msg, { browserContextIds: [] });
 				return;
+			case "Target.getTargets": {
+				const targetInfos: TargetInfo[] = [];
+				for (const tab of this.#tabs.values()) {
+					if (this.#eligible(tab)) targetInfos.push(this.#pageInfo(tab, tab.attached));
+				}
+				this.#reply(conn, msg, { targetInfos });
+				return;
+			}
 			case "Target.setDiscoverTargets": {
 				conn.discover = true;
 				for (const tab of this.#tabs.values()) {

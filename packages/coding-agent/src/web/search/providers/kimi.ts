@@ -3,14 +3,14 @@
  *
  * Uses the Kimi Code search API to retrieve web results. This is the Kimi Code
  * membership service, distinct from the Moonshot Open Platform — it requires a
- * Kimi Code Console credential (`omp /login kimi-code` or an explicit
+ * Kimi Code Console credential (`npi /login kimi-code` or an explicit
  * `MOONSHOT_SEARCH_API_KEY` / `KIMI_SEARCH_API_KEY`), not `MOONSHOT_API_KEY`.
  * Endpoint: POST https://api.kimi.com/coding/v1/search
  */
 import { type ApiKey, type AuthStorage, type FetchImpl, withAuth } from "@oh-my-pi/pi-ai";
 import { $env, APP_NAME } from "@oh-my-pi/pi-utils";
 
-import type { SearchResponse, SearchSource } from "@oh-my-pi/pi-tui/tools/web-search";
+import type { SearchResponse, SearchSource } from "../types";
 import { SearchProviderError } from "../../../web/search/types";
 import { formatQuery, parseSearchQuery, type QuerySyntax, type StructuredQuery } from "../query";
 import { clampNumResults, dateToAgeSeconds } from "../utils";
@@ -76,7 +76,7 @@ function resolveBaseUrl(): string {
 /**
  * Resolve the Kimi Code search credential. Highest precedence is the explicit
  * search-key env override; otherwise an AuthStorage-backed resolver for a
- * stored `kimi-code` credential (from `omp /login kimi-code`), so a stale token
+ * stored `kimi-code` credential (from `npi /login kimi-code`), so a stale token
  * triggers the central force-refresh / sibling-rotate retry. Returns
  * `undefined` when neither is configured.
  *
