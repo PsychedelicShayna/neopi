@@ -821,7 +821,7 @@ jobs:
            run: |
               bun run ci:release:checksums SHA256SUMS.txt \
                 packages/coding-agent/binaries/npi-* \
-                packages/browser-relay/dist/omp-browser-relay-extension.zip \
+                packages/browser-relay/dist/npi-browser-relay-extension.zip \
                 LICENSE \
                 THIRD-PARTY-NOTICES.txt
          - name: Create GitHub Release
@@ -831,7 +831,7 @@ jobs:
               prerelease: ${{ needs.release_metadata.outputs.channel == 'canary' }}
               files: |
                  packages/coding-agent/binaries/npi-*
-                 packages/browser-relay/dist/omp-browser-relay-extension.zip
+                 packages/browser-relay/dist/npi-browser-relay-extension.zip
                  LICENSE
                  THIRD-PARTY-NOTICES.txt
                  SHA256SUMS.txt

@@ -65,7 +65,7 @@ Most FS/bash tools auto-resolve these to FS paths.
 - `history://<id>`: read-only agent transcript (live|parked|released); bare `history://`: all agents. Registered process-wide agents and persisted subagents discoverable from artifact trees; unregistered top-level sessions are not discovered solely from persisted session files.
 - `artifact://<id>`: content
 {{#if securityEnabled}}
-- `security://scans[/<id>/…]`: read-only OMP scans, findings, coverage, reports, SARIF, provenance
+- `security://scans[/<id>/…]`: read-only NeoPi scans, findings, coverage, reports, SARIF, provenance
 {{/if}}
 - `local://<name>.md`: plan artifacts/shared subagent content
 {{#if hasObsidian}}

@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { postmortem } from "@oh-my-pi/pi-utils";
+import { postmortem, PRODUCT_NAME } from "@oh-my-pi/pi-utils";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import { expandPath, normalizeLocalScheme } from "../tools/path-utils";
 import type { HookUIContext } from "./hooks/types";
@@ -58,7 +58,7 @@ export class ExtensionExitError extends Error {
 	) {
 		super(
 			`Module called ${alias}(${code === undefined ? "" : String(code)}) during guarded extension/hook loading; ` +
-				`OMP extension/hook modules must not terminate the host process.`,
+				`${PRODUCT_NAME} extension/hook modules must not terminate the host process.`,
 		);
 		this.name = "ExtensionExitError";
 		this.code = code;

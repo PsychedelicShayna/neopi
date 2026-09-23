@@ -44,7 +44,7 @@ def emit(kind: str, **payload: Any) -> None:
 def read_frame() -> dict[str, Any]:
     line = sys.stdin.buffer.readline(MAX_FRAME + 2)
     if not line:
-        raise EOFError("OMP closed Claude sidecar input")
+        raise EOFError("NeoPi closed Claude sidecar input")
     if len(line) > MAX_FRAME or not line.endswith(b"\n"):
         raise ValueError("Claude sidecar input frame exceeded 1 MiB")
     value = json.loads(line)
@@ -88,19 +88,19 @@ def permission_handler(
     ) -> PermissionResultAllow | PermissionResultDeny:
         if tool_name not in enabled_tools:
             return PermissionResultDeny(
-                message=f"OMP did not grant Claude tool {tool_name}", interrupt=False
+                message=f"NeoPi did not grant Claude tool {tool_name}", interrupt=False
             )
         if tool_name in {"Edit", "Write"}:
             target = tool_path(tool_input)
             if not writable or not worktree or not target:
                 return PermissionResultDeny(
-                    message=f"{tool_name} requires a path inside the OMP worktree",
+                    message=f"{tool_name} requires a path inside the NeoPi worktree",
                     interrupt=False,
                 )
             absolute = target if os.path.isabs(target) else os.path.join(worktree, target)
             if not real_child(absolute, worktree):
                 return PermissionResultDeny(
-                    message=f"{tool_name} path escapes the OMP worktree", interrupt=False
+                    message=f"{tool_name} path escapes the NeoPi worktree", interrupt=False
                 )
         elif tool_name == "Bash":
             return PermissionResultDeny(
@@ -121,7 +121,7 @@ async def main() -> None:
     writable = bool(isolation.get("isolated") and isolation.get("worktree"))
     worktree = str(Path(str(isolation["worktree"])).resolve()) if writable else None
     if writable and (not worktree or not real_child(cwd, worktree)):
-        raise ValueError("Writable Claude cwd is outside the OMP-created isolated worktree")
+        raise ValueError("Writable Claude cwd is outside the NeoPi-created isolated worktree")
     tools = option_tools(list(start.get("tools") or []), writable)
     enabled_tools = set(tools)
     model = start.get("model")
