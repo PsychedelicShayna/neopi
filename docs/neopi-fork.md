@@ -91,7 +91,9 @@ Early binary and deployment work is recorded by `da8bb86645`, `e795702ff4`, `643
 
 `Ctrl+Space` (`app.stt.toggle`) starts an independent xAI recording; press it again to stop and transcribe the complete WAV through native `grok-stt`. Pauses and silence remain in the recording. Nothing is segmented, streamed, or transcribed while recording. Existing xAI OAuth credentials are preferred, with xAI API-key credentials as the fallback; no Dictation model selection, `stt.enabled` setting, local speech model, or helper executable is required.
 
-Configured upstream dictation remains separate: `Ctrl+Alt+Space` (`app.dictation.toggle`) or the Space-hold gesture uses the **Dictation** model role and `stt.enabled`. The xAI models remain available there as `xai-oauth/grok-stt` and `xai/grok-stt`, but that pipeline does not own Ctrl+Space.
+Configured upstream dictation remains separate: `Ctrl+Alt+Space` (`app.dictation.toggle`) or the Space-hold gesture uses the **Dictation** model role and `stt.enabled`. The xAI models remain available there as `xai-oauth/grok-stt` and `xai/grok-stt`, but that pipeline does not own Ctrl+Space. Pressing Backspace while holding Space latches the recording so it survives releasing the bar; a later Space or Backspace tap stops it, and other keys type normally meanwhile.
+
+Ctrl+Space is system-reserved for the xAI path (`RESERVED_KEYS` in `packages/tui/src/app-keybindings.ts`). User keybinding overrides cannot remap `app.stt.toggle` or bind Ctrl+Space elsewhere, and extension shortcuts on it are refused with an extension error.
 
 Cloud dictation keeps hold-to-talk behavior and writes audio to disk-backed WAV files. The controller retains at most five completed recordings; transcription failures report the retained file's recovery path. These files are temporary: they are removed when they leave the five-recording history or the controller is disposed.
 
