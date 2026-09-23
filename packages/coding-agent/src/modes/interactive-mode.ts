@@ -138,6 +138,8 @@ import { BUILTIN_SLASH_COMMAND_RESERVED_NAMES, buildTuiBuiltinSlashCommands } fr
 import { buildStaticInlineHint } from "../slash-commands/builtin-completions";
 import { formatCoarseDuration } from "@oh-my-pi/pi-tui/chrome/format";
 import { STTController, type SttState } from "../stt";
+import { transcribeXaiAudio } from "../stt/xai-stt";
+import { XaiSTTController } from "../stt/xai-stt-controller";
 import { resolveCliEntryCmd } from "../subprocess/worker-client";
 import { discoverTitleSystemPromptFile, resolvePromptInput } from "../system-prompt";
 import { labelEchoesHandle } from "../task/label";
@@ -1215,6 +1217,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 	readonly #uiHelpers: UiHelpers;
 	#sttController: STTController | undefined;
+	#xaiSttController: XaiSTTController | undefined;
 	#voiceAnimationInterval: NodeJS.Timeout | undefined;
 	#voiceHue = 0;
 	#voicePreviousShowHardwareCursor: boolean | null = null;
@@ -5728,6 +5731,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#sttController.dispose();
 			this.#sttController = undefined;
 		}
+		this.#xaiSttController?.dispose();
+		this.#xaiSttController = undefined;
 		this.#extensionUiController.clearExtensionTerminalInputListeners();
 		this.#extensionUiController.clearHookWidgets();
 		this.#extensionUiController.disposeComposerShapes();
@@ -6612,13 +6617,20 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** True when no speech capture is in flight. The space-hold push-to-talk gesture is gated on
 	 *  this so a hold can never engage on top of a capture the `app.stt.toggle` chord started. */
 	get sttIdle(): boolean {
-		return this.#sttController === undefined || this.#sttController.state === "idle";
+		return (
+			(this.#sttController === undefined || this.#sttController.state === "idle") &&
+			(this.#xaiSttController === undefined || this.#xaiSttController.state === "idle")
+		);
 	}
 
 	/** Resolve the STT controller, refusing when speech input is unavailable in this state. */
 	#prepareSTT(): STTController | undefined {
 		if (this.#liveCommandController.active) {
 			this.showWarning("End live mode before using speech-to-text input.");
+			return undefined;
+		}
+		if (this.#xaiSttController && this.#xaiSttController.state !== "idle") {
+			this.showWarning("Finish the xAI recording before using configured dictation.");
 			return undefined;
 		}
 		if (!settings.get("stt.enabled")) {
@@ -6658,11 +6670,36 @@ export class InteractiveMode implements InteractiveModeContext {
 		};
 	}
 
+	/** Ctrl+Space owns an independent, whole-recording xAI path. */
 	async handleSTTToggle(): Promise<void> {
+		if (this.#liveCommandController.active) {
+			this.showWarning("End live mode before recording xAI speech input.");
+			return;
+		}
+		if (this.#sttController && this.#sttController.state !== "idle") {
+			this.showWarning("Finish configured dictation before recording xAI speech input.");
+			return;
+		}
+		this.#xaiSttController ??= new XaiSTTController({
+			settings: this.settings,
+			transcribe: (audio, signal) =>
+				transcribeXaiAudio({
+					modelRegistry: this.session.modelRegistry,
+					sessionId: this.session.sessionId,
+					audio,
+					language: this.settings.get("stt.language") || undefined,
+					signal,
+				}),
+		});
+		await this.#xaiSttController.toggle(this.editor, this.#sttOptions());
+	}
+
+	/** Upstream dictation stays on its own shortcut and Space-hold gesture. */
+	async handleDictationToggle(): Promise<void> {
 		await this.#prepareSTT()?.toggle(this.editor, this.#sttOptions());
 	}
 
-	/** Space-hold push-to-talk edges. Distinct from {@link handleSTTToggle}: the gesture has an
+	/** Space-hold push-to-talk edges. Distinct from {@link handleDictationToggle}: the gesture has an
 	 *  explicit start and release, so it starts a capture only from idle and stops only the one it
 	 *  started. Toggling here would let a hold recognized during a chord-started recording finalize
 	 *  that recording early and hand its audio to the wrong route (issue: holding `Ctrl`+`Space` a
@@ -6710,7 +6747,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/** Start or stop the Codex-backed realtime voice surface. */
 	async handleLiveCommand(): Promise<void> {
-		if (this.#sttController && this.#sttController.state !== "idle") {
+		if (!this.sttIdle) {
 			this.showWarning("Finish the current speech-to-text capture before starting live mode.");
 			return;
 		}

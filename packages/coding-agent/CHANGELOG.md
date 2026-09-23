@@ -19,6 +19,8 @@
 - Added `tui.titleSpinner` (`braille` | `dots` | `line`, default `braille`) to pick the terminal-title working-state spinner glyphs alongside the existing `tui.titleState` on/off toggle.
 ### Fixed
 
+- Restored independent whole-recording xAI speech input on Ctrl+Space; configured dictation now has its own Ctrl+Alt+Space shortcut.
+- Relaunching an unlinked fork executable now falls back to `npi`, not the upstream `omp` binary.
 - Fork extension installs and rebuilds now respect explicit quarantine markers instead of reactivating disabled extensions.
 - Extension parse caches are isolated by schema so concurrently installed upstream and fork versions cannot invalidate each other.
 - Receipt-based messages queued during compaction now hold the pending resume until delivery or cancellation settles.
@@ -29,7 +31,7 @@
 
 - Fork extensions now use NeoPi names and migrate existing persona, loadout, REPL, and live-persona state on first read.
 - Use `npi update` for the fork's PR-based update workflow and `npi flash` for portable builds.
-- xAI dictation now uses the Dictation model role while retaining hold-to-talk and recoverable disk-backed recordings.
+- The Dictation model role supports xAI alongside the independent Ctrl+Space whole-recording path.
 - Advisor concerns now arrive between tool batches without cancelling running tools, blockers interrupt immediately, and nits appear only after the full primary turn ends.
 
 ### Removed
