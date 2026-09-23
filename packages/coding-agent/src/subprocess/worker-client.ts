@@ -4,6 +4,7 @@ import * as path from "node:path";
 import {
 	$env,
 	$which,
+	APP_NAME,
 	isBunTestRuntime,
 	isCompiledBinary,
 	isExecutable,
@@ -126,8 +127,8 @@ export function resolveExecutablePath(): string {
 			// Prefer the original launcher when invoked with an absolute path
 			isFullyQualifiedPath(argv0) ? argv0 : null,
 			!isPath ? $which(argv0, { requireAbsolutePaths: true, cache: WhichCachePolicy.Bypass }) : null,
-			// Generic fallback to finding "omp" on PATH
-			$which("omp", { requireAbsolutePaths: true, cache: WhichCachePolicy.Bypass }),
+			// Fall back to this fork's executable, never the upstream daily driver.
+			$which(APP_NAME, { requireAbsolutePaths: true, cache: WhichCachePolicy.Bypass }),
 		];
 		for (const candidate of candidates) {
 			if (candidate && isExecutable(candidate)) {

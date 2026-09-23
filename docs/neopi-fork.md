@@ -87,9 +87,11 @@ Early binary and deployment work is recorded by `da8bb86645`, `e795702ff4`, `643
 
 [PR #60](https://github.com/PsychedelicShayna/neopi/pull/60) added per-advisor system-prompt overrides. [PR #63](https://github.com/PsychedelicShayna/neopi/pull/63) separated concern, blocker, and nit delivery boundaries while preserving session safety gates.
 
-## xAI dictation
+## Whole-recording xAI speech input
 
-Native xAI batch transcription uses the shared **Dictation** model role: `xai-oauth/grok-stt` for the OAuth provider or `xai/grok-stt` for the API-key provider. An existing legacy xAI selection migrates to the OAuth-first chain `xai-oauth/grok-stt,xai/grok-stt` only when no explicit dictation role is configured. The retired `stt.modelName` selector is no longer a separate control.
+`Ctrl+Space` (`app.stt.toggle`) starts an independent xAI recording; press it again to stop and transcribe the complete WAV through native `grok-stt`. Pauses and silence remain in the recording. Nothing is segmented, streamed, or transcribed while recording. Existing xAI OAuth credentials are preferred, with xAI API-key credentials as the fallback; no Dictation model selection, `stt.enabled` setting, local speech model, or helper executable is required.
+
+Configured upstream dictation remains separate: `Ctrl+Alt+Space` (`app.dictation.toggle`) or the Space-hold gesture uses the **Dictation** model role and `stt.enabled`. The xAI models remain available there as `xai-oauth/grok-stt` and `xai/grok-stt`, but that pipeline does not own Ctrl+Space.
 
 Cloud dictation keeps hold-to-talk behavior and writes audio to disk-backed WAV files. The controller retains at most five completed recordings; transcription failures report the retained file's recovery path. These files are temporary: they are removed when they leave the five-recording history or the controller is disposed.
 

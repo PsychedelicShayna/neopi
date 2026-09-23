@@ -42,13 +42,13 @@ describe("executable fallback on unlinked binary", () => {
 		vi.spyOn(utils, "isCompiledBinary").mockReturnValue(true);
 		const missingPath = "/opt/homebrew/Cellar/omp/18.1.8/bin/omp";
 		const originalLauncher = "/opt/homebrew/bin/omp";
-		const otherOmpInPath = "/usr/local/bin/omp";
+		const otherOmpInPath = "/usr/local/bin/npi";
 
 		setProcessProp("execPath", missingPath);
 		setProcessProp("argv0", originalLauncher);
 
 		vi.spyOn(utils, "$which").mockImplementation((cmd: string) => {
-			if (cmd === "omp") return otherOmpInPath;
+			if (cmd === utils.APP_NAME) return otherOmpInPath;
 			return null;
 		});
 		vi.spyOn(utils, "isExecutable").mockImplementation((p: string) => {
@@ -65,13 +65,13 @@ describe("executable fallback on unlinked binary", () => {
 		vi.spyOn(utils, "isCompiledBinary").mockReturnValue(true);
 		const missingPath = "/opt/homebrew/Cellar/omp/18.1.8/bin/omp";
 		const originalLauncher = "/opt/homebrew/bin/omp";
-		const otherOmpInPath = "/usr/local/bin/omp";
+		const otherOmpInPath = "/usr/local/bin/npi";
 
 		setProcessProp("execPath", missingPath);
 		setProcessProp("argv0", originalLauncher);
 
 		vi.spyOn(utils, "$which").mockImplementation((cmd: string) => {
-			if (cmd === "omp") return otherOmpInPath;
+			if (cmd === utils.APP_NAME) return otherOmpInPath;
 			return null;
 		});
 		vi.spyOn(utils, "isExecutable").mockImplementation((p: string) => {
@@ -116,23 +116,25 @@ describe("executable fallback on unlinked binary", () => {
 
 		resolveExecutablePath();
 
-		// Should not pass "C:omp" to which as a bare name; only "omp" generic fallback is queried
-		expect(whichCalledWith).toBe("omp");
+		// A drive-relative path must not be queried as a bare command.
+		expect(whichCalledWith).toBe(utils.APP_NAME);
 	});
 
-	it("falls back to $which('omp') when original execPath was unlinked and argv0 has no path", () => {
+	it("uses npi after the old executable name is removed, never the upstream omp", () => {
 		vi.spyOn(utils, "isCompiledBinary").mockReturnValue(true);
-		const missingPath = "/opt/homebrew/Cellar/omp/18.1.8/bin/omp";
+		const missingPath = "/old/install/bin/omomp";
 		setProcessProp("execPath", missingPath);
-		setProcessProp("argv0", "omp");
+		setProcessProp("argv0", "omomp");
 
-		const mockUpgradedPath = "/opt/homebrew/bin/omp";
+		const mockUpgradedPath = "/usr/local/bin/npi";
+		const upstreamPath = "/usr/local/bin/omp";
 		vi.spyOn(utils, "$which").mockImplementation((cmd: string) => {
-			if (cmd === "omp") return mockUpgradedPath;
+			if (cmd === "npi") return mockUpgradedPath;
+			if (cmd === "omp") return upstreamPath;
 			return null;
 		});
 		vi.spyOn(utils, "isExecutable").mockImplementation((p: string) => {
-			return p === mockUpgradedPath;
+			return p === mockUpgradedPath || p === upstreamPath;
 		});
 
 		expect(resolveCliEntryCmd()).toEqual([mockUpgradedPath]);
@@ -141,7 +143,7 @@ describe("executable fallback on unlinked binary", () => {
 		});
 	});
 
-	it("falls back to process.argv0 when $which('omp') is unavailable", () => {
+	it("falls back to process.argv0 when the product command is unavailable", () => {
 		vi.spyOn(utils, "isCompiledBinary").mockReturnValue(true);
 		const missingPath = "/custom/install/bin/omp";
 		setProcessProp("execPath", missingPath);

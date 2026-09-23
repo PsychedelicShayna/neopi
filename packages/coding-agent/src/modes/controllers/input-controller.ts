@@ -628,6 +628,9 @@ export class InputController {
 		for (const key of this.ctx.keybindings.getKeys("app.stt.toggle")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.ctx.handleSTTToggle());
 		}
+		for (const key of this.ctx.keybindings.getKeys("app.dictation.toggle")) {
+			this.ctx.editor.setCustomKeyHandler(key, () => void this.ctx.handleDictationToggle());
+		}
 		for (const key of this.ctx.keybindings.getKeys("app.live.toggle")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.ctx.handleLiveCommand());
 		}

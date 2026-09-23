@@ -61,6 +61,7 @@ interface AppKeybindings {
 	"app.plan.toggle": true;
 	"app.history.search": true;
 	"app.stt.toggle": true;
+	"app.dictation.toggle": true;
 	"app.live.toggle": true;
 }
 
@@ -239,7 +240,11 @@ export const KEYBINDINGS = {
 	},
 	"app.stt.toggle": {
 		defaultKeys: "ctrl+space",
-		description: "Toggle speech-to-text (Ctrl+Space; default gesture: hold Space)",
+		description: "Record complete audio for xAI transcription (Ctrl+Space to start/stop)",
+	},
+	"app.dictation.toggle": {
+		defaultKeys: "ctrl+alt+space",
+		description: "Toggle configured dictation (separate from xAI whole-recording input)",
 	},
 	"app.live.toggle": {
 		defaultKeys: "ctrl+l",
