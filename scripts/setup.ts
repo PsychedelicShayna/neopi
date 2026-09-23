@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * `bun setup` entrypoint. Chains the setup steps (install → native
- * addon build → coding-agent link → omp link → OMOMP extensions). The native
+ * addon build → coding-agent link → npi link → NeoPi extensions). The native
  * host build uses the local Cargo/N-API backend by default; set
  * `OMP_NATIVE_BUILD_BACKEND=bazel` to opt into bazel. Flags after `--` are
  * appended to the native build invocation.
@@ -31,8 +31,8 @@ const steps: Step[] = [
 	{ label: "bun install", cmd: ["bun", "install"] },
 	{ label: "build:native", cmd: ["bun", "run", "build:native", ...passthrough] },
 	{ label: "coding-agent link", cmd: ["bun", "--cwd=packages/coding-agent", "link"] },
-	{ label: "link omp", cmd: ["sh", "scripts/link-omp.sh"] },
-	{ label: "omomp extensions", cmd: ["bun", "scripts/install-omomp-extensions.ts"] },
+	{ label: "link npi", cmd: ["sh", "scripts/link-npi.sh"] },
+	{ label: "neopi extensions", cmd: ["bun", "scripts/install-neopi-extensions.ts"] },
 ];
 
 for (const step of steps) {

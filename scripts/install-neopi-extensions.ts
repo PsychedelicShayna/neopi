@@ -1,35 +1,35 @@
 #!/usr/bin/env bun
 /**
- * Deploy every OMOMP-owned extension from the repo `extensions/` tree into an
+ * Deploy every NeoPi-owned extension from the repo `extensions/` tree into an
  * agent extensions directory.
  *
  * Each source directory becomes a symlink at `<dest>/<name>`. That keeps
- * in-repo relative imports (notably omomp-live-persona's runtime import of
- * `packages/coding-agent/src/live/personas.ts`) resolvable, and it picks up
- * new fork extensions without a hard-coded name list. Entries already in
- * dest that are not in the source tree are left untouched. A same-named
- * dest directory is renamed aside, never deleted.
+ * in-repo relative imports resolvable and picks up new fork extensions without
+ * a hard-coded source list. Unrelated entries in dest are left untouched;
+ * known legacy extension symlinks are retired after their replacements activate.
+ * A same-named dest directory is renamed aside, never deleted.
  */
 import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getAgentDir } from "@oh-my-pi/pi-utils/dirs";
 
-export interface InstallOmompExtensionsOptions {
+export interface InstallNeopiExtensionsOptions {
 	sourceDir: string;
 	destDir: string;
 }
 
-export interface OmompExtensionBackup {
+export interface NeopiExtensionBackup {
 	name: string;
 	path: string;
 }
 
-export interface InstallOmompExtensionsResult {
+export interface InstallNeopiExtensionsResult {
 	installed: string[];
 	refreshed: string[];
 	unchanged: string[];
-	backups: OmompExtensionBackup[];
+	retired: string[];
+	backups: NeopiExtensionBackup[];
 }
 
 type ManagedSymlinkOutcome = {
@@ -59,22 +59,22 @@ function isDirBusy(error: unknown): boolean {
 	);
 }
 
-export function defaultOmompExtensionsSourceDir(repoRoot: string): string {
+export function defaultNeopiExtensionsSourceDir(repoRoot: string): string {
 	return path.join(repoRoot, "extensions");
 }
 
-export function defaultOmompExtensionsDestDir(agentDir?: string): string {
+export function defaultNeopiExtensionsDestDir(agentDir?: string): string {
 	return path.join(agentDir ?? getAgentDir(), "extensions");
 }
 
 /** Directory names under `sourceDir` that should be deployed. Hidden names and files are ignored. */
-export async function listOmompExtensionNames(sourceDir: string): Promise<string[]> {
+export async function listNeopiExtensionNames(sourceDir: string): Promise<string[]> {
 	let entries: Dirent<string>[];
 	try {
 		entries = await fs.readdir(sourceDir, { withFileTypes: true });
 	} catch (error) {
 		if (isEnoent(error)) {
-			throw new Error(`OMOMP extensions source is missing: ${sourceDir}`);
+			throw new Error(`NeoPi extensions source is missing: ${sourceDir}`);
 		}
 		throw error;
 	}
@@ -94,6 +94,41 @@ async function sameRealpath(left: string, right: string): Promise<boolean> {
 	} catch {
 		return false;
 	}
+}
+
+const LEGACY_EXTENSION_NAMES = [
+	["omomp-persona", "neopi-persona"],
+	["omomp-loadout", "neopi-loadout"],
+	["omomp-repl", "neopi-repl"],
+	["omomp-live-persona", "neopi-live-persona"],
+] as const;
+
+function isKnownLegacyExtensionTarget(target: string, legacyName: string, legacyDest: string): boolean {
+	const resolvedTarget = path.resolve(path.dirname(legacyDest), target);
+	return path.basename(resolvedTarget) === legacyName && path.basename(path.dirname(resolvedTarget)) === "extensions";
+}
+
+async function retireLegacyExtensions(destDir: string, installedNames: ReadonlySet<string>): Promise<string[]> {
+	const retired: string[] = [];
+	for (const [legacyName, neopiName] of LEGACY_EXTENSION_NAMES) {
+		if (!installedNames.has(neopiName)) continue;
+
+		const legacyDest = path.join(destDir, legacyName);
+		let stat;
+		try {
+			stat = await fs.lstat(legacyDest);
+		} catch (error) {
+			if (isEnoent(error)) continue;
+			throw error;
+		}
+		if (!stat.isSymbolicLink()) continue;
+
+		const target = await fs.readlink(legacyDest);
+		if (!isKnownLegacyExtensionTarget(target, legacyName, legacyDest)) continue;
+		await fs.unlink(legacyDest);
+		retired.push(legacyName);
+	}
+	return retired;
 }
 
 function hiddenSibling(dest: string, label: string): string {
@@ -159,37 +194,46 @@ async function ensureManagedSymlink(source: string, dest: string): Promise<Manag
 }
 
 /**
- * Symlink every source extension directory into `destDir`. Never deletes dest
- * entries whose names are not in the source set. Same-named dest directories
- * are renamed aside and reported, not removed.
+ * Symlink every source extension directory into `destDir`. Same-named dest
+ * directories are renamed aside and reported, not removed. Once a NeoPi
+ * counterpart is active, retire its known legacy symlink only when the target
+ * has the expected extensions/<legacy-name> shape. Leave other entries alone.
  */
-export async function installOmompExtensions(
-	options: InstallOmompExtensionsOptions,
-): Promise<InstallOmompExtensionsResult> {
+export async function installNeopiExtensions(
+	options: InstallNeopiExtensionsOptions,
+): Promise<InstallNeopiExtensionsResult> {
 	const sourceDir = path.resolve(options.sourceDir);
 	const destDir = path.resolve(options.destDir);
-	const names = await listOmompExtensionNames(sourceDir);
+	const names = await listNeopiExtensionNames(sourceDir);
 	await fs.mkdir(destDir, { recursive: true });
 
-	const result: InstallOmompExtensionsResult = { installed: [], refreshed: [], unchanged: [], backups: [] };
+	const result: InstallNeopiExtensionsResult = {
+		installed: [],
+		refreshed: [],
+		unchanged: [],
+		backups: [],
+		retired: [],
+	};
 	for (const name of names) {
 		const outcome = await ensureManagedSymlink(path.join(sourceDir, name), path.join(destDir, name));
 		result[outcome.status].push(name);
 		if (outcome.backup) result.backups.push({ name, path: outcome.backup });
 	}
+	result.retired = await retireLegacyExtensions(destDir, new Set(names));
 	return result;
 }
 
-export function formatOmompExtensionsResult(result: InstallOmompExtensionsResult): string {
+export function formatNeopiExtensionsResult(result: InstallNeopiExtensionsResult): string {
 	const parts = [
 		result.installed.length ? `linked ${result.installed.join(", ")}` : undefined,
 		result.refreshed.length ? `refreshed ${result.refreshed.join(", ")}` : undefined,
 		result.unchanged.length ? `already current ${result.unchanged.join(", ")}` : undefined,
+		result.retired.length ? `retired ${result.retired.length}: ${result.retired.join(", ")}` : undefined,
 		result.backups.length
 			? `kept ${result.backups.map(backup => `${backup.name} at ${backup.path}`).join(", ")}`
 			: undefined,
 	].filter((part): part is string => part !== undefined);
-	return parts.length > 0 ? parts.join("; ") : "no OMOMP extensions to deploy";
+	return parts.length > 0 ? parts.join("; ") : "no NeoPi extensions to deploy";
 }
 
 function parseArgs(argv: string[]): { sourceDir?: string; destDir?: string } {
@@ -207,7 +251,7 @@ function parseArgs(argv: string[]): { sourceDir?: string; destDir?: string } {
 			i++;
 			continue;
 		}
-		throw new Error(`usage: install-omomp-extensions.ts [--source <dir>] [--dest <dir>]`);
+		throw new Error(`usage: install-neopi-extensions.ts [--source <dir>] [--dest <dir>]`);
 	}
 	return parsed;
 }
@@ -215,9 +259,9 @@ function parseArgs(argv: string[]): { sourceDir?: string; destDir?: string } {
 if (import.meta.main) {
 	const args = parseArgs(process.argv.slice(2));
 	const repoRoot = path.join(import.meta.dir, "..");
-	const result = await installOmompExtensions({
-		sourceDir: args.sourceDir ?? defaultOmompExtensionsSourceDir(repoRoot),
-		destDir: args.destDir ?? defaultOmompExtensionsDestDir(),
+	const result = await installNeopiExtensions({
+		sourceDir: args.sourceDir ?? defaultNeopiExtensionsSourceDir(repoRoot),
+		destDir: args.destDir ?? defaultNeopiExtensionsDestDir(),
 	});
-	console.log(`omomp extensions: ${formatOmompExtensionsResult(result)}`);
+	console.log(`neopi extensions: ${formatNeopiExtensionsResult(result)}`);
 }

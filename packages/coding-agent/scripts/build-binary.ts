@@ -2,12 +2,13 @@
 
 import { createRequire } from "node:module";
 import * as path from "node:path";
+import { APP_NAME } from "@oh-my-pi/pi-utils/dirs";
 import {
-	defaultOmompExtensionsDestDir,
-	defaultOmompExtensionsSourceDir,
-	formatOmompExtensionsResult,
-	installOmompExtensions,
-} from "../../../scripts/install-omomp-extensions";
+	defaultNeopiExtensionsDestDir,
+	defaultNeopiExtensionsSourceDir,
+	formatNeopiExtensionsResult,
+	installNeopiExtensions,
+} from "../../../scripts/install-neopi-extensions";
 import { compileCodingAgent } from "./compile-binary";
 
 const packageDir = path.join(import.meta.dir, "..");
@@ -52,16 +53,16 @@ function isTruthyCi(value: string | undefined): boolean {
 	return normalized !== "" && normalized !== "0" && normalized !== "false";
 }
 
-async function deployOmompExtensionsAfterBuild(outputPath: string): Promise<void> {
+async function deployNeopiExtensionsAfterBuild(outputPath: string): Promise<void> {
 	try {
-		const result = await installOmompExtensions({
-			sourceDir: defaultOmompExtensionsSourceDir(repoRoot),
-			destDir: defaultOmompExtensionsDestDir(),
+		const result = await installNeopiExtensions({
+			sourceDir: defaultNeopiExtensionsSourceDir(repoRoot),
+			destDir: defaultNeopiExtensionsDestDir(),
 		});
-		console.log(`omomp extensions: ${formatOmompExtensionsResult(result)}`);
+		console.log(`neopi extensions: ${formatNeopiExtensionsResult(result)}`);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		console.warn(`omomp extensions: post-build deploy failed; binary is already at ${outputPath}: ${message}`);
+		console.warn(`neopi extensions: post-build deploy failed; binary is already at ${outputPath}: ${message}`);
 	}
 }
 
@@ -101,7 +102,7 @@ async function runCommand(
 async function main(): Promise<void> {
 	const crossBuild = resolveCrossBuild(Bun.env.CROSS_TARGET);
 	const shouldAdhocSign = process.platform === "darwin" && !crossBuild && Bun.env.BUN_NO_CODESIGN_MACHO_BINARY !== "1";
-	const outName = crossBuild ? `omp-${crossBuild.id}` : "omp";
+	const outName = crossBuild ? `${APP_NAME}-${crossBuild.id}` : APP_NAME;
 	const outputPath = path.join(packageDir, "dist", outName);
 	// Generate inside the try so the finally always restores the empty checked-in
 	// placeholders (stats client archive, docs index) even on failure.
@@ -131,8 +132,8 @@ async function main(): Promise<void> {
 				await runCommand(["codesign", "--force", "--sign", "-", outputPath]);
 			}
 
-			if (!crossBuild && !isTruthyCi(Bun.env.CI) && Bun.env.OMOMP_SKIP_EXTENSION_INSTALL !== "1") {
-				await deployOmompExtensionsAfterBuild(outputPath);
+			if (!crossBuild && !isTruthyCi(Bun.env.CI) && Bun.env.NPI_SKIP_EXTENSION_INSTALL !== "1") {
+				await deployNeopiExtensionsAfterBuild(outputPath);
 			}
 		} finally {
 			await runCommand(["bun", "--cwd=../natives", "run", "gen:native:reset"]);
