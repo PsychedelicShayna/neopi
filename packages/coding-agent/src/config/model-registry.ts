@@ -22,7 +22,7 @@ import {
 	clampsContextOverride,
 	resolveMaxContextWindow,
 } from "@oh-my-pi/pi-catalog/compat/context-window";
-import { applyCatalogMetrics, CatalogMetricsIndex } from "@oh-my-pi/pi-catalog/identity/metrics";
+import { applyCatalogMetrics, applyRefreshedExactScores, CatalogMetricsIndex } from "@oh-my-pi/pi-catalog/identity/metrics";
 import { readModelCache, writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import {
 	createModelManager,
@@ -30,7 +30,7 @@ import {
 	type ModelManagerOptions,
 	type ModelRefreshStrategy,
 } from "@oh-my-pi/pi-catalog/model-manager";
-import { getBundledModels, getBundledProviders } from "@oh-my-pi/pi-catalog/models";
+import { getBundledModel, getBundledModels, getBundledProviders, type GeneratedProvider } from "@oh-my-pi/pi-catalog/models";
 import {
 	googleAntigravityModelManagerOptions,
 	googleGeminiCliModelManagerOptions,
@@ -290,7 +290,9 @@ export class ModelRegistry {
 	}
 
 	#withCatalogMetrics(models: Model<Api>[]): Model<Api>[] {
-		return applyCatalogMetrics(models, this.#catalogMetrics);
+		return applyRefreshedExactScores(applyCatalogMetrics(models, this.#catalogMetrics), (provider, id) => {
+			return getBundledModel(provider as GeneratedProvider, id)?.int ?? undefined;
+		});
 	}
 
 	#resolveCommandBackedApiKey(provider: string, options?: { forceCommandRefresh?: boolean }): CommandApiKeyResolution {

@@ -101,6 +101,10 @@ export class CatalogMetricsIndex {
 	get isEmpty(): boolean {
 		return this.#exact.size === 0;
 	}
+	/** Metrics recorded for this exact id. No dialect or canonical fallback. */
+	exact(modelId: string): CatalogMetrics | undefined {
+		return this.#exact.get(modelId.toLowerCase());
+	}
 
 	/** Record the metrics of every scored model; later rows fill fields earlier rows left unset. */
 	add(models: Iterable<Model<Api>>): void {
@@ -137,17 +141,37 @@ export class CatalogMetricsIndex {
 }
 
 /**
- * Fill each model's `int`/`tps` from `index`. Returns the input array when no
- * model changed so callers can keep identity-based caches.
+ * Fill each model's `int`/`tps` from `index`. `replace` writes an exact-id
+ * catalog score over a score the model already has; the default only fills
+ * fields the model left unset. Returns the input array when no model changed
+ * so callers can keep identity-based caches.
  */
 export function applyCatalogMetrics<TApi extends Api>(
 	models: Model<TApi>[],
 	index: CatalogMetricsIndex,
+	options?: { replace?: boolean },
 ): Model<TApi>[] {
 	if (index.isEmpty) return models;
+	const replace = options?.replace === true;
 	let changed: Model<TApi>[] | undefined;
 	for (let position = 0; position < models.length; position++) {
 		const model = models[position];
+		if (replace) {
+			const exact = index.exact(model.id);
+			if (exact) {
+				const int = exact.int ?? model.int;
+				const tps = exact.tps ?? model.tps;
+				if (int !== model.int || tps !== model.tps) {
+					changed ??= [...models];
+					changed[position] = {
+						...model,
+						...(int != null ? { int } : {}),
+						...(tps != null ? { tps } : {}),
+					};
+				}
+				continue;
+			}
+		}
 		if (model.int != null && model.tps != null) continue;
 		const metrics = index.resolve(model);
 		if (!metrics) continue;
@@ -160,6 +184,59 @@ export function applyCatalogMetrics<TApi extends Api>(
 			...(int != null ? { int } : {}),
 			...(tps != null ? { tps } : {}),
 		};
+	}
+	return changed ?? models;
+}
+
+/**
+ * Copy an exact-id score that no longer matches the bundled catalog onto every
+ * provider row for that id. Rows still equal to their bundled score are the
+ * stale copies. Disagreeing refreshed scores are left alone.
+ */
+export function applyRefreshedExactScores<TApi extends Api>(
+	models: Model<TApi>[],
+	bundledInt: (provider: string, id: string) => number | undefined,
+): Model<TApi>[] {
+	const groups = new Map<string, number[]>();
+	for (let index = 0; index < models.length; index++) {
+		const id = models[index].id.toLowerCase();
+		const group = groups.get(id);
+		if (group) group.push(index);
+		else groups.set(id, [index]);
+	}
+	let changed: Model<TApi>[] | undefined;
+	for (const indexes of groups.values()) {
+		let refreshedInt: number | undefined;
+		let refreshedTps: number | undefined;
+		let conflict = false;
+		for (const index of indexes) {
+			const model = models[index];
+			if (model.int == null || !Number.isFinite(model.int)) continue;
+			const bundled = bundledInt(model.provider, model.id);
+			if (bundled == null || !Number.isFinite(bundled) || model.int === bundled) continue;
+			if (refreshedInt === undefined) {
+				refreshedInt = model.int;
+				refreshedTps = model.tps != null && model.tps > 0 ? model.tps : undefined;
+				continue;
+			}
+			if (model.int !== refreshedInt) {
+				conflict = true;
+				break;
+			}
+			if (refreshedTps === undefined && model.tps != null && model.tps > 0) refreshedTps = model.tps;
+		}
+		if (conflict || refreshedInt === undefined) continue;
+		for (const index of indexes) {
+			const model = models[index];
+			const tps = refreshedTps ?? model.tps;
+			if (model.int === refreshedInt && model.tps === tps) continue;
+			changed ??= [...models];
+			changed[index] = {
+				...model,
+				int: refreshedInt,
+				...(tps != null ? { tps } : {}),
+			};
+		}
 	}
 	return changed ?? models;
 }

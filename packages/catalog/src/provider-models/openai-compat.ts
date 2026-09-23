@@ -275,6 +275,8 @@ function mapAnthropicModelsDev(payload: unknown, baseUrl: string): ModelSpec<"an
 			},
 			contextWindow: toPositiveNumber(model.limit?.context, null),
 			maxTokens: toPositiveNumber(model.limit?.output, null),
+			...(model.int != null ? { int: model.int } : {}),
+			...(model.tps != null ? { tps: model.tps } : {}),
 		});
 	}
 

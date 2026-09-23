@@ -22,7 +22,11 @@ export interface ModelsDevFallback<TApi extends Api = Api, TPayload = unknown> {
 	fetch(): Promise<TPayload>;
 	/** Maps payload into provider models. */
 	map(payload: TPayload, providerId: Provider): readonly ModelSpec<TApi>[];
-	/** When true, mapped rows can add model ids but cannot replace static metadata. */
+	/**
+	 * When true, mapped rows can add model ids but cannot replace static name,
+	 * limits, cost, or compat. A successful models.dev row still replaces `int`
+	 * and `tps` for the same id.
+	 */
 	additiveOnly?: boolean;
 }
 
@@ -314,12 +318,14 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 	const mergedWithCache = mergeDynamicModels(staticModels, cacheModels);
 	const mergedWithModelsDev = mergeDynamicModels(mergedWithCache, modelsDevModels);
 	const catalogMetricsSource = modelsDevFetchSucceeded ? normalizedModelsDevModels : preparedCacheModels;
+	const mergedWithDynamic = mergeDynamicModels(mergedWithModelsDev, dynamicModels);
+	// Discovery rows often copy the bundled score. Replace int/tps after that
+	// merge so a fresh stencil row wins for an id the endpoint also returned.
 	const mergedWithCatalogMetrics = additiveStaticModelIds
-		? mergeCatalogMetrics(mergedWithModelsDev, catalogMetricsSource)
-		: mergedWithModelsDev;
-	const mergedModels = mergeDynamicModels(mergedWithCatalogMetrics, dynamicModels);
+		? mergeCatalogMetrics(mergedWithDynamic, catalogMetricsSource)
+		: mergedWithDynamic;
 	const models = collapseBuiltVariants(
-		authoritativeDynamicFetchSucceeded ? retainModelIds(mergedModels, dynamicModels) : mergedModels,
+		authoritativeDynamicFetchSucceeded ? retainModelIds(mergedWithCatalogMetrics, dynamicModels) : mergedWithCatalogMetrics,
 	);
 	const resolutionAuthoritative = !hasRemoteFetcher || remoteResolutionComplete || shouldUseFreshCacheAsAuthoritative;
 	const remoteUpdatedAt = anyRemoteFetchSucceeded ? now() : undefined;
@@ -477,7 +483,7 @@ function mergeCatalogMetrics<TApi extends Api>(
 	catalogModels: readonly Model<TApi>[],
 ): Model<TApi>[] {
 	if (models.length === 0 || catalogModels.length === 0) return models;
-	return applyCatalogMetrics(models, new CatalogMetricsIndex(catalogModels));
+	return applyCatalogMetrics(models, new CatalogMetricsIndex(catalogModels), { replace: true });
 }
 
 function mergeDynamicModels<TApi extends Api>(
