@@ -461,6 +461,8 @@ export interface InteractiveModeContext {
 	readonly sttIdle: boolean;
 	/** Start or stop the Codex-backed realtime voice session. */
 	handleLiveCommand(): Promise<void>;
+	/** Start a `/record` screen capture, or stop the running one. */
+	toggleRecording(): Promise<void>;
 	executeCompaction(
 		customInstructionsOrOptions?: string | CompactOptions,
 		isAuto?: boolean,

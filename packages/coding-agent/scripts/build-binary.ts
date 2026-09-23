@@ -101,7 +101,10 @@ async function runCommand(
 
 async function main(): Promise<void> {
 	const crossBuild = resolveCrossBuild(Bun.env.CROSS_TARGET);
-	const shouldAdhocSign = process.platform === "darwin" && !crossBuild && Bun.env.BUN_NO_CODESIGN_MACHO_BINARY !== "1";
+	const shouldAdhocSign =
+		process.platform === "darwin" &&
+		(!crossBuild || crossBuild.platform === "darwin") &&
+		Bun.env.BUN_NO_CODESIGN_MACHO_BINARY !== "1";
 	const outName = crossBuild ? `${APP_NAME}-${crossBuild.id}` : APP_NAME;
 	const outputPath = path.join(packageDir, "dist", outName);
 	// Generate inside the try so the finally always restores the empty checked-in
@@ -129,7 +132,15 @@ async function main(): Promise<void> {
 			});
 
 			if (shouldAdhocSign) {
-				await runCommand(["codesign", "--force", "--sign", "-", outputPath]);
+				await runCommand([
+					"codesign",
+					"--force",
+					"--sign",
+					"-",
+					"--entitlements",
+					path.join(repoRoot, "scripts", "macos-entitlements.plist"),
+					outputPath,
+				]);
 			}
 
 			if (!crossBuild && !isTruthyCi(Bun.env.CI) && Bun.env.NPI_SKIP_EXTENSION_INSTALL !== "1") {

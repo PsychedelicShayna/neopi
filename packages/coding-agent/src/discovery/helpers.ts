@@ -218,7 +218,7 @@ function buildRule(
 	source: SourceMeta,
 	options?: RuleMarkdownOptions,
 ): Rule {
-	const { condition, astCondition, scope } = parseRuleConditionAndScope(frontmatter);
+	const { condition, astCondition, question, scope } = parseRuleConditionAndScope(frontmatter);
 
 	let globs: string[] | undefined;
 	if (Array.isArray(frontmatter.globs)) {
@@ -242,6 +242,7 @@ function buildRule(
 		description: typeof frontmatter.description === "string" ? frontmatter.description : undefined,
 		condition,
 		astCondition,
+		question,
 		scope,
 		agents: parseRuleAgents(frontmatter.agents),
 		interruptMode,
@@ -588,6 +589,8 @@ export async function loadFilesFromDir<T>(
 		transform: (name: string, content: string, path: string, source: SourceMeta) => T | null;
 		/** Whether to recurse into subdirectories (default: false) */
 		recursive?: boolean;
+		/** Registry/CLI origin forwarded to {@link SourceMeta.origin} (see {@link createSourceMeta}). */
+		origin?: string;
 	},
 ): Promise<LoadResult<T>> {
 	const items: T[] = [];
@@ -640,7 +643,7 @@ export async function loadFilesFromDir<T>(
 		}
 
 		const name = path.basename(filePath);
-		const source = createSourceMeta(provider, filePath, level);
+		const source = createSourceMeta(provider, filePath, level, options.origin);
 
 		try {
 			const item = options.transform(name, content, filePath, source);
