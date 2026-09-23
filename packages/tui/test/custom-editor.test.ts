@@ -758,4 +758,44 @@ describe("CustomEditor space-hold push-to-talk", () => {
 		expect(editor.getText()).toBe(" ".repeat(8));
 		expect(events).toEqual([]);
 	});
+
+	it("latches a hold with Backspace so releasing Space keeps recording until a Space tap", () => {
+		const { editor, events } = makeEditor();
+		editor.onSpaceHoldLatch = () => events.push("latch");
+		editor.handleInput("h");
+		editor.handleInput("i");
+		feedSpaces(editor, SPACE_HOLD_MECHANICAL_RUN + 2, REPEAT_GAP_MS);
+		expect(events).toEqual(["start"]);
+		// Backspace during the hold latches it instead of deleting text or stopping.
+		editor.handleInput("\x7f");
+		expect(events).toEqual(["start", "latch"]);
+		expect(editor.getText()).toBe("hi");
+		// Releasing everything no longer stops the recording.
+		vi.advanceTimersByTime(SPACE_HOLD_RELEASE_MS * 4);
+		expect(events).toEqual(["start", "latch"]);
+		// Other keys type normally and leave it running.
+		editor.handleInput("x");
+		expect(editor.getText()).toBe("hix");
+		expect(events).toEqual(["start", "latch"]);
+		// A fresh Space tap stops it without typing a space.
+		editor.handleInput(" ");
+		expect(events).toEqual(["start", "latch", "end"]);
+		expect(editor.getText()).toBe("hix");
+	});
+
+	it("swallows auto-repeat that is still arriving right after latching", () => {
+		const { editor, events } = makeEditor();
+		feedSpaces(editor, SPACE_HOLD_MECHANICAL_RUN + 2, REPEAT_GAP_MS);
+		editor.handleInput("\x7f");
+		// Backspace still physically held: its repeats must neither delete nor stop.
+		for (let i = 0; i < 5; i++) {
+			vi.advanceTimersByTime(REPEAT_GAP_MS);
+			editor.handleInput("\x7f");
+		}
+		expect(events).toEqual(["start"]);
+		vi.advanceTimersByTime(SPACE_HOLD_RELEASE_MS + 1);
+		// After release, a Backspace tap is the stop gesture.
+		editor.handleInput("\x7f");
+		expect(events).toEqual(["start", "end"]);
+	});
 });

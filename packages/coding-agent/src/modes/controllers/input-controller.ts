@@ -13,6 +13,7 @@ import { formatModelRoleAlias, roleCandidatePool } from "../../config/model-role
 import { resolveModelRoleValue } from "../../config/model-resolver";
 import { isSettingsInitialized, settings } from "../../config/settings";
 import { resolveLocalRoot } from "../../internal-urls";
+import { isReservedKey } from "@oh-my-pi/pi-tui/app-keybindings";
 import { AskDialogComponent } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { extractImagePathFromText } from "@oh-my-pi/pi-tui/prompt/custom-editor";
@@ -641,6 +642,8 @@ export class InputController {
 		this.ctx.editor.sttHoldEnabled = () => settings.get("stt.enabled") && this.ctx.sttIdle;
 		this.ctx.editor.onSpaceHoldStart = () => void this.ctx.handleSTTHold("start");
 		this.ctx.editor.onSpaceHoldEnd = () => void this.ctx.handleSTTHold("end");
+		this.ctx.editor.onSpaceHoldLatch = () =>
+			this.ctx.showStatus("Dictation latched: release Space, then tap Space or Backspace to stop");
 		for (const key of this.ctx.keybindings.getKeys("app.clipboard.copyLine")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => this.handleCopyCurrentLine());
 		}
@@ -2489,6 +2492,14 @@ export class InputController {
 
 		const shortcuts = runner.getShortcuts();
 		for (const [keyId, shortcut] of shortcuts) {
+			if (isReservedKey(keyId)) {
+				runner.emitError({
+					extensionPath: shortcut.extensionPath,
+					event: "shortcut",
+					error: `${keyId} is reserved for xAI speech input and cannot be bound by extensions`,
+				});
+				continue;
+			}
 			this.ctx.editor.setCustomKeyHandler(keyId, () => {
 				const ctx = runner.createCommandContext();
 				try {

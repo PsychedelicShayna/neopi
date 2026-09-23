@@ -260,3 +260,23 @@ describe("shipped dequeue defaults", () => {
 		expect(onDequeue).toHaveBeenCalledTimes(1);
 	});
 });
+
+describe("reserved Ctrl+Space", () => {
+	it("keeps Ctrl+Space on xAI speech input regardless of user overrides", () => {
+		const keybindings = KeybindingsManager.inMemory({
+			"app.stt.toggle": "f5",
+			"app.dictation.toggle": ["ctrl+space", "ctrl+alt+space"],
+			"app.history.search": "ctrl+space",
+		});
+
+		expect(keybindings.getKeys("app.stt.toggle")).toEqual(["ctrl+space"]);
+		expect(keybindings.getKeys("app.dictation.toggle")).toEqual(["ctrl+alt+space"]);
+		expect(keybindings.getKeys("app.history.search")).toEqual([]);
+		expect(keybindings.matches("\x00", "app.stt.toggle")).toBe(true);
+		expect(keybindings.matches("\x00", "app.history.search")).toBe(false);
+
+		keybindings.setUserBindings({ "app.retry": ["ctrl+space", "alt+shift+r"] });
+		expect(keybindings.getKeys("app.retry")).toEqual(["alt+shift+r"]);
+		expect(keybindings.getKeys("app.stt.toggle")).toEqual(["ctrl+space"]);
+	});
+});

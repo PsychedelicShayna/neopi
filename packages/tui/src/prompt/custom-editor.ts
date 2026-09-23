@@ -908,6 +908,9 @@ export class CustomEditor extends Editor {
 	/** Fired when the held space bar is released (detected as an idle gap with no further repeated
 	 *  spaces) — the push-to-talk STT stop. */
 	onSpaceHoldEnd?: () => void;
+	/** Fired when Backspace, pressed during a recognized hold, latches the recording so releasing
+	 *  the space bar no longer stops it. A later Space or Backspace tap fires `onSpaceHoldEnd`. */
+	onSpaceHoldLatch?: () => void;
 	/** Gate for the space-hold gesture. Returns false to keep the space bar inserting spaces
 	 *  normally; wired to `stt.enabled` so disabling STT restores plain space behavior. */
 	sttHoldEnabled?: () => boolean;
@@ -940,6 +943,9 @@ export class CustomEditor extends Editor {
 	#spaceHoldActive = false;
 	/** Idle timer that fires `onSpaceHoldEnd` once repeated spaces stop arriving. */
 	#spaceHoldTimer: NodeJS.Timeout | undefined;
+	/** Latched hold: `held` until the physical keys go idle, then `released`, where a Space or
+	 *  Backspace tap stops the recording. Undefined for an ordinary hold. */
+	#spaceHoldLatch: "held" | "released" | undefined;
 	#actionKeys = new Map<ConfigurableEditorAction, KeyId[]>(
 		Object.entries(DEFAULT_ACTION_KEYS).map(([action, keys]) => [action as ConfigurableEditorAction, [...keys]]),
 	);
@@ -1020,13 +1026,21 @@ export class CustomEditor extends Editor {
 	 *  spaces; the few spaces typed before a real hold is recognized are tracked back out. */
 	#handleSpaceHold(data: string, canonical: string | undefined): boolean {
 		const isSpace = canonical === "space";
+		if (this.#spaceHoldLatch !== undefined) return this.#handleLatchedHold(canonical);
 		if (this.#spaceHoldActive) {
 			if (isSpace) {
 				// Auto-repeat while held: swallow it and keep the release timer alive.
 				this.#armSpaceHoldReleaseTimer();
 				return true;
 			}
-			// Any non-space means the bar was released — stop recording, then let the key through.
+			if (canonical === "backspace") {
+				// Backspace during a hold latches it: the recording outlives the space bar.
+				this.#spaceHoldLatch = "held";
+				this.#armSpaceHoldReleaseTimer();
+				this.onSpaceHoldLatch?.();
+				return true;
+			}
+			// Any other non-space means the bar was released — stop recording, then let the key through.
 			this.#endSpaceHold();
 			return false;
 		}
@@ -1058,6 +1072,20 @@ export class CustomEditor extends Editor {
 		return true;
 	}
 
+	/** Latched recording. While the keys are still physically held, their auto-repeat is swallowed;
+	 *  once input goes idle the latch is `released` and a Space or Backspace tap stops it. Every other
+	 *  key types normally and leaves the recording running. */
+	#handleLatchedHold(canonical: string | undefined): boolean {
+		const isToggleKey = canonical === "space" || canonical === "backspace";
+		if (!isToggleKey) return false;
+		if (this.#spaceHoldLatch === "held") {
+			this.#armSpaceHoldReleaseTimer();
+			return true;
+		}
+		this.#endSpaceHold();
+		return true;
+	}
+
 	#resetSpaceRun(): void {
 		this.#spaceRunInserted = 0;
 		this.#mechanicalRun = 0;
@@ -1075,7 +1103,8 @@ export class CustomEditor extends Editor {
 		if (this.#spaceHoldTimer) clearTimeout(this.#spaceHoldTimer);
 		this.#spaceHoldTimer = setTimeout(() => {
 			this.#spaceHoldTimer = undefined;
-			this.#endSpaceHold();
+			if (this.#spaceHoldLatch === "held") this.#spaceHoldLatch = "released";
+			else this.#endSpaceHold();
 		}, SPACE_HOLD_RELEASE_MS);
 		this.#spaceHoldTimer.unref?.();
 	}
@@ -1083,6 +1112,7 @@ export class CustomEditor extends Editor {
 	#endSpaceHold(): void {
 		if (!this.#spaceHoldActive) return;
 		this.#spaceHoldActive = false;
+		this.#spaceHoldLatch = undefined;
 		this.#resetSpaceRun();
 		if (this.#spaceHoldTimer) {
 			clearTimeout(this.#spaceHoldTimer);

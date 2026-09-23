@@ -10,6 +10,7 @@ import {
 } from "@oh-my-pi/pi-utils";
 import { JSONC, YAML } from "bun";
 import {
+	canonicalKeyId,
 	type Keybinding,
 	type KeybindingDefinitions,
 	type KeybindingsConfig,
@@ -240,7 +241,7 @@ export const KEYBINDINGS = {
 	},
 	"app.stt.toggle": {
 		defaultKeys: "ctrl+space",
-		description: "Record complete audio for xAI transcription (Ctrl+Space to start/stop)",
+		description: "Record complete audio for xAI transcription (Ctrl+Space, reserved; not remappable)",
 	},
 	"app.dictation.toggle": {
 		defaultKeys: "ctrl+alt+space",
@@ -251,6 +252,44 @@ export const KEYBINDINGS = {
 		description: "Start or stop live voice mode (/live)",
 	},
 } as const satisfies KeybindingDefinitions;
+
+/**
+ * System-reserved keys. Each belongs to exactly one binding: user configuration can neither remap
+ * that binding nor claim the key for another one, and extension shortcuts on it are refused.
+ * Ctrl+Space is the xAI whole-recording escape hatch and must always reach it.
+ */
+export const RESERVED_KEYS = {
+	"ctrl+space": "app.stt.toggle",
+} as const satisfies Record<string, Keybinding>;
+
+/** Whether `key` (in any spelling `canonicalKeyId` accepts) is a system-reserved key. */
+export function isReservedKey(key: KeyId): boolean {
+	return Object.hasOwn(RESERVED_KEYS, canonicalKeyId(key));
+}
+
+const RESERVED_KEY_OWNERS: ReadonlySet<string> = new Set(Object.values(RESERVED_KEYS));
+
+/** Drop user overrides of reserved-key owners and strip reserved keys from every other binding. */
+function enforceReservedKeys(config: KeybindingsConfig): KeybindingsConfig {
+	const enforced: KeybindingsConfig = {};
+	for (const [id, keys] of Object.entries(config)) {
+		if (RESERVED_KEY_OWNERS.has(id)) {
+			logger.warn("Ignoring keybinding override for a reserved key owner", { keybinding: id });
+			continue;
+		}
+		if (keys === undefined) {
+			enforced[id] = keys;
+			continue;
+		}
+		const list = Array.isArray(keys) ? keys : [keys];
+		const kept = list.filter(key => !isReservedKey(key));
+		if (kept.length !== list.length) {
+			logger.warn("Ignoring reserved key in keybinding override", { keybinding: id, keys: list });
+		}
+		enforced[id] = kept.length === list.length ? keys : kept.length === 1 ? kept[0] : kept;
+	}
+	return enforced;
+}
 
 /**
  * Migration map from old keybinding names to new namespaced IDs.
@@ -587,10 +626,11 @@ export class KeybindingsManager extends TuiKeybindingsManager {
 	#userBindings: KeybindingsConfig;
 
 	constructor(userBindings: KeybindingsConfig = {}, configPath?: string, inheritedConfigPath?: string) {
-		super(KEYBINDINGS, userBindings);
+		const enforced = enforceReservedKeys(userBindings);
+		super(KEYBINDINGS, enforced);
 		this.#configPath = configPath;
 		this.#inheritedConfigPath = inheritedConfigPath;
-		this.#userBindings = userBindings;
+		this.#userBindings = enforced;
 	}
 
 	/**
@@ -625,8 +665,9 @@ export class KeybindingsManager extends TuiKeybindingsManager {
 	}
 
 	override setUserBindings(userBindings: KeybindingsConfig): void {
-		this.#userBindings = userBindings;
-		super.setUserBindings(userBindings);
+		const enforced = enforceReservedKeys(userBindings);
+		this.#userBindings = enforced;
+		super.setUserBindings(enforced);
 	}
 
 	override getKeys(keybinding: Keybinding): KeyId[] {
