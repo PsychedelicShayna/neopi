@@ -1,6 +1,6 @@
 # Issue tracker: GitHub
 
-Issues and specs for this repo live in GitHub Issues at `PsychedelicShayna/omomp`. Use the `gh` CLI from this clone so it resolves the repository from `origin`.
+Issues and specs for this repo live in GitHub Issues at `PsychedelicShayna/neopi`. Use the `gh` CLI from this clone so it resolves the repository from `origin`.
 
 ## Conventions
 

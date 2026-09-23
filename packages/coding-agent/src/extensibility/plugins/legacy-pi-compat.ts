@@ -561,7 +561,7 @@ function extensionParseCacheKey(source: string, importerPath: string): string {
 function getExtensionParseCacheDb(): Database | null {
 	if (extensionParseCacheDb !== undefined) return extensionParseCacheDb;
 	try {
-		// Incompatible readers may run concurrently (upstream omp and fork omomp).
+		// Incompatible readers may run concurrently (upstream omp and NeoPi).
 		// Give each persisted analysis format its own database before migration.
 		const cachePath = getLegacyPiExtensionCacheDbPath(EXTENSION_PARSE_CACHE_SCHEMA_VERSION);
 		try {

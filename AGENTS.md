@@ -8,56 +8,53 @@ This repo contains multiple packages, but **`packages/coding-agent/`** is the pr
 
 ## Binary install (HARD RULE)
 
-- **NEVER replace, overwrite, move, or reinstall the live `omp` binary** on
-  `PATH` (typically `~/.local/bin/omp`). That is Shayna's daily driver. Touching
-  it is a page-out, not a convenience.
-- When this fork is built for local use, install the artifact as a **separate**
-  binary named **`omomp`** — same name as this directory
-  (e.g. `~/.local/bin/omomp`). Not `om-omp`, not `omp`.
-- Allowed: write `packages/coding-agent/dist/omp` (build output), copy that to
-  `omomp`, run via `bun run dev` / `bun --cwd=packages/coding-agent src/cli.ts`.
-- Forbidden without an explicit order that names `omp` as the install target:
-  `install … omp`, `cp … ~/.local/bin/omp`, `ln -sf … omp`, package-manager
-  global install onto the `omp` name, or any "replace the live binary" step.
-- If a previous mistake left a backup (e.g. `omp-*-backup-*`), restore `omp`
-  from it immediately and keep fork builds only on `omomp`.
-- Installing `omomp` includes the fork extensions. After the binary is in
-  place, run `bun scripts/install-omomp-extensions.ts` so every
-  `extensions/*` directory is symlinked into the active profile's agent
-  `extensions/` dir (`getAgentDir()`; default `~/.omp/agent/extensions`).
-  Honors `PI_CONFIG_DIR`, `OMP_PROFILE`, and — on the default profile —
-  `PI_CODING_AGENT_DIR`. Same-named dest directories are renamed aside,
-  not deleted. The installer never removes unrelated user extensions.
-  `bun setup` and a local `packages/coding-agent` `bun run build` already
-  run it. An automatic post-build deploy failure warns and leaves the
-  binary in place; the explicit installer and `bun setup` still fail.
+- Build and install this fork only as **`npi`**, normally at
+  `~/.local/bin/npi`. NEVER install, copy, or link it under another binary
+  name.
+- The allowed compiled artifact is `packages/coding-agent/dist/npi`. Source
+  runs may use `bun run dev` or
+  `bun --cwd=packages/coding-agent src/cli.ts`.
+- Installing `npi` includes the fork extensions. After placing the binary, run
+  `bun scripts/install-neopi-extensions.ts` so each managed
+  `extensions/neopi-*` directory is linked into the active profile's agent
+  extension directory (`getAgentDir()`; default
+  `~/.omp/agent/extensions`). The installer honors `PI_CONFIG_DIR`,
+  `OMP_PROFILE`, and, on the default profile, `PI_CODING_AGENT_DIR`.
+  Same-named destination directories are renamed aside, not deleted; unrelated
+  user extensions remain untouched.
+- Local coding-agent builds deploy extensions automatically unless
+  `NPI_SKIP_EXTENSION_INSTALL=1`. An automatic post-build deployment failure
+  warns and leaves the binary in place; the explicit installer still fails.
+- NEVER use a remote installer, a global package-manager install, `bun setup`,
+  or `scripts/link-omp.sh` to install this fork. Build from the reviewed
+  checkout and copy `dist/npi` to the dedicated `npi` path.
 
 ## Fork maintenance
 
 Before adding fork behavior, integrating upstream, or rebasing a fork PR, read
 `docs/agents/fork-maintenance.md` for extension-first placement and compatibility
-checks.
+checks. Before synchronizing an upstream release, read and follow
+`docs/agents/upstream-sync.md`.
 
 ## Fork self-update
 
-- Running the installed binary as exactly `omomp update` is fork-specific: it
-  launches a normal interactive agent session with
-  `packages/coding-agent/src/prompts/omomp-update.md` as the initial user
-  request. The agent updates this checkout, resolves conflicts, validates,
-  builds, installs only `omomp`, deploys extensions, and commits the result.
-- The rewrite is intentionally gated by the executable basename and exact
-  argument list. `omp update` remains the upstream updater, while
-  `omomp update --check`, `omomp update --help`, and other update arguments keep
-  the upstream command behavior rather than silently becoming prompts.
-- A manual fork update follows the same contract: preserve and commit relevant
-  dirty work, create a recovery ref, fetch `upstream` and its tags, merge the
-  latest release state into `omomp`, resolve conflicts without dropping fork
-  behavior, run focused tests and required checks, then build with
-  `bun --cwd=packages/coding-agent run build`.
-- Install `packages/coding-agent/dist/omp` at the existing `omomp` path only,
-  then run `bun scripts/install-omomp-extensions.ts` and smoke-test the
-  installed executable. Never use `bun setup`, `scripts/link-omp.sh`, or the
-  upstream update installer for this flow because they can target `omp`.
+- Exact argv `npi update` launches the fork-specific interactive update session
+  from `packages/coding-agent/src/prompts/npi-update.md`.
+- The executable basename and exact argument list gate that rewrite.
+  `npi update --check`, `npi update --help`, and any additional arguments keep
+  the ordinary update-command behavior.
+- Updates MUST follow `docs/agents/upstream-sync.md`: preserve WIP and ahead
+  commits; merge prerequisite PRs only after validation; fetch the remote
+  default and create a fresh worktree from it. Merge the newest upstream
+  release tag; resolve every conflict personally, sequentially, with a
+  contemporaneous ledger. Sign logical commits with actual-model attribution.
+- MUST prove checks, build, staged install, and runtime smoke before PR merge.
+  NEVER commit or push directly to the default branch. After merge, fast-forward
+  only an ancestor checkout; preserve divergent work through topic/recovery
+  refs and follow the documented safe realignment procedure instead.
+- Install only `packages/coding-agent/dist/npi` at the dedicated `npi` path,
+  run `bun scripts/install-neopi-extensions.ts`, and smoke-test the installed
+  executable. NEVER use the upstream installer for this source fork.
 
 
 
@@ -71,7 +68,7 @@ checks.
 | `packages/coding-agent` | Main CLI application (primary focus)                                                    |
 | `packages/tui`          | Terminal UI library with differential rendering                                         |
 | `packages/natives`      | Bindings for native text/image/grep operations                                          |
-| `packages/stats`        | Local observability dashboard (`omp stats`)                                             |
+| `packages/stats`        | Local observability dashboard (`npi stats`)                                             |
 | `packages/omptype`      | ArkType-compatible schema validation with a lazy JIT runtime                            |
 | `packages/utils`        | Shared utilities (logger, streams, temp files)                                          |
 | `crates/pi-natives`     | Rust crate for performance-critical text/grep ops                                       |
@@ -114,9 +111,9 @@ Authorized exception: the Issue Funnel seat (`IssueFunnel` / Rue) may publish an
   	? new Worker(hostEntry, { type: "module", argv: ["__omp_worker_<name>"] })
   	: new Worker(new URL("./<worker>.ts", import.meta.url).href, { type: "module" });
   ```
-  When the process was started from the omp CLI — source `cli.ts`, npm-bundle `dist/cli.js`, or compiled binary — `workerHostEntry()` is `Bun.main` and the worker re-enters the single entry module, so no per-worker `--compile` entrypoints or bundle entries exist. Outside a CLI host (`bun test`, SDK embedding, standalone `omp-stats`) it returns `null` and the direct-module fallback loads the worker source. New worker kinds MUST add their selector to the dispatch table in `cli.ts` and keep the fallback branch.
+  When the process was started from the npi CLI — source `cli.ts`, npm-bundle `dist/cli.js`, or compiled binary — `workerHostEntry()` is `Bun.main` and the worker re-enters the single entry module, so no per-worker `--compile` entrypoints or bundle entries exist. Outside a CLI host (`bun test`, SDK embedding, standalone `omp-stats`) it returns `null` and the direct-module fallback loads the worker source. New worker kinds MUST add their selector to the dispatch table in `cli.ts` and keep the fallback branch.
   History: `with { type: "file" }` only copied the entry as a raw asset (workers crashed silently in compiled binaries — issues #1011, #1027), and the later literal-path + extra-entrypoint pattern required keeping spawn literals and two build scripts in sync (issue #1150). The smoke probe below is the live validation of this contract.
-  Validate any new worker with the dedicated smoke probe: `omp --smoke-test` spawns the stats sync worker and the tiny-model subprocess, pings them, and exits — it's wired into `ci:test:smoke` and `scripts/install-tests/run-ci.sh` so binary, source-link, and tarball installs all exercise it. Add a sibling smoke if the new worker is on a different module graph.
+  Validate any new worker with the dedicated smoke probe: `npi --smoke-test` spawns the stats sync worker and the tiny-model subprocess, pings them, and exits — it's wired into `ci:test:smoke` and `scripts/install-tests/run-ci.sh` so binary, source-link, and tarball installs all exercise it. Add a sibling smoke if the new worker is on a different module graph.
 
 ## Central Utilities
 
@@ -281,7 +278,7 @@ logger.warn("Theme file invalid, using fallback", { path });
 logger.debug("LSP fallback triggered", { reason });
 ```
 
-Logs go to `~/.omp/logs/omp.YYYY-MM-DD.log` with automatic rotation. Standalone CLI commands that exit without entering the TUI MAY use `console.*` or process streams for intentional user-facing output. Keep structured stdout clean. This exception is semantic, not filename-based; shared code must use `logger` or an explicit output sink.
+Logs go to `~/.omp/logs/npi.YYYY-MM-DD.log` with automatic rotation. Standalone CLI commands that exit without entering the TUI MAY use `console.*` or process streams for intentional user-facing output. Keep structured stdout clean. This exception is semantic, not filename-based; shared code must use `logger` or an explicit output sink.
 
 ## TUI Sanitization
 
@@ -409,7 +406,7 @@ The script handles version bump, CHANGELOG finalization, commit, tag, publish, a
 
 ### Issue tracker
 
-Issues and specs are tracked in `PsychedelicShayna/omomp` GitHub Issues. See
+Issues and specs are tracked in `PsychedelicShayna/neopi` GitHub Issues. See
 `docs/agents/issue-tracker.md`.
 
 ### Triage labels

@@ -1,7 +1,7 @@
 /**
  * Live personas: named instruction sets for the live voice model.
  *
- * Deliberate twin of the omomp-persona extension's conventions: schema-v1 JSON
+ * Deliberate twin of the neopi-persona extension's conventions: schema-v1 JSON
  * state in the agent dir written atomically (backup copy, temp file, fsync,
  * rename, directory fsync), a named-persona record, and loud errors on invalid
  * mutations. The "default" persona is the bundled prompts/live-instructions.md

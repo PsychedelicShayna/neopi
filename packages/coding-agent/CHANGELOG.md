@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Renamed the fork to NeoPi and its executable to `npi`; existing `.omp` configuration and provider compatibility remain unchanged.
+
 ### Added
 
 - Added `OMP_BUILD_BYTECODE=0` for local binary builds affected by Bun bytecode startup failures.
@@ -21,6 +25,8 @@
 
 ### Changed
 
+- Fork extensions now use NeoPi names and migrate existing persona, loadout, REPL, and live-persona state on first read.
+- Use `npi update` for the fork's PR-based update workflow and `npi flash` for portable builds.
 - Advisor concerns now arrive between tool batches without cancelling running tools, blockers interrupt immediately, and nits appear only after the full primary turn ends.
 
 ### Removed
