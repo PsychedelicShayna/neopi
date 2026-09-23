@@ -1,5 +1,6 @@
 import packageJson from "../../package.json" with { type: "json" };
 
+export const APP_NAME = "npi";
 export const VERSION = packageJson.version;
 export const getLastChangelogVersionPath = (): string => "";
 export const getChangelogPath = (): string | undefined => undefined;

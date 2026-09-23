@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { isCompiledBinary, logger, withTimeout, workerHostEntry } from "@oh-my-pi/pi-utils";
+import { APP_NAME, isCompiledBinary, logger, PRODUCT_NAME, withTimeout, workerHostEntry } from "@oh-my-pi/pi-utils";
 import type { Subprocess } from "bun";
 import type { Browser, CDPSession } from "puppeteer-core";
 import { ToolAbortError } from "../tool-errors";
@@ -224,12 +224,12 @@ async function openBrowserHandle(kind: BrowserKind, opts: AcquireBrowserOptions)
 		const outcome = await waitForRelayExtension(cdpUrl, opts.signal);
 		if (outcome === "unreachable") {
 			throw new ToolError(
-				`omp browser relay is not reachable at ${cdpUrl}. Start it with \`omp browser-relay\` (or check the endpoint), and make sure the OMP Browser Relay extension is loaded in Chrome.`,
+				`${PRODUCT_NAME} browser relay is not reachable at ${cdpUrl}. Start it with \`${APP_NAME} browser-relay\` (or check the endpoint), and make sure the ${PRODUCT_NAME} Browser Relay extension is loaded in Chrome.`,
 			);
 		}
 		if (outcome === "no-extension") {
 			throw new ToolError(
-				`omp browser relay is serving at ${cdpUrl} but its extension never connected. Install it with \`omp browser-relay install\` and check the toolbar badge shows "on".`,
+				`${PRODUCT_NAME} browser relay is serving at ${cdpUrl} but its extension never connected. Install it with \`${APP_NAME} browser-relay install\` and check the toolbar badge shows "on".`,
 			);
 		}
 		const puppeteer = await loadPuppeteer();

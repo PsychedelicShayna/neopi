@@ -1,5 +1,5 @@
 {
-  description = "OMP coding agent and development environment";
+  description = "NeoPi coding agent and development environment";
 
   nixConfig = {
     extra-substituters = [ "https://nix-community.cachix.org" ];
@@ -111,8 +111,8 @@
       apps = forAllSystems (system: {
         default = {
           type = "app";
-          program = "${self.packages.${system}.default}/bin/omp";
-          meta.description = "Run OMP";
+          program = "${self.packages.${system}.default}/bin/npi";
+          meta.description = "Run NeoPi";
         };
         omp = self.apps.${system}.default;
       });

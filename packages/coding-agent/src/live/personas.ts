@@ -1,7 +1,7 @@
 /**
  * Live personas: named instruction sets for the live voice model.
  *
- * Deliberate twin of the omomp-persona extension's conventions: schema-v1 JSON
+ * Deliberate twin of the neopi-persona extension's conventions: schema-v1 JSON
  * state in the agent dir written atomically (backup copy, temp file, fsync,
  * rename, directory fsync), a named-persona record, and loud errors on invalid
  * mutations. The "default" persona is the bundled prompts/live-instructions.md
@@ -15,8 +15,9 @@
  * exactly as it renders the bundled template today.
  */
 import * as fs from "node:fs/promises";
-import * as path from "node:path";
+import * as nodePath from "node:path";
 import { getAgentDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { readJsonWithLegacyFile } from "@oh-my-pi/pi-utils/dirs";
 import liveInstructionsTemplate from "./prompts/live-instructions.md" with { type: "text" };
 
 /** Reserved name of the immutable bundled persona. */
@@ -51,25 +52,27 @@ export function validateLivePersonaState(v: unknown): LivePersonaState {
 		!Object.values(v.personas).every(isDefinition) ||
 		(v.active !== undefined && typeof v.active !== "string")
 	) {
-		throw new Error("Invalid schema-v1 omomp-live-personas.json");
+		throw new Error("Invalid schema-v1 neopi-live-personas.json");
 	}
 	return v as unknown as LivePersonaState;
 }
 
-/** State file beside omomp-persona.json: profile, XDG, and PI_CODING_AGENT_DIR aware. */
-export const defaultLivePersonaStatePath = (): string => path.join(getAgentDir(), "omomp-live-personas.json");
+/** State file beside neopi-persona.json: profile, XDG, and PI_CODING_AGENT_DIR aware. */
+export const defaultLivePersonaStatePath = (): string => nodePath.join(getAgentDir(), "neopi-live-personas.json");
 
-/** Atomic JSON store; same backup + temp + fsync + rename algorithm as omomp-persona's BompStateStore. */
+/** Atomic JSON store; same backup + temp + fsync + rename algorithm as the persona extension's BompStateStore. */
 export class LivePersonaStore {
 	readonly backupPath: string;
+	readonly #legacyPath: string;
 
 	constructor(readonly path: string = defaultLivePersonaStatePath()) {
 		this.backupPath = `${path}.bak`;
+		this.#legacyPath = nodePath.join(nodePath.dirname(this.path), "omomp-live-personas.json");
 	}
 
 	async read(): Promise<LivePersonaState> {
 		try {
-			return validateLivePersonaState(JSON.parse(await fs.readFile(this.path, "utf8")));
+			return validateLivePersonaState(await readJsonWithLegacyFile(this.path, this.#legacyPath));
 		} catch (error) {
 			if (isEnoent(error)) return emptyLivePersonaState();
 			throw error;
@@ -78,8 +81,8 @@ export class LivePersonaStore {
 
 	async write(state: LivePersonaState): Promise<void> {
 		validateLivePersonaState(state);
-		await fs.mkdir(path.dirname(this.path), { recursive: true });
-		const temp = path.join(path.dirname(this.path), `.${Bun.randomUUIDv7()}.tmp`);
+		await fs.mkdir(nodePath.dirname(this.path), { recursive: true });
+		const temp = nodePath.join(nodePath.dirname(this.path), `.${Bun.randomUUIDv7()}.tmp`);
 		try {
 			await fs.copyFile(this.path, this.backupPath);
 		} catch (error) {
@@ -93,7 +96,7 @@ export class LivePersonaStore {
 			await file.close();
 		}
 		await fs.rename(temp, this.path);
-		const dir = await fs.open(path.dirname(this.path), "r");
+		const dir = await fs.open(nodePath.dirname(this.path), "r");
 		try {
 			await dir.sync();
 		} finally {

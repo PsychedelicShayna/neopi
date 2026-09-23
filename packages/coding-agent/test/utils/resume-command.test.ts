@@ -11,13 +11,13 @@ describe("resumeCommand", () => {
 
 	it("omits the profile flag in the default profile", () => {
 		setProfile(undefined);
-		expect(resumeCommand("abc123")).toBe("omomp --resume abc123");
+		expect(resumeCommand("abc123")).toBe("npi --resume abc123");
 	});
 
 	it("carries the active profile so the emitted hint is runnable verbatim", () => {
 		// Profile sessions live in ~/.omp/profiles/<name>/agent, so a resume hint
 		// without --profile fails with "Session not found" (issue #9018).
 		setProfile("personal");
-		expect(resumeCommand("abc123")).toBe("omomp --profile personal --resume abc123");
+		expect(resumeCommand("abc123")).toBe("npi --profile personal --resume abc123");
 	});
 });

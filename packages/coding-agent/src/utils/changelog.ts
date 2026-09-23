@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { getLastChangelogVersionPath, isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { APP_NAME, getLastChangelogVersionPath, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { Lexer } from "@oh-my-pi/pi-utils/marked";
 import type { BunFile } from "bun";
 import bundledChangelogPath from "../../CHANGELOG.md" with { type: "file" };
@@ -104,7 +104,7 @@ function categoryLabel(category: string, count: number): string {
 export function formatStartupChangelogSummary(selection: StartupChangelogSelection): string {
 	const latestVersion = selection.latestVersion;
 	if (!latestVersion || selection.selectedEntries === 0) {
-		return "Updated omp. Use /changelog for recent changes.";
+		return `Updated ${APP_NAME}. Use /changelog for recent changes.`;
 	}
 
 	const releaseCount = selection.selectedEntries;

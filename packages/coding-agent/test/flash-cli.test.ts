@@ -8,6 +8,7 @@ import {
 	confirmationMatches,
 	copySelected,
 	FLASH_PHASES,
+	type FlashState,
 	forceAsciiSymbolPreset,
 	missingHostTools,
 	nextIncompletePhase,
@@ -15,6 +16,7 @@ import {
 	partitionTypeMatches,
 	parseFlashState,
 	PORTABLE_AGENT_MANIFEST,
+	readFlashState,
 	rewriteGrubDefaults,
 	rewriteMkinitcpioHooks,
 	STICK_PACKAGES,
@@ -136,8 +138,44 @@ describe("resumable phases", () => {
 		};
 		expect(parseFlashState(base).completedPhases).toEqual(["partitioned", "formatted"]);
 		expect(() => parseFlashState({ ...base, completedPhases: ["partitioned", "base-installed"] })).toThrow(
-			"Invalid OMOMP flash state schema",
+			"Invalid NeoPi flash state schema",
 		);
+	});
+
+	test("reads legacy state without mutating it and refuses ambiguous or corrupt state", async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "flash-state-"));
+		temps.push(root);
+		const legacy = path.join(root, "omomp-flash-state.json");
+		const current = path.join(root, "npi-flash-state.json");
+		const state: FlashState = {
+			schemaVersion: 1,
+			devicePath: "/dev/sdc",
+			diskModel: "USB",
+			diskSizeBytes: 16e9,
+			espUuid: "esp",
+			luksUuid: "luks",
+			username: "shayna",
+			portableVersion: "18.1.2",
+			binarySha256: "a".repeat(64),
+			nativeSha256: "b".repeat(64),
+			completedPhases: ["partitioned", "formatted"],
+			warnings: [],
+			updatedAt: "2026-09-02T00:00:00.000Z",
+		};
+		const serialized = JSON.stringify(state);
+		expect(await readFlashState(root)).toBeNull();
+		await fs.writeFile(legacy, serialized);
+		expect(await readFlashState(root)).toEqual({ state, path: legacy });
+		expect(await fs.readFile(legacy, "utf8")).toBe(serialized);
+		await expect(fs.access(current)).rejects.toMatchObject({ code: "ENOENT" });
+		await fs.writeFile(current, serialized);
+		await expect(readFlashState(root)).rejects.toThrow("refusing ambiguous flash state");
+		expect(await fs.readFile(current, "utf8")).toBe(serialized);
+		expect(await fs.readFile(legacy, "utf8")).toBe(serialized);
+		await fs.unlink(legacy);
+		expect(await readFlashState(root)).toEqual({ state, path: current });
+		await fs.writeFile(current, "{");
+		await expect(readFlashState(root)).rejects.toThrow("Cannot read flash state");
 	});
 });
 
@@ -148,7 +186,9 @@ describe("portable payload", () => {
 			"agent/agent.db",
 			"agent/secret-placeholder.key",
 			"agent/models.yml",
-			"agent/omomp-persona.json",
+			"agent/neopi-persona.json",
+			"agent/neopi-loadout.json",
+			"agent/neopi-live-personas.json",
 			"agent/sessions",
 			"agent/blobs",
 			"omp/install-id",

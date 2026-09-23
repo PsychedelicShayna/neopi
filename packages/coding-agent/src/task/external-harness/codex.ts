@@ -1,3 +1,4 @@
+import { PRODUCT_NAME } from "@oh-my-pi/pi-utils/dirs";
 import { readFile, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { AgentProgress, SingleResult } from "@oh-my-pi/pi-tui/tools/task";
@@ -37,7 +38,7 @@ function assertCodexCapabilities(input: ExternalHarnessInput): void {
 	if (missing.length > 0) {
 		throw new Error(
 			"Codex external harness requires explicit grants for every indivisible app-server built-in " +
-				`(shell, apply_patch, file/image inspection, and web search); missing OMP capabilities: ${missing.join(", ")}`,
+				`(shell, apply_patch, file/image inspection, and web search); missing ${PRODUCT_NAME} capabilities: ${missing.join(", ")}`,
 		);
 	}
 }
@@ -50,7 +51,7 @@ async function selectSandbox(input: ExternalHarnessInput): Promise<"read-only" |
 	const cwd = await realpath(input.cwd);
 	const rel = relative(worktree, cwd);
 	if (!isAbsolute(worktree) || rel === ".." || rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)) {
-		throw new Error("refusing workspace-write outside the OMP-created isolated worktree");
+		throw new Error(`refusing workspace-write outside the ${PRODUCT_NAME}-created isolated worktree`);
 	}
 	if (input.isolation.repoRoot) {
 		const repoRoot = await realpath(input.isolation.repoRoot);
@@ -281,7 +282,11 @@ export const codexExternalHarnessAdapter: ExternalHarnessAdapter = {
 					break;
 			}
 			if (result) send({ id, result });
-			else send({ id, error: { code: -32601, message: `OMP denied unsupported server request: ${method}` } });
+			else
+				send({
+					id,
+					error: { code: -32601, message: `${PRODUCT_NAME} denied unsupported server request: ${method}` },
+				});
 		};
 
 		let completedResolve!: () => void;
@@ -457,7 +462,7 @@ export const codexExternalHarnessAdapter: ExternalHarnessAdapter = {
 			]);
 			const startup = async () => {
 				await request("initialize", {
-					clientInfo: { name: "oh-my-pi", title: "Oh My Pi", version: "1" },
+					clientInfo: { name: "neopi", title: PRODUCT_NAME, version: "1" },
 					capabilities: null,
 				});
 				send({ method: "initialized" });

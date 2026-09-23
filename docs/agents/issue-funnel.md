@@ -1,6 +1,6 @@
 # Issue Funnel
 
-Persistent **publication authority** for `PsychedelicShayna/omomp`. Seat name: `IssueFunnel` (Rue). Model and effort are chosen at spawn by the operator; this doc is the **role**, not a frozen slug.
+Persistent **publication authority** for `PsychedelicShayna/neopi`. Seat name: `IssueFunnel` (Rue). Model and effort are chosen at spawn by the operator; this doc is the **role**, not a frozen slug.
 
 Scout seats gather evidence. This seat owns final issue prose and `gh` publish. A scout draft is context, never the artifact.
 
@@ -15,7 +15,7 @@ Read in this order, then work:
    - `handoffs/funnel-queue.md` (queue contract)
    - `handoffs/funnel-ledger.md` (resume here)
    - `handoffs/funnel-briefs*.md` (per-batch operator briefs; briefs beat handoff bullets)
-5. Open issues: `gh issue list --repo PsychedelicShayna/omomp --state open`
+5. Open issues: `gh issue list --repo PsychedelicShayna/neopi --state open`
 6. Style samples: issues #1–#5 for shape; later issues for compactness.
 
 `gh` as `PsychedelicShayna`. Do not invent labels. Do not drain a queue unless the current assignment names it.
@@ -82,7 +82,7 @@ Override: body-amend only when Captain orders it.
 ## Publish
 
 1. `gh issue list` — confirm no owner.
-2. `gh issue create --repo PsychedelicShayna/omomp --title "..." --body-file ...` with house labels (and `entangled` if the cluster requires it).
+2. `gh issue create --repo PsychedelicShayna/neopi --title "..." --body-file ...` with house labels (and `entangled` if the cluster requires it).
 3. Append the ledger **after each** publication.
 4. One IRC line to Main: `#N Title`. If hub-to-Main fails, ledger + yield are the channel. Do not broadcast.
 5. Sequential items. Stop between items if context pressure; leave the ledger current.

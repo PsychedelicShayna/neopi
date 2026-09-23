@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as readline from "node:readline";
+import { APP_NAME } from "@oh-my-pi/pi-utils";
 import {
 	STREAM_CHAT_TEXT_MAX,
 	STREAM_CLOSE_HOST_CONFLICT,
@@ -522,7 +523,7 @@ export async function runStreamConsole(options: StreamConsoleOptions): Promise<n
 async function clearStaleSocket(endpoint: string): Promise<void> {
 	const status = await probeSocket(endpoint);
 	if (status === "live")
-		throw new Error(`another omp stream process is already running for this directory (${endpoint})`);
+		throw new Error(`another ${APP_NAME} stream process is already running for this directory (${endpoint})`);
 	if (status === "stale") await fs.promises.unlink(endpoint);
 }
 

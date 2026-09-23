@@ -9,6 +9,7 @@ import {
 	getPluginsDir,
 	getProjectDir,
 	parseFrontmatter,
+	PRODUCT_NAME,
 	tryParseJson,
 } from "@oh-my-pi/pi-utils";
 import { isUserSourceEnabled } from "../capability";
@@ -1272,7 +1273,7 @@ export async function listClaudePluginRoots(
 				}
 			}
 		} else {
-			warnings.push(`Failed to parse OMP plugin registry: ${ompRegistryPath}`);
+			warnings.push(`Failed to parse ${PRODUCT_NAME} plugin registry: ${ompRegistryPath}`);
 		}
 	}
 

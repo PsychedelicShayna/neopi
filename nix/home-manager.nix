@@ -12,13 +12,13 @@ let
 in
 {
   options.programs.omp = {
-    enable = lib.mkEnableOption "OMP coding agent";
+    enable = lib.mkEnableOption "NeoPi coding agent";
 
     package = lib.mkOption {
       type = lib.types.package;
       default = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
       defaultText = lib.literalExpression "inputs.omp.packages.${pkgs.stdenv.hostPlatform.system}.default";
-      description = "OMP package to install.";
+      description = "NeoPi package to install.";
     };
 
     settings = lib.mkOption {
@@ -28,7 +28,7 @@ in
         Settings written declaratively to {file}`~/.omp/agent/config.yml`.
         On each `home-manager switch` the declared settings are copied into
         place as a writable regular file (not a read-only store symlink), so
-        OMP can acquire its config lock and rewrite the file when persisting
+        NeoPi can acquire its config lock and rewrite the file when persisting
         runtime changes (`/settings`, onboarding). Those runtime changes are
         overwritten by the declared values again on the next
         `home-manager switch`.

@@ -2,7 +2,7 @@ import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import { APP_NAME, isEnoent } from "@oh-my-pi/pi-utils";
 import { $, type Server } from "bun";
 import {
 	getBehaviorDashboardStats,
@@ -87,7 +87,7 @@ async function getEmbeddedClientDir(): Promise<string> {
 
 	if (!EMBEDDED_CLIENT_ARCHIVE) {
 		throw new Error(
-			"Embedded stats client bundle missing. Rebuild the omp binary or npm bundle with embedded stats assets.",
+			`Embedded stats client bundle missing. Rebuild the ${APP_NAME} binary or npm bundle with embedded stats assets.`,
 		);
 	}
 

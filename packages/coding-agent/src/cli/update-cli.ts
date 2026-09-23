@@ -10,7 +10,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { $env, $which, APP_NAME, compareVersions, isEnoent, VERSION } from "@oh-my-pi/pi-utils";
+import { $env, $which, APP_NAME, compareVersions, isEnoent, PRODUCT_NAME, VERSION } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import { $ } from "bun";
@@ -24,6 +24,10 @@ import {
 } from "../utils/fetch-timeout";
 
 const REPO = "can1357/oh-my-pi";
+// Non-prompt update arguments retain the upstream distribution contract.
+const UPSTREAM_BINARY_NAME = "omp";
+const LOCAL_VERSION_PREFIX = `${APP_NAME}/`;
+const UPSTREAM_VERSION_PREFIX = `${UPSTREAM_BINARY_NAME}/`;
 const PACKAGE = "@oh-my-pi/pi-coding-agent";
 const HOMEBREW_FORMULA = "can1357/tap/omp";
 const MISE_TOOL = "github:can1357/oh-my-pi";
@@ -1163,9 +1167,9 @@ function getBinaryName(): string {
 	}
 
 	if (os === "windows") {
-		return `${APP_NAME}-${os}-${archName}.exe`;
+		return `${UPSTREAM_BINARY_NAME}-${os}-${archName}.exe`;
 	}
-	return `${APP_NAME}-${os}-${archName}`;
+	return `${UPSTREAM_BINARY_NAME}-${os}-${archName}`;
 }
 
 /**
@@ -1176,16 +1180,17 @@ function resolveOmpPath(): string | undefined {
 }
 
 /**
- * Parse the version a launcher reports from `omp --version` output
- * (`omp/X.Y.Z`, or a prerelease such as `omp/X.Y.Z-canary.1`).
+ * Parse local NeoPi or upstream launcher version output. Explicit update flags
+ * still use upstream release assets; the exact `npi update` takes the source-fork route.
  *
  * The prerelease suffix is preserved so a correctly installed canary build
  * verifies as up to date instead of appearing to report a stale `X.Y.Z` and
  * being mistaken for an unreplaced launcher.
  */
 export function parseReportedVersion(output: string): string | undefined {
-	if (!output.startsWith(`${APP_NAME}/`)) return undefined;
-	return output.slice(APP_NAME.length + 1).match(/^(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/)?.[1];
+	const prefix = output.startsWith(LOCAL_VERSION_PREFIX) ? LOCAL_VERSION_PREFIX : UPSTREAM_VERSION_PREFIX;
+	if (!output.startsWith(prefix)) return undefined;
+	return output.slice(prefix.length).match(/^(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/)?.[1];
 }
 
 async function reportedVersionAtPath(binaryPath: string): Promise<string | undefined> {
@@ -1215,10 +1220,10 @@ async function validateExistingUpdateTarget(targetPath: string): Promise<void> {
 	if (!hasShebang && (await reportedVersionAtPath(targetPath)) !== undefined) return;
 
 	const reason = hasShebang
-		? "is a shebang script, not an OMP binary"
-		: "does not report an OMP version when run directly";
+		? `is a shebang script, not a ${PRODUCT_NAME} binary`
+		: `does not report a ${PRODUCT_NAME} version when run directly`;
 	throw new Error(
-		`Refusing to replace ${targetPath}: the resolved foreign symlink target ${reason}. Point PATH directly at the OMP binary you want to update, or reinstall with: ${installerHint()}`,
+		`Refusing to replace ${targetPath}: the resolved foreign symlink target ${reason}. Point PATH directly at the ${PRODUCT_NAME} binary you want to update, or reinstall with: ${installerHint()}`,
 	);
 }
 

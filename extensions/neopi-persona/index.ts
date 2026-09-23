@@ -1,7 +1,10 @@
-// omomp-persona: session-scoped system-prompt personas.
+// neopi-persona: session-scoped system-prompt personas.
 // Self-contained extension directory — drag into any omp extensions dir to
-// enable, drag out to disable. State lives in <agentDir>/omomp-persona.json.
-import type { ExtensionAPI, ExtensionCommandContext } from "/home/shayna/omp/packages/coding-agent/src/extensibility/extensions/types.ts";
+// enable, drag out to disable. State lives in <agentDir>/neopi-persona.json.
+import type {
+	ExtensionAPI,
+	ExtensionCommandContext,
+} from "../../packages/coding-agent/src/extensibility/extensions/types.ts";
 import { createPersonaFeature, parsePersonaDefinition } from "./persona.ts";
 import type { PersonaFeature } from "./persona.ts";
 import { agentDir, BompStateStore, defaultStatePath } from "./state.ts";
@@ -49,10 +52,18 @@ async function personaMenu(personas: PersonaFeature, ctx: ExtensionCommandContex
 		if (!action) continue; // back to list
 
 		switch (action) {
-			case "Use": ctx.ui.notify(await personas.use(personaName, ctx), "info"); break;
-			case "Show": ctx.ui.notify(await personas.show(personaName), "info"); break;
-			case "Edit": await personaCreateEdit(personas, ctx, "edit", personaName); break;
-			case "Deactivate": ctx.ui.notify(await personas.off(ctx), "info"); break;
+			case "Use":
+				ctx.ui.notify(await personas.use(personaName, ctx), "info");
+				break;
+			case "Show":
+				ctx.ui.notify(await personas.show(personaName), "info");
+				break;
+			case "Edit":
+				await personaCreateEdit(personas, ctx, "edit", personaName);
+				break;
+			case "Deactivate":
+				ctx.ui.notify(await personas.off(ctx), "info");
+				break;
 			case "Delete": {
 				if (await ctx.ui.confirm("Delete persona", `Delete '${personaName}'?`)) {
 					ctx.ui.notify(await personas.delete(personaName, ctx), "info");
@@ -70,30 +81,32 @@ async function personaCreateEdit(
 	command: "create" | "edit",
 	existingName?: string,
 ): Promise<void> {
-	const target = existingName ?? await ctx.ui.input("Persona name");
+	const target = existingName ?? (await ctx.ui.input("Persona name"));
 	if (!target) return;
 	const mode = await ctx.ui.select("Persona mode", ["replace", "prepend", "append", "literal-substitute"]);
 	if (!mode) return;
 	const sourceKind = await ctx.ui.select("Persona source", ["inline", "file"]);
 	if (!sourceKind) return;
-	const value = sourceKind === "inline"
-		? await ctx.ui.editor("Persona content")
-		: await ctx.ui.input("Path relative to the agent directory");
+	const value =
+		sourceKind === "inline"
+			? await ctx.ui.editor("Persona content")
+			: await ctx.ui.input("Path relative to the agent directory");
 	if (value === undefined) return;
 	const literal = mode === "literal-substitute" ? await ctx.ui.input("Literal to replace") : undefined;
 	const inherit = await ctx.ui.confirm("Task inheritance", "Stamp inheritToTasks metadata for future children?");
 	const definition = parsePersonaDefinition(mode, sourceKind, value, literal, inherit);
-	const result = command === "create" ? await personas.create(target, definition) : await personas.edit(target, definition);
+	const result =
+		command === "create" ? await personas.create(target, definition) : await personas.edit(target, definition);
 	ctx.ui.notify(result, "info");
 }
 
-export default function omomp_persona(api: ExtensionAPI): void {
+export default function neopi_persona(api: ExtensionAPI): void {
 	const store = new BompStateStore(defaultStatePath());
 	const personas = createPersonaFeature(store, agentDir(), api);
 	api.on("before_agent_start", (event, ctx) => personas.apply(event, ctx));
 
 	api.registerCommand("persona", {
-		description: "Manage session-scoped omomp personas",
+		description: "Manage session-scoped NeoPi personas",
 		async handler(args: string, ctx: ExtensionCommandContext) {
 			const [command, name] = words(args);
 			const id = ctx.sessionManager.getSessionId();
@@ -103,20 +116,34 @@ export default function omomp_persona(api: ExtensionAPI): void {
 				return;
 			}
 			switch (command) {
-				case "list": return report(ctx, () => personas.list(id));
-				case "show": if (!name) return output(ctx, "Usage: /persona show <name>", true); return report(ctx, () => personas.show(name));
-				case "status": return report(ctx, () => personas.status(id));
-				case "use": if (!name) return output(ctx, "Usage: /persona use <name>", true); return report(ctx, () => personas.use(name, ctx));
-				case "off": return report(ctx, () => personas.off(ctx));
-				case "delete": if (!name) return output(ctx, "Usage: /persona delete <name>", true); return report(ctx, () => personas.delete(name, ctx));
+				case "list":
+					return report(ctx, () => personas.list(id));
+				case "show":
+					if (!name) return output(ctx, "Usage: /persona show <name>", true);
+					return report(ctx, () => personas.show(name));
+				case "status":
+					return report(ctx, () => personas.status(id));
+				case "use":
+					if (!name) return output(ctx, "Usage: /persona use <name>", true);
+					return report(ctx, () => personas.use(name, ctx));
+				case "off":
+					return report(ctx, () => personas.off(ctx));
+				case "delete":
+					if (!name) return output(ctx, "Usage: /persona delete <name>", true);
+					return report(ctx, () => personas.delete(name, ctx));
 				case "create":
 				case "edit": {
 					if (!ctx.hasUI) return output(ctx, `/persona ${command} requires the interactive editor`, true);
 					await personaCreateEdit(personas, ctx, command, name ?? undefined);
 					return;
 				}
-				default: return output(ctx, "Usage: /persona list|show <name>|create [name]|edit [name]|use <name>|off|delete <name>|status", true);
+				default:
+					return output(
+						ctx,
+						"Usage: /persona list|show <name>|create [name]|edit [name]|use <name>|off|delete <name>|status",
+						true,
+					);
 			}
-		}
+		},
 	});
 }

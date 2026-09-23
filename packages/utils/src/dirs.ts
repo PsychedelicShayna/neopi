@@ -15,13 +15,19 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { engines, version } from "../package.json" with { type: "json" };
-import { isEnoent, isEnotdir } from "./fs-error";
+import { isEexist, isEnoent, isEnotdir } from "./fs-error";
 
-/** App name (e.g. "omp") */
-export const APP_NAME: string = "omp";
+/** Executable name used in CLI output and launch commands. */
+export const APP_NAME: string = "npi";
+
+/** Product display name shown in titles and notifications. */
+export const PRODUCT_NAME: string = "NeoPi";
 
 /** Config directory name (e.g. ".omp") */
 export const CONFIG_DIR_NAME: string = ".omp";
+
+/** Stable XDG directory name; branding must not move existing state. */
+export const XDG_DIR_NAME: string = "omp";
 
 /** Ordered main settings filenames: canonical write target first, legacy-compatible YAML fallback second. */
 export const MAIN_CONFIG_FILENAMES = ["config.yml", "config.yaml"] as const;
@@ -29,8 +35,8 @@ export const MAIN_CONFIG_FILENAMES = ["config.yml", "config.yaml"] as const;
 /** Version (e.g. "1.0.0") */
 export const VERSION: string = version;
 
-/** Default User-Agent header string (e.g. "omp/17.2.12") */
-export const USER_AGENT = `omp/${VERSION}`;
+/** Default User-Agent header string. */
+export const USER_AGENT = `${APP_NAME}/${VERSION}`;
 
 /** Minimum Bun version */
 export const MIN_BUN_VERSION: string = engines.bun.replace(/[^0-9.]/g, "");
@@ -67,7 +73,7 @@ export function normalizeProfileName(profile: string | undefined): string | unde
 		WINDOWS_RESERVED_BASENAME_RE.test(normalized)
 	) {
 		throw new Error(
-			`Invalid OMP profile "${profile}". Profile names must match ${PROFILE_NAME_RE.source}, ` +
+			`Invalid ${PRODUCT_NAME} profile "${profile}". Profile names must match ${PROFILE_NAME_RE.source}, ` +
 				`cannot be "." or "..", cannot end with ".", and cannot be a Windows reserved device name ` +
 				`(CON, PRN, AUX, NUL, COM0-9, LPT0-9, or any of those with an extension).`,
 		);
@@ -97,7 +103,7 @@ function getProfileFromEnv(): string | undefined {
  * crash a bare `import` of this module with an uncaught stack trace before the
  * CLI's error handling is in scope. The default profile is used instead; the
  * CLI re-validates the env (see `runCli` in coding-agent/src/cli.ts) so the
- * user still gets a clean "Invalid OMP profile" message.
+ * user still gets a clean invalid-profile message.
  */
 function readProfileFromEnvSafe(): string | undefined {
 	try {
@@ -354,7 +360,7 @@ class DirResolver {
 				const value = process.env[envVar];
 				if (!value) return undefined;
 				try {
-					const appRoot = path.join(value, APP_NAME);
+					const appRoot = path.join(value, XDG_DIR_NAME);
 					if (profile) {
 						const profilePath = path.join(appRoot, "profiles", profile);
 						if (fs.existsSync(profilePath)) {
@@ -972,6 +978,32 @@ function adoptLegacyFile(legacyPath: string, targetPath: string): void {
 	}
 }
 
+/**
+ * Read renamed JSON state, adopting a legacy file on the same filesystem only
+ * when the new path is absent. Hard-link activation cannot replace newer state.
+ */
+export async function readJsonWithLegacyFile(targetPath: string, legacyPath: string): Promise<unknown> {
+	const file = Bun.file(targetPath);
+	try {
+		return await file.json();
+	} catch (error) {
+		if (!isEnoent(error)) throw error;
+	}
+	try {
+		await fs.promises.link(legacyPath, targetPath);
+	} catch (error) {
+		// A concurrent loader may have adopted and removed the legacy file.
+		if (isEexist(error) || isEnoent(error)) return file.json();
+		throw error;
+	}
+	try {
+		await fs.promises.unlink(legacyPath);
+	} catch (error) {
+		if (!isEnoent(error)) throw error;
+	}
+	return file.json();
+}
+
 /** Get the secret placeholder key path (~/.omp/agent/secret-placeholder.key; XDG default: $XDG_STATE_HOME/omp/secret-placeholder.key). Adopts a legacy key on first XDG resolution. */
 export function getSecretPlaceholderKeyPath(): string {
 	const keyPath = dirs.agentSubdir(undefined, "secret-placeholder.key", "state");
@@ -1068,13 +1100,13 @@ let cachedInstallId: string | null = null;
 const INSTALL_ID_FILE = "install-id";
 /**
  * Application label for usage attribution (`OMP_APP_NAME`), defaulting to
- * `omp`. Embedders that drive omp programmatically (robomp, CI bots, …) set
+ * `npi`. Embedders that drive NeoPi programmatically (robomp, CI bots, …) set
  * the env var so broker-side per-client burn tracking can answer "what did
  * app X use" instead of folding everything into one install-wide bucket.
  */
 export function getAppName(): string {
 	const value = process.env.OMP_APP_NAME?.trim();
-	return value ? value : "omp";
+	return value ? value : APP_NAME;
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

@@ -1,4 +1,4 @@
-import { postmortem } from "@oh-my-pi/pi-utils";
+import { APP_NAME, postmortem } from "@oh-my-pi/pi-utils";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import { runCleanseCommand } from "../cleanse";
 import { cleanseHelp as commandHelp } from "../cli/command-help";
@@ -36,13 +36,13 @@ export default class Cleanse extends Command {
 	};
 
 	static examples = [
-		"omp cleanse",
-		"omp cleanse --all",
-		'omp cleanse "ts errors"',
-		"omp cleanse -n 8",
-		"omp cleanse -m opus",
-		"omp cleanse -t",
-		"omp cleanse --agents 12 --model anthropic/claude-opus-4-6",
+		`${APP_NAME} cleanse`,
+		`${APP_NAME} cleanse --all`,
+		`${APP_NAME} cleanse "ts errors"`,
+		`${APP_NAME} cleanse -n 8`,
+		`${APP_NAME} cleanse -m opus`,
+		`${APP_NAME} cleanse -t`,
+		`${APP_NAME} cleanse --agents 12 --model anthropic/claude-opus-4-6`,
 	];
 
 	async run(): Promise<void> {

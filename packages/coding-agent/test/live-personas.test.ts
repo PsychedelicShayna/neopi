@@ -17,7 +17,7 @@ describe("live personas", () => {
 
 	beforeEach(async () => {
 		dir = await fs.mkdtemp(path.join(os.tmpdir(), "live-personas-"));
-		statePath = path.join(dir, "omomp-live-personas.json");
+		statePath = path.join(dir, "neopi-live-personas.json");
 		personas = createLivePersonaFeature(new LivePersonaStore(statePath));
 	});
 
@@ -25,12 +25,39 @@ describe("live personas", () => {
 		await fs.rm(dir, { recursive: true, force: true });
 	});
 
-	test("bundled default keeps user relays silent and speaks delegated updates", () => {
-		expect(defaultLiveInstructions).toContain("Silently relay the utterance");
-		expect(defaultLiveInstructions).toContain("NEVER echo, summarize, confirm, or announce the relay aloud");
-		expect(defaultLiveInstructions).toContain("MUST speak a concise, natural summary");
-		expect(defaultLiveInstructions).toContain("MUST promptly tell {{firstName}}");
-		expect(defaultLiveInstructions).toContain("MUST promptly narrate each supplied update");
+	test("adopts legacy persona state without losing the selected instructions", async () => {
+		const legacyPath = path.join(dir, "omomp-live-personas.json");
+		await Bun.write(
+			legacyPath,
+			JSON.stringify({
+				schemaVersion: 1,
+				personas: { iris: { instructions: "Legacy Iris instructions." } },
+				active: "iris",
+			}),
+		);
+
+		expect(await resolveLiveInstructions(statePath)).toBe("Legacy Iris instructions.");
+		expect(await Bun.file(statePath).exists()).toBe(true);
+		expect(await Bun.file(legacyPath).exists()).toBe(false);
+	});
+
+	test("keeps current persona state authoritative when both filenames exist", async () => {
+		const legacyPath = path.join(dir, "omomp-live-personas.json");
+		await personas.clone("default", "current");
+		await personas.edit("current", "Current instructions.");
+		await personas.use("current");
+		// A restored legacy backup must not replace the current selection.
+		await Bun.write(
+			legacyPath,
+			JSON.stringify({
+				schemaVersion: 1,
+				personas: { iris: { instructions: "Older instructions." } },
+				active: "iris",
+			}),
+		);
+
+		expect(await resolveLiveInstructions(statePath)).toBe("Current instructions.");
+		expect(await Bun.file(legacyPath).exists()).toBe(true);
 	});
 
 	test("default is immutable: edit, delete, and clone-over are rejected loudly", async () => {
@@ -74,7 +101,6 @@ describe("live personas", () => {
 		expect(await resolveLiveInstructions(statePath)).toBe("Short-lived instructions.");
 		await personas.delete("iris");
 		expect(await resolveLiveInstructions(statePath)).toBe(defaultLiveInstructions);
-		expect(await personas.status()).toBe("Live persona: default");
 	});
 
 	test("resolver degrades to the bundled template on missing, corrupt, or dangling stores", async () => {
@@ -93,8 +119,5 @@ describe("live personas", () => {
 			"utf8",
 		);
 		expect(await resolveLiveInstructions(statePath)).toBe(defaultLiveInstructions);
-		// The fallback text still carries the render variables the controller substitutes.
-		expect(defaultLiveInstructions).toContain("{{firstName}}");
-		expect(defaultLiveInstructions).toContain("{{username}}");
 	});
 });

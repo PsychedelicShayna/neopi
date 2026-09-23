@@ -12,7 +12,7 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import * as fs from "node:fs/promises";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
-import { logger } from "@oh-my-pi/pi-utils";
+import { APP_NAME, logger } from "@oh-my-pi/pi-utils";
 import type {
 	BusChannel,
 	CollabUiRequest,
@@ -468,9 +468,12 @@ export class CollabHost {
 			publication => publication,
 			err => {
 				logger.warn("Collab host registry publication failed", { error: String(err) });
-				this.#ctx.showStatus("Collab host discovery unavailable (omp collab list will not show this session)", {
-					dim: true,
-				});
+				this.#ctx.showStatus(
+					`Collab host discovery unavailable (${APP_NAME} collab list will not show this session)`,
+					{
+						dim: true,
+					},
+				);
 				return null;
 			},
 		);

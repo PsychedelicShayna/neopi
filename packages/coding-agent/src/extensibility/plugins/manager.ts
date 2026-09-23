@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+	APP_NAME,
 	getPluginsDir,
 	getPluginsLockfile,
 	getPluginsNodeModules,
@@ -10,6 +11,7 @@ import {
 	getProjectPluginOverridesPath,
 	isEnoent,
 	logger,
+	PRODUCT_NAME,
 } from "@oh-my-pi/pi-utils";
 import { resolveActiveProjectRegistryPath } from "../../discovery/helpers";
 import { loadExtensions } from "../extensions/loader";
@@ -1043,7 +1045,7 @@ export class PluginManager {
 					status: fixed ? "ok" : "error",
 					message: fixed
 						? `Reconciled version drift: node_modules now matches lock v${recordedVersion}`
-						: `Version drift: lock records v${recordedVersion} but node_modules has v${pluginPkg.version} (run \`omp plugin install ${name} --force\`)`,
+						: `Version drift: lock records v${recordedVersion} but node_modules has v${pluginPkg.version} (run \`${APP_NAME} plugin install ${name} --force\`)`,
 					fixed,
 				});
 				if (fixed) {
@@ -1063,7 +1065,7 @@ export class PluginManager {
 				status: hasManifest ? "ok" : "warning",
 				message: hasManifest
 					? `v${pluginPkg.version}${pluginPkg.description ? ` - ${pluginPkg.description}` : ""}`
-					: `v${pluginPkg.version} - No omp/pi manifest (not an omp plugin)`,
+					: `v${pluginPkg.version} - No omp/pi manifest (not a ${PRODUCT_NAME} plugin)`,
 			});
 
 			// Check tools path exists if specified

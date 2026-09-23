@@ -1,3 +1,4 @@
+import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { existsSync } from "node:fs";
 import * as path from "node:path";
 /**
@@ -62,18 +63,18 @@ export default class Ttsr extends Command {
 	};
 
 	static examples = [
-		"omp ttsr list",
-		"omp ttsr test 'const x: any = 1'",
-		"omp ttsr test src/foo.ts",
-		"omp ttsr test --file src/foo.ts",
-		"omp ttsr test --file src/foo.ts --source text",
-		"omp ttsr test --rule .omp/rules/no-any.md --source tool --path src/foo.ts 'const x: any = 1'",
-		"omp ttsr test --agent scout 'const x: any = 1'",
-		"echo 'Box::leak(&mut v)' | omp ttsr test --file - --path src/lib.rs",
-		"omp ttsr test --source tool --tool edit --path src/foo.ts 'const x: any = 1'",
-		"omp ttsr scan",
-		"omp ttsr scan src/",
-		"omp ttsr scan -r .omp/rules/no-any.md src/",
+		`${APP_NAME} ttsr list`,
+		`${APP_NAME} ttsr test 'const x: any = 1'`,
+		`${APP_NAME} ttsr test src/foo.ts`,
+		`${APP_NAME} ttsr test --file src/foo.ts`,
+		`${APP_NAME} ttsr test --file src/foo.ts --source text`,
+		`${APP_NAME} ttsr test --rule .omp/rules/no-any.md --source tool --path src/foo.ts 'const x: any = 1'`,
+		`${APP_NAME} ttsr test --agent scout 'const x: any = 1'`,
+		`echo 'Box::leak(&mut v)' | ${APP_NAME} ttsr test --file - --path src/lib.rs`,
+		`${APP_NAME} ttsr test --source tool --tool edit --path src/foo.ts 'const x: any = 1'`,
+		`${APP_NAME} ttsr scan`,
+		`${APP_NAME} ttsr scan src/`,
+		`${APP_NAME} ttsr scan -r .omp/rules/no-any.md src/`,
 	];
 
 	async run(): Promise<void> {

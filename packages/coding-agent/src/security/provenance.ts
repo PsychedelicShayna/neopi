@@ -1,3 +1,4 @@
+import { PRODUCT_NAME } from "@oh-my-pi/pi-utils";
 import type { SecurityAuthRef, SecurityProducer, SecurityProvenance, SecurityScan } from "./contracts";
 import { canonicalSecurityJson } from "./contracts";
 
@@ -14,7 +15,7 @@ export const OMP_SECURITY_WORKFLOW_VERSION = "1.0.0";
 export function createNativeSecurityProducer(): SecurityProducer {
 	return {
 		kind: "omp-native",
-		name: "OMP Native Security",
+		name: `${PRODUCT_NAME} Native Security`,
 		version: OMP_SECURITY_WORKFLOW_VERSION,
 	};
 }
