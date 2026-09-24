@@ -1,5 +1,6 @@
 import { Spacer } from "@oh-my-pi/pi-tui";
-import { APP_NAME, formatAge } from "@oh-my-pi/pi-utils";
+import { APP_NAME, formatAge, getAgentDir } from "@oh-my-pi/pi-utils";
+import { discoverChains } from "../chains/config";
 import { CollabGuestLink } from "../collab/guest";
 import type { CollabHost } from "../collab/host";
 import { type CollabHostSnapshot, listCollabHosts } from "../collab/registry";
@@ -40,6 +41,60 @@ function collabLinkHint(host: CollabHost, heading: string, view = false): string
 	].join("\n");
 }
 
+/** One-block summary of chaining mode, the active chain, and every discovered chain. */
+async function formatChainingStatus(cwd: string): Promise<string> {
+	const { chains, warnings } = await discoverChains(cwd, getAgentDir());
+	const active = settings.get("chaining.active");
+	const lines = [
+		`Chaining: ${settings.get("chaining.auto") ? "on (every prompt)" : "off (Alt+Enter runs it once)"}`,
+		`Active chain: ${active || "(none; you will be asked)"}`,
+	];
+	if (chains.length === 0) {
+		lines.push("No chains defined. Create one with /chaining configure.");
+	} else {
+		lines.push("Chains:");
+		for (const chain of chains) {
+			const marker = chain.name === active ? "*" : "-";
+			lines.push(`  ${marker} ${chain.name}: ${chain.steps.map(step => step.name).join(" → ")}`);
+		}
+	}
+	for (const warning of warnings) lines.push(`Warning: ${warning}`);
+	return lines.join("\n");
+}
+
+/** Apply a /chaining verb that does not need the TUI; returns the message, or undefined for an unknown verb. */
+async function applyChainingVerb(verb: string, rest: string, cwd: string): Promise<string | undefined> {
+	if (verb === "on") {
+		const { chains } = await discoverChains(cwd, getAgentDir());
+		if (chains.length === 0) return "No chains defined. Create one with /chaining configure first.";
+		settings.set("chaining.auto", true);
+		const active = settings.get("chaining.active");
+		return chains.some(chain => chain.name === active)
+			? `Chaining on: every prompt runs through "${active}".`
+			: "Chaining on: you will be asked which chain to use on the next prompt.";
+	}
+	if (verb === "off") {
+		settings.set("chaining.auto", false);
+		return "Chaining off. Alt+Enter still runs the active chain for one prompt.";
+	}
+	if (verb === "use") {
+		const name = rest.trim();
+		if (!name) {
+			settings.set("chaining.active", "");
+			return "Active chain cleared; the next chained prompt will ask which chain to use.";
+		}
+		const { chains } = await discoverChains(cwd, getAgentDir());
+		if (!chains.some(chain => chain.name === name)) {
+			return `No chain named "${name}". Known: ${chains.map(chain => chain.name).join(", ") || "(none)"}`;
+		}
+		settings.set("chaining.active", name);
+		return `Active chain: ${name}`;
+	}
+	if (verb === "status") return formatChainingStatus(cwd);
+	return undefined;
+}
+
+const CHAINING_USAGE = "Usage: /chaining [on|off|status|use [name]|configure]";
 function showCollabQrCode(ctx: InteractiveModeContext, webLink: string): void {
 	try {
 		ctx.present([new Spacer(1), new CollabQrCodeComponent(webLink)]);
@@ -169,6 +224,50 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 			}
 			runtime.ctx.showStatus("Usage: /advisor [on|off|status|dump [raw]|configure]");
 			runtime.ctx.editor.setText("");
+		},
+	},
+	{
+		name: "chaining",
+		icon: "advisor",
+		description: "Post-processing chains that rewrite a prompt through ordered model steps before it is sent",
+		acpDescription: "Manage post-processing chains",
+		acpInputHint: "[on|off|status|use [name]|configure]",
+		subcommands: [
+			{ name: "on", description: "Run every prompt through the active chain" },
+			{ name: "off", description: "Stop chaining every prompt (Alt+Enter still chains one)" },
+			{ name: "status", description: "Show chaining mode, active chain, and chains" },
+			{ name: "use", description: "Set the active chain; no name clears it", usage: "[name]" },
+			{ name: "configure", description: "Open the chain configuration editor (TUI)" },
+		],
+		allowArgs: true,
+		getTuiAutocompleteDescription: () => {
+			const active = settings.get("chaining.active");
+			const mode = settings.get("chaining.auto") ? "on" : "off";
+			return active ? `Chaining: ${mode} (${active})` : `Chaining: ${mode}`;
+		},
+		handle: async (command, runtime) => {
+			const { verb, rest } = parseSubcommand(command.args);
+			if (verb === "configure") {
+				await runtime.output(
+					"/chaining configure opens an interactive editor and is only available in the interactive TUI.",
+				);
+				return commandConsumed();
+			}
+			const message = await applyChainingVerb(verb || "status", rest, runtime.session.sessionManager.getCwd());
+			return message === undefined
+				? usage(CHAINING_USAGE, runtime)
+				: (await runtime.output(message), commandConsumed());
+		},
+		handleTui: async (command, runtime) => {
+			const { verb, rest } = parseSubcommand(command.args);
+			runtime.ctx.editor.setText("");
+			if (verb === "configure") {
+				runtime.ctx.showChainConfigure();
+				return;
+			}
+			const message = await applyChainingVerb(verb || "status", rest, runtime.ctx.sessionManager.getCwd());
+			runtime.ctx.showStatus(message ?? CHAINING_USAGE);
+			refreshStatusLine(runtime.ctx);
 		},
 	},
 	{

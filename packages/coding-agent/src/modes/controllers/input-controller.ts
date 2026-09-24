@@ -8,7 +8,10 @@ import {
 	type PasteOptions,
 	type SlashCommand,
 } from "@oh-my-pi/pi-tui";
-import { isEnoent, logger, postmortem, sanitizeText } from "@oh-my-pi/pi-utils";
+import { getAgentDir, isEnoent, logger, postmortem, sanitizeText } from "@oh-my-pi/pi-utils";
+import type { ChainConfig } from "@oh-my-pi/pi-tui/overlays/chain-types";
+import { discoverChains } from "../../chains/config";
+import { runChain } from "../../chains/runner";
 import { formatModelRoleAlias, roleCandidatePool } from "../../config/model-roles";
 import { resolveModelRoleValue } from "../../config/model-resolver";
 import { isSettingsInitialized, settings } from "../../config/settings";
@@ -149,6 +152,9 @@ const TINY_TITLE_PROGRESS_REVEAL_DELAY_MS = 1_000;
 const LEFT_DOUBLE_TAP_MIN_GAP_MS = 40;
 const LEFT_DOUBLE_TAP_MAX_GAP_MS = 500;
 
+/** Picker entry that sends the prompt unchanged. */
+const SEND_WITHOUT_CHAIN = "Send without a chain";
+
 export class InputController {
 	constructor(
 		private ctx: InteractiveModeContext,
@@ -163,6 +169,9 @@ export class InputController {
 			readMacFileUrls: readMacFileUrlsFromClipboard,
 		},
 	) {}
+
+	/** Set by the chain keybinding: the next submit runs through the active chain. */
+	#chainNextSubmit = false;
 
 	/** Resolve the current tiny role at use time so project/session reloads cannot leave a stale model. */
 	#resolveTinyTitleLocalModelKey(): string | undefined {
@@ -626,6 +635,9 @@ export class InputController {
 		for (const key of this.ctx.keybindings.getKeys("app.message.followUp")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.handleFollowUp());
 		}
+		for (const key of this.ctx.keybindings.getKeys("app.message.chain")) {
+			this.ctx.editor.setCustomKeyHandler(key, () => this.#submitThroughChain());
+		}
 		for (const key of this.ctx.keybindings.getKeys("app.stt.toggle")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.ctx.handleSTTToggle());
 		}
@@ -868,6 +880,8 @@ export class InputController {
 
 	setupEditorSubmitHandler(): void {
 		this.ctx.editor.onSubmit = async (text: string) => {
+			const forceChain = this.#chainNextSubmit;
+			this.#chainNextSubmit = false;
 			text = this.#compactDraftImages(text.trim());
 			const hasPendingImages = this.ctx.editor.pendingImages.length > 0;
 			if ((!isSettingsInitialized() || settings.get("emojiAutocomplete")) && text) text = expandEmoticons(text);
@@ -1116,10 +1130,29 @@ export class InputController {
 				return;
 			}
 
+			// Post-processing chain: only plain prompts reach here. The typed text
+			// stays in history so Up recalls what was written, not the rewrite.
+			const typedText = text;
+			if (forceChain || settings.get("chaining.auto")) {
+				const chained = await this.#applyPostProcessingChain(text);
+				if (chained === undefined) {
+					if (inputImages && inputImages.length > 0) {
+						this.ctx.editor.pendingImages = [...inputImages];
+						this.ctx.editor.pendingImageLinks = inputImageLinks
+							? [...inputImageLinks]
+							: inputImages.map(() => undefined);
+						this.ctx.editor.imageLinks = this.ctx.editor.pendingImageLinks;
+					}
+					this.ctx.editor.setCollapsedText(typedText);
+					return;
+				}
+				text = chained;
+			}
+
 			// If streaming, use prompt() with steer behavior
 			// This handles extension commands (execute immediately), prompt template expansion, and queueing
 			if (this.ctx.session.isStreaming) {
-				this.ctx.editor.addToHistory(text);
+				this.ctx.editor.addToHistory(typedText);
 				this.ctx.editor.setText("");
 				this.ctx.editor.imageLinks = undefined;
 				const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
@@ -1240,8 +1273,64 @@ export class InputController {
 				this.ctx.updatePendingMessagesDisplay();
 				this.ctx.ui.requestRender();
 			}
-			this.ctx.editor.addToHistory(text);
+			this.ctx.editor.addToHistory(typedText);
 		};
+	}
+
+	/** Chain keybinding: submit the composer through the active chain once. */
+	#submitThroughChain(): void {
+		if (!this.ctx.editor.getText().trim()) return;
+		this.#chainNextSubmit = true;
+		this.ctx.editor.submit();
+	}
+
+	/**
+	 * Rewrite `text` with the active chain, asking which chain to use when none
+	 * is active (the pick becomes active). Returns undefined when the prompt must
+	 * not be sent: no chain, a cancelled pick, or a failed step.
+	 */
+	async #applyPostProcessingChain(text: string): Promise<string | undefined> {
+		const chain = await this.#resolveActiveChain();
+		if (chain === SEND_WITHOUT_CHAIN) return text;
+		if (!chain) return undefined;
+		try {
+			const result = await runChain(chain, text, {
+				settings: this.ctx.settings,
+				modelRegistry: this.ctx.session.modelRegistry,
+				tools: this.ctx.session.agent.state.tools,
+				cwd: this.ctx.sessionManager.getCwd(),
+				onStep: (step, index, total) =>
+					this.ctx.showStatus(`Chain ${chain.name}: ${step.name} (${index + 1}/${total})…`),
+			});
+			this.ctx.showStatus("");
+			return result;
+		} catch (error) {
+			this.ctx.showError(
+				`Chain ${chain.name} failed; prompt not sent: ${error instanceof Error ? error.message : String(error)}`,
+			);
+			return undefined;
+		}
+	}
+
+	async #resolveActiveChain(): Promise<ChainConfig | typeof SEND_WITHOUT_CHAIN | undefined> {
+		const { chains, warnings } = await discoverChains(this.ctx.sessionManager.getCwd(), getAgentDir());
+		if (warnings.length > 0) this.ctx.showWarning(`CHAINS.yml: ${warnings.join("; ")}`);
+		if (chains.length === 0) {
+			this.ctx.showWarning("No post-processing chains defined. Create one with /chaining configure.");
+			return undefined;
+		}
+		const activeName = settings.get("chaining.active");
+		const active = chains.find(chain => chain.name === activeName);
+		if (active) return active;
+		const choice = await this.ctx.showHookSelector("Post-processing chain", [
+			...chains.map(chain => chain.name),
+			SEND_WITHOUT_CHAIN,
+		]);
+		if (choice === undefined) return undefined;
+		if (choice === SEND_WITHOUT_CHAIN) return SEND_WITHOUT_CHAIN;
+		const picked = chains.find(chain => chain.name === choice);
+		if (picked) settings.set("chaining.active", picked.name);
+		return picked;
 	}
 
 	/**

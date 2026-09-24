@@ -1067,7 +1067,7 @@ function shouldInheritDefaultBeforePriority(role: ModelRole): boolean {
 const ROLE_PRIORITY_ALIAS: Partial<Record<ModelRole, keyof typeof MODEL_PRIO>> = {
 	advisor: "slow",
 	chronicler: "slow",
-	voice: "smol",
+	prose: "smol",
 	memory: "smol",
 	tiny: "smol",
 };
@@ -1082,6 +1082,8 @@ const ROLE_CONFIGURED_FALLBACK: Partial<Record<ModelRole, ConfiguredRoleFallback
 	advisor: { role: "slow", configuredOnly: true },
 	memory: { role: "tiny", configuredOnly: false },
 	tiny: { role: "smol", configuredOnly: false },
+	// Chain steps default to @prose; unset, it follows the user's own fast model.
+	prose: { role: "smol", configuredOnly: false },
 };
 
 function hasOwnKey<T extends object>(value: T, key: PropertyKey): key is keyof T {

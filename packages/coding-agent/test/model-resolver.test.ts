@@ -1014,6 +1014,16 @@ describe("role priorities and chains", () => {
 		expect(resolveRoleChain("memory", settings, [defaultModel, tiny])[0]?.model.id).toBe("tiny-model");
 		expect(resolveRoleChain("image", settings, [defaultModel, image])[0]?.model.id).toBe("gpt-image-1");
 	});
+
+	test("prose follows the configured smol role rather than the built-in smol priority list", () => {
+		const userFast = roleChainModel("xai-oauth", "grok-4.7");
+		const builtinFast = roleChainModel("google", "gemini-3.8-flash");
+		const settings = Settings.isolated({ modelRoles: { smol: "xai-oauth/grok-4.7:medium" } });
+
+		const [first] = resolveRoleChain("prose", settings, [builtinFast, userFast]);
+		expect(first?.model.id).toBe("grok-4.7");
+		expect(first?.thinkingLevel).toBe("medium");
+	});
 });
 
 describe("resolveModelRoleValue", () => {

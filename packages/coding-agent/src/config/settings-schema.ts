@@ -2458,16 +2458,22 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"stt.voiceFilters.enabled": {
+	// Post-processing chains
+	"chaining.auto": {
 		type: "boolean",
 		default: false,
 		ui: {
 			tab: "interaction",
-			group: "Speech",
-			label: "Voice Filters",
+			group: "Chaining",
+			label: "Chain Every Prompt",
 			description:
-				"Offer post-processing filters when Ctrl+Space starts an xAI recording. Filters are markdown files in .omp/voice-filters/ or ~/.omp/agent/voice-filters/ and run on the @voice role unless they name a model.",
+				"Send every composer prompt through the active post-processing chain (/chaining on|off). Alt+Enter runs the chain for one prompt either way.",
 		},
+	},
+
+	"chaining.active": {
+		type: "string",
+		default: "",
 	},
 
 	// ────────────────────────────────────────────────────────────────────────
