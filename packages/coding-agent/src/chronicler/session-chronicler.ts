@@ -18,7 +18,7 @@ import { Agent, type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core
 import { estimateTranscriptTokens } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Api, Model, ProviderSessionState } from "@oh-my-pi/pi-ai";
 import { streamSimple } from "@oh-my-pi/pi-ai";
-import { logger, prompt } from "@oh-my-pi/pi-utils";
+import { acquireFileLock, type FileLockHandle, logger, prompt } from "@oh-my-pi/pi-utils";
 import { AdvisorTranscriptRecorder, deriveAdvisorTelemetry } from "../advisor";
 import type { ModelRegistry } from "../config/model-registry";
 import { formatModelString, resolveChroniclerRoleSelection } from "../config/model-resolver";
@@ -102,6 +102,12 @@ interface ChroniclerBinding {
 	readonly systemText: string;
 	readonly agent: Agent;
 	readonly agentUnsubscribe: () => void;
+	/**
+	 * Exclusive OS-backed lease on this session's chronicler store. Two processes
+	 * on one session (a resumed window beside the original) would otherwise each
+	 * commit batches over the same entries and halt the store.
+	 */
+	readonly lease: FileLockHandle;
 }
 
 interface PendingRendezvous {
@@ -162,6 +168,8 @@ export class SessionChronicler {
 
 	#settingsUnsub: (() => void) | undefined;
 	#noModelWarned: string | undefined;
+	/** Session file last reported as chronicled by another process; one notice per episode. */
+	#leaseContendedWarned: string | undefined;
 
 	/** Recent persisted-message identities: cloned assistants break object identity. */
 	#settled = new Map<string, AgentMessage[]>();
@@ -883,14 +891,48 @@ export class SessionChronicler {
 		this.#binding = undefined;
 
 		if (gen !== this.#generation || this.#deadlineExpired || !this.#enabled()) return undefined;
-		const store = new ChroniclerStore(
-			`${descriptor.artifactsDir}/chronicler`,
-			{ sessionId: descriptor.sessionId, project: descriptor.cwd, model: selection.modelString },
-			{ warn: message => this.#host.emitNotice("warning", message, "chronicler") },
-		);
-		await store.open();
-		if (this.#generation !== gen) return undefined;
+		const storeRoot = `${descriptor.artifactsDir}/chronicler`;
+		let lease: FileLockHandle;
+		try {
+			lease = await acquireFileLock(storeRoot, { retries: 1 });
+		} catch {
+			// Another process owns this session's store; retry on the next scan so
+			// capture resumes here once that process exits (the OS drops its lease).
+			if (this.#leaseContendedWarned !== descriptor.sessionFile) {
+				this.#leaseContendedWarned = descriptor.sessionFile;
+				this.#host.emitNotice(
+					"warning",
+					"Chronicler paused: another process is chronicling this session",
+					"chronicler",
+				);
+			}
+			return undefined;
+		}
+		this.#leaseContendedWarned = undefined;
+		let bound = false;
+		try {
+			const store = new ChroniclerStore(
+				storeRoot,
+				{ sessionId: descriptor.sessionId, project: descriptor.cwd, model: selection.modelString },
+				{ warn: message => this.#host.emitNotice("warning", message, "chronicler") },
+			);
+			await store.open();
+			if (this.#generation !== gen) return undefined;
+			const binding = this.#completeBinding(gen, descriptor, selection, store, lease);
+			bound = true;
+			return binding;
+		} finally {
+			if (!bound) lease.release();
+		}
+	}
 
+	#completeBinding(
+		gen: number,
+		descriptor: SessionDescriptor,
+		selection: RoleSelection,
+		store: ChroniclerStore,
+		lease: FileLockHandle,
+	): ChroniclerBinding {
 		const recorder = new AdvisorTranscriptRecorder(
 			() => descriptor.sessionFile,
 			() => descriptor.cwd,
@@ -926,6 +968,7 @@ export class SessionChronicler {
 			systemText,
 			agent,
 			agentUnsubscribe,
+			lease,
 		};
 		agent.addBeforeModelCallHook(() => {
 			if (this.#generation !== gen || this.#deadlineExpired || this.#cleanedUp) {
@@ -966,6 +1009,7 @@ export class SessionChronicler {
 	async #teardownBinding(binding: ChroniclerBinding): Promise<void> {
 		binding.agentUnsubscribe();
 		binding.agent.abort("chronicler binding released");
+		binding.lease.release();
 		try {
 			await binding.recorder.close();
 		} catch (error) {

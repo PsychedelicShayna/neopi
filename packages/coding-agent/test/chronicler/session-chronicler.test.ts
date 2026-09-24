@@ -1321,6 +1321,36 @@ describe("SessionChronicler capture runtime", () => {
 		expect(passSourceIds(passes[0]!)).toEqual([first]);
 	}, 30_000);
 
+	it("lets only one of two owners of a session capture it, then hands over when that owner stops", async () => {
+		const manager = await newSessionManager();
+		const first = appendUser(manager, "Captured by the original window.");
+		await manager.flush();
+		scripts.push(beatPass());
+		const owner = startChronicler(manager, newSettings());
+		await waitForBatches(owner.root, 1);
+
+		// A second owner of the same session file: a resumed window beside the original.
+		const resumed = await SessionManager.open(manager.getSessionFile()!, sessionDir);
+		const other = startChronicler(resumed, newSettings());
+		const later = appendUser(resumed, "Typed in the resumed window.");
+		await resumed.flush();
+		other.chronicler.onPrimaryTurnEnd(false);
+		const deadline = Date.now() + SETTLE_MS;
+		while (!other.notices.some(notice => notice.message.includes("another process is chronicling"))) {
+			if (Date.now() >= deadline) throw new Error("Expected the second owner to report a held store");
+			await Bun.sleep(25);
+		}
+		expect(passes).toHaveLength(1);
+		expect(await committedEntryIds(owner.root)).toEqual([first]);
+
+		// Once the original owner releases the store, the resumed window captures the rest exactly once.
+		await shutdown(owner);
+		scripts.push(ackPass());
+		other.chronicler.onPrimaryTurnEnd(false);
+		await waitForCoverage(other.root, [first, later]);
+		expect(duplicates(await committedEntryIds(other.root))).toEqual([]);
+	}, 30_000);
+
 	// ── persistence-order adaptation ────────────────────────────────────────
 
 	it("parks a wake announced with a final message until that message is persisted", async () => {
