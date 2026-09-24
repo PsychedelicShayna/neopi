@@ -2458,6 +2458,18 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"stt.voiceFilters.enabled": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "interaction",
+			group: "Speech",
+			label: "Voice Filters",
+			description:
+				"Offer post-processing filters when Ctrl+Space starts an xAI recording. Filters are markdown files in .omp/voice-filters/ or ~/.omp/agent/voice-filters/ and run on the @voice role unless they name a model.",
+		},
+	},
+
 	// ────────────────────────────────────────────────────────────────────────
 	// Context
 	// ────────────────────────────────────────────────────────────────────────

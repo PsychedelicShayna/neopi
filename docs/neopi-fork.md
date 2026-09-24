@@ -97,6 +97,24 @@ Ctrl+Space is system-reserved for the xAI path (`RESERVED_KEYS` in `packages/tui
 
 Cloud dictation keeps hold-to-talk behavior and writes audio to disk-backed WAV files. The controller retains at most five completed recordings; transcription failures report the retained file's recovery path. These files are temporary: they are removed when they leave the five-recording history or the controller is disposed.
 
+### Voice filters
+
+With `stt.voiceFilters.enabled` on, Ctrl+Space starts recording immediately and opens a filter picker alongside it. Untouched, the picker counts down five seconds and closes on **None**. Any navigation (arrows, Tab/Shift+Tab, paging, type-to-search) cancels the countdown and keeps it open; Enter keeps the choice, Escape picks None, and ending the recording closes it on the highlighted entry. The list shows six rows and scrolls, so large filter collections never grow the popup. Ctrl+Space still stops the recording while the picker has focus.
+
+Filters are markdown files in `<agent dir>/voice-filters/` (`~/.omp/agent/voice-filters/` by default) or the nearest project `.omp/voice-filters/`; a project filter shadows a user filter of the same name. The body is the system prompt and the raw xAI transcript is the user message; the model's final text goes to the composer instead of the transcript.
+
+```markdown
+---
+name: concise
+description: Tighten rambling dictation into a direct request
+model: @voice          # optional; any selector or @role, default @voice
+tools: [bash]          # optional; session tools the filter may call, default none
+---
+Rewrite the transcript as a concise instruction for a coding agent. Output only the rewrite.
+```
+
+Filters without `model` use the **Voice filter** role (`@voice`), which falls back to the fast `smol` chain when unset, so switching that one role in the model menu retargets every filter. While a filter runs, the mic cursor pulses violet (recording is rainbow, transcription gray). A failing filter inserts the raw transcript and shows a warning; dictation is never lost.
+
 ## Upstream synchronization
 
 Recent release integrations landed through [PR #62](https://github.com/PsychedelicShayna/neopi/pull/62) and [PR #67](https://github.com/PsychedelicShayna/neopi/pull/67). Future integrations follow the origin-snapshot, recovery-ref, conflict-ledger, verification, and PR process in [docs/agents/upstream-sync.md](agents/upstream-sync.md).
