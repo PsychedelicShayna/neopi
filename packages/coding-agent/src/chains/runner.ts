@@ -4,7 +4,7 @@
  * by the step prompt, and whose user message is the previous step's output
  * (the composer text for the first step). The last output is returned.
  */
-import { Agent, type AgentTool, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentMessage, type AgentTool, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { streamSimple } from "@oh-my-pi/pi-ai";
 import type { ChainConfig, ChainStep } from "@oh-my-pi/pi-tui/overlays/chain-types";
 import {
@@ -18,6 +18,7 @@ import { formatModelRoleAlias } from "../config/model-roles";
 import { getModelMatchPreferences, resolveModelRoleValue } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import chainSystemPrompt from "../prompts/chains/system.md" with { type: "text" };
+import { formatSessionHistoryMarkdown } from "../session/session-history-format";
 
 /** Model role a step falls back to when it names no model. */
 export const CHAIN_DEFAULT_ROLE = "prose";
@@ -31,9 +32,19 @@ export interface RunChainOptions {
 	/** The session's tool instances; each step receives only the ones it names. */
 	tools: readonly AgentTool[];
 	cwd: string;
+	/** Live primary transcript, rendered into steps that set `context`. */
+	messages?: readonly AgentMessage[];
 	signal?: AbortSignal;
 	/** Called before each step starts, for progress display. */
 	onStep?: (step: ChainStep, index: number, total: number) => void;
+}
+
+/** The user message for a step: the draft, wrapped with the transcript when the step ingests context. */
+export function renderChainInput(step: ChainStep, input: string, messages: readonly AgentMessage[] | undefined): string {
+	if (!step.context || !messages?.length) return input;
+	const transcript = formatSessionHistoryMarkdown(messages as unknown[]).trim();
+	if (!transcript) return input;
+	return `<transcript>\n${transcript}\n</transcript>\n\n<draft>\n${input}\n</draft>`;
 }
 
 /** Run one step over `input` and return the model's final text. */
@@ -70,7 +81,7 @@ export async function runChainStep(step: ChainStep, input: string, options: RunC
 	const onAbort = () => agent.abort("chain cancelled");
 	options.signal?.addEventListener("abort", onAbort, { once: true });
 	try {
-		await agent.prompt(input);
+		await agent.prompt(renderChainInput(step, input, options.messages));
 	} finally {
 		options.signal?.removeEventListener("abort", onAbort);
 	}
