@@ -1321,6 +1321,7 @@ export class InputController {
 				settings: this.ctx.settings,
 				modelRegistry: this.ctx.session.modelRegistry,
 				tools: this.ctx.session.agent.state.tools,
+				messages: this.ctx.session.agent.state.messages,
 				cwd: this.ctx.sessionManager.getCwd(),
 				onStep: (step, index, total) =>
 					this.ctx.showStatus(`Chain ${chain.name}: ${step.name} (${index + 1}/${total})…`),
