@@ -1,7 +1,8 @@
 /**
  * Runs a post-processing chain: each step is one bare model pass whose system
- * prompt is the step prompt and whose user message is the previous step's
- * output (the composer text for the first step). The last output is returned.
+ * prompt is the step's `systemPrompt` (or the bundled chain default) followed
+ * by the step prompt, and whose user message is the previous step's output
+ * (the composer text for the first step). The last output is returned.
  */
 import { Agent, type AgentTool, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { streamSimple } from "@oh-my-pi/pi-ai";
@@ -16,9 +17,13 @@ import type { ModelRegistry } from "../config/model-registry";
 import { formatModelRoleAlias } from "../config/model-roles";
 import { getModelMatchPreferences, resolveModelRoleValue } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
+import chainSystemPrompt from "../prompts/chains/system.md" with { type: "text" };
 
 /** Model role a step falls back to when it names no model. */
 export const CHAIN_DEFAULT_ROLE = "prose";
+
+/** Bundled system prompt a step uses when it sets no `systemPrompt` override. */
+export const CHAIN_SYSTEM_PROMPT = chainSystemPrompt;
 
 export interface RunChainOptions {
 	settings: Settings;
@@ -49,7 +54,7 @@ export async function runChainStep(step: ChainStep, input: string, options: RunC
 	const providerSessionId = Bun.randomUUIDv7();
 	const agent = new Agent({
 		initialState: {
-			systemPrompt: [step.prompt],
+			systemPrompt: [step.systemPrompt ?? CHAIN_SYSTEM_PROMPT, step.prompt],
 			model: resolved.model,
 			thinkingLevel: toReasoningEffort(thinkingLevel),
 			tools,
