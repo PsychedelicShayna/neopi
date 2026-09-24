@@ -52,14 +52,9 @@ git clone https://github.com/PsychedelicShayna/neopi.git
 cd neopi
 
 # Review the source and bun.lock first. Audit any newly proposed dependency.
-bun install
-CARGO_BUILD_JOBS=6 bun run build:native
-OMP_BUILD_BYTECODE=0 NPI_SKIP_EXTENSION_INSTALL=1 bun --cwd=packages/coding-agent run build
-install -Dm755 packages/coding-agent/dist/npi ~/.local/bin/npi
-bun scripts/install-neopi-extensions.ts
-
-~/.local/bin/npi --version
-~/.local/bin/npi --smoke-test
+bun install --frozen-lockfile
+./build.sh     # rebuilds the native addon only when stale, then packages/coding-agent/dist/npi
+./install.sh   # atomic install to ~/.local/bin/npi (NPI_DEST overrides), extensions, smoke test
 ```
 
 This repository does not prescribe a remote installer or a global package-manager install. The existing package scope and protocol identifiers remain `@oh-my-pi/*`; configuration remains under `~/.omp` unless `PI_CONFIG_DIR` or the documented profile settings select another location.

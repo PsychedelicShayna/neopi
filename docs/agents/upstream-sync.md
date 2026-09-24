@@ -114,25 +114,22 @@ Replace the attribution placeholder with the actual model identity from the runn
 Run verification from the integration worktree. At minimum:
 
 ```sh
-bun install
-CARGO_BUILD_JOBS=6 bun run build:native
+bun install --frozen-lockfile
+./build.sh    # fresh native addon first: tests load it too
 CARGO_BUILD_JOBS=6 bun run check
 bun --cwd=packages/coding-agent test
 bun --cwd=packages/catalog test
 bun --cwd=packages/ai test
 bun --cwd=packages/tui test
 bun run test:scripts
-OMP_BUILD_BYTECODE=0 NPI_SKIP_EXTENSION_INSTALL=1 \
-  bun --cwd=packages/coding-agent run build
-packages/coding-agent/dist/npi --version
 packages/coding-agent/dist/npi --smoke-test
 ```
 
 Also run every focused test that covers a conflicted path. Exercise the changed runtime path rather than relying only on tests. Record exact commands, pass counts, failures, and any unavailable check in the ledger's `## Verification` section. Record binary version and smoke evidence under `## Binary`. A failure may be classified as pre-existing only with evidence from the unmodified base or upstream tag.
 
-The built artifact must be `packages/coding-agent/dist/npi`. Source-fork verification and installation never use a remote installer, `bun setup`, a global package install, or a differently named binary.
+The built artifact must be `packages/coding-agent/dist/npi`, produced by `./build.sh`. Every upstream version bump invalidates the gitignored native addon in each checkout; `build.sh` detects that and rebuilds it, so never assemble the build from individual `bun run` commands. Source-fork verification and installation never use a remote installer, `bun setup`, a global package install, or a differently named binary.
 
-Before PR merge, stage an installation in a temporary prefix: install the artifact as `<prefix>/bin/npi`, run the extension installer with an isolated configuration directory, and verify the managed links resolve to this checkout. Exercise that installed binary's `--version`, `--smoke-test`, `--help`, and a real prompt (`-p "Reply with exactly: OK"`). Record the observed version, exit statuses, response, and extension result. MUST keep the live installation and profile untouched during this proof.
+Before PR merge, stage an installation in a temporary prefix: `NPI_DEST=<prefix>/bin/npi PI_CODING_AGENT_DIR=<prefix>/agent ./install.sh`, then verify the managed links resolve to this checkout. Exercise that installed binary's `--version`, `--smoke-test`, `--help`, and a real prompt (`-p "Reply with exactly: OK"`). Record the observed version, exit statuses, response, and extension result. MUST keep the live installation and profile untouched during this proof.
 
 ## 6. Publish through a PR
 
@@ -169,4 +166,4 @@ Run that fast-forward path only after preserving dirty work and confirming the m
 
 Never realign a local default branch merely because a similarly named PR exists. Verify the PR incorporated the commit's intended tree changes first. Never delete or overwrite a WIP branch as cleanup for an upstream sync.
 
-Before installing, compare the verified integration tree with `origin/$DEFAULT`. If they differ, build and verify the fetched remote tree in a fresh worktree. Back up the existing `npi` binary, install the verified artifact only at the dedicated `npi` path, and run `bun scripts/install-neopi-extensions.ts` from the realigned checkout. MUST verify the installed binary's version, smoke test, help, and a real prompt, plus extension links and startup errors. Restore preserved local-only configuration afterward without overwriting source changes; keep recovery refs. The upstream installer is not part of this source-fork workflow.
+Before installing, compare the verified integration tree with `origin/$DEFAULT`. If they differ, build and verify the fetched remote tree in a fresh worktree. Back up the existing `npi` binary, then run `./build.sh && ./install.sh` from the realigned checkout; this also refreshes that checkout's native addon, which otherwise stays at the previous release and fails the next build. MUST verify the installed binary's version, smoke test, help, and a real prompt, plus extension links and startup errors. Restore preserved local-only configuration afterward without overwriting source changes; keep recovery refs. The upstream installer is not part of this source-fork workflow.
