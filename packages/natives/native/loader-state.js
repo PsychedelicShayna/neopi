@@ -476,21 +476,46 @@ function isSafeEmbeddedAddonFilename(filename) {
  return filename.length > 0 && path.basename(filename) === filename && !filename.includes("/") && !filename.includes("\\");
 }
 
+/**
+ * Stamp recorded next to an extracted addon: the embedded content hash plus the
+ * identity (inode, mtime) of the file that extraction wrote. Size alone cannot
+ * tell two builds of one release apart, and every build of a fork shares its
+ * upstream version; a rewrite by any other binary changes the identity.
+ * @param {string} sha256
+ * @param {fs.Stats} stat
+ * @returns {string}
+ */
+function embeddedAddonStamp(sha256, stat) {
+ return `${sha256} ${stat.ino} ${stat.mtimeMs}\n`;
+}
+
 function isEmbeddedAddonFileCurrent(targetPath, file) {
+ let stat;
  try {
-  const stat = fs.statSync(targetPath);
-  if (!stat.isFile()) return false;
-  return typeof file.size !== "number" || stat.size === file.size;
+  stat = fs.statSync(targetPath);
+ } catch (err) {
+  if (err && err.code === "ENOENT") return false;
+  throw err;
+ }
+ if (!stat.isFile()) return false;
+ if (typeof file.size === "number" && stat.size !== file.size) return false;
+ if (typeof file.sha256 !== "string") return true;
+ try {
+  return fs.readFileSync(`${targetPath}.sha256`, "utf8") === embeddedAddonStamp(file.sha256, stat);
  } catch (err) {
   if (err && err.code === "ENOENT") return false;
   throw err;
  }
 }
 
-function writeEmbeddedAddonFile(targetPath, content) {
+function writeEmbeddedAddonFile(targetPath, content, sha256) {
  const tempPath = `${targetPath}.tmp.${process.pid}.${Date.now()}`;
+ let written;
  try {
   fs.writeFileSync(tempPath, content, { mode: 0o755 });
+  // Identity of our own inode, taken before the rename: a concurrent extractor
+  // that renames over it afterwards leaves a stamp that no longer matches.
+  written = fs.statSync(tempPath);
   fs.renameSync(tempPath, targetPath);
  } catch (err) {
   try {
@@ -499,6 +524,9 @@ function writeEmbeddedAddonFile(targetPath, content) {
    // Best-effort cleanup only.
   }
   throw err;
+ }
+ if (typeof sha256 === "string") {
+  fs.writeFileSync(`${targetPath}.sha256`, embeddedAddonStamp(sha256, written));
  }
 }
 
@@ -544,7 +572,7 @@ export function extractEmbeddedAddonArchive({ archivePath, files, targetDir }) {
     throw new Error(`Embedded addon size mismatch for ${filename}: expected ${file.size}, got ${size}`);
    }
    const targetPath = path.join(targetDir, filename);
-   writeEmbeddedAddonFile(targetPath, archive.subarray(offset, offset + size));
+   writeEmbeddedAddonFile(targetPath, archive.subarray(offset, offset + size), file.sha256);
    pending.delete(filename);
    writtenPaths.push(targetPath);
   }
@@ -604,8 +632,7 @@ function maybeExtractEmbeddedAddon(ctx, errors) {
  }
 
  try {
-  const buffer = fs.readFileSync(selectedEmbeddedFile.filePath);
-  fs.writeFileSync(targetPath, buffer);
+  writeEmbeddedAddonFile(targetPath, fs.readFileSync(selectedEmbeddedFile.filePath), selectedEmbeddedFile.sha256);
   return targetPath;
  } catch (err) {
   const message = err instanceof Error ? err.message : String(err);
