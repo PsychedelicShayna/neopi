@@ -29,7 +29,7 @@ import type { AdvisorConfigScope } from "@oh-my-pi/pi-tui/overlays/advisor-confi
 import { type ChainConfigDeps, ChainConfigOverlayComponent } from "@oh-my-pi/pi-tui/overlays/chain-config";
 import type { ChainConfigScope } from "@oh-my-pi/pi-tui/overlays/chain-types";
 import { chainsConfigFilePath, discoverChains, loadChainsConfigFile, saveChainsConfigFile } from "../../chains/config";
-import { CHAIN_DEFAULT_ROLE } from "../../chains/runner";
+import { CHAIN_DEFAULT_ROLE, CHAIN_SYSTEM_PROMPT } from "../../chains/runner";
 import { formatModelRoleAlias } from "../../config/model-roles";
 import { showGitOverlay } from "../../cli/git-tui";
 import { formatLoginIdentity } from "../../cli/oauth-terminal";
@@ -530,6 +530,7 @@ export class SelectorController {
 				scopedModels: this.ctx.session.scopedModels,
 				availableToolNames: this.ctx.session.getAdvisorAvailableToolNames(),
 				defaultModelLabel: proseModel ? `${proseModel.provider}/${proseModel.id}` : undefined,
+				defaultSystemPrompt: CHAIN_SYSTEM_PROMPT,
 			};
 			const overlay = new ChainConfigOverlayComponent(this.ctx.ui, deps, initialScope, initialDoc, {
 				loadDoc: scope => loadChainsConfigFile(chainsConfigFilePath(scope, dirs)),
