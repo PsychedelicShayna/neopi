@@ -11,7 +11,8 @@ import {
 import { getAgentDir, isEnoent, logger, postmortem, sanitizeText } from "@oh-my-pi/pi-utils";
 import type { ChainConfig } from "@oh-my-pi/pi-tui/overlays/chain-types";
 import { discoverChains } from "../../chains/config";
-import { runChain } from "../../chains/runner";
+import { EscapeGesture } from "../../chains/escape-gesture";
+import { ChainControl, runChain } from "../../chains/runner";
 import { formatModelRoleAlias, roleCandidatePool } from "../../config/model-roles";
 import { resolveModelRoleValue } from "../../config/model-resolver";
 import { isSettingsInitialized, settings } from "../../config/settings";
@@ -1157,8 +1158,8 @@ export class InputController {
 			// stays in history so Up recalls what was written, not the rewrite.
 			const typedText = text;
 			if (forceChain || (isSettingsInitialized() && cfgChainingAuto.get(settings))) {
-				const chained = await this.#applyPostProcessingChain(text);
-				if (chained === undefined) {
+				const outcome = await this.#applyPostProcessingChain(text);
+				if (!outcome.send) {
 					if (inputImages && inputImages.length > 0) {
 						this.ctx.editor.pendingImages = [...inputImages];
 						this.ctx.editor.pendingImageLinks = inputImageLinks
@@ -1166,10 +1167,10 @@ export class InputController {
 							: inputImages.map(() => undefined);
 						this.ctx.editor.imageLinks = this.ctx.editor.pendingImageLinks;
 					}
-					this.ctx.editor.setCollapsedText(typedText);
+					this.ctx.editor.setCollapsedText(outcome.text);
 					return;
 				}
-				text = chained;
+				text = outcome.text;
 			}
 
 			// If streaming, use prompt() with steer behavior
@@ -1309,13 +1310,38 @@ export class InputController {
 
 	/**
 	 * Rewrite `text` with the active chain, asking which chain to use when none
-	 * is active (the pick becomes active). Returns undefined when the prompt must
-	 * not be sent: no chain, a cancelled pick, or a failed step.
+	 * is active (the pick becomes active). `send: false` puts `text` back in the
+	 * composer instead of sending: no chain, a cancelled pick, an abort (the typed
+	 * draft), or a failed step (the last completed output).
+	 *
+	 * While the chain runs the composer is locked and shimmering; Esc Esc skips the
+	 * step in flight, Esc Esc Esc or the clear key aborts.
 	 */
-	async #applyPostProcessingChain(text: string): Promise<string | undefined> {
+	async #applyPostProcessingChain(text: string): Promise<{ text: string; send: boolean }> {
 		const chain = await this.#resolveActiveChain();
-		if (chain === SEND_WITHOUT_CHAIN) return text;
-		if (!chain) return undefined;
+		if (chain === SEND_WITHOUT_CHAIN) return { text, send: true };
+		if (!chain) return { text, send: false };
+
+		const control = new ChainControl();
+		const gesture = new EscapeGesture();
+		let lastOutput = text;
+		let currentStep = chain.steps[0]?.name ?? "";
+		// Submit already emptied the buffer; put the draft back so the lock has something to shimmer.
+		this.ctx.editor.setCollapsedText(text);
+		this.ctx.editor.setChainLock({
+			onEscape: () => {
+				const action = gesture.press();
+				if (action === "skip") {
+					control.skipStep();
+					this.ctx.showStatus(`Chain ${chain.name}: skipping "${currentStep}"…`);
+				} else if (action === "abort") {
+					control.abort();
+				}
+			},
+			// Never handleCtrlC: its double-press exit must not race a running step.
+			onClear: () => control.abort(),
+		});
+		this.ctx.ui.requestRender();
 		try {
 			const result = await runChain(chain, text, {
 				settings: this.ctx.settings,
@@ -1323,16 +1349,34 @@ export class InputController {
 				tools: this.ctx.session.agent.state.tools,
 				messages: this.ctx.session.agent.state.messages,
 				cwd: this.ctx.sessionManager.getCwd(),
-				onStep: (step, index, total) =>
-					this.ctx.showStatus(`Chain ${chain.name}: ${step.name} (${index + 1}/${total})…`),
+				control,
+				onStep: (step, index, total) => {
+					currentStep = step.name;
+					this.ctx.showStatus(
+						`Chain ${chain.name} · step ${index + 1}/${total} "${step.name}" · preprocessing… (Esc Esc skip · Esc Esc Esc abort · Ctrl+C abort)`,
+					);
+				},
+				onStepDone: (_step, _index, output) => {
+					lastOutput = output;
+					this.ctx.editor.setText(output);
+					this.ctx.ui.requestRender();
+				},
+				onStepSkipped: step => this.ctx.showStatus(`Chain ${chain.name}: skipped "${step.name}"`),
 			});
 			this.ctx.showStatus("");
-			return result;
+			return { text: result, send: true };
 		} catch (error) {
-			this.ctx.showError(
-				`Chain ${chain.name} failed; prompt not sent: ${error instanceof Error ? error.message : String(error)}`,
+			if (control.signal.aborted) {
+				this.ctx.showStatus("Chain aborted; draft restored");
+				return { text, send: false };
+			}
+			// Not showError: it clears the loading state of a primary turn that may be streaming.
+			this.ctx.showWarning(
+				`Chain ${chain.name} failed at step "${currentStep}"; composer holds the last completed output: ${error instanceof Error ? error.message : String(error)}`,
 			);
-			return undefined;
+			return { text: lastOutput, send: false };
+		} finally {
+			this.ctx.editor.setChainLock(undefined);
 		}
 	}
 
