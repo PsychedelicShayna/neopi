@@ -40,6 +40,7 @@ interface AppKeybindings {
 	"app.tools.toggleVisibility": true;
 	"app.editor.external": true;
 	"app.message.followUp": true;
+	"app.message.chain": true;
 	"app.retry": true;
 	"app.message.dequeue": true;
 	"app.clipboard.pasteImage": true;
@@ -149,6 +150,10 @@ export const KEYBINDINGS = {
 		// first so the default binding works there without remapping (#1903).
 		defaultKeys: ["ctrl+q", "ctrl+enter"],
 		description: "Send follow-up message",
+	},
+	"app.message.chain": {
+		defaultKeys: "alt+enter",
+		description: "Send through the active post-processing chain",
 	},
 	"app.retry": {
 		// F5 leads: it is delivered verbatim by every terminal, unlike modified

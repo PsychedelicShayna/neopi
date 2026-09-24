@@ -4,7 +4,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { setAgentDir } from "@oh-my-pi/pi-utils";
 import { Settings, settings } from "../src/config/settings";
-import { discoverVoiceFilters } from "../src/stt/voice-filters";
 import { XaiSTTController, type XaiSTTControllerDependencies } from "../src/stt/xai-stt-controller";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
@@ -33,10 +32,7 @@ describe("independent xAI whole-recording input", () => {
 		await fs.rm(tmp, { recursive: true, force: true });
 	});
 
-	function setup(
-		transcribe: XaiSTTControllerDependencies["transcribe"],
-		resolvePostProcessor?: XaiSTTControllerDependencies["resolvePostProcessor"],
-	) {
+	function setup(transcribe: XaiSTTControllerDependencies["transcribe"]) {
 		let text = "Existing draft. ";
 		const editor = {
 			get text() {
@@ -51,7 +47,6 @@ describe("independent xAI whole-recording input", () => {
 		controller = new XaiSTTController({
 			settings,
 			transcribe,
-			resolvePostProcessor,
 			createCapture(callback) {
 				onAudio = callback;
 				return { stop() {} };
@@ -131,78 +126,5 @@ describe("independent xAI whole-recording input", () => {
 		expect(options.showWarning).toHaveBeenCalledWith(expect.stringContaining(retainedPath));
 		expect(editor.text).toBe("Existing draft. ");
 		expect(controller.state).toBe("idle");
-	});
-
-	it("inserts the voice filter's rewrite instead of the raw transcript", async () => {
-		const filter = vi.fn(async (text: string) => `Filtered: ${text.toUpperCase()}`);
-		const { editor, options, controller } = setup(
-			async () => "rambling spoken draft",
-			() => filter,
-		);
-		await controller.toggle(editor, options);
-		onAudio!(null, new Float32Array([0.5]));
-		await controller.toggle(editor, options);
-		expect(filter).toHaveBeenCalledWith("rambling spoken draft", expect.any(AbortSignal));
-		expect(editor.text).toBe("Existing draft. Filtered: RAMBLING SPOKEN DRAFT");
-		expect(options.onStateChange.mock.calls.map(([state]) => state)).toEqual([
-			"recording",
-			"transcribing",
-			"postprocessing",
-			"idle",
-		]);
-	});
-
-	it("keeps the raw transcript and warns when the voice filter fails", async () => {
-		const { editor, options, controller } = setup(
-			async () => "keep my words",
-			() => async () => {
-				throw new Error("Voice filter model unavailable");
-			},
-		);
-		await controller.toggle(editor, options);
-		onAudio!(null, new Float32Array([0.5]));
-		await controller.toggle(editor, options);
-		expect(editor.text).toBe("Existing draft. keep my words");
-		expect(options.showWarning).toHaveBeenCalledWith(expect.stringContaining("Voice filter model unavailable"));
-		expect(controller.state).toBe("idle");
-	});
-
-	it("skips post-processing entirely when no filter was chosen", async () => {
-		const { editor, options, controller } = setup(
-			async () => "plain words",
-			() => undefined,
-		);
-		await controller.toggle(editor, options);
-		onAudio!(null, new Float32Array([0.5]));
-		await controller.toggle(editor, options);
-		expect(editor.text).toBe("Existing draft. plain words");
-		expect(options.onStateChange.mock.calls.map(([state]) => state)).not.toContain("postprocessing");
-	});
-
-	it("discovers voice filters with project files shadowing user files by name", async () => {
-		const userDir = path.join(tmp, "voice-filters");
-		const project = path.join(tmp, "project");
-		const projectDir = path.join(project, ".omp", "voice-filters");
-		await fs.mkdir(userDir, { recursive: true });
-		await fs.mkdir(projectDir, { recursive: true });
-		await Bun.write(path.join(userDir, "concise.md"), "---\ndescription: user version\n---\nUser prompt.");
-		await Bun.write(
-			path.join(userDir, "names.md"),
-			"---\nmodel: xai/grok-4.7:low\ntools: [bash, read]\n---\nFix name spellings.",
-		);
-		await Bun.write(path.join(userDir, "empty.md"), "---\ndescription: no body\n---\n");
-		await Bun.write(path.join(projectDir, "concise.md"), "---\ndescription: project version\n---\nProject prompt.");
-
-		const filters = await discoverVoiceFilters(project);
-
-		expect(filters.map(filter => [filter.name, filter.source])).toEqual([
-			["concise", "project"],
-			["names", "user"],
-		]);
-		expect(filters[0]!.systemPrompt).toBe("Project prompt.");
-		expect(filters[0]!.model).toBeUndefined();
-		expect(filters[0]!.tools).toEqual([]);
-		expect(filters[1]!.model).toBe("xai/grok-4.7:low");
-		expect(filters[1]!.tools).toEqual(["bash", "read"]);
 	});
 });

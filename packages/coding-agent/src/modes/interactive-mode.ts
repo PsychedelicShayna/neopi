@@ -137,16 +137,9 @@ import type { ShakeMode } from "../session/shake-types";
 import { BUILTIN_SLASH_COMMAND_RESERVED_NAMES, buildTuiBuiltinSlashCommands } from "../slash-commands/builtin-registry";
 import { buildStaticInlineHint } from "../slash-commands/builtin-completions";
 import { formatCoarseDuration } from "@oh-my-pi/pi-tui/chrome/format";
-import { STTController } from "../stt";
+import { STTController, type SttState } from "../stt";
 import { transcribeXaiAudio } from "../stt/xai-stt";
-import { type TranscriptPostProcessor, XaiSTTController, type XaiSttState } from "../stt/xai-stt-controller";
-import {
-	discoverVoiceFilters,
-	runVoiceFilter,
-	VOICE_FILTER_PICKER_TIMEOUT_MS,
-	type VoiceFilter,
-} from "../stt/voice-filters";
-import { VoiceFilterPickerComponent } from "@oh-my-pi/pi-tui/overlays/voice-filter-picker";
+import { XaiSTTController } from "../stt/xai-stt-controller";
 import { resolveCliEntryCmd } from "../subprocess/worker-client";
 import { discoverTitleSystemPromptFile, resolvePromptInput } from "../system-prompt";
 import { labelEchoesHandle } from "../task/label";
@@ -1229,9 +1222,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	#voiceHue = 0;
 	#voicePreviousShowHardwareCursor: boolean | null = null;
 	#voicePreviousUseTerminalCursor: boolean | null = null;
-	#voiceFilterPicker: { picker: VoiceFilterPickerComponent; handle: OverlayHandle } | undefined;
-	/** Filter chosen for the current xAI recording; consumed once its transcript returns. */
-	#voiceFilterChoice: VoiceFilter | undefined;
 	#resizeHandler?: () => void;
 	#observerRegistry: SessionObserverRegistry;
 	/** Click override for the pinned jump-list density; undefined follows `display.pinnedAgents`. */
@@ -6659,9 +6649,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		return {
 			showWarning: (msg: string) => this.showWarning(msg),
 			showStatus: (msg: string) => this.showStatus(msg),
-			onStateChange: (state: XaiSttState) => {
-				// The recording ended: the picker closes on whatever is highlighted.
-				if (state !== "recording") this.#voiceFilterPicker?.picker.finish();
+			onStateChange: (state: SttState) => {
 				// Duck assistant speech while the user is talking (push-to-talk); restore after.
 				if (state === "recording") vocalizer.duck();
 				else vocalizer.unduck();
@@ -6674,8 +6662,6 @@ export class InteractiveMode implements InteractiveModeContext {
 				} else if (state === "transcribing") {
 					this.#stopMicAnimation();
 					this.#setMicCursor({ r: 200, g: 200, b: 200 });
-				} else if (state === "postprocessing") {
-					this.#startVoiceFilterAnimation();
 				} else {
 					this.#cleanupMicAnimation();
 				}
@@ -6704,72 +6690,8 @@ export class InteractiveMode implements InteractiveModeContext {
 					language: this.settings.get("stt.language") || undefined,
 					signal,
 				}),
-			resolvePostProcessor: () => this.#voiceFilterPostProcessor(),
 		});
-		const wasIdle = this.#xaiSttController.state === "idle";
 		await this.#xaiSttController.toggle(this.editor, this.#sttOptions());
-		if (wasIdle && this.#xaiSttController.state === "recording" && this.settings.get("stt.voiceFilters.enabled")) {
-			await this.#openVoiceFilterPicker();
-		}
-	}
-
-	/** Offer voice filters without pausing the recording; untouched, it closes on "None". */
-	async #openVoiceFilterPicker(): Promise<void> {
-		this.#voiceFilterChoice = undefined;
-		const filters = await discoverVoiceFilters(this.sessionManager.getCwd());
-		if (this.#xaiSttController?.state !== "recording" || this.#voiceFilterPicker) return;
-		if (filters.length === 0) {
-			this.showStatus("No voice filters found in .omp/voice-filters or ~/.omp/agent/voice-filters");
-			return;
-		}
-		const byPath = new Map(filters.map(filter => [filter.path, filter]));
-		const picker = new VoiceFilterPickerComponent({
-			items: [
-				{ value: "", label: "None", description: "Insert the raw transcript" },
-				...filters.map(filter => ({
-					value: filter.path,
-					label: filter.name,
-					description: filter.description ?? filter.source,
-				})),
-			],
-			timeoutMs: VOICE_FILTER_PICKER_TIMEOUT_MS,
-			tui: this.ui,
-			onDecide: value => {
-				this.#voiceFilterChoice = value ? byPath.get(value) : undefined;
-				this.#closeVoiceFilterPicker();
-				if (this.#voiceFilterChoice) this.showStatus(`Voice filter: ${this.#voiceFilterChoice.name}`);
-			},
-			onToggleRecording: () => void this.handleSTTToggle(),
-		});
-		const handle = this.ui.showOverlay(picker, { anchor: "center", width: "60%", minWidth: 44 });
-		this.#voiceFilterPicker = { picker, handle };
-		this.ui.setFocus(picker);
-		this.ui.requestRender();
-	}
-
-	#closeVoiceFilterPicker(): void {
-		const open = this.#voiceFilterPicker;
-		if (!open) return;
-		this.#voiceFilterPicker = undefined;
-		open.handle.hide();
-		open.picker.dispose();
-		this.#selectorController.focusActiveEditorArea();
-		this.ui.requestRender();
-	}
-
-	/** Hand the xAI controller the chosen filter once, then forget it. */
-	#voiceFilterPostProcessor(): TranscriptPostProcessor | undefined {
-		const filter = this.#voiceFilterChoice;
-		this.#voiceFilterChoice = undefined;
-		if (!filter) return undefined;
-		return (text, signal) =>
-			runVoiceFilter(filter, text, {
-				settings: this.settings,
-				modelRegistry: this.session.modelRegistry,
-				tools: this.session.agent.state.tools,
-				cwd: this.sessionManager.getCwd(),
-				signal,
-			});
 	}
 
 	/** Upstream dictation stays on its own shortcut and Space-hold gesture. */
@@ -6861,22 +6783,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			clearInterval(this.#voiceAnimationInterval);
 			this.#voiceAnimationInterval = undefined;
 		}
-	}
-
-	/** Third mic state: a violet pulse while a voice filter rewrites the transcript. */
-	#startVoiceFilterAnimation(): void {
-		this.#stopMicAnimation();
-		let tick = 0;
-		const paint = () => {
-			const { r, g, b } = hsvToRgb({ h: 275, s: 0.7, v: 0.55 + 0.45 * Math.abs(Math.sin(tick / 6)) });
-			this.#setMicCursor({ r, g, b });
-		};
-		paint();
-		this.#voiceAnimationInterval = setInterval(() => {
-			tick++;
-			paint();
-			this.ui.requestComponentRender(this.editor);
-		}, 60);
 	}
 
 	#cleanupMicAnimation(): void {
@@ -6976,6 +6882,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	showAdvisorConfigure(): void {
 		this.#selectorController.showAdvisorConfigure();
+	}
+
+	showChainConfigure(): void {
+		this.#selectorController.showChainConfigure();
 	}
 
 	showHistorySearch(): void {

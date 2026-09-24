@@ -338,7 +338,8 @@ export async function loadWatchdogConfigFile(filePath: string): Promise<Watchdog
  * Returns `""` for an empty doc.
  */
 
-function appendYamlString(lines: string[], indent: string, key: string, value: string): void {
+/** Append `key: value`, using a literal block scalar for multiline text. Shared with chain config. */
+export function appendYamlString(lines: string[], indent: string, key: string, value: string): void {
 	const hasSignificantLeadingWhitespace = value.split("\n").some(line => /^[ \t]/.test(line));
 	if (!value.includes("\n") || hasSignificantLeadingWhitespace) {
 		lines.push(`${indent}${key}: ${YAML.stringify(value)}`);

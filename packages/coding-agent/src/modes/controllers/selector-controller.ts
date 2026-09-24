@@ -25,6 +25,11 @@ import {
 } from "../../advisor";
 import { reset as resetCapabilities } from "../../capability";
 import type { AdvisorConfigScope } from "@oh-my-pi/pi-tui/overlays/advisor-config";
+import { type ChainConfigDeps, ChainConfigOverlayComponent } from "@oh-my-pi/pi-tui/overlays/chain-config";
+import type { ChainConfigScope } from "@oh-my-pi/pi-tui/overlays/chain-types";
+import { chainsConfigFilePath, discoverChains, loadChainsConfigFile, saveChainsConfigFile } from "../../chains/config";
+import { CHAIN_DEFAULT_ROLE } from "../../chains/runner";
+import { formatModelRoleAlias } from "../../config/model-roles";
 import { showGitOverlay } from "../../cli/git-tui";
 import { resolveAdvisorRoleSelection, resolveModelRoleValue } from "../../config/model-resolver";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
@@ -476,6 +481,75 @@ export class SelectorController {
 					);
 					return identity ? (report, limit) => limitMatchesActiveAccount(report, limit, identity) : undefined;
 				},
+			});
+			const overlayHandle = this.ctx.ui.showOverlay(overlay, {
+				anchor: "bottom-center",
+				width: "100%",
+				maxHeight: "100%",
+				margin: 0,
+				fullscreen: true,
+			});
+			this.ctx.ui.setFocus(overlay);
+			this.ctx.ui.requestRender();
+		})();
+	}
+
+	showChainConfigure(): void {
+		const cwd = this.ctx.sessionManager.getCwd();
+		const agentDir = getAgentDir() ?? getProjectDir();
+		const initialScope: ChainConfigScope = "project";
+		void (async () => {
+			// Project scope edits the repo-root CHAINS.yml, beside WATCHDOG.yml.
+			let projectDir = cwd;
+			try {
+				projectDir = vcs.repo(cwd)?.root() ?? cwd;
+			} catch {
+				projectDir = cwd;
+			}
+			const dirs = { projectDir, agentDir };
+			const initialDoc = await loadChainsConfigFile(chainsConfigFilePath(initialScope, dirs));
+			if (initialDoc.warnings?.length) {
+				this.ctx.showWarning(`CHAINS.yml: ${sanitizeDisplayWarnings(initialDoc.warnings).join("; ")}`);
+			}
+			const done = () => {
+				overlayHandle?.hide();
+				this.focusActiveEditorArea();
+				this.ctx.ui.requestRender();
+			};
+			const proseModel = resolveModelRoleValue(
+				formatModelRoleAlias(CHAIN_DEFAULT_ROLE),
+				this.ctx.session.modelRegistry.getAvailable(),
+				{ settings: this.ctx.settings },
+			).model;
+			const deps: ChainConfigDeps = {
+				getAvailableModels: () => this.ctx.session.modelRegistry.getAvailable(),
+				browserSource: createModelBrowserSource(this.ctx.settings),
+				externalEditor: text => {
+					const command = getEditorCommand();
+					return command ? openInEditor(command, text) : Promise.resolve(null);
+				},
+				scopedModels: this.ctx.session.scopedModels,
+				availableToolNames: this.ctx.session.getAdvisorAvailableToolNames(),
+				defaultModelLabel: proseModel ? `${proseModel.provider}/${proseModel.id}` : undefined,
+			};
+			const overlay = new ChainConfigOverlayComponent(this.ctx.ui, deps, initialScope, initialDoc, {
+				loadDoc: scope => loadChainsConfigFile(chainsConfigFilePath(scope, dirs)),
+				save: async (scope, doc) => {
+					await saveChainsConfigFile(chainsConfigFilePath(scope, dirs), doc);
+					const discovered = await discoverChains(cwd, agentDir);
+					if (discovered.warnings.length > 0) {
+						this.ctx.showWarning(`CHAINS.yml: ${sanitizeDisplayWarnings(discovered.warnings).join("; ")}`);
+					}
+					const count = discovered.chains.length;
+					this.ctx.showStatus(
+						`Saved ${scope} CHAINS.yml — ${count} chain${count === 1 ? "" : "s"} available. Alt+Enter sends through the active chain.`,
+					);
+					this.ctx.ui.requestRender();
+				},
+				close: done,
+				requestRender: () => this.ctx.ui.requestRender(),
+				notify: message => this.ctx.showStatus(message),
+				warn: message => this.ctx.showWarning(message),
 			});
 			const overlayHandle = this.ctx.ui.showOverlay(overlay, {
 				anchor: "bottom-center",
