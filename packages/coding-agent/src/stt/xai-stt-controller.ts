@@ -5,10 +5,16 @@ import { evaluateSubmitTrigger } from "./submit-trigger";
 import type { SttState } from "./stt-controller";
 import { WavFileRecorder } from "./wav-file-recorder";
 
+/** xAI capture states: the shared STT states plus a post-processing stage after transcription. */
+export type XaiSttState = SttState | "postprocessing";
+
+/** Rewrites a raw transcript before it reaches the composer (a voice filter pass). */
+export type TranscriptPostProcessor = (text: string, signal: AbortSignal) => Promise<string>;
+
 interface XaiSTTToggleOptions {
 	showWarning(msg: string): void;
 	showStatus(msg: string): void;
-	onStateChange(state: SttState): void;
+	onStateChange(state: XaiSttState): void;
 }
 
 /** The slice of the composer editor used by speech-to-text controllers. */
@@ -27,6 +33,8 @@ export interface XaiSTTControllerDependencies {
 	settings: Settings;
 	transcribe(audio: Blob, signal: AbortSignal): Promise<string>;
 	createCapture?: CaptureFactory;
+	/** Consulted once per recording after transcription; undefined inserts the raw transcript. */
+	resolvePostProcessor?: () => TranscriptPostProcessor | undefined;
 }
 
 /**
@@ -34,13 +42,14 @@ export interface XaiSTTControllerDependencies {
  * explicitly toggles recording off. Silence never segments or stops capture.
  */
 export class XaiSTTController {
-	#state: SttState = "idle";
+	#state: XaiSttState = "idle";
 	#toggling = false;
 	#stopAfterStart = false;
 	#disposed = false;
 	readonly #settings: Settings;
 	readonly #transcribe: (audio: Blob, signal: AbortSignal) => Promise<string>;
 	readonly #createCapture: CaptureFactory;
+	readonly #resolvePostProcessor: (() => TranscriptPostProcessor | undefined) | undefined;
 
 	#recorder: CaptureHandle | null = null;
 	#file: WavFileRecorder | null = null;
@@ -48,17 +57,18 @@ export class XaiSTTController {
 	#abort: AbortController | null = null;
 	readonly #retainedFiles: WavFileRecorder[] = [];
 
-	constructor({ settings, transcribe, createCapture }: XaiSTTControllerDependencies) {
+	constructor({ settings, transcribe, createCapture, resolvePostProcessor }: XaiSTTControllerDependencies) {
 		this.#settings = settings;
 		this.#transcribe = transcribe;
 		this.#createCapture = createCapture ?? (callback => new AudioCapture(16_000, callback));
+		this.#resolvePostProcessor = resolvePostProcessor;
 	}
 
-	get state(): SttState {
+	get state(): XaiSttState {
 		return this.#state;
 	}
 
-	#setState(state: SttState, options: XaiSTTToggleOptions): void {
+	#setState(state: XaiSttState, options: XaiSTTToggleOptions): void {
 		this.#state = state;
 		options.onStateChange(state);
 	}
@@ -80,6 +90,9 @@ export class XaiSTTController {
 					break;
 				case "transcribing":
 					options.showStatus("Transcription in progress...");
+					break;
+				case "postprocessing":
+					options.showStatus("Voice filter in progress...");
 					break;
 			}
 
@@ -154,7 +167,9 @@ export class XaiSTTController {
 			} else {
 				const text = (await this.#transcribe(Bun.file(recordingPath, { type: "audio/wav" }), abort.signal)).trim();
 				if (this.#disposed) return;
-				this.#insertTranscript(editor, text, options);
+				const processed = text ? await this.#postProcess(text, abort.signal, options) : text;
+				if (this.#disposed) return;
+				this.#insertTranscript(editor, processed, options);
 			}
 		} catch (error) {
 			if (!this.#disposed) {
@@ -167,6 +182,24 @@ export class XaiSTTController {
 
 		this.#cleanup(false);
 		if (!this.#disposed) this.#setState("idle", options);
+	}
+
+	/** Run the selected voice filter; on failure keep the raw transcript so dictation is never lost. */
+	async #postProcess(text: string, signal: AbortSignal, options: XaiSTTToggleOptions): Promise<string> {
+		const processor = this.#resolvePostProcessor?.();
+		if (!processor) return text;
+		this.#setState("postprocessing", options);
+		options.showStatus("Applying voice filter...");
+		try {
+			const processed = (await processor(text, signal)).trim();
+			return processed || text;
+		} catch (error) {
+			if (this.#disposed) return text;
+			const message = error instanceof Error ? error.message : String(error);
+			options.showWarning(`${message}. Inserted the raw transcript instead.`);
+			logger.error("xAI STT voice filter failed", { error: message });
+			return text;
+		}
 	}
 
 	#insertTranscript(editor: XaiSTTEditor, text: string, options: XaiSTTToggleOptions): void {
