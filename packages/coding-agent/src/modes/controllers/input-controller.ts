@@ -1370,6 +1370,7 @@ export class InputController {
 				this.ctx.showStatus("Chain aborted; draft restored");
 				return { text, send: false };
 			}
+			this.ctx.showStatus("");
 			// Not showError: it clears the loading state of a primary turn that may be streaming.
 			this.ctx.showWarning(
 				`Chain ${chain.name} failed at step "${currentStep}"; composer holds the last completed output: ${error instanceof Error ? error.message : String(error)}`,
