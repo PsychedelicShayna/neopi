@@ -152,7 +152,9 @@ export const KEYBINDINGS = {
 		description: "Send follow-up message",
 	},
 	"app.message.chain": {
-		defaultKeys: "alt+enter",
+		// Not an Enter chord: legacy terminals and tmux send Alt+Enter as ESC CR,
+		// the same bytes many terminals map Shift+Enter (newline) to.
+		defaultKeys: "alt+c",
 		description: "Send through the active post-processing chain",
 	},
 	"app.retry": {

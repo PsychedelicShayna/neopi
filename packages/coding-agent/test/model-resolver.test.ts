@@ -1022,7 +1022,7 @@ describe("role priorities and chains", () => {
 
 		const [first] = resolveRoleChain("prose", settings, [builtinFast, userFast]);
 		expect(first?.model.id).toBe("grok-4.7");
-		expect(first?.thinkingLevel).toBe("medium");
+		expect(first?.thinkingLevel).toBe(Effort.Medium);
 	});
 });
 

@@ -542,7 +542,7 @@ export class SelectorController {
 					}
 					const count = discovered.chains.length;
 					this.ctx.showStatus(
-						`Saved ${scope} CHAINS.yml — ${count} chain${count === 1 ? "" : "s"} available. Alt+Enter sends through the active chain.`,
+						`Saved ${scope} CHAINS.yml — ${count} chain${count === 1 ? "" : "s"} available. Alt+C sends through the active chain.`,
 					);
 					this.ctx.ui.requestRender();
 				},
