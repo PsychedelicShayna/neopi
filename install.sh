@@ -24,7 +24,8 @@ version=$(bun -p 'require("./packages/coding-agent/package.json").version')
 [[ -x $binary && -f $binary.source ]] || die "$binary is missing or was not built by ./build.sh; run ./build.sh"
 source_id=$(
 	git rev-parse HEAD
-	git diff --no-ext-diff --no-textconv --no-color --binary HEAD | sha256sum | cut -d' ' -f1
+	git diff --no-ext-diff --no-textconv --no-color --binary HEAD | sha256sum | cut -d" " -f1
+	git ls-files -z --others --exclude-standard | xargs -0 -r sha256sum | sha256sum | cut -d" " -f1
 )
 [[ $(<"$binary.source") == "$source_id" ]] || die "$binary was built from a different tree than this checkout; run ./build.sh"
 

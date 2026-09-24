@@ -108,7 +108,8 @@ binary=packages/coding-agent/dist/npi
 rm -f -- "$binary.source"
 source_id=$(
 	git rev-parse HEAD
-	git diff --no-ext-diff --no-textconv --no-color --binary HEAD | sha256sum | cut -d' ' -f1
+	git diff --no-ext-diff --no-textconv --no-color --binary HEAD | sha256sum | cut -d" " -f1
+	git ls-files -z --others --exclude-standard | xargs -0 -r sha256sum | sha256sum | cut -d" " -f1
 )
 
 # Bytecode stays off: the pinned Bun canary has produced executables with invalid
