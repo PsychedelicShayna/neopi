@@ -81,7 +81,11 @@ export interface RunChainOptions {
 }
 
 /** The user message for a step: the draft, wrapped with the transcript when the step ingests context. */
-export function renderChainInput(step: ChainStep, input: string, messages: readonly AgentMessage[] | undefined): string {
+export function renderChainInput(
+	step: ChainStep,
+	input: string,
+	messages: readonly AgentMessage[] | undefined,
+): string {
 	if (!step.context || !messages?.length) return input;
 	const transcript = formatSessionHistoryMarkdown(messages as unknown[]).trim();
 	if (!transcript) return input;
