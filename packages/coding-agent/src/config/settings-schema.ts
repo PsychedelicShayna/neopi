@@ -2467,7 +2467,7 @@ export const SETTINGS_SCHEMA = {
 			group: "Chaining",
 			label: "Chain Every Prompt",
 			description:
-				"Send every composer prompt through the active post-processing chain (/chaining on|off). Alt+Enter runs the chain for one prompt either way.",
+				"Send every composer prompt through the active post-processing chain (/chaining on|off). Alt+C runs the chain for one prompt either way.",
 		},
 	},
 

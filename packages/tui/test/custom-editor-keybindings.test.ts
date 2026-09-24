@@ -280,3 +280,14 @@ describe("reserved Ctrl+Space", () => {
 		expect(keybindings.getKeys("app.stt.toggle")).toEqual(["ctrl+space"]);
 	});
 });
+
+describe("chain send default", () => {
+	it("never claims the bytes terminals send for a newline chord", () => {
+		const keybindings = KeybindingsManager.inMemory({});
+		// ESC CR: legacy Alt+Enter, and Shift+Enter in terminals mapped to send it (Alacritty, tmux).
+		for (const newline of ["\x1b\r", "\x1b[13;2~", "\x1b[13;2u", "\x1b[13;3u", "\n"]) {
+			expect(keybindings.matches(newline, "app.message.chain")).toBe(false);
+		}
+		expect(keybindings.matches("\x1bc", "app.message.chain")).toBe(true);
+	});
+});
