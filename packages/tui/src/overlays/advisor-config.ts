@@ -522,14 +522,19 @@ export class AdvisorConfigOverlayComponent implements Component {
 		const handleInput = list.handleInput.bind(list);
 		list.handleInput = data => {
 			if (matchesKey(data, "space")) {
+				// Space toggles an advisor row; on any action row it is Enter, so
+				// the whole list can be driven without switching keys.
 				const value = list.getSelectedItem()?.value;
-				const match = value ? /^advisor:(\d+)$/.exec(value) : null;
+				if (!value) return;
+				const match = /^advisor:(\d+)$/.exec(value);
 				const advisor = match ? this.#doc.advisors[Number(match[1])] : undefined;
-				if (advisor) {
-					advisor.enabled = advisor.enabled === false ? undefined : false;
-					this.#dirty = true;
-					this.#showList(value);
+				if (!advisor) {
+					runSelect(value);
+					return;
 				}
+				advisor.enabled = advisor.enabled === false ? undefined : false;
+				this.#dirty = true;
+				this.#showList(value);
 				return;
 			}
 			if (matchesKey(data, "s")) {
@@ -543,7 +548,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#setScreen(
 			"list",
 			list,
-			"↑↓ move · Space toggle advisor · Enter / click select · s save & apply · scroll preview on the right · Esc close",
+			"↑↓ move · Space toggle advisor, else select · Enter / click select · s save & apply · scroll preview on the right · Esc close",
 		);
 	}
 
