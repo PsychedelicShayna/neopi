@@ -29,6 +29,7 @@ describe("AdvisorConfigOverlayComponent", () => {
 	const callbacks = {
 		loadDoc: async () => ({ advisors: [] }),
 		save: async () => {},
+		apply: async () => {},
 		close: () => {},
 		requestRender: () => {},
 		notify: () => {},

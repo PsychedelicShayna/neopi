@@ -444,8 +444,13 @@ export class SelectorController {
 				loadDoc: async scope => loadWatchdogConfigFile(await resolveAdvisorConfigEditPath(scope, dirs)),
 				save: async (scope, doc) => {
 					await saveWatchdogConfigFile(await resolveAdvisorConfigEditPath(scope, dirs), doc);
+					this.ctx.showStatus(`Saved ${scope} WATCHDOG.yml — press a to apply it to the live advisors.`);
+					this.ctx.ui.requestRender();
+				},
+				apply: async () => {
 					// Re-discover the merged roster (project + user) so the live advisors
-					// reflect cross-level precedence, not just the edited file.
+					// reflect cross-level precedence, not just the edited file. Only
+					// advisors whose effective configuration changed restart.
 					const discovered = await discoverAdvisorConfigs(cwd, agentDir);
 					const count = this.ctx.session.applyAdvisorConfigs(
 						discovered.advisors,
@@ -458,8 +463,8 @@ export class SelectorController {
 					}
 					this.ctx.showStatus(
 						count > 0
-							? `Saved ${scope} WATCHDOG.yml — ${count} advisor${count === 1 ? "" : "s"} active.`
-							: `Saved ${scope} WATCHDOG.yml. Run /advisor on to activate the configured advisors.`,
+							? `Applied WATCHDOG.yml — ${count} advisor${count === 1 ? "" : "s"} active.`
+							: "Applied WATCHDOG.yml. Run /advisor on to activate the configured advisors.",
 					);
 					this.ctx.ui.requestRender();
 				},

@@ -39,6 +39,7 @@ describe("advisor config editor warnings and synthetic default row", () => {
 		new AdvisorConfigOverlayComponent({} as TUI, deps, "project", doc, {
 			loadDoc: async () => ({ advisors: [] }),
 			save: async (_scope, doc) => onSave(doc),
+			apply: async () => {},
 			close: () => {},
 			requestRender: () => {},
 			notify: () => {},
@@ -90,6 +91,47 @@ describe("advisor config editor warnings and synthetic default row", () => {
 		expect(saved?.advisors.map(a => [a.name, a.enabled])).toEqual([["alpha", false]]);
 	});
 
+	it("saves with s without applying, and applies saved changes once with a", async () => {
+		const events: string[] = [];
+		const notes: string[] = [];
+		const overlay = new AdvisorConfigOverlayComponent(
+			{} as TUI,
+			deps,
+			"project",
+			{ advisors: [{ name: "alpha" }] },
+			{
+				loadDoc: async () => ({ advisors: [] }),
+				save: async (_scope, doc) => {
+					events.push(`save:${doc.advisors[0]?.enabled}`);
+				},
+				apply: async () => {
+					events.push("apply");
+				},
+				close: () => {},
+				requestRender: () => {},
+				notify: message => notes.push(message),
+			},
+		);
+		const flush = () => Bun.sleep(0);
+
+		overlay.handleInput(" "); // alpha off (unsaved)
+		overlay.handleInput("s");
+		await flush();
+		expect(events).toEqual(["save:false"]);
+
+		overlay.handleInput("a");
+		await flush();
+		overlay.handleInput("a"); // nothing pending: no second apply
+		await flush();
+		expect(events).toEqual(["save:false", "apply"]);
+		expect(notes).toEqual(["Advisor config: nothing to apply."]);
+
+		overlay.handleInput(" "); // alpha back on, unsaved: `a` saves first, then applies
+		overlay.handleInput("a");
+		await flush();
+		expect(events).toEqual(["save:false", "apply", "save:undefined", "apply"]);
+	});
+
 	it("surfaces the newly active file's warnings on scope switch, and only there", async () => {
 		const warnings: string[] = [];
 		let pendingLoad: Promise<WatchdogConfigDoc> | undefined;
@@ -109,6 +151,7 @@ describe("advisor config editor warnings and synthetic default row", () => {
 					return pendingLoad;
 				},
 				save: async () => {},
+				apply: async () => {},
 				close: () => {},
 				requestRender: () => {},
 				notify: () => {},
@@ -144,6 +187,7 @@ describe("advisor config editor warnings and synthetic default row", () => {
 			{
 				loadDoc: async () => ({ advisors: [] }),
 				save: async () => {},
+				apply: async () => {},
 				close: () => {},
 				requestRender: () => {},
 				notify: () => {},
