@@ -515,8 +515,10 @@ export class AdvisorConfigOverlayComponent implements Component {
 			this.#previewScroll = 0;
 			this.#cb.requestRender();
 		};
-		const runSelect = (value: string) =>
-			void this.#onListSelect(value, list.getSelectedItem()?.value).catch(err => {
+		// Row selections (Enter, click, Space on an action row) return to the top
+		// as they always have; key shortcuts keep the cursor where it was.
+		const runSelect = (value: string, keepSelection = false) =>
+			void this.#onListSelect(value, keepSelection ? list.getSelectedItem()?.value : undefined).catch(err => {
 				this.#cb.notify(`Advisor config: ${err instanceof Error ? err.message : String(err)}`);
 			});
 		const handleInput = list.handleInput.bind(list);
@@ -538,7 +540,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 				return;
 			}
 			if (matchesKey(data, "s")) {
-				runSelect("save");
+				runSelect("save", true);
 				return;
 			}
 			handleInput(data);
