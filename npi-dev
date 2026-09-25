@@ -52,5 +52,12 @@ if ! compgen -G "$native_dir/*.node" >/dev/null; then
 	echo "npi-dev: linked native addon from $primary" >&2
 fi
 
+# `bun install` runs this generator as its `prepare` step; a borrowed
+# node_modules skips that, so build the gitignored bundle from this checkout.
+if [[ ! -f "$root/packages/coding-agent/src/export/html/tool-views.generated.js" ]]; then
+	echo "npi-dev: generating tool-views bundle" >&2
+	bun --cwd="$root" run gen:tool-views >&2
+fi
+
 # bunfig.toml is only read from the working directory, so pass it explicitly.
 exec bun --config="$root/bunfig.toml" "$root/packages/coding-agent/src/cli.ts" "$@"
