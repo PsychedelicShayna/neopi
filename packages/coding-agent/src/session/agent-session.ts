@@ -106,6 +106,15 @@ import { loadAdvisorTranscriptCosts } from "../advisor";
 import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, type AsyncJob, AsyncJobManager } from "../async";
 import { reset as resetCapabilities } from "../capability";
 import type { EffectiveExtensionRoots } from "../capability/types";
+import {
+	CHAT_MODE_ENTRY_TYPE,
+	type ChatModeConfig,
+	chatModeEntryData,
+	chatModeIncludes,
+	readChatModeEntry,
+	sameChatMode,
+} from "../chat/chat-mode";
+import { renderChatCompactionPrompt } from "../chat/chat-system-prompt";
 import { SessionChronicler } from "../chronicler/session-chronicler";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
 import type { ModelRegistry } from "../config/model-registry";
@@ -765,6 +774,8 @@ export class AgentSession {
 	#resetCoordinator: CodexAutoRedeemCoordinator;
 	// Extension system
 	#extensionRunner: ExtensionRunner | undefined = undefined;
+	#chatMode: ChatModeConfig | undefined;
+	#chatModeJournaledSessionId: string | undefined;
 	#getEvalPreludes: (() => readonly EvalPreludeDefinition[]) | undefined;
 	#reconcileBrowserMcpFilter: AgentSessionConfig["reconcileBrowserMcpFilter"];
 	/**
@@ -1479,6 +1490,7 @@ export class AgentSession {
 		this.#promptTemplates = config.promptTemplates ?? [];
 		this.#slashCommands = config.slashCommands ?? [];
 		this.#extensionRunner = config.extensionRunner;
+		this.#chatMode = config.chatMode;
 		this.#getEvalPreludes = config.getEvalPreludes;
 		this.#reconcileBrowserMcpFilter = config.reconcileBrowserMcpFilter;
 		this.#customCommands = config.customCommands ?? [];
@@ -1809,6 +1821,7 @@ export class AgentSession {
 		// same buffering contract print mode declares via setTextOutputCommitted.
 		this.#textOutputCommitted = this.#agentKind === "main";
 		this.#scoutAllowedBySpawnPolicy = config.scoutAllowedBySpawnPolicy ?? true;
+		this.#journalChatMode();
 		this.#providerSessionId = config.providerSessionId;
 		this.#inheritedProviderPromptCacheKey =
 			config.providerPromptCacheKeySource === "fork" ? this.agent.promptCacheKey : undefined;
@@ -1941,6 +1954,7 @@ export class AgentSession {
 			createEditTool: config.advisorCreateEditTool,
 			getToolContext: config.advisorGetToolContext,
 			mcpResources: config.advisorMcpResources,
+			chatMode: config.chatMode?.mode,
 			watchdogPrompt: config.advisorWatchdogPrompt,
 			sharedInstructions: config.advisorSharedInstructions,
 			sharedMaxNotesPerUpdate: config.advisorSharedMaxNotesPerUpdate,
@@ -1960,7 +1974,8 @@ export class AgentSession {
 			providerSessionState: this.#providerSessionState,
 			preferWebsockets: this.#preferWebsockets,
 			isDisposed: () => this.#isDisposed,
-			isCaptureEligible: () => this.#agentKind === "main",
+			isCaptureEligible: () =>
+				this.#agentKind === "main" && (!this.#chatMode || chatModeIncludes(this.#chatMode, "memory")),
 			emitNotice: (level, message, source) => this.emitNotice(level, message, source),
 			cwd: () => this.sessionManager.getCwd(),
 		});
@@ -2012,6 +2027,7 @@ export class AgentSession {
 				this.#experimentalContextNotesReminder = { prompt, generation: this.#promptGeneration };
 			},
 			memoryBackendSession: () => this,
+			chatCompactionPrompt: () => (this.#chatMode ? renderChatCompactionPrompt(this.#chatMode.mode) : undefined),
 			emitSessionEvent: (event, options) => this.#emitSessionEvent(event, options),
 			emitNotice: (level, message, source) => this.emitNotice(level, message, source),
 			schedulePostPromptTask: (task, options) => this.#schedulePostPromptTask(task, options),
@@ -6415,7 +6431,26 @@ export class AgentSession {
 		return this.#providerBoundary.normalizeAgentMessageImages(message);
 	}
 
+	/**
+	 * Journal the chat mode on the active session file so `--resume` restores
+	 * it. Runs at construction and before each prompt, once per session file, so
+	 * `/new`, forks, and switches carry the mode too. Records entering chat mode,
+	 * a changed include set, or leaving a previously recorded chat mode.
+	 */
+	#journalChatMode(): void {
+		if (this.#agentKind !== "main") return;
+		const sessionId = this.sessionManager.getSessionId();
+		if (this.#chatModeJournaledSessionId === sessionId) return;
+		this.#chatModeJournaledSessionId = sessionId;
+		const recorded = readChatModeEntry(this.sessionManager.getBranch());
+		const current = this.#chatMode ?? null;
+		if (sameChatMode(recorded, current) || (current === null && recorded === undefined)) return;
+		this.sessionManager.appendCustomEntry(CHAT_MODE_ENTRY_TYPE, chatModeEntryData(current));
+	}
+
 	#magicKeywordEnabled(keyword: MagicKeywordId): boolean {
+		// Chat mode never turns conversation words into coding-workflow notices.
+		if (this.#chatMode) return false;
 		return this.settings.get("magicKeywords.enabled") && this.settings.get(`magicKeywords.${keyword}`);
 	}
 
@@ -6574,6 +6609,7 @@ export class AgentSession {
 			return true;
 		}
 
+		this.#journalChatMode();
 		// Skip eager preludes when the user has already queued a directive
 		const hasPendingUserDirective = this.#toolChoiceQueue.inspect().includes("user-force");
 		const activeModel = this.agent.state.model;
@@ -6588,7 +6624,9 @@ export class AgentSession {
 		const eagerTodoPrelude =
 			!options?.synthetic && !hasPendingUserDirective ? this.#todo.createEagerTodoPrelude(expandedText) : undefined;
 		const eagerTaskPrelude =
-			!options?.synthetic && !hasPendingUserDirective ? this.#todo.createEagerTaskPrelude(expandedText) : undefined;
+			!options?.synthetic && !hasPendingUserDirective && !this.#chatMode
+				? this.#todo.createEagerTaskPrelude(expandedText)
+				: undefined;
 		const attachmentSourceNotices = this.#createAttachmentSourceNotices(options?.images, submittedAt);
 		const normalizedImages = await this.#normalizeImagesForModel(options?.images);
 
@@ -11884,5 +11922,10 @@ export class AgentSession {
 	 */
 	get extensionRunner(): ExtensionRunner | undefined {
 		return this.#extensionRunner;
+	}
+
+	/** Chat mode this session runs in; undefined for an ordinary coding session. */
+	get chatMode(): ChatModeConfig | undefined {
+		return this.#chatMode;
 	}
 }

@@ -78,6 +78,8 @@ import { CursorExecHandlers, type CursorMcpResourceAdapter } from "../cursor";
 import { bridgeToolMap } from "../cursor-bridge-tools";
 import { estimateToolSchemaTokens } from "@oh-my-pi/pi-tui/status-line/context-usage";
 import type { PlanModeState } from "../plan-mode/state";
+import type { ChatMode } from "../chat/chat-mode";
+import { renderChatAdvisorPrompt } from "../chat/chat-system-prompt";
 import advisorSystemPrompt from "../prompts/advisor/system.md" with { type: "text" };
 import type { SecretObfuscator } from "../secrets/obfuscator";
 import {
@@ -324,6 +326,8 @@ export interface SessionAdvisorsOptions {
 	 * advertises nothing.
 	 */
 	mcpResources?: CursorMcpResourceAdapter;
+	/** Chat mode of the primary session; swaps the default advisor prompt for a spectator one. */
+	chatMode?: ChatMode;
 	watchdogPrompt?: string;
 	sharedInstructions?: string;
 	sharedMaxNotesPerUpdate?: number;
@@ -425,6 +429,7 @@ export class SessionAdvisors {
 	#advisorGetToolContext: SessionAdvisorsOptions["getToolContext"];
 	#advisorMcpResources: SessionAdvisorsOptions["mcpResources"];
 	#advisorWatchdogPrompt: string | undefined;
+	#chatMode: ChatMode | undefined;
 	#advisorSharedInstructions: string | undefined;
 	#advisorSharedMaxNotesPerUpdate: number | undefined;
 	#advisorContextPrompt: string | undefined;
@@ -465,6 +470,7 @@ export class SessionAdvisors {
 		this.#advisorGetToolContext = options.getToolContext;
 		this.#advisorMcpResources = options.mcpResources;
 		this.#advisorWatchdogPrompt = options.watchdogPrompt;
+		this.#chatMode = options.chatMode;
 		this.#advisorSharedInstructions = options.sharedInstructions;
 		this.#advisorSharedMaxNotesPerUpdate = options.sharedMaxNotesPerUpdate;
 		this.#advisorContextPrompt = options.contextPrompt;
@@ -1013,7 +1019,10 @@ export class SessionAdvisors {
 			// `#advisorWatchdogPrompt` already carries WATCHDOG.md + YAML shared
 			// instructions; `config.instructions` adds this advisor's specialization.
 			const systemPrompt = [
-				config.systemPrompt ?? prompt.render(advisorSystemPrompt, { max_notes_per_update: budgetPerUpdate }),
+				config.systemPrompt ??
+					(this.#chatMode
+						? renderChatAdvisorPrompt(this.#chatMode, budgetPerUpdate)
+						: prompt.render(advisorSystemPrompt, { max_notes_per_update: budgetPerUpdate })),
 			];
 			if (this.#advisorContextPrompt) systemPrompt.push(this.#advisorContextPrompt);
 			if (this.#advisorMemoryPrompt) systemPrompt.push(this.#advisorMemoryPrompt);

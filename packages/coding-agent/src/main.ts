@@ -23,12 +23,14 @@ import * as logger from "@oh-my-pi/pi-utils/logger";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { reset as resetCapabilities } from "./capability";
+import { readChatModeEntry, resolveChatMode } from "./chat/chat-mode";
 import { type Args, reportUnrecognizedFlags, validateToolNames } from "./cli/args";
 import { applyExtensionFlags, type ExtensionFlagSink } from "./cli/extension-flags";
 import { processFileArguments } from "./cli/file-processor";
 import { buildInitialMessage } from "./cli/initial-message";
 import type { SessionPickerOptions } from "@oh-my-pi/pi-tui/apps/session-picker";
 import { applyStartupCwd } from "./cli/startup-cwd";
+import { CliUsageError } from "./cli/usage-error";
 import { getLatestRelease } from "./cli/update-cli";
 import { findConfigFile } from "./config";
 import { ModelRegistry } from "./config/model-registry";
@@ -1227,6 +1229,20 @@ export async function buildSessionOptions(
 		autoApprove: parsed.autoApprove ?? false,
 	};
 	const restoringSession = Boolean(parsed.continue || parsed.resume || isForeignSessionImport(parsed));
+	// Chat mode strips coding-agent context. Resolved first: it decides whether
+	// discovered SYSTEM.md / APPEND_SYSTEM.md apply at all.
+	const chatMode = resolveChatMode({
+		flag: parsed.chat,
+		includeFlag: parsed.chatInclude,
+		stored: sessionManager ? readChatModeEntry(sessionManager.getBranch()) : undefined,
+		restoring: restoringSession,
+		settingsMode: activeSettings.get("chat.mode"),
+		settingsInclude: activeSettings.get("chat.include"),
+	});
+	if (chatMode && parsed.systemPromptTemplate !== undefined) {
+		throw new CliUsageError("--system-prompt-template cannot be combined with chat mode");
+	}
+	if (chatMode) options.chatMode = chatMode;
 	if (parsed.serviceTier !== undefined) {
 		options.openAIServiceTier = serviceTierSettingToTier(parsed.serviceTier) ?? null;
 	}
@@ -1244,15 +1260,17 @@ export async function buildSessionOptions(
 		throw new Error("--system-prompt and --system-prompt-template cannot be combined");
 	}
 	const cwd = options.cwd;
+	// Chat mode honors only explicit prompt flags: discovered SYSTEM.md and
+	// APPEND_SYSTEM.md carry coding-agent guidance the mode exists to drop.
 	const discoveredOverride =
-		parsed.systemPrompt === undefined && parsed.systemPromptTemplate === undefined
+		parsed.systemPrompt === undefined && parsed.systemPromptTemplate === undefined && !chatMode
 			? await discoverSystemPromptOverride(cwd)
 			: undefined;
 	const systemPromptSource =
 		parsed.systemPrompt ?? (discoveredOverride?.kind === "text" ? discoveredOverride.path : undefined);
 	const templatePath =
 		parsed.systemPromptTemplate ?? (discoveredOverride?.kind === "template" ? discoveredOverride.path : undefined);
-	const appendPromptSource = parsed.appendSystemPrompt ?? discoverAppendSystemPromptFile();
+	const appendPromptSource = parsed.appendSystemPrompt ?? (chatMode ? undefined : discoverAppendSystemPromptFile());
 	const titleSystemPromptSource = discoverTitleSystemPromptFile(cwd);
 	const [resolvedSystemPrompt, resolvedAppendPrompt, titleSystemPrompt, resolvedSystemPromptTemplate] =
 		await Promise.all([
@@ -1290,7 +1308,9 @@ export async function buildSessionOptions(
 			parsed.systemPromptTemplate !== undefined ||
 			parsed.appendSystemPrompt !== undefined ||
 			parsed.tools !== undefined ||
-			parsed.noTools === true;
+			parsed.noTools === true ||
+			parsed.chat !== undefined ||
+			parsed.chatInclude !== undefined;
 		if (!forkCacheShapeChanged && header?.providerPromptCacheKey) {
 			options.providerPromptCacheKey = header.providerPromptCacheKey;
 			options.providerPromptCacheKeySource = "fork";
@@ -1566,28 +1586,38 @@ export async function buildSessionOptions(
 		options.titleSystemPrompt = titleSystemPrompt;
 	}
 
-	// Tools
-	if (parsed.noTools) {
-		options.toolNames = parsed.tools && parsed.tools.length > 0 ? parsed.tools : [];
-	} else if (parsed.tools) {
-		options.toolNames = parsed.tools;
-	}
-
-	if (parsed.noLsp) {
+	if (chatMode) {
+		// Chat mode: no tools unless explicitly granted, no discovered skills or
+		// rules unless re-included, and no MCP/LSP startup work.
+		options.toolNames = parsed.tools ?? [];
+		if (!chatMode.include.includes("skills")) options.skills = [];
+		if (!chatMode.include.includes("rules")) options.rules = [];
+		options.enableMCP = false;
 		options.enableLsp = false;
-	}
+	} else {
+		// Tools
+		if (parsed.noTools) {
+			options.toolNames = parsed.tools && parsed.tools.length > 0 ? parsed.tools : [];
+		} else if (parsed.tools) {
+			options.toolNames = parsed.tools;
+		}
 
-	// Skills
-	if (parsed.noSkills) {
-		options.skills = [];
-	} else if (parsed.skills && parsed.skills.length > 0) {
-		// Override includeSkills for this session
-		activeSettings.override("skills.includeSkills", parsed.skills as string[]);
-	}
+		if (parsed.noLsp) {
+			options.enableLsp = false;
+		}
 
-	// Rules
-	if (parsed.noRules) {
-		options.rules = [];
+		// Skills
+		if (parsed.noSkills) {
+			options.skills = [];
+		} else if (parsed.skills && parsed.skills.length > 0) {
+			// Override includeSkills for this session
+			activeSettings.override("skills.includeSkills", parsed.skills as string[]);
+		}
+
+		// Rules
+		if (parsed.noRules) {
+			options.rules = [];
+		}
 	}
 
 	// Trusted extension paths are an exact allowlist for extension modules.

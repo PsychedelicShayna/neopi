@@ -86,6 +86,10 @@ const setResume: OptionalSetter = (result, value) => {
 	result.resume = value !== undefined ? value : true;
 };
 
+const setChat: OptionalSetter = (result, value) => {
+	result.chat = value !== undefined ? value : true;
+};
+
 const MAX_TIME_DURATION_RE = /^(\d+(?:\.\d+)?)([smh])$/;
 
 function maxTimeMultiplier(unit: string | undefined): number {
@@ -226,6 +230,12 @@ export const STRING_SETTERS: Record<string, StringSetter> = {
 	"--skills": (result, value) => {
 		result.skills = value.split(",").map(s => s.trim());
 	},
+	"--chat-include": (result, value) => {
+		result.chatInclude = value
+			.split(",")
+			.map(s => s.trim())
+			.filter(Boolean);
+	},
 	"--approval-mode": (result, value, deps) => {
 		if (value === "always-ask" || value === "write" || value === "yolo") {
 			result.approvalMode = value;
@@ -249,6 +259,7 @@ export const OPTIONAL_FLAGS: Record<string, OptionalFlagConfig> = {
 	"--resume": { set: setResume, rejectEmpty: true },
 	"-r": { set: setResume, rejectEmpty: true },
 	"--session": { set: setResume, rejectEmpty: true },
+	"--chat": { set: setChat, rejectEmpty: true },
 };
 
 /**

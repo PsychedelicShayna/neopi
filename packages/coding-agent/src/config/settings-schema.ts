@@ -10,6 +10,7 @@ import {
 	type BlobDestinationMetadata,
 	BUILTIN_BLOB_DESTINATIONS,
 } from "../blob-broker/destinations";
+import { CHAT_INCLUDES, CHAT_MODE_SETTING_VALUES } from "../chat/chat-mode";
 import { DEFAULT_RELAY_URL } from "../collab/protocol";
 import { DEFAULT_LIVE_VOICE, LIVE_VOICE_OPTIONS, LIVE_VOICE_VALUES } from "../live/voices";
 import { MAGIC_KEYWORDS, type MagicKeywordId } from "../modes/magic-keywords";
@@ -1487,6 +1488,36 @@ export const SETTINGS_SCHEMA = {
 				},
 				{ value: "none", label: "None", description: "Omit the personality block entirely" },
 			],
+		},
+	},
+
+	"chat.mode": {
+		type: "enum",
+		values: CHAT_MODE_SETTING_VALUES,
+		default: "off",
+		ui: {
+			tab: "model",
+			group: "Prompt",
+			label: "Chat Mode",
+			description:
+				"Default mode for new sessions. Chat modes strip coding-agent context (tools, skills, rules, memory, reminders); --chat overrides, resumed sessions keep their recorded mode",
+			options: [
+				{ value: "off", label: "Off", description: "Ordinary coding-agent session" },
+				{ value: "chat", label: "Chat", description: "Conversation-first system prompt" },
+				{ value: "erp", label: "ERP", description: "Explicit erotic roleplay system prompt" },
+				{ value: "raw", label: "Raw", description: "Empty system prompt; only the conversation" },
+			],
+		},
+	},
+
+	"chat.include": {
+		type: "array",
+		default: [] as string[],
+		ui: {
+			tab: "model",
+			group: "Prompt",
+			label: "Chat Mode Includes",
+			description: `Context categories kept in chat mode (${CHAT_INCLUDES.join(", ")}); --chat-include overrides`,
 		},
 	},
 

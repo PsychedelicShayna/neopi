@@ -17,6 +17,7 @@ import {
 } from "./flag-tables";
 import { getExtraHelpText } from "./help-extra";
 import { CliUsageError } from "./usage-error";
+import { parseChatIncludes, parseChatModeArg } from "../chat/chat-mode";
 
 export { getExtraHelpText };
 
@@ -45,6 +46,10 @@ export interface Args {
 	systemPrompt?: string;
 	systemPromptTemplate?: string;
 	appendSystemPrompt?: string;
+	/** `--chat[=chat|erp|raw|off]`; `true` for the bare flag. */
+	chat?: string | true;
+	/** `--chat-include` categories re-enabled in chat mode. */
+	chatInclude?: string[];
 	thinking?: ConfiguredThinkingLevel;
 	serviceTier?: ServiceTierOpenAISettingValue;
 	hideThinking?: boolean;
@@ -333,6 +338,13 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 	if (result.systemPrompt !== undefined && result.systemPromptTemplate !== undefined) {
 		throw new CliUsageError("--system-prompt and --system-prompt-template cannot be combined");
 	}
+	if (result.chat !== undefined) {
+		const chatMode = parseChatModeArg(result.chat);
+		if (chatMode !== null && result.systemPromptTemplate !== undefined) {
+			throw new CliUsageError("--system-prompt-template cannot be combined with --chat");
+		}
+	}
+	if (result.chatInclude !== undefined) parseChatIncludes(result.chatInclude, "--chat-include");
 	return result;
 }
 
