@@ -1428,6 +1428,14 @@ export interface ExtensionAPI {
 	/** Get the value of a registered CLI flag. */
 	getFlag(name: string): boolean | string | undefined;
 
+	/**
+	 * Declare that this extension's prompt and context injection belongs in chat
+	 * mode (`--chat`). Chat sessions ignore `before_agent_start` and `context`
+	 * results from extensions that do not declare it; commands, UI, and other
+	 * events are unaffected.
+	 */
+	declareChatModeSupport(): void;
+
 	// =========================================================================
 	// Message Rendering
 	// =========================================================================
@@ -1805,6 +1813,8 @@ export interface Extension {
 	commands: Map<string, RegisteredCommand>;
 	flags: Map<string, ExtensionFlag>;
 	shortcuts: Map<KeyId, ExtensionShortcut>;
+	/** Set by {@link ExtensionAPI.declareChatModeSupport}. */
+	chatModeSupport?: boolean;
 }
 
 /**

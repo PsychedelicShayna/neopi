@@ -4076,4 +4076,55 @@ describe("ExtensionRunner", () => {
 			expect(cachedTexts).toEqual(["persisted user", "persisted assistant"]);
 		});
 	});
+
+	describe("chat mode prompt injection", () => {
+		const promptExtension = (name: string, chatModeSupport: boolean): Extension => {
+			const extensionPath = path.join(extensionsDir, `${name}.ts`);
+			return {
+				path: extensionPath,
+				resolvedPath: extensionPath,
+				handlers: new Map([
+					[
+						"before_agent_start",
+						[
+							async (...args: unknown[]) => ({
+								systemPrompt: [...(args[0] as { systemPrompt: string[] }).systemPrompt, name],
+							}),
+						],
+					],
+				]),
+				tools: new Map(),
+				assistantThinkingRenderers: [],
+				fileWriteFallbackHandlers: [],
+				fileDeleteFallbackHandlers: [],
+				messageRenderers: new Map(),
+				composerShapes: new Map(),
+				commands: new Map(),
+				flags: new Map(),
+				shortcuts: new Map(),
+				chatModeSupport,
+			};
+		};
+
+		it("honors only extensions that declared chat-mode support", async () => {
+			const runner = new ExtensionRunner(
+				[promptExtension("coding-guidance", false), promptExtension("persona", true)],
+				new ExtensionRuntime(),
+				tempDir.path(),
+				sessionManager,
+				modelRegistry,
+			);
+			expect((await runner.emitBeforeAgentStart("hi", undefined, ["base"]))?.systemPrompt).toEqual([
+				"base",
+				"coding-guidance",
+				"persona",
+			]);
+
+			runner.setChatMode(true);
+			expect((await runner.emitBeforeAgentStart("hi", undefined, ["base"]))?.systemPrompt).toEqual([
+				"base",
+				"persona",
+			]);
+		});
+	});
 });

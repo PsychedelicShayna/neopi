@@ -445,6 +445,7 @@ interface ToolRegistrationScope {
 
 export class ExtensionRunner {
 	#uiContext: ExtensionUIContext;
+	#chatMode = false;
 	#mode: ExtensionMode = "print";
 	#toolApprovalPreviewWaiter?: (toolCallId: string) => Promise<void>;
 	#errorListeners: Set<ExtensionErrorListener> = new Set();
@@ -1138,6 +1139,18 @@ export class ExtensionRunner {
 		}
 	}
 
+	/**
+	 * Chat mode: `before_agent_start` and `context` results count only from
+	 * extensions that called {@link ExtensionAPI.declareChatModeSupport}.
+	 */
+	setChatMode(active: boolean): void {
+		this.#chatMode = active;
+	}
+
+	#injectsContext(ext: Extension): boolean {
+		return !this.#chatMode || ext.chatModeSupport === true;
+	}
+
 	hasHandlers(eventType: string): boolean {
 		for (const ext of this.extensions) {
 			const handlers = ext.handlers.get(eventType);
@@ -1684,7 +1697,7 @@ export class ExtensionRunner {
 		// Check if any extensions actually have context handlers before cloning
 		let hasContextHandlers = false;
 		for (const ext of this.extensions) {
-			if (ext.handlers.get("context")?.length) {
+			if (this.#injectsContext(ext) && ext.handlers.get("context")?.length) {
 				hasContextHandlers = true;
 				break;
 			}
@@ -1707,7 +1720,7 @@ export class ExtensionRunner {
 
 		for (const ext of this.extensions) {
 			const handlers = ext.handlers.get("context");
-			if (!handlers || handlers.length === 0) continue;
+			if (!handlers || handlers.length === 0 || !this.#injectsContext(ext)) continue;
 
 			for (const handler of handlers) {
 				const event: ContextEvent = { type: "context", messages: currentMessages };
@@ -1813,7 +1826,7 @@ export class ExtensionRunner {
 
 		for (const ext of this.extensions) {
 			const handlers = ext.handlers.get("before_agent_start");
-			if (!handlers || handlers.length === 0) continue;
+			if (!handlers || handlers.length === 0 || !this.#injectsContext(ext)) continue;
 
 			for (const handler of handlers) {
 				const event: BeforeAgentStartEvent = {

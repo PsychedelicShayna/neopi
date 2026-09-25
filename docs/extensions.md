@@ -116,7 +116,7 @@ Core methods:
 - `registerTool`, `registerCommand`, `registerShortcut`, `registerFlag`
 - `registerMessageRenderer`, `registerAssistantThinkingRenderer`
 - `registerComposerShape`
-- `setLabel`, `getFlag`
+- `setLabel`, `getFlag`, `declareChatModeSupport`
 - `sendMessage`, `sendUserMessage`, `appendEntry`, `exec`
 - `getActiveTools`, `getAllTools`, `setActiveTools`
 - `getCommands`
@@ -128,6 +128,8 @@ Core methods:
 - `events` (shared event bus)
 
 `ExtensionAPI` methods retain their extension binding when destructured or passed as callbacks.
+
+`declareChatModeSupport()` marks an extension's prompt and context injection as belonging in chat mode (`--chat`). Chat sessions ignore `before_agent_start` and `context` results from extensions that do not call it; their commands, UI, and other events keep working.
 
 `getServiceTiers()` returns a detached snapshot of the session's live per-family tier map. `setServiceTier(family, tier)` changes one family for subsequent requests; pass `undefined` to clear that session override. OpenAI accepts `auto`, `default`, `flex`, `scale`, or `priority`; Anthropic accepts `priority`; Google accepts `flex` or `priority`. Changes made while a response is streaming do not alter that in-flight request.
 

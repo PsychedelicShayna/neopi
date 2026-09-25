@@ -103,6 +103,8 @@ async function personaCreateEdit(
 export default function neopi_persona(api: ExtensionAPI): void {
 	const store = new BompStateStore(defaultStatePath());
 	const personas = createPersonaFeature(store, agentDir(), api);
+	// A persona is the chat-mode prompt source: keep its injection in `--chat`.
+	api.declareChatModeSupport();
 	api.on("before_agent_start", (event, ctx) => personas.apply(event, ctx));
 
 	api.registerCommand("persona", {

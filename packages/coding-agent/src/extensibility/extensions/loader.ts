@@ -302,6 +302,10 @@ class ConcreteExtensionAPI implements ExtensionAPI {
 		return this.runtime.flagValues.get(name);
 	}
 
+	declareChatModeSupport(): void {
+		this.extension.chatModeSupport = true;
+	}
+
 	sendMessage<T = unknown>(
 		message: CustomMessagePayload<T>,
 		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" | "aside" },
