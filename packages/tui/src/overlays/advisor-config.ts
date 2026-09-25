@@ -491,7 +491,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 		return `${model} · ${tools}`;
 	}
 
-	#showList(): void {
+	#showList(selectedValue?: string): void {
 		this.#ensureRosterVisible();
 		const items: SelectItem[] = this.#doc.advisors.map((advisor, index) => ({
 			value: `advisor:${index}`,
@@ -510,19 +510,44 @@ export class AdvisorConfigOverlayComponent implements Component {
 
 		// Show every row (no internal overflow-search); the split frame supplies height.
 		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme());
+		if (selectedValue) list.setSelectedIndex(items.findIndex(item => item.value === selectedValue));
 		list.onSelectionChange = () => {
 			this.#previewScroll = 0;
 			this.#cb.requestRender();
 		};
-		list.onSelect = item =>
-			void this.#onListSelect(item.value).catch(err => {
+		const runSelect = (value: string) =>
+			void this.#onListSelect(value, list.getSelectedItem()?.value).catch(err => {
 				this.#cb.notify(`Advisor config: ${err instanceof Error ? err.message : String(err)}`);
 			});
+		const handleInput = list.handleInput.bind(list);
+		list.handleInput = data => {
+			if (matchesKey(data, "space")) {
+				const value = list.getSelectedItem()?.value;
+				const match = value ? /^advisor:(\d+)$/.exec(value) : null;
+				const advisor = match ? this.#doc.advisors[Number(match[1])] : undefined;
+				if (advisor) {
+					advisor.enabled = advisor.enabled === false ? undefined : false;
+					this.#dirty = true;
+					this.#showList(value);
+				}
+				return;
+			}
+			if (matchesKey(data, "s")) {
+				runSelect("save");
+				return;
+			}
+			handleInput(data);
+		};
+		list.onSelect = item => runSelect(item.value);
 		list.onCancel = () => this.#cb.close();
-		this.#setScreen("list", list, "↑↓ move · Enter / click select · scroll preview on the right · Esc close");
+		this.#setScreen(
+			"list",
+			list,
+			"↑↓ move · Space toggle advisor · Enter / click select · s save & apply · scroll preview on the right · Esc close",
+		);
 	}
 
-	async #onListSelect(value: string): Promise<void> {
+	async #onListSelect(value: string, selectedValue?: string): Promise<void> {
 		if (value === "add") {
 			this.#doc.advisors.push({ name: `Advisor ${this.#doc.advisors.length + 1}` });
 			this.#dirty = true;
@@ -561,7 +586,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 			// warnings no longer apply to it. (On failure the throw skips this.)
 			this.#doc.warnings = undefined;
 			this.#dirty = false;
-			this.#showList();
+			this.#showList(selectedValue);
 			return;
 		}
 		if (value === "close") {
