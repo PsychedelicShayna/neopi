@@ -57,6 +57,39 @@ describe("advisor config editor warnings and synthetic default row", () => {
 		expect(saved?.advisors).toEqual([]);
 	});
 
+	it("toggles the highlighted advisor with Space and saves it with s, all from the list", async () => {
+		let saved: WatchdogConfigDoc | undefined;
+		const overlay = buildOverlay({ advisors: [{ name: "alpha" }, { name: "beta" }] }, doc => {
+			saved = structuredClone(doc);
+		});
+
+		overlay.handleInput("\x1b[B"); // highlight beta
+		overlay.handleInput(" "); // off
+		overlay.handleInput(" "); // on again: still on the list, cursor kept on beta
+		overlay.handleInput(" "); // off
+		overlay.handleInput("s");
+		await Promise.resolve();
+
+		expect(saved?.advisors.map(a => [a.name, a.enabled])).toEqual([
+			["alpha", undefined],
+			["beta", false],
+		]);
+	});
+
+	it("treats Space as Enter on non-advisor rows", async () => {
+		let saved: WatchdogConfigDoc | undefined;
+		const overlay = buildOverlay({ advisors: [{ name: "alpha" }] }, doc => {
+			saved = structuredClone(doc);
+		});
+
+		overlay.handleInput(" "); // alpha off
+		for (let i = 0; i < 4; i++) overlay.handleInput("\x1b[B"); // → Save & apply
+		overlay.handleInput(" ");
+		await Promise.resolve();
+
+		expect(saved?.advisors.map(a => [a.name, a.enabled])).toEqual([["alpha", false]]);
+	});
+
 	it("surfaces the newly active file's warnings on scope switch, and only there", async () => {
 		const warnings: string[] = [];
 		let pendingLoad: Promise<WatchdogConfigDoc> | undefined;
