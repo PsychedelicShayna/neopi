@@ -82,8 +82,10 @@ export interface AdvisorConfigStat {
 export interface AdvisorConfigCallbacks {
 	/** Load a scope's `WATCHDOG.yml` into an editable doc (empty when absent). */
 	loadDoc: (scope: AdvisorConfigScope) => Promise<WatchdogConfigDoc>;
-	/** Persist the doc to the scope's file and rebuild the live advisors. */
+	/** Persist the doc to the scope's file. Must not touch the live advisors. */
 	save: (scope: AdvisorConfigScope, doc: WatchdogConfigDoc) => Promise<void>;
+	/** Apply the saved configuration to the live advisors (only changed ones restart). */
+	apply: () => Promise<void>;
 	/** Tear down the overlay and restore the editor. */
 	close: () => void;
 	requestRender: () => void;
@@ -215,6 +217,8 @@ export class AdvisorConfigOverlayComponent implements Component {
 	/** Cached usage reports (quota/window/reset) prefetched on overlay open. */
 	#cachedReports: UsageReport[] | null = null;
 	#dirty = false;
+	/** Saved to disk this session but not yet applied to the live advisors. */
+	#pendingApply = false;
 
 	#screen: Screen = "list";
 	/** The interactive element for the current screen. */
@@ -296,7 +300,8 @@ export class AdvisorConfigOverlayComponent implements Component {
 		const height = Math.max(14, process.stdout.rows || 40);
 		const bodyRows = Math.max(3, height - 4);
 		this.#bodyRowsLast = bodyRows;
-		const title = `Advisor configuration · ${this.#scope}${this.#dirty ? "  ● unsaved" : ""}`;
+		const state = this.#dirty ? "  ● unsaved" : this.#pendingApply ? "  ◐ saved, not applied" : "";
+		const title = `Advisor configuration · ${this.#scope}${state}`;
 		this.#split.setNarrowPane(this.#screen === "list" ? undefined : "left");
 		this.#split.setSplitAt(this.#screen === "list" ? 0 : Number.MAX_SAFE_INTEGER);
 		this.#split.setHeight(bodyRows);
@@ -540,7 +545,11 @@ export class AdvisorConfigOverlayComponent implements Component {
 				return;
 			}
 			if (matchesKey(data, "s")) {
-				runSelect("save", true);
+				runSelect("saveOnly", true);
+				return;
+			}
+			if (matchesKey(data, "a")) {
+				runSelect("apply", true);
 				return;
 			}
 			handleInput(data);
@@ -550,7 +559,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#setScreen(
 			"list",
 			list,
-			"↑↓ move · Space toggle advisor, else select · Enter / click select · s save & apply · scroll preview on the right · Esc close",
+			"↑↓ move · Space toggle advisor, else select · Enter / click select · s save · a apply · scroll preview on the right · Esc close",
 		);
 	}
 
@@ -586,13 +595,21 @@ export class AdvisorConfigOverlayComponent implements Component {
 			this.#showList();
 			return;
 		}
-		if (value === "save") {
-			const doc = this.#hasSyntheticDefaultAdvisor(this.#doc) ? { ...this.#doc, advisors: [] } : this.#doc;
-			await this.#cb.save(this.#scope, doc);
-			// The saved file contains only the normalized entries, so the load-time
-			// warnings no longer apply to it. (On failure the throw skips this.)
-			this.#doc.warnings = undefined;
-			this.#dirty = false;
+		if (value === "saveOnly") {
+			await this.#saveDoc();
+			this.#showList(selectedValue);
+			return;
+		}
+		if (value === "apply" || value === "save") {
+			// The "Save & apply" row always saves; `a` saves only unsaved edits.
+			if (value === "save" || this.#dirty) await this.#saveDoc();
+			if (!this.#pendingApply) {
+				this.#cb.notify("Advisor config: nothing to apply.");
+				this.#showList(selectedValue);
+				return;
+			}
+			await this.#cb.apply();
+			this.#pendingApply = false;
 			this.#showList(selectedValue);
 			return;
 		}
@@ -602,6 +619,17 @@ export class AdvisorConfigOverlayComponent implements Component {
 		}
 		const match = /^advisor:(\d+)$/.exec(value);
 		if (match) this.#showDetail(Number(match[1]));
+	}
+
+	/** Write the current scope's doc to disk without touching the live advisors. */
+	async #saveDoc(): Promise<void> {
+		const doc = this.#hasSyntheticDefaultAdvisor(this.#doc) ? { ...this.#doc, advisors: [] } : this.#doc;
+		await this.#cb.save(this.#scope, doc);
+		// The saved file contains only the normalized entries, so the load-time
+		// warnings no longer apply to it. (On failure the throw skips this.)
+		this.#doc.warnings = undefined;
+		this.#dirty = false;
+		this.#pendingApply = true;
 	}
 
 	#showDetail(index: number, selectedField?: string): void {
