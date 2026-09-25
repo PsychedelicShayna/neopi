@@ -398,6 +398,8 @@ export interface SessionMaintenanceHost {
 	takeExperimentalContextRolloverRequest(context: AgentTurnEndContext | undefined): boolean;
 	queueExperimentalContextNotesReminder(prompt: string): void;
 	memoryBackendSession(): MemoryBackendOperationContext["session"];
+	/** Chat-mode narrative summary prompt; replaces the stock compaction prompt unless an extension supplied one. */
+	chatCompactionPrompt?(): string | undefined;
 	emitSessionEvent(event: AgentSessionEvent, options?: { detachExtensions?: boolean }): Promise<void>;
 	emitNotice(level: "info" | "warning" | "error", message: string, source?: string): void;
 	schedulePostPromptTask(
@@ -3390,6 +3392,9 @@ export class SessionMaintenance {
 			};
 		}
 
+		// Chat mode summarizes the story, not a task handoff; an extension-supplied
+		// prompt (session.compacting) still wins.
+		hookPrompt ??= this.#host.chatCompactionPrompt?.();
 		return { kind: "needsLlm", hookContext, hookPrompt, preserveData };
 	}
 

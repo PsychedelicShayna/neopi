@@ -147,6 +147,8 @@ See [providers](./providers.md) and [models](./models.md) for model resolution.
 | `--system-prompt <text\|file>` | Plain-text system prompt override (default: coding assistant prompt). See [system prompt customization](./system-prompt-customization.md). |
 | `--system-prompt-template <path>` | Strictly read `<path>` as a Handlebars system-prompt template; mutually exclusive with `--system-prompt`. See [system prompt customization](./system-prompt-customization.md). |
 | `--append-system-prompt <text\|file>` | Append plain text or file contents to the system prompt. |
+| `--chat[=chat\|erp\|raw\|off]` | Chat mode: drop coding-agent context (tools, skills, rules, memory, reminders, delegation). `chat` (bare flag) and `erp` use built-in conversation or erotic-roleplay prompts and keep the project `AGENTS.md` hierarchy as lore; `raw` sends no system prompt. `--system-prompt` replaces the mode prompt; `--tools` grants tools. The mode is saved with the session and restored on resume; `off` switches it off. Default: `chat.mode` setting. Use `--chat=<mode>`, since a bare `--chat` would take a following message as its value. |
+| `--chat-include <list>` | Comma-separated context to keep in chat mode: `date`, `cwd`, `contextFiles`, `skills`, `rules`, `memory`. Default: `chat.include` setting. |
 
 #### Output mode
 

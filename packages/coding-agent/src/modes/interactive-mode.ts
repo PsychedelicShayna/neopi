@@ -60,6 +60,7 @@ import {
 } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { reset as resetCapabilities } from "../capability";
+import { chatModeLabel } from "../chat/chat-mode";
 import { restartArgv } from "../cli/flag-tables";
 import type { CollabGuestLink } from "../collab/guest";
 import { CollabController } from "../collab/controller";
@@ -1426,6 +1427,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.editorContainer.addChild(this.editor);
 		this.statusLine = new StatusLineComponent(session, statusLineHost);
 		this.statusLine.setAutoCompactEnabled(session.autoCompactionEnabled);
+		if (session.chatMode) this.statusLine.setHookStatus("chat-mode", chatModeLabel(session.chatMode.mode));
 		this.#codexResetFireworksController = new CodexResetFireworksController(this);
 		this.statusLine.setCodexResetFireworksHandler(event => {
 			this.#codexResetFireworksController.show(event);

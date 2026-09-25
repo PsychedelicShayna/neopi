@@ -38,6 +38,13 @@ export const launchHelp = {
 			description: "Handlebars system prompt template (mutually exclusive with --system-prompt)",
 		}),
 		"append-system-prompt": Flags.string({ description: "Append text or file contents to the system prompt" }),
+		chat: Flags.string({
+			description:
+				"Chat mode without coding-agent context: chat (bare flag), erp, raw (empty prompt), or off. Use --chat=<mode>",
+		}),
+		"chat-include": Flags.string({
+			description: "Comma-separated context to keep in chat mode: date, cwd, contextFiles, skills, rules, memory",
+		}),
 		"allow-home": Flags.boolean({ description: "Allow starting in ~ without auto-switching to a temp dir" }),
 		profile: Flags.string({ description: "Use an isolated profile for auth, sessions, settings, and caches" }),
 		alias: Flags.string({ description: "Create a shell shortcut for the selected profile and exit" }),
@@ -118,6 +125,7 @@ export const launchHelp = {
 		`# Create a shell shortcut for a work profile\n  ${APP_NAME} --profile work --alias ${APP_NAME}-work`,
 		`# Use different model (fuzzy matching)\n  ${APP_NAME} --model opus "Help me refactor this code"`,
 		`# Limit model cycling to specific models\n  ${APP_NAME} --models claude-sonnet,claude-haiku,gpt-4o`,
+		`# Chat without coding-agent context (chat, erp, or raw)\n  ${APP_NAME} --chat=erp`,
 		`# Export a session file to HTML\n  ${APP_NAME} --export ~/.omp/agent/sessions/--path--/session.jsonl`,
 	],
 } satisfies CommandMetadata;

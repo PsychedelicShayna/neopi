@@ -450,6 +450,8 @@ export interface LoadContextFilesOptions {
 	cwd?: string;
 	/** Disabled extension IDs to honor instead of the process-global settings. */
 	disabledExtensions?: string[];
+	/** Keep only project-level files (cwd hierarchy), dropping user/agent-dir context files. */
+	projectOnly?: boolean;
 }
 
 /**
@@ -507,14 +509,16 @@ export async function loadProjectContextFiles(
 	// resolution base so relative imports work the same way Claude Code,
 	// Goose, and other tools document.
 	const files = await Promise.all(
-		result.items.map(async item => {
-			const contextFile = item as ContextFile;
-			return {
-				path: contextFile.path,
-				content: await expandAtImports(contextFile.content, contextFile.path),
-				depth: contextFile.depth,
-			};
-		}),
+		result.items
+			.filter(item => !options.projectOnly || (item as ContextFile).level === "project")
+			.map(async item => {
+				const contextFile = item as ContextFile;
+				return {
+					path: contextFile.path,
+					content: await expandAtImports(contextFile.content, contextFile.path),
+					depth: contextFile.depth,
+				};
+			}),
 	);
 
 	// Sort by depth (descending): higher depth (farther from cwd) comes first,

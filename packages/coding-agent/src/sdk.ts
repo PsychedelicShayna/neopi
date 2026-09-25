@@ -55,6 +55,8 @@ import {
 } from "./capability/rule";
 import { bucketRules } from "./capability/rule-buckets";
 import type { EffectiveExtensionRoots } from "./capability/types";
+import { type ChatModeConfig, chatModeIncludes } from "./chat/chat-mode";
+import { buildChatSystemPrompt } from "./chat/chat-system-prompt";
 import { shouldEnableAppendOnlyContext } from "./config/append-only-context-mode";
 import { shouldInlineToolDescriptors } from "./config/inline-tool-descriptors-mode";
 import { isAuthenticated, kNoAuth, ModelRegistry } from "./config/model-registry";
@@ -449,6 +451,11 @@ export interface CreateAgentSessionOptions {
 	customSystemPrompt?: string;
 	/** Already-loaded text appended through the bundled system prompt templates. */
 	appendSystemPrompt?: string;
+	/**
+	 * Chat mode (`--chat`): strips coding-agent context from the system prompt,
+	 * per-turn reminders, memory, and extension prompt injection.
+	 */
+	chatMode?: ChatModeConfig;
 	/**
 	 * Already-loaded title-generation system prompt override (typically
 	 * {@link discoverTitleSystemPromptFile} → {@link resolvePromptInput}). When
@@ -882,10 +889,12 @@ export async function discoverContextFiles(
 	cwd?: string,
 	_agentDir?: string,
 	disabledExtensions?: string[],
+	projectOnly?: boolean,
 ): Promise<Array<{ path: string; content: string; depth?: number }>> {
 	return await loadContextFilesInternal({
 		cwd: cwd ?? getProjectDir(),
 		disabledExtensions,
+		projectOnly,
 	});
 }
 
@@ -1420,9 +1429,15 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	// Independent discoveries that depend only on cwd/agentDir — kicked off in parallel and awaited
 	// at their respective consumer sites. Their work can overlap with model resolution, secret loading,
 	// session-context build, tool creation, MCP discovery, and extension discovery.
+	// Chat mode keeps only the project context-file hierarchy (story lore);
+	// agent-dir/user-level files carry coding guidance. Raw mode loads none.
+	const chatMode = options.chatMode;
+	const chatKeepsContextFiles = chatMode ? chatModeIncludes(chatMode, "contextFiles") : true;
 	const contextFilesPromise = options.contextFiles
 		? Promise.resolve(options.contextFiles)
-		: logger.time("discoverContextFiles", discoverContextFiles, cwd, agentDir);
+		: chatKeepsContextFiles
+			? logger.time("discoverContextFiles", discoverContextFiles, cwd, agentDir, undefined, chatMode !== undefined)
+			: Promise.resolve([]);
 	contextFilesPromise.catch(() => {});
 	const resolveRepoContext = async (repoCwd: string) => {
 		try {
@@ -1759,6 +1774,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	let hasSession = false;
 	let hasRegistered = false;
 	const restrictToolNames = options.restrictToolNames === true;
+	// Memory (prompt instructions, backend startup, memory tools, auto-learn) is
+	// off for restricted subagents and for chat sessions that did not re-include it.
+	const memoryEnabled = !restrictToolNames && (!chatMode || chatModeIncludes(chatMode, "memory"));
 	const enableLsp = options.enableLsp ?? !restrictToolNames;
 	const lspReadOnly = options.lspReadOnly ?? restrictToolNames;
 	const asyncMaxJobs = Math.min(100, Math.max(1, settings.get("async.maxJobs") ?? 100));
@@ -1854,7 +1872,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					(settings.get("skillful") === true && (session?.skills ?? skills).length > 0)
 				);
 			},
-			restrictToolNames,
+			// Chat mode owns its tool list exactly (`--tools` or none): no automatic
+			// auto-learn, memory, goal, or AST widening.
+			restrictToolNames: restrictToolNames || chatMode !== undefined,
 			get hasEditTool() {
 				const requestedToolNames = options.toolNames ? normalizeToolNames(options.toolNames) : undefined;
 				return restrictToolNames
@@ -2900,6 +2920,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			localProtocolOptions,
 			() => (hasSession ? session.getAsyncJobSnapshot() : null),
 		);
+		extensionRunner.setChatMode(chatMode !== undefined);
 
 		credentialDisabledTarget = extensionRunner;
 		for (const event of startupCredentialDisabledEvents.splice(0)) {
@@ -3210,10 +3231,15 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			const activeRepoContext = hasSession
 				? await logger.time("resolveActiveRepoContext", resolveRepoContext, promptCwd)
 				: initialActiveRepoContext;
-			if (hasSession && options.contextFiles === undefined) {
-				contextFiles = await logger.time("discoverContextFiles", discoverContextFiles, promptCwd, agentDir, [
-					...(settings.get("disabledExtensions") ?? []),
-				]);
+			if (hasSession && options.contextFiles === undefined && chatKeepsContextFiles) {
+				contextFiles = await logger.time(
+					"discoverContextFiles",
+					discoverContextFiles,
+					promptCwd,
+					agentDir,
+					[...(settings.get("disabledExtensions") ?? [])],
+					chatMode !== undefined,
+				);
 				toolSession.contextFiles = contextFiles;
 				session.setAdvisorContextPrompt(formatAdvisorContextPrompt(contextFiles));
 			}
@@ -3248,7 +3274,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					setActiveRules(nextActiveRules);
 				}
 			}
-			const memoryBackend = restrictToolNames ? undefined : await resolveMemoryBackend(settings);
+			const memoryBackend = memoryEnabled ? await resolveMemoryBackend(settings) : undefined;
 			const memoryInstructions = memoryBackend
 				? await memoryBackend.buildDeveloperInstructions(agentDir, settings, session)
 				: undefined;
@@ -3263,6 +3289,23 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			if (options.systemPrompt !== undefined && typeof options.systemPrompt !== "function") {
 				return {
 					systemPrompt: typeof options.systemPrompt === "string" ? [options.systemPrompt] : options.systemPrompt,
+				};
+			}
+			if (chatMode) {
+				return {
+					systemPrompt: buildChatSystemPrompt({
+						config: chatMode,
+						customPrompt: options.customSystemPrompt,
+						appendPrompt: composeAppendPrompt(
+							memoryInstructions ? [memoryInstructions] : [],
+							options.appendSystemPrompt,
+						),
+						contextFiles,
+						cwd: promptCwd,
+						toolNames,
+						skills: session?.skills ?? skills,
+						rules: alwaysApplyRules,
+					}),
 				};
 			}
 
@@ -3405,7 +3448,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// Session-managed builtins may be force-included by createTools. Keep the
 		// active set consistent with that registry decision, using built-in
 		// provenance so same-named extension tools are never force-activated.
-		if (!restrictToolNames && explicitlyRequestedToolNames) {
+		if (!restrictToolNames && !chatMode && explicitlyRequestedToolNames) {
 			for (const name of ["manage_skill", "learn", "context_notes", "new_context"]) {
 				if (builtInToolNames.includes(name) && !explicitlyRequestedToolNames.includes(name)) {
 					explicitlyRequestedToolNames.push(name);
@@ -3616,11 +3659,14 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			if (blobBroker) transformed = await blobBroker.decorateContext(transformed, transformModel);
 			// Keep per-request volatility out of the system prompt: the date/cwd
 			// reminder rides on the first user turn so open-weight providers keep
-			// their tool-schema prefix cache (#7404).
+			// their tool-schema prefix cache (#7404). Chat mode sends it only when
+			// `date` is re-included, without the cwd (the chat prompt carries that).
+			if (chatMode && !chatModeIncludes(chatMode, "date")) return transformed;
 			return dateCwdReminder.transform(
 				transformed,
 				formatLocalCalendarDate(),
-				normalizePromptPath(sessionManager.getCwd()),
+				chatMode ? "" : normalizePromptPath(sessionManager.getCwd()),
+				chatMode !== undefined,
 			);
 		};
 		const onPayload = async (payload: unknown, model?: Model) => {
@@ -3889,6 +3935,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// block createAgentSession for tens of seconds while the whole file is
 		// streamed and parsed on the main thread.
 		session = new AgentSession({
+			chatMode,
 			codeModeState,
 			advisorWatchdogPrompt,
 			advisorContextPrompt,
@@ -3942,10 +3989,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						return mcpManager.getTools();
 					}
 				: undefined,
-			memoryEnabled: !restrictToolNames,
+			memoryEnabled,
 			memoryAgentDir: agentDir,
 			memoryTaskDepth: taskDepth,
-			createMemoryTools: restrictToolNames
+			createMemoryTools: !memoryEnabled
 				? undefined
 				: async () => {
 						const tools = await Promise.all(
@@ -4383,7 +4430,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// and the tools; the fire-time re-check in `#onAgentEnd` still handles a
 		// mid-session DISABLE. The subscription lives for the session's lifetime; the
 		// reference is intentionally discarded (the listener retains it).
-		if (!restrictToolNames) {
+		if (memoryEnabled) {
 			if (settings.get("autolearn.enabled") && taskDepth === 0) {
 				await logger.time("startMemoryStartupTask", startMemoryBackend);
 				new AutoLearnController({

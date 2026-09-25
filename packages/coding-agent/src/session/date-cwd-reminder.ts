@@ -46,9 +46,14 @@ export class DateCwdReminderInjector {
 	#controls: Array<{ anchor: Message; message: Message }> = [];
 	#seen = new WeakSet<object>();
 
-	/** Apply the current reminder while preserving all earlier injected bytes. */
-	transform(context: Context, date: string, cwd: string): Context {
-		if (!context.systemPrompt || context.systemPrompt.length === 0 || context.messages.length === 0) return context;
+	/**
+	 * Apply the current reminder while preserving all earlier injected bytes.
+	 * Contexts without a system prompt are left alone unless `withoutSystemPrompt`
+	 * is set (chat raw mode re-including the date).
+	 */
+	transform(context: Context, date: string, cwd: string, withoutSystemPrompt = false): Context {
+		const hasSystemPrompt = context.systemPrompt !== undefined && context.systemPrompt.length > 0;
+		if ((!hasSystemPrompt && !withoutSystemPrompt) || context.messages.length === 0) return context;
 		const reminder = renderDateCwdReminder(date, cwd);
 		const messages = this.#inject(context.messages, reminder);
 		return messages === context.messages ? context : { ...context, messages };

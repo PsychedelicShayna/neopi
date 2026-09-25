@@ -1,4 +1,5 @@
 import advisorSystemPrompt from "../../prompts/advisor/system.md" with { type: "text" };
+import { renderChatAdvisorPrompt } from "../../chat/chat-system-prompt";
 import { type AgentMessage, type AgentToolResult, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Model, PASTE_CODE_LOGIN_PROVIDERS as PasteCodeLoginProviders, UsageReport } from "@oh-my-pi/pi-ai";
@@ -419,14 +420,17 @@ export class SelectorController {
 			);
 			const defaultAdvisorModel = advisorRoleSel?.model;
 			const deps: AdvisorConfigDeps = {
-				getDefaultSystemPrompt: (advisor, doc) =>
-					prompt.render(advisorSystemPrompt, {
-						max_notes_per_update: resolveAdvisorMaxNotesPerUpdate(
-							advisor.maxNotesPerUpdate,
-							doc.maxNotesPerUpdate,
-							this.ctx.settings.get("advisor.maxNotesPerUpdate"),
-						),
-					}),
+				getDefaultSystemPrompt: (advisor, doc) => {
+					const maxNotesPerUpdate = resolveAdvisorMaxNotesPerUpdate(
+						advisor.maxNotesPerUpdate,
+						doc.maxNotesPerUpdate,
+						this.ctx.settings.get("advisor.maxNotesPerUpdate"),
+					);
+					const chatMode = this.ctx.session.chatMode;
+					return chatMode
+						? renderChatAdvisorPrompt(chatMode.mode, maxNotesPerUpdate)
+						: prompt.render(advisorSystemPrompt, { max_notes_per_update: maxNotesPerUpdate });
+				},
 				getAvailableModels: () => this.ctx.session.modelRegistry.getAvailable(),
 				browserSource: createModelBrowserSource(this.ctx.settings),
 				defaultToolNames: ADVISOR_DEFAULT_TOOL_NAMES,

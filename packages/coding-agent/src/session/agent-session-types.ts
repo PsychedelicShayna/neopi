@@ -22,6 +22,7 @@ import type { postmortem } from "@oh-my-pi/pi-utils";
 import type { AdvisorConfig } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import type { AsyncJob, AsyncJobDeliveryState, AsyncJobManager } from "../async";
 import type { EffectiveExtensionRoots } from "../capability/types";
+import type { ChatModeConfig } from "../chat/chat-mode";
 import type { ModelRegistry } from "../config/model-registry";
 import type { PromptTemplate } from "../config/prompt-templates";
 import type { Settings, SkillsSettings } from "../config/settings";
@@ -314,6 +315,8 @@ export interface AgentSessionConfig {
 	 * empty catalog and every `read_mcp_resource` a `not_found`.
 	 */
 	advisorMcpResources?: CursorMcpResourceAdapter;
+	/** Chat mode the session runs in; undefined for an ordinary coding session. */
+	chatMode?: ChatModeConfig;
 	/** Preloaded watchdog prompt content for the advisor. */
 	advisorWatchdogPrompt?: string;
 	/** Shared advisor instructions loaded from WATCHDOG.yml. */
