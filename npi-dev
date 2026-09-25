@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Run this checkout's npi from source, in the caller's working directory.
+#
+#   /path/to/checkout/npi-dev [npi args...]
+#
+# Works from the primary checkout and from any git worktree of it. A fresh
+# worktree has no node_modules and no native addon (both gitignored), so on
+# first run they are borrowed from the primary checkout without installing
+# anything:
+#   - node_modules/ becomes a real directory whose third-party entries link to
+#     the primary's, while node_modules/@oh-my-pi is copied as relative links so
+#     every workspace package (pi-tui, pi-ai, ...) resolves to THIS checkout.
+#   - packages/natives/native/*.node links to the primary's built addon. If this
+#     checkout changes Rust code, rebuild with `bun run build:native` here.
+# This never installs, builds, or touches the globally installed `npi`.
+set -euo pipefail
+
+root="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && pwd)"
+
+primary="$(git -C "$root" worktree list --porcelain | sed -n '1s/^worktree //p')"
+
+if [[ ! -d "$root/node_modules" ]]; then
+	if [[ "$primary" == "$root" || ! -d "$primary/node_modules" ]]; then
+		echo "npi-dev: $root has no node_modules; run 'bun install' in the primary checkout first." >&2
+		exit 1
+	fi
+	mkdir "$root/node_modules"
+	shopt -s dotglob nullglob
+	for entry in "$primary"/node_modules/*; do
+		name="${entry##*/}"
+		if [[ "$name" == "@oh-my-pi" ]]; then
+			# Relative links (../../packages/<pkg>) now point into this checkout.
+			cp -a "$entry" "$root/node_modules/$name"
+		else
+			ln -s "$entry" "$root/node_modules/$name"
+		fi
+	done
+	shopt -u dotglob nullglob
+	echo "npi-dev: linked dependencies from $primary" >&2
+fi
+
+native_dir="$root/packages/natives/native"
+if ! compgen -G "$native_dir/*.node" >/dev/null; then
+	if ! compgen -G "$primary/packages/natives/native/*.node" >/dev/null; then
+		echo "npi-dev: no native addon; run 'bun run build:native' in $root." >&2
+		exit 1
+	fi
+	mkdir -p "$native_dir"
+	for addon in "$primary"/packages/natives/native/*.node; do
+		ln -s "$addon" "$native_dir/${addon##*/}"
+	done
+	echo "npi-dev: linked native addon from $primary" >&2
+fi
+
+# bunfig.toml is only read from the working directory, so pass it explicitly.
+exec bun --config="$root/bunfig.toml" "$root/packages/coding-agent/src/cli.ts" "$@"
