@@ -508,8 +508,7 @@ export class SessionAdvisors {
 	/** Rebuilds live advisors when role assignments alter their resolved runtime inputs. */
 	onModelRolesChanged(): void {
 		if (!this.#advisorEnabled || this.#host.isDisposed()) return;
-		if (this.#advisors.length > 0 && !this.#advisorRuntimeMatchesCurrentConfig()) this.#stopAdvisorRuntime();
-		this.#buildAdvisorRuntime(true);
+		this.#reconcileAdvisorRuntime(true);
 	}
 
 	/**
@@ -539,8 +538,7 @@ export class SessionAdvisors {
 	retryAfterModelDiscovery(): boolean {
 		if (this.#host.isDisposed() || !this.hasInactiveNoModelAdvisor()) return false;
 		const before = this.#advisors.length;
-		if (before > 0 && !this.#advisorRuntimeMatchesCurrentConfig()) this.#stopAdvisorRuntime();
-		this.#buildAdvisorRuntime(true, false);
+		this.#reconcileAdvisorRuntime(true, false);
 		return this.#advisors.length > before;
 	}
 
@@ -895,6 +893,9 @@ export class SessionAdvisors {
 		const tools = config.tools?.length ? config.tools.join("\u001e") : "";
 		const instructions = config.instructions?.trim() ?? "";
 		const budget = this.#advisorMaxNotesPerUpdate(config);
+		// Shared system-prompt inputs belong in every signature: changing them
+		// must restart every advisor, changing one advisor's fields only that one.
+		// The memory prompt is deliberately absent (see setMemoryPrompt).
 		return [
 			config.name,
 			slug,
@@ -904,6 +905,9 @@ export class SessionAdvisors {
 			instructions,
 			JSON.stringify(config.systemPrompt ?? null),
 			budget,
+			this.#advisorSharedInstructions ?? "",
+			this.#advisorWatchdogPrompt ?? "",
+			this.#advisorContextPrompt ?? "",
 		].join("\u001f");
 	}
 
@@ -916,7 +920,42 @@ export class SessionAdvisors {
 		return true;
 	}
 
-	#buildAdvisorRuntime(seedToCurrent = false, emitWarnings = true): boolean {
+	/**
+	 * Bring live runtimes in line with the resolved roster, touching only what
+	 * changed: an advisor whose signature still matches keeps its runtime,
+	 * context, and in-flight review; one whose signature changed, or that left
+	 * the roster, is stopped; a changed or new one is started. Unchanged input is
+	 * a no-op. Shared inputs are part of every signature, so editing them
+	 * restarts the whole roster.
+	 */
+	#reconcileAdvisorRuntime(seedToCurrent: boolean, emitWarnings = true): boolean {
+		if (this.#host.isDisposed()) return false;
+		if (!this.#advisorEnabled) {
+			this.#stopAdvisorRuntime();
+			return false;
+		}
+		const wanted = new Map(this.#resolveAdvisorRuntimeDescriptors(false).map(d => [d.slug, d.signature]));
+		const keep = new Map<string, ActiveAdvisor>();
+		const stale: ActiveAdvisor[] = [];
+		for (const advisor of this.#advisors) {
+			if (wanted.get(advisor.slug) === advisor.signature) keep.set(advisor.slug, advisor);
+			else stale.push(advisor);
+		}
+		this.#stopAdvisors(stale);
+		this.#advisors = [];
+		const running = this.#buildAdvisorRuntime(seedToCurrent, emitWarnings, keep);
+		if (!running) {
+			this.#advisorYieldQueueUnsubscribe?.();
+			this.#advisorYieldQueueUnsubscribe = undefined;
+		}
+		return running;
+	}
+
+	#buildAdvisorRuntime(
+		seedToCurrent = false,
+		emitWarnings = true,
+		reuse?: ReadonlyMap<string, ActiveAdvisor>,
+	): boolean {
 		if (this.#host.isDisposed()) return false;
 		if (this.#advisors.length > 0) return true;
 		if (!this.#advisorEnabled) return false;
@@ -944,6 +983,14 @@ export class SessionAdvisors {
 				: resolveModelServiceTier(advisorTierMap, model);
 
 		for (const descriptor of descriptors) {
+			// Reconcile hands over runtimes whose signature still matches; keep them
+			// untouched (context, backlog, recorder) and in roster order.
+			const kept = reuse?.get(descriptor.slug);
+			if (kept) {
+				this.#advisorStatuses.set(kept.slug, { name: kept.name, status: "running" });
+				this.#advisors.push(kept);
+				continue;
+			}
 			const {
 				config,
 				slug,
@@ -1405,11 +1452,20 @@ export class SessionAdvisors {
 	}
 
 	#stopAdvisorRuntime(): void {
+		this.#stopAdvisors(this.#advisors);
+		this.#advisors = [];
+		this.#advisorYieldQueueUnsubscribe?.();
+		this.#advisorYieldQueueUnsubscribe = undefined;
+	}
+
+	/** Dispose the given advisors and extend the recorder-close barrier with their closes. */
+	#stopAdvisors(advisors: readonly ActiveAdvisor[]): void {
+		if (advisors.length === 0) return;
 		// Detach each recorder feed BEFORE aborting its advisor agent: dispose() aborts
 		// the loop, and an abort emits a final `message_end` we must not enqueue against
 		// a closing recorder (it would reopen and resurrect an already-released file).
-		const closes: Promise<void>[] = [];
-		for (const a of this.#advisors) {
+		const closes: Promise<void>[] = [this.#advisorRecorderClosed];
+		for (const a of advisors) {
 			a.agentUnsubscribe?.();
 			a.agentUnsubscribe = undefined;
 			a.runtime.dispose();
@@ -1418,10 +1474,9 @@ export class SessionAdvisors {
 			a.recorderClosed = a.recorder.close();
 			closes.push(a.recorderClosed);
 		}
+		// Chained onto the previous barrier: a partial stop must not let a later
+		// recorder open before an earlier, still-closing one releases its file.
 		this.#advisorRecorderClosed = Promise.all(closes).then(() => {});
-		this.#advisors = [];
-		this.#advisorYieldQueueUnsubscribe?.();
-		this.#advisorYieldQueueUnsubscribe = undefined;
 	}
 
 	#recordAdvisorCost(advisor: ActiveAdvisor, message: AssistantMessage): void {
@@ -2111,10 +2166,7 @@ export class SessionAdvisors {
 	 */
 	setAdvisorEnabled(enabled: boolean): boolean {
 		this.#advisorEnabled = enabled;
-		if (enabled) {
-			if (this.#advisors.length > 0 && !this.#advisorRuntimeMatchesCurrentConfig()) this.#stopAdvisorRuntime();
-			return this.#buildAdvisorRuntime(true);
-		}
+		if (enabled) return this.#reconcileAdvisorRuntime(true);
 		this.#stopAdvisorRuntime();
 		return false;
 	}
@@ -2140,11 +2192,13 @@ export class SessionAdvisors {
 
 	/**
 	 * Replace the live advisor roster from an edited `WATCHDOG.yml` (the `/advisor
-	 * configure` save path). Swaps the configs + shared baseline, then rebuilds the
-	 * runtimes in place so the change applies without a restart. When the advisor is
+	 * configure` save path). Swaps the configs + shared baseline, then reconciles
+	 * the runtimes: only advisors whose effective configuration changed restart,
+	 * added ones start, removed ones stop, and an unchanged save touches nothing.
+	 * Changed shared instructions restart every advisor. When the advisor is
 	 * disabled the new configs are simply stored for the next enable.
 	 *
-	 * @returns the number of advisors active after the rebuild.
+	 * @returns the number of advisors active after the call.
 	 */
 	applyAdvisorConfigs(
 		advisors: AdvisorConfig[],
@@ -2154,8 +2208,7 @@ export class SessionAdvisors {
 		this.#advisorConfigs = advisors;
 		this.#advisorSharedInstructions = sharedInstructions;
 		this.#advisorSharedMaxNotesPerUpdate = sharedMaxNotesPerUpdate;
-		this.#stopAdvisorRuntime();
-		this.#buildAdvisorRuntime(true);
+		this.#reconcileAdvisorRuntime(true);
 		return this.#advisors.length;
 	}
 

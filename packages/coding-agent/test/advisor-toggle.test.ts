@@ -653,6 +653,41 @@ describe("AgentSession advisor toggle", () => {
 		expect(advisorPrompt).toContain("Keep advice concrete.");
 		expect(advisorPrompt).toContain("Review module boundaries.");
 	});
+	it("restarts only the advisor whose configuration changed", () => {
+		enableAdvisor();
+		const beta = { name: "Beta", instructions: "Check tests." };
+		session.applyAdvisorConfigs([{ name: "Alpha" }, beta], undefined);
+		const alpha = session.getAdvisorAgent();
+		if (!alpha) throw new Error("Expected Alpha advisor");
+
+		// An unchanged save (fresh but equal objects), editing Beta, adding Gamma,
+		// and removing Gamma again must all leave Alpha's runtime untouched.
+		session.applyAdvisorConfigs([{ name: "Alpha" }, { ...beta }], undefined);
+		expect(session.getAdvisorAgent()).toBe(alpha);
+		session.applyAdvisorConfigs([{ name: "Alpha" }, { ...beta, instructions: "Check coverage." }], undefined);
+		expect(session.getAdvisorAgent()).toBe(alpha);
+		session.applyAdvisorConfigs([{ name: "Alpha" }, beta, { name: "Gamma" }], undefined);
+		expect(session.getAdvisorAgent()).toBe(alpha);
+		expect(session.applyAdvisorConfigs([{ name: "Alpha" }, beta], undefined)).toBe(2);
+		expect(session.getAdvisorAgent()).toBe(alpha);
+		expect(session.getAdvisorStats().advisors.map(advisor => advisor.name)).toEqual(["Alpha", "Beta"]);
+
+		// Editing Alpha itself restarts it with the new configuration.
+		session.applyAdvisorConfigs([{ name: "Alpha", instructions: "Watch naming." }, beta], undefined);
+		const restarted = session.getAdvisorAgent();
+		expect(restarted).not.toBe(alpha);
+		expect(restarted?.state.systemPrompt.join("\n")).toContain("Watch naming.");
+	});
+	it("restarts every advisor when shared instructions change", () => {
+		enableAdvisor();
+		session.applyAdvisorConfigs([{ name: "Alpha" }], "Be brief.");
+		const alpha = session.getAdvisorAgent();
+
+		session.applyAdvisorConfigs([{ name: "Alpha" }], "Be thorough.");
+		const restarted = session.getAdvisorAgent();
+		expect(restarted).not.toBe(alpha);
+		expect(restarted?.state.systemPrompt.join("\n")).toContain("Be thorough.");
+	});
 	it("retains cumulative advisor cost after an in-session history rewrite", async () => {
 		const advisor = enableAdvisor();
 		appendAdvisorCost(advisor, 0.5, 1);
