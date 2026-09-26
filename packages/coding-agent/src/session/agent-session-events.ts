@@ -16,6 +16,12 @@ export type AgentSessionEvent =
 			/** False when an async delivery will resume the session before its true final settle. */
 			isTerminal?: boolean;
 			/**
+			 * True when the agent finished its turn: the end is terminal, or the session resumes
+			 * only for queued input or background-job results. False while the agent continues its
+			 * own work (retry, compaction continuation, stop-time reminders).
+			 */
+			yielded?: boolean;
+			/**
 			 * True when this settle carries the turn's final assistant answer, even when
 			 * `isTerminal` is false because a pending async delivery will wake the session
 			 * again. Consumers that relay the answer outward (the live voice relay) key off
