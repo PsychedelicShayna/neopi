@@ -182,6 +182,8 @@ const TINY_TITLE_PROGRESS_REVEAL_DELAY_MS = 1_000;
 const LEFT_DOUBLE_TAP_MIN_GAP_MS = 40;
 const LEFT_DOUBLE_TAP_MAX_GAP_MS = 500;
 
+/** Chain step outputs longer than this show as a collapsed paste chip while the lock holds them. */
+const CHAIN_DISPLAY_COLLAPSE_CHARS = 8_000;
 /** Picker entry that sends the prompt unchanged. */
 const SEND_WITHOUT_CHAIN = "Send without a chain";
 
@@ -1335,8 +1337,13 @@ export class InputController {
 		let chainName = "";
 		let currentStep = "";
 		// Lock before resolving the chain: submit already emptied the buffer, and anything typed
-		// while CHAINS.yml loads or the picker is open would be overwritten. The draft goes back
-		// as displayed so the lock has something to shimmer.
+		// while CHAINS.yml loads or the picker is open would be overwritten. Text typed while
+		// input hooks ran is kept in local history rather than lost. The draft goes back as
+		// displayed so the lock has something to shimmer.
+		if (this.ctx.editor.getText().trim()) {
+			this.ctx.editor.rememberDraft();
+			this.ctx.showStatus("Text typed during submit saved to history (Up)");
+		}
 		if (!this.ctx.editor.restoreSubmittedDraft()) this.ctx.editor.setCollapsedText(text);
 		this.ctx.editor.setChainLock({
 			onEscape: () => {
@@ -1386,7 +1393,10 @@ export class InputController {
 				},
 				onStepDone: (_step, _index, output) => {
 					lastOutput = output;
-					this.ctx.editor.setText(output);
+					// A large rewrite shows collapsed: the lock re-renders the composer every frame.
+					this.ctx.editor.setText("");
+					if (output.length > CHAIN_DISPLAY_COLLAPSE_CHARS) this.ctx.editor.insertPaste(output);
+					else this.ctx.editor.setText(output);
 					this.ctx.ui.requestRender();
 				},
 				onStepSkipped: step => this.ctx.showStatus(`Chain ${chain.name}: skipped "${step.name}"`),
