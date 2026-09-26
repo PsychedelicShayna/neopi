@@ -662,6 +662,20 @@ describe("live controller delegation ownership", () => {
 		expect(speakableTexts(h.sent)).toEqual(["Crew report from Helios: ready now"]);
 	});
 
+	it("holds voice-triggering context while the operator edits the composer, and releases it when the voice agent delegates", async () => {
+		const h = makeHarness({ speakableIdleMs: 60_000 });
+		await h.controller.start();
+		h.controller.noteComposerActivity();
+		h.fireSession(crewMessage("typing-1", "Helios", "tests pass"));
+		await settle();
+		expect(speakableTexts(h.sent)).toEqual([]);
+
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "ship it" } });
+		h.fireLive(delegation("dlg-release", "ship it"));
+		await settle();
+		expect(speakableTexts(h.sent)).toEqual(["Crew report from Helios: tests pass"]);
+	});
+
 	it("cancels a deferred crew report when the controller stops", async () => {
 		const h = makeHarness({ speakableIdleMs: 60 });
 		await h.controller.start();

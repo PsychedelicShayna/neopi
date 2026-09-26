@@ -90,6 +90,11 @@ export class LiveCommandController {
 		await this.#session?.toggleMute();
 	}
 
+	/** Composer edits count as operator activity: voice-triggering context waits until they settle. */
+	noteComposerActivity(): void {
+		this.#session?.noteComposerActivity();
+	}
+
 	/** Where Enter sends composer text, or undefined when no call is running. */
 	get destination(): LiveInputDestination | undefined {
 		return this.#session ? this.#destination : undefined;

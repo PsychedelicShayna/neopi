@@ -28,7 +28,8 @@ import { DEFAULT_LIVE_VOICE } from "./voices";
 const OUTPUT_ACTIVE_LEVEL = 0.015;
 const MIN_BARGE_IN_LEVEL = 0.04;
 const OUTPUT_ECHO_RATIO = 0.65;
-const DEFAULT_SPEAKABLE_IDLE_MS = 3000;
+/** Quiet time after operator activity (speech or composer edits) before held voice-triggering context is delivered. */
+const DEFAULT_SPEAKABLE_IDLE_MS = 10_000;
 
 /** Distinct states of a realtime call connection. */
 export type LivePhase = "connecting" | "listening" | "working" | "speaking" | "muted" | "error";
@@ -74,7 +75,7 @@ export interface LiveSessionControllerOptions {
 	extractAssistantText(message: AssistantMessage): string;
 	/** Realtime output voice, defaulting to sol. */
 	voice?: string;
-	/** Test seam: quiet time after user activity before queued speakables send; defaults to 3000 ms. */
+	/** Test seam: quiet time after operator activity before held context sends; defaults to 10000 ms. */
 	speakableIdleMs?: number;
 	/** Test seam: builds the realtime transport; defaults to CodexLiveTransport. */
 	createTransport?(options: ConstructorParameters<typeof CodexLiveTransport>[0]): LiveTransportLike;
@@ -196,8 +197,12 @@ export class LiveSessionController {
 	#thinkingRelayedLength = 0;
 	/** Last reasoning-narration send, for rate-capping the speakable feed. */
 	#lastThinkingFlushAt = 0;
-	/** Speakable updates held until the user has been quiet, in arrival order. */
-	#pendingSpeakables: string[] = [];
+	/**
+	 * Voice-triggering context (crew reports, reasoning narration, final answers) held while the
+	 * operator is speaking or editing the composer, in arrival order. Anything delivered then
+	 * would make the voice agent talk over the operator and lose the in-progress utterance.
+	 */
+	#heldContext: Array<() => void> = [];
 	#speakableIdleDeadline = 0;
 	#speakableIdleTimer: NodeJS.Timeout | undefined;
 	/** Serialized persistence tail for the live-transcript artifact (order + no double allocation). */
@@ -328,7 +333,7 @@ export class LiveSessionController {
 		clearTimeout(this.#speakableIdleTimer);
 		this.#speakableIdleTimer = undefined;
 		this.#speakableIdleDeadline = 0;
-		this.#pendingSpeakables.length = 0;
+		this.#heldContext = [];
 		this.#unsubscribeSession?.();
 		this.#unsubscribeSession = undefined;
 		// Flush a mid-utterance user transcript (VAD-split or aborted turn) so the
@@ -402,6 +407,8 @@ export class LiveSessionController {
 				this.#finishTranscript(event.turn.role, event.turn.transcript);
 				break;
 			case "delegation.created":
+				// The voice agent is acting on the operator's words now; hold nothing back.
+				this.#releaseHeldContext();
 				void this.#handleDelegation(event).catch(cause => this.#reportFailure(errorFrom(cause)));
 				break;
 			case "error":
@@ -587,9 +594,11 @@ export class LiveSessionController {
 			if (!text) continue;
 			this.#lastRelayedResponse = message;
 			const finalContext = prompt.render(agentFinalMessageTemplate, { message: text });
-			for (const chunk of chunkLiveContext(finalContext)) {
-				this.#queueSend(buildDelegationContextAppend(delegationId, chunk));
-			}
+			this.#deliverOrHold(() => {
+				for (const chunk of chunkLiveContext(finalContext)) {
+					this.#queueSend(buildDelegationContextAppend(delegationId, chunk));
+				}
+			});
 			break;
 		}
 		if (options.closeDelegation) {
@@ -673,15 +682,26 @@ export class LiveSessionController {
 			}
 			item = `${units.join("").trimEnd()}…`;
 		}
+		this.#deliverOrHold(() => this.#sendSpeakable(item));
+	}
+
+	/**
+	 * Deliver voice-triggering context now, or hold it while operator activity is recent.
+	 * Held items release in order on the quiet deadline, when the voice agent starts
+	 * speaking anyway, or when it delegates.
+	 */
+	#deliverOrHold(send: () => void): void {
 		if (Date.now() < this.#speakableIdleDeadline) {
-			this.#pendingSpeakables.push(item);
+			this.#heldContext.push(send);
 			return;
 		}
-		clearTimeout(this.#speakableIdleTimer);
-		this.#speakableIdleTimer = undefined;
-		this.#speakableIdleDeadline = 0;
-		this.#flushPendingSpeakables();
-		this.#sendSpeakable(item);
+		this.#releaseHeldContext();
+		send();
+	}
+
+	/** Record composer edits as operator activity, holding voice-triggering context meanwhile. */
+	noteComposerActivity(): void {
+		this.#markUserActivity();
 	}
 
 	#sendSpeakable(item: string): void {
@@ -707,19 +727,23 @@ export class LiveSessionController {
 			this.#speakableIdleTimer = setTimeout(() => this.#handleSpeakableIdle(), remaining);
 			return;
 		}
-		this.#speakableIdleDeadline = 0;
-		this.#flushPendingSpeakables();
+		this.#releaseHeldContext();
 	}
 
-	#flushPendingSpeakables(): void {
+	#releaseHeldContext(): void {
+		clearTimeout(this.#speakableIdleTimer);
+		this.#speakableIdleTimer = undefined;
+		this.#speakableIdleDeadline = 0;
 		if (this.#stopped) return;
-		for (const item of this.#pendingSpeakables) this.#sendSpeakable(item);
-		this.#pendingSpeakables.length = 0;
+		const held = this.#heldContext;
+		this.#heldContext = [];
+		for (const send of held) send();
 	}
 
 	#handleOutputLevel(level: number): void {
 		this.#outputLevel = clampLevel(level);
 		this.#emitLevels();
+		if (this.#outputLevel > OUTPUT_ACTIVE_LEVEL && this.#heldContext.length > 0) this.#releaseHeldContext();
 		if (!this.#activeDelegationId) this.#refreshAudioPhase();
 	}
 

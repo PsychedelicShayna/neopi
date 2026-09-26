@@ -7116,6 +7116,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#liveCommandController.routeSubmit(text);
 	}
 
+	noteLiveComposerActivity(): void {
+		this.#liveCommandController.noteComposerActivity();
+	}
+
 	async showDebugSelector(): Promise<void> {
 		await this.#selectorController.showDebugSelector();
 	}
