@@ -180,11 +180,18 @@ describe("STTController cloud transcription", () => {
 		settings.setModelRole("dictation", "openai/whisper-1");
 		const transcribed = Promise.withResolvers<TranscriptionResult>();
 		vi.spyOn(transcription, "transcribeAudio").mockReturnValue(transcribed.promise);
-		const capture = vi.fn(() => ({ stop: vi.fn() }));
+		// The retained-WAV cloud path skips transcription for an empty recording, so the first
+		// clip carries audio.
+		let onAudio: ((error: Error | null, samples: Float32Array) => void) | undefined;
+		const capture = vi.fn((callback: (error: Error | null, samples: Float32Array) => void) => {
+			onAudio = callback;
+			return { stop: vi.fn() };
+		});
 		controller = new STTController(capture, { settings, registry: registryFor(model) });
 		const editor = makeEditor();
 
 		await controller.start(editor, makeOptions());
+		onAudio?.(null, new Float32Array([0.25]));
 		const transcribing = controller.stop();
 		await controller.start(editor, makeOptions());
 		transcribed.resolve({ text: "first clip", usage: ZERO_USAGE });
