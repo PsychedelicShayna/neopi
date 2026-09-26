@@ -44,6 +44,9 @@ import { estimateToolSchemaTokens } from "@oh-my-pi/pi-tui/status-line/context-u
 import { SessionChronicler, type SessionChroniclerHost } from "../../src/chronicler/session-chronicler";
 import { type CaptureCheckpoint, ChroniclerStore, chroniclerStoreIO } from "../../src/chronicler/store";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
+import { cfgChroniclerEnabled } from "@oh-my-pi/pi-coding-agent/chronicler/settings";
+import { cfgRetryEnabled } from "@oh-my-pi/pi-coding-agent/session/settings";
+import { cfgAsyncEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
 
 const FINISH_TOOL = "finish_chronicle";
 const CAPTURE_MODEL_ID = "chronicler-mock";
@@ -102,8 +105,8 @@ describe("SessionChronicler capture runtime", () => {
 		cwd = tempDir.path();
 		sessionDir = path.join(cwd, "sessions");
 		authStorage = createInMemoryAuthStorage();
-		authStorage.setRuntimeApiKey("mock", "test-key");
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("mock", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		modelRegistry = new ModelRegistry(authStorage);
 		captureModel = createMockModel({ id: CAPTURE_MODEL_ID, provider: "mock", contextWindow: 200_000 });
 		availableModels = [captureModel];
@@ -1074,7 +1077,7 @@ describe("SessionChronicler capture runtime", () => {
 		const harness = startChronicler(manager, settings);
 		await entered.promise;
 
-		settings.override("chronicler.enabled", false);
+		cfgChroniclerEnabled.override(settings, false);
 		const newFile = await manager.newSession();
 		expect(newFile).toBeDefined();
 		const newRoot = chroniclerRoot(manager);
@@ -1083,7 +1086,7 @@ describe("SessionChronicler capture runtime", () => {
 		await manager.ensureOnDisk();
 		await manager.flush();
 		scripts.push(ackPass());
-		settings.override("chronicler.enabled", true);
+		cfgChroniclerEnabled.override(settings, true);
 
 		gate.resolve();
 		await waitForCoverage(newRoot, [newEntry]);
@@ -1733,9 +1736,9 @@ describe("SessionChronicler capture runtime", () => {
 		try {
 			await reached.promise;
 			expect(await readCommitted(harness.root)).toEqual([]);
-			settings.override("chronicler.enabled", false);
+			cfgChroniclerEnabled.override(settings, false);
 			expect(harness.chronicler.status).toBe("off");
-			settings.override("chronicler.enabled", true);
+			cfgChroniclerEnabled.override(settings, true);
 			await Bun.sleep(100);
 			expect(passes).toHaveLength(1);
 			expect(renameSpy).not.toHaveBeenCalled();
@@ -1819,9 +1822,9 @@ describe("SessionChronicler capture runtime", () => {
 		const harness = startChronicler(manager, settings);
 		try {
 			await entered.promise;
-			settings.override("chronicler.enabled", false);
+			cfgChroniclerEnabled.override(settings, false);
 			expect(harness.chronicler.status).toBe("off");
-			settings.override("chronicler.enabled", true);
+			cfgChroniclerEnabled.override(settings, true);
 			await Bun.sleep(150);
 			expect(passes).toHaveLength(1);
 			expect(await readCommitted(harness.root)).toEqual([]);
@@ -1968,7 +1971,7 @@ describe("SessionChronicler capture runtime", () => {
 			initialState: { model: mock, tools: [], systemPrompt: ["Primary"] },
 		});
 		const settings = newSettings();
-		settings.override("retry.enabled", false);
+		cfgRetryEnabled.override(settings, false);
 		const session = new AgentSession({ agent, sessionManager: manager, settings, modelRegistry, advisorTools: [] });
 		session.subscribe(() => {});
 		scripts.push(beatPass());
@@ -1997,7 +2000,7 @@ describe("SessionChronicler capture runtime", () => {
 			classification: { taskDepth?: number; parentTaskPrefix?: string },
 		) => {
 			const settings = newSettings();
-			settings.override("async.enabled", false);
+			cfgAsyncEnabled.override(settings, false);
 			return createAgentSession({
 				cwd,
 				agentDir: cwd,
@@ -2023,8 +2026,8 @@ describe("SessionChronicler capture runtime", () => {
 			await manager.flush();
 			const { session } = await makeSdk(manager, classification);
 			try {
-				session.settings.override("chronicler.enabled", false);
-				session.settings.override("chronicler.enabled", true);
+				cfgChroniclerEnabled.override(session.settings, false);
+				cfgChroniclerEnabled.override(session.settings, true);
 				await session.dispose();
 				expect(passes).toHaveLength(0);
 				expect(await readCommitted(chroniclerRoot(manager))).toEqual([]);

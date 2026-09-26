@@ -31,6 +31,7 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm, USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { Snowflake, TempDir } from "@oh-my-pi/pi-utils";
+import { cfgAdvisorSyncBacklog } from "@oh-my-pi/pi-coding-agent/advisor/settings";
 
 interface MockYieldDetails {
 	status: "success";
@@ -362,7 +363,7 @@ describe("AgentSession advisor auto-resume suppression", () => {
 			settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
 			const authStorage = await AuthStorage.create(":memory:");
 			authStorages.push(authStorage);
-			authStorage.setRuntimeApiKey("anthropic", "test-key");
+			authStorage.keys.setRuntime("anthropic", "test-key");
 			const extensionRunner: AdvisorTestExtensionRunner | undefined = abortAtCard
 				? {
 						hasHandlers: eventType => eventType === "message_end",
@@ -391,7 +392,7 @@ describe("AgentSession advisor auto-resume suppression", () => {
 					event.message.role === "assistant" &&
 					event.message.content.some(part => part.type === "text" && part.text === "terminal result")
 				) {
-					settings.override("advisor.syncBacklog", "1");
+					cfgAdvisorSyncBacklog.override(settings, "1");
 					terminalSeen.resolve();
 				}
 			});

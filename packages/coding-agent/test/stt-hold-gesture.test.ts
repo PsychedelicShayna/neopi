@@ -9,6 +9,7 @@ import { Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { STTController, type STTControllerDependencies } from "@oh-my-pi/pi-coding-agent/stt/stt-controller";
 import { setAgentDir } from "@oh-my-pi/pi-utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
+import { cfgSttLanguage } from "@oh-my-pi/pi-coding-agent/stt/settings";
 
 const ZERO_USAGE = {
 	input: 0,
@@ -95,7 +96,7 @@ describe("STTController push-to-talk hold ownership", () => {
 		state = beginSettingsTest();
 		await Settings.init({ inMemory: true });
 		settings.setModelRole("dictation", "xai/grok-stt");
-		settings.set("stt.language", "en");
+		cfgSttLanguage.set(settings, "en");
 		tmp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-stt-hold-test-"));
 		setAgentDir(tmp);
 		onAudio = undefined;
@@ -124,7 +125,7 @@ describe("STTController push-to-talk hold ownership", () => {
 		// Space bar held while the chord's capture is live: both edges are inert.
 		await stt.holdStart(editor, options);
 		expect(stt.state).toBe("recording");
-		await stt.holdEnd(editor, options);
+		await stt.holdEnd();
 		expect(stt.state).toBe("recording");
 		expect(stopCapture).not.toHaveBeenCalled();
 		expect(transcribe).not.toHaveBeenCalled();
@@ -149,7 +150,7 @@ describe("STTController push-to-talk hold ownership", () => {
 		expect(stt.state).toBe("recording");
 		onAudio?.(null, new Float32Array([0, 0.5, -0.5]));
 
-		await stt.holdEnd(editor, options);
+		await stt.holdEnd();
 		expect(stt.state).toBe("idle");
 		expect(stopCapture).toHaveBeenCalledTimes(1);
 		expect(transcribe).toHaveBeenCalledTimes(1);
@@ -169,7 +170,7 @@ describe("STTController push-to-talk hold ownership", () => {
 		await stt.toggle(editor, options);
 		expect(stt.state).toBe("idle");
 
-		await stt.holdEnd(editor, options);
+		await stt.holdEnd();
 		expect(stopCapture).toHaveBeenCalledTimes(1);
 		expect(transcribe).toHaveBeenCalledTimes(1);
 	});
@@ -183,7 +184,7 @@ describe("STTController push-to-talk hold ownership", () => {
 
 		await stt.holdStart(editor, options);
 		onAudio?.(null, new Float32Array([0, 0.5, -0.5]));
-		const pending = stt.holdEnd(editor, options);
+		const pending = stt.holdEnd();
 		expect(stt.state).toBe("transcribing");
 
 		await stt.holdStart(editor, options);

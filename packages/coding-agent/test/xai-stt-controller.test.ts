@@ -6,6 +6,8 @@ import { setAgentDir } from "@oh-my-pi/pi-utils";
 import { Settings, settings } from "../src/config/settings";
 import { XaiSTTController, type XaiSTTControllerDependencies } from "../src/stt/xai-stt-controller";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
+import { cfgSttEnabled } from "@oh-my-pi/pi-coding-agent/stt/settings";
+import { cfgSttSubmitTrigger } from "@oh-my-pi/pi-coding-agent/stt/settings";
 
 describe("independent xAI whole-recording input", () => {
 	let savedSettings: SettingsTestState | undefined;
@@ -16,8 +18,8 @@ describe("independent xAI whole-recording input", () => {
 	beforeEach(async () => {
 		savedSettings = beginSettingsTest();
 		await Settings.init({ inMemory: true });
-		settings.set("stt.enabled", false);
-		settings.set("stt.submitTrigger", "never");
+		cfgSttEnabled.set(settings, false);
+		cfgSttSubmitTrigger.set(settings, "never");
 		settings.setModelRole("dictation", "local-inference/parakeet-tdt-0.6b-v3");
 		tmp = await fs.mkdtemp(path.join(os.tmpdir(), "neopi-xai-recording-"));
 		setAgentDir(tmp);
