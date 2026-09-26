@@ -136,6 +136,17 @@ describe("LiveCommandController", () => {
 		await h.controller.stop();
 	});
 
+	it("clears a preview the recognizer withdrew", async () => {
+		const h = createHarness();
+		h.editor.insertText("note");
+		await h.controller.handleCommand();
+		speak(h, 1, "uh", false);
+		expect(h.editor.getText()).toBe("note uh");
+		speak(h, 1, "", true);
+		expect(h.editor.getText()).toBe("note");
+		await h.controller.stop();
+	});
+
 	it("drops the rest of an utterance whose preview the operator cleared", async () => {
 		const h = createHarness();
 		await h.controller.handleCommand();

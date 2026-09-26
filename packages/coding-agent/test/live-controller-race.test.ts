@@ -386,6 +386,33 @@ describe("live controller delegation ownership", () => {
 		expect(h.prompts).toEqual(["fix the parser"]);
 	});
 
+	it("ignores the final of a partial turn the operator already submitted", async () => {
+		const h = makeHarness();
+		await h.controller.start();
+		h.fireLive({ type: "input_transcript.added", item: { text: "sent by hand" } });
+		h.controller.retireComposerSpeech();
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "sent by hand" } });
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "new request" } });
+		h.fireLive(delegation("dlg-after-partial", "model-authored fallback"));
+		await settle();
+		expect(h.prompts).toEqual(["new request"]);
+	});
+
+	it("drops a partial the recognizer withdrew, ending a handoff that only claimed it", async () => {
+		const h = makeHarness();
+		await h.controller.start();
+		h.fireLive({ type: "input_transcript.added", item: { text: "uh" } });
+		h.fireLive(delegation("dlg-withdrawn", "model-authored fallback"));
+		await settle();
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "" } });
+		await settle();
+		expect(h.speech.at(-1)).toEqual({ turn: 1, text: "", final: true });
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "real request" } });
+		h.fireLive(delegation("dlg-real", "model-authored fallback"));
+		await settle();
+		expect(h.prompts).toEqual(["real request"]);
+	});
+
 	it("reports every operator turn to the composer, repeats included", async () => {
 		const h = makeHarness();
 		await h.controller.start();

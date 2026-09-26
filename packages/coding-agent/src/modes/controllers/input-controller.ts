@@ -180,6 +180,8 @@ const TINY_TITLE_PROGRESS_REVEAL_DELAY_MS = 1_000;
 // apart) on a stray click, which used to pop the hub with no key ever pressed.
 // Three or more rapid taps are likewise treated as a burst, not a gesture. A
 // deliberate human double-tap is always tens of milliseconds apart.
+/** Status when a submit holds because a voice handoff of the same speech just landed. */
+const LIVE_HANDOFF_HOLD_STATUS = "A voice handoff just reached the main agent; review the draft before sending";
 const LEFT_DOUBLE_TAP_MIN_GAP_MS = 40;
 const LEFT_DOUBLE_TAP_MAX_GAP_MS = 500;
 
@@ -933,7 +935,10 @@ export class InputController {
 			// compaction queueing) is main-session-only.
 			if (this.ctx.focusedAgentId) {
 				// The composer's speech goes to the focused agent; the voice call must not relay it too.
-				if (this.ctx.liveCallActive) this.ctx.discardLiveSpeech();
+				if (this.ctx.liveCallActive && !this.ctx.discardLiveSpeech()) {
+					this.#holdForLiveHandoff(text);
+					return;
+				}
 				await this.#submitToFocusedSession(text, "steer");
 				return;
 			}
@@ -975,12 +980,10 @@ export class InputController {
 			// always reach the main agent.
 			let liveRoute: LiveSubmitRoute = "primary";
 			if (/^[/!$]/.test(text)) {
-				if (this.ctx.liveCallActive) this.ctx.discardLiveSpeech();
+				if (this.ctx.liveCallActive && !this.ctx.discardLiveSpeech()) liveRoute = "held";
 			} else liveRoute = this.ctx.routeLiveSubmit(text, { hasImages: hasPendingImages });
 			if (liveRoute === "held") {
-				// Submit already emptied the composer; the operator reviews the draft in place.
-				this.ctx.editor.setCollapsedText(text);
-				this.ctx.showStatus("A voice handoff just reached the main agent; review the draft before sending");
+				this.#holdForLiveHandoff(text);
 				return;
 			}
 			if (liveRoute === "voice") {
@@ -1345,6 +1348,13 @@ export class InputController {
 			}
 			this.ctx.editor.addToHistory(typedText);
 		};
+	}
+
+	/** A voice handoff of the draft's speech landed as the operator submitted: put the draft back
+	 *  (submit already emptied the composer) for review instead of sending it twice. */
+	#holdForLiveHandoff(text: string): void {
+		this.ctx.editor.setCollapsedText(text);
+		this.ctx.showStatus(LIVE_HANDOFF_HOLD_STATUS);
 	}
 
 	/** Chain keybinding: submit the composer through the active chain once. */
@@ -1914,8 +1924,12 @@ export class InputController {
 		const imageLinks =
 			images && this.ctx.editor.pendingImageLinks.length > 0 ? [...this.ctx.editor.pendingImageLinks] : undefined;
 		if (!text && !images) return;
-		// Sending the composer is the operator's handoff on this path too.
-		if (this.ctx.liveCallActive) this.ctx.discardLiveSpeech();
+		// Sending the composer is the operator's handoff on this path too. The draft is still in
+		// the composer here, so holding only needs the status.
+		if (this.ctx.liveCallActive && !this.ctx.discardLiveSpeech()) {
+			this.ctx.showStatus(LIVE_HANDOFF_HOLD_STATUS);
+			return;
+		}
 
 		// Focused subagent session: follow-ups go to it; non-chat input is gated.
 		if (this.ctx.focusedAgentId) {

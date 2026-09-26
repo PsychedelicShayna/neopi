@@ -7125,8 +7125,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#liveCommandController.active;
 	}
 
-	discardLiveSpeech(): void {
-		this.#liveCommandController.discardSpeech();
+	discardLiveSpeech(): boolean {
+		return this.#liveCommandController.discardSpeech();
 	}
 
 	shareLiveSubmit(text: string): void {

@@ -186,6 +186,9 @@ export class LiveSessionController {
 	#answeredTurns: number[] | undefined;
 	/** The transport finished connecting; context sent before then waits in {@link #pendingOperatorText}. */
 	#connected = false;
+	/** Ledger number of a partial turn the operator retired from the composer; the rest of that
+	 *  utterance is ignored so its authoritative final cannot re-enter the ledger. */
+	#retiredPartialTurn: number | undefined;
 	/** Ordering stamps: when a user turn last became final, and when voice-triggering context
 	 *  last went out. A response started after context, not speech, is narration, not an answer. */
 	#eventSeq = 0;
@@ -719,6 +722,7 @@ export class LiveSessionController {
 	 */
 	retireComposerSpeech(): boolean {
 		const pending = this.#pendingDelegation;
+		const last = this.#userTurnLedger[this.#userTurnLedger.length - 1];
 		let settled = true;
 		if (pending && !(this.#pendingDelivery?.cancel() ?? true)) {
 			settled = false;
@@ -731,6 +735,8 @@ export class LiveSessionController {
 			this.#refreshAudioPhase();
 		}
 		this.#userTurnLedger = this.#userTurnLedger.filter(turn => turn.claim !== undefined);
+		// A partial turn retired mid-utterance: the rest of it, final included, is already handled.
+		if (last && !last.final && !this.#userTurnLedger.includes(last)) this.#retiredPartialTurn = last.turn;
 		this.#answeredTurns = undefined;
 		return settled;
 	}
@@ -958,8 +964,18 @@ export class LiveSessionController {
 
 	#ingestUserTurn(text: string, final: boolean): void {
 		const normalized = text.trim();
-		if (!normalized) return;
+		const retired = this.#retiredPartialTurn;
+		if (retired !== undefined) {
+			if (final) this.#retiredPartialTurn = undefined;
+			this.#emitUserSpeech({ role: "user", turn: retired, text: normalized, final });
+			return;
+		}
 		let current = this.#userTurnLedger[this.#userTurnLedger.length - 1];
+		if (!normalized) {
+			// An empty authoritative final retracts the partial it closes.
+			if (final && current && !current.final) this.#retractPartialTurn(current);
+			return;
+		}
 		if (!current || current.final) {
 			current = { turn: ++this.#userLedgerTurn, text: normalized, final };
 			this.#userTurnLedger.push(current);
@@ -978,6 +994,24 @@ export class LiveSessionController {
 		if (final && pendingGeneration !== undefined) {
 			void this.#dispatchPendingDelegation(pendingGeneration).catch(cause => this.#reportFailure(errorFrom(cause)));
 		}
+	}
+
+	/** Drop a partial turn the recognizer withdrew, clearing its composer preview. A pending handoff
+	 *  that claimed it either dispatches its remaining turns or, with none left, ends. */
+	#retractPartialTurn(turn: { turn: number; claim?: number }): void {
+		this.#userTurnLedger = this.#userTurnLedger.filter(entry => entry !== turn);
+		this.#emitUserSpeech({ role: "user", turn: turn.turn, text: "", final: true });
+		const pending = this.#pendingDelegation;
+		if (!pending || turn.claim !== pending.generation) return;
+		pending.turns = pending.turns.filter(number => number !== turn.turn);
+		if (pending.turns.length === 0) {
+			this.#delegationGeneration += 1;
+			this.#pendingDelegation = undefined;
+			this.#pendingDelivery = undefined;
+			this.#refreshAudioPhase();
+			return;
+		}
+		void this.#dispatchPendingDelegation(pending.generation).catch(cause => this.#reportFailure(errorFrom(cause)));
 	}
 
 	/**

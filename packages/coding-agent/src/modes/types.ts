@@ -467,7 +467,7 @@ export interface InteractiveModeContext {
 	/** Whether a live voice call is connected, connecting, or closing. */
 	readonly liveCallActive: boolean;
 	/** The operator cleared the composer during a live call; its speech must not be handed off. */
-	discardLiveSpeech(): void;
+	discardLiveSpeech(): boolean;
 	/** Share text the main agent is about to receive with the voice agent when the destination is `both`. */
 	shareLiveSubmit(text: string): void;
 	/** Report a composer edit to an active live call so voice-triggering context waits for it to settle. */

@@ -143,10 +143,15 @@ export class LiveCommandController {
 		return "voice";
 	}
 
-	/** The operator cleared the draft: the speech in it is discarded, so no handoff may relay it. */
-	discardSpeech(): void {
-		this.#session?.retireComposerSpeech();
-		this.#committed = [];
+	/**
+	 * The composer's speech is being cleared or sent elsewhere, so no handoff may relay it.
+	 * Returns false when a handoff of that speech was accepted at this moment: a submit must then
+	 * hold, or the same request would go out twice.
+	 */
+	discardSpeech(): boolean {
+		const settled = this.#session?.retireComposerSpeech() ?? true;
+		if (settled) this.#committed = [];
+		return settled;
 	}
 
 	/** With the destination `both`, tell the voice agent what the main agent is about to receive. */
@@ -246,7 +251,11 @@ export class LiveCommandController {
 			utterance = { turn: transcript.turn, prefix: this.#separator("before"), text: "" };
 			this.#utterance = utterance;
 		}
-		if (transcript.final) {
+		if (transcript.final && !transcript.text.trim()) {
+			// The recognizer withdrew the utterance.
+			this.#utterance = undefined;
+			this.#ctx.editor.clearVolatileText();
+		} else if (transcript.final) {
 			this.#utterance = undefined;
 			this.#commitUtterance(utterance, transcript.text);
 		} else {
