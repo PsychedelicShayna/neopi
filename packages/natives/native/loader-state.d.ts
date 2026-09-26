@@ -28,6 +28,9 @@ export interface DetectCompiledBinaryInput {
 
 export function detectCompiledBinary(input: DetectCompiledBinaryInput): boolean;
 
+/** Where extracted addons live (the loader's resolver; install.sh prunes it). */
+export function getNativesDir(): string;
+
 
 export interface GetAddonFilenamesInput {
 	tag: string;

@@ -17,6 +17,8 @@ die() {
 	exit 1
 }
 say() { printf 'install.sh: %s\n' "$*"; }
+# shellcheck source=scripts/npi-build-lib.sh
+source scripts/npi-build-lib.sh
 
 command -v bun >/dev/null || die "bun is not on PATH"
 
@@ -27,11 +29,7 @@ dest=$(realpath -ms -- "${NPI_DEST:-$HOME/.local/bin/npi}")
 version=$(bun -p 'require("./packages/coding-agent/package.json").version')
 
 [[ -x $binary && -f $binary.source ]] || die "$binary is missing or was not built by ./build.sh; run ./build.sh"
-source_id=$(
-	git rev-parse HEAD
-	git diff --no-ext-diff --no-textconv --no-color --binary HEAD | sha256sum | cut -d" " -f1
-	git ls-files -z --others --exclude-standard | xargs -0 -r sha256sum | sha256sum | cut -d" " -f1
-)
+source_id=$(source_id)
 binary_sha=$(sha256sum -- "$binary" | cut -d" " -f1)
 [[ $(<"$binary.source") == "$source_id"$'\n'"$binary_sha" ]] ||
 	die "$binary was not built by ./build.sh from this checkout as it is now; run ./build.sh"
@@ -44,7 +42,22 @@ staging=0
 smoke_home=""
 mkdir -p -- "$(dirname -- "$dest")"
 staged=$(mktemp "$dest.new.XXXXXX")
-trap 'rm -f -- "$staged"; [[ -z $smoke_home ]] || rm -rf -- "$smoke_home"' EXIT
+# The previous binary, kept (as a hard link to its inode) until the extensions deploy and the
+# installed binary passes its smoke test; any failure after the rename puts it back.
+previous=""
+installed=0
+cleanup() {
+	rm -f -- "$staged"
+	[[ -z $smoke_home ]] || rm -rf -- "$smoke_home"
+	if [[ -n $previous ]]; then
+		if ((installed)); then
+			rm -f -- "$previous"
+		else
+			mv -f -- "$previous" "$dest" && say "restored the previous $dest"
+		fi
+	fi
+}
+trap cleanup EXIT
 if ((staging)); then
 	# The smoke tests extract the native addon; keep that out of the live cache.
 	smoke_home=$(mktemp -d)
@@ -65,6 +78,10 @@ smoke() {
 	run_isolated "$1" --smoke-test >/dev/null || die "$1 --smoke-test failed"
 }
 smoke "$staged"
+if [[ -e $dest ]]; then
+	previous=$(mktemp -u "$dest.old.XXXXXX")
+	ln -- "$dest" "$previous"
+fi
 mv -f -- "$staged" "$dest"
 say "installed $dest"
 
@@ -76,11 +93,13 @@ else
 fi
 
 smoke "$dest"
+installed=1
 say "smoke test passed: $("$dest" --version)"
 
 prune_natives() {
 	natives_version=$(bun -p 'require("./packages/natives/package.json").version')
-	natives_dir=$(bun -e 'import { getNativesDir } from "@oh-my-pi/pi-utils/dirs"; process.stdout.write(getNativesDir())')
+	# The loader's own resolver: it can differ from pi-utils' cache dir under XDG.
+	natives_dir=$(bun -e 'import { getNativesDir } from "./packages/natives/native/loader-state.js"; process.stdout.write(getNativesDir())')
 	keep=" "
 	for addon in packages/natives/native/pi_natives.*.node; do
 		[[ -f $addon ]] && keep+="$(sha256sum -- "$addon" | cut -c1-16) "

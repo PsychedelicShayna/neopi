@@ -56,7 +56,8 @@ function startupMarker(text) {
  }
 }
 
-function getNativesDir() {
+/** Where extracted addons live; install.sh prunes this same directory. */
+export function getNativesDir() {
  const xdgDataHome = process.env.XDG_DATA_HOME;
  if (xdgDataHome && fs.existsSync(path.join(xdgDataHome, "omp"))) {
   return path.join(xdgDataHome, "omp", "natives");
