@@ -2804,17 +2804,30 @@ export class Editor implements Component, Focusable {
 		this.#exitHistoryForEditing();
 		this.#recordUndoState();
 		let cursor = this.#offsetOf(this.#state.cursorLine, this.#state.cursorCol);
+		const previewStart = cursor - this.#volatileTextLen;
 		for (const span of targets) {
 			let { start, end } = span;
 			const spaceBefore = start > 0 && /\s/.test(full[start - 1] ?? "");
 			const spaceAfter = end < full.length && /\s/.test(full[end] ?? "");
-			if (spaceAfter && (spaceBefore || start === 0)) end += 1;
-			else if (spaceBefore && end === full.length) start -= 1;
+			if (spaceAfter && (spaceBefore || start === 0)) {
+				if (this.#volatileTextLen > 0 && end >= previewStart && end < previewStart + this.#volatileTextLen) {
+					// The separator opens the live preview; take the one before instead, if any.
+					if (spaceBefore) start -= 1;
+				} else {
+					end += 1;
+					// The separator opened the next utterance: that span now starts after it.
+					const next = this.#speechSpans.find(other => other.start === span.end && !targets.includes(other));
+					if (next) {
+						next.start += 1;
+						next.text = next.text.slice(1);
+					}
+				}
+			} else if (spaceBefore && end === full.length) start -= 1;
 			full = full.slice(0, start) + full.slice(end);
 			if (cursor >= end) cursor -= end - start;
 			else if (cursor > start) cursor = start;
 		}
-		this.#speechSpans = this.#speechSpans.filter(span => !targets.includes(span));
+		this.#speechSpans = this.#speechSpans.filter(span => !targets.includes(span) && span.text.length > 0);
 		this.#state.lines = full.split("\n");
 		let line = 0;
 		while (line < this.#state.lines.length - 1 && cursor > (this.#state.lines[line]?.length ?? 0)) {

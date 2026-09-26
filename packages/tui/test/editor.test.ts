@@ -2990,6 +2990,16 @@ describe("Editor component", () => {
 			expect(editor.getText()).toBe("ab hello wor!ld");
 		});
 
+		it("removes one spoken utterance without breaking tracking of the next", () => {
+			const editor = new Editor(defaultEditorTheme);
+			const first = editor.commitVolatileText("hello");
+			const second = editor.commitVolatileText(" world");
+			editor.removeUtterances([first!]);
+			expect(editor.getText()).toBe("world");
+			editor.removeUtterances([second!]);
+			expect(editor.getText()).toBe("");
+		});
+
 		it("drops the rest of an utterance once the operator deletes its preview", () => {
 			const editor = new Editor(defaultEditorTheme);
 			editor.setVolatileText("hello wor");
