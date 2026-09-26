@@ -61,6 +61,26 @@ fi
 smoke "$dest"
 say "smoke test passed: $("$dest" --version)"
 
+# Each build extracts its embedded addon to a content-addressed file, and the
+# runtime never deletes another build's file because that build may be loading
+# it. Prune them here instead: a pruned build re-extracts on its next start.
+natives_version=$(bun -p 'require("./packages/natives/package.json").version')
+natives_dir=$(bun -e 'import { getNativesDir } from "@oh-my-pi/pi-utils/dirs"; process.stdout.write(getNativesDir())')
+keep=" "
+for addon in packages/natives/native/pi_natives.*.node; do
+	[[ -f $addon ]] && keep+="$(sha256sum -- "$addon" | cut -c1-16) "
+done
+pruned=0
+shopt -s nullglob
+for extracted in "$natives_dir/$natives_version"/pi_natives.*.node; do
+	hash=${extracted%.node}
+	hash=${hash##*.}
+	[[ $hash =~ ^[0-9a-f]{16}$ && $keep != *" $hash "* ]] || continue
+	rm -f -- "$extracted" && pruned=$((pruned + 1))
+done
+shopt -u nullglob
+((pruned == 0)) || say "pruned $pruned native addon(s) extracted by other builds of $natives_version"
+
 on_path=$(command -v npi || true)
 if [[ -n $on_path && $(readlink -f -- "$on_path") != $(readlink -f -- "$dest") ]]; then
 	say "warning: 'npi' on PATH is $on_path, not $dest"
