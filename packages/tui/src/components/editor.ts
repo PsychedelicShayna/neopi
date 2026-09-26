@@ -2808,6 +2808,7 @@ export class Editor implements Component, Focusable {
 		this.#recordUndoState();
 		let cursor = this.#offsetOf(this.#state.cursorLine, this.#state.cursorCol);
 		const previewStart = cursor - this.#volatileTextLen;
+		const removed: Array<{ start: number; end: number }> = [];
 		for (const span of targets) {
 			let { start, end } = span;
 			const spaceBefore = start > 0 && /\s/.test(full[start - 1] ?? "");
@@ -2827,10 +2828,22 @@ export class Editor implements Component, Focusable {
 				}
 			} else if (spaceBefore && end === full.length) start -= 1;
 			full = full.slice(0, start) + full.slice(end);
+			removed.push({ start, end });
 			if (cursor >= end) cursor -= end - start;
 			else if (cursor > start) cursor = start;
 		}
-		this.#speechSpans = this.#speechSpans.filter(span => !targets.includes(span) && span.text.length > 0);
+		// Map the surviving spans by the exact ranges removed; a text diff cannot place spans
+		// reliably when the removed speech repeats the text around it.
+		this.#speechSpans = this.#speechSpans.flatMap(span => {
+			if (targets.includes(span) || span.text.length === 0) return [];
+			let shift = 0;
+			for (const range of removed) {
+				if (range.end <= span.start) shift += range.end - range.start;
+				else if (range.start < span.end) return [];
+			}
+			return [{ ...span, start: span.start - shift, end: span.end - shift }];
+		});
+		this.#spanBase = full;
 		this.#state.lines = full.split("\n");
 		let line = 0;
 		while (line < this.#state.lines.length - 1 && cursor > (this.#state.lines[line]?.length ?? 0)) {
