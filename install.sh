@@ -45,6 +45,7 @@ staged=$(mktemp "$dest.new.XXXXXX")
 # The previous binary, kept (as a hard link to its inode) until the extensions deploy and the
 # installed binary passes its smoke test; any failure after the rename puts it back.
 previous=""
+moved=0
 installed=0
 cleanup() {
 	rm -f -- "$staged"
@@ -55,6 +56,9 @@ cleanup() {
 		else
 			mv -f -- "$previous" "$dest" && say "restored the previous $dest"
 		fi
+	elif ((moved && !installed)); then
+		# A first install that failed after the rename: no npi without its extensions.
+		rm -f -- "$dest" && say "removed the incomplete $dest"
 	fi
 }
 trap cleanup EXIT
@@ -83,6 +87,7 @@ if [[ -e $dest ]]; then
 	ln -- "$dest" "$previous"
 fi
 mv -f -- "$staged" "$dest"
+moved=1
 say "installed $dest"
 
 if [[ -n ${PI_CODING_AGENT_DIR:-} ]]; then
