@@ -462,7 +462,7 @@ export interface InteractiveModeContext {
 	/** Cycle where Enter sends composer text during a live call (primary / voice / both). */
 	handleLiveDestinationCycle(): void;
 	/** Route submitted text by the live input destination; true when the voice agent consumed it. */
-	routeLiveSubmit(text: string): boolean;
+	routeLiveSubmit(text: string, options: { hasImages: boolean }): boolean;
 	/** Report a composer edit to an active live call so voice-triggering context waits for it to settle. */
 	noteLiveComposerActivity(): void;
 	/** Start a `/record` screen capture, or stop the running one. */

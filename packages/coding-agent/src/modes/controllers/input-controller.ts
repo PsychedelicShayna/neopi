@@ -966,9 +966,10 @@ export class InputController {
 				return;
 			}
 
-			// Live call: Enter may address the voice agent instead of, or alongside, the main
-			// agent. Harness commands (`/`, `!`, `$`) and image drafts stay with the main agent.
-			if (!hasPendingImages && !/^[/!$]/.test(text) && this.ctx.routeLiveSubmit(text)) {
+			// Live call: Enter is the operator's own handoff and may address the voice agent
+			// instead of, or alongside, the main agent. Harness commands (`/`, `!`, `$`) stay
+			// with the harness; image drafts always reach the main agent.
+			if (!/^[/!$]/.test(text) && this.ctx.routeLiveSubmit(text, { hasImages: hasPendingImages })) {
 				this.ctx.editor.addToHistory(text);
 				this.ctx.editor.clearDraft();
 				return;

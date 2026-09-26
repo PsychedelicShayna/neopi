@@ -110,15 +110,19 @@ export class LiveCommandController {
 	}
 
 	/**
-	 * Route submitted composer text by the current destination. `voice` hands the text to
-	 * the voice agent only, shows it in the transcript with a mic badge, and returns true
-	 * (consumed). `both` also shares it with the voice agent as silent awareness and returns
-	 * false so the ordinary submit still reaches the primary. `primary`, or no call, returns
-	 * false untouched.
+	 * Route submitted composer text by the current destination. Submitting is the operator's
+	 * own handoff: the draft already carries every spoken utterance not yet handed off, so
+	 * the voice agent can no longer relay those turns. `voice` hands the text to the voice
+	 * agent only, shows it in the transcript with a mic badge, and returns true (consumed).
+	 * `both` also shares it with the voice agent as silent awareness and returns false so the
+	 * ordinary submit still reaches the primary, as does `primary`. Drafts with images always
+	 * go to the primary. Returns false untouched when no call is running.
 	 */
-	routeSubmit(text: string): boolean {
+	routeSubmit(text: string, options: { hasImages: boolean }): boolean {
 		const session = this.#session;
-		if (!session || this.#destination === "primary") return false;
+		if (!session) return false;
+		session.discardUnclaimedSpeech();
+		if (this.#destination === "primary" || (this.#destination === "voice" && options.hasImages)) return false;
 		if (this.#destination === "both") {
 			session.sendOperatorText(text, "both");
 			return false;

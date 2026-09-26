@@ -7112,8 +7112,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (destination) this.showStatus(`Live input → ${LIVE_DESTINATION_LABELS[destination]}`);
 	}
 
-	routeLiveSubmit(text: string): boolean {
-		return this.#liveCommandController.routeSubmit(text);
+	routeLiveSubmit(text: string, options: { hasImages: boolean }): boolean {
+		return this.#liveCommandController.routeSubmit(text, options);
 	}
 
 	noteLiveComposerActivity(): void {

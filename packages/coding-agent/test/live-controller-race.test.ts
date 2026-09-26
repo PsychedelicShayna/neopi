@@ -346,6 +346,17 @@ describe("live controller delegation ownership", () => {
 		expect(h.prompts).toEqual(["spoken while she answered\n\nnow do it"]);
 	});
 
+	it("never relays speech the operator already submitted from the composer", async () => {
+		const h = makeHarness();
+		await h.controller.start();
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "already sent by hand" } });
+		h.controller.discardUnclaimedSpeech();
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "new request" } });
+		h.fireLive(delegation("dlg-after-submit", "model-authored fallback"));
+		await settle();
+		expect(h.prompts).toEqual(["new request"]);
+	});
+
 	it("retains a claimed mixed turn across assistant completion", async () => {
 		const h = makeHarness();
 		await h.controller.start();
