@@ -465,6 +465,12 @@ function formatTimeoutClampNotice(
 	return `Timeout clamped to ${effectiveTimeoutSec}s (requested ${requestedTimeoutSec}s; ${limit}).`;
 }
 
+function serviceEnvEntries(args: unknown): [string, string][] {
+	const env = (args as { env?: unknown }).env;
+	if (!env || typeof env !== "object") return [];
+	return Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === "string");
+}
+
 /**
  * Bash tool implementation.
  *
@@ -475,6 +481,15 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 	/** Bash reads `skill://` paths through its shell filesystem, including as a working directory. */
 	readonly readsSkillUris = true;
 	readonly approval = (args: unknown): ToolApprovalDecision => {
+		const decision = this.#commandApproval(args);
+		// Service env reaches the spawned login shell (e.g. BASH_ENV), so a
+		// command-only allow rule must not authorize it unseen.
+		if (serviceEnvEntries(args).length > 0 && typeof decision !== "string" && decision.policy === "allow") {
+			return "exec";
+		}
+		return decision;
+	};
+	#commandApproval(args: unknown): ToolApprovalDecision {
 		const rawCommand = (args as Partial<BashToolInput>).command;
 		const command = typeof rawCommand === "string" ? rawCommand : "";
 		const patternRules = getBashApprovalPatternRules(cfgBashPatterns.get(this.session.settings));
@@ -558,11 +573,15 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			};
 		}
 		return "exec";
-	};
+	}
 	readonly formatApprovalDetails = (args: unknown): string[] => {
 		const rawCommand = (args as Partial<BashToolInput>).command;
 		const command = typeof rawCommand === "string" ? rawCommand : "(missing)";
-		return [`Command: ${truncateForPrompt(command)}`];
+		const lines = [`Command: ${truncateForPrompt(command)}`];
+		for (const [key, value] of serviceEnvEntries(args)) {
+			lines.push(`Env: ${truncateForPrompt(`${key}=${value}`)}`);
+		}
+		return lines;
 	};
 	readonly label = "Bash";
 	readonly loadMode = "essential";

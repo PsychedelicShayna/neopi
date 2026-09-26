@@ -543,6 +543,16 @@ describe("tool-owned dynamic approval declarations", () => {
 		}
 	});
 
+	it("does not let a command allow rule authorize service env overrides", () => {
+		const tool = createBashTool({ "bash.patterns": [{ match: "echo *", approval: "allow" }] });
+		if (typeof tool.approval !== "function") throw new Error("Bash approval must be dynamic");
+		const args = { command: "echo harmless", env: { BASH_ENV: "./payload.sh" } };
+
+		expect(tool.approval(args)).toBe("exec");
+		expect(tool.formatApprovalDetails?.(args)).toContain("Env: BASH_ENV=./payload.sh");
+		expect(tool.approval({ command: "echo harmless" })).toEqual({ tier: "write", policy: "allow" });
+	});
+
 	it("allows literal shell metacharacters in quoted arguments", () => {
 		const settingsOverrides = {
 			"bash.patterns": [{ match: "cargo *", approval: "allow" }],
