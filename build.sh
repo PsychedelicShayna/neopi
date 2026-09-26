@@ -8,7 +8,6 @@
 # native inputs than the checkout now holds; otherwise the build is fast.
 #
 # Environment:
-#   CARGO_BUILD_JOBS         cargo parallelism (default 6)
 #   OMP_NATIVE_X64_VARIANT   modern | baseline (default: modern iff the CPU has AVX2)
 #   NPI_FORCE_NATIVE=1       rebuild the native addon unconditionally
 set -euo pipefail
@@ -21,11 +20,12 @@ die() {
 }
 say() { printf 'build.sh: %s\n' "$*"; }
 
-[[ $(uname -s) == Linux ]] || die "only Linux is supported"
+[[ $(uname -s) == Linux ]] || die "only Linux is supported; elsewhere see 'Install from source' in README.md"
 command -v bun >/dev/null || die "bun is not on PATH"
 [[ -d node_modules ]] || die "node_modules is missing; run 'bun install --frozen-lockfile' first"
 
-export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-6}"
+# Fixed, not a default: an inherited larger value would starve the machine (AGENTS.md).
+export CARGO_BUILD_JOBS=6
 
 native_dir=packages/natives/native
 version=$(bun -p 'require("./packages/natives/package.json").version')
@@ -138,5 +138,7 @@ OMP_BUILD_BYTECODE=0 NPI_SKIP_EXTENSION_INSTALL=1 bun --cwd=packages/coding-agen
 git diff --quiet -- "$native_dir/embedded-addon.js" || die "$native_dir/embedded-addon.js was left modified"
 reported=$("$binary" --version)
 [[ $reported == "npi/$version" ]] || die "$binary reports '$reported', expected npi/$version"
-printf '%s\n' "$source_id" >"$binary.source"
+# The marker authenticates these exact bytes, not just the tree: install.sh refuses a
+# same-version binary copied over dist/npi afterwards.
+printf '%s\n%s\n' "$source_id" "$(sha256sum -- "$binary" | cut -d' ' -f1)" >"$binary.source"
 say "built $binary ($reported)"

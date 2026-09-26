@@ -322,6 +322,7 @@ For the bash tool specifically:
   assemble the binary from individual `bun run` commands: every upstream version bump
   invalidates the gitignored native addon in each checkout, and only `build.sh` detects and
   rebuilds it. Stage installs with `NPI_DEST=<temp>/bin/npi PI_CODING_AGENT_DIR=<temp>/agent`.
+  The scripts are Linux-only; README.md "Install from source" gives the macOS path.
 
 ## Rust Build Profiles
 
