@@ -760,7 +760,9 @@ describe("CustomEditor space-hold push-to-talk", () => {
 
 	it("latches a hold with Backspace so releasing Space keeps recording until a Space tap", () => {
 		const { editor, events } = makeEditor();
-		editor.onSpaceHoldLatch = () => events.push("latch");
+		const handler = editor.spaceHold.handler;
+		if (!handler) throw new Error("expected a space-hold handler");
+		handler.onLatch = () => events.push("latch");
 		editor.handleInput("h");
 		editor.handleInput("i");
 		feedSpaces(editor, SPACE_HOLD_MECHANICAL_RUN + 2, REPEAT_GAP_MS);

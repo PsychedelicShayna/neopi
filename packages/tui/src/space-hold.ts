@@ -36,7 +36,7 @@ export interface SpaceHoldHandler {
 	/** The held space bar was released (an idle gap with no further repeated spaces, or any other key). */
 	onEnd(): void;
 	/** Backspace during a recognized hold latched the recording: releasing the space bar no longer
-	 *  stops it, and a later Space or Backspace tap does. Leave unset to keep Backspace as a release. */
+	 *  stops it, and a later Space or Backspace tap does. */
 	onLatch?(): void;
 }
 
@@ -90,10 +90,10 @@ export class SpaceHoldGesture {
 			return "swallow";
 		}
 		if (this.#active) {
-			if (isBackspace && this.handler?.onLatch) {
+			if (isBackspace) {
 				this.#latch = "held";
 				this.#armReleaseTimer();
-				this.handler.onLatch();
+				this.handler?.onLatch?.();
 				return "swallow";
 			}
 			if (isSpace) {
