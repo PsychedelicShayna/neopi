@@ -2735,7 +2735,9 @@ export class Editor implements Component, Focusable {
 	 *  rest of the utterance is shown at the cursor, so dictation never deletes the operator's
 	 *  edits or repeats itself. If the operator deleted the preview, the rest of the utterance
 	 *  is dropped. */
-	setVolatileText(text: string): void {
+	setVolatileText(rawText: string): void {
+		// Speech arrives from outside the terminal: normalize it like loaded text.
+		const text = sanitizeLoadedText(rawText);
 		this.#reconcileVolatile();
 		if (this.#volatileDropped) return;
 		const shown = this.#unadoptedPart(text);
@@ -2765,7 +2767,8 @@ export class Editor implements Component, Focusable {
 	 * single undoable edit and end the utterance. Returns the utterance id when any of its speech
 	 * remains in the draft, for {@link removeUtterances}.
 	 */
-	commitVolatileText(text: string): number | undefined {
+	commitVolatileText(rawText: string): number | undefined {
+		const text = sanitizeLoadedText(rawText);
 		this.#reconcileVolatile();
 		const id = this.#utteranceId;
 		const rest = this.#volatileDropped ? undefined : this.#unadoptedPart(text);

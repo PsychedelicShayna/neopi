@@ -3000,6 +3000,14 @@ describe("Editor component", () => {
 			expect(editor.getText()).toBe("");
 		});
 
+		it("strips terminal control characters from speech", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.setVolatileText("a\tb\x1bc");
+			expect(editor.getText()).not.toMatch(/[\t\x1b]/);
+			editor.commitVolatileText("a\tb\x07c");
+			expect(editor.getText()).not.toMatch(/[\t\x07]/);
+		});
+
 		it("drops the rest of an utterance once the operator deletes its preview", () => {
 			const editor = new Editor(defaultEditorTheme);
 			editor.setVolatileText("hello wor");
