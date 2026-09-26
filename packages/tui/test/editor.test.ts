@@ -2979,13 +2979,26 @@ describe("Editor component", () => {
 			expect(editor.getText()).toBe("single line");
 		});
 
-		it("keeps a preview as ordinary text once the cursor moves away from it", () => {
+		it("keeps a preview the operator edited around and continues with only the rest of the utterance", () => {
 			const editor = new Editor(defaultEditorTheme);
 			editor.insertText("ab");
-			editor.setVolatileText(" spoken");
-			editor.handleInput("\x1b[H"); // Home: cursor leaves the preview
-			editor.setVolatileText("X");
-			expect(editor.getText()).toBe("Xab spoken");
+			editor.setVolatileText(" hello wor");
+			editor.insertText("!");
+			editor.setVolatileText(" hello world");
+			expect(editor.getText()).toBe("ab hello wor!ld");
+			editor.commitVolatileText(" hello world");
+			expect(editor.getText()).toBe("ab hello wor!ld");
+		});
+
+		it("drops the rest of an utterance once the operator deletes its preview", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.setVolatileText("hello wor");
+			editor.setText("");
+			editor.setVolatileText("hello world");
+			editor.commitVolatileText("hello world");
+			expect(editor.getText()).toBe("");
+			editor.setVolatileText("next");
+			expect(editor.getText()).toBe("next");
 		});
 	});
 

@@ -513,6 +513,51 @@ export interface PasteOptions {
 	submitAfterPaste?: boolean;
 }
 
+/** Speech the editor inserted for one utterance, as a draft offset range. */
+interface SpeechSpan {
+	id: number;
+	start: number;
+	end: number;
+	text: string;
+}
+
+/** The single region where `before` and `after` differ: `[start, oldEnd)` in `before` became
+ *  `[start, newEnd)` in `after`. Several edits collapse into one region covering all of them. */
+function diffRegion(before: string, after: string): { start: number; oldEnd: number; newEnd: number } {
+	const limit = Math.min(before.length, after.length);
+	let start = 0;
+	while (start < limit && before.charCodeAt(start) === after.charCodeAt(start)) start++;
+	let suffix = 0;
+	while (
+		suffix < limit - start &&
+		before.charCodeAt(before.length - 1 - suffix) === after.charCodeAt(after.length - 1 - suffix)
+	) {
+		suffix++;
+	}
+	return { start, oldEnd: before.length - suffix, newEnd: after.length - suffix };
+}
+
+/** Where `span` sits after the edit `region`, or undefined when the edit touched it. */
+function mapSpan(span: SpeechSpan, region: { start: number; oldEnd: number; newEnd: number }): SpeechSpan | undefined {
+	if (span.end <= region.start) return span;
+	if (span.start >= region.oldEnd) {
+		const shift = region.newEnd - region.oldEnd;
+		return { ...span, start: span.start + shift, end: span.end + shift };
+	}
+	return undefined;
+}
+
+/** Offset of a line/column position in `text` split on newlines. */
+function offsetOfIn(text: string, line: number, col: number): number {
+	let offset = 0;
+	for (let i = 0; i < line; i++) {
+		const next = text.indexOf("\n", offset);
+		if (next === -1) break;
+		offset = next + 1;
+	}
+	return offset + col;
+}
+
 export class Editor implements Component, Focusable {
 	#state: EditorState = {
 		lines: [""],
@@ -2414,6 +2459,7 @@ export class Editor implements Component, Focusable {
 
 	#notifyChange(text?: string): void {
 		this.#textRevision++;
+		if (this.#speechSpans.length > 0) this.#reconcileSpans();
 		this.onChange?.(text ?? this.getText());
 	}
 
@@ -2666,88 +2712,109 @@ export class Editor implements Component, Focusable {
 	/** Draft and cursor right after the last volatile write. Any difference means something
 	 *  other than a volatile write edited the draft or moved the cursor since. */
 	#volatileSnapshot: { text: string; line: number; col: number } | undefined;
+	/** Cumulative utterance text last passed to {@link setVolatileText}. */
+	#volatileUtterance = "";
+	/** Leading code units of {@link #volatileUtterance} already in the draft as ordinary text: the
+	 *  operator edited around an earlier preview, which stays where it stood. */
+	#volatileAdopted = 0;
+	/** The operator deleted the preview (for example by clearing or submitting the draft); the rest
+	 *  of the utterance is dropped instead of reappearing. */
+	#volatileDropped = false;
+	/** Id of the utterance being shown. Speech it leaves in the draft is tracked under this id. */
+	#utteranceId = 1;
+	/** Committed or adopted speech still in the draft, as offsets into {@link #spanBase}. */
+	#speechSpans: SpeechSpan[] = [];
+	/** Draft text the {@link #speechSpans} offsets refer to. */
+	#spanBase = "";
 
-	/** Whether a volatile preview is still live at the cursor. Reading it adopts a preview the
-	 *  operator has edited around (see {@link setVolatileText}). */
-	get hasVolatileText(): boolean {
-		this.#reconcileVolatile();
-		return this.#volatileTextLen > 0;
-	}
-
-	/** Show or replace a volatile speech-to-text preview at the cursor. The text is
-	 *  inserted with undo suspended so a long live dictation never floods the undo
-	 *  stack; finalize it with {@link commitVolatileText} or drop it with
-	 *  {@link clearVolatileText}. Newlines are allowed. If the draft changed or the
-	 *  cursor moved since the previous preview, that preview is kept as ordinary text
-	 *  and the new one starts at the cursor, so dictation never deletes the operator's
-	 *  own edits. */
+	/** Show or replace a volatile speech-to-text preview at the cursor. `text` is the whole
+	 *  utterance so far. The preview is inserted with undo suspended so a long live dictation
+	 *  never floods the undo stack; finalize it with {@link commitVolatileText} or drop it with
+	 *  {@link clearVolatileText}. Newlines are allowed. If the operator edited the draft or moved
+	 *  the cursor since the previous preview, that preview stays as ordinary text and only the
+	 *  rest of the utterance is shown at the cursor, so dictation never deletes the operator's
+	 *  edits or repeats itself. If the operator deleted the preview, the rest of the utterance
+	 *  is dropped. */
 	setVolatileText(text: string): void {
 		this.#reconcileVolatile();
+		if (this.#volatileDropped) return;
+		const shown = this.#unadoptedPart(text);
+		if (shown === undefined) return;
 		this.#exitHistoryForEditing();
 		this.#withUndoSuspended(() => {
 			this.#deleteCharsBeforeCursor(this.#volatileTextLen);
-			if (text) this.#insertTextAtCursor(text);
+			if (shown) this.#insertTextAtCursor(shown);
 		});
-		this.#volatileTextLen = text.length;
+		this.#volatileUtterance = text;
+		this.#volatileTextLen = shown.length;
 		this.#snapshotVolatile();
-		if (!text) this.#notifyChange();
+		if (!shown) this.#notifyChange();
 	}
 
-	/** Remove the current volatile preview without committing it. */
+	/** Remove the current volatile preview without committing it and end the utterance. */
 	clearVolatileText(): void {
 		this.#reconcileVolatile();
-		if (this.#volatileTextLen === 0) return;
-		this.#withUndoSuspended(() => this.#deleteCharsBeforeCursor(this.#volatileTextLen));
-		this.#volatileTextLen = 0;
-		this.#volatileSnapshot = undefined;
-		this.#notifyChange();
+		const hadPreview = this.#volatileTextLen > 0;
+		if (hadPreview) this.#withUndoSuspended(() => this.#deleteCharsBeforeCursor(this.#volatileTextLen));
+		this.#endUtterance();
+		if (hadPreview) this.#notifyChange();
 	}
 
-	/** Drop any volatile preview, then insert `text` as a single undoable edit. */
-	commitVolatileText(text: string): void {
+	/**
+	 * Drop any volatile preview, then insert the not-yet-adopted rest of utterance `text` as a
+	 * single undoable edit and end the utterance. Returns the utterance id when any of its speech
+	 * remains in the draft, for {@link removeUtterances}.
+	 */
+	commitVolatileText(text: string): number | undefined {
 		this.#reconcileVolatile();
+		const id = this.#utteranceId;
+		const rest = this.#volatileDropped ? undefined : this.#unadoptedPart(text);
 		this.#exitHistoryForEditing();
 		this.#withUndoSuspended(() => this.#deleteCharsBeforeCursor(this.#volatileTextLen));
 		this.#volatileTextLen = 0;
 		this.#volatileSnapshot = undefined;
-		if (text) this.#insertTextAtCursor(text);
-		else this.#notifyChange();
+		if (rest) {
+			this.#reconcileSpans();
+			const start = this.#offsetOf(this.#state.cursorLine, this.#state.cursorCol);
+			this.#insertTextAtCursor(rest);
+			this.#reconcileSpans();
+			this.#speechSpans.push({ id, start, end: start + rest.length, text: rest });
+		} else {
+			this.#notifyChange();
+		}
+		this.#endUtterance();
+		return this.#speechSpans.some(span => span.id === id) ? id : undefined;
 	}
 
 	/**
-	 * Remove the last occurrence of each text as one undoable edit, leaving the volatile
-	 * preview intact. Occurrences overlapping the preview are skipped. One whitespace
-	 * character at the seam is removed with each span so neighbouring words do not run
-	 * together or double up. Returns how many texts were removed.
+	 * Remove the speech committed under the given utterance ids as one undoable edit, leaving
+	 * the volatile preview intact. Only spans still holding exactly the spoken text are removed,
+	 * so text the operator typed is never deleted. One whitespace character at each seam goes
+	 * with the span so neighbouring words do not run together or double up. Returns how many
+	 * spans were removed.
 	 */
-	removeText(texts: readonly string[]): number {
+	removeUtterances(ids: readonly number[]): number {
 		this.#reconcileVolatile();
 		let full = this.#state.lines.join("\n");
+		this.#reconcileSpans(full);
+		const targets = this.#speechSpans
+			.filter(span => ids.includes(span.id) && full.slice(span.start, span.end) === span.text)
+			.sort((a, b) => b.start - a.start);
+		if (targets.length === 0) return 0;
+		this.#exitHistoryForEditing();
+		this.#recordUndoState();
 		let cursor = this.#offsetOf(this.#state.cursorLine, this.#state.cursorCol);
-		const previewStart = cursor - this.#volatileTextLen;
-		let removed = 0;
-		for (const text of texts) {
-			if (!text) continue;
-			let start = full.lastIndexOf(text);
-			while (start !== -1 && this.#volatileTextLen > 0 && start < cursor && start + text.length > previewStart) {
-				start = start > 0 ? full.lastIndexOf(text, start - 1) : -1;
-			}
-			if (start === -1) continue;
-			let end = start + text.length;
+		for (const span of targets) {
+			let { start, end } = span;
 			const spaceBefore = start > 0 && /\s/.test(full[start - 1] ?? "");
 			const spaceAfter = end < full.length && /\s/.test(full[end] ?? "");
 			if (spaceAfter && (spaceBefore || start === 0)) end += 1;
 			else if (spaceBefore && end === full.length) start -= 1;
-			if (removed === 0) {
-				this.#exitHistoryForEditing();
-				this.#recordUndoState();
-			}
 			full = full.slice(0, start) + full.slice(end);
 			if (cursor >= end) cursor -= end - start;
 			else if (cursor > start) cursor = start;
-			removed += 1;
 		}
-		if (removed === 0) return 0;
+		this.#speechSpans = this.#speechSpans.filter(span => !targets.includes(span));
 		this.#state.lines = full.split("\n");
 		let line = 0;
 		while (line < this.#state.lines.length - 1 && cursor > (this.#state.lines[line]?.length ?? 0)) {
@@ -2759,7 +2826,24 @@ export class Editor implements Component, Focusable {
 		this.#lastAction = null;
 		this.#snapshotVolatile();
 		this.#notifyChange();
-		return removed;
+		return targets.length;
+	}
+
+	/** The part of cumulative utterance `text` not already adopted into the draft, or undefined
+	 *  when the transcript revised the adopted part and can no longer be continued. */
+	#unadoptedPart(text: string): string | undefined {
+		if (this.#volatileAdopted === 0) return text;
+		const adopted = this.#volatileUtterance.slice(0, this.#volatileAdopted);
+		return text.startsWith(adopted) ? text.slice(this.#volatileAdopted) : undefined;
+	}
+
+	#endUtterance(): void {
+		this.#volatileTextLen = 0;
+		this.#volatileSnapshot = undefined;
+		this.#volatileUtterance = "";
+		this.#volatileAdopted = 0;
+		this.#volatileDropped = false;
+		this.#utteranceId += 1;
 	}
 
 	#offsetOf(line: number, col: number): number {
@@ -2775,20 +2859,55 @@ export class Editor implements Component, Focusable {
 				: undefined;
 	}
 
-	/** Adopt the preview as ordinary text when anything but a volatile write changed the
-	 *  draft or moved the cursor, so the next preview never deletes the operator's edits. */
+	/** When anything but a volatile write changed the draft or moved the cursor, the preview stops
+	 *  being volatile so the next preview never deletes the operator's edits: it is adopted as
+	 *  ordinary (tracked) speech if it is still in the draft, or the utterance is dropped if the
+	 *  operator deleted it. */
 	#reconcileVolatile(): void {
 		const snapshot = this.#volatileSnapshot;
 		if (this.#volatileTextLen === 0 || !snapshot) return;
+		const current = this.#state.lines.join("\n");
 		if (
 			snapshot.line === this.#state.cursorLine &&
 			snapshot.col === this.#state.cursorCol &&
-			snapshot.text === this.#state.lines.join("\n")
+			snapshot.text === current
 		) {
 			return;
 		}
+		const end = offsetOfIn(snapshot.text, snapshot.line, snapshot.col);
+		const preview: SpeechSpan = {
+			id: this.#utteranceId,
+			start: end - this.#volatileTextLen,
+			end,
+			text: snapshot.text.slice(end - this.#volatileTextLen, end),
+		};
+		const region = diffRegion(snapshot.text, current);
+		const kept = mapSpan(preview, region);
+		const deleted =
+			!kept &&
+			region.start <= preview.start &&
+			region.oldEnd >= preview.end &&
+			!current.slice(region.start, region.newEnd).includes(preview.text);
 		this.#volatileTextLen = 0;
 		this.#volatileSnapshot = undefined;
+		if (deleted) {
+			this.#volatileDropped = true;
+			return;
+		}
+		this.#volatileAdopted = this.#volatileUtterance.length;
+		this.#reconcileSpans(current);
+		if (kept) this.#speechSpans.push(kept);
+	}
+
+	/** Carry speech spans across draft edits since {@link #spanBase}; spans an edit touched are
+	 *  forgotten, so later removal can only ever delete untouched spoken text. */
+	#reconcileSpans(current = this.#state.lines.join("\n")): void {
+		if (this.#spanBase === current) return;
+		if (this.#speechSpans.length > 0) {
+			const region = diffRegion(this.#spanBase, current);
+			this.#speechSpans = this.#speechSpans.flatMap(span => mapSpan(span, region) ?? []);
+		}
+		this.#spanBase = current;
 	}
 
 	/** Delete `count` UTF-16 code units immediately before the cursor, crossing line
