@@ -426,6 +426,19 @@ describe("live controller delegation ownership", () => {
 		expect(h.delegated).toContainEqual([1]);
 	});
 
+	it("reports a typed voice prompt undelivered when the call ends before it connects", async () => {
+		const h = makeHarness();
+		const delivered = h.controller.sendOperatorText("iris, are you there?", "voice");
+		await h.controller.stop();
+		expect(await delivered).toBe(false);
+	});
+
+	it("reports a typed voice prompt delivered once the transport takes it", async () => {
+		const h = makeHarness();
+		await h.controller.start();
+		expect(await h.controller.sendOperatorText("iris, are you there?", "voice")).toBe(true);
+	});
+
 	it("reports every operator turn to the composer, repeats included", async () => {
 		const h = makeHarness();
 		await h.controller.start();

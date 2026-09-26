@@ -132,7 +132,9 @@ export class LiveCommandController {
 		if (!session.retireComposerSpeech()) return "held";
 		this.#committed.clear();
 		if (this.#destination !== "voice" || options.hasImages) return "primary";
-		session.sendOperatorText(text, "voice");
+		void session.sendOperatorText(text, "voice").then(delivered => {
+			if (!delivered) this.#restoreUndelivered(text);
+		});
 		const component = new UserMessageComponent(text);
 		if (theme.icon.mic) component.setReaction(theme.icon.mic);
 		this.#ctx.present(component);
@@ -148,6 +150,15 @@ export class LiveCommandController {
 		const settled = this.#session?.retireComposerSpeech() ?? true;
 		if (settled) this.#committed.clear();
 		return settled;
+	}
+
+	/** A voice-only prompt never reached the voice agent (the call ended first): give it back. */
+	#restoreUndelivered(text: string): void {
+		const editor = this.#ctx.editor;
+		const draft = editor.getText();
+		editor.setText(draft.trim() ? `${text}\n${draft}` : text);
+		this.#ctx.showWarning("The voice agent did not receive your message; it is back in the composer");
+		this.#ctx.ui.requestRender();
 	}
 
 	/** With the destination `both`, tell the voice agent what the main agent is about to receive. */

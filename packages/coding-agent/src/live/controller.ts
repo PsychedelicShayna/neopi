@@ -195,7 +195,7 @@ export class LiveSessionController {
 	#contextSinceResponse = false;
 	/** The voice agent is mid-response (between its first output and its turn.done). */
 	#responding = false;
-	#pendingOperatorText: LiveClientMessage[] = [];
+	#pendingOperatorText: Array<{ message: LiveClientMessage; sent: (delivered: boolean) => void }> = [];
 	/** See {@link expectOperatorTurn}. */
 	#operatorTurnPending = false;
 	#userLedgerTurn = 0;
@@ -299,7 +299,7 @@ export class LiveSessionController {
 			this.#connected = true;
 			const queued = this.#pendingOperatorText;
 			this.#pendingOperatorText = [];
-			for (const message of queued) this.#queueSend(message);
+			for (const { message, sent } of queued) void this.#queueSend(message).then(sent);
 			this.#unsubscribeSession = this.#session.subscribe(event =>
 				this.#guardEvent(() => this.#handleSessionEvent(event)),
 			);
@@ -370,6 +370,7 @@ export class LiveSessionController {
 		this.#speakableIdleTimer = undefined;
 		this.#speakableIdleDeadline = 0;
 		this.#heldContext = [];
+		for (const { sent } of this.#pendingOperatorText) sent(false);
 		this.#pendingOperatorText = [];
 		this.#unsubscribeSession?.();
 		this.#unsubscribeSession = undefined;
@@ -706,22 +707,30 @@ export class LiveSessionController {
 	 * Hand composer text the operator typed to the voice model. `voice` addresses it to the
 	 * voice agent, which answers it and must not delegate it; `both` marks text already sent
 	 * to the main agent as silent awareness. Sent immediately: the operator is the source,
-	 * so the speakable hold does not apply.
+	 * so the speakable hold does not apply. Resolves whether every chunk reached the
+	 * transport; text still waiting for the connection resolves false if the call ends first.
 	 */
-	sendOperatorText(text: string, audience: "voice" | "both"): void {
+	sendOperatorText(text: string, audience: "voice" | "both"): Promise<boolean> {
 		const message = text.trim();
-		if (!message || this.#stopped) return;
+		if (!message || this.#stopped) return Promise.resolve(false);
 		const template = audience === "voice" ? operatorTypedMessageTemplate : operatorSharedMessageTemplate;
 		// A typed prompt makes the voice agent answer it, not the speech around it.
 		if (audience === "voice") this.#contextSinceResponse = true;
 		const channel = audience === "voice" ? undefined : "commentary";
 		// Every chunk carries the routing label: the voice agent routes each context item by it.
 		const labelBytes = Buffer.byteLength(prompt.render(template, { message: "" }), "utf8");
+		const deliveries: Promise<boolean>[] = [];
 		for (const part of chunkLiveContext(message, CONTEXT_CHUNK_BYTES - labelBytes)) {
 			const context = buildSessionContextAppend(prompt.render(template, { message: part }), channel);
-			if (this.#connected) this.#queueSend(context);
-			else this.#pendingOperatorText.push(context);
+			if (this.#connected) {
+				deliveries.push(this.#queueSend(context));
+			} else {
+				const { promise, resolve } = Promise.withResolvers<boolean>();
+				this.#pendingOperatorText.push({ message: context, sent: resolve });
+				deliveries.push(promise);
+			}
 		}
+		return Promise.all(deliveries).then(results => results.every(Boolean));
 	}
 
 	/**
@@ -1063,14 +1072,20 @@ export class LiveSessionController {
 		await appendFile(this.#transcriptLogPath, `${line}\n`, { mode: 0o600 });
 	}
 
-	#queueSend(message: LiveClientMessage): void {
+	/** Queue one message behind earlier sends; resolves whether the transport accepted it. */
+	#queueSend(message: LiveClientMessage): Promise<boolean> {
 		const transport = this.#transport;
-		if (!transport || this.#stopped) return;
-		this.#sendChain = this.#sendChain
-			.then(async () => {
-				if (!this.#stopped) await transport.send(message);
-			})
-			.catch(cause => this.#reportFailure(errorFrom(cause)));
+		if (!transport || this.#stopped) return Promise.resolve(false);
+		const sent = this.#sendChain.then(async () => {
+			if (this.#stopped) return false;
+			await transport.send(message);
+			return true;
+		});
+		this.#sendChain = sent.then(
+			() => {},
+			cause => this.#reportFailure(errorFrom(cause)),
+		);
+		return sent.catch(() => false);
 	}
 
 	#refreshAudioPhase(): void {

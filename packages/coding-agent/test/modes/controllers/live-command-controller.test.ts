@@ -65,8 +65,9 @@ function createHarness(): Harness {
 		const session = new LiveSessionController(created);
 		vi.spyOn(session, "start").mockResolvedValue();
 		vi.spyOn(session, "stop").mockResolvedValue();
-		vi.spyOn(session, "sendOperatorText").mockImplementation((text, audience) => {
+		vi.spyOn(session, "sendOperatorText").mockImplementation(async (text, audience) => {
 			sentToVoice.push([text, audience]);
+			return true;
 		});
 		return session;
 	});
