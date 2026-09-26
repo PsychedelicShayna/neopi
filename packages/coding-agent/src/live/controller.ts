@@ -394,9 +394,6 @@ export class LiveSessionController {
 				this.#recordLiveTranscript(event.turn.role, event.turn.transcript, true);
 				if (event.turn.role === "user") this.#ingestUserTurn(event.turn.transcript, true);
 				this.#finishTranscript(event.turn.role, event.turn.transcript);
-				if (event.turn.role === "assistant") {
-					this.#userTurnLedger = this.#userTurnLedger.filter(turn => turn.claim !== undefined);
-				}
 				break;
 			case "delegation.created":
 				void this.#handleDelegation(event).catch(cause => this.#reportFailure(errorFrom(cause)));
