@@ -19,6 +19,8 @@ die() {
 	exit 1
 }
 say() { printf 'build.sh: %s\n' "$*"; }
+# shellcheck source=scripts/npi-build-lib.sh
+source scripts/npi-build-lib.sh
 
 [[ $(uname -s) == Linux ]] || die "only Linux is supported; elsewhere see 'Install from source' in README.md"
 command -v bun >/dev/null || die "bun is not on PATH"
@@ -66,7 +68,7 @@ has_sentinel() { LC_ALL=C grep -aqE "${sentinel}([^A-Za-z0-9_]|\$)" "$1"; }
 native_inputs() {
 	local paths=(
 		crates Cargo.toml Cargo.lock rust-toolchain.toml .cargo
-		build.sh packages/natives/package.json packages/natives/scripts
+		build.sh scripts/npi-build-lib.sh package.json bun.lock packages/natives/package.json packages/natives/scripts
 		scripts/bazel-natives.ts scripts/host-detect.ts
 		BUILD.bazel MODULE.bazel MODULE.bazel.lock .bazelrc .bazelversion bazel
 	)
@@ -74,7 +76,7 @@ native_inputs() {
 		"${OMP_NATIVE_CARGO_PROFILE:-}" "${OMP_NATIVE_BUILD_BACKEND:-}"
 	git rev-parse "${paths[@]/#/HEAD:}"
 	git diff --no-ext-diff --no-textconv --no-color --binary HEAD -- "${paths[@]}"
-	git ls-files -z --others --exclude-standard -- "${paths[@]}" | xargs -0 -r sha256sum
+	untracked_digest "${paths[@]}"
 }
 
 # The stamp pins the inputs and the identity of the addon file they produced, so
@@ -123,11 +125,7 @@ fi
 # so record the tree this build starts from; a failed build leaves no record.
 binary=packages/coding-agent/dist/npi
 rm -f -- "$binary.source"
-source_id=$(
-	git rev-parse HEAD
-	git diff --no-ext-diff --no-textconv --no-color --binary HEAD | sha256sum | cut -d" " -f1
-	git ls-files -z --others --exclude-standard | xargs -0 -r sha256sum | sha256sum | cut -d" " -f1
-)
+source_id=$(source_id)
 
 # Bytecode stays off: the pinned Bun canary has produced executables with invalid
 # bytecode that still exit 0 at build time. Extensions deploy in install.sh, never
