@@ -648,6 +648,9 @@ export class InputController {
 		for (const key of this.ctx.keybindings.getKeys("app.live.toggle")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.ctx.handleLiveCommand());
 		}
+		for (const key of this.ctx.keybindings.getKeys("app.live.mute")) {
+			this.ctx.editor.setCustomKeyHandler(key, () => void this.ctx.handleLiveMute());
+		}
 		// Hold the space bar to push-to-talk: the editor recognizes the auto-repeat burst, tracks
 		// the spam back out, and starts/stops STT on hold start / release. Gated on `stt.enabled` so
 		// a disabled STT leaves the space bar typing normally, and on `sttIdle` so a hold can never

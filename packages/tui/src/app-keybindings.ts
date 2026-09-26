@@ -65,6 +65,7 @@ interface AppKeybindings {
 	"app.stt.toggle": true;
 	"app.dictation.toggle": true;
 	"app.live.toggle": true;
+	"app.live.mute": true;
 }
 
 /** Application action identifier registered alongside the base TUI keybindings. */
@@ -257,6 +258,10 @@ export const KEYBINDINGS = {
 	"app.live.toggle": {
 		defaultKeys: "ctrl+l",
 		description: "Start or stop live voice mode (/live)",
+	},
+	"app.live.mute": {
+		defaultKeys: "alt+space",
+		description: "Mute or unmute the microphone during live voice mode",
 	},
 } as const satisfies KeybindingDefinitions;
 
