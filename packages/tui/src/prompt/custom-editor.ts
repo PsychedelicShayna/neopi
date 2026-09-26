@@ -866,8 +866,8 @@ export class CustomEditor extends Editor {
 		if (!this.#chainLock) super.setVolatileText(text);
 	}
 
-	override commitVolatileText(text: string): void {
-		if (!this.#chainLock) super.commitVolatileText(text);
+	override commitVolatileText(text: string): number | undefined {
+		return this.#chainLock ? undefined : super.commitVolatileText(text);
 	}
 
 	override submit(): void {
