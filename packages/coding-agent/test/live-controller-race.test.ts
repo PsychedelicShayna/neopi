@@ -335,14 +335,20 @@ describe("live controller delegation ownership", () => {
 		expect(h.prompts).toEqual(["first clause\n\nsecond clause"]);
 	});
 
-	it("drops unclaimed addressed speech after assistant completion but retains a claimed mixed turn", async () => {
+	it("keeps unclaimed speech across assistant completion so a later handoff carries it", async () => {
 		const h = makeHarness();
 		await h.controller.start();
-		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "voice-only question" } });
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "spoken while she answered" } });
 		h.fireLive({ type: "turn.done", turn: { role: "assistant", transcript: "voice-only answer" } });
-		h.fireLive(delegation("dlg-empty", "model-authored fallback"));
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "now do it" } });
+		h.fireLive(delegation("dlg-late", "model-authored fallback"));
 		await settle();
-		expect(h.deliveries).toHaveLength(0);
+		expect(h.prompts).toEqual(["spoken while she answered\n\nnow do it"]);
+	});
+
+	it("retains a claimed mixed turn across assistant completion", async () => {
+		const h = makeHarness();
+		await h.controller.start();
 
 		h.fireLive({ type: "input_transcript.added", item: { text: "claimed mixed" } });
 		h.fireLive(delegation("dlg-mixed", "wrong"));
