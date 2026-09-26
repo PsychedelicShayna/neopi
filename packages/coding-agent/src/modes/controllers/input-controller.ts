@@ -1156,7 +1156,7 @@ export class InputController {
 			// Post-processing chain: only plain prompts reach here. The typed text
 			// stays in history so Up recalls what was written, not the rewrite.
 			const typedText = text;
-			if (forceChain || cfgChainingAuto.get(settings)) {
+			if (forceChain || (isSettingsInitialized() && cfgChainingAuto.get(settings))) {
 				const chained = await this.#applyPostProcessingChain(text);
 				if (chained === undefined) {
 					if (inputImages && inputImages.length > 0) {

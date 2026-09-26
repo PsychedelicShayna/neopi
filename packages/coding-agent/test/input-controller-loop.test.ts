@@ -15,6 +15,7 @@ function createLoopContext(options: {
 			? {
 					hasHandlers: () => false,
 					getCommand: (name: string) => (extensionCommandNames.includes(name) ? {} : undefined),
+					getEvalBackendAliases: () => [],
 				}
 			: undefined;
 	let loopPrompt: string | undefined = "original loop prompt";
