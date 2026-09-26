@@ -108,7 +108,7 @@ runs:
         env:
            REMOTE: ${{ steps.backend.outputs.remote }}
            RESTORE_HIT: ${{ steps.restore.outputs.cache-hit }}
-           ON_MAIN: ${{ github.ref == 'refs/heads/main' }}
+           ON_MAIN: ${{ github.ref == 'refs/heads/neopi' }}
         run: |
            set -euo pipefail
            save_needed=false
