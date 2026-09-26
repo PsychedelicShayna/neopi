@@ -51,10 +51,16 @@ stamp="$native_dir/.$addon_name.stamp"
 # next byte must not extend the identifier (18_1_1 must not match 18_1_10).
 has_sentinel() { LC_ALL=C grep -aqE "${sentinel}([^A-Za-z0-9_]|\$)" "$1"; }
 
-# Everything the addon is compiled from, plus the settings that change its bytes.
+# Everything the addon is compiled from, the scripts and configs that drive that
+# build, and the settings that change its bytes.
 native_inputs() {
-	local paths=(crates Cargo.toml Cargo.lock rust-toolchain.toml .cargo packages/natives/scripts/build-bindings.ts)
-	printf '%s\n' "$version" "$addon_name" "${RUSTFLAGS:-}" "${OMP_NATIVE_CARGO_PROFILE:-}"
+	local paths=(
+		crates Cargo.toml Cargo.lock rust-toolchain.toml .cargo
+		build.sh packages/natives/package.json packages/natives/scripts
+		scripts/bazel-natives.ts scripts/host-detect.ts
+		BUILD.bazel MODULE.bazel MODULE.bazel.lock .bazelrc .bazelversion bazel
+	)
+	printf '%s\n' "$version" "$addon_name" "${RUSTFLAGS:-}" "${OMP_NATIVE_CARGO_PROFILE:-}" "${OMP_NATIVE_BUILD_BACKEND:-}"
 	git rev-parse "${paths[@]/#/HEAD:}"
 	git diff --no-ext-diff --no-textconv --no-color --binary HEAD -- "${paths[@]}"
 	git ls-files -z --others --exclude-standard -- "${paths[@]}" | xargs -0 -r sha256sum

@@ -3,8 +3,10 @@
 # NeoPi extensions from this checkout.
 #
 # Environment:
-#   NPI_DEST              install path (default ~/.local/bin/npi)
-#   PI_CODING_AGENT_DIR   agent dir whose extensions/ receives the links (default: the active profile's)
+#   NPI_DEST              install path; its file name must be npi (default ~/.local/bin/npi)
+#   PI_CODING_AGENT_DIR   agent dir whose extensions/ receives the links (default: the active profile's).
+#                         When set, OMP_PROFILE and PI_PROFILE are ignored so a staged install
+#                         never rewires a named profile's extensions.
 set -euo pipefail
 
 cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
@@ -19,6 +21,8 @@ command -v bun >/dev/null || die "bun is not on PATH"
 
 binary=packages/coding-agent/dist/npi
 dest=$(realpath -ms -- "${NPI_DEST:-$HOME/.local/bin/npi}")
+# The fork installs only as npi, and `npi update` routing keys on that basename.
+[[ $(basename -- "$dest") == npi ]] || die "install path must be named npi, got $dest"
 version=$(bun -p 'require("./packages/coding-agent/package.json").version')
 
 [[ -x $binary && -f $binary.source ]] || die "$binary is missing or was not built by ./build.sh; run ./build.sh"
@@ -47,7 +51,12 @@ smoke "$staged"
 mv -f -- "$staged" "$dest"
 say "installed $dest"
 
-bun scripts/install-neopi-extensions.ts
+if [[ -n ${PI_CODING_AGENT_DIR:-} ]]; then
+	# A named profile would otherwise win over PI_CODING_AGENT_DIR in getAgentDir().
+	env -u OMP_PROFILE -u PI_PROFILE bun scripts/install-neopi-extensions.ts
+else
+	bun scripts/install-neopi-extensions.ts
+fi
 
 smoke "$dest"
 say "smoke test passed: $("$dest" --version)"
