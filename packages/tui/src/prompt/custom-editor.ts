@@ -852,6 +852,11 @@ export class CustomEditor extends Editor {
 
 	/** Lock the composer while a chain rewrites it: every line shimmers and all input is dropped except
 	 *  Escape (→ `onEscape`) and the app.clear key, Ctrl+C by default (→ `onClear`). `undefined` unlocks. */
+	/** Whether a chain holds the composer; paste paths outside {@link handleInput} check it too. */
+	get chainLocked(): boolean {
+		return this.#chainLock !== undefined;
+	}
+
 	setChainLock(lock: ChainLock | undefined): void {
 		this.#chainLock = lock;
 		this.#requestShimmerRepaint?.();

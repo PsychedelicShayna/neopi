@@ -870,6 +870,10 @@ export class InputController {
 				// editor while the modal Input had focus (#2127).
 				const focused = this.ctx.ui.getFocused();
 				const target = focused && focused !== this.ctx.editor && hasPasteText(focused) ? focused : this.ctx.editor;
+				if (target === this.ctx.editor && this.ctx.editor.chainLocked) {
+					this.ctx.showStatus("The composer is locked while a chain runs");
+					return;
+				}
 				target.pasteText(text);
 				this.ctx.ui.requestRender();
 			},
@@ -879,6 +883,10 @@ export class InputController {
 				const focused = this.ctx.ui.getFocused();
 				if (focused && focused !== this.ctx.editor && hasPasteText(focused)) {
 					this.ctx.showStatus("Image paste is not supported in this prompt");
+					return;
+				}
+				if (this.ctx.editor.chainLocked) {
+					this.ctx.showStatus("The composer is locked while a chain runs");
 					return;
 				}
 				await this.#normalizeAndInsertPastedImage(image, `Unsupported pasted image format: ${image.mimeType}`);
@@ -1167,7 +1175,10 @@ export class InputController {
 							: inputImages.map(() => undefined);
 						this.ctx.editor.imageLinks = this.ctx.editor.pendingImageLinks;
 					}
-					this.ctx.editor.setCollapsedText(outcome.text);
+					// An untouched draft comes back as displayed, large pastes still collapsed.
+					if (outcome.text !== typedText || !this.ctx.editor.restoreSubmittedDraft()) {
+						this.ctx.editor.setCollapsedText(outcome.text);
+					}
 					return;
 				}
 				text = outcome.text;
@@ -1318,22 +1329,21 @@ export class InputController {
 	 * step in flight, Esc Esc Esc or the clear key aborts.
 	 */
 	async #applyPostProcessingChain(text: string): Promise<{ text: string; send: boolean }> {
-		const chain = await this.#resolveActiveChain();
-		if (chain === SEND_WITHOUT_CHAIN) return { text, send: true };
-		if (!chain) return { text, send: false };
-
 		const control = new ChainControl();
 		const gesture = new EscapeGesture();
 		let lastOutput = text;
-		let currentStep = chain.steps[0]?.name ?? "";
-		// Submit already emptied the buffer; put the draft back so the lock has something to shimmer.
-		this.ctx.editor.setCollapsedText(text);
+		let chainName = "";
+		let currentStep = "";
+		// Lock before resolving the chain: submit already emptied the buffer, and anything typed
+		// while CHAINS.yml loads or the picker is open would be overwritten. The draft goes back
+		// as displayed so the lock has something to shimmer.
+		if (!this.ctx.editor.restoreSubmittedDraft()) this.ctx.editor.setCollapsedText(text);
 		this.ctx.editor.setChainLock({
 			onEscape: () => {
 				const action = gesture.press();
 				if (action === "skip") {
 					control.skipStep();
-					this.ctx.showStatus(`Chain ${chain.name}: skipping "${currentStep}"…`);
+					if (currentStep) this.ctx.showStatus(`Chain ${chainName}: skipping "${currentStep}"…`);
 				} else if (action === "abort") {
 					control.abort();
 				}
@@ -1341,6 +1351,24 @@ export class InputController {
 			// Never handleCtrlC: its double-press exit must not race a running step.
 			onClear: () => control.abort(),
 		});
+		this.ctx.ui.requestRender();
+		let resolved: ChainConfig | typeof SEND_WITHOUT_CHAIN | undefined;
+		try {
+			resolved = await this.#resolveActiveChain();
+		} catch (error) {
+			this.ctx.editor.setChainLock(undefined);
+			throw error;
+		}
+		if (resolved === SEND_WITHOUT_CHAIN || !resolved || control.signal.aborted) {
+			this.ctx.editor.setChainLock(undefined);
+			const send = resolved === SEND_WITHOUT_CHAIN && !control.signal.aborted;
+			// Sending: the composer held the draft only for the lock.
+			if (send) this.ctx.editor.setText("");
+			return { text, send };
+		}
+		const chain = resolved;
+		chainName = chain.name;
+		currentStep = chain.steps[0]?.name ?? "";
 		this.ctx.ui.requestRender();
 		try {
 			const result = await runChain(chain, text, {
@@ -1364,6 +1392,8 @@ export class InputController {
 				onStepSkipped: step => this.ctx.showStatus(`Chain ${chain.name}: skipped "${step.name}"`),
 			});
 			this.ctx.showStatus("");
+			// Sending: the composer showed the rewrite only while the lock held it.
+			this.ctx.editor.setText("");
 			return { text: result, send: true };
 		} catch (error) {
 			if (control.signal.aborted) {

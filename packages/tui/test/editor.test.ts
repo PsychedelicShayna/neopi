@@ -2907,6 +2907,27 @@ describe("Editor component", () => {
 		});
 	});
 
+	describe("submitted draft restore", () => {
+		it("puts a submitted large paste back collapsed, with its content intact", () => {
+			const editor = new Editor(defaultEditorTheme);
+			const payload = "line\n".repeat(400);
+			let submitted = "";
+			editor.onSubmit = text => {
+				submitted = text;
+			};
+			editor.insertText("see ");
+			editor.insertPaste(payload);
+			const collapsed = editor.getText();
+			editor.submit();
+			expect(submitted).toContain(payload.trim());
+			expect(editor.getText()).toBe("");
+
+			expect(editor.restoreSubmittedDraft()).toBe(true);
+			expect(editor.getText()).toBe(collapsed);
+			expect(editor.getExpandedText()).toContain(payload.trim());
+		});
+	});
+
 	describe("volatile speech-to-text preview", () => {
 		it("replaces the volatile preview in place rather than appending", () => {
 			const editor = new Editor(defaultEditorTheme);
