@@ -57,7 +57,14 @@ bun install --frozen-lockfile
 ./install.sh   # atomic install to ~/.local/bin/npi (NPI_DEST overrides), extensions, smoke test
 ```
 
-`build.sh` and `install.sh` support Linux. On macOS, build the native addon first with `bun --cwd=packages/natives run build` (again after every version bump), then `bun --cwd=packages/coding-agent run build`; copy `packages/coding-agent/dist/npi` to a dedicated `npi` path and run `bun scripts/install-neopi-extensions.ts`.
+`build.sh` and `install.sh` support Linux. On macOS, run the same steps by hand:
+
+```sh
+CARGO_BUILD_JOBS=6 bun --cwd=packages/natives run build   # first, and after every version bump
+OMP_BUILD_BYTECODE=0 NPI_SKIP_EXTENSION_INSTALL=1 bun --cwd=packages/coding-agent run build
+cp packages/coding-agent/dist/npi ~/.local/bin/npi        # a dedicated npi path
+bun scripts/install-neopi-extensions.ts
+```
 
 This repository does not prescribe a remote installer or a global package-manager install. The existing package scope and protocol identifiers remain `@oh-my-pi/*`; configuration remains under `~/.omp` unless `PI_CONFIG_DIR` or the documented profile settings select another location.
 
