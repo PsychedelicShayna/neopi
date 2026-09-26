@@ -1383,6 +1383,7 @@ export class InputController {
 				modelRegistry: this.ctx.session.modelRegistry,
 				tools: this.ctx.session.agent.state.tools,
 				messages: this.ctx.session.agent.state.messages,
+				obfuscator: this.ctx.session.obfuscator,
 				cwd: this.ctx.sessionManager.getCwd(),
 				control,
 				onStep: (step, index, total) => {

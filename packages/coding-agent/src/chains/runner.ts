@@ -19,6 +19,8 @@ import { formatModelRoleAlias } from "../config/model-roles";
 import { getModelMatchPreferences, resolveModelRoleValue } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import chainInputWithContext from "../prompts/chains/input-with-context.md" with { type: "text" };
+import { obfuscateProviderContext } from "../secrets/message-transform";
+import type { SecretObfuscator } from "../secrets/obfuscator";
 import chainSystemPrompt from "../prompts/chains/system.md" with { type: "text" };
 import { estimateToolSchemaTokens } from "@oh-my-pi/pi-tui/status-line/context-usage";
 import { formatSessionHistoryMarkdown } from "../session/session-history-format";
@@ -77,6 +79,8 @@ export interface RunChainOptions {
 	cwd: string;
 	/** Live primary transcript, rendered into steps that set `context`. */
 	messages?: readonly AgentMessage[];
+	/** The session's secret obfuscator: steps send what the primary session would, never more. */
+	obfuscator?: SecretObfuscator;
 	/** Skip/abort handle; a private one is used when omitted. */
 	control?: ChainControl;
 	/** Called before each step starts, for progress display. */
@@ -171,6 +175,8 @@ export async function runChainStep(
 	const granted = new Set(step.tools ?? []);
 	const tools = options.tools.filter(tool => granted.has(tool.name));
 	const providerSessionId = Bun.randomUUIDv7();
+	const obfuscator = options.obfuscator;
+	const hidesSecrets = obfuscator?.obfuscates() === true;
 	const agent = new Agent({
 		initialState: {
 			systemPrompt: [step.systemPrompt ?? CHAIN_SYSTEM_PROMPT, step.prompt],
@@ -181,7 +187,11 @@ export async function runChainStep(
 		sessionId: providerSessionId,
 		cwdResolver: () => options.cwd,
 		getApiKey: requestModel => options.modelRegistry.resolver(requestModel, providerSessionId),
-		streamFn: streamSimple,
+		// Same provider boundary as the primary session: configured secrets leave as placeholders.
+		streamFn: hidesSecrets
+			? (streamModel, context, streamOptions) =>
+					streamSimple(streamModel, obfuscateProviderContext(obfuscator, context), streamOptions)
+			: streamSimple,
 		intentTracing: false,
 	});
 	agent.setDisableReasoning(shouldDisableReasoning(thinkingLevel));
@@ -205,7 +215,8 @@ export async function runChainStep(
 		.join("")
 		.trim();
 	if (!text) throw new Error(`Chain step "${step.name}" returned empty text`);
-	return text;
+	// Placeholders the model echoed back become the operator's own text again.
+	return hidesSecrets && obfuscator ? obfuscator.deobfuscate(text) : text;
 }
 
 /**
