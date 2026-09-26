@@ -2065,7 +2065,7 @@ export class AgentSession implements SettingsScope {
 			modelRegistry: this.#modelRegistry,
 			obfuscator: this.#obfuscator,
 			providerSessionState: this.#providerSessionState,
-			preferWebsockets: this.#preferWebsockets,
+			preferWebsockets: this.preferWebsockets,
 			isDisposed: () => this.#isDisposed,
 			isCaptureEligible: () =>
 				this.#agentKind === "main" && (!this.#chatMode || chatModeIncludes(this.#chatMode, "memory")),

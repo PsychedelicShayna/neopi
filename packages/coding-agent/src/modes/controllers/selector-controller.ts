@@ -138,6 +138,7 @@ import {
 	cfgTreeFilterMode,
 } from "../settings";
 import { cfgTaskAgentModelOverrides } from "../../task/settings";
+import { cfgAdvisorMaxNotesPerUpdate } from "../../advisor/settings";
 
 const MANUAL_LOGIN_PROMPT = "Paste the authorization code (or full redirect URL), then press Enter:";
 
@@ -413,7 +414,7 @@ export class SelectorController {
 					const maxNotesPerUpdate = resolveAdvisorMaxNotesPerUpdate(
 						advisor.maxNotesPerUpdate,
 						doc.maxNotesPerUpdate,
-						this.ctx.settings.get("advisor.maxNotesPerUpdate"),
+						cfgAdvisorMaxNotesPerUpdate.get(this.ctx.settings),
 					);
 					const chatMode = this.ctx.session.chatMode;
 					return chatMode

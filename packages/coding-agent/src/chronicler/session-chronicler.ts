@@ -22,7 +22,9 @@ import { acquireFileLock, type FileLockHandle, logger, prompt } from "@oh-my-pi/
 import { AdvisorTranscriptRecorder, deriveAdvisorTelemetry } from "../advisor";
 import type { ModelRegistry } from "../config/model-registry";
 import { formatModelString, resolveChroniclerRoleSelection } from "../config/model-resolver";
-import type { SettingPath, Settings } from "../config/settings";
+import { cfgModelRoles } from "../config/model-settings";
+import type { Settings } from "../config/settings";
+import { cfgChroniclerEnabled } from "./settings";
 import { estimateToolSchemaTokens } from "@oh-my-pi/pi-tui/status-line/context-usage";
 import contextTemplate from "../prompts/chronicler/context.md" with { type: "text" };
 import systemTemplate from "../prompts/chronicler/system.md" with { type: "text" };
@@ -177,7 +179,12 @@ export class SessionChronicler {
 
 	constructor(host: SessionChroniclerHost) {
 		this.#host = host;
-		this.#settingsUnsub = host.settings.onEffectiveChange(path => this.#onSettingChange(path));
+		const unsubEnabled = cfgChroniclerEnabled.listen(host.settings, () => this.#onSettingChange());
+		const unsubRoles = cfgModelRoles.listen(host.settings, () => this.#onSettingChange());
+		this.#settingsUnsub = () => {
+			unsubEnabled();
+			unsubRoles();
+		};
 		// An idle resumed on-disk session must catch up its backlog without
 		// requiring another user turn, so scan once at construction.
 		this.#scheduleWake(true);
@@ -355,8 +362,7 @@ export class SessionChronicler {
 			});
 	}
 
-	#onSettingChange(path: SettingPath): void {
-		if (path !== "chronicler.enabled" && path !== "modelRoles" && !path.startsWith("modelRoles.")) return;
+	#onSettingChange(): void {
 		if (this.#cleanedUp || this.#deadlineExpired) return;
 		// Reopen canonical committed state on configuration changes, including a
 		// corruption halt: strict store validation will halt again if it persists.
@@ -483,7 +489,7 @@ export class SessionChronicler {
 	// ---- scan -------------------------------------------------------------
 
 	#enabled(): boolean {
-		return this.#host.settings.get("chronicler.enabled") === true;
+		return cfgChroniclerEnabled.get(this.#host.settings);
 	}
 
 	async #runScan(): Promise<void> {
@@ -505,7 +511,7 @@ export class SessionChronicler {
 		const selection = this.#resolveSelection();
 		if (!selection) {
 			this.#status = "no_model";
-			const unresolved = JSON.stringify(this.#host.settings.get("modelRoles") ?? null);
+			const unresolved = JSON.stringify(cfgModelRoles.get(this.#host.settings) ?? null);
 			if (this.#noModelWarned !== unresolved) {
 				this.#noModelWarned = unresolved;
 				this.#host.emitNotice(

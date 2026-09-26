@@ -22,6 +22,7 @@ import type { SlashCommandSpec } from "./types";
 
 import { cfgBrowserEnabled, cfgBrowserHeadless } from "../tools/browser/settings";
 import { cfgShareRedactSecrets, cfgShareServerUrl, cfgShareStore } from "../commands/settings";
+import { cfgChainingActive, cfgChainingAuto } from "../chains/settings";
 
 /** Join hint printed by /collab: compact terminal link + clickable browser deep link. */
 function collabLinkHint(host: CollabHost, heading: string, view = false): string {
@@ -46,9 +47,9 @@ function collabLinkHint(host: CollabHost, heading: string, view = false): string
 /** One-block summary of chaining mode, the active chain, and every discovered chain. */
 async function formatChainingStatus(cwd: string): Promise<string> {
 	const { chains, warnings } = await discoverChains(cwd, getAgentDir());
-	const active = settings.get("chaining.active");
+	const active = cfgChainingActive.get(settings);
 	const lines = [
-		`Chaining: ${settings.get("chaining.auto") ? "on (every prompt)" : "off (Alt+C runs it once)"}`,
+		`Chaining: ${cfgChainingAuto.get(settings) ? "on (every prompt)" : "off (Alt+C runs it once)"}`,
 		`Active chain: ${active || "(none; you will be asked)"}`,
 	];
 	if (chains.length === 0) {
@@ -69,27 +70,27 @@ async function applyChainingVerb(verb: string, rest: string, cwd: string): Promi
 	if (verb === "on") {
 		const { chains } = await discoverChains(cwd, getAgentDir());
 		if (chains.length === 0) return "No chains defined. Create one with /chaining configure first.";
-		settings.set("chaining.auto", true);
-		const active = settings.get("chaining.active");
+		cfgChainingAuto.set(settings, true);
+		const active = cfgChainingActive.get(settings);
 		return chains.some(chain => chain.name === active)
 			? `Chaining on: every prompt runs through "${active}".`
 			: "Chaining on: you will be asked which chain to use on the next prompt.";
 	}
 	if (verb === "off") {
-		settings.set("chaining.auto", false);
+		cfgChainingAuto.set(settings, false);
 		return "Chaining off. Alt+C still runs the active chain for one prompt.";
 	}
 	if (verb === "use") {
 		const name = rest.trim();
 		if (!name) {
-			settings.set("chaining.active", "");
+			cfgChainingActive.set(settings, "");
 			return "Active chain cleared; the next chained prompt will ask which chain to use.";
 		}
 		const { chains } = await discoverChains(cwd, getAgentDir());
 		if (!chains.some(chain => chain.name === name)) {
 			return `No chain named "${name}". Known: ${chains.map(chain => chain.name).join(", ") || "(none)"}`;
 		}
-		settings.set("chaining.active", name);
+		cfgChainingActive.set(settings, name);
 		return `Active chain: ${name}`;
 	}
 	if (verb === "status") return formatChainingStatus(cwd);
@@ -243,8 +244,8 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		],
 		allowArgs: true,
 		getTuiAutocompleteDescription: () => {
-			const active = settings.get("chaining.active");
-			const mode = settings.get("chaining.auto") ? "on" : "off";
+			const active = cfgChainingActive.get(settings);
+			const mode = cfgChainingAuto.get(settings) ? "on" : "off";
 			return active ? `Chaining: ${mode} (${active})` : `Chaining: ${mode}`;
 		},
 		handle: async (command, runtime) => {
