@@ -4,8 +4,9 @@
  * by the step prompt, and whose user message is the previous step's output
  * (the composer text for the first step). The last output is returned.
  */
-import { Agent, type AgentMessage, type AgentTool, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import { streamSimple } from "@oh-my-pi/pi-ai";
+import { Agent, type AgentMessage, type AgentTool, ThinkingLevel, Tokenizer } from "@oh-my-pi/pi-agent-core";
+import { type Model, streamSimple } from "@oh-my-pi/pi-ai";
+import * as prompt from "@oh-my-pi/pi-utils/prompt";
 import type { ChainConfig, ChainStep } from "@oh-my-pi/pi-tui/overlays/chain-types";
 import {
 	concreteThinkingLevel,
@@ -17,6 +18,7 @@ import type { ModelRegistry } from "../config/model-registry";
 import { formatModelRoleAlias } from "../config/model-roles";
 import { getModelMatchPreferences, resolveModelRoleValue } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
+import chainInputWithContext from "../prompts/chains/input-with-context.md" with { type: "text" };
 import chainSystemPrompt from "../prompts/chains/system.md" with { type: "text" };
 import { formatSessionHistoryMarkdown } from "../session/session-history-format";
 
@@ -27,6 +29,10 @@ export const CHAIN_DEFAULT_ROLE = "prose";
 export const CHAIN_SYSTEM_PROMPT = chainSystemPrompt;
 
 const CHAIN_SKIP = "chain step skipped";
+/** Tokens kept free for tool definitions and message framing when fitting the transcript. */
+const CHAIN_FRAMING_RESERVE = 2_000;
+/** Output room reserved when the model reports no output limit. */
+const CHAIN_DEFAULT_OUTPUT_RESERVE = 8_192;
 const CHAIN_ABORT = "chain aborted";
 
 /** Cancels a running chain as a whole or skips just the step in flight. */
@@ -80,16 +86,59 @@ export interface RunChainOptions {
 	onStepSkipped?: (step: ChainStep, index: number) => void;
 }
 
-/** The user message for a step: the draft, wrapped with the transcript when the step ingests context. */
+/**
+ * The newest messages whose token estimate fits `budget`. Older history is dropped first: the
+ * draft's references almost always point at the most recent turns.
+ */
+function fitTranscript(messages: readonly AgentMessage[], budget: number, tokenizer: Tokenizer): AgentMessage[] {
+	let used = 0;
+	let start = messages.length;
+	while (start > 0) {
+		const cost = tokenizer.countMessage(messages[start - 1]!);
+		if (used + cost > budget) break;
+		used += cost;
+		start -= 1;
+	}
+	return messages.slice(start);
+}
+
+/** A boundary token that occurs in none of `texts`, so embedded tag-like text cannot close a block. */
+function blockBoundary(texts: readonly string[]): string {
+	for (;;) {
+		const boundary = Bun.randomUUIDv7().replaceAll("-", "").slice(-12);
+		if (!texts.some(text => text.includes(boundary))) return boundary;
+	}
+}
+
+/**
+ * The user message for a step: the draft, wrapped with the transcript when the step ingests
+ * context. With a model, the transcript keeps only the newest messages that fit its context
+ * window after the system prompt, draft, output, and framing are reserved.
+ */
 export function renderChainInput(
 	step: ChainStep,
 	input: string,
 	messages: readonly AgentMessage[] | undefined,
+	model?: Pick<Model, "contextWindow" | "maxTokens" | "tokenizer">,
 ): string {
 	if (!step.context || !messages?.length) return input;
-	const transcript = formatSessionHistoryMarkdown(messages as unknown[]).trim();
+	let kept: readonly AgentMessage[] = messages;
+	if (model?.contextWindow) {
+		const tokenizer = new Tokenizer(model);
+		const system = step.systemPrompt ?? CHAIN_SYSTEM_PROMPT;
+		const reserved =
+			tokenizer.countTokens([system, step.prompt, input]) +
+			Math.min(model.maxTokens || CHAIN_DEFAULT_OUTPUT_RESERVE, Math.floor(model.contextWindow / 4)) +
+			CHAIN_FRAMING_RESERVE;
+		kept = fitTranscript(messages, Math.max(0, model.contextWindow - reserved), tokenizer);
+	}
+	const transcript = formatSessionHistoryMarkdown(kept as unknown[]).trim();
 	if (!transcript) return input;
-	return `<transcript>\n${transcript}\n</transcript>\n\n<draft>\n${input}\n</draft>`;
+	return prompt.render(chainInputWithContext, {
+		transcript,
+		draft: input,
+		boundary: blockBoundary([transcript, input]),
+	});
 }
 
 /** Run one step over `input` and return the model's final text. */
@@ -133,7 +182,7 @@ export async function runChainStep(
 	const onAbort = () => agent.abort("chain cancelled");
 	signal?.addEventListener("abort", onAbort, { once: true });
 	try {
-		await agent.prompt(renderChainInput(step, input, options.messages));
+		await agent.prompt(renderChainInput(step, input, options.messages, resolved.model));
 	} finally {
 		signal?.removeEventListener("abort", onAbort);
 	}
@@ -170,9 +219,10 @@ export async function runChain(
 		// Before onStep: a skip/abort issued from the callback targets this step.
 		const stepSignal = control.beginStep();
 		options.onStep?.(step, index, chain.steps.length);
+		let output: string;
 		try {
 			stepSignal.throwIfAborted();
-			current = await runStep(step, current, options, stepSignal);
+			output = await runStep(step, current, options, stepSignal);
 		} catch (error) {
 			// A whole-chain abort wins even if the step signal's first reason was a skip.
 			if (control.signal.aborted) throw error;
@@ -186,6 +236,12 @@ export async function runChain(
 		}
 		// An abort that raced a successful completion must not be sent.
 		control.signal.throwIfAborted();
+		// So must a skip: the step's input passes through as promised.
+		if (stepSignal.aborted && stepSignal.reason === CHAIN_SKIP) {
+			options.onStepSkipped?.(step, index);
+			continue;
+		}
+		current = output;
 		options.onStepDone?.(step, index, current);
 	}
 	control.signal.throwIfAborted();

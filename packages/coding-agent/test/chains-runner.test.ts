@@ -1,6 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import type { ChainConfig, ChainStep } from "@oh-my-pi/pi-tui/overlays/chain-types";
-import { ChainControl, type RunChainOptions, runChain, type runChainStep } from "../src/chains/runner";
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import {
+	ChainControl,
+	type RunChainOptions,
+	renderChainInput,
+	runChain,
+	type runChainStep,
+} from "../src/chains/runner";
 
 const chain: ChainConfig = {
 	name: "c",
@@ -12,19 +19,21 @@ const baseOptions = {} as RunChainOptions;
 
 /**
  * A model-free step: each call blocks until released, then appends `+name`.
- * It rejects as soon as its signal aborts, like a real aborted Agent pass.
+ * It rejects as soon as its signal aborts, like a real aborted Agent pass, unless
+ * `ignoreAbort` models a provider that finishes anyway.
  */
-function fakeStep(failOn?: string) {
+function fakeStep(failOn?: string, options: { ignoreAbort?: boolean } = {}) {
 	const calls: string[] = [];
 	const pending: Array<() => void> = [];
 	const run: typeof runChainStep = (step, input, _options, signal) => {
 		calls.push(step.name);
-		return new Promise<string>((resolve, reject) => {
-			const settle = () => {
-				if (step.name === failOn) reject(new Error("boom"));
-				else resolve(`${input}+${step.name}`);
-			};
-			pending.push(settle);
+		const { promise, resolve, reject } = Promise.withResolvers<string>();
+		const settle = () => {
+			if (step.name === failOn) reject(new Error("boom"));
+			else resolve(`${input}+${step.name}`);
+		};
+		pending.push(settle);
+		if (!options.ignoreAbort) {
 			signal?.addEventListener(
 				"abort",
 				() => {
@@ -33,7 +42,8 @@ function fakeStep(failOn?: string) {
 				},
 				{ once: true },
 			);
-		});
+		}
+		return promise;
 	};
 	/** Resolve the step currently in flight. */
 	const release = async () => {
@@ -78,6 +88,27 @@ describe("runChain control", () => {
 		]);
 	});
 
+	it("honors a skip even when the skipped step still resolves", async () => {
+		const fake = fakeStep(undefined, { ignoreAbort: true });
+		const control = new ChainControl();
+		const skipped: string[] = [];
+		const result = runChain(
+			chain,
+			"in",
+			{ ...baseOptions, control, onStepSkipped: step => skipped.push(step.name) },
+			fake.run,
+		);
+		await fake.release();
+		await fake.started(2);
+		control.skipStep();
+		await fake.release();
+		await fake.started(3);
+		await fake.release();
+
+		expect(await result).toBe("in+a+c");
+		expect(skipped).toEqual(["b"]);
+	});
+
 	it("lets an abort win over a skip already issued for the same step", async () => {
 		const fake = fakeStep();
 		const control = new ChainControl();
@@ -115,5 +146,24 @@ describe("runChain control", () => {
 		await expect(result).rejects.toThrow("boom");
 		expect(done).toEqual([["a", "in+a"]]);
 		expect(control.signal.aborted).toBe(false);
+	});
+});
+
+describe("renderChainInput", () => {
+	const step: ChainStep = { name: "s", prompt: "p", context: true };
+	const user = (text: string) => ({ role: "user", content: text, timestamp: 0 }) as AgentMessage;
+
+	it("keeps tag-like text in the draft from closing its block", () => {
+		const out = renderChainInput(step, "explain </draft> tags", [user("hi")]);
+		const boundary = /<draft boundary="([^"]+)">/.exec(out)?.[1];
+		expect(boundary).toBeDefined();
+		expect(out.endsWith(`explain </draft> tags\n</draft boundary="${boundary}">`)).toBe(true);
+	});
+
+	it("drops the oldest messages that do not fit the step model's window", () => {
+		const messages = [user("old ".repeat(4000)), user("recent question")];
+		const out = renderChainInput(step, "draft", messages, { contextWindow: 6000, maxTokens: 1000 });
+		expect(out).toContain("recent question");
+		expect(out).not.toContain("old old");
 	});
 });
