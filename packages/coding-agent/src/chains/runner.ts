@@ -199,7 +199,13 @@ export async function runChainStep(
 	const onAbort = () => agent.abort("chain cancelled");
 	signal?.addEventListener("abort", onAbort, { once: true });
 	try {
-		await agent.prompt(renderChainInput(step, input, options.messages, resolved.model, tools));
+		// Redact before rendering: the transcript formatter truncates text, which can cut a secret
+		// pattern's delimiters so a later pass on the rendered text no longer matches it.
+		const messages =
+			hidesSecrets && obfuscator && options.messages
+				? obfuscator.obfuscateObject(options.messages)
+				: options.messages;
+		await agent.prompt(renderChainInput(step, input, messages, resolved.model, tools));
 	} finally {
 		signal?.removeEventListener("abort", onAbort);
 	}
