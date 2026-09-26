@@ -240,7 +240,11 @@ import { CommandController } from "./controllers/command-controller";
 import { EventController } from "./controllers/event-controller";
 import { ExtensionUiController } from "./controllers/extension-ui-controller";
 import { InputController } from "./controllers/input-controller";
-import { LiveCommandController } from "./controllers/live-command-controller";
+import {
+	type LiveInputDestination,
+	LiveCommandController,
+	type LiveSubmitRoute,
+} from "./controllers/live-command-controller";
 import { MCPCommandController } from "./controllers/mcp-command-controller";
 import { OmfgController } from "./controllers/omfg-controller";
 import { SelectorController } from "./controllers/selector-controller";
@@ -480,6 +484,12 @@ export function computeEditorMaxHeight(terminalRows: number): number {
 	const comfortable = Math.max(EDITOR_MAX_HEIGHT_MIN, Math.min(EDITOR_MAX_HEIGHT_MAX, rows - EDITOR_RESERVED_ROWS));
 	return Math.max(EDITOR_MIN_RENDERED_ROWS, Math.min(comfortable, rows - EDITOR_MIN_CHROME_ROWS));
 }
+
+const LIVE_DESTINATION_LABELS: Record<LiveInputDestination, string> = {
+	primary: "main agent",
+	voice: "voice agent",
+	both: "main and voice agents",
+};
 
 const HUD_NOTE_SUP_DIGITS: Record<string, string> = {
 	"0": "\u2070",
@@ -7001,7 +7011,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	 *  latches the recording past the space bar's release. */
 	dictationSpaceHold(target: DictationTarget): SpaceHoldHandler {
 		return {
-			enabled: () => cfgSttEnabled.get(settings) && this.sttIdle,
+			// Live mode owns the microphone; a held space bar stays plain spaces during a call.
+			enabled: () => cfgSttEnabled.get(settings) && this.sttIdle && !this.#liveCommandController.active,
 			onStart: () => void this.#readySTTController()?.holdStart(target, this.#dictationCallbacks(target)),
 			onEnd: () => void this.#sttController?.holdEnd(),
 			onLatch: () => this.showStatus("Dictation latched: release Space, then tap Space or Backspace to stop"),
@@ -7095,6 +7106,35 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 		await this.#liveCommandController.handleCommand();
+	}
+
+	async handleLiveMute(): Promise<void> {
+		await this.#liveCommandController.toggleMute();
+	}
+
+	handleLiveDestinationCycle(): void {
+		const destination = this.#liveCommandController.cycleDestination();
+		if (destination) this.showStatus(`Live input → ${LIVE_DESTINATION_LABELS[destination]}`);
+	}
+
+	routeLiveSubmit(text: string, options: { hasImages: boolean }): LiveSubmitRoute {
+		return this.#liveCommandController.routeSubmit(text, options);
+	}
+
+	get liveCallActive(): boolean {
+		return this.#liveCommandController.active;
+	}
+
+	discardLiveSpeech(): boolean {
+		return this.#liveCommandController.discardSpeech();
+	}
+
+	shareLiveSubmit(text: string): void {
+		this.#liveCommandController.shareSubmit(text);
+	}
+
+	noteLiveComposerActivity(): void {
+		this.#liveCommandController.noteComposerActivity();
 	}
 
 	async showDebugSelector(): Promise<void> {

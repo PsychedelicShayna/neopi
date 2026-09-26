@@ -37,6 +37,7 @@ import { createModelBrowserSource } from "../model-browser-source";
 import { parseQueueShorthand, splitQueuedMessages } from "@oh-my-pi/pi-tui/prompt/queue-input";
 import { invokeSkillCommandFromText, isKnownSkillCommand } from "../../modes/skill-command";
 import type { InteractiveModeContext } from "../../modes/types";
+import type { LiveSubmitRoute } from "./live-command-controller";
 import manualContinuePrompt from "../../prompts/system/manual-continue.md" with { type: "text" };
 import { AgentRegistry } from "../../registry/agent-registry";
 import type { RestoredQueuedMessage } from "../../session/agent-session-types";
@@ -179,6 +180,8 @@ const TINY_TITLE_PROGRESS_REVEAL_DELAY_MS = 1_000;
 // apart) on a stray click, which used to pop the hub with no key ever pressed.
 // Three or more rapid taps are likewise treated as a burst, not a gesture. A
 // deliberate human double-tap is always tens of milliseconds apart.
+/** Status when a submit holds because a voice handoff of the same speech just landed. */
+const LIVE_HANDOFF_HOLD_STATUS = "A voice handoff just reached the main agent; review the draft before sending";
 const LEFT_DOUBLE_TAP_MIN_GAP_MS = 40;
 const LEFT_DOUBLE_TAP_MAX_GAP_MS = 500;
 
@@ -679,6 +682,12 @@ export class InputController {
 		for (const key of this.ctx.keybindings.getKeys("app.live.toggle")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.ctx.handleLiveCommand());
 		}
+		for (const key of this.ctx.keybindings.getKeys("app.live.mute")) {
+			this.ctx.editor.setCustomKeyHandler(key, () => void this.ctx.handleLiveMute());
+		}
+		for (const key of this.ctx.keybindings.getKeys("app.live.destination.cycle")) {
+			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.handleLiveDestinationCycle());
+		}
 		// Hold the space bar to push-to-talk: the editor recognizes the auto-repeat burst, tracks
 		// the spam back out, and starts STT on hold start / stops it on release.
 		this.ctx.editor.spaceHold.handler = this.ctx.dictationSpaceHold(this.ctx.editor);
@@ -714,6 +723,7 @@ export class InputController {
 
 		this.ctx.editor.onChange = (text: string) => {
 			this.#draftText = text;
+			this.ctx.noteLiveComposerActivity();
 			const wasBashMode = this.ctx.isBashMode;
 			const wasPythonMode = this.ctx.isPythonMode;
 			const trimmed = text.trimStart();
@@ -924,6 +934,11 @@ export class InputController {
 			// Everything below (continue shortcuts, slash/bash/python, loop,
 			// compaction queueing) is main-session-only.
 			if (this.ctx.focusedAgentId) {
+				// The composer's speech goes to the focused agent; the voice call must not relay it too.
+				if (this.ctx.liveCallActive && !this.ctx.discardLiveSpeech()) {
+					this.#holdForLiveHandoff(text);
+					return;
+				}
 				await this.#submitToFocusedSession(text, "steer");
 				return;
 			}
@@ -956,6 +971,24 @@ export class InputController {
 						userInitiated: true,
 					});
 				}
+				return;
+			}
+
+			// Live call: Enter is the operator's own handoff and may address the voice agent
+			// instead of, or alongside, the main agent. Harness commands (`/`, `!`, `$`) stay
+			// with the harness, but still consume the speech dictated into them; image drafts
+			// always reach the main agent.
+			let liveRoute: LiveSubmitRoute = "primary";
+			if (/^[/!$]/.test(text)) {
+				if (this.ctx.liveCallActive && !this.ctx.discardLiveSpeech()) liveRoute = "held";
+			} else liveRoute = this.ctx.routeLiveSubmit(text, { hasImages: hasPendingImages });
+			if (liveRoute === "held") {
+				this.#holdForLiveHandoff(text);
+				return;
+			}
+			if (liveRoute === "voice") {
+				this.ctx.editor.addToHistory(text);
+				this.ctx.editor.clearDraft();
 				return;
 			}
 
@@ -1002,14 +1035,17 @@ export class InputController {
 			}
 
 			if (!text && !hasInputImages) return;
+			// Input hooks have settled what the main agent receives; share that, not the raw draft.
 
 			const queueBody = parseQueueShorthand(text);
 			if (queueBody !== undefined) {
-				await this.#queueForYield(queueBody, {
+				const accepted = await this.#queueForYield(queueBody, {
 					historyText: text,
 					images: inputImages,
 					imageLinks: inputImageLinks,
 				});
+				// A queued prompt still reaches the main agent; `both` shares what was accepted.
+				if (accepted.length > 0 && this.ctx.liveCallActive) this.ctx.shareLiveSubmit(accepted.join("\n\n"));
 				return;
 			}
 
@@ -1185,6 +1221,8 @@ export class InputController {
 				}
 				text = outcome.text;
 			}
+			// Only the prompt about to reach the main agent, after hooks and the chain.
+			if (this.ctx.liveCallActive) this.ctx.shareLiveSubmit(text);
 
 			// If streaming, use prompt() with steer behavior
 			// This handles extension commands (execute immediately), prompt template expansion, and queueing
@@ -1312,6 +1350,15 @@ export class InputController {
 			}
 			this.ctx.editor.addToHistory(typedText);
 		};
+	}
+
+	/** A voice handoff of the draft's speech landed as the operator submitted: put the draft back
+	 *  (submit already emptied the composer) for review instead of sending it twice. */
+	#holdForLiveHandoff(text: string): void {
+		// The draft as displayed, spoken spans included, so the landing handoff can still remove
+		// its speech from it.
+		if (!this.ctx.editor.restoreSubmittedDraft()) this.ctx.editor.setCollapsedText(text);
+		this.ctx.showStatus(LIVE_HANDOFF_HOLD_STATUS);
 	}
 
 	/** Chain keybinding: submit the composer through the active chain once. */
@@ -1571,6 +1618,7 @@ export class InputController {
 		if (now - this.ctx.lastSigintTime < 500) {
 			void this.ctx.shutdown();
 		} else {
+			this.ctx.discardLiveSpeech();
 			this.ctx.clearEditor();
 			this.ctx.lastSigintTime = now;
 		}
@@ -1768,12 +1816,12 @@ export class InputController {
 			images?: ImageContent[];
 			imageLinks?: (string | undefined)[];
 		},
-	): Promise<void> {
+	): Promise<readonly string[]> {
 		const splitMessages = splitQueuedMessages(text);
 		if (splitMessages.length === 0 && !options.images?.length) {
 			this.ctx.editor.clearDraft();
 			this.ctx.showWarning("Usage: /queue <message> (or start a prompt with -> / =>)");
-			return;
+			return [];
 		}
 
 		const messages = splitMessages.length > 0 ? splitMessages : [""];
@@ -1801,7 +1849,7 @@ export class InputController {
 					: `Queued ${messages.length} messages for after compaction`,
 			);
 			this.ctx.ui.requestRender();
-			return;
+			return messages;
 		}
 
 		const startImmediately = !this.ctx.session.isStreaming && this.ctx.session.queuedMessageCount === 0;
@@ -1871,6 +1919,7 @@ export class InputController {
 			);
 		}
 		this.ctx.ui.requestRender();
+		return messages.slice(0, queuedCount);
 	}
 
 	/** Send editor text as a follow-up message (queued behind current stream). */
@@ -1880,6 +1929,12 @@ export class InputController {
 		const imageLinks =
 			images && this.ctx.editor.pendingImageLinks.length > 0 ? [...this.ctx.editor.pendingImageLinks] : undefined;
 		if (!text && !images) return;
+		// Sending the composer is the operator's handoff on this path too. The draft is still in
+		// the composer here, so holding only needs the status.
+		if (this.ctx.liveCallActive && !this.ctx.discardLiveSpeech()) {
+			this.ctx.showStatus(LIVE_HANDOFF_HOLD_STATUS);
+			return;
+		}
 
 		// Focused subagent session: follow-ups go to it; non-chat input is gated.
 		if (this.ctx.focusedAgentId) {

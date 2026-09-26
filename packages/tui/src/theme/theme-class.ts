@@ -622,6 +622,7 @@ export class Theme {
 			vimVisual: this.#symbols["icon.vimVisual"],
 			vimVisualLine: this.#symbols["icon.vimVisualLine"],
 			mic: this.#symbols["icon.mic"],
+			micMuted: this.#symbols["icon.micMuted"],
 			camera: this.#symbols["icon.camera"],
 		};
 	}

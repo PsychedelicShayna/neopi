@@ -543,6 +543,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	#collabStatus: CollabStatus | null = null;
 	#streamStatus: { viewers: number } | null = null;
 	#recording = false;
+	#liveStatus: SegmentContext["live"] = null;
 	#focusedAgentId: string | undefined;
 	#activeRepoCache: ActiveRepoCache | undefined;
 
@@ -948,6 +949,13 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	setRecording(recording: boolean): void {
 		if (this.#recording === recording) return;
 		this.#recording = recording;
+		this.#invalidateStatusLineRenderCache();
+	}
+
+	/** Show the live voice call icon, or hide it with `null`. */
+	setLiveStatus(status: SegmentContext["live"]): void {
+		if (this.#liveStatus?.phase === status?.phase && this.#liveStatus?.destination === status?.destination) return;
+		this.#liveStatus = status;
 		this.#invalidateStatusLineRenderCache();
 	}
 
@@ -2195,6 +2203,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			collab: this.#collabStatus,
 			stream: this.#streamStatus,
 			recording: this.#recording,
+			live: this.#liveStatus,
 			usageStats,
 			contextPercent,
 			contextTokens,

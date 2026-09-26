@@ -65,6 +65,7 @@ function createCtx(overrides?: {
 		collab: null,
 		stream: null,
 		recording: false,
+		live: null,
 		usageStats: {
 			input: 0,
 			output: 0,

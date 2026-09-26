@@ -1,0 +1,3 @@
+"Operator Typed Message":
+
+{{message}}

@@ -2908,6 +2908,16 @@ describe("Editor component", () => {
 	});
 
 	describe("submitted draft restore", () => {
+		it("keeps spoken spans removable after a submitted draft is restored", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.insertText("note:");
+			const spoken = editor.commitVolatileText(" fix the parser");
+			editor.submit();
+			expect(editor.restoreSubmittedDraft()).toBe(true);
+			editor.removeUtterances([spoken!]);
+			expect(editor.getText()).toBe("note:");
+		});
+
 		it("puts a submitted large paste back collapsed, with its content intact", () => {
 			const editor = new Editor(defaultEditorTheme);
 			const payload = "line\n".repeat(400);
@@ -2977,6 +2987,46 @@ describe("Editor component", () => {
 			expect(editor.getText()).toBe("line one\nline two");
 			editor.setVolatileText("single line");
 			expect(editor.getText()).toBe("single line");
+		});
+
+		it("keeps a preview the operator edited around and continues with only the rest of the utterance", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.insertText("ab");
+			editor.setVolatileText(" hello wor");
+			editor.insertText("!");
+			editor.setVolatileText(" hello world");
+			expect(editor.getText()).toBe("ab hello wor!ld");
+			editor.commitVolatileText(" hello world");
+			expect(editor.getText()).toBe("ab hello wor!ld");
+		});
+
+		it("removes one spoken utterance without breaking tracking of the next", () => {
+			const editor = new Editor(defaultEditorTheme);
+			const first = editor.commitVolatileText("hello");
+			const second = editor.commitVolatileText(" world");
+			editor.removeUtterances([first!]);
+			expect(editor.getText()).toBe("world");
+			editor.removeUtterances([second!]);
+			expect(editor.getText()).toBe("");
+		});
+
+		it("strips terminal control characters from speech", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.setVolatileText("a\tb\x1bc");
+			expect(editor.getText()).not.toMatch(/[\t\x1b]/);
+			editor.commitVolatileText("a\tb\x07c");
+			expect(editor.getText()).not.toMatch(/[\t\x07]/);
+		});
+
+		it("drops the rest of an utterance once the operator deletes its preview", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.setVolatileText("hello wor");
+			editor.setText("");
+			editor.setVolatileText("hello world");
+			editor.commitVolatileText("hello world");
+			expect(editor.getText()).toBe("");
+			editor.setVolatileText("next");
+			expect(editor.getText()).toBe("next");
 		});
 	});
 

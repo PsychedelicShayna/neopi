@@ -33,6 +33,7 @@ function createModelContext(advisorActive: boolean): SegmentContext {
 		collab: null,
 		stream: null,
 		recording: false,
+		live: null,
 		usageStats: {
 			input: 0,
 			output: 0,
@@ -72,6 +73,28 @@ describe("status line stream segment", () => {
 		});
 		ctx.stream = null;
 		expect(renderSegment("stream", ctx)).toEqual({ content: "", visible: false });
+	});
+});
+
+describe("status line model segment live icon", () => {
+	it("shows the mic by call phase, slashes it while muted, and hides it when live is off", () => {
+		const ctx = createModelContext(false);
+		ctx.live = { phase: "listening", destination: "primary" };
+		expect(renderSegment("model", ctx).content).toContain(theme.fg("success", ` ${theme.icon.mic}`));
+		ctx.live = { phase: "muted", destination: "primary" };
+		expect(renderSegment("model", ctx).content).toContain(theme.fg("dim", ` ${theme.icon.micMuted}`));
+		ctx.live = { phase: "disconnected", destination: "primary" };
+		expect(renderSegment("model", ctx).content).toContain(theme.fg("error", ` ${theme.icon.mic}`));
+		ctx.live = null;
+		expect(renderSegment("model", ctx).content).not.toContain(theme.icon.mic);
+	});
+
+	it("names the Enter target only when it is not the main agent", () => {
+		const ctx = createModelContext(false);
+		ctx.live = { phase: "listening", destination: "voice" };
+		expect(renderSegment("model", ctx).content).toContain(theme.fg("success", " voice"));
+		ctx.live = { phase: "listening", destination: "primary" };
+		expect(renderSegment("model", ctx).content).not.toContain("primary");
 	});
 });
 
