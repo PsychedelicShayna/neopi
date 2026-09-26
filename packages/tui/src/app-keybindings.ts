@@ -260,7 +260,7 @@ export const KEYBINDINGS = {
 		description: "Start or stop live voice mode (/live)",
 	},
 	"app.live.mute": {
-		defaultKeys: "alt+space",
+		defaultKeys: "alt+shift+m",
 		description: "Mute or unmute the microphone during live voice mode",
 	},
 } as const satisfies KeybindingDefinitions;
