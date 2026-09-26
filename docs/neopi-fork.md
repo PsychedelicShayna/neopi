@@ -65,7 +65,7 @@ Provenance: `c7bb908557`, `7a87cfe115`, `3b4dd762b6`, `6fa90d9a09`, `14c6e4406f`
 
 - Keys: `Ctrl+L` starts and ends the call; `Alt+Shift+M` (`app.live.mute`) mutes; `Ctrl+Alt+L` (`app.live.destination.cycle`) cycles where Enter sends plain text: main agent, voice agent only, or both. Esc and Ctrl+C keep their composer meanings.
 - Status: the model segment shows a mic colored by call phase, slashed while muted, labelled `voice` or `both` when Enter does not target the main agent, and red after a call ends in an error.
-- Enter is the operator's handoff: submitting drops unclaimed spoken turns so the voice agent cannot relay them again. Voice-only text reaches the voice model as an `"Operator Typed Message"`; `both` also sends it as silent commentary.
+- Enter is the operator's handoff: submitting (or clearing the draft with Ctrl+C) drops unclaimed spoken turns and cancels a handoff not yet accepted, so the voice agent cannot relay them again. If a handoff of that speech is landing at that moment, Enter holds the draft instead. Voice-only text reaches the voice model as an `"Operator Typed Message"`; `both` also sends the final prompt, after input hooks and any post-processing chain, as silent commentary, and the voice agent speaks that turn's final answer.
 - Crew reports, reasoning narration, and final answers wait while the operator speaks or edits the composer (10-second quiet window), releasing early when the voice agent speaks or delegates.
 - Assistant turn completion no longer deletes unclaimed operator speech (issue #39).
 
