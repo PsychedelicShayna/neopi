@@ -1394,6 +1394,8 @@ export class InputController {
 				onStepDone: (_step, _index, output) => {
 					lastOutput = output;
 					// A large rewrite shows collapsed: the lock re-renders the composer every frame.
+					// Drop the previous preview's paste payload; the submitted-draft snapshot stays.
+					this.ctx.editor.clearPasteState();
 					this.ctx.editor.setText("");
 					if (output.length > CHAIN_DISPLAY_COLLAPSE_CHARS) this.ctx.editor.insertPaste(output);
 					else this.ctx.editor.setText(output);
@@ -1417,6 +1419,8 @@ export class InputController {
 			);
 			return { text: lastOutput, send: false };
 		} finally {
+			// Preview pastes belong to the lock; the caller restores or replaces the draft next.
+			this.ctx.editor.clearPasteState();
 			this.ctx.editor.setChainLock(undefined);
 		}
 	}
