@@ -89,6 +89,7 @@ export function buildHotkeysMarkdown(bindings: HotkeysMarkdownBindings): string 
 		"| Hold `Space` | Speech-to-text (push-to-talk): hold to record, release to transcribe |",
 		`| \`${hotkeyLabel(bindings, "app.live.toggle")}\` | Start/stop live voice mode (/live) |`,
 		`| \`${hotkeyLabel(bindings, "app.live.mute")}\` | Mute/unmute microphone in live voice mode |`,
+		`| \`${hotkeyLabel(bindings, "app.live.destination.cycle")}\` | Cycle live Enter target: main / voice / both |`,
 		`| \`${hotkeyLabel(bindings, "app.agents.hub")}\` / \`${hotkeyLabel(bindings, "app.session.observe")}\` / double-tap \`←\` (empty editor) | Open the agent hub |`,
 		"| `#<number>` | GitHub issue/PR reference (e.g. `#3164` → `pr://`/`issue://`) |",
 		"| `#` / `#<text>` | Prompt actions (copy / undo / move cursor) |",
