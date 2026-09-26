@@ -759,6 +759,11 @@ export class SessionAdvisors {
 		void processing.finally(() => this.#pendingAdvisorCardEvents.delete(processing)).catch(() => {});
 	}
 
+	/** Whether advisor-card persistence handlers are still in flight. */
+	get hasPendingCardEvents(): boolean {
+		return this.#pendingAdvisorCardEvents.size > 0;
+	}
+
 	/** Waits for all advisor-card persistence handlers currently in flight. */
 	async waitForPendingCardEvents(): Promise<void> {
 		await Promise.allSettled(this.#pendingAdvisorCardEvents);

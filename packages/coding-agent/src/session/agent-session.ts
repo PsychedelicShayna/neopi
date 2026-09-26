@@ -2829,10 +2829,7 @@ export class AgentSession implements SettingsScope {
 			const sessionGeneration = this.#sessionGeneration;
 			const promptSequence = this.#promptSequence;
 			this.#advisors.onPrimaryRunEnd();
-			// Return to the current subscriber gate before waiting: the released
-			// cards enter that same FIFO and must finish before terminal listeners
-			// can dispose the session.
-			const delivery = this.#advisors.waitForPendingCardEvents().then(() => {
+			const deliver = (): void => {
 				if (
 					this.#isDisposed ||
 					sessionGeneration !== this.#sessionGeneration ||
@@ -2849,8 +2846,17 @@ export class AgentSession implements SettingsScope {
 				// Terminal listeners can enqueue a steer after the synchronous settle
 				// drain already ran. Drain their work just as the old inline fanout did.
 				this.#drainStrandedQueuedMessages();
-			});
-			this.#trackPostPromptTask(delivery);
+			};
+			// No released cards: deliver inline so agent_end keeps its place ahead of
+			// whatever the settle does next (turn observers, idle waiters).
+			if (!this.#advisors.hasPendingCardEvents) {
+				deliver();
+				return;
+			}
+			// Return to the current subscriber gate before waiting: the released
+			// cards enter that same FIFO and must finish before terminal listeners
+			// can dispose the session.
+			this.#trackPostPromptTask(this.#advisors.waitForPendingCardEvents().then(deliver));
 			return;
 		}
 		this.#emitToListeners(event);
