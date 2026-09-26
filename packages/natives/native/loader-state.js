@@ -997,9 +997,11 @@ export function loadNative() {
  const embeddedCandidate = maybeExtractEmbeddedAddon(ctx, errors);
  const stagedCandidate = embeddedCandidate ? null : maybeStageNodeModulesAddon(ctx, errors);
  const prepended = [embeddedCandidate, stagedCandidate].filter(c => typeof c === "string");
- const runtimeCandidates = prepended.length > 0 ? [...prepended, ...ctx.candidates] : ctx.candidates;
+ const runtimeCandidates = prepended.length > 0 ? [...prepended, ...ctx.candidates] : [...ctx.candidates];
+ let reextracted = false;
 
- for (const candidate of runtimeCandidates) {
+ for (let index = 0; index < runtimeCandidates.length; index++) {
+  const candidate = runtimeCandidates[index];
   try {
    startupMarker(`native:require:${path.basename(candidate)}`);
    const bindings = require_(candidate);
@@ -1012,6 +1014,13 @@ export function loadNative() {
   } catch (err) {
    const message = err instanceof Error ? err.message : String(err);
    errors.push(`${candidate}: ${message}`);
+   // install.sh of another build may prune the selected file between selection and load:
+   // extract this build's addon again, once, and try it next.
+   if (candidate === embeddedCandidate && !reextracted && !fs.existsSync(candidate)) {
+    reextracted = true;
+    const again = maybeExtractEmbeddedAddon(ctx, errors);
+    if (again) runtimeCandidates.splice(index + 1, 0, again);
+   }
   }
  }
 
