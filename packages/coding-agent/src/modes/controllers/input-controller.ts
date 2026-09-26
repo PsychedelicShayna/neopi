@@ -11,7 +11,8 @@ import {
 import { getAgentDir, isEnoent, logger, postmortem, sanitizeText } from "@oh-my-pi/pi-utils";
 import type { ChainConfig } from "@oh-my-pi/pi-tui/overlays/chain-types";
 import { discoverChains } from "../../chains/config";
-import { runChain } from "../../chains/runner";
+import { EscapeGesture } from "../../chains/escape-gesture";
+import { ChainControl, runChain } from "../../chains/runner";
 import { formatModelRoleAlias, roleCandidatePool } from "../../config/model-roles";
 import { resolveModelRoleValue } from "../../config/model-resolver";
 import { isSettingsInitialized, settings } from "../../config/settings";
@@ -181,6 +182,8 @@ const TINY_TITLE_PROGRESS_REVEAL_DELAY_MS = 1_000;
 const LEFT_DOUBLE_TAP_MIN_GAP_MS = 40;
 const LEFT_DOUBLE_TAP_MAX_GAP_MS = 500;
 
+/** Chain step outputs longer than this show as a collapsed paste chip while the lock holds them. */
+const CHAIN_DISPLAY_COLLAPSE_CHARS = 8_000;
 /** Picker entry that sends the prompt unchanged. */
 const SEND_WITHOUT_CHAIN = "Send without a chain";
 
@@ -869,6 +872,10 @@ export class InputController {
 				// editor while the modal Input had focus (#2127).
 				const focused = this.ctx.ui.getFocused();
 				const target = focused && focused !== this.ctx.editor && hasPasteText(focused) ? focused : this.ctx.editor;
+				if (target === this.ctx.editor && this.ctx.editor.chainLocked) {
+					this.ctx.showStatus("The composer is locked while a chain runs");
+					return;
+				}
 				target.pasteText(text);
 				this.ctx.ui.requestRender();
 			},
@@ -878,6 +885,10 @@ export class InputController {
 				const focused = this.ctx.ui.getFocused();
 				if (focused && focused !== this.ctx.editor && hasPasteText(focused)) {
 					this.ctx.showStatus("Image paste is not supported in this prompt");
+					return;
+				}
+				if (this.ctx.editor.chainLocked) {
+					this.ctx.showStatus("The composer is locked while a chain runs");
 					return;
 				}
 				await this.#normalizeAndInsertPastedImage(image, `Unsupported pasted image format: ${image.mimeType}`);
@@ -1157,8 +1168,8 @@ export class InputController {
 			// stays in history so Up recalls what was written, not the rewrite.
 			const typedText = text;
 			if (forceChain || (isSettingsInitialized() && cfgChainingAuto.get(settings))) {
-				const chained = await this.#applyPostProcessingChain(text);
-				if (chained === undefined) {
+				const outcome = await this.#applyPostProcessingChain(text);
+				if (!outcome.send) {
 					if (inputImages && inputImages.length > 0) {
 						this.ctx.editor.pendingImages = [...inputImages];
 						this.ctx.editor.pendingImageLinks = inputImageLinks
@@ -1166,10 +1177,13 @@ export class InputController {
 							: inputImages.map(() => undefined);
 						this.ctx.editor.imageLinks = this.ctx.editor.pendingImageLinks;
 					}
-					this.ctx.editor.setCollapsedText(typedText);
+					// An untouched draft comes back as displayed, large pastes still collapsed.
+					if (outcome.text !== typedText || !this.ctx.editor.restoreSubmittedDraft()) {
+						this.ctx.editor.setCollapsedText(outcome.text);
+					}
 					return;
 				}
-				text = chained;
+				text = outcome.text;
 			}
 
 			// If streaming, use prompt() with steer behavior
@@ -1309,29 +1323,106 @@ export class InputController {
 
 	/**
 	 * Rewrite `text` with the active chain, asking which chain to use when none
-	 * is active (the pick becomes active). Returns undefined when the prompt must
-	 * not be sent: no chain, a cancelled pick, or a failed step.
+	 * is active (the pick becomes active). `send: false` puts `text` back in the
+	 * composer instead of sending: no chain, a cancelled pick, an abort (the typed
+	 * draft), or a failed step (the last completed output).
+	 *
+	 * While the chain runs the composer is locked and shimmering; Esc Esc skips the
+	 * step in flight, Esc Esc Esc or the clear key aborts.
 	 */
-	async #applyPostProcessingChain(text: string): Promise<string | undefined> {
-		const chain = await this.#resolveActiveChain();
-		if (chain === SEND_WITHOUT_CHAIN) return text;
-		if (!chain) return undefined;
+	async #applyPostProcessingChain(text: string): Promise<{ text: string; send: boolean }> {
+		const control = new ChainControl();
+		const gesture = new EscapeGesture();
+		let lastOutput = text;
+		let chainName = "";
+		let currentStep = "";
+		// Lock before resolving the chain: submit already emptied the buffer, and anything typed
+		// while CHAINS.yml loads or the picker is open would be overwritten. Text typed while
+		// input hooks ran is kept in local history rather than lost. The draft goes back as
+		// displayed so the lock has something to shimmer.
+		if (this.ctx.editor.getText().trim()) {
+			this.ctx.editor.rememberDraft();
+			this.ctx.showStatus("Text typed during submit saved to history (Up)");
+		}
+		if (!this.ctx.editor.restoreSubmittedDraft()) this.ctx.editor.setCollapsedText(text);
+		this.ctx.editor.setChainLock({
+			onEscape: () => {
+				const action = gesture.press();
+				if (action === "skip") {
+					control.skipStep();
+					if (currentStep) this.ctx.showStatus(`Chain ${chainName}: skipping "${currentStep}"…`);
+				} else if (action === "abort") {
+					control.abort();
+				}
+			},
+			// Never handleCtrlC: its double-press exit must not race a running step.
+			onClear: () => control.abort(),
+		});
+		this.ctx.ui.requestRender();
+		let resolved: ChainConfig | typeof SEND_WITHOUT_CHAIN | undefined;
+		try {
+			resolved = await this.#resolveActiveChain();
+		} catch (error) {
+			this.ctx.editor.setChainLock(undefined);
+			throw error;
+		}
+		if (resolved === SEND_WITHOUT_CHAIN || !resolved || control.signal.aborted) {
+			this.ctx.editor.setChainLock(undefined);
+			const send = resolved === SEND_WITHOUT_CHAIN && !control.signal.aborted;
+			// Sending: the composer held the draft only for the lock.
+			if (send) this.ctx.editor.setText("");
+			return { text, send };
+		}
+		const chain = resolved;
+		chainName = chain.name;
+		currentStep = chain.steps[0]?.name ?? "";
+		this.ctx.ui.requestRender();
 		try {
 			const result = await runChain(chain, text, {
 				settings: this.ctx.settings,
 				modelRegistry: this.ctx.session.modelRegistry,
 				tools: this.ctx.session.agent.state.tools,
+				messages: this.ctx.session.agent.state.messages,
+				obfuscator: this.ctx.session.obfuscator,
 				cwd: this.ctx.sessionManager.getCwd(),
-				onStep: (step, index, total) =>
-					this.ctx.showStatus(`Chain ${chain.name}: ${step.name} (${index + 1}/${total})…`),
+				control,
+				onStep: (step, index, total) => {
+					currentStep = step.name;
+					this.ctx.showStatus(
+						`Chain ${chain.name} · step ${index + 1}/${total} "${step.name}" · preprocessing… (Esc Esc skip · Esc Esc Esc abort · Ctrl+C abort)`,
+					);
+				},
+				onStepDone: (_step, _index, output) => {
+					lastOutput = output;
+					// A large rewrite shows collapsed: the lock re-renders the composer every frame.
+					// Drop the previous preview's paste payload; the submitted-draft snapshot stays.
+					this.ctx.editor.clearPasteState();
+					this.ctx.editor.setText("");
+					if (output.length > CHAIN_DISPLAY_COLLAPSE_CHARS) this.ctx.editor.insertPaste(output);
+					else this.ctx.editor.setText(output);
+					this.ctx.ui.requestRender();
+				},
+				onStepSkipped: step => this.ctx.showStatus(`Chain ${chain.name}: skipped "${step.name}"`),
 			});
 			this.ctx.showStatus("");
-			return result;
+			// Sending: the composer showed the rewrite only while the lock held it.
+			this.ctx.editor.setText("");
+			return { text: result, send: true };
 		} catch (error) {
-			this.ctx.showError(
-				`Chain ${chain.name} failed; prompt not sent: ${error instanceof Error ? error.message : String(error)}`,
+			if (control.signal.aborted) {
+				this.ctx.showStatus("Chain aborted; draft restored");
+				return { text, send: false };
+			}
+			this.ctx.showStatus("");
+			// Not showError: it clears the loading state of a primary turn that may be streaming.
+			this.ctx.showWarning(
+				`Chain ${chain.name} failed at step "${currentStep}"; composer holds the last completed output: ${error instanceof Error ? error.message : String(error)}`,
 			);
-			return undefined;
+			return { text: lastOutput, send: false };
+		} finally {
+			// Preview pastes belong to the lock; the caller restores or replaces the draft next.
+			this.ctx.editor.clearPasteState();
+			this.ctx.editor.setChainLock(undefined);
 		}
 	}
 
@@ -1946,6 +2037,12 @@ export class InputController {
 	}
 
 	async #insertPendingImage(imageData: ImageContent, source?: ImageAttachmentSource): Promise<void> {
+		// A paste still normalizing when a chain took the composer would attach an image the
+		// chain's submission never sends and its dispatch then clears.
+		if (this.ctx.editor.chainLocked) {
+			this.ctx.showStatus("The composer is locked while a chain runs");
+			return;
+		}
 		const image: ImageContent = source
 			? tagImageAttachmentSource(imageData, source.path, source.kind)
 			: { type: "image", data: imageData.data, mimeType: imageData.mimeType };

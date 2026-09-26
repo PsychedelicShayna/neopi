@@ -12,7 +12,11 @@ export interface ChainStep {
 	model?: string;
 	/** Built-in tool names the step may call; omitted or empty grants none. */
 	tools?: string[];
-	/** System prompt for this step; the incoming text is the user message. */
+	/** Feed the live session transcript to this step alongside the draft; omitted is off. */
+	context?: boolean;
+	/** Full system-prompt override; omitted uses the bundled chain default. `prompt` is always appended after it. */
+	systemPrompt?: string;
+	/** Step instructions, appended to the system prompt; the incoming text is the user message. */
 	prompt: string;
 }
 

@@ -2483,6 +2483,31 @@ export class Editor implements Component, Focusable {
 		this.#notifyChange();
 	}
 
+	/** The last submitted draft as it was displayed, chips and paste markers still collapsed. */
+	#submittedDraft:
+		| { lines: string[]; pastes: Map<number, string>; atoms: Map<string, string>; pasteCounter: number }
+		| undefined;
+
+	/**
+	 * Put the last submitted draft back exactly as it was displayed, with large pastes and chips
+	 * still collapsed, for a host that holds the submission (e.g. while a chain rewrites it).
+	 * Returns false when nothing was submitted yet.
+	 */
+	restoreSubmittedDraft(): boolean {
+		const draft = this.#submittedDraft;
+		if (!draft) return false;
+		this.#pastes = new Map(draft.pastes);
+		this.#atoms = new Map(draft.atoms);
+		this.#pasteCounter = draft.pasteCounter;
+		const lines = [...draft.lines];
+		this.#state = { lines, cursorLine: lines.length - 1, cursorCol: 0 };
+		this.#setCursorCol(lines[lines.length - 1]?.length ?? 0);
+		this.#historyIndex = -1;
+		this.#lastAction = null;
+		this.#notifyChange();
+		return true;
+	}
+
 	/** Drop every registered atom expansion (draft cleared or replaced by the host). */
 	clearAtoms(): void {
 		this.#atoms.clear();
@@ -3000,6 +3025,12 @@ export class Editor implements Component, Focusable {
 		this.#resetKillSequence();
 
 		const result = this.#expandPasteMarkers(this.#state.lines.join("\n")).trim();
+		this.#submittedDraft = {
+			lines: [...this.#state.lines],
+			pastes: new Map(this.#pastes),
+			atoms: new Map(this.#atoms),
+			pasteCounter: this.#pasteCounter,
+		};
 
 		this.#state = { lines: [""], cursorLine: 0, cursorCol: 0 };
 		this.clearPasteState();

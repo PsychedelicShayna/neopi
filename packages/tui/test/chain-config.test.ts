@@ -23,6 +23,7 @@ const deps: ChainConfigDeps = {
 	},
 	scopedModels: [],
 	availableToolNames: ["read", "grep", "web_search"],
+	defaultSystemPrompt: "default",
 };
 
 const DOWN = "\x1b[B";
@@ -78,8 +79,8 @@ function addStep(harness: Harness, stepRows: number, name: string, prompt: strin
 	press(ENTER); // + Add step → name input
 	retype(name);
 	press(ENTER); // create step, open step detail
-	// Step detail rows (no model set): Name, Model, Tools, Prompt.
-	press(DOWN, DOWN, DOWN, ENTER);
+	// Step detail rows (no model set): Name, Model, Tools, Transcript context, System prompt, Prompt.
+	press(DOWN, DOWN, DOWN, DOWN, DOWN, ENTER);
 	press(prompt, CTRL_Q); // hook editor submit
 	press(ESC); // step detail → chain detail
 }
@@ -259,6 +260,32 @@ describe("ChainConfigOverlayComponent", () => {
 		press(DELETE);
 
 		expect(doc.chains[0]?.steps.map(step => step.name)).toEqual(["Proofread"]);
+	});
+
+	it("toggles a step's transcript context on and back off", () => {
+		const doc: ChainsConfigDoc = { chains: [{ name: "Polish", steps: [{ name: "Tighten", prompt: "a" }] }] };
+		const { press } = makeOverlay(doc);
+
+		press(ENTER, DOWN, DOWN, ENTER); // open chain, open step 1
+		press(DOWN, DOWN, DOWN, ENTER); // Name → Model → Tools → Transcript context
+		expect(doc.chains[0]?.steps[0]?.context).toBe(true);
+
+		press(ENTER); // the row stays selected after the toggle
+		expect(doc.chains[0]?.steps[0]?.context).toBeUndefined();
+	});
+
+	it("edits a step's system prompt from the bundled default and resets it with Backspace", () => {
+		const doc: ChainsConfigDoc = { chains: [{ name: "Polish", steps: [{ name: "Tighten", prompt: "a" }] }] };
+		const { press, overlay } = makeOverlay(doc);
+
+		press(ENTER, DOWN, DOWN, ENTER); // open chain, open step 1
+		expect(overlay.render(120).join("\n")).toContain("(bundled default)");
+		press(DOWN, DOWN, DOWN, DOWN, ENTER); // System prompt → editor prefilled with the default
+		press(" more", CTRL_Q);
+		expect(doc.chains[0]?.steps[0]?.systemPrompt).toBe("default more");
+
+		press("\x7f"); // Backspace on the System prompt row
+		expect(doc.chains[0]?.steps[0]?.systemPrompt).toBeUndefined();
 	});
 
 	it("shows the chain's steps in the preview pane of the list screen", () => {

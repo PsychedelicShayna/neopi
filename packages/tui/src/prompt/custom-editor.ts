@@ -4,7 +4,7 @@ import { BracketedPasteHandler } from "../bracketed-paste";
 import { BRACKETED_PASTE_END, BRACKETED_PASTE_START } from "../stdin-buffer";
 import { Editor, type EditorTextDecorationContext, type EditorTheme } from "../components/editor";
 import { addKeyAliases, canonicalKeyId, getKeybindings } from "../keybindings";
-import { type KeyId, parseKey, parseKittySequence } from "../keys";
+import { type KeyId, matchesKey, parseKey, parseKittySequence } from "../keys";
 import { SpaceHoldGesture } from "../space-hold";
 import { TUI } from "../tui";
 import type { AppKeybinding } from "../app-keybindings";
@@ -30,6 +30,13 @@ import { MacOSSpellingProvider, type SpellingFeatures } from "./macos-spelling";
 import { hasMagicKeyword, highlightMagicKeywords } from "./magic-keywords";
 import { isQueuedMessageList, parseQueueShorthand, QUEUE_LIST_MARKER_RE } from "./queue-input";
 import { fgOrPlain, theme } from "../theme/theme";
+import { shimmerEnabled, shimmerText } from "../theme/shimmer";
+
+/** Callbacks a locked composer forwards to while a post-processing chain rewrites it. */
+export interface ChainLock {
+	onEscape: () => void;
+	onClear: () => void;
+}
 
 type ConfigurableEditorAction = Extract<
 	AppKeybinding,
@@ -720,10 +727,16 @@ export class CustomEditor extends Editor {
 	#queueShorthandActive = false;
 	#queueListActive = false;
 
+	#chainLock: ChainLock | undefined;
+
 	/** Decorate magic keywords, attachments, and the queue-composer header/list markers.
 	 *  Queue shorthand reserves its first logical line as a dim `Queueing` label; sequential
 	 *  item markers use the accent color so separate follow-ups remain visible while composing. */
 	override decorateText = (text: string, context: EditorTextDecorationContext): string => {
+		if (this.#chainLock) {
+			if (shimmerEnabled()) this.#scheduleShimmerFrame();
+			return shimmerText(text, theme);
+		}
 		this.#syncComposerTokenPattern();
 		const editorText = this.getText();
 		const animated = this.focused && this.#shimmerEnabled() && hasMagicKeyword(editorText);
@@ -835,6 +848,40 @@ export class CustomEditor extends Editor {
 			clearTimeout(this.#shimmerTimer);
 			this.#shimmerTimer = undefined;
 		}
+	}
+
+	/** Lock the composer while a chain rewrites it: every line shimmers and all input is dropped except
+	 *  Escape (→ `onEscape`) and the app.clear key, Ctrl+C by default (→ `onClear`). `undefined` unlocks. */
+	// While a chain holds the composer it owns the draft and overwrites it when done, so writes
+	// that bypass handleInput (an in-flight dictation finishing, its submit trigger) are dropped.
+	override insertText(text: string): void {
+		if (!this.#chainLock) super.insertText(text);
+	}
+
+	override deleteBeforeCursor(count: number): void {
+		if (!this.#chainLock) super.deleteBeforeCursor(count);
+	}
+
+	override setVolatileText(text: string): void {
+		if (!this.#chainLock) super.setVolatileText(text);
+	}
+
+	override commitVolatileText(text: string): void {
+		if (!this.#chainLock) super.commitVolatileText(text);
+	}
+
+	override submit(): void {
+		if (!this.#chainLock) super.submit();
+	}
+
+	/** Whether a chain holds the composer; paste paths outside {@link handleInput} check it too. */
+	get chainLocked(): boolean {
+		return this.#chainLock !== undefined;
+	}
+
+	setChainLock(lock: ChainLock | undefined): void {
+		this.#chainLock = lock;
+		this.#requestShimmerRepaint?.();
 	}
 
 	/** Schedule one shimmer frame if none is already pending. The next render
@@ -985,6 +1032,16 @@ export class CustomEditor extends Editor {
 	}
 
 	override handleInput(data: string): void {
+		if (this.#chainLock) {
+			if (matchesKey(data, "escape")) {
+				this.#chainLock.onEscape();
+				return;
+			}
+			const parsed = parseKey(data);
+			const canonical = parsed !== undefined ? canonicalKeyId(parsed) : undefined;
+			if (canonical !== undefined && this.#matchesAction(canonical, "app.clear")) this.#chainLock.onClear();
+			return;
+		}
 		// Serialize behind any in-flight async paste so a trailing Enter / follow-up key can't
 		// submit before the clipboard image reaches `pendingImages` (Codex PR #3602 review).
 		if (this.#pasteInFlight > 0) {

@@ -6,7 +6,8 @@
  * two-pane split (clickable chain sidebar on the left, a preview of the
  * highlighted chain's description and ordered steps on the right), a chain
  * detail screen edits the chain's name, description, and step order, and a step
- * detail screen edits one step's name, model, tools, and prompt.
+ * detail screen edits one step's name, model, tools, transcript context, system
+ * prompt, and prompt.
  *
  * Every screen is backed by a proven primitive — {@link SelectList} (list /
  * chain / step / tools / thinking), {@link Input} (names and description),
@@ -65,6 +66,8 @@ export interface ChainConfigDeps {
 	availableToolNames: string[];
 	/** Formatted @prose role model, shown for steps with no model (e.g. "github-copilot/grok-4.7"). */
 	defaultModelLabel?: string;
+	/** Bundled default shown when a step has no system-prompt override. */
+	defaultSystemPrompt: string;
 }
 
 const PREVIEW_WIDTH = 60;
@@ -101,7 +104,8 @@ type Screen =
 	| "model"
 	| "thinking"
 	| "tools"
-	| "prompt";
+	| "prompt"
+	| "systemPrompt";
 
 /**
  * Fullscreen chain-configuration overlay. Implements {@link Component} directly
@@ -665,6 +669,18 @@ export class ChainConfigOverlayComponent implements Component {
 		if (step.model?.trim()) items.push({ value: "resetModel", label: "Reset model to @prose default" });
 		items.push(
 			{ value: "tools", label: "Tools", description: formatStepTools(step.tools) },
+			{
+				value: "context",
+				label: "Transcript context",
+				description: step.context
+					? "on — the step reads the session transcript with the draft"
+					: "off — the step sees only the draft",
+			},
+			{
+				value: "systemPrompt",
+				label: "System prompt",
+				description: step.systemPrompt === undefined ? "(bundled default)" : previewLineOrNone(step.systemPrompt),
+			},
 			{ value: "prompt", label: "Prompt", description: previewLineOrNone(step.prompt) },
 			{ value: "delete", label: "Delete this step" },
 			{ value: "back", label: "Back" },
@@ -674,6 +690,18 @@ export class ChainConfigOverlayComponent implements Component {
 			const found = items.findIndex(item => item.value === selectedField);
 			if (found >= 0) list.setSelectedIndex(found);
 		}
+		const handleInput = list.handleInput.bind(list);
+		list.handleInput = data => {
+			if (matchesKey(data, "backspace") && list.getSelectedItem()?.value === "systemPrompt") {
+				if (step.systemPrompt !== undefined) {
+					delete step.systemPrompt;
+					this.#dirty = true;
+					this.#showStep(chainIndex, stepIndex, "systemPrompt");
+				}
+				return;
+			}
+			handleInput(data);
+		};
 		list.onSelect = item => this.#onStepSelect(chainIndex, stepIndex, item.value);
 		list.onCancel = () => this.#showChain(chainIndex, `step:${stepIndex}`);
 		this.#setScreen(
@@ -703,6 +731,14 @@ export class ChainConfigOverlayComponent implements Component {
 				return;
 			case "tools":
 				this.#showToolsEditor(chainIndex, stepIndex, new Set(step.tools ?? []), 0);
+				return;
+			case "context":
+				step.context = step.context ? undefined : true;
+				this.#dirty = true;
+				this.#showStep(chainIndex, stepIndex, "context");
+				return;
+			case "systemPrompt":
+				this.#showSystemPromptEditor(chainIndex, stepIndex);
 				return;
 			case "prompt":
 				this.#showPromptEditor(chainIndex, stepIndex);
@@ -846,5 +882,26 @@ export class ChainConfigOverlayComponent implements Component {
 			{ externalEditor: this.#deps.externalEditor },
 		);
 		this.#setScreen("prompt", editor, "");
+	}
+
+	#showSystemPromptEditor(chainIndex: number, stepIndex: number): void {
+		const step = this.#step(chainIndex, stepIndex);
+		if (!step) {
+			this.#showChain(chainIndex);
+			return;
+		}
+		const editor = new HookEditorComponent(
+			this.#tui,
+			`System prompt — ${step.name}`,
+			step.systemPrompt ?? this.#deps.defaultSystemPrompt,
+			value => {
+				step.systemPrompt = value;
+				this.#dirty = true;
+				this.#showStep(chainIndex, stepIndex, "systemPrompt");
+			},
+			() => this.#showStep(chainIndex, stepIndex, "systemPrompt"),
+			{ externalEditor: this.#deps.externalEditor },
+		);
+		this.#setScreen("systemPrompt", editor, "");
 	}
 }

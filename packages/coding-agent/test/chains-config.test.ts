@@ -21,7 +21,7 @@ describe("post-processing chain config", () => {
 		await fs.rm(root, { recursive: true, force: true });
 	});
 
-	it("round-trips a chain with multiline prompts, models, and tools through CHAINS.yml", async () => {
+	it("round-trips a chain with multiline prompts, models, tools, context, and system prompts through CHAINS.yml", async () => {
 		const file = chainsConfigFilePath("user", { projectDir: project, agentDir });
 		const doc = {
 			chains: [
@@ -33,6 +33,8 @@ describe("post-processing chain config", () => {
 							name: "names",
 							model: "xai-oauth/grok-4.7:low",
 							tools: ["bash"],
+							context: true,
+							systemPrompt: "You rewrite drafts.\nOutput only the draft.\n",
 							prompt: "Fix name spellings.\nKeep everything else.",
 						},
 						{ name: "tighten", prompt: "Rewrite as numbered instructions.\n\n  Indented: keep.\n" },
@@ -41,7 +43,22 @@ describe("post-processing chain config", () => {
 			],
 		};
 		await saveChainsConfigFile(file, doc);
-		expect(await loadChainsConfigFile(file)).toEqual(doc);
+		const loaded = await loadChainsConfigFile(file);
+		expect(loaded).toEqual(doc);
+		const [withContext, plain] = loaded.chains[0]!.steps;
+		expect(withContext!.context).toBe(true);
+		expect(withContext!.systemPrompt).toBe("You rewrite drafts.\nOutput only the draft.\n");
+		expect(plain!.context).toBeUndefined();
+		expect(plain!.systemPrompt).toBeUndefined();
+	});
+
+	it("keeps an explicitly empty system prompt instead of restoring the bundled one", async () => {
+		const file = chainsConfigFilePath("user", { projectDir: project, agentDir });
+		await saveChainsConfigFile(file, {
+			chains: [{ name: "bare", steps: [{ name: "raw", systemPrompt: "", prompt: "Rewrite." }] }],
+		});
+		const loaded = await loadChainsConfigFile(file);
+		expect(loaded.chains[0]!.steps[0]!.systemPrompt).toBe("");
 	});
 
 	it("lets a project chain shadow a user chain by name and drops invalid entries with warnings", async () => {
