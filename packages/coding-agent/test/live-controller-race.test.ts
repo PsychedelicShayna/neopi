@@ -413,6 +413,19 @@ describe("live controller delegation ownership", () => {
 		expect(h.prompts).toEqual(["real request"]);
 	});
 
+	it("retires an accepted handoff's speech when a newer handoff supersedes it", async () => {
+		const h = makeHarness({ holdDelivery: true });
+		await h.controller.start();
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "first request" } });
+		h.fireLive(delegation("dlg-first", "model-authored fallback"));
+		await settle();
+		h.deliveries[0]!.accept();
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "second request" } });
+		h.fireLive(delegation("dlg-second", "model-authored fallback"));
+		await settle();
+		expect(h.delegated).toContainEqual([1]);
+	});
+
 	it("reports every operator turn to the composer, repeats included", async () => {
 		const h = makeHarness();
 		await h.controller.start();

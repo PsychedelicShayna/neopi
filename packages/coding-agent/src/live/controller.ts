@@ -473,8 +473,12 @@ export class LiveSessionController {
 		const cancelledPrevious = previousDelivery?.cancel() === true;
 		if (previousDelivery && !cancelledPrevious && previousGeneration !== undefined) {
 			// Acceptance won the race. Those turns already belong to the old
-			// agent turn and must never be folded into this handoff.
+			// agent turn and must never be folded into this handoff. The old
+			// continuation stops at the generation check, so retire their speech
+			// from the composer here.
+			const accepted = this.#userTurnLedger.filter(turn => turn.claim === previousGeneration);
 			this.#userTurnLedger = this.#userTurnLedger.filter(turn => turn.claim !== previousGeneration);
+			if (accepted.length > 0) this.#emitDelegated(accepted.map(turn => turn.turn));
 		}
 		this.#pendingDelivery = undefined;
 		if (cancelledPrevious) {
