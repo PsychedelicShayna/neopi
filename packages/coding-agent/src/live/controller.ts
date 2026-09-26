@@ -21,13 +21,15 @@ import {
 	type LiveServerEvent,
 } from "./protocol";
 import { CodexLiveTransport } from "./transport";
-import type { LivePhase } from "@oh-my-pi/pi-tui/apps/live-visualizer";
 import { DEFAULT_LIVE_VOICE } from "./voices";
 
 const OUTPUT_ACTIVE_LEVEL = 0.015;
 const MIN_BARGE_IN_LEVEL = 0.04;
 const OUTPUT_ECHO_RATIO = 0.65;
 const DEFAULT_SPEAKABLE_IDLE_MS = 3000;
+
+/** Distinct states of a realtime call connection. */
+export type LivePhase = "connecting" | "listening" | "working" | "speaking" | "muted" | "error";
 
 /** Incremental or final transcript for one realtime conversational turn. */
 export interface LiveTranscript {
@@ -48,6 +50,8 @@ export interface LiveSessionCallbacks {
 	onTranscript(transcript: LiveTranscript | undefined): void;
 	/** Reports one terminal stop, optionally carrying its cause. */
 	onTerminal(error?: Error): void;
+	/** Reports operator utterances the primary agent accepted through a voice handoff. */
+	onDelegated?(texts: readonly string[]): void;
 }
 
 /** Structural transport surface the controller needs (test seam). */
@@ -502,6 +506,7 @@ export class LiveSessionController {
 			this.#activeDelegationId = pending.id;
 			this.#lastRelayedResponse = undefined;
 			this.#thinkingRelayedLength = 0;
+			this.#emitDelegated(turns.map(turn => turn.text));
 			await delivery.completed;
 		} catch (cause) {
 			// A newer delegation barging in aborts this turn mid-await; that
@@ -894,6 +899,14 @@ export class LiveSessionController {
 		this.#lastTranscript = transcript;
 		try {
 			this.#callbacks.onTranscript(transcript);
+		} catch (cause) {
+			this.#reportFailure(errorFrom(cause));
+		}
+	}
+
+	#emitDelegated(texts: readonly string[]): void {
+		try {
+			this.#callbacks.onDelegated?.(texts);
 		} catch (cause) {
 			this.#reportFailure(errorFrom(cause));
 		}

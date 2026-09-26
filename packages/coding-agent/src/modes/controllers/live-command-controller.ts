@@ -1,18 +1,20 @@
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
-import { LiveSessionController, type LiveSessionControllerOptions, type LiveTranscript } from "../../live/controller";
+import {
+	type LivePhase,
+	LiveSessionController,
+	type LiveSessionControllerOptions,
+	type LiveTranscript,
+} from "../../live/controller";
 import { LIVE_MODEL } from "../../live/protocol";
-import { LiveVisualizer } from "@oh-my-pi/pi-tui/apps/live-visualizer";
 import { vocalizer } from "../../tts/vocalizer";
 import type { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
-import type { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext } from "../types";
 import { createAssistantMessageComponent } from "@oh-my-pi/pi-tui/prompt/interactive-context-helpers";
 
 import { cfgLiveVoice } from "../../live/settings";
 
-const ANIMATION_INTERVAL_MS = 80;
 type LiveSessionFactory = (options: LiveSessionControllerOptions) => LiveSessionController;
 
 const LIVE_MESSAGE_USAGE: AssistantMessage["usage"] = {
@@ -27,18 +29,31 @@ function errorFrom(cause: unknown): Error {
 	return cause instanceof Error ? cause : new Error(String(cause));
 }
 
-/** Owns the editor-replacing visualizer and realtime session lifecycle for `/live`. */
+/** Operator speech for one realtime user turn, as it is being typed into the composer. */
+interface ComposerUtterance {
+	turn: number;
+	/** Separator placed before the utterance so it does not run into the existing draft. */
+	prefix: string;
+	/** Text currently shown as the volatile preview, including {@link prefix}. */
+	preview: string;
+	/** Preview text the operator edited around, now ordinary draft text. */
+	adopted: string | undefined;
+}
+
+/**
+ * Owns the realtime session lifecycle for `/live`. The ordinary composer stays mounted
+ * and focused: operator speech types into it like hold-space dictation (a volatile
+ * preview while speaking, committed when the utterance ends), and utterances the primary
+ * agent accepts through a voice handoff leave the draft as one undoable edit.
+ */
 export class LiveCommandController {
 	readonly #ctx: InteractiveModeContext;
 	readonly #createSession: LiveSessionFactory | undefined;
 
 	#session: LiveSessionController | undefined;
 	#settling: Promise<void> | undefined;
-	#visualizer: LiveVisualizer | undefined;
-	#detachedEditor: CustomEditor | undefined;
-	#animationInterval: NodeJS.Timeout | undefined;
-	#previousShowHardwareCursor: boolean | undefined;
-	#previousUseTerminalCursor: boolean | undefined;
+	#phase: LivePhase | undefined;
+	#utterance: ComposerUtterance | undefined;
 	#resumeVocalizer: (() => void) | undefined;
 	#assistantTranscriptComponent: AssistantMessageComponent | undefined;
 	#assistantTranscriptTurn = 0;
@@ -54,6 +69,11 @@ export class LiveCommandController {
 		return this.#session !== undefined || this.#settling !== undefined;
 	}
 
+	/** Current call phase, or undefined when no live session is running. */
+	get phase(): LivePhase | undefined {
+		return this.#session ? this.#phase : undefined;
+	}
+
 	/** Start live mode, or stop the currently active session. */
 	async handleCommand(): Promise<void> {
 		if (this.#session) {
@@ -64,7 +84,12 @@ export class LiveCommandController {
 		await this.#start();
 	}
 
-	/** Stop the active live session and restore the editor. */
+	/** Mute or unmute the microphone of the active live session. No-op when live mode is off. */
+	async toggleMute(): Promise<void> {
+		await this.#session?.toggleMute();
+	}
+
+	/** Stop the active live session. */
 	async stop(): Promise<void> {
 		const session = this.#session;
 		if (!session) {
@@ -89,21 +114,16 @@ export class LiveCommandController {
 				logger.debug("Live session teardown failed", { error: errorFrom(cause).message });
 			});
 		} else {
-			this.#restoreEditor();
+			this.#release();
 		}
 	}
 
 	async #start(): Promise<void> {
 		this.#assistantTranscriptTurn = 0;
 		this.#assistantTranscriptStartedAt = 0;
-		const visualizer = new LiveVisualizer({
-			onStop: () => {
-				void this.stop().catch(cause => this.#ctx.showError(errorFrom(cause).message));
-			},
-			onToggleMute: () => this.#session?.toggleMute(),
-			stopKeys: this.#ctx.keybindings.getKeys("app.live.toggle"),
-		});
-		this.#mountVisualizer(visualizer);
+		this.#phase = "connecting";
+		this.#utterance = undefined;
+		this.#resumeVocalizer = vocalizer.suspend();
 
 		const options: LiveSessionControllerOptions = {
 			session: this.#ctx.session,
@@ -111,32 +131,30 @@ export class LiveCommandController {
 			voice: cfgLiveVoice.get(this.#ctx.settings),
 			callbacks: {
 				onPhase: phase => {
-					if (this.#visualizer !== visualizer) return;
-					visualizer.setPhase(phase);
-					this.#ctx.ui.requestComponentRender(visualizer);
+					if (this.#session !== session) return;
+					this.#phase = phase;
+					this.#ctx.ui.requestRender();
 				},
-				onLevels: input => {
-					if (this.#visualizer !== visualizer) return;
-					visualizer.setInputLevel(input);
-					this.#ctx.ui.requestComponentRender(visualizer);
-				},
+				onLevels: () => {},
 				onTranscript: transcript => {
-					if (this.#visualizer !== visualizer) return;
-					if (!transcript) {
-						visualizer.clearTranscript();
-						this.#ctx.ui.requestComponentRender(visualizer);
-					} else if (transcript.role === "user") {
-						visualizer.setTranscript(transcript.text);
-						this.#ctx.ui.requestComponentRender(visualizer);
+					if (this.#session !== session || !transcript) return;
+					if (transcript.role === "user") {
+						this.#typeUserTranscript(transcript);
 					} else {
 						this.#presentAssistantTranscript(transcript);
 					}
+				},
+				onDelegated: texts => {
+					if (this.#session !== session) return;
+					this.#ctx.editor.removeText(texts);
+					this.#ctx.ui.requestRender();
 				},
 				onTerminal: error => this.#finish(session, error),
 			},
 		};
 		const session = this.#createSession ? this.#createSession(options) : new LiveSessionController(options);
 		this.#session = session;
+		this.#ctx.ui.requestRender();
 
 		try {
 			await session.start();
@@ -146,6 +164,46 @@ export class LiveCommandController {
 				this.#finish(session, errorFrom(cause));
 			}
 		}
+	}
+
+	/**
+	 * Type one user transcript update into the composer. Partials replace a volatile
+	 * preview; the final transcript commits as one undoable edit. When the operator edits
+	 * around the preview, the preview becomes ordinary draft text and later updates for
+	 * that turn only append what was not already shown.
+	 */
+	#typeUserTranscript(transcript: LiveTranscript): void {
+		const editor = this.#ctx.editor;
+		let utterance = this.#utterance;
+		if (!utterance || transcript.turn !== utterance.turn) {
+			if (utterance && editor.hasVolatileText) editor.commitVolatileText(utterance.preview);
+			const draft = editor.getText();
+			utterance = {
+				turn: transcript.turn,
+				prefix: draft.length > 0 && !/\s$/.test(draft) ? " " : "",
+				preview: "",
+				adopted: undefined,
+			};
+			this.#utterance = utterance;
+		}
+		if (utterance.preview && utterance.adopted === undefined && !editor.hasVolatileText) {
+			utterance.adopted = utterance.preview;
+		}
+		const shown = `${utterance.prefix}${transcript.text}`;
+		if (utterance.adopted !== undefined) {
+			if (transcript.final) {
+				const rest = shown.startsWith(utterance.adopted) ? shown.slice(utterance.adopted.length) : "";
+				if (rest.trim()) editor.commitVolatileText(rest);
+				this.#utterance = undefined;
+			}
+		} else if (transcript.final) {
+			editor.commitVolatileText(shown);
+			this.#utterance = undefined;
+		} else {
+			editor.setVolatileText(shown);
+			utterance.preview = shown;
+		}
+		this.#ctx.ui.requestRender();
 	}
 
 	#presentAssistantTranscript(transcript: LiveTranscript): void {
@@ -199,31 +257,10 @@ export class LiveCommandController {
 		this.#ctx.ui.requestComponentRender(component);
 	}
 
-	#mountVisualizer(visualizer: LiveVisualizer): void {
-		this.#visualizer = visualizer;
-		this.#detachedEditor = this.#ctx.editor;
-		this.#previousShowHardwareCursor = this.#ctx.ui.getShowHardwareCursor();
-		this.#previousUseTerminalCursor = this.#ctx.editor.getUseTerminalCursor();
-		this.#ctx.ui.setShowHardwareCursor(false);
-		this.#ctx.editor.setUseTerminalCursor(false);
-		this.#ctx.editorContainer.clear();
-		this.#ctx.editorContainer.addChild(visualizer);
-		this.#ctx.ui.setFocus(visualizer);
-		this.#resumeVocalizer = vocalizer.suspend();
-		let frame = 0;
-		this.#animationInterval = setInterval(() => {
-			if (this.#visualizer !== visualizer) return;
-			frame += 1;
-			visualizer.setFrame(frame);
-			this.#ctx.ui.requestComponentRender(visualizer);
-		}, ANIMATION_INTERVAL_MS);
-		this.#ctx.ui.requestRender();
-	}
-
 	#finish(session: LiveSessionController, error?: Error): void {
 		if (this.#session !== session) return;
 		this.#session = undefined;
-		this.#restoreEditor();
+		this.#release();
 		if (error) this.#ctx.showError(error.message);
 		const settling = session.stop().catch(cause => {
 			logger.debug("Live session cleanup failed", { error: errorFrom(cause).message });
@@ -234,29 +271,17 @@ export class LiveCommandController {
 		});
 	}
 
-	#restoreEditor(): void {
+	/** Keep any in-flight speech preview as draft text and hand audio output back to TTS. */
+	#release(): void {
 		this.#finalizeAssistantTranscript();
-		if (this.#animationInterval) {
-			clearInterval(this.#animationInterval);
-			this.#animationInterval = undefined;
+		const utterance = this.#utterance;
+		this.#utterance = undefined;
+		if (utterance && this.#ctx.editor.hasVolatileText) {
+			this.#ctx.editor.commitVolatileText(utterance.preview);
 		}
+		this.#phase = undefined;
 		this.#resumeVocalizer?.();
 		this.#resumeVocalizer = undefined;
-		const editor = this.#detachedEditor;
-		this.#detachedEditor = undefined;
-		this.#visualizer = undefined;
-		if (!editor) return;
-		this.#ctx.editorContainer.clear();
-		this.#ctx.editorContainer.addChild(editor);
-		if (this.#previousShowHardwareCursor !== undefined) {
-			this.#ctx.ui.setShowHardwareCursor(this.#previousShowHardwareCursor);
-		}
-		if (this.#previousUseTerminalCursor !== undefined) {
-			editor.setUseTerminalCursor(this.#previousUseTerminalCursor);
-		}
-		this.#previousShowHardwareCursor = undefined;
-		this.#previousUseTerminalCursor = undefined;
-		this.#ctx.ui.setFocus(editor);
 		this.#ctx.ui.requestRender();
 	}
 }

@@ -1,31 +1,31 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { LiveSessionController } from "@oh-my-pi/pi-coding-agent/live/controller";
-import { LiveVisualizer } from "@oh-my-pi/pi-tui/apps/live-visualizer";
+import {
+	type LiveSessionCallbacks,
+	LiveSessionController,
+	type LiveSessionControllerOptions,
+} from "@oh-my-pi/pi-coding-agent/live/controller";
 import { LiveCommandController } from "@oh-my-pi/pi-coding-agent/modes/controllers/live-command-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
+import { getEditorTheme } from "@oh-my-pi/pi-tui/theme";
 
-/** Fake InteractiveModeContext plus typed capture channels for focus/mount traffic. */
-interface ContextHarness {
+const UNDO = "\x1b[45;5u";
+
+interface Harness {
 	ctx: InteractiveModeContext;
-	/** The editor stub the controller must restore after live mode ends. */
-	editor: unknown;
-	/** Every component handed to `ui.setFocus`, in order. */
-	focused: unknown[];
-	/** Every component handed to `editorContainer.addChild`, in order. */
-	mounted: unknown[];
-	/** Resolves when `ui.setFocus` sees the original editor again. */
-	editorRefocused: Promise<void>;
+	editor: CustomEditor;
+	controller: LiveCommandController;
+	/** Callbacks the controller handed to the live session. */
+	callbacks(): LiveSessionCallbacks;
+	voice(): string | undefined;
+	/** Components mounted into or focused away from the composer slot. */
+	layoutChanges: unknown[];
 }
 
-function createContext(): ContextHarness {
-	const editor = {
-		getUseTerminalCursor: vi.fn(() => true),
-		setUseTerminalCursor: vi.fn(),
-	};
-	const focused: unknown[] = [];
-	const mounted: unknown[] = [];
-	const refocused = Promise.withResolvers<void>();
+function createHarness(): Harness {
+	const editor = new CustomEditor(getEditorTheme());
+	const layoutChanges: unknown[] = [];
 	const ctx = {
 		settings: Settings.isolated({ "live.voice": "vale" }),
 		keybindings: { getKeys: vi.fn(() => ["ctrl+l"]) },
@@ -33,18 +33,11 @@ function createContext(): ContextHarness {
 		extractAssistantText: vi.fn(() => ""),
 		editor,
 		editorContainer: {
-			clear: vi.fn(),
-			addChild: vi.fn((component: unknown) => {
-				mounted.push(component);
-			}),
+			clear: vi.fn(() => layoutChanges.push("clear")),
+			addChild: vi.fn((component: unknown) => layoutChanges.push(component)),
 		},
 		ui: {
-			getShowHardwareCursor: vi.fn(() => true),
-			setShowHardwareCursor: vi.fn(),
-			setFocus: vi.fn((component: unknown) => {
-				focused.push(component);
-				if (component === editor) refocused.resolve();
-			}),
+			setFocus: vi.fn((component: unknown) => layoutChanges.push(component)),
 			requestRender: vi.fn(),
 			requestComponentRender: vi.fn(),
 		},
@@ -52,7 +45,29 @@ function createContext(): ContextHarness {
 		chatContainer: { children: [] },
 		present: vi.fn(),
 	} as unknown as InteractiveModeContext;
-	return { ctx, editor, focused, mounted, editorRefocused: refocused.promise };
+	let options: LiveSessionControllerOptions | undefined;
+	const controller = new LiveCommandController(ctx, created => {
+		options = created;
+		const session = new LiveSessionController(created);
+		vi.spyOn(session, "start").mockResolvedValue();
+		vi.spyOn(session, "stop").mockResolvedValue();
+		return session;
+	});
+	return {
+		ctx,
+		editor,
+		controller,
+		callbacks: () => {
+			if (!options) throw new Error("live session was not created");
+			return options.callbacks;
+		},
+		voice: () => options?.voice,
+		layoutChanges,
+	};
+}
+
+function speak(h: Harness, turn: number, text: string, final: boolean): void {
+	h.callbacks().onTranscript({ role: "user", turn, text, final });
 }
 
 afterEach(() => {
@@ -61,52 +76,68 @@ afterEach(() => {
 
 describe("LiveCommandController", () => {
 	it("forwards the selected voice across the live-session boundary", async () => {
-		const { ctx } = createContext();
-		let receivedVoice: string | undefined;
-		const controller = new LiveCommandController(ctx, options => {
-			receivedVoice = options.voice;
-			const session = new LiveSessionController(options);
-			vi.spyOn(session, "start").mockResolvedValue();
-			vi.spyOn(session, "stop").mockResolvedValue();
-			return session;
-		});
-
+		const h = createHarness();
 		try {
-			await controller.handleCommand();
-			expect(receivedVoice).toBe("vale");
+			await h.controller.handleCommand();
+			expect(h.voice()).toBe("vale");
 		} finally {
-			await controller.stop();
+			await h.controller.stop();
 		}
 	});
 
-	it("stops the session and restores the editor when the live-toggle chord hits the focused visualizer", async () => {
-		const { ctx, editor, focused, mounted, editorRefocused } = createContext();
-		const stop = vi.fn(async () => {});
-		const controller = new LiveCommandController(ctx, options => {
-			const session = new LiveSessionController(options);
-			vi.spyOn(session, "start").mockResolvedValue();
-			vi.spyOn(session, "stop").mockImplementation(stop);
-			return session;
-		});
+	it("keeps the composer in place and types speech into it, one utterance after another", async () => {
+		const h = createHarness();
+		h.editor.insertText("context:");
+		await h.controller.handleCommand();
+		expect(h.layoutChanges).toEqual([]);
 
-		await controller.handleCommand();
-		expect(controller.active).toBe(true);
+		speak(h, 1, "hello wor", false);
+		expect(h.editor.getText()).toBe("context: hello wor");
+		expect(h.editor.hasVolatileText).toBe(true);
+		speak(h, 1, "hello world", true);
+		expect(h.editor.getText()).toBe("context: hello world");
+		expect(h.editor.hasVolatileText).toBe(false);
+		speak(h, 2, "and more", true);
+		expect(h.editor.getText()).toBe("context: hello world and more");
 
-		// The controller replaces and focuses the editor with the visualizer;
-		// Ctrl+L must end the call from there, not just from the editor.
-		const visualizer = focused[0];
-		if (!(visualizer instanceof LiveVisualizer)) {
-			throw new Error("expected the controller to focus a LiveVisualizer");
-		}
-		visualizer.handleInput("\x0c"); // Ctrl+L — the keypress alone must drive teardown
-		await editorRefocused;
+		await h.controller.stop();
+		for (let i = 0; h.controller.active && i < 20; i++) await Promise.resolve();
+		expect(h.controller.active).toBe(false);
+		expect(h.layoutChanges).toEqual([]);
+	});
 
-		expect(stop).toHaveBeenCalled();
-		expect(mounted.at(-1)).toBe(editor);
-		expect(focused.at(-1)).toBe(editor);
-		// `active` stays true until #finish's fire-and-forget settling promise
-		// clears; drain microtasks deterministically instead of sleeping.
-		for (let i = 0; controller.active && i < 20; i++) await Promise.resolve();
-		expect(controller.active).toBe(false);
+	it("never deletes text the operator types while a preview is showing", async () => {
+		const h = createHarness();
+		await h.controller.handleCommand();
+		speak(h, 1, "hello wor", false);
+		h.editor.insertText("!");
+		speak(h, 1, "hello world", false);
+		expect(h.editor.getText()).toBe("hello wor!");
+		speak(h, 1, "hello world", true);
+		expect(h.editor.getText()).toBe("hello wor!ld");
+		await h.controller.stop();
+	});
+
+	it("removes delegated speech from the draft as one undoable edit", async () => {
+		const h = createHarness();
+		h.editor.insertText("note:");
+		await h.controller.handleCommand();
+		speak(h, 1, "repair the cache", true);
+		expect(h.editor.getText()).toBe("note: repair the cache");
+
+		h.callbacks().onDelegated?.(["repair the cache"]);
+		expect(h.editor.getText()).toBe("note:");
+		h.editor.handleInput(UNDO);
+		expect(h.editor.getText()).toBe("note: repair the cache");
+		await h.controller.stop();
+	});
+
+	it("keeps an unfinished utterance as draft text when the call ends", async () => {
+		const h = createHarness();
+		await h.controller.handleCommand();
+		speak(h, 1, "half a thou", false);
+		await h.controller.stop();
+		expect(h.editor.getText()).toBe("half a thou");
+		expect(h.editor.hasVolatileText).toBe(false);
 	});
 });

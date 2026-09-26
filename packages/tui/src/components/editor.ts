@@ -2663,36 +2663,132 @@ export class Editor implements Component, Focusable {
 
 	/** Code units of the current volatile speech-to-text preview (see {@link setVolatileText}). */
 	#volatileTextLen = 0;
+	/** Draft and cursor right after the last volatile write. Any difference means something
+	 *  other than a volatile write edited the draft or moved the cursor since. */
+	#volatileSnapshot: { text: string; line: number; col: number } | undefined;
+
+	/** Whether a volatile preview is still live at the cursor. Reading it adopts a preview the
+	 *  operator has edited around (see {@link setVolatileText}). */
+	get hasVolatileText(): boolean {
+		this.#reconcileVolatile();
+		return this.#volatileTextLen > 0;
+	}
 
 	/** Show or replace a volatile speech-to-text preview at the cursor. The text is
 	 *  inserted with undo suspended so a long live dictation never floods the undo
 	 *  stack; finalize it with {@link commitVolatileText} or drop it with
-	 *  {@link clearVolatileText}. Newlines are allowed. */
+	 *  {@link clearVolatileText}. Newlines are allowed. If the draft changed or the
+	 *  cursor moved since the previous preview, that preview is kept as ordinary text
+	 *  and the new one starts at the cursor, so dictation never deletes the operator's
+	 *  own edits. */
 	setVolatileText(text: string): void {
+		this.#reconcileVolatile();
 		this.#exitHistoryForEditing();
 		this.#withUndoSuspended(() => {
 			this.#deleteCharsBeforeCursor(this.#volatileTextLen);
 			if (text) this.#insertTextAtCursor(text);
 		});
 		this.#volatileTextLen = text.length;
+		this.#snapshotVolatile();
 		if (!text) this.#notifyChange();
 	}
 
 	/** Remove the current volatile preview without committing it. */
 	clearVolatileText(): void {
+		this.#reconcileVolatile();
 		if (this.#volatileTextLen === 0) return;
 		this.#withUndoSuspended(() => this.#deleteCharsBeforeCursor(this.#volatileTextLen));
 		this.#volatileTextLen = 0;
+		this.#volatileSnapshot = undefined;
 		this.#notifyChange();
 	}
 
 	/** Drop any volatile preview, then insert `text` as a single undoable edit. */
 	commitVolatileText(text: string): void {
+		this.#reconcileVolatile();
 		this.#exitHistoryForEditing();
 		this.#withUndoSuspended(() => this.#deleteCharsBeforeCursor(this.#volatileTextLen));
 		this.#volatileTextLen = 0;
+		this.#volatileSnapshot = undefined;
 		if (text) this.#insertTextAtCursor(text);
 		else this.#notifyChange();
+	}
+
+	/**
+	 * Remove the last occurrence of each text as one undoable edit, leaving the volatile
+	 * preview intact. Occurrences overlapping the preview are skipped. One whitespace
+	 * character at the seam is removed with each span so neighbouring words do not run
+	 * together or double up. Returns how many texts were removed.
+	 */
+	removeText(texts: readonly string[]): number {
+		this.#reconcileVolatile();
+		let full = this.#state.lines.join("\n");
+		let cursor = this.#offsetOf(this.#state.cursorLine, this.#state.cursorCol);
+		const previewStart = cursor - this.#volatileTextLen;
+		let removed = 0;
+		for (const text of texts) {
+			if (!text) continue;
+			let start = full.lastIndexOf(text);
+			while (start !== -1 && this.#volatileTextLen > 0 && start < cursor && start + text.length > previewStart) {
+				start = start > 0 ? full.lastIndexOf(text, start - 1) : -1;
+			}
+			if (start === -1) continue;
+			let end = start + text.length;
+			const spaceBefore = start > 0 && /\s/.test(full[start - 1] ?? "");
+			const spaceAfter = end < full.length && /\s/.test(full[end] ?? "");
+			if (spaceAfter && (spaceBefore || start === 0)) end += 1;
+			else if (spaceBefore && end === full.length) start -= 1;
+			if (removed === 0) {
+				this.#exitHistoryForEditing();
+				this.#recordUndoState();
+			}
+			full = full.slice(0, start) + full.slice(end);
+			if (cursor >= end) cursor -= end - start;
+			else if (cursor > start) cursor = start;
+			removed += 1;
+		}
+		if (removed === 0) return 0;
+		this.#state.lines = full.split("\n");
+		let line = 0;
+		while (line < this.#state.lines.length - 1 && cursor > (this.#state.lines[line]?.length ?? 0)) {
+			cursor -= (this.#state.lines[line]?.length ?? 0) + 1;
+			line += 1;
+		}
+		this.#state.cursorLine = line;
+		this.#setCursorCol(cursor);
+		this.#lastAction = null;
+		this.#snapshotVolatile();
+		this.#notifyChange();
+		return removed;
+	}
+
+	#offsetOf(line: number, col: number): number {
+		let offset = col;
+		for (let i = 0; i < line; i++) offset += (this.#state.lines[i]?.length ?? 0) + 1;
+		return offset;
+	}
+
+	#snapshotVolatile(): void {
+		this.#volatileSnapshot =
+			this.#volatileTextLen > 0
+				? { text: this.#state.lines.join("\n"), line: this.#state.cursorLine, col: this.#state.cursorCol }
+				: undefined;
+	}
+
+	/** Adopt the preview as ordinary text when anything but a volatile write changed the
+	 *  draft or moved the cursor, so the next preview never deletes the operator's edits. */
+	#reconcileVolatile(): void {
+		const snapshot = this.#volatileSnapshot;
+		if (this.#volatileTextLen === 0 || !snapshot) return;
+		if (
+			snapshot.line === this.#state.cursorLine &&
+			snapshot.col === this.#state.cursorCol &&
+			snapshot.text === this.#state.lines.join("\n")
+		) {
+			return;
+		}
+		this.#volatileTextLen = 0;
+		this.#volatileSnapshot = undefined;
 	}
 
 	/** Delete `count` UTF-16 code units immediately before the cursor, crossing line

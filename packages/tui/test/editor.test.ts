@@ -2978,6 +2978,15 @@ describe("Editor component", () => {
 			editor.setVolatileText("single line");
 			expect(editor.getText()).toBe("single line");
 		});
+
+		it("keeps a preview as ordinary text once the cursor moves away from it", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.insertText("ab");
+			editor.setVolatileText(" spoken");
+			editor.handleInput("\x1b[H"); // Home: cursor leaves the preview
+			editor.setVolatileText("X");
+			expect(editor.getText()).toBe("Xab spoken");
+		});
 	});
 
 	describe("composer border styles", () => {

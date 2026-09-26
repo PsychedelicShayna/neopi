@@ -457,6 +457,8 @@ export interface InteractiveModeContext {
 	readonly sttIdle: boolean;
 	/** Start or stop the Codex-backed realtime voice session. */
 	handleLiveCommand(): Promise<void>;
+	/** Mute or unmute the live voice session microphone; no-op when live mode is off. */
+	handleLiveMute(): Promise<void>;
 	/** Start a `/record` screen capture, or stop the running one. */
 	toggleRecording(): Promise<void>;
 	executeCompaction(

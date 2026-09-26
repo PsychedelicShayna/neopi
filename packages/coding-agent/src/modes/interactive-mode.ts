@@ -7097,6 +7097,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		await this.#liveCommandController.handleCommand();
 	}
 
+	async handleLiveMute(): Promise<void> {
+		await this.#liveCommandController.toggleMute();
+	}
+
 	async showDebugSelector(): Promise<void> {
 		await this.#selectorController.showDebugSelector();
 	}
