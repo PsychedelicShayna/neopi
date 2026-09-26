@@ -31,10 +31,18 @@ native_dir=packages/natives/native
 version=$(bun -p 'require("./packages/natives/package.json").version')
 sentinel="__piNativesV${version//[^A-Za-z0-9]/_}"
 
+# The addon must match the libc of the Bun that loads it; scripts/host-detect.ts
+# reads the same ELF interpreter. There is no modern musl x64 addon.
+musl=0
+LC_ALL=C grep -aq '/ld-musl-' <(head -c 8192 -- "$(readlink -f -- "$(command -v bun)")") && musl=1
+
 case $(uname -m) in
 x86_64)
 	variant=${OMP_NATIVE_X64_VARIANT:-}
-	if [[ -z $variant ]]; then
+	if ((musl)); then
+		[[ -z $variant || $variant == baseline ]] || die "musl hosts build only the baseline x64 addon"
+		variant=baseline
+	elif [[ -z $variant ]]; then
 		if grep -qiw avx2 /proc/cpuinfo; then variant=modern; else variant=baseline; fi
 	fi
 	[[ $variant == modern || $variant == baseline ]] || die "OMP_NATIVE_X64_VARIANT must be modern or baseline"
@@ -60,7 +68,8 @@ native_inputs() {
 		scripts/bazel-natives.ts scripts/host-detect.ts
 		BUILD.bazel MODULE.bazel MODULE.bazel.lock .bazelrc .bazelversion bazel
 	)
-	printf '%s\n' "$version" "$addon_name" "${RUSTFLAGS:-}" "${OMP_NATIVE_CARGO_PROFILE:-}" "${OMP_NATIVE_BUILD_BACKEND:-}"
+	printf '%s\n' "$version" "$addon_name" "${RUSTFLAGS:-}" "${CARGO_ENCODED_RUSTFLAGS:-}" \
+		"${OMP_NATIVE_CARGO_PROFILE:-}" "${OMP_NATIVE_BUILD_BACKEND:-}"
 	git rev-parse "${paths[@]/#/HEAD:}"
 	git diff --no-ext-diff --no-textconv --no-color --binary HEAD -- "${paths[@]}"
 	git ls-files -z --others --exclude-standard -- "${paths[@]}" | xargs -0 -r sha256sum
