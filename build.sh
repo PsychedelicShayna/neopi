@@ -46,6 +46,8 @@ x86_64)
 		if grep -qiw avx2 /proc/cpuinfo; then variant=modern; else variant=baseline; fi
 	fi
 	[[ $variant == modern || $variant == baseline ]] || die "OMP_NATIVE_X64_VARIANT must be modern or baseline"
+	# The native driver's child builds detect the variant on their own; pin them to this one.
+	export OMP_NATIVE_X64_VARIANT=$variant
 	addon_name="pi_natives.linux-x64-$variant.node"
 	;;
 aarch64) addon_name=pi_natives.linux-arm64.node ;;
