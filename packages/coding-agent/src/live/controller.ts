@@ -627,6 +627,16 @@ export class LiveSessionController {
 		}
 	}
 
+	/**
+	 * The operator submitted the composer, which already holds every spoken utterance not yet
+	 * handed off. Drop those unclaimed ledger turns so a later voice delegation cannot relay
+	 * words the operator has already sent, edited, or deleted. Claimed turns stay with their
+	 * in-flight handoff.
+	 */
+	discardUnclaimedSpeech(): void {
+		this.#userTurnLedger = this.#userTurnLedger.filter(turn => turn.claim !== undefined);
+	}
+
 	/** Fleet feed: relay a crew IRC message onto the speakable channel for background awareness. */
 	#relayCrewMessage(message: CustomMessage): void {
 		const details = message.details as { from?: string; message?: string } | undefined;

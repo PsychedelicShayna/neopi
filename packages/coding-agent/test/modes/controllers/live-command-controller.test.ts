@@ -176,22 +176,25 @@ describe("LiveCommandController", () => {
 		expect(h.liveStatus()).toBeNull();
 	});
 
-	it("routes Enter by destination: primary untouched, voice consumed, both shared", async () => {
+	it("routes Enter by destination: primary untouched, voice consumed, both shared, images to primary", async () => {
 		const h = createHarness();
-		expect(h.controller.routeSubmit("no call running")).toBe(false);
+		const noImages = { hasImages: false };
+		expect(h.controller.routeSubmit("no call running", noImages)).toBe(false);
 		await h.controller.handleCommand();
 
-		expect(h.controller.routeSubmit("for the main agent")).toBe(false);
+		expect(h.controller.routeSubmit("for the main agent", noImages)).toBe(false);
 		expect(h.sentToVoice).toEqual([]);
 
 		expect(h.controller.cycleDestination()).toBe("voice");
 		expect(h.liveStatus()).toEqual({ phase: "connecting", destination: "voice" });
-		expect(h.controller.routeSubmit("iris, what did it say")).toBe(true);
+		expect(h.controller.routeSubmit("iris, what did it say", noImages)).toBe(true);
 		expect(h.sentToVoice).toEqual([["iris, what did it say", "voice"]]);
 		expect(h.presented).toHaveLength(1);
+		expect(h.controller.routeSubmit("look at this", { hasImages: true })).toBe(false);
+		expect(h.sentToVoice).toHaveLength(1);
 
 		expect(h.controller.cycleDestination()).toBe("both");
-		expect(h.controller.routeSubmit("ship it")).toBe(false);
+		expect(h.controller.routeSubmit("ship it", noImages)).toBe(false);
 		expect(h.sentToVoice.at(-1)).toEqual(["ship it", "both"]);
 
 		expect(h.controller.cycleDestination()).toBe("primary");
