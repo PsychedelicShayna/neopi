@@ -651,6 +651,9 @@ export class InputController {
 		for (const key of this.ctx.keybindings.getKeys("app.live.mute")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.ctx.handleLiveMute());
 		}
+		for (const key of this.ctx.keybindings.getKeys("app.live.destination.cycle")) {
+			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.handleLiveDestinationCycle());
+		}
 		// Hold the space bar to push-to-talk: the editor recognizes the auto-repeat burst, tracks
 		// the spam back out, and starts/stops STT on hold start / release. Gated on `stt.enabled` so
 		// a disabled STT leaves the space bar typing normally, and on `sttIdle` so a hold can never
@@ -926,6 +929,14 @@ export class InputController {
 						userInitiated: true,
 					});
 				}
+				return;
+			}
+
+			// Live call: Enter may address the voice agent instead of, or alongside, the main
+			// agent. Harness commands (`/`, `!`, `$`) and image drafts stay with the main agent.
+			if (!hasPendingImages && !/^[/!$]/.test(text) && this.ctx.routeLiveSubmit(text)) {
+				this.ctx.editor.addToHistory(text);
+				this.ctx.editor.clearDraft();
 				return;
 			}
 

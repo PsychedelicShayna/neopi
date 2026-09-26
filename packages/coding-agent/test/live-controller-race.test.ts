@@ -598,6 +598,20 @@ describe("live controller delegation ownership", () => {
 		expect(h.sent.some(m => m.type === "session.context.append" && m.channel === "speakable")).toBe(true);
 	});
 
+	it("sends typed operator text immediately: addressed to the voice agent, or as silent commentary when shared", async () => {
+		const h = makeHarness({ speakableIdleMs: 60_000 });
+		await h.controller.start();
+		h.fireLive({ type: "input_transcript.added", item: { text: "still talking" } });
+		h.controller.sendOperatorText("iris, pause the narration", "voice");
+		h.controller.sendOperatorText("ship the fix", "both");
+		await settle();
+		const appends = h.sent.filter(m => m.type === "session.context.append");
+		expect(appends.map(m => [m.channel, m.content[0]?.text])).toEqual([
+			[undefined, '"Operator Typed Message":\n\niris, pause the narration'],
+			["commentary", '"Operator Message Sent To Main Agent":\n\nship the fix'],
+		]);
+	});
+
 	it("defers a crew report after a user transcript update until the speakable quiet period", async () => {
 		const h = makeHarness({ speakableIdleMs: 60 });
 		await h.controller.start();
