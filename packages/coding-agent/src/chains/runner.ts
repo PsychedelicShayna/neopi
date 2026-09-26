@@ -5,7 +5,7 @@
  * (the composer text for the first step). The last output is returned.
  */
 import { Agent, type AgentMessage, type AgentTool, ThinkingLevel, Tokenizer } from "@oh-my-pi/pi-agent-core";
-import { type Model, streamSimple } from "@oh-my-pi/pi-ai";
+import { type Message, type Model, streamSimple } from "@oh-my-pi/pi-ai";
 import * as prompt from "@oh-my-pi/pi-utils/prompt";
 import type { ChainConfig, ChainStep } from "@oh-my-pi/pi-tui/overlays/chain-types";
 import {
@@ -19,7 +19,7 @@ import { formatModelRoleAlias } from "../config/model-roles";
 import { getModelMatchPreferences, resolveModelRoleValue } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import chainInputWithContext from "../prompts/chains/input-with-context.md" with { type: "text" };
-import { obfuscateProviderContext } from "../secrets/message-transform";
+import { obfuscateMessages, obfuscateProviderContext } from "../secrets/message-transform";
 import type { SecretObfuscator } from "../secrets/obfuscator";
 import chainSystemPrompt from "../prompts/chains/system.md" with { type: "text" };
 import { estimateToolSchemaTokens } from "@oh-my-pi/pi-tui/status-line/context-usage";
@@ -152,6 +152,35 @@ export function renderChainInput(
 		.trimEnd();
 }
 
+/**
+ * `message` with its operator-visible text redacted and its structure (roles, block types, ids,
+ * custom types) untouched, so the transcript formatter still recognizes it. Standard provider
+ * messages go through the session's own transform; other kinds redact their text fields.
+ */
+function redactMessageText(obfuscator: SecretObfuscator, message: AgentMessage): AgentMessage {
+	switch (message.role) {
+		case "user":
+		case "developer":
+		case "assistant":
+		case "toolResult":
+			return obfuscateMessages(obfuscator, [message as Message])[0] as AgentMessage;
+	}
+	const redacted: Record<string, unknown> = { ...message };
+	for (const field of ["content", "summary", "shortSummary", "command", "output"]) {
+		const value = redacted[field];
+		if (typeof value === "string") {
+			redacted[field] = obfuscator.obfuscate(value);
+		} else if (Array.isArray(value)) {
+			redacted[field] = value.map(block =>
+				block && typeof block === "object" && (block as { type?: unknown }).type === "text"
+					? { ...block, text: obfuscator.obfuscate(String((block as { text?: unknown }).text ?? "")) }
+					: block,
+			);
+		}
+	}
+	return redacted as unknown as AgentMessage;
+}
+
 /** Run one step over `input` and return the model's final text. */
 export async function runChainStep(
 	step: ChainStep,
@@ -203,7 +232,7 @@ export async function runChainStep(
 		// pattern's delimiters so a later pass on the rendered text no longer matches it.
 		const messages =
 			hidesSecrets && obfuscator && options.messages
-				? obfuscator.obfuscateObject(options.messages)
+				? options.messages.map(message => redactMessageText(obfuscator, message))
 				: options.messages;
 		await agent.prompt(renderChainInput(step, input, messages, resolved.model, tools));
 	} finally {
