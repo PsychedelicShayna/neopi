@@ -5,8 +5,9 @@
 # Environment:
 #   NPI_DEST              install path; its file name must be npi (default ~/.local/bin/npi)
 #   PI_CODING_AGENT_DIR   agent dir whose extensions/ receives the links (default: the active profile's).
-#                         When set, OMP_PROFILE and PI_PROFILE are ignored so a staged install
-#                         never rewires a named profile's extensions.
+#                         Setting it makes this a staged install: OMP_PROFILE and PI_PROFILE are
+#                         ignored for the extension links, the smoke tests run under a throwaway
+#                         HOME, and the live native cache is left alone.
 set -euo pipefail
 
 cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
@@ -31,21 +32,37 @@ source_id=$(
 	git diff --no-ext-diff --no-textconv --no-color --binary HEAD | sha256sum | cut -d" " -f1
 	git ls-files -z --others --exclude-standard | xargs -0 -r sha256sum | sha256sum | cut -d" " -f1
 )
-[[ $(<"$binary.source") == "$source_id" ]] || die "$binary was built from a different tree than this checkout; run ./build.sh"
+binary_sha=$(sha256sum -- "$binary" | cut -d" " -f1)
+[[ $(<"$binary.source") == "$source_id"$'\n'"$binary_sha" ]] ||
+	die "$binary was not built by ./build.sh from this checkout as it is now; run ./build.sh"
 
 # Stage next to the destination, prove the staged copy runs, then rename over
 # the destination: atomic, and a running npi keeps its old inode instead of
 # failing with ETXTBSY or reading a torn file. A broken build is never installed.
+staging=0
+[[ -n ${PI_CODING_AGENT_DIR:-} ]] && staging=1
+smoke_home=""
 mkdir -p -- "$(dirname -- "$dest")"
 staged=$(mktemp "$dest.new.XXXXXX")
-trap 'rm -f -- "$staged"' EXIT
+trap 'rm -f -- "$staged"; [[ -z $smoke_home ]] || rm -rf -- "$smoke_home"' EXIT
+if ((staging)); then
+	# The smoke tests extract the native addon; keep that out of the live cache.
+	smoke_home=$(mktemp -d)
+fi
 cp -- "$binary" "$staged"
 chmod 755 -- "$staged"
+run_isolated() {
+	if ((staging)); then
+		env -u PI_CONFIG_DIR -u XDG_CACHE_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME HOME="$smoke_home" "$@"
+	else
+		"$@"
+	fi
+}
 smoke() {
 	local reported
-	reported=$("$1" --version) || die "$1 --version failed"
+	reported=$(run_isolated "$1" --version) || die "$1 --version failed"
 	[[ $reported == "npi/$version" ]] || die "$1 reports '$reported', expected npi/$version"
-	"$1" --smoke-test >/dev/null || die "$1 --smoke-test failed"
+	run_isolated "$1" --smoke-test >/dev/null || die "$1 --smoke-test failed"
 }
 smoke "$staged"
 mv -f -- "$staged" "$dest"
@@ -61,25 +78,39 @@ fi
 smoke "$dest"
 say "smoke test passed: $("$dest" --version)"
 
+prune_natives() {
+	natives_version=$(bun -p 'require("./packages/natives/package.json").version')
+	natives_dir=$(bun -e 'import { getNativesDir } from "@oh-my-pi/pi-utils/dirs"; process.stdout.write(getNativesDir())')
+	keep=" "
+	for addon in packages/natives/native/pi_natives.*.node; do
+		[[ -f $addon ]] && keep+="$(sha256sum -- "$addon" | cut -c1-16) "
+	done
+	pruned=0
+	shopt -s nullglob
+	for extracted in "$natives_dir/$natives_version"/pi_natives.*.node; do
+		hash=${extracted%.node}
+		hash=${hash##*.}
+		[[ $hash =~ ^[0-9a-f]{16}$ && $keep != *" $hash "* ]] || continue
+		# Selected in the last ten minutes, or mapped by a running process: it may be in use.
+		[[ -z $(find "$extracted" -mmin -10 2>/dev/null) ]] || continue
+		! grep -qsF -- "$extracted" /proc/[0-9]*/maps || continue
+		rm -f -- "$extracted" && pruned=$((pruned + 1))
+	done
+	shopt -u nullglob
+	((pruned == 0)) || say "pruned $pruned native addon(s) extracted by other builds of $natives_version"
+}
+
 # Each build extracts its embedded addon to a content-addressed file, and the
 # runtime never deletes another build's file because that build may be loading
-# it. Prune them here instead: a pruned build re-extracts on its next start.
-natives_version=$(bun -p 'require("./packages/natives/package.json").version')
-natives_dir=$(bun -e 'import { getNativesDir } from "@oh-my-pi/pi-utils/dirs"; process.stdout.write(getNativesDir())')
-keep=" "
-for addon in packages/natives/native/pi_natives.*.node; do
-	[[ -f $addon ]] && keep+="$(sha256sum -- "$addon" | cut -c1-16) "
-done
-pruned=0
-shopt -s nullglob
-for extracted in "$natives_dir/$natives_version"/pi_natives.*.node; do
-	hash=${extracted%.node}
-	hash=${hash##*.}
-	[[ $hash =~ ^[0-9a-f]{16}$ && $keep != *" $hash "* ]] || continue
-	rm -f -- "$extracted" && pruned=$((pruned + 1))
-done
-shopt -u nullglob
-((pruned == 0)) || say "pruned $pruned native addon(s) extracted by other builds of $natives_version"
+# it. Prune them here instead, sparing any addon a process has mapped or selected
+# in the last ten minutes (the loader refreshes the mtime of the file it picks);
+# a pruned build re-extracts on its next start. A staged install leaves the live
+# cache alone.
+if ((staging)); then
+	say "staged install: live native cache left untouched"
+else
+	prune_natives
+fi
 
 on_path=$(command -v npi || true)
 if [[ -n $on_path && $(readlink -f -- "$on_path") != $(readlink -f -- "$dest") ]]; then

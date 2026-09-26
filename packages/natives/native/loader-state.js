@@ -493,6 +493,21 @@ function embeddedAddonTargetPath(dir, file) {
  return path.join(dir, `${file.filename.slice(0, file.filename.length - ext.length)}.${file.sha256.slice(0, 16)}${ext}`);
 }
 
+/**
+ * Mark a reused extracted addon as just selected. install.sh prunes other builds'
+ * addons but spares any selected in the last few minutes, so this keeps the file
+ * this process is about to load. Best effort.
+ * @param {string} targetPath
+ */
+function markEmbeddedAddonSelected(targetPath) {
+ try {
+  const now = new Date();
+  fs.utimesSync(targetPath, now, now);
+ } catch {
+  // A read-only cache still loads; it just loses the pruning grace period.
+ }
+}
+
 function isEmbeddedAddonFileCurrent(targetPath, file) {
  try {
   const stat = fs.statSync(targetPath);
@@ -601,6 +616,7 @@ function maybeExtractEmbeddedAddon(ctx, errors) {
     targetDir: ctx.versionedDir,
    });
    if (isEmbeddedAddonFileCurrent(targetPath, selectedEmbeddedFile)) {
+    markEmbeddedAddonSelected(targetPath);
     return targetPath;
    }
    errors.push(`embedded addon archive (${embeddedAddon.archive.filename}): missing ${selectedEmbeddedFile.filename}`);
@@ -613,6 +629,7 @@ function maybeExtractEmbeddedAddon(ctx, errors) {
  }
 
  if (isEmbeddedAddonFileCurrent(targetPath, selectedEmbeddedFile)) {
+  markEmbeddedAddonSelected(targetPath);
   return targetPath;
  }
  if (!selectedEmbeddedFile.filePath) {
