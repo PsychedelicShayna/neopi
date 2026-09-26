@@ -214,7 +214,8 @@ async function createContext() {
 			}
 		},
 		updatePendingMessagesDisplay,
-		routeLiveSubmit: vi.fn(() => false),
+		routeLiveSubmit: vi.fn(() => "primary"),
+		discardLiveSpeech: vi.fn(),
 		shareLiveSubmit: vi.fn(),
 		noteLiveComposerActivity: vi.fn(),
 		isBashMode: false,

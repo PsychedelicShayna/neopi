@@ -240,7 +240,11 @@ import { CommandController } from "./controllers/command-controller";
 import { EventController } from "./controllers/event-controller";
 import { ExtensionUiController } from "./controllers/extension-ui-controller";
 import { InputController } from "./controllers/input-controller";
-import { type LiveInputDestination, LiveCommandController } from "./controllers/live-command-controller";
+import {
+	type LiveInputDestination,
+	LiveCommandController,
+	type LiveSubmitRoute,
+} from "./controllers/live-command-controller";
 import { MCPCommandController } from "./controllers/mcp-command-controller";
 import { OmfgController } from "./controllers/omfg-controller";
 import { SelectorController } from "./controllers/selector-controller";
@@ -7113,8 +7117,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (destination) this.showStatus(`Live input → ${LIVE_DESTINATION_LABELS[destination]}`);
 	}
 
-	routeLiveSubmit(text: string, options: { hasImages: boolean }): boolean {
+	routeLiveSubmit(text: string, options: { hasImages: boolean }): LiveSubmitRoute {
 		return this.#liveCommandController.routeSubmit(text, options);
+	}
+
+	discardLiveSpeech(): void {
+		this.#liveCommandController.discardSpeech();
 	}
 
 	shareLiveSubmit(text: string): void {

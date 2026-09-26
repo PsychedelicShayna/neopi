@@ -20,6 +20,9 @@ type LiveSessionFactory = (options: LiveSessionControllerOptions) => LiveSession
 
 /** Where Enter sends composer text during a live call. */
 export type LiveInputDestination = "primary" | "voice" | "both";
+/** What a submit does during a call: continue to the primary agent, stop because the voice agent
+ *  took it, or hold the draft because a voice handoff of its speech is landing right now. */
+export type LiveSubmitRoute = "primary" | "voice" | "held";
 const DESTINATION_ORDER: readonly LiveInputDestination[] = ["primary", "voice", "both"];
 
 const LIVE_MESSAGE_USAGE: AssistantMessage["usage"] = {
@@ -63,6 +66,8 @@ export class LiveCommandController {
 	#utterance: ComposerUtterance | undefined;
 	/** Utterances committed into the draft, by editor utterance id, for removal on handoff. */
 	#committed: Array<{ id: number; key: string }> = [];
+	/** Set while the controller itself edits the draft, so those edits are not operator activity. */
+	#editing = false;
 	#phase: LivePhase | undefined;
 	#destination: LiveInputDestination = "primary";
 	#resumeVocalizer: (() => void) | undefined;
@@ -97,6 +102,7 @@ export class LiveCommandController {
 
 	/** Composer edits count as operator activity: voice-triggering context waits until they settle. */
 	noteComposerActivity(): void {
+		if (this.#editing) return;
 		this.#session?.noteComposerActivity();
 	}
 
@@ -124,17 +130,23 @@ export class LiveCommandController {
 	 * Drafts with images always go to the primary. Returns false untouched when no call is
 	 * running.
 	 */
-	routeSubmit(text: string, options: { hasImages: boolean }): boolean {
+	routeSubmit(text: string, options: { hasImages: boolean }): LiveSubmitRoute {
 		const session = this.#session;
-		if (!session) return false;
-		session.retireComposerSpeech();
+		if (!session) return "primary";
+		if (!session.retireComposerSpeech()) return "held";
 		this.#committed = [];
-		if (this.#destination !== "voice" || options.hasImages) return false;
+		if (this.#destination !== "voice" || options.hasImages) return "primary";
 		session.sendOperatorText(text, "voice");
 		const component = new UserMessageComponent(text);
 		if (theme.icon.mic) component.setReaction(theme.icon.mic);
 		this.#ctx.present(component);
-		return true;
+		return "voice";
+	}
+
+	/** The operator cleared the draft: the speech in it is discarded, so no handoff may relay it. */
+	discardSpeech(): void {
+		this.#session?.retireComposerSpeech();
+		this.#committed = [];
 	}
 
 	/** With the destination `both`, tell the voice agent what the main agent is about to receive. */
@@ -267,7 +279,12 @@ export class LiveCommandController {
 			this.#committed.splice(index, 1);
 		}
 		if (ids.length === 0) return;
-		this.#ctx.editor.removeUtterances(ids);
+		this.#editing = true;
+		try {
+			this.#ctx.editor.removeUtterances(ids);
+		} finally {
+			this.#editing = false;
+		}
 		this.#ctx.ui.requestRender();
 	}
 

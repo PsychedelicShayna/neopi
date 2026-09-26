@@ -182,6 +182,11 @@ export class LiveSessionController {
 	#answeredTurns: number[] | undefined;
 	/** The transport finished connecting; context sent before then waits in {@link #pendingOperatorText}. */
 	#connected = false;
+	/** Ordering stamps: when a user turn last became final, and when voice-triggering context
+	 *  last went out. A response started after context, not speech, is narration, not an answer. */
+	#eventSeq = 0;
+	#userFinalSeq = 0;
+	#contextSeq = 0;
 	#pendingOperatorText: LiveClientMessage[] = [];
 	#userLedgerTurn = 0;
 	readonly #seenDelegationIds = new Set<string>();
@@ -410,9 +415,13 @@ export class LiveSessionController {
 				this.#addTranscript("user", event.item.text);
 				break;
 			case "output_transcript.added":
-				this.#answeredTurns ??= this.#userTurnLedger
-					.filter(turn => turn.final && turn.claim === undefined)
-					.map(turn => turn.turn);
+				// Only a response to the operator's speech answers it; narration of released
+				// context (reports, final answers) must not retire turns awaiting a handoff.
+				if (!this.#answeredTurns && this.#userFinalSeq > this.#contextSeq) {
+					this.#answeredTurns = this.#userTurnLedger
+						.filter(turn => turn.final && turn.claim === undefined)
+						.map(turn => turn.turn);
+				}
 				this.#addTranscript("assistant", event.item.text);
 				break;
 			case "turn.done":
@@ -612,6 +621,7 @@ export class LiveSessionController {
 			this.#lastRelayedResponse = message;
 			const finalContext = prompt.render(agentFinalMessageTemplate, { message: text });
 			this.#deliverOrHold(() => {
+				this.#contextSeq = ++this.#eventSeq;
 				for (const chunk of chunkLiveContext(finalContext)) {
 					this.#queueSend(buildDelegationContextAppend(delegationId, chunk));
 				}
@@ -650,11 +660,15 @@ export class LiveSessionController {
 	 * handed off. Drop the unclaimed ledger turns and cancel a handoff that has claimed turns but
 	 * is not yet accepted, so neither a later delegation nor the pending one relays words the
 	 * operator already sent, edited, or deleted. Turns the main agent already accepted stay
-	 * with it.
+	 * with it. Returns false when a handoff was accepted but has not yet retired its speech from
+	 * the composer: submitting now would send those words a second time.
 	 */
-	retireComposerSpeech(): void {
+	retireComposerSpeech(): boolean {
 		const pending = this.#pendingDelegation;
-		if (pending && (this.#pendingDelivery?.cancel() ?? true)) {
+		let settled = true;
+		if (pending && !(this.#pendingDelivery?.cancel() ?? true)) {
+			settled = false;
+		} else if (pending) {
 			// Supersede the handoff: its in-flight abort/dispatch sees a newer generation and stops.
 			this.#delegationGeneration += 1;
 			this.#pendingDelegation = undefined;
@@ -664,6 +678,7 @@ export class LiveSessionController {
 		}
 		this.#userTurnLedger = this.#userTurnLedger.filter(turn => turn.claim !== undefined);
 		this.#answeredTurns = undefined;
+		return settled;
 	}
 
 	/** The voice agent finished answering: the turns it answered are its own and must not ride a
@@ -755,6 +770,7 @@ export class LiveSessionController {
 	}
 
 	#sendSpeakable(item: string): void {
+		this.#contextSeq = ++this.#eventSeq;
 		const delegationId = this.#activeDelegationId;
 		this.#queueSend(
 			delegationId
@@ -897,6 +913,7 @@ export class LiveSessionController {
 		} else if (!current.text.startsWith(normalized)) {
 			current.text += normalized;
 		}
+		if (final) this.#userFinalSeq = ++this.#eventSeq;
 		const pendingGeneration = this.#pendingDelegation?.generation;
 		if (final && pendingGeneration !== undefined) {
 			void this.#dispatchPendingDelegation(pendingGeneration).catch(cause => this.#reportFailure(errorFrom(cause)));

@@ -969,7 +969,14 @@ export class InputController {
 			// Live call: Enter is the operator's own handoff and may address the voice agent
 			// instead of, or alongside, the main agent. Harness commands (`/`, `!`, `$`) stay
 			// with the harness; image drafts always reach the main agent.
-			if (!/^[/!$]/.test(text) && this.ctx.routeLiveSubmit(text, { hasImages: hasPendingImages })) {
+			const liveRoute = /^[/!$]/.test(text)
+				? "primary"
+				: this.ctx.routeLiveSubmit(text, { hasImages: hasPendingImages });
+			if (liveRoute === "held") {
+				this.ctx.showStatus("A voice handoff just reached the main agent; review the draft before sending");
+				return;
+			}
+			if (liveRoute === "voice") {
 				this.ctx.editor.addToHistory(text);
 				this.ctx.editor.clearDraft();
 				return;
@@ -1589,6 +1596,7 @@ export class InputController {
 		if (now - this.ctx.lastSigintTime < 500) {
 			void this.ctx.shutdown();
 		} else {
+			this.ctx.discardLiveSpeech();
 			this.ctx.clearEditor();
 			this.ctx.lastSigintTime = now;
 		}

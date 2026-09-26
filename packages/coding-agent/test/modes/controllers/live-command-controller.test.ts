@@ -172,6 +172,19 @@ describe("LiveCommandController", () => {
 		await h.controller.stop();
 	});
 
+	it("does not count removing delegated speech as operator activity", async () => {
+		const h = createHarness();
+		await h.controller.handleCommand();
+		const activity = vi.spyOn(LiveSessionController.prototype, "noteComposerActivity");
+		h.editor.onChange = () => h.controller.noteComposerActivity();
+		speak(h, 1, "repair the cache", true);
+		activity.mockClear();
+		h.callbacks().onDelegated?.(["repair the cache"]);
+		expect(h.editor.getText()).toBe("");
+		expect(activity).not.toHaveBeenCalled();
+		await h.controller.stop();
+	});
+
 	it("removes only the spoken copy of delegated speech, never matching text the operator typed", async () => {
 		const h = createHarness();
 		await h.controller.handleCommand();
@@ -208,22 +221,22 @@ describe("LiveCommandController", () => {
 	it("routes Enter by destination: primary untouched, voice consumed, both shared, images to primary", async () => {
 		const h = createHarness();
 		const noImages = { hasImages: false };
-		expect(h.controller.routeSubmit("no call running", noImages)).toBe(false);
+		expect(h.controller.routeSubmit("no call running", noImages)).toBe("primary");
 		await h.controller.handleCommand();
 
-		expect(h.controller.routeSubmit("for the main agent", noImages)).toBe(false);
+		expect(h.controller.routeSubmit("for the main agent", noImages)).toBe("primary");
 		expect(h.sentToVoice).toEqual([]);
 
 		expect(h.controller.cycleDestination()).toBe("voice");
 		expect(h.liveStatus()).toEqual({ phase: "connecting", destination: "voice" });
-		expect(h.controller.routeSubmit("iris, what did it say", noImages)).toBe(true);
+		expect(h.controller.routeSubmit("iris, what did it say", noImages)).toBe("voice");
 		expect(h.sentToVoice).toEqual([["iris, what did it say", "voice"]]);
 		expect(h.presented).toHaveLength(1);
-		expect(h.controller.routeSubmit("look at this", { hasImages: true })).toBe(false);
+		expect(h.controller.routeSubmit("look at this", { hasImages: true })).toBe("primary");
 		expect(h.sentToVoice).toHaveLength(1);
 
 		expect(h.controller.cycleDestination()).toBe("both");
-		expect(h.controller.routeSubmit("ship it", noImages)).toBe(false);
+		expect(h.controller.routeSubmit("ship it", noImages)).toBe("primary");
 		expect(h.sentToVoice).toHaveLength(1);
 		h.controller.shareSubmit("ship it, rewritten by a hook");
 		expect(h.sentToVoice.at(-1)).toEqual(["ship it, rewritten by a hook", "both"]);

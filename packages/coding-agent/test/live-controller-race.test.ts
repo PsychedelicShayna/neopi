@@ -359,6 +359,34 @@ describe("live controller delegation ownership", () => {
 		expect(h.prompts).toEqual(["new request"]);
 	});
 
+	it("holds a composer submit while an accepted handoff has not yet retired its speech", async () => {
+		const h = makeHarness({ holdDelivery: true });
+		await h.controller.start();
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "fix the parser" } });
+		h.fireLive(delegation("dlg-accepting", "model-authored fallback"));
+		await settle();
+		// Accepted, but the controller has not yet run its acceptance continuation.
+		h.deliveries[0]!.accept();
+		expect(h.controller.retireComposerSpeech()).toBe(false);
+		await settle();
+		expect(h.controller.retireComposerSpeech()).toBe(true);
+		expect(h.prompts).toEqual(["fix the parser"]);
+	});
+
+	it("keeps a pending request when the voice agent only narrates released context", async () => {
+		// No quiet window: the crew report goes out right after the request.
+		const h = makeHarness({ speakableIdleMs: 0 });
+		await h.controller.start();
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "fix the parser" } });
+		h.fireSession(crewMessage("irc-1", "scout", "tests are green"));
+		await settle();
+		h.fireLive({ type: "output_transcript.added", item: { text: "Scout says the tests are green" } });
+		h.fireLive({ type: "turn.done", turn: { role: "assistant", transcript: "Scout says the tests are green" } });
+		h.fireLive(delegation("dlg-after-narration", "model-authored fallback"));
+		await settle();
+		expect(h.prompts).toEqual(["fix the parser"]);
+	});
+
 	it("cancels a handoff still waiting on its speech when the operator submits the composer", async () => {
 		const h = makeHarness();
 		await h.controller.start();

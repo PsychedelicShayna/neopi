@@ -134,7 +134,8 @@ function createContext(sessionOverride?: InteractiveModeContext["session"]) {
 		// No input waiter: the state under test.
 		onInputCallback: undefined,
 		updatePendingMessagesDisplay,
-		routeLiveSubmit: vi.fn(() => false),
+		routeLiveSubmit: vi.fn(() => "primary"),
+		discardLiveSpeech: vi.fn(),
 		shareLiveSubmit: vi.fn(),
 		noteLiveComposerActivity: vi.fn(),
 		flushPendingBashComponents,

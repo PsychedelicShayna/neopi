@@ -46,6 +46,7 @@ import type { ToolExecutionHandle } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import type { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import type { RecentSession } from "@oh-my-pi/pi-tui/prompt/welcome";
 import type { EventController } from "./controllers/event-controller";
+import type { LiveSubmitRoute } from "./controllers/live-command-controller";
 import type { LoopConditionConfig, LoopLimitRuntime } from "@oh-my-pi/pi-tui/status-line/loop";
 import type { OAuthManualInputManager } from "./oauth-manual-input";
 import type { Theme } from "@oh-my-pi/pi-tui/theme";
@@ -462,7 +463,9 @@ export interface InteractiveModeContext {
 	/** Cycle where Enter sends composer text during a live call (primary / voice / both). */
 	handleLiveDestinationCycle(): void;
 	/** Route submitted text by the live input destination; true when the voice agent consumed it. */
-	routeLiveSubmit(text: string, options: { hasImages: boolean }): boolean;
+	routeLiveSubmit(text: string, options: { hasImages: boolean }): LiveSubmitRoute;
+	/** The operator cleared the composer during a live call; its speech must not be handed off. */
+	discardLiveSpeech(): void;
 	/** Share text the main agent is about to receive with the voice agent when the destination is `both`. */
 	shareLiveSubmit(text: string): void;
 	/** Report a composer edit to an active live call so voice-triggering context waits for it to settle. */
