@@ -179,12 +179,11 @@ export class SessionChronicler {
 
 	constructor(host: SessionChroniclerHost) {
 		this.#host = host;
-		const unsubEnabled = cfgChroniclerEnabled.listen(host.settings, () => this.#onSettingChange());
-		const unsubRoles = cfgModelRoles.listen(host.settings, () => this.#onSettingChange());
-		this.#settingsUnsub = () => {
-			unsubEnabled();
-			unsubRoles();
-		};
+		// Synchronous (not the microtask-coalesced Setting.listen): a disable must revoke an
+		// in-flight publication before the caller's next await.
+		this.#settingsUnsub = host.settings.onEffectiveChange([cfgChroniclerEnabled, cfgModelRoles], () =>
+			this.#onSettingChange(),
+		);
 		// An idle resumed on-disk session must catch up its backlog without
 		// requiring another user turn, so scan once at construction.
 		this.#scheduleWake(true);
