@@ -3156,19 +3156,19 @@ async function executeToolCalls(
 				steeringInterruptMode = state.interruptMode ?? interruptMode;
 			}
 		}
-		if (steeringQueued) {
-			// Queued steering hard-aborts only interruptible waits and (unless the
-			// message's own interrupt mode, or the loop default, is "wait") raises
-			// the cooperative soft signal for everything else: the boundary dequeue
-			// below injects the message as soon as running tools finish (or
-			// background themselves), and not-yet-started interruptible waits
-			// are skipped. Idempotent — a second steer poll after the abort is
-			// a no-op.
+		if (steeringQueued && steeringInterruptMode === "immediate") {
+			// Only an immediate steer interrupts mid-batch: it hard-aborts interruptible
+			// waits and raises the cooperative soft signal for everything else, and the
+			// boundary dequeue below injects it as soon as running tools finish (or
+			// background themselves). A "wait" steer — the message's own mode (e.g. an
+			// advisor concern) or the loop default — interrupts nothing, not even an
+			// interruptible wait; it injects when the batch finishes. Idempotent — a
+			// second steer poll after the abort is a no-op.
 			if (!steeringAbortController.signal.aborted) {
 				interruptState.triggered = true;
 				interruptState.source = steeringSource ?? "unknown";
 				steeringAbortController.abort(TOOL_INTERRUPT_ABORT_REASON);
-				if (steeringInterruptMode !== "wait") steeringSoftController.abort();
+				steeringSoftController.abort();
 			}
 			return;
 		}
