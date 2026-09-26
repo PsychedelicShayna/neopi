@@ -56,7 +56,8 @@ function startupMarker(text) {
  }
 }
 
-function getNativesDir() {
+/** Where extracted addons live; install.sh prunes this same directory. */
+export function getNativesDir() {
  const xdgDataHome = process.env.XDG_DATA_HOME;
  if (xdgDataHome && fs.existsSync(path.join(xdgDataHome, "omp"))) {
   return path.join(xdgDataHome, "omp", "natives");
@@ -476,6 +477,62 @@ function isSafeEmbeddedAddonFilename(filename) {
  return filename.length > 0 && path.basename(filename) === filename && !filename.includes("/") && !filename.includes("\\");
 }
 
+/**
+ * Where an embedded addon is extracted. With a known content hash the filename
+ * carries it, so every build of one release (a fork ships many under a single
+ * upstream version) extracts to its own immutable file: no other binary can
+ * replace or remove it between the check and the load. These files are never
+ * pruned individually; they go with the version directory. Without a hash, the
+ * canonical name.
+ * @param {string} dir
+ * @param {{ filename: string, sha256?: string }} file
+ * @returns {string}
+ */
+function embeddedAddonTargetPath(dir, file) {
+ if (typeof file.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(file.sha256)) return path.join(dir, file.filename);
+ const ext = path.extname(file.filename);
+ return path.join(dir, `${file.filename.slice(0, file.filename.length - ext.length)}.${file.sha256.slice(0, 16)}${ext}`);
+}
+
+/**
+ * Mark a reused extracted addon as just selected. install.sh prunes other builds'
+ * addons but spares any selected in the last few minutes, so this keeps the file
+ * this process is about to load. Best effort.
+ * @param {string} targetPath
+ */
+function markEmbeddedAddonSelected(targetPath) {
+ try {
+  const now = new Date();
+  fs.utimesSync(targetPath, now, now);
+ } catch {
+  // A read-only cache still loads; it just loses the pruning grace period.
+ }
+}
+
+/**
+ * For a compiled binary with embedded addons, whether `candidate` holds the bytes embedded for
+ * its filename; other binaries accept every candidate. Hashes only on this fallback path.
+ * @param {{ isCompiledBinary: boolean; platformTag: string; packageVersion: string }} ctx
+ * @param {string} candidate
+ * @param {string[]} errors
+ * @returns {boolean}
+ */
+function embeddedBytesMatch(ctx, candidate, errors) {
+ if (!ctx.isCompiledBinary || !embeddedAddon) return true;
+ if (embeddedAddon.platformTag !== ctx.platformTag || embeddedAddon.version !== ctx.packageVersion) return true;
+ const file = embeddedAddon.files.find(entry => entry.filename === path.basename(candidate));
+ if (typeof file?.sha256 !== "string") return true;
+ let actual;
+ try {
+  actual = new Bun.CryptoHasher("sha256").update(fs.readFileSync(candidate)).digest("hex");
+ } catch {
+  return false;
+ }
+ if (actual === file.sha256) return true;
+ errors.push(`${candidate}: not this binary's embedded addon (sha256 mismatch); skipped`);
+ return false;
+}
+
 function isEmbeddedAddonFileCurrent(targetPath, file) {
  try {
   const stat = fs.statSync(targetPath);
@@ -494,9 +551,9 @@ function writeEmbeddedAddonFile(targetPath, content) {
   fs.renameSync(tempPath, targetPath);
  } catch (err) {
   try {
-   fs.unlinkSync(tempPath);
+   fs.rmSync(tempPath, { force: true });
   } catch {
-   // Best-effort cleanup only.
+   // Best effort cleanup; preserve the original write error.
   }
   throw err;
  }
@@ -508,7 +565,7 @@ export function extractEmbeddedAddonArchive({ archivePath, files, targetDir }) {
   if (!isSafeEmbeddedAddonFilename(file.filename)) {
    throw new Error(`Unsafe embedded addon filename: ${file.filename}`);
   }
-  const targetPath = path.join(targetDir, file.filename);
+  const targetPath = embeddedAddonTargetPath(targetDir, file);
   if (!isEmbeddedAddonFileCurrent(targetPath, file)) {
    pending.set(file.filename, file);
   }
@@ -543,7 +600,7 @@ export function extractEmbeddedAddonArchive({ archivePath, files, targetDir }) {
    if (typeof file.size === "number" && file.size !== size) {
     throw new Error(`Embedded addon size mismatch for ${filename}: expected ${file.size}, got ${size}`);
    }
-   const targetPath = path.join(targetDir, filename);
+   const targetPath = embeddedAddonTargetPath(targetDir, file);
    writeEmbeddedAddonFile(targetPath, archive.subarray(offset, offset + size));
    pending.delete(filename);
    writtenPaths.push(targetPath);
@@ -565,7 +622,7 @@ function maybeExtractEmbeddedAddon(ctx, errors) {
 
  const selectedEmbeddedFile = selectEmbeddedAddonFile(ctx.selectedVariant);
  if (!selectedEmbeddedFile) return null;
- const targetPath = path.join(ctx.versionedDir, selectedEmbeddedFile.filename);
+ const targetPath = embeddedAddonTargetPath(ctx.versionedDir, selectedEmbeddedFile);
 
  startupMarker("native:extractEmbeddedAddon:start");
  try {
@@ -584,6 +641,7 @@ function maybeExtractEmbeddedAddon(ctx, errors) {
     targetDir: ctx.versionedDir,
    });
    if (isEmbeddedAddonFileCurrent(targetPath, selectedEmbeddedFile)) {
+    markEmbeddedAddonSelected(targetPath);
     return targetPath;
    }
    errors.push(`embedded addon archive (${embeddedAddon.archive.filename}): missing ${selectedEmbeddedFile.filename}`);
@@ -596,6 +654,7 @@ function maybeExtractEmbeddedAddon(ctx, errors) {
  }
 
  if (isEmbeddedAddonFileCurrent(targetPath, selectedEmbeddedFile)) {
+  markEmbeddedAddonSelected(targetPath);
   return targetPath;
  }
  if (!selectedEmbeddedFile.filePath) {
@@ -604,8 +663,7 @@ function maybeExtractEmbeddedAddon(ctx, errors) {
  }
 
  try {
-  const buffer = fs.readFileSync(selectedEmbeddedFile.filePath);
-  fs.writeFileSync(targetPath, buffer);
+  writeEmbeddedAddonFile(targetPath, fs.readFileSync(selectedEmbeddedFile.filePath));
   return targetPath;
  } catch (err) {
   const message = err instanceof Error ? err.message : String(err);
@@ -963,9 +1021,17 @@ export function loadNative() {
  const embeddedCandidate = maybeExtractEmbeddedAddon(ctx, errors);
  const stagedCandidate = embeddedCandidate ? null : maybeStageNodeModulesAddon(ctx, errors);
  const prepended = [embeddedCandidate, stagedCandidate].filter(c => typeof c === "string");
- const runtimeCandidates = prepended.length > 0 ? [...prepended, ...ctx.candidates] : ctx.candidates;
+ const runtimeCandidates = prepended.length > 0 ? [...prepended, ...ctx.candidates] : [...ctx.candidates];
+ /** Paths this process extracted from its own embedded archive. */
+ const extracted = new Set(prepended);
+ let reextracted = false;
 
- for (const candidate of runtimeCandidates) {
+ for (let index = 0; index < runtimeCandidates.length; index++) {
+  const candidate = runtimeCandidates[index];
+  // A compiled binary falls back only to files holding exactly its embedded bytes: another
+  // build of this release carries the same version sentinel. Checked lazily, so the hash runs
+  // only once the binary's own addon has failed.
+  if (!extracted.has(candidate) && !embeddedBytesMatch(ctx, candidate, errors)) continue;
   try {
    startupMarker(`native:require:${path.basename(candidate)}`);
    const bindings = require_(candidate);
@@ -978,6 +1044,16 @@ export function loadNative() {
   } catch (err) {
    const message = err instanceof Error ? err.message : String(err);
    errors.push(`${candidate}: ${message}`);
+   // install.sh of another build may prune the selected file between selection and load:
+   // extract this build's addon again, once, and try it next.
+   if (candidate === embeddedCandidate && !reextracted && !fs.existsSync(candidate)) {
+    reextracted = true;
+    const again = maybeExtractEmbeddedAddon(ctx, errors);
+    if (again) {
+     extracted.add(again);
+     runtimeCandidates.splice(index + 1, 0, again);
+    }
+   }
   }
  }
 

@@ -15,6 +15,7 @@ const embeddedAddonTypedefs = `/** @typedef {"modern" | "baseline" | "default"} 
  * @property {EmbeddedAddonVariant} variant
  * @property {string} filename
  * @property {number} size
+ * @property {string=} sha256
  * @property {string=} filePath
  */
 
@@ -64,6 +65,7 @@ interface CandidateAddon {
 interface AvailableAddon extends CandidateAddon {
 	path: string;
 	size: number;
+	sha256?: string;
 }
 
 /**
@@ -120,13 +122,14 @@ export async function embedNativeAddon({
 			);
 		}
 		archiveEntries[addon.filename] = bytes;
+		addon.sha256 = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
 	}
 	await Bun.write(archivePath, await new Bun.Archive(archiveEntries, { compress: "gzip", level: 9 }).bytes());
 
 	const files = available
 		.map(
 			addon =>
-				`\t\t{ variant: ${JSON.stringify(addon.variant)}, filename: ${JSON.stringify(addon.filename)}, size: ${addon.size} },`,
+				`\t\t{ variant: ${JSON.stringify(addon.variant)}, filename: ${JSON.stringify(addon.filename)}, size: ${addon.size}, sha256: ${JSON.stringify(addon.sha256)} },`,
 		)
 		.join("\n");
 

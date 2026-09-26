@@ -2,6 +2,8 @@ export interface EmbeddedAddonFile {
 	variant: "modern" | "baseline" | "default";
 	filename: string;
 	size?: number;
+	/** Content hash; extraction stamps the cached copy with it so a same-size rebuild is re-extracted. */
+	sha256?: string;
 	filePath?: string;
 }
 
@@ -25,6 +27,9 @@ export interface DetectCompiledBinaryInput {
 }
 
 export function detectCompiledBinary(input: DetectCompiledBinaryInput): boolean;
+
+/** Where extracted addons live (the loader's resolver; install.sh prunes it). */
+export function getNativesDir(): string;
 
 
 export interface GetAddonFilenamesInput {

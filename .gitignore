@@ -11,6 +11,7 @@ target/
 .xwin-cache/
 *.tsbuildinfo
 *.node
+*.node.stamp
 *.b64.js
 /result
 /result-*

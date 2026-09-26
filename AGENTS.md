@@ -318,6 +318,11 @@ For the bash tool specifically:
 - **Cargo parallelism**: always pass `-j 6` to cargo builds (e.g. `cargo build -j 6`,
   `bun run build:native` should use `CARGO_BUILD_JOBS=6`). The machine has 20 cores;
   unbounded cargo eats all of them and starves the session.
+- **Building and installing `npi`**: `./build.sh` then `./install.sh` at the repo root. Never
+  assemble the binary from individual `bun run` commands: every upstream version bump
+  invalidates the gitignored native addon in each checkout, and only `build.sh` detects and
+  rebuilds it. Stage installs with `NPI_DEST=<temp>/bin/npi PI_CODING_AGENT_DIR=<temp>/agent`.
+  The scripts are Linux-only; README.md "Install from source" gives the macOS path.
 
 ## Rust Build Profiles
 
