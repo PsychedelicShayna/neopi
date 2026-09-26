@@ -39,8 +39,7 @@ export const cfgLspShared = register({
 		tab: "files",
 		group: "LSP",
 		label: "Shared Language Servers",
-		description:
-			`Share one language server per project across ${APP_NAME} instances via the daemon broker (falls back to private servers when unavailable)`,
+		description: `Share one language server per project across ${APP_NAME} instances via the daemon broker (falls back to private servers when unavailable)`,
 	},
 });
 

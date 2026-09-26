@@ -53,8 +53,7 @@ export const cfgCollabAutoStart = register({
 		tab: "interaction",
 		group: "Collab",
 		label: "Auto Start",
-		description:
-			`Host every interactive session via collab.relayUrl as it starts and publish it to the local registry (${APP_NAME} collab list); rooms rotate on session switch`,
+		description: `Host every interactive session via collab.relayUrl as it starts and publish it to the local registry (${APP_NAME} collab list); rooms rotate on session switch`,
 		options: [
 			{ value: "off", label: "Off", description: "Share only when /collab is run" },
 			{

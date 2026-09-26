@@ -17,8 +17,7 @@ export const cfgStreamServerUrl = register({
 		tab: "interaction",
 		group: "Stream",
 		label: "Stream Server",
-		description:
-			`Live stream server used by \`${APP_NAME} stream\` (https://host[:port]); viewers watch at <base>/<your Stencil username>`,
+		description: `Live stream server used by \`${APP_NAME} stream\` (https://host[:port]); viewers watch at <base>/<your Stencil username>`,
 	},
 });
 

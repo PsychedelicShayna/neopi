@@ -747,8 +747,7 @@ export const cfgSecurityEnabled = register({
 		tab: "tools",
 		group: "Available Tools",
 		label: "Security",
-		description:
-			`Enable ${PRODUCT_NAME}-native security scan planning, execution, and the read-only security:// resource namespace`,
+		description: `Enable ${PRODUCT_NAME}-native security scan planning, execution, and the read-only security:// resource namespace`,
 	},
 });
 

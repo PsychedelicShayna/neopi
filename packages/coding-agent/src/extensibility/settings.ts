@@ -21,8 +21,7 @@ export const cfgSkillsRegistryUrl = register({
 		tab: "interaction",
 		group: "Skills",
 		label: "Skill Registry",
-		description:
-			`Skillshare registry used by \`${APP_NAME} skill\` to install, search, and publish skills (https://host[:port])`,
+		description: `Skillshare registry used by \`${APP_NAME} skill\` to install, search, and publish skills (https://host[:port])`,
 	},
 });
 
@@ -157,7 +156,6 @@ export const cfgExtensionHandlersToolCallTimeoutMs = register({
 		tab: "tools",
 		group: "Extensions",
 		label: "Tool Call Handler Timeout (ms)",
-		description:
-			`Positive finite active-work timeout for extension tool_call handlers; invalid values use 30000ms, and time awaiting ${PRODUCT_NAME}-owned dialogs does not count`,
+		description: `Positive finite active-work timeout for extension tool_call handlers; invalid values use 30000ms, and time awaiting ${PRODUCT_NAME}-owned dialogs does not count`,
 	},
 });

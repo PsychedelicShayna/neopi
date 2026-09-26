@@ -38,8 +38,7 @@ export const cfgBrowserRelay = register({
 		tab: "tools",
 		group: "Grep & Browser",
 		label: "Browser Relay",
-		description:
-			`Drive your own Chrome tabs through the ${PRODUCT_NAME} browser relay. Install the extension once (\`${APP_NAME} browser-relay install\`); the relay server auto-starts when the browser prelude needs it. Takes precedence over Browser CDP URL; set PI_BROWSER_RELAY=0 or PI_BROWSER_RELAY=1 to override.`,
+		description: `Drive your own Chrome tabs through the ${PRODUCT_NAME} browser relay. Install the extension once (\`${APP_NAME} browser-relay install\`); the relay server auto-starts when the browser prelude needs it. Takes precedence over Browser CDP URL; set PI_BROWSER_RELAY=0 or PI_BROWSER_RELAY=1 to override.`,
 	},
 });
 
@@ -88,8 +87,7 @@ export const cfgBrowserFreezeOnTurnEnd = register({
 		tab: "tools",
 		group: "Grep & Browser",
 		label: "Freeze Browser Tabs On Turn End",
-		description:
-			`Freeze ${PRODUCT_NAME}-owned headless browser tabs when a turn settles so animated pages stop burning CPU/GPU while idle. Tabs unfreeze automatically on next use; pass persist:true on open to opt a tab out.`,
+		description: `Freeze ${PRODUCT_NAME}-owned headless browser tabs when a turn settles so animated pages stop burning CPU/GPU while idle. Tabs unfreeze automatically on next use; pass persist:true on open to opt a tab out.`,
 	},
 });
 
@@ -101,8 +99,7 @@ export const cfgBrowserIdleCloseSec = register({
 		tab: "tools",
 		group: "Grep & Browser",
 		label: "Browser Idle Close Timeout",
-		description:
-			`Close ${PRODUCT_NAME}-owned headless browser tabs idle longer than this many seconds (0 = never; session dispose still reaps). Applies only to ${PRODUCT_NAME}-launched headless tabs, never relay/CDP/spawned browsers or other sessions' tabs.`,
+		description: `Close ${PRODUCT_NAME}-owned headless browser tabs idle longer than this many seconds (0 = never; session dispose still reaps). Applies only to ${PRODUCT_NAME}-launched headless tabs, never relay/CDP/spawned browsers or other sessions' tabs.`,
 		options: [
 			{ value: "0", label: "Never" },
 			{ value: "900", label: "15 minutes" },

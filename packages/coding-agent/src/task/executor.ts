@@ -3403,7 +3403,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		onProgress,
 	} = options;
 	const providedSettings = options.settings;
-	const modelOverride = explicitModelOverride ?? (providedSettings ? cfgTaskAgentModelOverrides.get(providedSettings)[agent.name] : undefined);
+	const modelOverride =
+		explicitModelOverride ??
+		(providedSettings ? cfgTaskAgentModelOverrides.get(providedSettings)[agent.name] : undefined);
 	const cleanupGraceMs = options.cleanupGraceMs ?? TASK_ABORT_CLEANUP_GRACE_MS;
 	const startTime = Date.now();
 	// Set by the session's onFirstChatDispatch hook the first time the agent
@@ -3439,7 +3441,11 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	if (externalAdapter) {
 		const maxRuntimeMs = Math.max(
 			0,
-			Math.trunc(Number(options.maxRuntimeMs ?? (providedSettings ? cfgTaskMaxRuntimeMs.get(providedSettings) : undefined) ?? 0) || 0),
+			Math.trunc(
+				Number(
+					options.maxRuntimeMs ?? (providedSettings ? cfgTaskMaxRuntimeMs.get(providedSettings) : undefined) ?? 0,
+				) || 0,
+			),
 		);
 		const deadlineAt = maxRuntimeMs > 0 ? Date.now() + maxRuntimeMs : undefined;
 		const deadlineController = new AbortController();

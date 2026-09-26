@@ -110,11 +110,7 @@ import type { SessionManager } from "./session-manager";
 import { buildSessionMetadata } from "./session-metadata";
 import type { YieldQueue } from "./yield-queue";
 
-import {
-	cfgAdvisorEvictStaleResults,
-	cfgAdvisorMaxNotesPerUpdate,
-	cfgAdvisorSyncBacklog,
-} from "../advisor/settings";
+import { cfgAdvisorEvictStaleResults, cfgAdvisorMaxNotesPerUpdate, cfgAdvisorSyncBacklog } from "../advisor/settings";
 import { cfgCompaction, cfgContextPromotionEnabled } from "./context-settings";
 import { cfgRetry, cfgTierAdvisor } from "./settings";
 
