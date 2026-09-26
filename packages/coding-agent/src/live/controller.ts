@@ -53,8 +53,9 @@ export interface LiveSessionCallbacks {
 	onTranscript(transcript: LiveTranscript | undefined): void;
 	/** Reports one terminal stop, optionally carrying its cause. */
 	onTerminal(error?: Error): void;
-	/** Reports operator utterances the primary agent accepted through a voice handoff. */
-	onDelegated?(texts: readonly string[]): void;
+	/** Reports the ledger turns (as numbered by {@link onUserSpeech}) the primary agent accepted
+	 *  through a voice handoff. */
+	onDelegated?(turns: readonly number[]): void;
 	/** Reports each update to an operator turn exactly as the handoff ledger records it: every
 	 *  turn, repeats included, with the final text authoritative. Composer input follows this,
 	 *  not the coalesced display transcript. */
@@ -357,8 +358,8 @@ export class LiveSessionController {
 		// that case retire its speech from the composer now, while the caller still listens.
 		const pending = this.#pendingDelegation;
 		if (pending?.dispatching && this.#pendingDelivery && !this.#pendingDelivery.cancel()) {
-			const texts = this.#userTurnLedger.filter(turn => turn.claim === pending.generation).map(turn => turn.text);
-			if (texts.length > 0) this.#emitDelegated(texts);
+			const turns = this.#userTurnLedger.filter(turn => turn.claim === pending.generation).map(turn => turn.turn);
+			if (turns.length > 0) this.#emitDelegated(turns);
 		} else {
 			this.#pendingDelivery?.cancel();
 		}
@@ -555,7 +556,7 @@ export class LiveSessionController {
 			this.#activeDelegationId = pending.id;
 			this.#lastRelayedResponse = undefined;
 			this.#thinkingRelayedLength = 0;
-			this.#emitDelegated(turns.map(turn => turn.text));
+			this.#emitDelegated(turns.map(turn => turn.turn));
 			await delivery.completed;
 		} catch (cause) {
 			// A newer delegation barging in aborts this turn mid-await; that
@@ -1125,9 +1126,9 @@ export class LiveSessionController {
 		}
 	}
 
-	#emitDelegated(texts: readonly string[]): void {
+	#emitDelegated(turns: readonly number[]): void {
 		try {
-			this.#callbacks.onDelegated?.(texts);
+			this.#callbacks.onDelegated?.(turns);
 		} catch (cause) {
 			this.#reportFailure(errorFrom(cause));
 		}

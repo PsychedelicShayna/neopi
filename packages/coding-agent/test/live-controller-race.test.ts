@@ -103,7 +103,7 @@ interface Harness {
 	prompts: string[];
 	deliveries: DeliveryControl[];
 	speech: Array<{ turn: number; text: string; final: boolean }>;
-	delegated: string[][];
+	delegated: number[][];
 	fireLive(event: LiveServerEvent): void;
 	fireSession(event: AgentSessionEvent): void;
 	setStreaming(value: boolean): void;
@@ -120,7 +120,7 @@ function makeHarness(options?: {
 	const aborts: Array<Record<string, unknown>> = [];
 	const prompts: string[] = [];
 	const speech: Harness["speech"] = [];
-	const delegated: string[][] = [];
+	const delegated: number[][] = [];
 	const abortGates: Array<{ promise: Promise<void>; resolve: () => void }> = [];
 	const deliveries: Harness["deliveries"] = [];
 	let streaming = false;
@@ -433,7 +433,7 @@ describe("live controller delegation ownership", () => {
 		h.deliveries[0]!.accept();
 		await h.controller.stop();
 		expect(h.prompts).toEqual(["fix the parser"]);
-		expect(h.delegated).toContainEqual(["fix the parser"]);
+		expect(h.delegated).toContainEqual([1]);
 	});
 
 	it("does not relay a later turn as the answer to a shared prompt a delegation already answered", async () => {

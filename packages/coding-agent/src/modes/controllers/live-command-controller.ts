@@ -46,11 +46,6 @@ interface ComposerUtterance {
 	text: string;
 }
 
-/** Collapse whitespace so a delegated ledger turn matches the transcript typed for it. */
-function speechKey(text: string): string {
-	return text.replace(/\s+/g, " ").trim();
-}
-
 /**
  * Owns the realtime session lifecycle for `/live`. The ordinary composer stays mounted
  * and focused: operator speech types into it like hold-space dictation (a volatile
@@ -65,7 +60,8 @@ export class LiveCommandController {
 	#settling: Promise<void> | undefined;
 	#utterance: ComposerUtterance | undefined;
 	/** Utterances committed into the draft, by editor utterance id, for removal on handoff. */
-	#committed: Array<{ id: number; key: string }> = [];
+	/** Editor utterance id of each ledger turn committed into the draft, for removal on handoff. */
+	#committed = new Map<number, number>();
 	/** Set while the controller itself edits the draft, so those edits are not operator activity. */
 	#editing = false;
 	#phase: LivePhase | undefined;
@@ -134,7 +130,7 @@ export class LiveCommandController {
 		const session = this.#session;
 		if (!session) return "primary";
 		if (!session.retireComposerSpeech()) return "held";
-		this.#committed = [];
+		this.#committed.clear();
 		if (this.#destination !== "voice" || options.hasImages) return "primary";
 		session.sendOperatorText(text, "voice");
 		const component = new UserMessageComponent(text);
@@ -150,7 +146,7 @@ export class LiveCommandController {
 	 */
 	discardSpeech(): boolean {
 		const settled = this.#session?.retireComposerSpeech() ?? true;
-		if (settled) this.#committed = [];
+		if (settled) this.#committed.clear();
 		return settled;
 	}
 
@@ -196,7 +192,7 @@ export class LiveCommandController {
 		this.#destination = "primary";
 		this.#showPhase("connecting");
 		this.#utterance = undefined;
-		this.#committed = [];
+		this.#committed.clear();
 		this.#resumeVocalizer = vocalizer.suspend();
 
 		const options: LiveSessionControllerOptions = {
@@ -217,9 +213,9 @@ export class LiveCommandController {
 					if (this.#session !== session) return;
 					this.#typeUserTranscript(speech);
 				},
-				onDelegated: texts => {
+				onDelegated: turns => {
 					if (this.#session !== session) return;
-					this.#removeDelegated(texts);
+					this.#removeDelegated(turns);
 				},
 				onTerminal: error => this.#finish(session, error),
 			},
@@ -267,7 +263,7 @@ export class LiveCommandController {
 
 	#commitUtterance(utterance: ComposerUtterance, text: string): void {
 		const id = this.#ctx.editor.commitVolatileText(`${utterance.prefix}${text}${this.#separator("after")}`);
-		if (id !== undefined && text) this.#committed.push({ id, key: speechKey(text) });
+		if (id !== undefined && text) this.#committed.set(utterance.turn, id);
 	}
 
 	/** A space when the character on that side of the cursor would otherwise touch the speech. */
@@ -279,15 +275,14 @@ export class LiveCommandController {
 		return neighbour && !/\s/.test(neighbour) ? " " : "";
 	}
 
-	/** Remove utterances the primary agent accepted through a voice handoff, newest match first. */
-	#removeDelegated(texts: readonly string[]): void {
+	/** Remove the utterances of the turns the primary agent accepted through a voice handoff. */
+	#removeDelegated(turns: readonly number[]): void {
 		const ids: number[] = [];
-		for (const text of texts) {
-			const key = speechKey(text);
-			const index = this.#committed.findLastIndex(entry => entry.key === key);
-			if (index === -1) continue;
-			ids.push(this.#committed[index]!.id);
-			this.#committed.splice(index, 1);
+		for (const turn of turns) {
+			const id = this.#committed.get(turn);
+			if (id === undefined) continue;
+			ids.push(id);
+			this.#committed.delete(turn);
 		}
 		if (ids.length === 0) return;
 		this.#editing = true;
@@ -373,7 +368,7 @@ export class LiveCommandController {
 		const utterance = this.#utterance;
 		this.#utterance = undefined;
 		if (utterance) this.#commitUtterance(utterance, utterance.text);
-		this.#committed = [];
+		this.#committed.clear();
 		this.#showPhase(undefined);
 		this.#resumeVocalizer?.();
 		this.#resumeVocalizer = undefined;

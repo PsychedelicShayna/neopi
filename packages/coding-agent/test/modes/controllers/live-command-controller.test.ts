@@ -176,7 +176,7 @@ describe("LiveCommandController", () => {
 		speak(h, 1, "repair the cache", true);
 		expect(h.editor.getText()).toBe("note: repair the cache");
 
-		h.callbacks().onDelegated?.(["repair the cache"]);
+		h.callbacks().onDelegated?.([1]);
 		expect(h.editor.getText()).toBe("note:");
 		h.editor.handleInput(UNDO);
 		expect(h.editor.getText()).toBe("note: repair the cache");
@@ -190,9 +190,22 @@ describe("LiveCommandController", () => {
 		h.editor.onChange = () => h.controller.noteComposerActivity();
 		speak(h, 1, "repair the cache", true);
 		activity.mockClear();
-		h.callbacks().onDelegated?.(["repair the cache"]);
+		h.callbacks().onDelegated?.([1]);
 		expect(h.editor.getText()).toBe("");
 		expect(activity).not.toHaveBeenCalled();
+		await h.controller.stop();
+	});
+
+	it("removes the delegated turn's speech, not a later identical utterance", async () => {
+		const h = createHarness();
+		await h.controller.handleCommand();
+		speak(h, 1, "run it", true);
+		speak(h, 2, "run it", true);
+		expect(h.editor.getText()).toBe("run it run it");
+		h.callbacks().onDelegated?.([1]);
+		expect(h.editor.getText()).toBe("run it");
+		h.callbacks().onDelegated?.([2]);
+		expect(h.editor.getText()).toBe("");
 		await h.controller.stop();
 	});
 
@@ -201,7 +214,7 @@ describe("LiveCommandController", () => {
 		await h.controller.handleCommand();
 		speak(h, 1, "fix it", true);
 		h.editor.insertText(" then fix it");
-		h.callbacks().onDelegated?.(["fix it"]);
+		h.callbacks().onDelegated?.([1]);
 		expect(h.editor.getText()).toBe("then fix it");
 		await h.controller.stop();
 	});
