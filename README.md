@@ -62,6 +62,7 @@ bun install --frozen-lockfile
 ```sh
 CARGO_BUILD_JOBS=6 bun --cwd=packages/natives run build   # first, and after every version bump
 OMP_BUILD_BYTECODE=0 NPI_SKIP_EXTENSION_INSTALL=1 bun --cwd=packages/coding-agent run build
+mkdir -p ~/.local/bin
 cp packages/coding-agent/dist/npi ~/.local/bin/npi        # a dedicated npi path
 bun scripts/install-neopi-extensions.ts
 ```

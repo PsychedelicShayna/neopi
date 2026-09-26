@@ -73,7 +73,9 @@ native_inputs() {
 		BUILD.bazel MODULE.bazel MODULE.bazel.lock .bazelrc .bazelversion bazel
 	)
 	printf '%s\n' "$version" "$addon_name" "${RUSTFLAGS:-}" "${CARGO_ENCODED_RUSTFLAGS:-}" \
-		"${OMP_NATIVE_CARGO_PROFILE:-}" "${OMP_NATIVE_BUILD_BACKEND:-}"
+		"${OMP_NATIVE_CARGO_PROFILE:-}" "${OMP_NATIVE_BUILD_BACKEND:-}" "${RUSTC_LINKER:-}"
+	# Target linkers reach the embedded relay's rustc through crates/pi-natives/build.rs.
+	env | grep -E '^CARGO_TARGET_[A-Z0-9_]+_LINKER=' | sort || true
 	git rev-parse "${paths[@]/#/HEAD:}"
 	git diff --no-ext-diff --no-textconv --no-color --binary HEAD -- "${paths[@]}"
 	untracked_digest "${paths[@]}"
