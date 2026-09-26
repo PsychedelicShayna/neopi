@@ -113,10 +113,8 @@ describe("LiveCommandController", () => {
 
 		speak(h, 1, "hello wor", false);
 		expect(h.editor.getText()).toBe("context: hello wor");
-		expect(h.editor.hasVolatileText).toBe(true);
 		speak(h, 1, "hello world", true);
 		expect(h.editor.getText()).toBe("context: hello world");
-		expect(h.editor.hasVolatileText).toBe(false);
 		speak(h, 2, "and more", true);
 		expect(h.editor.getText()).toBe("context: hello world and more");
 
@@ -132,9 +130,31 @@ describe("LiveCommandController", () => {
 		speak(h, 1, "hello wor", false);
 		h.editor.insertText("!");
 		speak(h, 1, "hello world", false);
-		expect(h.editor.getText()).toBe("hello wor!");
+		expect(h.editor.getText()).toBe("hello wor!ld");
 		speak(h, 1, "hello world", true);
 		expect(h.editor.getText()).toBe("hello wor!ld");
+		await h.controller.stop();
+	});
+
+	it("drops the rest of an utterance whose preview the operator cleared", async () => {
+		const h = createHarness();
+		await h.controller.handleCommand();
+		speak(h, 1, "hello wor", false);
+		h.editor.setText("");
+		speak(h, 1, "hello world", true);
+		expect(h.editor.getText()).toBe("");
+		speak(h, 2, "fresh start", true);
+		expect(h.editor.getText()).toBe("fresh start");
+		await h.controller.stop();
+	});
+
+	it("spaces speech by the characters around the cursor, not the end of the draft", async () => {
+		const h = createHarness();
+		h.editor.insertText("tail");
+		h.editor.handleInput("\x1b[H");
+		await h.controller.handleCommand();
+		speak(h, 1, "head", true);
+		expect(h.editor.getText()).toBe("head tail");
 		await h.controller.stop();
 	});
 
@@ -152,13 +172,22 @@ describe("LiveCommandController", () => {
 		await h.controller.stop();
 	});
 
+	it("removes only the spoken copy of delegated speech, never matching text the operator typed", async () => {
+		const h = createHarness();
+		await h.controller.handleCommand();
+		speak(h, 1, "fix it", true);
+		h.editor.insertText(" then fix it");
+		h.callbacks().onDelegated?.(["fix it"]);
+		expect(h.editor.getText()).toBe("then fix it");
+		await h.controller.stop();
+	});
+
 	it("keeps an unfinished utterance as draft text when the call ends", async () => {
 		const h = createHarness();
 		await h.controller.handleCommand();
 		speak(h, 1, "half a thou", false);
 		await h.controller.stop();
 		expect(h.editor.getText()).toBe("half a thou");
-		expect(h.editor.hasVolatileText).toBe(false);
 	});
 
 	it("mirrors the call phase into the status line and leaves it disconnected after a failure", async () => {
@@ -195,7 +224,9 @@ describe("LiveCommandController", () => {
 
 		expect(h.controller.cycleDestination()).toBe("both");
 		expect(h.controller.routeSubmit("ship it", noImages)).toBe(false);
-		expect(h.sentToVoice.at(-1)).toEqual(["ship it", "both"]);
+		expect(h.sentToVoice).toHaveLength(1);
+		h.controller.shareSubmit("ship it, rewritten by a hook");
+		expect(h.sentToVoice.at(-1)).toEqual(["ship it, rewritten by a hook", "both"]);
 
 		expect(h.controller.cycleDestination()).toBe("primary");
 		await h.controller.stop();

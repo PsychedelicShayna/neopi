@@ -1018,6 +1018,8 @@ export class InputController {
 			}
 
 			if (!text && !hasInputImages) return;
+			// Input hooks have settled what the main agent receives; share that, not the raw draft.
+			if (!/^[/!$]/.test(text)) this.ctx.shareLiveSubmit(text);
 
 			const queueBody = parseQueueShorthand(text);
 			if (queueBody !== undefined) {

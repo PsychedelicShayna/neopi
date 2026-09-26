@@ -37,12 +37,15 @@ function errorFrom(cause: unknown): Error {
 /** Operator speech for one realtime user turn, as it is being typed into the composer. */
 interface ComposerUtterance {
 	turn: number;
-	/** Separator placed before the utterance so it does not run into the existing draft. */
+	/** Separator placed before the utterance so it does not run into the text before the cursor. */
 	prefix: string;
-	/** Text currently shown as the volatile preview, including {@link prefix}. */
-	preview: string;
-	/** Preview text the operator edited around, now ordinary draft text. */
-	adopted: string | undefined;
+	/** Transcript text last shown as the volatile preview, without {@link prefix}. */
+	text: string;
+}
+
+/** Collapse whitespace so a delegated ledger turn matches the transcript typed for it. */
+function speechKey(text: string): string {
+	return text.replace(/\s+/g, " ").trim();
 }
 
 /**
@@ -58,6 +61,8 @@ export class LiveCommandController {
 	#session: LiveSessionController | undefined;
 	#settling: Promise<void> | undefined;
 	#utterance: ComposerUtterance | undefined;
+	/** Utterances committed into the draft, by editor utterance id, for removal on handoff. */
+	#committed: Array<{ id: number; key: string }> = [];
 	#phase: LivePhase | undefined;
 	#destination: LiveInputDestination = "primary";
 	#resumeVocalizer: (() => void) | undefined;
@@ -114,24 +119,27 @@ export class LiveCommandController {
 	 * own handoff: the draft already carries every spoken utterance not yet handed off, so
 	 * the voice agent can no longer relay those turns. `voice` hands the text to the voice
 	 * agent only, shows it in the transcript with a mic badge, and returns true (consumed).
-	 * `both` also shares it with the voice agent as silent awareness and returns false so the
-	 * ordinary submit still reaches the primary, as does `primary`. Drafts with images always
-	 * go to the primary. Returns false untouched when no call is running.
+	 * `both` and `primary` return false so the ordinary submit reaches the primary; `both`
+	 * shares the final prompt through {@link shareSubmit} once input hooks have settled it.
+	 * Drafts with images always go to the primary. Returns false untouched when no call is
+	 * running.
 	 */
 	routeSubmit(text: string, options: { hasImages: boolean }): boolean {
 		const session = this.#session;
 		if (!session) return false;
-		session.discardUnclaimedSpeech();
-		if (this.#destination === "primary" || (this.#destination === "voice" && options.hasImages)) return false;
-		if (this.#destination === "both") {
-			session.sendOperatorText(text, "both");
-			return false;
-		}
+		session.retireComposerSpeech();
+		this.#committed = [];
+		if (this.#destination !== "voice" || options.hasImages) return false;
 		session.sendOperatorText(text, "voice");
 		const component = new UserMessageComponent(text);
 		if (theme.icon.mic) component.setReaction(theme.icon.mic);
 		this.#ctx.present(component);
 		return true;
+	}
+
+	/** With the destination `both`, tell the voice agent what the main agent is about to receive. */
+	shareSubmit(text: string): void {
+		if (this.#destination === "both") this.#session?.sendOperatorText(text, "both");
 	}
 
 	/** Stop the active live session. */
@@ -169,6 +177,7 @@ export class LiveCommandController {
 		this.#destination = "primary";
 		this.#showPhase("connecting");
 		this.#utterance = undefined;
+		this.#committed = [];
 		this.#resumeVocalizer = vocalizer.suspend();
 
 		const options: LiveSessionControllerOptions = {
@@ -191,8 +200,7 @@ export class LiveCommandController {
 				},
 				onDelegated: texts => {
 					if (this.#session !== session) return;
-					this.#ctx.editor.removeText(texts);
-					this.#ctx.ui.requestRender();
+					this.#removeDelegated(texts);
 				},
 				onTerminal: error => this.#finish(session, error),
 			},
@@ -212,42 +220,54 @@ export class LiveCommandController {
 	}
 
 	/**
-	 * Type one user transcript update into the composer. Partials replace a volatile
-	 * preview; the final transcript commits as one undoable edit. When the operator edits
-	 * around the preview, the preview becomes ordinary draft text and later updates for
-	 * that turn only append what was not already shown.
+	 * Type one user transcript update into the composer. Partials replace a volatile preview;
+	 * the final transcript commits as one undoable edit. The editor keeps a preview the
+	 * operator edited around and continues with only the rest of the utterance, and drops the
+	 * rest when the operator deleted it.
 	 */
 	#typeUserTranscript(transcript: LiveTranscript): void {
-		const editor = this.#ctx.editor;
 		let utterance = this.#utterance;
 		if (!utterance || transcript.turn !== utterance.turn) {
-			if (utterance && editor.hasVolatileText) editor.commitVolatileText(utterance.preview);
-			const draft = editor.getText();
-			utterance = {
-				turn: transcript.turn,
-				prefix: draft.length > 0 && !/\s$/.test(draft) ? " " : "",
-				preview: "",
-				adopted: undefined,
-			};
+			if (utterance) this.#commitUtterance(utterance, utterance.text);
+			utterance = { turn: transcript.turn, prefix: this.#separator("before"), text: "" };
 			this.#utterance = utterance;
 		}
-		if (utterance.preview && utterance.adopted === undefined && !editor.hasVolatileText) {
-			utterance.adopted = utterance.preview;
-		}
-		const shown = `${utterance.prefix}${transcript.text}`;
-		if (utterance.adopted !== undefined) {
-			if (transcript.final) {
-				const rest = shown.startsWith(utterance.adopted) ? shown.slice(utterance.adopted.length) : "";
-				if (rest.trim()) editor.commitVolatileText(rest);
-				this.#utterance = undefined;
-			}
-		} else if (transcript.final) {
-			editor.commitVolatileText(shown);
+		if (transcript.final) {
 			this.#utterance = undefined;
+			this.#commitUtterance(utterance, transcript.text);
 		} else {
-			editor.setVolatileText(shown);
-			utterance.preview = shown;
+			this.#ctx.editor.setVolatileText(`${utterance.prefix}${transcript.text}`);
+			utterance.text = transcript.text;
 		}
+		this.#ctx.ui.requestRender();
+	}
+
+	#commitUtterance(utterance: ComposerUtterance, text: string): void {
+		const id = this.#ctx.editor.commitVolatileText(`${utterance.prefix}${text}${this.#separator("after")}`);
+		if (id !== undefined && text) this.#committed.push({ id, key: speechKey(text) });
+	}
+
+	/** A space when the character on that side of the cursor would otherwise touch the speech. */
+	#separator(side: "before" | "after"): string {
+		const editor = this.#ctx.editor;
+		const { line, col } = editor.getCursor();
+		const text = editor.getLines()[line] ?? "";
+		const neighbour = side === "before" ? (col > 0 ? text[col - 1] : line > 0 ? "\n" : "") : text[col];
+		return neighbour && !/\s/.test(neighbour) ? " " : "";
+	}
+
+	/** Remove utterances the primary agent accepted through a voice handoff, newest match first. */
+	#removeDelegated(texts: readonly string[]): void {
+		const ids: number[] = [];
+		for (const text of texts) {
+			const key = speechKey(text);
+			const index = this.#committed.findLastIndex(entry => entry.key === key);
+			if (index === -1) continue;
+			ids.push(this.#committed[index]!.id);
+			this.#committed.splice(index, 1);
+		}
+		if (ids.length === 0) return;
+		this.#ctx.editor.removeUtterances(ids);
 		this.#ctx.ui.requestRender();
 	}
 
@@ -324,9 +344,8 @@ export class LiveCommandController {
 		this.#finalizeAssistantTranscript();
 		const utterance = this.#utterance;
 		this.#utterance = undefined;
-		if (utterance && this.#ctx.editor.hasVolatileText) {
-			this.#ctx.editor.commitVolatileText(utterance.preview);
-		}
+		if (utterance) this.#commitUtterance(utterance, utterance.text);
+		this.#committed = [];
 		this.#showPhase(undefined);
 		this.#resumeVocalizer?.();
 		this.#resumeVocalizer = undefined;

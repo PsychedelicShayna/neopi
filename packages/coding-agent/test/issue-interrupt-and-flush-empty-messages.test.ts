@@ -56,6 +56,7 @@ function createContext(options?: {
 		loopModeEnabled: false,
 		updatePendingMessagesDisplay,
 		routeLiveSubmit: vi.fn(() => false),
+		shareLiveSubmit: vi.fn(),
 		noteLiveComposerActivity: vi.fn(),
 		showError,
 		hasActiveBtw: () => false,

@@ -210,6 +210,7 @@ function createContext(): {
 		startPendingSubmission,
 		updatePendingMessagesDisplay,
 		routeLiveSubmit: vi.fn(() => false),
+		shareLiveSubmit: vi.fn(),
 		noteLiveComposerActivity: vi.fn(),
 		updateEditorBorderColor: vi.fn(),
 		showDebugSelector: vi.fn(),

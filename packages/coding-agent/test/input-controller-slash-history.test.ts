@@ -74,6 +74,7 @@ function makeCtx(isStreaming = false) {
 		withLocalSubmission: async (_text: string, fn: () => Promise<unknown>) => fn(),
 		updatePendingMessagesDisplay: vi.fn(),
 		routeLiveSubmit: vi.fn(() => false),
+		shareLiveSubmit: vi.fn(),
 		noteLiveComposerActivity: vi.fn(),
 		showWarning: vi.fn(),
 		showError: vi.fn(),

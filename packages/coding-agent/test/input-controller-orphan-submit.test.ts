@@ -135,6 +135,7 @@ function createContext(sessionOverride?: InteractiveModeContext["session"]) {
 		onInputCallback: undefined,
 		updatePendingMessagesDisplay,
 		routeLiveSubmit: vi.fn(() => false),
+		shareLiveSubmit: vi.fn(),
 		noteLiveComposerActivity: vi.fn(),
 		flushPendingBashComponents,
 		showError,

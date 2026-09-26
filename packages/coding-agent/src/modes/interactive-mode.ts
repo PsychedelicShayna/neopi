@@ -7007,7 +7007,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	 *  latches the recording past the space bar's release. */
 	dictationSpaceHold(target: DictationTarget): SpaceHoldHandler {
 		return {
-			enabled: () => cfgSttEnabled.get(settings) && this.sttIdle,
+			// Live mode owns the microphone; a held space bar stays plain spaces during a call.
+			enabled: () => cfgSttEnabled.get(settings) && this.sttIdle && !this.#liveCommandController.active,
 			onStart: () => void this.#readySTTController()?.holdStart(target, this.#dictationCallbacks(target)),
 			onEnd: () => void this.#sttController?.holdEnd(),
 			onLatch: () => this.showStatus("Dictation latched: release Space, then tap Space or Backspace to stop"),
@@ -7114,6 +7115,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	routeLiveSubmit(text: string, options: { hasImages: boolean }): boolean {
 		return this.#liveCommandController.routeSubmit(text, options);
+	}
+
+	shareLiveSubmit(text: string): void {
+		this.#liveCommandController.shareSubmit(text);
 	}
 
 	noteLiveComposerActivity(): void {

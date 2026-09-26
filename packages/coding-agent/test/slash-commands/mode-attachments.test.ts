@@ -66,6 +66,7 @@ function createHarness(
 		compactionQueuedMessages: [],
 		updatePendingMessagesDisplay: vi.fn(),
 		routeLiveSubmit: vi.fn(() => false),
+		shareLiveSubmit: vi.fn(),
 		noteLiveComposerActivity: vi.fn(),
 		showStatus: vi.fn(),
 		showWarning: vi.fn(),
