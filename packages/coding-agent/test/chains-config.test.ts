@@ -52,6 +52,15 @@ describe("post-processing chain config", () => {
 		expect(plain!.systemPrompt).toBeUndefined();
 	});
 
+	it("keeps an explicitly empty system prompt instead of restoring the bundled one", async () => {
+		const file = chainsConfigFilePath("user", { projectDir: project, agentDir });
+		await saveChainsConfigFile(file, {
+			chains: [{ name: "bare", steps: [{ name: "raw", systemPrompt: "", prompt: "Rewrite." }] }],
+		});
+		const loaded = await loadChainsConfigFile(file);
+		expect(loaded.chains[0]!.steps[0]!.systemPrompt).toBe("");
+	});
+
 	it("lets a project chain shadow a user chain by name and drops invalid entries with warnings", async () => {
 		await Bun.write(
 			path.join(agentDir, "CHAINS.yml"),

@@ -54,8 +54,8 @@ function parseStep(raw: unknown, where: string, warnings: string[]): ChainStep |
 	const tools = parseTools(entry.tools, `${where} (${name})`, warnings);
 	if (tools) step.tools = tools;
 	if (entry.context === true) step.context = true;
-	const systemPrompt = stringField(entry.systemPrompt);
-	if (systemPrompt) step.systemPrompt = systemPrompt;
+	// Presence, not content: an explicitly empty override replaces the bundled prompt with none.
+	if (typeof entry.systemPrompt === "string") step.systemPrompt = entry.systemPrompt;
 	return step;
 }
 
@@ -165,7 +165,7 @@ export function serializeChainsConfig(doc: ChainsConfigDoc): string {
 				lines.push("        tools:");
 				for (const tool of step.tools) lines.push(`          - ${YAML.stringify(tool)}`);
 			}
-			if (step.systemPrompt?.trim()) appendYamlString(lines, "        ", "systemPrompt", step.systemPrompt);
+			if (step.systemPrompt !== undefined) appendYamlString(lines, "        ", "systemPrompt", step.systemPrompt);
 			appendYamlString(lines, "        ", "prompt", step.prompt);
 		}
 	}
