@@ -2037,6 +2037,12 @@ export class InputController {
 	}
 
 	async #insertPendingImage(imageData: ImageContent, source?: ImageAttachmentSource): Promise<void> {
+		// A paste still normalizing when a chain took the composer would attach an image the
+		// chain's submission never sends and its dispatch then clears.
+		if (this.ctx.editor.chainLocked) {
+			this.ctx.showStatus("The composer is locked while a chain runs");
+			return;
+		}
 		const image: ImageContent = source
 			? tagImageAttachmentSource(imageData, source.path, source.kind)
 			: { type: "image", data: imageData.data, mimeType: imageData.mimeType };
