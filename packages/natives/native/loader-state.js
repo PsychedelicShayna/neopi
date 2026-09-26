@@ -1021,16 +1021,17 @@ export function loadNative() {
  const embeddedCandidate = maybeExtractEmbeddedAddon(ctx, errors);
  const stagedCandidate = embeddedCandidate ? null : maybeStageNodeModulesAddon(ctx, errors);
  const prepended = [embeddedCandidate, stagedCandidate].filter(c => typeof c === "string");
- // A compiled binary whose own addon could not be extracted accepts a fallback only if it holds
- // exactly the embedded bytes: another build of this release carries the same version sentinel.
- const fallbacks = embeddedCandidate
-  ? ctx.candidates
-  : ctx.candidates.filter(candidate => embeddedBytesMatch(ctx, candidate, errors));
- const runtimeCandidates = prepended.length > 0 ? [...prepended, ...fallbacks] : [...fallbacks];
+ const runtimeCandidates = prepended.length > 0 ? [...prepended, ...ctx.candidates] : [...ctx.candidates];
+ /** Paths this process extracted from its own embedded archive. */
+ const extracted = new Set(prepended);
  let reextracted = false;
 
  for (let index = 0; index < runtimeCandidates.length; index++) {
   const candidate = runtimeCandidates[index];
+  // A compiled binary falls back only to files holding exactly its embedded bytes: another
+  // build of this release carries the same version sentinel. Checked lazily, so the hash runs
+  // only once the binary's own addon has failed.
+  if (!extracted.has(candidate) && !embeddedBytesMatch(ctx, candidate, errors)) continue;
   try {
    startupMarker(`native:require:${path.basename(candidate)}`);
    const bindings = require_(candidate);
@@ -1048,7 +1049,10 @@ export function loadNative() {
    if (candidate === embeddedCandidate && !reextracted && !fs.existsSync(candidate)) {
     reextracted = true;
     const again = maybeExtractEmbeddedAddon(ctx, errors);
-    if (again) runtimeCandidates.splice(index + 1, 0, again);
+    if (again) {
+     extracted.add(again);
+     runtimeCandidates.splice(index + 1, 0, again);
+    }
    }
   }
  }
