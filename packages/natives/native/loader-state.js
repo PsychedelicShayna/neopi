@@ -480,7 +480,9 @@ function isSafeEmbeddedAddonFilename(filename) {
  * Where an embedded addon is extracted. With a known content hash the filename
  * carries it, so every build of one release (a fork ships many under a single
  * upstream version) extracts to its own immutable file: no other binary can
- * replace it between the check and the load. Without a hash, the canonical name.
+ * replace or remove it between the check and the load. These files are never
+ * pruned individually; they go with the version directory. Without a hash, the
+ * canonical name.
  * @param {string} dir
  * @param {{ filename: string, sha256?: string }} file
  * @returns {string}
@@ -489,35 +491,6 @@ function embeddedAddonTargetPath(dir, file) {
  if (typeof file.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(file.sha256)) return path.join(dir, file.filename);
  const ext = path.extname(file.filename);
  return path.join(dir, `${file.filename.slice(0, file.filename.length - ext.length)}.${file.sha256.slice(0, 16)}${ext}`);
-}
-
-/**
- * Remove addons other builds of this release extracted next to ours. Best effort:
- * a file another process still has loaded stays mapped on POSIX and is skipped on
- * Windows, where deleting it fails.
- * @param {string} dir
- * @param {{ filename: string, sha256?: string }} file
- * @param {string} keepPath
- */
-function pruneOtherBuildAddons(dir, file, keepPath) {
- const ext = path.extname(file.filename);
- const stem = file.filename.slice(0, file.filename.length - ext.length);
- let entries;
- try {
-  entries = fs.readdirSync(dir);
- } catch {
-  return;
- }
- for (const entry of entries) {
-  const full = path.join(dir, entry);
-  if (full === keepPath || !entry.startsWith(`${stem}.`) || !entry.endsWith(ext)) continue;
-  if (!/^[0-9a-f]{16}$/.test(entry.slice(stem.length + 1, entry.length - ext.length))) continue;
-  try {
-   fs.rmSync(full, { force: true });
-  } catch {
-   // In use by another process on Windows; it goes with the version directory.
-  }
- }
 }
 
 function isEmbeddedAddonFileCurrent(targetPath, file) {
@@ -628,7 +601,6 @@ function maybeExtractEmbeddedAddon(ctx, errors) {
     targetDir: ctx.versionedDir,
    });
    if (isEmbeddedAddonFileCurrent(targetPath, selectedEmbeddedFile)) {
-    pruneOtherBuildAddons(ctx.versionedDir, selectedEmbeddedFile, targetPath);
     return targetPath;
    }
    errors.push(`embedded addon archive (${embeddedAddon.archive.filename}): missing ${selectedEmbeddedFile.filename}`);
@@ -650,7 +622,6 @@ function maybeExtractEmbeddedAddon(ctx, errors) {
 
  try {
   writeEmbeddedAddonFile(targetPath, fs.readFileSync(selectedEmbeddedFile.filePath));
-  pruneOtherBuildAddons(ctx.versionedDir, selectedEmbeddedFile, targetPath);
   return targetPath;
  } catch (err) {
   const message = err instanceof Error ? err.message : String(err);
