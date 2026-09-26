@@ -156,7 +156,8 @@ export class LiveCommandController {
 	#restoreUndelivered(text: string): void {
 		const editor = this.#ctx.editor;
 		const draft = editor.getText();
-		editor.setText(draft.trim() ? `${text}\n${draft}` : text);
+		// After what is already there, so several undelivered prompts come back in order.
+		editor.setText(draft.trim() ? `${draft}\n${text}` : text);
 		this.#ctx.showWarning("The voice agent did not receive your message; it is back in the composer");
 		this.#ctx.ui.requestRender();
 	}
@@ -222,6 +223,14 @@ export class LiveCommandController {
 				},
 				onUserSpeech: speech => {
 					if (this.#session !== session) return;
+					if (this.#ctx.editor.chainLocked) {
+						// A chain owns the draft and drops writes; speech it never showed must not be
+						// handed off either.
+						session.retireComposerSpeech();
+						this.#utterance = undefined;
+						this.#ctx.showStatus("Speech ignored while a chain rewrites the draft");
+						return;
+					}
 					this.#typeUserTranscript(speech);
 				},
 				onDelegated: turns => {

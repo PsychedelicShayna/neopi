@@ -51,6 +51,8 @@ function createHarness(): Harness {
 			requestComponentRender: vi.fn(),
 		},
 		showError: vi.fn(),
+		showStatus: vi.fn(),
+		showWarning: vi.fn(),
 		chatContainer: { children: [] },
 		present: vi.fn((component: unknown) => presented.push(component)),
 		statusLine: {
@@ -134,6 +136,19 @@ describe("LiveCommandController", () => {
 		expect(h.editor.getText()).toBe("hello wor!ld");
 		speak(h, 1, "hello world", true);
 		expect(h.editor.getText()).toBe("hello wor!ld");
+		await h.controller.stop();
+	});
+
+	it("retires speech a running chain keeps out of the composer", async () => {
+		const h = createHarness();
+		await h.controller.handleCommand();
+		const retire = vi.spyOn(LiveSessionController.prototype, "retireComposerSpeech");
+		h.editor.setText("draft");
+		h.editor.setChainLock({ onEscape: vi.fn(), onClear: vi.fn() });
+		speak(h, 1, "fix the parser", true);
+		expect(h.editor.getText()).toBe("draft");
+		expect(retire).toHaveBeenCalled();
+		h.editor.setChainLock(undefined);
 		await h.controller.stop();
 	});
 
