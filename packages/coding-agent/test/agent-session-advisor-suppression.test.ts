@@ -267,7 +267,11 @@ describe("AgentSession advisor auto-resume suppression", () => {
 			const terminalSeen = Promise.withResolvers<void>();
 			const held = Promise.withResolvers<AbortSignal>();
 			const release = Promise.withResolvers<void>();
-			const advised = Promise.withResolvers<void>();
+			const advisedSeen = (): boolean =>
+				session
+					.getAdvisorAgent()
+					?.state.messages.some(message => message.role === "toolResult" && message.toolName === "advise") ===
+				true;
 			const aborted = Promise.withResolvers<void>();
 			const note = `Inspect the ${severity} fixture before accepting the result.`;
 			const parameters = type({});
@@ -322,10 +326,6 @@ describe("AgentSession advisor auto-resume suppression", () => {
 							content: [{ type: "toolCall", name: "advise", arguments: { note, severity } }],
 							stopReason: "toolUse",
 						};
-					},
-					() => {
-						advised.resolve();
-						return { content: [], stopReason: "stop" };
 					},
 					async () => {
 						if (!continuation) return { content: [], stopReason: "stop" };
@@ -419,7 +419,9 @@ describe("AgentSession advisor auto-resume suppression", () => {
 			const prompt = session.prompt("Run step then held, then finish.");
 			try {
 				const signal = await held.promise;
-				await advised.promise;
+				// An advise-only advisor turn ends without another model call, so wait
+				// for the routed note itself rather than the advisor's next request.
+				for (let i = 0; i < 200 && !agent.hasQueuedMessages() && !advisedSeen(); i++) await Bun.sleep(5);
 				if (severity === "blocker") {
 					await aborted.promise;
 					expect(signal.aborted).toBe(true);
