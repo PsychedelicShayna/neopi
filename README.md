@@ -65,6 +65,7 @@ OMP_BUILD_BYTECODE=0 NPI_SKIP_EXTENSION_INSTALL=1 bun --cwd=packages/coding-agen
 mkdir -p ~/.local/bin
 cp packages/coding-agent/dist/npi ~/.local/bin/npi        # a dedicated npi path
 bun scripts/install-neopi-extensions.ts
+~/.local/bin/npi --version && ~/.local/bin/npi --smoke-test
 ```
 
 This repository does not prescribe a remote installer or a global package-manager install. The existing package scope and protocol identifiers remain `@oh-my-pi/*`; configuration remains under `~/.omp` unless `PI_CONFIG_DIR` or the documented profile settings select another location.
