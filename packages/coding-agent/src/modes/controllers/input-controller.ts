@@ -1044,6 +1044,8 @@ export class InputController {
 					images: inputImages,
 					imageLinks: inputImageLinks,
 				});
+				// A queued prompt still reaches the main agent; `both` shares it like any other.
+				if (this.ctx.liveCallActive) this.ctx.shareLiveSubmit(queueBody);
 				return;
 			}
 
