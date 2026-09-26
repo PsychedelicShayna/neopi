@@ -10,7 +10,7 @@ import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
-import { logger, postmortem, ptree, untilAborted } from "@oh-my-pi/pi-utils";
+import { APP_NAME, logger, postmortem, ptree, untilAborted } from "@oh-my-pi/pi-utils";
 import { TERMINAL_STATES } from "@oh-my-pi/pi-tui/apps/ps-data";
 import type { DaemonSnapshot } from "@oh-my-pi/pi-tui/tools/daemon";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
@@ -91,7 +91,7 @@ class HostConnection {
 		socket.on("error", error => logger.debug("IDA host connection error", { name, error: errorMessage(error) }));
 		socket.on("close", () => {
 			this.#open = false;
-			const error = new IdaHostGoneError(`IDA host ${name} exited; see \`omp ps logs ${name}\``);
+			const error = new IdaHostGoneError(`IDA host ${name} exited; see \`${APP_NAME} ps logs ${name}\``);
 			for (const entry of this.#pending.values()) entry.reject(error);
 			this.#pending.clear();
 			onClose();
@@ -111,7 +111,7 @@ class HostConnection {
 	call(request: IdaHostRequest): Promise<unknown> {
 		if (!this.#open) {
 			return Promise.reject(
-				new IdaHostGoneError(`IDA host ${this.#name} exited; see \`omp ps logs ${this.#name}\``),
+				new IdaHostGoneError(`IDA host ${this.#name} exited; see \`${APP_NAME} ps logs ${this.#name}\``),
 			);
 		}
 		const entry = Promise.withResolvers<unknown>();
@@ -372,7 +372,7 @@ async function startHost(
 	}
 	if (TERMINAL_STATES[started.state]) {
 		const reason = started.exitReason ?? `code ${started.exitCode}`;
-		throw new ToolError(`IDA host ${name} exited during startup (${reason}); see \`omp ps logs ${name}\``);
+		throw new ToolError(`IDA host ${name} exited during startup (${reason}); see \`${APP_NAME} ps logs ${name}\``);
 	}
 }
 
@@ -390,7 +390,7 @@ async function openIdaDatabase(session: ToolSession, loc: IdbLocation): Promise<
 		});
 		if (db) return db;
 		if (attempt === ENSURE_ATTEMPTS) {
-			throw new ToolError(`IDA host ${name} did not come up; see \`omp ps logs ${name}\``);
+			throw new ToolError(`IDA host ${name} did not come up; see \`${APP_NAME} ps logs ${name}\``);
 		}
 		const existing = await describeQuietly(broker, name, HOST_LABEL);
 		if (existing && !TERMINAL_STATES[existing.state]) {

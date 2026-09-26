@@ -2,6 +2,7 @@
  * CLI handler for `npi grievances` — view, clean, and manually push reported tool issues.
  */
 import chalk from "@oh-my-pi/pi-utils/chalk";
+import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { Settings } from "../config/settings";
 import { flushGrievances, openAutoQaDb } from "../tools/report-tool-issue";
 
@@ -255,7 +256,7 @@ export async function pushGrievances(options: PushGrievancesOptions): Promise<vo
 		if (rejected > 0) {
 			console.log(
 				chalk.yellow(
-					`${rejected} grievance${rejected === 1 ? " was" : "s were"} refused by the server and marked rejected (see \`omp grievances list\`).`,
+					`${rejected} grievance${rejected === 1 ? " was" : "s were"} refused by the server and marked rejected (see \`${APP_NAME} grievances list\`).`,
 				),
 			);
 		}

@@ -12,7 +12,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { getAvatarCacheDir, logger } from "@oh-my-pi/pi-utils";
+import { getAvatarCacheDir, logger, USER_AGENT } from "@oh-my-pi/pi-utils";
 
 const AVATAR_PX = 64;
 const FETCH_TIMEOUT_MS = 5_000;
@@ -47,7 +47,7 @@ async function githubApiAvatarUrl(cwd: string, email: string): Promise<string | 
 	const match = remoteUrl?.match(/github\.com[/:]([^/]+)\/([^/]+?)(?:\.git)?$/);
 	if (!match) return null;
 	const token = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
-	const headers: Record<string, string> = { Accept: "application/vnd.github+json", "User-Agent": "omp" };
+	const headers: Record<string, string> = { Accept: "application/vnd.github+json", "User-Agent": USER_AGENT };
 	if (token) headers.Authorization = `Bearer ${token}`;
 	try {
 		const response = await fetch(

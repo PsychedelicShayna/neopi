@@ -207,7 +207,9 @@ async function runToken(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
 
 async function runLogin(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
 	if (flags.via && !flags.provider) {
-		throw new Error("Usage: omp auth-broker login <provider> --via=user@host (provider required for remote login)");
+		throw new Error(
+			`Usage: ${APP_NAME} auth-broker login <provider> --via=user@host (provider required for remote login)`,
+		);
 	}
 	const providers = getOAuthProviders();
 	// One interface for picker + login prompts; closed before `--via` hands
