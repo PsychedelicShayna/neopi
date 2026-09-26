@@ -77,10 +77,10 @@ export function renderCfgRead(
 	}, options);
 }
 
-/** Render `write cfg://…[/save]`: the proposed value while pending, then the approved/declined change. */
+/** Render `write cfg://…[/save]`: a placeholder while pending, then the approved/declined change. */
 export function renderCfgWrite(
 	url: string,
-	content: string | undefined,
+	_content: string | undefined,
 	result: CardToolResult | undefined,
 	details: CfgWriteDetails | undefined,
 	options: RenderResultOptions,
@@ -103,7 +103,8 @@ export function renderCfgWrite(
 		const header = `${renderStatusLine({ icon, title: "Config", description: details?.path ?? target?.segments.join(".") }, theme)} ${badges.join(" ")}`;
 		if (result?.isError) return [header, formatErrorDetail(firstText(result) || "Settings write failed.", theme)];
 		const arrow = theme.fg("dim", "→");
-		const next = theme.fg("toolOutput", details?.value ?? content?.trim() ?? "…");
+		// Pending content may be a credential; only the redacted result value is shown.
+		const next = theme.fg("toolOutput", details?.value ?? "…");
 		const lines = [
 			header,
 			details ? `  ${theme.fg("dim", details.previous)} ${arrow} ${next}` : `  ${arrow} ${next}`,

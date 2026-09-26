@@ -378,9 +378,11 @@ function jobsRenderResult(
 							artifactError ?? (outputMeta?.source?.type !== "report" ? outputMeta?.artifactError : undefined);
 						const previewMeta = job.meta ?? (previewError ? { artifactError: previewError } : undefined);
 
-						const preview = flattenStructuredPreview(
-							stripTaskResultEnvelope(
-								stripOutputNotice(job.errorText?.trim() || job.resultText?.trim() || "", previewMeta).trim(),
+						const preview = replaceTabs(
+							flattenStructuredPreview(
+								stripTaskResultEnvelope(
+									stripOutputNotice(job.errorText?.trim() || job.resultText?.trim() || "", previewMeta).trim(),
+								),
 							),
 						);
 						if (preview) {
