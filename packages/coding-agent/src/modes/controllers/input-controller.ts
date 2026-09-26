@@ -932,6 +932,8 @@ export class InputController {
 			// Everything below (continue shortcuts, slash/bash/python, loop,
 			// compaction queueing) is main-session-only.
 			if (this.ctx.focusedAgentId) {
+				// The composer's speech goes to the focused agent; the voice call must not relay it too.
+				if (this.ctx.liveCallActive) this.ctx.discardLiveSpeech();
 				await this.#submitToFocusedSession(text, "steer");
 				return;
 			}
@@ -976,6 +978,8 @@ export class InputController {
 				if (this.ctx.liveCallActive) this.ctx.discardLiveSpeech();
 			} else liveRoute = this.ctx.routeLiveSubmit(text, { hasImages: hasPendingImages });
 			if (liveRoute === "held") {
+				// Submit already emptied the composer; the operator reviews the draft in place.
+				this.ctx.editor.setCollapsedText(text);
 				this.ctx.showStatus("A voice handoff just reached the main agent; review the draft before sending");
 				return;
 			}
@@ -1910,6 +1914,8 @@ export class InputController {
 		const imageLinks =
 			images && this.ctx.editor.pendingImageLinks.length > 0 ? [...this.ctx.editor.pendingImageLinks] : undefined;
 		if (!text && !images) return;
+		// Sending the composer is the operator's handoff on this path too.
+		if (this.ctx.liveCallActive) this.ctx.discardLiveSpeech();
 
 		// Focused subagent session: follow-ups go to it; non-chat input is gated.
 		if (this.ctx.focusedAgentId) {

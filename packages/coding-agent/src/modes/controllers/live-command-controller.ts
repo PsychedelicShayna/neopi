@@ -205,12 +205,12 @@ export class LiveCommandController {
 				},
 				onLevels: () => {},
 				onTranscript: transcript => {
-					if (this.#session !== session || !transcript) return;
-					if (transcript.role === "user") {
-						this.#typeUserTranscript(transcript);
-					} else {
-						this.#presentAssistantTranscript(transcript);
-					}
+					if (this.#session !== session || !transcript || transcript.role === "user") return;
+					this.#presentAssistantTranscript(transcript);
+				},
+				onUserSpeech: speech => {
+					if (this.#session !== session) return;
+					this.#typeUserTranscript(speech);
 				},
 				onDelegated: texts => {
 					if (this.#session !== session) return;

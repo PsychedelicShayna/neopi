@@ -102,6 +102,8 @@ interface Harness {
 	aborts: Array<Record<string, unknown>>;
 	prompts: string[];
 	deliveries: DeliveryControl[];
+	speech: Array<{ turn: number; text: string; final: boolean }>;
+	delegated: string[][];
 	fireLive(event: LiveServerEvent): void;
 	fireSession(event: AgentSessionEvent): void;
 	setStreaming(value: boolean): void;
@@ -117,6 +119,8 @@ function makeHarness(options?: {
 	const sent: LiveClientMessage[] = [];
 	const aborts: Array<Record<string, unknown>> = [];
 	const prompts: string[] = [];
+	const speech: Harness["speech"] = [];
+	const delegated: string[][] = [];
 	const abortGates: Array<{ promise: Promise<void>; resolve: () => void }> = [];
 	const deliveries: Harness["deliveries"] = [];
 	let streaming = false;
@@ -205,7 +209,14 @@ function makeHarness(options?: {
 
 	const controller = new LiveSessionController({
 		session,
-		callbacks: { onPhase() {}, onLevels() {}, onTranscript() {}, onTerminal() {} },
+		callbacks: {
+			onPhase() {},
+			onLevels() {},
+			onTranscript() {},
+			onTerminal() {},
+			onUserSpeech: ({ turn, text, final }) => speech.push({ turn, text, final }),
+			onDelegated: texts => delegated.push([...texts]),
+		},
 		...(options?.speakableIdleMs !== undefined ? { speakableIdleMs: options.speakableIdleMs } : {}),
 		extractAssistantText: message => (message as unknown as { testText?: string }).testText ?? "",
 		createTransport: transportOptions => {
@@ -229,6 +240,8 @@ function makeHarness(options?: {
 		aborts,
 		prompts,
 		deliveries,
+		speech,
+		delegated,
 		fireLive: event => liveCallbacks?.onEvent(event),
 		fireSession: event => sessionSubscriber?.(event),
 		setStreaming: value => {
@@ -371,6 +384,43 @@ describe("live controller delegation ownership", () => {
 		await settle();
 		expect(h.controller.retireComposerSpeech()).toBe(true);
 		expect(h.prompts).toEqual(["fix the parser"]);
+	});
+
+	it("reports every operator turn to the composer, repeats included", async () => {
+		const h = makeHarness();
+		await h.controller.start();
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "yes" } });
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "yes" } });
+		expect(h.speech.filter(update => update.final)).toEqual([
+			{ turn: 1, text: "yes", final: true },
+			{ turn: 2, text: "yes", final: true },
+		]);
+	});
+
+	it("retires an accepted handoff's speech from the composer when the call stops", async () => {
+		const h = makeHarness({ holdDelivery: true });
+		await h.controller.start();
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "fix the parser" } });
+		h.fireLive(delegation("dlg-stop", "model-authored fallback"));
+		await settle();
+		h.deliveries[0]!.accept();
+		await h.controller.stop();
+		expect(h.prompts).toEqual(["fix the parser"]);
+		expect(h.delegated).toContainEqual(["fix the parser"]);
+	});
+
+	it("does not relay a later turn as the answer to a shared prompt a delegation already answered", async () => {
+		const h = makeHarness({ speakableIdleMs: 0 });
+		await h.controller.start();
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "fix the parser" } });
+		h.fireLive(delegation("dlg-shared", "model-authored fallback"));
+		await settle();
+		h.controller.expectOperatorTurn();
+		h.fireSession(agentEnd([assistant("Parser fixed.", "stop")]));
+		await settle();
+		h.fireSession(agentEnd([assistant("Unrelated later work.", "stop")]));
+		await settle();
+		expect(h.sent.filter(message => message.type === "session.context.append")).toHaveLength(0);
 	});
 
 	it("relays the final answer of a turn the operator shared from the composer", async () => {

@@ -55,6 +55,10 @@ export interface LiveSessionCallbacks {
 	onTerminal(error?: Error): void;
 	/** Reports operator utterances the primary agent accepted through a voice handoff. */
 	onDelegated?(texts: readonly string[]): void;
+	/** Reports each update to an operator turn exactly as the handoff ledger records it: every
+	 *  turn, repeats included, with the final text authoritative. Composer input follows this,
+	 *  not the coalesced display transcript. */
+	onUserSpeech?(speech: LiveTranscript): void;
 }
 
 /** Structural transport surface the controller needs (test seam). */
@@ -346,6 +350,17 @@ export class LiveSessionController {
 	}
 
 	async #stop(): Promise<void> {
+		// A handoff still in flight either never starts, or already belongs to the main agent; in
+		// that case retire its speech from the composer now, while the caller still listens.
+		const pending = this.#pendingDelegation;
+		if (pending?.dispatching && this.#pendingDelivery && !this.#pendingDelivery.cancel()) {
+			const texts = this.#userTurnLedger.filter(turn => turn.claim === pending.generation).map(turn => turn.text);
+			if (texts.length > 0) this.#emitDelegated(texts);
+		} else {
+			this.#pendingDelivery?.cancel();
+		}
+		this.#pendingDelegation = undefined;
+		this.#pendingDelivery = undefined;
 		this.#stopped = true;
 		clearTimeout(this.#speakableIdleTimer);
 		this.#speakableIdleTimer = undefined;
@@ -627,6 +642,8 @@ export class LiveSessionController {
 			if (this.#operatorTurnPending) this.#relayOperatorTurnResult(messages, options);
 			return;
 		}
+		// A shared operator prompt folded into the delegated turn is answered by this settle.
+		if (options.closeDelegation) this.#operatorTurnPending = false;
 		for (let index = messages.length - 1; index >= 0; index -= 1) {
 			const message = messages[index];
 			if (message?.role !== "assistant") continue;
@@ -956,6 +973,7 @@ export class LiveSessionController {
 			current.text += normalized;
 		}
 		if (final) this.#userFinalSeq = ++this.#eventSeq;
+		this.#emitUserSpeech({ role: "user", turn: current.turn, text: current.text, final: current.final });
 		const pendingGeneration = this.#pendingDelegation?.generation;
 		if (final && pendingGeneration !== undefined) {
 			void this.#dispatchPendingDelegation(pendingGeneration).catch(cause => this.#reportFailure(errorFrom(cause)));
@@ -1053,6 +1071,14 @@ export class LiveSessionController {
 		this.#lastTranscript = transcript;
 		try {
 			this.#callbacks.onTranscript(transcript);
+		} catch (cause) {
+			this.#reportFailure(errorFrom(cause));
+		}
+	}
+
+	#emitUserSpeech(speech: LiveTranscript): void {
+		try {
+			this.#callbacks.onUserSpeech?.(speech);
 		} catch (cause) {
 			this.#reportFailure(errorFrom(cause));
 		}

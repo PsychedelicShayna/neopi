@@ -87,7 +87,7 @@ function createHarness(): Harness {
 }
 
 function speak(h: Harness, turn: number, text: string, final: boolean): void {
-	h.callbacks().onTranscript({ role: "user", turn, text, final });
+	h.callbacks().onUserSpeech?.({ role: "user", turn, text, final });
 }
 
 afterEach(() => {
