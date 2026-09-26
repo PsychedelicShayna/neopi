@@ -20,6 +20,7 @@ import { getModelMatchPreferences, resolveModelRoleValue } from "../config/model
 import type { Settings } from "../config/settings";
 import chainInputWithContext from "../prompts/chains/input-with-context.md" with { type: "text" };
 import chainSystemPrompt from "../prompts/chains/system.md" with { type: "text" };
+import { estimateToolSchemaTokens } from "@oh-my-pi/pi-tui/status-line/context-usage";
 import { formatSessionHistoryMarkdown } from "../session/session-history-format";
 
 /** Model role a step falls back to when it names no model. */
@@ -29,8 +30,8 @@ export const CHAIN_DEFAULT_ROLE = "prose";
 export const CHAIN_SYSTEM_PROMPT = chainSystemPrompt;
 
 const CHAIN_SKIP = "chain step skipped";
-/** Tokens kept free for tool definitions and message framing when fitting the transcript. */
-const CHAIN_FRAMING_RESERVE = 2_000;
+/** Tokens kept free for message framing when fitting the transcript; tool schemas are counted. */
+const CHAIN_FRAMING_RESERVE = 1_000;
 /** Output room reserved when the model reports no output limit. */
 const CHAIN_DEFAULT_OUTPUT_RESERVE = 8_192;
 const CHAIN_ABORT = "chain aborted";
@@ -116,13 +117,15 @@ function blockBoundary(texts: readonly string[]): string {
 /**
  * The user message for a step: the draft, wrapped with the transcript when the step ingests
  * context. With a model, the transcript keeps only the newest messages that fit its context
- * window after the system prompt, draft, output, and framing are reserved.
+ * window after the system prompt, the granted tools' schemas, the draft, output, and framing
+ * are reserved.
  */
 export function renderChainInput(
 	step: ChainStep,
 	input: string,
 	messages: readonly AgentMessage[] | undefined,
 	model?: Pick<Model, "contextWindow" | "maxTokens" | "tokenizer">,
+	tools: readonly AgentTool[] = [],
 ): string {
 	if (!step.context || !messages?.length) return input;
 	let transcript: string;
@@ -131,6 +134,7 @@ export function renderChainInput(
 		const system = step.systemPrompt ?? CHAIN_SYSTEM_PROMPT;
 		const reserved =
 			tokenizer.countTokens([system, step.prompt, input]) +
+			estimateToolSchemaTokens(tools, tokenizer) +
 			Math.min(model.maxTokens || CHAIN_DEFAULT_OUTPUT_RESERVE, Math.floor(model.contextWindow / 4)) +
 			CHAIN_FRAMING_RESERVE;
 		transcript = fitTranscript(messages, Math.max(0, model.contextWindow - reserved), tokenizer);
@@ -185,7 +189,7 @@ export async function runChainStep(
 	const onAbort = () => agent.abort("chain cancelled");
 	signal?.addEventListener("abort", onAbort, { once: true });
 	try {
-		await agent.prompt(renderChainInput(step, input, options.messages, resolved.model));
+		await agent.prompt(renderChainInput(step, input, options.messages, resolved.model, tools));
 	} finally {
 		signal?.removeEventListener("abort", onAbort);
 	}

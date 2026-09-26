@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { ChainConfig, ChainStep } from "@oh-my-pi/pi-tui/overlays/chain-types";
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { AgentMessage, AgentTool } from "@oh-my-pi/pi-agent-core";
 import {
 	ChainControl,
 	type RunChainOptions,
@@ -164,6 +164,21 @@ describe("renderChainInput", () => {
 		const draft = "keep\n\n\n\nthese gaps   \n| a | b |\n|--|--|";
 		const out = renderChainInput(step, draft, [user("hi")]);
 		expect(out).toContain(`\n${draft}\n</draft`);
+	});
+
+	it("reserves room for the schemas of the tools a step is granted", () => {
+		const messages = [user("older context ".repeat(900)), user("recent question")];
+		const model = { contextWindow: 7000, maxTokens: 1000 };
+		const bulkyTool = {
+			name: "bulky",
+			label: "Bulky",
+			description: "schema ".repeat(1500),
+			parameters: { type: "object", properties: {} },
+		} as unknown as AgentTool;
+		expect(renderChainInput(step, "draft", messages, model)).toContain("older context");
+		const withTool = renderChainInput(step, "draft", messages, model, [bulkyTool]);
+		expect(withTool).toContain("recent question");
+		expect(withTool).not.toContain("older context");
 	});
 
 	it("drops the oldest messages that do not fit the step model's window", () => {
