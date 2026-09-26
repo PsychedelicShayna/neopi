@@ -66,6 +66,8 @@ function createLoopContext(options: {
 		startPendingSubmission: vi.fn((input: { text: string }) => ({ ...input, cancelled: false, started: false })),
 		withLocalSubmission: async (_text: string, fn: () => unknown) => fn(),
 		updatePendingMessagesDisplay: vi.fn(),
+		routeLiveSubmit: vi.fn(() => false),
+		noteLiveComposerActivity: vi.fn(),
 		updateEditorBorderColor: vi.fn(),
 		showError: vi.fn(),
 		handleBashCommand: vi.fn(),

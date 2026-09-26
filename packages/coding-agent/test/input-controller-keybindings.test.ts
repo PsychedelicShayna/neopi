@@ -214,6 +214,8 @@ async function createContext() {
 			}
 		},
 		updatePendingMessagesDisplay,
+		routeLiveSubmit: vi.fn(() => false),
+		noteLiveComposerActivity: vi.fn(),
 		isBashMode: false,
 		isPythonMode: false,
 		hideToolActivity: false,

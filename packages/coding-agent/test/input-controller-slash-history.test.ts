@@ -73,6 +73,8 @@ function makeCtx(isStreaming = false) {
 		fileSlashCommands: new Set<string>(),
 		withLocalSubmission: async (_text: string, fn: () => Promise<unknown>) => fn(),
 		updatePendingMessagesDisplay: vi.fn(),
+		routeLiveSubmit: vi.fn(() => false),
+		noteLiveComposerActivity: vi.fn(),
 		showWarning: vi.fn(),
 		showError: vi.fn(),
 	} as unknown as InteractiveModeContext;

@@ -55,6 +55,8 @@ function createContext(options?: {
 		isPythonMode: false,
 		loopModeEnabled: false,
 		updatePendingMessagesDisplay,
+		routeLiveSubmit: vi.fn(() => false),
+		noteLiveComposerActivity: vi.fn(),
 		showError,
 		hasActiveBtw: () => false,
 		withLocalSubmission: async (_text: string, fn: () => Promise<unknown>) => fn(),
