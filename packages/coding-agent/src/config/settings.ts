@@ -3235,7 +3235,8 @@ export class Settings {
 						: legacySttModel === "turbo" || legacySttModel === "whisper-large-v3-turbo"
 							? "local/whisper-large-v3-turbo"
 							: legacySttModel === "xai"
-								? "xai/grok-stt"
+								? // OAuth first, then the API-key provider (docs/neopi-fork.md).
+									"xai-oauth/grok-stt,xai/grok-stt"
 								: undefined;
 			if (dictationSelector && !Object.hasOwn(roles, "dictation")) {
 				roles.dictation = dictationSelector;
