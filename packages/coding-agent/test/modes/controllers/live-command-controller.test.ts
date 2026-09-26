@@ -196,6 +196,17 @@ describe("LiveCommandController", () => {
 		await h.controller.stop();
 	});
 
+	it("keeps the operator's own line break before delegated speech", async () => {
+		const h = createHarness();
+		h.editor.insertText("notes:");
+		h.editor.handleInput("\x1b[13;2u");
+		await h.controller.handleCommand();
+		speak(h, 1, "repair the cache", true);
+		h.callbacks().onDelegated?.([1]);
+		expect(h.editor.getText()).toBe("notes:\n");
+		await h.controller.stop();
+	});
+
 	it("removes the delegated turn's speech, not a later identical utterance", async () => {
 		const h = createHarness();
 		await h.controller.handleCommand();
@@ -215,7 +226,7 @@ describe("LiveCommandController", () => {
 		speak(h, 1, "fix it", true);
 		h.editor.insertText(" then fix it");
 		h.callbacks().onDelegated?.([1]);
-		expect(h.editor.getText()).toBe("then fix it");
+		expect(h.editor.getText()).toBe(" then fix it");
 		await h.controller.stop();
 	});
 

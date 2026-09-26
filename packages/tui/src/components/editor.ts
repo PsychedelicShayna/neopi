@@ -2792,9 +2792,8 @@ export class Editor implements Component, Focusable {
 	/**
 	 * Remove the speech committed under the given utterance ids as one undoable edit, leaving
 	 * the volatile preview intact. Only spans still holding exactly the spoken text are removed,
-	 * so text the operator typed is never deleted. One whitespace character at each seam goes
-	 * with the span so neighbouring words do not run together or double up. Returns how many
-	 * spans were removed.
+	 * so text the operator typed is never deleted. Spans carry their own separators, so the
+	 * operator's whitespace around them is kept. Returns how many spans were removed.
 	 */
 	removeUtterances(ids: readonly number[]): number {
 		this.#reconcileVolatile();
@@ -2810,23 +2809,20 @@ export class Editor implements Component, Focusable {
 		const previewStart = cursor - this.#volatileTextLen;
 		const removed: Array<{ start: number; end: number }> = [];
 		for (const span of targets) {
-			let { start, end } = span;
-			const spaceBefore = start > 0 && /\s/.test(full[start - 1] ?? "");
-			const spaceAfter = end < full.length && /\s/.test(full[end] ?? "");
-			if (spaceAfter && (spaceBefore || start === 0)) {
-				if (this.#volatileTextLen > 0 && end >= previewStart && end < previewStart + this.#volatileTextLen) {
-					// The separator opens the live preview; take the one before instead, if any.
-					if (spaceBefore) start -= 1;
-				} else {
-					end += 1;
-					// The separator opened the next utterance: that span now starts after it.
-					const next = this.#speechSpans.find(other => other.start === span.end && !targets.includes(other));
-					if (next) {
-						next.start += 1;
-						next.text = next.text.slice(1);
-					}
-				}
-			} else if (spaceBefore && end === full.length) start -= 1;
+			const { start } = span;
+			let { end } = span;
+			// A span carries its own separators, so the operator's whitespace around it stays. The
+			// one exception: speech at the start of a line followed by the next utterance, whose
+			// leading separator would otherwise open the line.
+			const lineStart = start === 0 || full[start - 1] === "\n";
+			const next = this.#speechSpans.find(other => other.start === end && !targets.includes(other));
+			const inPreview =
+				this.#volatileTextLen > 0 && end >= previewStart && end < previewStart + this.#volatileTextLen;
+			if (lineStart && next && !inPreview && /^[ \t]/.test(next.text)) {
+				end += 1;
+				next.start += 1;
+				next.text = next.text.slice(1);
+			}
 			full = full.slice(0, start) + full.slice(end);
 			removed.push({ start, end });
 			if (cursor >= end) cursor -= end - start;
