@@ -32,7 +32,7 @@ import { withCredentialRedaction } from "@oh-my-pi/pi-ai/providers/transform-mes
 import { FALLBACK_DIALECT, preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { $env } from "@oh-my-pi/pi-utils/env";
-import { getAgentDir, getModelDbPath, getProjectDir } from "@oh-my-pi/pi-utils/dirs";
+import { APP_NAME, getAgentDir, getModelDbPath, getProjectDir } from "@oh-my-pi/pi-utils/dirs";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import * as prompt from "@oh-my-pi/pi-utils/prompt";
@@ -4636,7 +4636,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					for (const extensionPath of unloaded) announcedUnloadedExtensions.add(extensionPath);
 					session.emitNotice(
 						"warning",
-						`Restart omp to load newly enabled extensions: ${unloaded.join(", ")}`,
+						`Restart ${APP_NAME} to load newly enabled extensions: ${unloaded.join(", ")}`,
 						"extensions",
 					);
 				}
