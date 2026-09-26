@@ -51,6 +51,7 @@ export function createGallerySegmentContext(sessionOptions?: GallerySessionOptio
 		collab: { role: "host", participantCount: 3 },
 		stream: null,
 		recording: false,
+		live: null,
 		usageStats: {
 			input: 12_400,
 			output: 3_600,

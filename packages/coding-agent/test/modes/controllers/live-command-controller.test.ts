@@ -21,11 +21,14 @@ interface Harness {
 	voice(): string | undefined;
 	/** Components mounted into or focused away from the composer slot. */
 	layoutChanges: unknown[];
+	/** Latest status-line live state, `null` when hidden. */
+	liveStatus(): unknown;
 }
 
 function createHarness(): Harness {
 	const editor = new CustomEditor(getEditorTheme());
 	const layoutChanges: unknown[] = [];
+	let liveStatus: unknown = null;
 	const ctx = {
 		settings: Settings.isolated({ "live.voice": "vale" }),
 		keybindings: { getKeys: vi.fn(() => ["ctrl+l"]) },
@@ -44,6 +47,11 @@ function createHarness(): Harness {
 		showError: vi.fn(),
 		chatContainer: { children: [] },
 		present: vi.fn(),
+		statusLine: {
+			setLiveStatus: vi.fn((status: unknown) => {
+				liveStatus = status;
+			}),
+		},
 	} as unknown as InteractiveModeContext;
 	let options: LiveSessionControllerOptions | undefined;
 	const controller = new LiveCommandController(ctx, created => {
@@ -63,6 +71,7 @@ function createHarness(): Harness {
 		},
 		voice: () => options?.voice,
 		layoutChanges,
+		liveStatus: () => liveStatus,
 	};
 }
 
@@ -139,5 +148,20 @@ describe("LiveCommandController", () => {
 		await h.controller.stop();
 		expect(h.editor.getText()).toBe("half a thou");
 		expect(h.editor.hasVolatileText).toBe(false);
+	});
+
+	it("mirrors the call phase into the status line and leaves it disconnected after a failure", async () => {
+		const h = createHarness();
+		await h.controller.handleCommand();
+		expect(h.liveStatus()).toEqual({ phase: "connecting" });
+		h.callbacks().onPhase("muted");
+		expect(h.liveStatus()).toEqual({ phase: "muted" });
+		h.callbacks().onTerminal(new Error("socket closed"));
+		expect(h.liveStatus()).toEqual({ phase: "disconnected" });
+
+		await h.controller.handleCommand();
+		expect(h.liveStatus()).toEqual({ phase: "connecting" });
+		await h.controller.stop();
+		expect(h.liveStatus()).toBeNull();
 	});
 });
