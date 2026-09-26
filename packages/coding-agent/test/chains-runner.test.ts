@@ -160,6 +160,12 @@ describe("renderChainInput", () => {
 		expect(out.endsWith(`explain </draft> tags\n</draft boundary="${boundary}">`)).toBe(true);
 	});
 
+	it("passes the draft through byte for byte, blank lines included", () => {
+		const draft = "keep\n\n\n\nthese gaps   \n| a | b |\n|--|--|";
+		const out = renderChainInput(step, draft, [user("hi")]);
+		expect(out).toContain(`\n${draft}\n</draft`);
+	});
+
 	it("drops the oldest messages that do not fit the step model's window", () => {
 		const messages = [user("old ".repeat(4000)), user("recent question")];
 		const out = renderChainInput(step, "draft", messages, { contextWindow: 6000, maxTokens: 1000 });

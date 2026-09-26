@@ -87,19 +87,22 @@ export interface RunChainOptions {
 }
 
 /**
- * The newest messages whose token estimate fits `budget`. Older history is dropped first: the
- * draft's references almost always point at the most recent turns.
+ * The rendered transcript of the newest messages whose rendering fits `budget` tokens. The
+ * rendered form is what the step reads (tool results collapsed, reasoning elided), so it is what
+ * gets measured. Older history is dropped first: a draft's references almost always point at the
+ * most recent turns.
  */
-function fitTranscript(messages: readonly AgentMessage[], budget: number, tokenizer: Tokenizer): AgentMessage[] {
-	let used = 0;
-	let start = messages.length;
-	while (start > 0) {
-		const cost = tokenizer.countMessage(messages[start - 1]!);
-		if (used + cost > budget) break;
-		used += cost;
-		start -= 1;
+function fitTranscript(messages: readonly AgentMessage[], budget: number, tokenizer: Tokenizer): string {
+	const render = (start: number) => formatSessionHistoryMarkdown(messages.slice(start) as unknown[]).trim();
+	// Smallest start index whose rendering fits; rendering size only shrinks as start grows.
+	let low = 0;
+	let high = messages.length;
+	while (low < high) {
+		const mid = (low + high) >>> 1;
+		if (tokenizer.countTokens(render(mid)) <= budget) high = mid;
+		else low = mid + 1;
 	}
-	return messages.slice(start);
+	return low < messages.length ? render(low) : "";
 }
 
 /** A boundary token that occurs in none of `texts`, so embedded tag-like text cannot close a block. */
@@ -122,7 +125,7 @@ export function renderChainInput(
 	model?: Pick<Model, "contextWindow" | "maxTokens" | "tokenizer">,
 ): string {
 	if (!step.context || !messages?.length) return input;
-	let kept: readonly AgentMessage[] = messages;
+	let transcript: string;
 	if (model?.contextWindow) {
 		const tokenizer = new Tokenizer(model);
 		const system = step.systemPrompt ?? CHAIN_SYSTEM_PROMPT;
@@ -130,15 +133,15 @@ export function renderChainInput(
 			tokenizer.countTokens([system, step.prompt, input]) +
 			Math.min(model.maxTokens || CHAIN_DEFAULT_OUTPUT_RESERVE, Math.floor(model.contextWindow / 4)) +
 			CHAIN_FRAMING_RESERVE;
-		kept = fitTranscript(messages, Math.max(0, model.contextWindow - reserved), tokenizer);
+		transcript = fitTranscript(messages, Math.max(0, model.contextWindow - reserved), tokenizer);
+	} else {
+		transcript = formatSessionHistoryMarkdown(messages as unknown[]).trim();
 	}
-	const transcript = formatSessionHistoryMarkdown(kept as unknown[]).trim();
 	if (!transcript) return input;
-	return prompt.render(chainInputWithContext, {
-		transcript,
-		draft: input,
-		boundary: blockBoundary([transcript, input]),
-	});
+	// compile, not render: the post-render formatter would rewrite the draft's whitespace and tables.
+	return prompt
+		.compile(chainInputWithContext)({ transcript, draft: input, boundary: blockBoundary([transcript, input]) })
+		.trimEnd();
 }
 
 /** Run one step over `input` and return the model's final text. */
