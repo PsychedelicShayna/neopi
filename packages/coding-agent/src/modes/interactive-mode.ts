@@ -6775,6 +6775,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#liveCommandController.routeSubmit(text);
 	}
 
+	noteLiveComposerActivity(): void {
+		this.#liveCommandController.noteComposerActivity();
+	}
+
 	#setMicCursor(color: { r: number; g: number; b: number }): void {
 		this.editor.cursorOverride = `\x1b[38;2;${color.r};${color.g};${color.b}m${theme.icon.mic}\x1b[0m`;
 		// Theme symbols can be wide (for example, 🎤), so measure the rendered override.
