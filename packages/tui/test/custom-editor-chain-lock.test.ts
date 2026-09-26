@@ -28,4 +28,19 @@ describe("CustomEditor chain lock", () => {
 		editor.handleInput("x");
 		expect(editor.getText()).toBe("draftx");
 	});
+
+	it("drops dictation that lands while the chain holds the composer", () => {
+		const editor = new CustomEditor(getEditorTheme());
+		const onSubmit = vi.fn();
+		editor.onSubmit = onSubmit;
+		editor.setText("draft");
+		editor.setChainLock({ onEscape: vi.fn(), onClear: vi.fn() });
+
+		editor.setVolatileText(" spoken");
+		editor.commitVolatileText(" spoken");
+		editor.insertText(" typed");
+		editor.submit();
+		expect(editor.getText()).toBe("draft");
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
 });

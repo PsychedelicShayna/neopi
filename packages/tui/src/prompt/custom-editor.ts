@@ -852,6 +852,28 @@ export class CustomEditor extends Editor {
 
 	/** Lock the composer while a chain rewrites it: every line shimmers and all input is dropped except
 	 *  Escape (→ `onEscape`) and the app.clear key, Ctrl+C by default (→ `onClear`). `undefined` unlocks. */
+	// While a chain holds the composer it owns the draft and overwrites it when done, so writes
+	// that bypass handleInput (an in-flight dictation finishing, its submit trigger) are dropped.
+	override insertText(text: string): void {
+		if (!this.#chainLock) super.insertText(text);
+	}
+
+	override deleteBeforeCursor(count: number): void {
+		if (!this.#chainLock) super.deleteBeforeCursor(count);
+	}
+
+	override setVolatileText(text: string): void {
+		if (!this.#chainLock) super.setVolatileText(text);
+	}
+
+	override commitVolatileText(text: string): void {
+		if (!this.#chainLock) super.commitVolatileText(text);
+	}
+
+	override submit(): void {
+		if (!this.#chainLock) super.submit();
+	}
+
 	/** Whether a chain holds the composer; paste paths outside {@link handleInput} check it too. */
 	get chainLocked(): boolean {
 		return this.#chainLock !== undefined;
