@@ -1355,7 +1355,9 @@ export class InputController {
 	/** A voice handoff of the draft's speech landed as the operator submitted: put the draft back
 	 *  (submit already emptied the composer) for review instead of sending it twice. */
 	#holdForLiveHandoff(text: string): void {
-		this.ctx.editor.setCollapsedText(text);
+		// The draft as displayed, spoken spans included, so the landing handoff can still remove
+		// its speech from it.
+		if (!this.ctx.editor.restoreSubmittedDraft()) this.ctx.editor.setCollapsedText(text);
 		this.ctx.showStatus(LIVE_HANDOFF_HOLD_STATUS);
 	}
 

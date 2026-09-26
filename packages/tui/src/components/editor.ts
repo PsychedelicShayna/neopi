@@ -2531,7 +2531,13 @@ export class Editor implements Component, Focusable {
 
 	/** The last submitted draft as it was displayed, chips and paste markers still collapsed. */
 	#submittedDraft:
-		| { lines: string[]; pastes: Map<number, string>; atoms: Map<string, string>; pasteCounter: number }
+		| {
+				lines: string[];
+				pastes: Map<number, string>;
+				atoms: Map<string, string>;
+				pasteCounter: number;
+				speechSpans: SpeechSpan[];
+		  }
 		| undefined;
 
 	/**
@@ -2546,6 +2552,9 @@ export class Editor implements Component, Focusable {
 		this.#atoms = new Map(draft.atoms);
 		this.#pasteCounter = draft.pasteCounter;
 		const lines = [...draft.lines];
+		// Spoken spans come back too, so a voice handoff can still retire its speech.
+		this.#speechSpans = draft.speechSpans.map(span => ({ ...span }));
+		this.#spanBase = lines.join("\n");
 		this.#state = { lines, cursorLine: lines.length - 1, cursorCol: 0 };
 		this.#setCursorCol(lines[lines.length - 1]?.length ?? 0);
 		this.#historyIndex = -1;
@@ -3265,11 +3274,13 @@ export class Editor implements Component, Focusable {
 		this.#resetKillSequence();
 
 		const result = this.#expandPasteMarkers(this.#state.lines.join("\n")).trim();
+		this.#reconcileSpans();
 		this.#submittedDraft = {
 			lines: [...this.#state.lines],
 			pastes: new Map(this.#pastes),
 			atoms: new Map(this.#atoms),
 			pasteCounter: this.#pasteCounter,
+			speechSpans: this.#speechSpans.map(span => ({ ...span })),
 		};
 
 		this.#state = { lines: [""], cursorLine: 0, cursorCol: 0 };

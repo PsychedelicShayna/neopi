@@ -2908,6 +2908,16 @@ describe("Editor component", () => {
 	});
 
 	describe("submitted draft restore", () => {
+		it("keeps spoken spans removable after a submitted draft is restored", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.insertText("note:");
+			const spoken = editor.commitVolatileText(" fix the parser");
+			editor.submit();
+			expect(editor.restoreSubmittedDraft()).toBe(true);
+			editor.removeUtterances([spoken!]);
+			expect(editor.getText()).toBe("note:");
+		});
+
 		it("puts a submitted large paste back collapsed, with its content intact", () => {
 			const editor = new Editor(defaultEditorTheme);
 			const payload = "line\n".repeat(400);
