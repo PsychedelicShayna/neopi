@@ -5,8 +5,8 @@ import * as path from "node:path";
 import { type EmbeddedAddonFile, extractEmbeddedAddonArchive } from "../native/loader-state.js";
 
 // A fork ships many builds under one upstream version, so the per-version
-// cache can hold a same-size addon from a different build. Size alone must not
-// make it current.
+// cache can hold a same-size addon from a different build. Each build extracts
+// to a path named by its content hash, so neither can load the other's bytes.
 describe("embedded addon cache", () => {
 	const filename = "pi_natives.linux-x64-modern.node";
 	let testDir: string;
@@ -35,21 +35,27 @@ describe("embedded addon cache", () => {
 		await fs.rm(testDir, { recursive: true, force: true });
 	});
 
-	it("replaces a same-size addon left by another build of the same version", async () => {
-		await Bun.write(path.join(targetDir, filename), "old!");
+	it("extracts to a content-addressed path, never loading another build's same-size addon", async () => {
+		const canonical = path.join(targetDir, filename);
+		await Bun.write(canonical, "old!");
 
-		expect(extractEmbeddedAddonArchive({ archivePath, files, targetDir })).toEqual([path.join(targetDir, filename)]);
-		expect(await fs.readFile(path.join(targetDir, filename), "utf8")).toBe("new!");
+		const [extracted] = extractEmbeddedAddonArchive({ archivePath, files, targetDir });
+		expect(extracted).not.toBe(canonical);
+		expect(await fs.readFile(extracted!, "utf8")).toBe("new!");
+		expect(await fs.readFile(canonical, "utf8")).toBe("old!");
 		expect(extractEmbeddedAddonArchive({ archivePath, files, targetDir })).toEqual([]);
 	});
 
-	it("re-extracts after another binary rewrites the cached addon", async () => {
-		extractEmbeddedAddonArchive({ archivePath, files, targetDir });
-		const cached = path.join(targetDir, filename);
-		await Bun.write(`${cached}.other`, "odd!");
-		await fs.rename(`${cached}.other`, cached);
+	it("keeps two builds of one version in separate files", async () => {
+		const otherArchive = path.join(testDir, "other.tar.gz");
+		const otherBytes = Buffer.from("odd!");
+		await Bun.write(otherArchive, await new Bun.Archive({ [filename]: otherBytes }, { compress: "gzip" }).bytes());
+		const otherFiles = [{ ...files[0]!, sha256: new Bun.CryptoHasher("sha256").update(otherBytes).digest("hex") }];
 
-		expect(extractEmbeddedAddonArchive({ archivePath, files, targetDir })).toEqual([cached]);
-		expect(await fs.readFile(cached, "utf8")).toBe("new!");
+		const [ours] = extractEmbeddedAddonArchive({ archivePath, files, targetDir });
+		const [theirs] = extractEmbeddedAddonArchive({ archivePath: otherArchive, files: otherFiles, targetDir });
+		expect(theirs).not.toBe(ours);
+		expect(await fs.readFile(ours!, "utf8")).toBe("new!");
+		expect(await fs.readFile(theirs!, "utf8")).toBe("odd!");
 	});
 });

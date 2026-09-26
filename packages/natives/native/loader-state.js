@@ -477,56 +477,72 @@ function isSafeEmbeddedAddonFilename(filename) {
 }
 
 /**
- * Stamp recorded next to an extracted addon: the embedded content hash plus the
- * identity (inode, mtime) of the file that extraction wrote. Size alone cannot
- * tell two builds of one release apart, and every build of a fork shares its
- * upstream version; a rewrite by any other binary changes the identity.
- * @param {string} sha256
- * @param {fs.Stats} stat
+ * Where an embedded addon is extracted. With a known content hash the filename
+ * carries it, so every build of one release (a fork ships many under a single
+ * upstream version) extracts to its own immutable file: no other binary can
+ * replace it between the check and the load. Without a hash, the canonical name.
+ * @param {string} dir
+ * @param {{ filename: string, sha256?: string }} file
  * @returns {string}
  */
-function embeddedAddonStamp(sha256, stat) {
- return `${sha256} ${stat.ino} ${stat.mtimeMs}\n`;
+function embeddedAddonTargetPath(dir, file) {
+ if (typeof file.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(file.sha256)) return path.join(dir, file.filename);
+ const ext = path.extname(file.filename);
+ return path.join(dir, `${file.filename.slice(0, file.filename.length - ext.length)}.${file.sha256.slice(0, 16)}${ext}`);
+}
+
+/**
+ * Remove addons other builds of this release extracted next to ours. Best effort:
+ * a file another process still has loaded stays mapped on POSIX and is skipped on
+ * Windows, where deleting it fails.
+ * @param {string} dir
+ * @param {{ filename: string, sha256?: string }} file
+ * @param {string} keepPath
+ */
+function pruneOtherBuildAddons(dir, file, keepPath) {
+ const ext = path.extname(file.filename);
+ const stem = file.filename.slice(0, file.filename.length - ext.length);
+ let entries;
+ try {
+  entries = fs.readdirSync(dir);
+ } catch {
+  return;
+ }
+ for (const entry of entries) {
+  const full = path.join(dir, entry);
+  if (full === keepPath || !entry.startsWith(`${stem}.`) || !entry.endsWith(ext)) continue;
+  if (!/^[0-9a-f]{16}$/.test(entry.slice(stem.length + 1, entry.length - ext.length))) continue;
+  try {
+   fs.rmSync(full, { force: true });
+  } catch {
+   // In use by another process on Windows; it goes with the version directory.
+  }
+ }
 }
 
 function isEmbeddedAddonFileCurrent(targetPath, file) {
- let stat;
  try {
-  stat = fs.statSync(targetPath);
- } catch (err) {
-  if (err && err.code === "ENOENT") return false;
-  throw err;
- }
- if (!stat.isFile()) return false;
- if (typeof file.size === "number" && stat.size !== file.size) return false;
- if (typeof file.sha256 !== "string") return true;
- try {
-  return fs.readFileSync(`${targetPath}.sha256`, "utf8") === embeddedAddonStamp(file.sha256, stat);
+  const stat = fs.statSync(targetPath);
+  if (!stat.isFile()) return false;
+  return typeof file.size !== "number" || stat.size === file.size;
  } catch (err) {
   if (err && err.code === "ENOENT") return false;
   throw err;
  }
 }
 
-function writeEmbeddedAddonFile(targetPath, content, sha256) {
+function writeEmbeddedAddonFile(targetPath, content) {
  const tempPath = `${targetPath}.tmp.${process.pid}.${Date.now()}`;
- let written;
  try {
   fs.writeFileSync(tempPath, content, { mode: 0o755 });
-  // Identity of our own inode, taken before the rename: a concurrent extractor
-  // that renames over it afterwards leaves a stamp that no longer matches.
-  written = fs.statSync(tempPath);
   fs.renameSync(tempPath, targetPath);
  } catch (err) {
   try {
-   fs.unlinkSync(tempPath);
+   fs.rmSync(tempPath, { force: true });
   } catch {
-   // Best-effort cleanup only.
+   // Best effort cleanup; preserve the original write error.
   }
   throw err;
- }
- if (typeof sha256 === "string") {
-  fs.writeFileSync(`${targetPath}.sha256`, embeddedAddonStamp(sha256, written));
  }
 }
 
@@ -536,7 +552,7 @@ export function extractEmbeddedAddonArchive({ archivePath, files, targetDir }) {
   if (!isSafeEmbeddedAddonFilename(file.filename)) {
    throw new Error(`Unsafe embedded addon filename: ${file.filename}`);
   }
-  const targetPath = path.join(targetDir, file.filename);
+  const targetPath = embeddedAddonTargetPath(targetDir, file);
   if (!isEmbeddedAddonFileCurrent(targetPath, file)) {
    pending.set(file.filename, file);
   }
@@ -571,8 +587,8 @@ export function extractEmbeddedAddonArchive({ archivePath, files, targetDir }) {
    if (typeof file.size === "number" && file.size !== size) {
     throw new Error(`Embedded addon size mismatch for ${filename}: expected ${file.size}, got ${size}`);
    }
-   const targetPath = path.join(targetDir, filename);
-   writeEmbeddedAddonFile(targetPath, archive.subarray(offset, offset + size), file.sha256);
+   const targetPath = embeddedAddonTargetPath(targetDir, file);
+   writeEmbeddedAddonFile(targetPath, archive.subarray(offset, offset + size));
    pending.delete(filename);
    writtenPaths.push(targetPath);
   }
@@ -593,7 +609,7 @@ function maybeExtractEmbeddedAddon(ctx, errors) {
 
  const selectedEmbeddedFile = selectEmbeddedAddonFile(ctx.selectedVariant);
  if (!selectedEmbeddedFile) return null;
- const targetPath = path.join(ctx.versionedDir, selectedEmbeddedFile.filename);
+ const targetPath = embeddedAddonTargetPath(ctx.versionedDir, selectedEmbeddedFile);
 
  startupMarker("native:extractEmbeddedAddon:start");
  try {
@@ -612,6 +628,7 @@ function maybeExtractEmbeddedAddon(ctx, errors) {
     targetDir: ctx.versionedDir,
    });
    if (isEmbeddedAddonFileCurrent(targetPath, selectedEmbeddedFile)) {
+    pruneOtherBuildAddons(ctx.versionedDir, selectedEmbeddedFile, targetPath);
     return targetPath;
    }
    errors.push(`embedded addon archive (${embeddedAddon.archive.filename}): missing ${selectedEmbeddedFile.filename}`);
@@ -632,7 +649,8 @@ function maybeExtractEmbeddedAddon(ctx, errors) {
  }
 
  try {
-  writeEmbeddedAddonFile(targetPath, fs.readFileSync(selectedEmbeddedFile.filePath), selectedEmbeddedFile.sha256);
+  writeEmbeddedAddonFile(targetPath, fs.readFileSync(selectedEmbeddedFile.filePath));
+  pruneOtherBuildAddons(ctx.versionedDir, selectedEmbeddedFile, targetPath);
   return targetPath;
  } catch (err) {
   const message = err instanceof Error ? err.message : String(err);
