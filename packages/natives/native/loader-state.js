@@ -509,6 +509,30 @@ function markEmbeddedAddonSelected(targetPath) {
  }
 }
 
+/**
+ * For a compiled binary with embedded addons, whether `candidate` holds the bytes embedded for
+ * its filename; other binaries accept every candidate. Hashes only on this fallback path.
+ * @param {{ isCompiledBinary: boolean; platformTag: string; packageVersion: string }} ctx
+ * @param {string} candidate
+ * @param {string[]} errors
+ * @returns {boolean}
+ */
+function embeddedBytesMatch(ctx, candidate, errors) {
+ if (!ctx.isCompiledBinary || !embeddedAddon) return true;
+ if (embeddedAddon.platformTag !== ctx.platformTag || embeddedAddon.version !== ctx.packageVersion) return true;
+ const file = embeddedAddon.files.find(entry => entry.filename === path.basename(candidate));
+ if (typeof file?.sha256 !== "string") return true;
+ let actual;
+ try {
+  actual = new Bun.CryptoHasher("sha256").update(fs.readFileSync(candidate)).digest("hex");
+ } catch {
+  return false;
+ }
+ if (actual === file.sha256) return true;
+ errors.push(`${candidate}: not this binary's embedded addon (sha256 mismatch); skipped`);
+ return false;
+}
+
 function isEmbeddedAddonFileCurrent(targetPath, file) {
  try {
   const stat = fs.statSync(targetPath);
@@ -997,7 +1021,12 @@ export function loadNative() {
  const embeddedCandidate = maybeExtractEmbeddedAddon(ctx, errors);
  const stagedCandidate = embeddedCandidate ? null : maybeStageNodeModulesAddon(ctx, errors);
  const prepended = [embeddedCandidate, stagedCandidate].filter(c => typeof c === "string");
- const runtimeCandidates = prepended.length > 0 ? [...prepended, ...ctx.candidates] : [...ctx.candidates];
+ // A compiled binary whose own addon could not be extracted accepts a fallback only if it holds
+ // exactly the embedded bytes: another build of this release carries the same version sentinel.
+ const fallbacks = embeddedCandidate
+  ? ctx.candidates
+  : ctx.candidates.filter(candidate => embeddedBytesMatch(ctx, candidate, errors));
+ const runtimeCandidates = prepended.length > 0 ? [...prepended, ...fallbacks] : [...fallbacks];
  let reextracted = false;
 
  for (let index = 0; index < runtimeCandidates.length; index++) {
