@@ -335,11 +335,13 @@ describe("live controller delegation ownership", () => {
 		expect(h.prompts).toEqual(["first clause\n\nsecond clause"]);
 	});
 
-	it("keeps unclaimed speech across assistant completion so a later handoff carries it", async () => {
+	it("retires the turns an answer addressed but keeps speech spoken during it for a later handoff", async () => {
 		const h = makeHarness();
 		await h.controller.start();
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "iris, what time is it" } });
+		h.fireLive({ type: "output_transcript.added", item: { text: "It is noon" } });
 		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "spoken while she answered" } });
-		h.fireLive({ type: "turn.done", turn: { role: "assistant", transcript: "voice-only answer" } });
+		h.fireLive({ type: "turn.done", turn: { role: "assistant", transcript: "It is noon" } });
 		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "now do it" } });
 		h.fireLive(delegation("dlg-late", "model-authored fallback"));
 		await settle();
@@ -350,11 +352,23 @@ describe("live controller delegation ownership", () => {
 		const h = makeHarness();
 		await h.controller.start();
 		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "already sent by hand" } });
-		h.controller.discardUnclaimedSpeech();
+		h.controller.retireComposerSpeech();
 		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "new request" } });
 		h.fireLive(delegation("dlg-after-submit", "model-authored fallback"));
 		await settle();
 		expect(h.prompts).toEqual(["new request"]);
+	});
+
+	it("cancels a handoff still waiting on its speech when the operator submits the composer", async () => {
+		const h = makeHarness();
+		await h.controller.start();
+		h.fireLive({ type: "input_transcript.added", item: { text: "typed and sent by hand" } });
+		h.fireLive(delegation("dlg-pending", "model-authored fallback"));
+		await settle();
+		h.controller.retireComposerSpeech();
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "typed and sent by hand" } });
+		await settle();
+		expect(h.prompts).toEqual([]);
 	});
 
 	it("retains a claimed mixed turn across assistant completion", async () => {

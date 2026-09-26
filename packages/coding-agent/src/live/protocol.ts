@@ -207,8 +207,8 @@ function utf8ByteLength(codePoint: number): number {
 	return 4;
 }
 
-/** Split context into character-safe chunks of at most 500 UTF-8 bytes. */
-export function chunkLiveContext(text: string): string[] {
+/** Split context into character-safe chunks of at most `maxBytes` (default 500) UTF-8 bytes. */
+export function chunkLiveContext(text: string, maxBytes = CONTEXT_CHUNK_BYTES): string[] {
 	if (text.length === 0) return [""];
 
 	const chunks: string[] = [];
@@ -220,7 +220,7 @@ export function chunkLiveContext(text: string): string[] {
 		if (codePoint === undefined) break;
 		const characterLength = codePoint > 0xffff ? 2 : 1;
 		const characterBytes = utf8ByteLength(codePoint);
-		if (chunkBytes + characterBytes > CONTEXT_CHUNK_BYTES) {
+		if (chunkBytes + characterBytes > maxBytes && index > chunkStart) {
 			chunks.push(text.slice(chunkStart, index));
 			chunkStart = index;
 			chunkBytes = 0;

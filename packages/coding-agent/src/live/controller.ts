@@ -177,6 +177,12 @@ export class LiveSessionController {
 	#delegationGeneration = 0;
 	/** Canonical controller-owned user turns awaiting or undergoing a handoff. */
 	#userTurnLedger: Array<{ turn: number; text: string; final: boolean; claim?: number }> = [];
+	/** Ledger turns already final and unclaimed when the voice agent began its current response:
+	 *  the turns that response answers. Undefined while no response is under way. */
+	#answeredTurns: number[] | undefined;
+	/** The transport finished connecting; context sent before then waits in {@link #pendingOperatorText}. */
+	#connected = false;
+	#pendingOperatorText: LiveClientMessage[] = [];
 	#userLedgerTurn = 0;
 	readonly #seenDelegationIds = new Set<string>();
 	#pendingDelegation:
@@ -275,6 +281,10 @@ export class LiveSessionController {
 			if (this.#stopped) {
 				throw this.#failure ?? new Error("The live session stopped while connecting.");
 			}
+			this.#connected = true;
+			const queued = this.#pendingOperatorText;
+			this.#pendingOperatorText = [];
+			for (const message of queued) this.#queueSend(message);
 			this.#unsubscribeSession = this.#session.subscribe(event =>
 				this.#guardEvent(() => this.#handleSessionEvent(event)),
 			);
@@ -334,6 +344,7 @@ export class LiveSessionController {
 		this.#speakableIdleTimer = undefined;
 		this.#speakableIdleDeadline = 0;
 		this.#heldContext = [];
+		this.#pendingOperatorText = [];
 		this.#unsubscribeSession?.();
 		this.#unsubscribeSession = undefined;
 		// Flush a mid-utterance user transcript (VAD-split or aborted turn) so the
@@ -399,16 +410,20 @@ export class LiveSessionController {
 				this.#addTranscript("user", event.item.text);
 				break;
 			case "output_transcript.added":
+				this.#answeredTurns ??= this.#userTurnLedger
+					.filter(turn => turn.final && turn.claim === undefined)
+					.map(turn => turn.turn);
 				this.#addTranscript("assistant", event.item.text);
 				break;
 			case "turn.done":
 				this.#recordLiveTranscript(event.turn.role, event.turn.transcript, true);
 				if (event.turn.role === "user") this.#ingestUserTurn(event.turn.transcript, true);
+				else this.#retireAnsweredTurns();
 				this.#finishTranscript(event.turn.role, event.turn.transcript);
 				break;
 			case "delegation.created":
-				// The voice agent is acting on the operator's words now; hold nothing back.
-				this.#releaseHeldContext();
+				// This response hands the operator's words off rather than answering them.
+				this.#answeredTurns = undefined;
 				void this.#handleDelegation(event).catch(cause => this.#reportFailure(errorFrom(cause)));
 				break;
 			case "error":
@@ -446,6 +461,8 @@ export class LiveSessionController {
 			turn => turn.claim === undefined || turn.claim === this.#pendingDelegation?.generation,
 		);
 		if (claimed.length === 0) return;
+		// The voice agent is acting on the operator's words now; hold nothing back.
+		this.#releaseHeldContext();
 		for (const turn of claimed) turn.claim = generation;
 		this.#pendingDelegation = {
 			id: event.item.id,
@@ -617,24 +634,47 @@ export class LiveSessionController {
 	sendOperatorText(text: string, audience: "voice" | "both"): void {
 		const message = text.trim();
 		if (!message || this.#stopped) return;
-		const context =
-			audience === "voice"
-				? prompt.render(operatorTypedMessageTemplate, { message })
-				: prompt.render(operatorSharedMessageTemplate, { message });
+		const template = audience === "voice" ? operatorTypedMessageTemplate : operatorSharedMessageTemplate;
 		const channel = audience === "voice" ? undefined : "commentary";
-		for (const chunk of chunkLiveContext(context)) {
-			this.#queueSend(buildSessionContextAppend(chunk, channel));
+		// Every chunk carries the routing label: the voice agent routes each context item by it.
+		const labelBytes = Buffer.byteLength(prompt.render(template, { message: "" }), "utf8");
+		for (const part of chunkLiveContext(message, CONTEXT_CHUNK_BYTES - labelBytes)) {
+			const context = buildSessionContextAppend(prompt.render(template, { message: part }), channel);
+			if (this.#connected) this.#queueSend(context);
+			else this.#pendingOperatorText.push(context);
 		}
 	}
 
 	/**
 	 * The operator submitted the composer, which already holds every spoken utterance not yet
-	 * handed off. Drop those unclaimed ledger turns so a later voice delegation cannot relay
-	 * words the operator has already sent, edited, or deleted. Claimed turns stay with their
-	 * in-flight handoff.
+	 * handed off. Drop the unclaimed ledger turns and cancel a handoff that has claimed turns but
+	 * is not yet accepted, so neither a later delegation nor the pending one relays words the
+	 * operator already sent, edited, or deleted. Turns the main agent already accepted stay
+	 * with it.
 	 */
-	discardUnclaimedSpeech(): void {
+	retireComposerSpeech(): void {
+		const pending = this.#pendingDelegation;
+		if (pending && (this.#pendingDelivery?.cancel() ?? true)) {
+			// Supersede the handoff: its in-flight abort/dispatch sees a newer generation and stops.
+			this.#delegationGeneration += 1;
+			this.#pendingDelegation = undefined;
+			this.#pendingDelivery = undefined;
+			this.#userTurnLedger = this.#userTurnLedger.filter(turn => turn.claim !== pending.generation);
+			this.#refreshAudioPhase();
+		}
 		this.#userTurnLedger = this.#userTurnLedger.filter(turn => turn.claim !== undefined);
+		this.#answeredTurns = undefined;
+	}
+
+	/** The voice agent finished answering: the turns it answered are its own and must not ride a
+	 *  later handoff. Speech that arrived during the answer stays for a later delegation. */
+	#retireAnsweredTurns(): void {
+		const answered = this.#answeredTurns;
+		this.#answeredTurns = undefined;
+		if (!answered?.length) return;
+		this.#userTurnLedger = this.#userTurnLedger.filter(
+			turn => turn.claim !== undefined || !answered.includes(turn.turn),
+		);
 	}
 
 	/** Fleet feed: relay a crew IRC message onto the speakable channel for background awareness. */
