@@ -178,6 +178,7 @@ export type SymbolKey =
 	| "cmd.cart"
 	// STT
 	| "icon.mic"
+	| "icon.micMuted"
 	// Compaction divider
 	| "icon.camera"
 	// Thinking Levels
@@ -539,6 +540,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"cmd.cart": "🛒",
 	// STT
 	"icon.mic": "🎤",
+	"icon.micMuted": "🔇",
 	// Compaction divider
 	"icon.camera": "📷",
 	// Thinking levels
@@ -976,6 +978,8 @@ const NERD_SYMBOLS: SymbolMap = {
 	"cmd.cart": "\uf07a",
 	// STT - fa-microphone
 	"icon.mic": "\uf130",
+	// Live mute - fa-microphone-slash
+	"icon.micMuted": "\uf131",
 	// Compaction divider - fa-camera-retro
 	"icon.camera": "\uf083",
 	// Thinking levels — increasing circle slices, with fire reserved for max.
@@ -1270,6 +1274,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"cmd.cart": "",
 	// STT
 	"icon.mic": "MIC",
+	"icon.micMuted": "MUTE",
 	// Compaction divider
 	"icon.camera": "[o]",
 	// Thinking Levels
