@@ -1039,13 +1039,13 @@ export class InputController {
 
 			const queueBody = parseQueueShorthand(text);
 			if (queueBody !== undefined) {
-				await this.#queueForYield(queueBody, {
+				const accepted = await this.#queueForYield(queueBody, {
 					historyText: text,
 					images: inputImages,
 					imageLinks: inputImageLinks,
 				});
-				// A queued prompt still reaches the main agent; `both` shares it like any other.
-				if (this.ctx.liveCallActive) this.ctx.shareLiveSubmit(queueBody);
+				// A queued prompt still reaches the main agent; `both` shares what was accepted.
+				if (accepted.length > 0 && this.ctx.liveCallActive) this.ctx.shareLiveSubmit(accepted.join("\n\n"));
 				return;
 			}
 
@@ -1814,12 +1814,12 @@ export class InputController {
 			images?: ImageContent[];
 			imageLinks?: (string | undefined)[];
 		},
-	): Promise<void> {
+	): Promise<readonly string[]> {
 		const splitMessages = splitQueuedMessages(text);
 		if (splitMessages.length === 0 && !options.images?.length) {
 			this.ctx.editor.clearDraft();
 			this.ctx.showWarning("Usage: /queue <message> (or start a prompt with -> / =>)");
-			return;
+			return [];
 		}
 
 		const messages = splitMessages.length > 0 ? splitMessages : [""];
@@ -1847,7 +1847,7 @@ export class InputController {
 					: `Queued ${messages.length} messages for after compaction`,
 			);
 			this.ctx.ui.requestRender();
-			return;
+			return messages;
 		}
 
 		const startImmediately = !this.ctx.session.isStreaming && this.ctx.session.queuedMessageCount === 0;
@@ -1917,6 +1917,7 @@ export class InputController {
 			);
 		}
 		this.ctx.ui.requestRender();
+		return messages.slice(0, queuedCount);
 	}
 
 	/** Send editor text as a follow-up message (queued behind current stream). */

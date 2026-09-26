@@ -468,6 +468,18 @@ describe("live controller delegation ownership", () => {
 		expect(h.sent.filter(message => message.type === "session.context.append")).toHaveLength(1);
 	});
 
+	it("keeps a spoken request when the voice agent is answering a typed prompt", async () => {
+		const h = makeHarness();
+		await h.controller.start();
+		h.controller.sendOperatorText("iris, what changed?", "voice");
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "fix the parser" } });
+		h.fireLive({ type: "output_transcript.added", item: { text: "Two files changed" } });
+		h.fireLive({ type: "turn.done", turn: { role: "assistant", transcript: "Two files changed" } });
+		h.fireLive(delegation("dlg-after-typed", "model-authored fallback"));
+		await settle();
+		expect(h.prompts).toEqual(["fix the parser"]);
+	});
+
 	it("keeps a pending request when the voice agent only narrates released context", async () => {
 		// No quiet window: the crew report goes out right after the request.
 		const h = makeHarness({ speakableIdleMs: 0 });

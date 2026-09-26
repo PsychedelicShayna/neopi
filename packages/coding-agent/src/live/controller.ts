@@ -189,11 +189,11 @@ export class LiveSessionController {
 	/** Ledger number of a partial turn the operator retired from the composer; the rest of that
 	 *  utterance is ignored so its authoritative final cannot re-enter the ledger. */
 	#retiredPartialTurn: number | undefined;
-	/** Ordering stamps: when a user turn last became final, and when voice-triggering context
-	 *  last went out. A response started after context, not speech, is narration, not an answer. */
-	#eventSeq = 0;
-	#userFinalSeq = 0;
-	#contextSeq = 0;
+	/** Voice-triggering context (reports, final answers, typed prompts) went out since the voice
+	 *  agent's last response ended. A response that may be answering it retires no spoken turns. */
+	#contextSinceResponse = false;
+	/** The voice agent is mid-response (between its first output and its turn.done). */
+	#responding = false;
 	#pendingOperatorText: LiveClientMessage[] = [];
 	/** See {@link expectOperatorTurn}. */
 	#operatorTurnPending = false;
@@ -627,7 +627,12 @@ export class LiveSessionController {
 	 * handoff. Classified once per response, before output releases any held context.
 	 */
 	#noteResponseStart(): void {
-		if (this.#answeredTurns || this.#userFinalSeq <= this.#contextSeq) return;
+		if (this.#responding) return;
+		this.#responding = true;
+		// The response consumes the context sent before it; context sent during it counts for the next.
+		const fromContext = this.#contextSinceResponse;
+		this.#contextSinceResponse = false;
+		if (this.#answeredTurns || fromContext) return;
 		this.#answeredTurns = this.#userTurnLedger
 			.filter(turn => turn.final && turn.claim === undefined)
 			.map(turn => turn.turn);
@@ -658,7 +663,7 @@ export class LiveSessionController {
 			this.#lastRelayedResponse = message;
 			const finalContext = prompt.render(agentFinalMessageTemplate, { message: text });
 			this.#deliverOrHold(() => {
-				this.#contextSeq = ++this.#eventSeq;
+				this.#contextSinceResponse = true;
 				for (const chunk of chunkLiveContext(finalContext)) {
 					this.#queueSend(buildDelegationContextAppend(delegationId, chunk));
 				}
@@ -680,7 +685,7 @@ export class LiveSessionController {
 			this.#lastRelayedResponse = message;
 			const labelBytes = Buffer.byteLength(prompt.render(agentFinalMessageTemplate, { message: "" }), "utf8");
 			this.#deliverOrHold(() => {
-				this.#contextSeq = ++this.#eventSeq;
+				this.#contextSinceResponse = true;
 				for (const part of chunkLiveContext(text, CONTEXT_CHUNK_BYTES - labelBytes)) {
 					this.#queueSend(buildSessionContextAppend(prompt.render(agentFinalMessageTemplate, { message: part })));
 				}
@@ -702,6 +707,8 @@ export class LiveSessionController {
 		const message = text.trim();
 		if (!message || this.#stopped) return;
 		const template = audience === "voice" ? operatorTypedMessageTemplate : operatorSharedMessageTemplate;
+		// A typed prompt makes the voice agent answer it, not the speech around it.
+		if (audience === "voice") this.#contextSinceResponse = true;
 		const channel = audience === "voice" ? undefined : "commentary";
 		// Every chunk carries the routing label: the voice agent routes each context item by it.
 		const labelBytes = Buffer.byteLength(prompt.render(template, { message: "" }), "utf8");
@@ -744,6 +751,7 @@ export class LiveSessionController {
 	/** The voice agent finished answering: the turns it answered are its own and must not ride a
 	 *  later handoff. Speech that arrived during the answer stays for a later delegation. */
 	#retireAnsweredTurns(): void {
+		this.#responding = false;
 		const answered = this.#answeredTurns;
 		this.#answeredTurns = undefined;
 		if (!answered?.length) return;
@@ -830,7 +838,7 @@ export class LiveSessionController {
 	}
 
 	#sendSpeakable(item: string): void {
-		this.#contextSeq = ++this.#eventSeq;
+		this.#contextSinceResponse = true;
 		const delegationId = this.#activeDelegationId;
 		this.#queueSend(
 			delegationId
@@ -988,7 +996,6 @@ export class LiveSessionController {
 		} else if (!current.text.startsWith(normalized)) {
 			current.text += normalized;
 		}
-		if (final) this.#userFinalSeq = ++this.#eventSeq;
 		this.#emitUserSpeech({ role: "user", turn: current.turn, text: current.text, final: current.final });
 		const pendingGeneration = this.#pendingDelegation?.generation;
 		if (final && pendingGeneration !== undefined) {
