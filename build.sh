@@ -76,6 +76,9 @@ native_inputs() {
 		"${OMP_NATIVE_CARGO_PROFILE:-}" "${OMP_NATIVE_BUILD_BACKEND:-}" "${RUSTC_LINKER:-}"
 	# Target linkers reach the embedded relay's rustc through crates/pi-natives/build.rs.
 	env | grep -E '^CARGO_TARGET_[A-Z0-9_]+_LINKER=' | sort || true
+	# A Bazel rc (scripts/bazel-natives.ts) can change flags and toolchains.
+	printf 'bazelrc %s\n' "${OMP_BAZEL_RC:-}"
+	if [[ -n ${OMP_BAZEL_RC:-} && -f $OMP_BAZEL_RC ]]; then sha256sum <"$OMP_BAZEL_RC"; fi
 	git rev-parse "${paths[@]/#/HEAD:}"
 	git diff --no-ext-diff --no-textconv --no-color --binary HEAD -- "${paths[@]}"
 	untracked_digest "${paths[@]}"
