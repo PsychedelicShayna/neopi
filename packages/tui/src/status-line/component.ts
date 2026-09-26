@@ -954,7 +954,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 
 	/** Show the live voice call icon, or hide it with `null`. */
 	setLiveStatus(status: SegmentContext["live"]): void {
-		if (this.#liveStatus?.phase === status?.phase) return;
+		if (this.#liveStatus?.phase === status?.phase && this.#liveStatus?.destination === status?.destination) return;
 		this.#liveStatus = status;
 		this.#invalidateStatusLineRenderCache();
 	}

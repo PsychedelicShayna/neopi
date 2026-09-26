@@ -11,6 +11,8 @@ import type { AgentSessionEvent } from "../session/agent-session-events";
 import { type CustomMessage, LIVE_DELEGATION_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../session/messages";
 import { resolveLiveInstructions } from "./personas";
 import agentFinalMessageTemplate from "./prompts/agent-final-message.md" with { type: "text" };
+import operatorSharedMessageTemplate from "./prompts/operator-shared-message.md" with { type: "text" };
+import operatorTypedMessageTemplate from "./prompts/operator-typed-message.md" with { type: "text" };
 import {
 	buildDelegationContextAppend,
 	buildSessionClose,
@@ -595,6 +597,25 @@ export class LiveSessionController {
 			this.#lastRelayedResponse = undefined;
 		}
 		this.#refreshAudioPhase();
+	}
+
+	/**
+	 * Hand composer text the operator typed to the voice model. `voice` addresses it to the
+	 * voice agent, which answers it and must not delegate it; `both` marks text already sent
+	 * to the main agent as silent awareness. Sent immediately: the operator is the source,
+	 * so the speakable hold does not apply.
+	 */
+	sendOperatorText(text: string, audience: "voice" | "both"): void {
+		const message = text.trim();
+		if (!message || this.#stopped) return;
+		const context =
+			audience === "voice"
+				? prompt.render(operatorTypedMessageTemplate, { message })
+				: prompt.render(operatorSharedMessageTemplate, { message });
+		const channel = audience === "voice" ? undefined : "commentary";
+		for (const chunk of chunkLiveContext(context)) {
+			this.#queueSend(buildSessionContextAppend(chunk, channel));
+		}
 	}
 
 	/** Fleet feed: relay a crew IRC message onto the speakable channel for background awareness. */

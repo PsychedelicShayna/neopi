@@ -130,6 +130,8 @@ export interface SegmentContext {
 	/** Live voice call state for the model-segment mic icon, or null when `/live` is off. */
 	live: {
 		phase: "connecting" | "listening" | "working" | "speaking" | "muted" | "disconnected";
+		/** Where Enter sends composer text during the call. */
+		destination: "primary" | "voice" | "both";
 	} | null;
 	// Cached values for performance (computed once per render)
 	usageStats: {

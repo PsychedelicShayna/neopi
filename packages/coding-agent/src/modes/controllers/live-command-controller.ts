@@ -9,6 +9,7 @@ import {
 import { LIVE_MODEL } from "../../live/protocol";
 import { vocalizer } from "../../tts/vocalizer";
 import type { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
+import { UserMessageComponent } from "@oh-my-pi/pi-tui/chat/user-message";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext } from "../types";
 import { createAssistantMessageComponent } from "@oh-my-pi/pi-tui/prompt/interactive-context-helpers";
@@ -16,6 +17,10 @@ import { createAssistantMessageComponent } from "@oh-my-pi/pi-tui/prompt/interac
 import { cfgLiveVoice } from "../../live/settings";
 
 type LiveSessionFactory = (options: LiveSessionControllerOptions) => LiveSessionController;
+
+/** Where Enter sends composer text during a live call. */
+export type LiveInputDestination = "primary" | "voice" | "both";
+const DESTINATION_ORDER: readonly LiveInputDestination[] = ["primary", "voice", "both"];
 
 const LIVE_MESSAGE_USAGE: AssistantMessage["usage"] = {
 	input: 0,
@@ -53,6 +58,8 @@ export class LiveCommandController {
 	#session: LiveSessionController | undefined;
 	#settling: Promise<void> | undefined;
 	#utterance: ComposerUtterance | undefined;
+	#phase: LivePhase | undefined;
+	#destination: LiveInputDestination = "primary";
 	#resumeVocalizer: (() => void) | undefined;
 	#assistantTranscriptComponent: AssistantMessageComponent | undefined;
 	#assistantTranscriptTurn = 0;
@@ -81,6 +88,41 @@ export class LiveCommandController {
 	/** Mute or unmute the microphone of the active live session. No-op when live mode is off. */
 	async toggleMute(): Promise<void> {
 		await this.#session?.toggleMute();
+	}
+
+	/** Where Enter sends composer text, or undefined when no call is running. */
+	get destination(): LiveInputDestination | undefined {
+		return this.#session ? this.#destination : undefined;
+	}
+
+	/** Advance primary → voice → both → primary. Returns the new destination, or undefined when no call is running. */
+	cycleDestination(): LiveInputDestination | undefined {
+		if (!this.#session) return undefined;
+		const next = DESTINATION_ORDER[(DESTINATION_ORDER.indexOf(this.#destination) + 1) % DESTINATION_ORDER.length];
+		this.#destination = next ?? "primary";
+		this.#showPhase(this.#phase);
+		return this.#destination;
+	}
+
+	/**
+	 * Route submitted composer text by the current destination. `voice` hands the text to
+	 * the voice agent only, shows it in the transcript with a mic badge, and returns true
+	 * (consumed). `both` also shares it with the voice agent as silent awareness and returns
+	 * false so the ordinary submit still reaches the primary. `primary`, or no call, returns
+	 * false untouched.
+	 */
+	routeSubmit(text: string): boolean {
+		const session = this.#session;
+		if (!session || this.#destination === "primary") return false;
+		if (this.#destination === "both") {
+			session.sendOperatorText(text, "both");
+			return false;
+		}
+		session.sendOperatorText(text, "voice");
+		const component = new UserMessageComponent(text);
+		if (theme.icon.mic) component.setReaction(theme.icon.mic);
+		this.#ctx.present(component);
+		return true;
 	}
 
 	/** Stop the active live session. */
@@ -115,6 +157,7 @@ export class LiveCommandController {
 	async #start(): Promise<void> {
 		this.#assistantTranscriptTurn = 0;
 		this.#assistantTranscriptStartedAt = 0;
+		this.#destination = "primary";
 		this.#showPhase("connecting");
 		this.#utterance = undefined;
 		this.#resumeVocalizer = vocalizer.suspend();
@@ -281,10 +324,13 @@ export class LiveCommandController {
 		this.#ctx.ui.requestRender();
 	}
 
-	/** Mirror the call phase into the status-line mic icon; an error leaves it showing "disconnected". */
+	/** Mirror the call phase and input destination into the status-line mic icon; an error leaves it showing "disconnected". */
 	#showPhase(phase: LivePhase | undefined): void {
+		this.#phase = phase;
 		this.#ctx.statusLine.setLiveStatus(
-			phase === undefined ? null : { phase: phase === "error" ? "disconnected" : phase },
+			phase === undefined
+				? null
+				: { phase: phase === "error" ? "disconnected" : phase, destination: this.#destination },
 		);
 		this.#ctx.ui.requestRender();
 	}

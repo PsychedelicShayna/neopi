@@ -459,6 +459,10 @@ export interface InteractiveModeContext {
 	handleLiveCommand(): Promise<void>;
 	/** Mute or unmute the live voice session microphone; no-op when live mode is off. */
 	handleLiveMute(): Promise<void>;
+	/** Cycle where Enter sends composer text during a live call (primary / voice / both). */
+	handleLiveDestinationCycle(): void;
+	/** Route submitted text by the live input destination; true when the voice agent consumed it. */
+	routeLiveSubmit(text: string): boolean;
 	/** Start a `/record` screen capture, or stop the running one. */
 	toggleRecording(): Promise<void>;
 	executeCompaction(

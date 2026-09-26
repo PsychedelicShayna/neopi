@@ -23,12 +23,18 @@ interface Harness {
 	layoutChanges: unknown[];
 	/** Latest status-line live state, `null` when hidden. */
 	liveStatus(): unknown;
+	/** Composer text handed to the voice model, with its audience. */
+	sentToVoice: Array<[string, string]>;
+	/** Components presented into the transcript. */
+	presented: unknown[];
 }
 
 function createHarness(): Harness {
 	const editor = new CustomEditor(getEditorTheme());
 	const layoutChanges: unknown[] = [];
 	let liveStatus: unknown = null;
+	const sentToVoice: Array<[string, string]> = [];
+	const presented: unknown[] = [];
 	const ctx = {
 		settings: Settings.isolated({ "live.voice": "vale" }),
 		keybindings: { getKeys: vi.fn(() => ["ctrl+l"]) },
@@ -46,7 +52,7 @@ function createHarness(): Harness {
 		},
 		showError: vi.fn(),
 		chatContainer: { children: [] },
-		present: vi.fn(),
+		present: vi.fn((component: unknown) => presented.push(component)),
 		statusLine: {
 			setLiveStatus: vi.fn((status: unknown) => {
 				liveStatus = status;
@@ -59,6 +65,9 @@ function createHarness(): Harness {
 		const session = new LiveSessionController(created);
 		vi.spyOn(session, "start").mockResolvedValue();
 		vi.spyOn(session, "stop").mockResolvedValue();
+		vi.spyOn(session, "sendOperatorText").mockImplementation((text, audience) => {
+			sentToVoice.push([text, audience]);
+		});
 		return session;
 	});
 	return {
@@ -72,6 +81,8 @@ function createHarness(): Harness {
 		voice: () => options?.voice,
 		layoutChanges,
 		liveStatus: () => liveStatus,
+		sentToVoice,
+		presented,
 	};
 }
 
@@ -153,15 +164,38 @@ describe("LiveCommandController", () => {
 	it("mirrors the call phase into the status line and leaves it disconnected after a failure", async () => {
 		const h = createHarness();
 		await h.controller.handleCommand();
-		expect(h.liveStatus()).toEqual({ phase: "connecting" });
+		expect(h.liveStatus()).toEqual({ phase: "connecting", destination: "primary" });
 		h.callbacks().onPhase("muted");
-		expect(h.liveStatus()).toEqual({ phase: "muted" });
+		expect(h.liveStatus()).toEqual({ phase: "muted", destination: "primary" });
 		h.callbacks().onTerminal(new Error("socket closed"));
-		expect(h.liveStatus()).toEqual({ phase: "disconnected" });
+		expect(h.liveStatus()).toEqual({ phase: "disconnected", destination: "primary" });
 
 		await h.controller.handleCommand();
-		expect(h.liveStatus()).toEqual({ phase: "connecting" });
+		expect(h.liveStatus()).toEqual({ phase: "connecting", destination: "primary" });
 		await h.controller.stop();
 		expect(h.liveStatus()).toBeNull();
+	});
+
+	it("routes Enter by destination: primary untouched, voice consumed, both shared", async () => {
+		const h = createHarness();
+		expect(h.controller.routeSubmit("no call running")).toBe(false);
+		await h.controller.handleCommand();
+
+		expect(h.controller.routeSubmit("for the main agent")).toBe(false);
+		expect(h.sentToVoice).toEqual([]);
+
+		expect(h.controller.cycleDestination()).toBe("voice");
+		expect(h.liveStatus()).toEqual({ phase: "connecting", destination: "voice" });
+		expect(h.controller.routeSubmit("iris, what did it say")).toBe(true);
+		expect(h.sentToVoice).toEqual([["iris, what did it say", "voice"]]);
+		expect(h.presented).toHaveLength(1);
+
+		expect(h.controller.cycleDestination()).toBe("both");
+		expect(h.controller.routeSubmit("ship it")).toBe(false);
+		expect(h.sentToVoice.at(-1)).toEqual(["ship it", "both"]);
+
+		expect(h.controller.cycleDestination()).toBe("primary");
+		await h.controller.stop();
+		expect(h.controller.cycleDestination()).toBeUndefined();
 	});
 });

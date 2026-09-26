@@ -240,7 +240,7 @@ import { CommandController } from "./controllers/command-controller";
 import { EventController } from "./controllers/event-controller";
 import { ExtensionUiController } from "./controllers/extension-ui-controller";
 import { InputController } from "./controllers/input-controller";
-import { LiveCommandController } from "./controllers/live-command-controller";
+import { type LiveInputDestination, LiveCommandController } from "./controllers/live-command-controller";
 import { MCPCommandController } from "./controllers/mcp-command-controller";
 import { OmfgController } from "./controllers/omfg-controller";
 import { SelectorController } from "./controllers/selector-controller";
@@ -480,6 +480,12 @@ export function computeEditorMaxHeight(terminalRows: number): number {
 	const comfortable = Math.max(EDITOR_MAX_HEIGHT_MIN, Math.min(EDITOR_MAX_HEIGHT_MAX, rows - EDITOR_RESERVED_ROWS));
 	return Math.max(EDITOR_MIN_RENDERED_ROWS, Math.min(comfortable, rows - EDITOR_MIN_CHROME_ROWS));
 }
+
+const LIVE_DESTINATION_LABELS: Record<LiveInputDestination, string> = {
+	primary: "main agent",
+	voice: "voice agent",
+	both: "main and voice agents",
+};
 
 const HUD_NOTE_SUP_DIGITS: Record<string, string> = {
 	"0": "\u2070",
@@ -7099,6 +7105,15 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	async handleLiveMute(): Promise<void> {
 		await this.#liveCommandController.toggleMute();
+	}
+
+	handleLiveDestinationCycle(): void {
+		const destination = this.#liveCommandController.cycleDestination();
+		if (destination) this.showStatus(`Live input → ${LIVE_DESTINATION_LABELS[destination]}`);
+	}
+
+	routeLiveSubmit(text: string): boolean {
+		return this.#liveCommandController.routeSubmit(text);
 	}
 
 	async showDebugSelector(): Promise<void> {
