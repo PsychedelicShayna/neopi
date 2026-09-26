@@ -65,6 +65,8 @@ function createHarness(
 		ui: { requestRender: vi.fn() },
 		compactionQueuedMessages: [],
 		updatePendingMessagesDisplay: vi.fn(),
+		routeLiveSubmit: vi.fn(() => false),
+		noteLiveComposerActivity: vi.fn(),
 		showStatus: vi.fn(),
 		showWarning: vi.fn(),
 		showError,
