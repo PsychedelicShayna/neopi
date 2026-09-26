@@ -188,6 +188,8 @@ export class LiveSessionController {
 	#userFinalSeq = 0;
 	#contextSeq = 0;
 	#pendingOperatorText: LiveClientMessage[] = [];
+	/** See {@link expectOperatorTurn}. */
+	#operatorTurnPending = false;
 	#userLedgerTurn = 0;
 	readonly #seenDelegationIds = new Set<string>();
 	#pendingDelegation:
@@ -415,13 +417,7 @@ export class LiveSessionController {
 				this.#addTranscript("user", event.item.text);
 				break;
 			case "output_transcript.added":
-				// Only a response to the operator's speech answers it; narration of released
-				// context (reports, final answers) must not retire turns awaiting a handoff.
-				if (!this.#answeredTurns && this.#userFinalSeq > this.#contextSeq) {
-					this.#answeredTurns = this.#userTurnLedger
-						.filter(turn => turn.final && turn.claim === undefined)
-						.map(turn => turn.turn);
-				}
+				this.#noteResponseStart();
 				this.#addTranscript("assistant", event.item.text);
 				break;
 			case "turn.done":
@@ -607,9 +603,30 @@ export class LiveSessionController {
 		}
 	}
 
+	/**
+	 * The voice agent began a response. Only a response to the operator's speech answers it;
+	 * narration of released context (reports, final answers) must not retire turns awaiting a
+	 * handoff. Classified once per response, before output releases any held context.
+	 */
+	#noteResponseStart(): void {
+		if (this.#answeredTurns || this.#userFinalSeq <= this.#contextSeq) return;
+		this.#answeredTurns = this.#userTurnLedger
+			.filter(turn => turn.final && turn.claim === undefined)
+			.map(turn => turn.turn);
+	}
+
+	/** A main-agent turn the operator started from the composer with the destination `both`:
+	 *  its final answer goes to the voice agent like a delegated one. */
+	expectOperatorTurn(): void {
+		if (!this.#stopped) this.#operatorTurnPending = true;
+	}
+
 	#appendFinalResponse(messages: readonly AgentMessage[], options: { closeDelegation: boolean }): void {
 		const delegationId = this.#activeDelegationId;
-		if (!delegationId) return;
+		if (!delegationId) {
+			if (this.#operatorTurnPending) this.#relayOperatorTurnResult(messages, options);
+			return;
+		}
 		for (let index = messages.length - 1; index >= 0; index -= 1) {
 			const message = messages[index];
 			if (message?.role !== "assistant") continue;
@@ -633,6 +650,26 @@ export class LiveSessionController {
 			this.#lastRelayedResponse = undefined;
 		}
 		this.#refreshAudioPhase();
+	}
+
+	/** Relay the final answer of an operator-started turn at session level, labeled per chunk. */
+	#relayOperatorTurnResult(messages: readonly AgentMessage[], options: { closeDelegation: boolean }): void {
+		const message = messages.findLast(candidate => candidate?.role === "assistant");
+		const text = message && message !== this.#lastRelayedResponse ? this.#extractAssistantText(message).trim() : "";
+		if (text && message) {
+			this.#lastRelayedResponse = message;
+			const labelBytes = Buffer.byteLength(prompt.render(agentFinalMessageTemplate, { message: "" }), "utf8");
+			this.#deliverOrHold(() => {
+				this.#contextSeq = ++this.#eventSeq;
+				for (const part of chunkLiveContext(text, CONTEXT_CHUNK_BYTES - labelBytes)) {
+					this.#queueSend(buildSessionContextAppend(prompt.render(agentFinalMessageTemplate, { message: part })));
+				}
+			});
+		}
+		if (options.closeDelegation) {
+			this.#operatorTurnPending = false;
+			this.#lastRelayedResponse = undefined;
+		}
 	}
 
 	/**
@@ -807,9 +844,14 @@ export class LiveSessionController {
 	}
 
 	#handleOutputLevel(level: number): void {
+		const wasActive = this.#outputLevel > OUTPUT_ACTIVE_LEVEL;
 		this.#outputLevel = clampLevel(level);
 		this.#emitLevels();
-		if (this.#outputLevel > OUTPUT_ACTIVE_LEVEL && this.#heldContext.length > 0) this.#releaseHeldContext();
+		if (this.#outputLevel > OUTPUT_ACTIVE_LEVEL && this.#heldContext.length > 0) {
+			// Classify the response now starting before its output releases held context.
+			if (!wasActive) this.#noteResponseStart();
+			this.#releaseHeldContext();
+		}
 		if (!this.#activeDelegationId) this.#refreshAudioPhase();
 	}
 

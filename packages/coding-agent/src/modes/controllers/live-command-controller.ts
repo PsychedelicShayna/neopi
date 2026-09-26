@@ -151,7 +151,9 @@ export class LiveCommandController {
 
 	/** With the destination `both`, tell the voice agent what the main agent is about to receive. */
 	shareSubmit(text: string): void {
-		if (this.#destination === "both") this.#session?.sendOperatorText(text, "both");
+		if (this.#destination !== "both" || !this.#session) return;
+		this.#session.sendOperatorText(text, "both");
+		this.#session.expectOperatorTurn();
 	}
 
 	/** Stop the active live session. */

@@ -373,6 +373,24 @@ describe("live controller delegation ownership", () => {
 		expect(h.prompts).toEqual(["fix the parser"]);
 	});
 
+	it("relays the final answer of a turn the operator shared from the composer", async () => {
+		const h = makeHarness({ speakableIdleMs: 0 });
+		await h.controller.start();
+		h.controller.expectOperatorTurn();
+		h.fireSession(agentEnd([assistant("The build is fixed.", "stop")]));
+		await settle();
+		const finals = h.sent.flatMap(message =>
+			message.type === "session.context.append" ? [message.content.map(item => item.text).join("")] : [],
+		);
+		expect(finals).toHaveLength(1);
+		expect(finals[0]).toContain("Agent Final Message");
+		expect(finals[0]).toContain("The build is fixed.");
+		// The turn is over: a later settle is not the operator's to relay.
+		h.fireSession(agentEnd([assistant("Unrelated later work.", "stop")]));
+		await settle();
+		expect(h.sent.filter(message => message.type === "session.context.append")).toHaveLength(1);
+	});
+
 	it("keeps a pending request when the voice agent only narrates released context", async () => {
 		// No quiet window: the crew report goes out right after the request.
 		const h = makeHarness({ speakableIdleMs: 0 });

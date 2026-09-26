@@ -7121,6 +7121,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#liveCommandController.routeSubmit(text, options);
 	}
 
+	get liveCallActive(): boolean {
+		return this.#liveCommandController.active;
+	}
+
 	discardLiveSpeech(): void {
 		this.#liveCommandController.discardSpeech();
 	}

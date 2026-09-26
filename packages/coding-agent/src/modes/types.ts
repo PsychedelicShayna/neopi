@@ -464,6 +464,8 @@ export interface InteractiveModeContext {
 	handleLiveDestinationCycle(): void;
 	/** Route submitted text by the live input destination; true when the voice agent consumed it. */
 	routeLiveSubmit(text: string, options: { hasImages: boolean }): LiveSubmitRoute;
+	/** Whether a live voice call is connected, connecting, or closing. */
+	readonly liveCallActive: boolean;
 	/** The operator cleared the composer during a live call; its speech must not be handed off. */
 	discardLiveSpeech(): void;
 	/** Share text the main agent is about to receive with the voice agent when the destination is `both`. */

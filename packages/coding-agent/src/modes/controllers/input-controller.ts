@@ -37,6 +37,7 @@ import { createModelBrowserSource } from "../model-browser-source";
 import { parseQueueShorthand, splitQueuedMessages } from "@oh-my-pi/pi-tui/prompt/queue-input";
 import { invokeSkillCommandFromText, isKnownSkillCommand } from "../../modes/skill-command";
 import type { InteractiveModeContext } from "../../modes/types";
+import type { LiveSubmitRoute } from "./live-command-controller";
 import manualContinuePrompt from "../../prompts/system/manual-continue.md" with { type: "text" };
 import { AgentRegistry } from "../../registry/agent-registry";
 import type { RestoredQueuedMessage } from "../../session/agent-session-types";
@@ -968,10 +969,12 @@ export class InputController {
 
 			// Live call: Enter is the operator's own handoff and may address the voice agent
 			// instead of, or alongside, the main agent. Harness commands (`/`, `!`, `$`) stay
-			// with the harness; image drafts always reach the main agent.
-			const liveRoute = /^[/!$]/.test(text)
-				? "primary"
-				: this.ctx.routeLiveSubmit(text, { hasImages: hasPendingImages });
+			// with the harness, but still consume the speech dictated into them; image drafts
+			// always reach the main agent.
+			let liveRoute: LiveSubmitRoute = "primary";
+			if (/^[/!$]/.test(text)) {
+				if (this.ctx.liveCallActive) this.ctx.discardLiveSpeech();
+			} else liveRoute = this.ctx.routeLiveSubmit(text, { hasImages: hasPendingImages });
 			if (liveRoute === "held") {
 				this.ctx.showStatus("A voice handoff just reached the main agent; review the draft before sending");
 				return;
@@ -1026,7 +1029,6 @@ export class InputController {
 
 			if (!text && !hasInputImages) return;
 			// Input hooks have settled what the main agent receives; share that, not the raw draft.
-			if (!/^[/!$]/.test(text)) this.ctx.shareLiveSubmit(text);
 
 			const queueBody = parseQueueShorthand(text);
 			if (queueBody !== undefined) {
@@ -1210,6 +1212,8 @@ export class InputController {
 				}
 				text = outcome.text;
 			}
+			// Only the prompt about to reach the main agent, after hooks and the chain.
+			if (this.ctx.liveCallActive) this.ctx.shareLiveSubmit(text);
 
 			// If streaming, use prompt() with steer behavior
 			// This handles extension commands (execute immediately), prompt template expansion, and queueing
