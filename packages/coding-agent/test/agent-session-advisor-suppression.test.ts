@@ -25,12 +25,13 @@ import { createMockModel, type MockModel, type MockResponse } from "@oh-my-pi/pi
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import type { IrcMessage } from "@oh-my-pi/pi-tui/tools/hub";
+import type { IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm, USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { Snowflake, TempDir } from "@oh-my-pi/pi-utils";
+import { cfgAdvisorSyncBacklog } from "@oh-my-pi/pi-coding-agent/advisor/settings";
 
 interface MockYieldDetails {
 	status: "success";
@@ -116,7 +117,7 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		const settings = Settings.isolated({ "compaction.enabled": false });
 		const authStorage = await AuthStorage.create(":memory:");
 		authStorages.push(authStorage);
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
 		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
 		return { session, sessionManager, mock, streamStarted: started.promise };
@@ -189,8 +190,10 @@ describe("AgentSession advisor auto-resume suppression", () => {
 						},
 					],
 				},
-				{ content: [], stopReason: "stop" },
 			],
+			// Any further review stays silent; the advise-only turn above ends
+			// its own review without a follow-up request.
+			handler: () => ({ content: [], stopReason: "stop" }),
 		});
 		const agent = new Agent({
 			getApiKey: () => "test-key",
@@ -202,7 +205,7 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
 		const authStorage = await AuthStorage.create(":memory:");
 		authStorages.push(authStorage);
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
 		session = new AgentSession({
 			agent,
@@ -264,7 +267,11 @@ describe("AgentSession advisor auto-resume suppression", () => {
 			const terminalSeen = Promise.withResolvers<void>();
 			const held = Promise.withResolvers<AbortSignal>();
 			const release = Promise.withResolvers<void>();
-			const advised = Promise.withResolvers<void>();
+			const advisedSeen = (): boolean =>
+				session
+					.getAdvisorAgent()
+					?.state.messages.some(message => message.role === "toolResult" && message.toolName === "advise") ===
+				true;
 			const aborted = Promise.withResolvers<void>();
 			const note = `Inspect the ${severity} fixture before accepting the result.`;
 			const parameters = type({});
@@ -320,10 +327,6 @@ describe("AgentSession advisor auto-resume suppression", () => {
 							stopReason: "toolUse",
 						};
 					},
-					() => {
-						advised.resolve();
-						return { content: [], stopReason: "stop" };
-					},
 					async () => {
 						if (!continuation) return { content: [], stopReason: "stop" };
 						await terminalSeen.promise;
@@ -360,7 +363,7 @@ describe("AgentSession advisor auto-resume suppression", () => {
 			settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
 			const authStorage = await AuthStorage.create(":memory:");
 			authStorages.push(authStorage);
-			authStorage.setRuntimeApiKey("anthropic", "test-key");
+			authStorage.keys.setRuntime("anthropic", "test-key");
 			const extensionRunner: AdvisorTestExtensionRunner | undefined = abortAtCard
 				? {
 						hasHandlers: eventType => eventType === "message_end",
@@ -389,7 +392,7 @@ describe("AgentSession advisor auto-resume suppression", () => {
 					event.message.role === "assistant" &&
 					event.message.content.some(part => part.type === "text" && part.text === "terminal result")
 				) {
-					settings.override("advisor.syncBacklog", "1");
+					cfgAdvisorSyncBacklog.override(settings, "1");
 					terminalSeen.resolve();
 				}
 			});
@@ -416,7 +419,9 @@ describe("AgentSession advisor auto-resume suppression", () => {
 			const prompt = session.prompt("Run step then held, then finish.");
 			try {
 				const signal = await held.promise;
-				await advised.promise;
+				// An advise-only advisor turn ends without another model call, so wait
+				// for the routed note itself rather than the advisor's next request.
+				for (let i = 0; i < 200 && !agent.hasQueuedMessages() && !advisedSeen(); i++) await Bun.sleep(5);
 				if (severity === "blocker") {
 					await aborted.promise;
 					expect(signal.aborted).toBe(true);
@@ -478,8 +483,8 @@ describe("AgentSession advisor auto-resume suppression", () => {
 						},
 					],
 				},
-				{ content: [], stopReason: "stop" },
 			],
+			handler: () => ({ content: [], stopReason: "stop" }),
 		});
 		const agent = new Agent({
 			getApiKey: () => "test-key",
@@ -495,7 +500,7 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
 		const authStorage = await AuthStorage.create(":memory:");
 		authStorages.push(authStorage);
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
 		session = new AgentSession({
 			agent,
@@ -509,7 +514,7 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		await session.prompt("yield the final result");
 		expect(await session.waitForAdvisorCatchup(1000)).toBe(true);
 
-		expect(advisorMock.calls).toHaveLength(2);
+		expect(advisorMock.calls).toHaveLength(1);
 		expect(mock.calls).toHaveLength(1);
 		const advisorCards = session.agent.state.messages.filter(isAdvisorCard);
 		expect(advisorCards).toHaveLength(1);
@@ -916,7 +921,7 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		const settings = Settings.isolated({ "compaction.enabled": false });
 		const authStorage = await AuthStorage.create(":memory:");
 		authStorages.push(authStorage);
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
 		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
 		const msg: IrcMessage = { id: "m-yield", from: "peer", to: "me", body: "status?", ts: Date.now() };

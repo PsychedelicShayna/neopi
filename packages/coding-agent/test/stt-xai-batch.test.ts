@@ -9,6 +9,7 @@ import { Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { STTController, type STTControllerDependencies } from "@oh-my-pi/pi-coding-agent/stt/stt-controller";
 import { setAgentDir } from "@oh-my-pi/pi-utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
+import { cfgSttLanguage } from "@oh-my-pi/pi-coding-agent/stt/settings";
 
 const ZERO_USAGE = {
 	input: 0,
@@ -95,7 +96,7 @@ describe("STTController xAI batch mode", () => {
 		state = beginSettingsTest();
 		await Settings.init({ inMemory: true });
 		settings.setModelRole("dictation", "xai/grok-stt");
-		settings.set("stt.language", "en");
+		cfgSttLanguage.set(settings, "en");
 		tmp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-xai-stt-test-"));
 		setAgentDir(tmp);
 		onAudio = undefined;

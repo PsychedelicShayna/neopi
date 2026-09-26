@@ -13,7 +13,8 @@ export * from "./config/model-registry";
 // Prompt templates
 export type * from "./config/prompt-templates";
 export * from "./config/prompt-templates";
-export type { RetrySettings, SkillsSettings } from "./config/settings";
+export type { SkillsSettings } from "./extensibility/settings";
+export type { RetrySettings } from "./session/settings";
 export { Settings, settings } from "./config/settings";
 // Eval tool bridge for extension-provided eval backends (works in source and
 // compiled mode: extensions import this package by bare specifier, which the

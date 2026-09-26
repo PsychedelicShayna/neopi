@@ -4,6 +4,7 @@ import type { Settings } from "../config/settings";
 import { evaluateSubmitTrigger } from "./submit-trigger";
 import type { SttState } from "./stt-controller";
 import { WavFileRecorder } from "./wav-file-recorder";
+import { cfgSttSubmitTrigger } from "./settings";
 
 interface XaiSTTToggleOptions {
 	showWarning(msg: string): void;
@@ -175,7 +176,7 @@ export class XaiSTTController {
 			return;
 		}
 
-		const trigger = this.#settings.get("stt.submitTrigger");
+		const trigger = cfgSttSubmitTrigger.get(this.#settings);
 		const { submit, trimTrailing } = evaluateSubmitTrigger(text, trigger);
 		const textToInsert = trimTrailing > 0 ? text.slice(0, -trimTrailing) : text;
 		if (textToInsert) editor.insertText(textToInsert);

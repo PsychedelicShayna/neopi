@@ -91,23 +91,18 @@ describe("SessionSelectorComponent delete confirmation", () => {
 		expect(rendered).toContain("Beta");
 	});
 
-	it("Backspace on an empty search query triggers delete confirmation (macOS Fn+Backspace sends \\x7f)", async () => {
+	it("Backspace on an empty search query never requests a delete, and held Backspace cannot roll into Delete", async () => {
 		const onDelete = vi.fn(async () => true);
 		const selector = createSelector(onDelete);
 
-		// No search query typed yet — Backspace should mean "delete session",
-		// not "edit the (empty) search box".
+		// Backspace only edits the filter: erasing past an empty query must not arm a delete.
 		selector.handleInput("\x7f");
-		expect(renderText(selector)).toContain("Delete session?");
-		expect(renderText(selector)).toContain("Alpha");
+		expect(renderText(selector)).not.toContain("Delete session?");
 
-		// Confirm.
-		selector.handleInput("\n");
-		await Bun.sleep(0);
-
-		expect(onDelete).toHaveBeenCalledTimes(1);
-		expect(renderText(selector)).not.toContain("Alpha");
-		expect(renderText(selector)).toContain("Beta");
+		// A Delete that continues the erase run is ignored until the key is released and re-pressed.
+		selector.handleInput("\x1b[3~");
+		expect(renderText(selector)).not.toContain("Delete session?");
+		expect(onDelete).not.toHaveBeenCalled();
 	});
 
 	it("Backspace with a non-empty search query edits the query, not the session", async () => {

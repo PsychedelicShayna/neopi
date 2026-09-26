@@ -4,7 +4,6 @@ import { discoverChains } from "../chains/config";
 import { CollabGuestLink } from "../collab/guest";
 import type { CollabHost } from "../collab/host";
 import { type CollabHostSnapshot, listCollabHosts } from "../collab/registry";
-import type { SettingPath, SettingValue } from "../config/settings";
 import { settings } from "../config/settings";
 import { parseExportArgs } from "../export/html/args";
 import { shareSession } from "../export/share";
@@ -20,6 +19,10 @@ import { refreshStatusLine } from "./builtin-modes";
 import { CollabQrCodeComponent, collabBrowserLink } from "@oh-my-pi/pi-tui/chrome/collab-qrcode";
 import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers/parse";
 import type { SlashCommandSpec } from "./types";
+
+import { cfgBrowserEnabled, cfgBrowserHeadless } from "../tools/browser/settings";
+import { cfgShareRedactSecrets, cfgShareServerUrl, cfgShareStore } from "../commands/settings";
+import { cfgChainingActive, cfgChainingAuto } from "../chains/settings";
 
 /** Join hint printed by /collab: compact terminal link + clickable browser deep link. */
 function collabLinkHint(host: CollabHost, heading: string, view = false): string {
@@ -44,9 +47,9 @@ function collabLinkHint(host: CollabHost, heading: string, view = false): string
 /** One-block summary of chaining mode, the active chain, and every discovered chain. */
 async function formatChainingStatus(cwd: string): Promise<string> {
 	const { chains, warnings } = await discoverChains(cwd, getAgentDir());
-	const active = settings.get("chaining.active");
+	const active = cfgChainingActive.get(settings);
 	const lines = [
-		`Chaining: ${settings.get("chaining.auto") ? "on (every prompt)" : "off (Alt+C runs it once)"}`,
+		`Chaining: ${cfgChainingAuto.get(settings) ? "on (every prompt)" : "off (Alt+C runs it once)"}`,
 		`Active chain: ${active || "(none; you will be asked)"}`,
 	];
 	if (chains.length === 0) {
@@ -67,27 +70,27 @@ async function applyChainingVerb(verb: string, rest: string, cwd: string): Promi
 	if (verb === "on") {
 		const { chains } = await discoverChains(cwd, getAgentDir());
 		if (chains.length === 0) return "No chains defined. Create one with /chaining configure first.";
-		settings.set("chaining.auto", true);
-		const active = settings.get("chaining.active");
+		cfgChainingAuto.set(settings, true);
+		const active = cfgChainingActive.get(settings);
 		return chains.some(chain => chain.name === active)
 			? `Chaining on: every prompt runs through "${active}".`
 			: "Chaining on: you will be asked which chain to use on the next prompt.";
 	}
 	if (verb === "off") {
-		settings.set("chaining.auto", false);
+		cfgChainingAuto.set(settings, false);
 		return "Chaining off. Alt+C still runs the active chain for one prompt.";
 	}
 	if (verb === "use") {
 		const name = rest.trim();
 		if (!name) {
-			settings.set("chaining.active", "");
+			cfgChainingActive.set(settings, "");
 			return "Active chain cleared; the next chained prompt will ask which chain to use.";
 		}
 		const { chains } = await discoverChains(cwd, getAgentDir());
 		if (!chains.some(chain => chain.name === name)) {
 			return `No chain named "${name}". Known: ${chains.map(chain => chain.name).join(", ") || "(none)"}`;
 		}
-		settings.set("chaining.active", name);
+		cfgChainingActive.set(settings, name);
 		return `Active chain: ${name}`;
 	}
 	if (verb === "status") return formatChainingStatus(cwd);
@@ -241,8 +244,8 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		],
 		allowArgs: true,
 		getTuiAutocompleteDescription: () => {
-			const active = settings.get("chaining.active");
-			const mode = settings.get("chaining.auto") ? "on" : "off";
+			const active = cfgChainingActive.get(settings);
+			const mode = cfgChainingAuto.get(settings) ? "on" : "off";
 			return active ? `Chaining: ${mode} (${active})` : `Chaining: ${mode}`;
 		},
 		handle: async (command, runtime) => {
@@ -361,10 +364,10 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		handle: async (_command, runtime) => {
 			try {
 				const result = await shareSession(runtime.sessionManager, {
-					serverUrl: runtime.settings.get("share.serverUrl"),
-					store: runtime.settings.get("share.store"),
+					serverUrl: cfgShareServerUrl.get(runtime.settings),
+					store: cfgShareStore.get(runtime.settings),
 					state: runtime.session.state,
-					obfuscator: runtime.settings.get("share.redactSecrets") ? runtime.session.obfuscator : undefined,
+					obfuscator: cfgShareRedactSecrets.get(runtime.settings) ? runtime.session.obfuscator : undefined,
 				});
 				const lines = [`Share URL: ${result.url}`];
 				if (result.gistUrl) lines.push(`Gist: ${result.gistUrl}`);
@@ -577,20 +580,20 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		],
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime => {
-			if (!runtime.ctx.settings.get("browser.enabled" as SettingPath)) return "Browser: disabled";
-			return runtime.ctx.settings.get("browser.headless" as SettingPath) ? "Browser: headless" : "Browser: visible";
+			if (!cfgBrowserEnabled.get(runtime.ctx.settings)) return "Browser: disabled";
+			return cfgBrowserHeadless.get(runtime.ctx.settings) ? "Browser: headless" : "Browser: visible";
 		},
 		handle: async (command, runtime) => {
 			const arg = command.args.toLowerCase();
-			const enabled = runtime.settings.get("browser.enabled" as SettingPath) as boolean;
+			const enabled = cfgBrowserEnabled.get(runtime.settings);
 			if (!enabled) return usage("Browser capability is disabled (enable in settings).", runtime);
-			const current = runtime.settings.get("browser.headless" as SettingPath) as boolean;
+			const current = cfgBrowserHeadless.get(runtime.settings);
 			let next = current;
 			if (!arg) next = !current;
 			else if (arg === "headless" || arg === "hidden") next = true;
 			else if (arg === "visible" || arg === "show" || arg === "headful") next = false;
 			else return usage("Usage: /browser [headless|visible]", runtime);
-			runtime.settings.set("browser.headless" as SettingPath, next as SettingValue<SettingPath>);
+			cfgBrowserHeadless.set(runtime.settings, next);
 			try {
 				await restartBrowserForModeChange();
 			} catch (err) {
@@ -606,9 +609,9 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		},
 		handleTui: async (command, runtime) => {
 			const arg = command.args.toLowerCase();
-			const current = settings.get("browser.headless" as SettingPath) as boolean;
+			const current = cfgBrowserHeadless.get(settings);
 			let next = current;
-			if (!(settings.get("browser.enabled" as SettingPath) as boolean)) {
+			if (!cfgBrowserEnabled.get(settings)) {
 				runtime.ctx.showWarning("Browser capability is disabled (enable in settings)");
 				runtime.ctx.editor.setText("");
 				return;
@@ -624,7 +627,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 				runtime.ctx.editor.setText("");
 				return;
 			}
-			settings.set("browser.headless" as SettingPath, next as SettingValue<SettingPath>);
+			cfgBrowserHeadless.set(settings, next);
 			try {
 				await restartBrowserForModeChange();
 			} catch (error) {

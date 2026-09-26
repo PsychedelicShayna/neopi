@@ -17,18 +17,18 @@ import {
 	extractImagePastePathsFromText,
 	extractImagePathFromText,
 	extractPastePathsFromText,
-	SPACE_HOLD_MECHANICAL_RUN,
-	SPACE_HOLD_RELEASE_MS,
-	SPACE_REPEAT_MAX_GAP_MS,
 } from "@oh-my-pi/pi-tui/prompt/custom-editor";
+import { SPACE_HOLD_MECHANICAL_RUN, SPACE_HOLD_RELEASE_MS, SPACE_REPEAT_MAX_GAP_MS } from "@oh-my-pi/pi-tui/space-hold";
 import { getEditorTheme, initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 
-function makeEditor() {
+function makeEditor(holdEnabled = true) {
 	const editor = new CustomEditor(getEditorTheme());
 	const events: string[] = [];
-	editor.sttHoldEnabled = () => true;
-	editor.onSpaceHoldStart = () => events.push("start");
-	editor.onSpaceHoldEnd = () => events.push("end");
+	editor.spaceHold.handler = {
+		enabled: () => holdEnabled,
+		onStart: () => events.push("start"),
+		onEnd: () => events.push("end"),
+	};
 	return { editor, events };
 }
 
@@ -752,8 +752,7 @@ describe("CustomEditor space-hold push-to-talk", () => {
 	});
 
 	it("leaves the space bar typing normally when the gesture is disabled", () => {
-		const { editor, events } = makeEditor();
-		editor.sttHoldEnabled = () => false;
+		const { editor, events } = makeEditor(false);
 		feedSpaces(editor, 8, REPEAT_GAP_MS);
 		expect(editor.getText()).toBe(" ".repeat(8));
 		expect(events).toEqual([]);
@@ -761,7 +760,9 @@ describe("CustomEditor space-hold push-to-talk", () => {
 
 	it("latches a hold with Backspace so releasing Space keeps recording until a Space tap", () => {
 		const { editor, events } = makeEditor();
-		editor.onSpaceHoldLatch = () => events.push("latch");
+		const handler = editor.spaceHold.handler;
+		if (!handler) throw new Error("expected a space-hold handler");
+		handler.onLatch = () => events.push("latch");
 		editor.handleInput("h");
 		editor.handleInput("i");
 		feedSpaces(editor, SPACE_HOLD_MECHANICAL_RUN + 2, REPEAT_GAP_MS);
