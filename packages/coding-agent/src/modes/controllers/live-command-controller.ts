@@ -52,7 +52,6 @@ export class LiveCommandController {
 
 	#session: LiveSessionController | undefined;
 	#settling: Promise<void> | undefined;
-	#phase: LivePhase | undefined;
 	#utterance: ComposerUtterance | undefined;
 	#resumeVocalizer: (() => void) | undefined;
 	#assistantTranscriptComponent: AssistantMessageComponent | undefined;
@@ -67,11 +66,6 @@ export class LiveCommandController {
 	/** Whether a live session is connected, connecting, or closing. */
 	get active(): boolean {
 		return this.#session !== undefined || this.#settling !== undefined;
-	}
-
-	/** Current call phase, or undefined when no live session is running. */
-	get phase(): LivePhase | undefined {
-		return this.#session ? this.#phase : undefined;
 	}
 
 	/** Start live mode, or stop the currently active session. */
@@ -121,7 +115,7 @@ export class LiveCommandController {
 	async #start(): Promise<void> {
 		this.#assistantTranscriptTurn = 0;
 		this.#assistantTranscriptStartedAt = 0;
-		this.#phase = "connecting";
+		this.#showPhase("connecting");
 		this.#utterance = undefined;
 		this.#resumeVocalizer = vocalizer.suspend();
 
@@ -132,8 +126,7 @@ export class LiveCommandController {
 			callbacks: {
 				onPhase: phase => {
 					if (this.#session !== session) return;
-					this.#phase = phase;
-					this.#ctx.ui.requestRender();
+					this.#showPhase(phase);
 				},
 				onLevels: () => {},
 				onTranscript: transcript => {
@@ -261,7 +254,10 @@ export class LiveCommandController {
 		if (this.#session !== session) return;
 		this.#session = undefined;
 		this.#release();
-		if (error) this.#ctx.showError(error.message);
+		if (error) {
+			this.#showPhase("error");
+			this.#ctx.showError(error.message);
+		}
 		const settling = session.stop().catch(cause => {
 			logger.debug("Live session cleanup failed", { error: errorFrom(cause).message });
 		});
@@ -279,9 +275,17 @@ export class LiveCommandController {
 		if (utterance && this.#ctx.editor.hasVolatileText) {
 			this.#ctx.editor.commitVolatileText(utterance.preview);
 		}
-		this.#phase = undefined;
+		this.#showPhase(undefined);
 		this.#resumeVocalizer?.();
 		this.#resumeVocalizer = undefined;
+		this.#ctx.ui.requestRender();
+	}
+
+	/** Mirror the call phase into the status-line mic icon; an error leaves it showing "disconnected". */
+	#showPhase(phase: LivePhase | undefined): void {
+		this.#ctx.statusLine.setLiveStatus(
+			phase === undefined ? null : { phase: phase === "error" ? "disconnected" : phase },
+		);
 		this.#ctx.ui.requestRender();
 	}
 }

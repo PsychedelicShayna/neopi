@@ -210,6 +210,15 @@ const statusSegment: StatusLineSegment = {
 	},
 };
 
+const LIVE_PHASE_COLORS: Record<NonNullable<SegmentContext["live"]>["phase"], ThemeColor> = {
+	connecting: "dim",
+	listening: "success",
+	working: "warning",
+	speaking: "accent",
+	muted: "dim",
+	disconnected: "error",
+};
+
 const modelSegment: StatusLineSegment = {
 	id: "model",
 	render(ctx) {
@@ -288,6 +297,12 @@ const modelSegment: StatusLineSegment = {
 			const allYielded = advisorStats.advisors.every(a => a.yielded);
 			const advisorIcon = allYielded ? theme.icon.advisorClosed || theme.icon.advisor : theme.icon.advisor;
 			if (advisorIcon) content += theme.fg(badgeColor, ` ${advisorIcon}`);
+		}
+		// Live voice call: mic colored by call phase, slashed while muted.
+		if (ctx.live) {
+			const muted = ctx.live.phase === "muted";
+			const liveIcon = muted ? theme.icon.micMuted || theme.icon.mic : theme.icon.mic;
+			if (liveIcon) content += theme.fg(LIVE_PHASE_COLORS[ctx.live.phase], ` ${liveIcon}`);
 		}
 		if (tail) {
 			content += accentFg(ctx, "statusLineModel", tail);
