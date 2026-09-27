@@ -256,6 +256,35 @@ describe("linear mixture in a session", () => {
 		expect(fresh.model && `${fresh.model.provider}/${fresh.model.id}`).toBe("mixture/draft-then-edit");
 	});
 
+	it.each([
+		{ limit: "hops", toml: 'entry = "writer"\nlimits = { max_hops = 1 }', settings: {}, reason: "the 1-hop limit" },
+		{
+			limit: "hard_cap",
+			toml: 'entry = "writer"',
+			settings: { "moa.hard_max_hops": 1 },
+			reason: "the hard cap of 1 hops",
+		},
+	])(
+		"stops at the $limit limit with the notice and the last member's output",
+		async ({ limit, toml, settings, reason }) => {
+			const session = await mixtureSession(
+				DRAFT_THEN_EDIT_TOML.replace('entry = "writer"', toml),
+				undefined,
+				Settings.isolated({ ...SETTINGS, ...settings }),
+			);
+			members.script("writer", { text: "only a draft" });
+			await session.sendUserMessage("go");
+
+			const outer = lastAssistant(session);
+			expect(outer.stopReason).toBe("stop");
+			const answer = outer.content.flatMap(block => (block.type === "text" ? [block.text] : [])).join("");
+			expect(answer).toContain(`stopped after 1 hops: ${reason} was reached`);
+			expect(answer).toContain("only a draft");
+			expect(members.callsTo("editor")).toHaveLength(0);
+			expect(traceCards(session).some(card => card.kind === "limit" && card.limit === limit)).toBe(true);
+		},
+	);
+
 	it("runs in a subagent session sharing the registry, and the subagent's exit leaves the parent's mixture", async () => {
 		const parent = await mixtureSession();
 		const child = await createMoaSession(fixture, { settings: Settings.isolated(SETTINGS) });
