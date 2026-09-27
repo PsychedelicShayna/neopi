@@ -57,6 +57,8 @@ export interface MemberReply {
 	error?: { message: string; status?: number };
 	/** Wait for the caller's abort signal, then end with `error`/`reason: "aborted"`. */
 	waitForAbort?: boolean;
+	/** With `waitForAbort`: hold the aborted terminal back until this settles. */
+	abortedAfter?: Promise<void>;
 	/** Optional usage meters the attempt reports beside tokens and USD. */
 	meters?: Pick<Usage, "premiumRequests" | "credits">;
 	/** Emit a tool call block before finishing. */
@@ -143,6 +145,7 @@ export class FakeMembers {
 				if (signal && !signal.aborted) {
 					await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
 				}
+				await reply.abortedAfter;
 				message.stopReason = "aborted";
 				message.errorMessage = "Request was aborted";
 				stream.push({ type: "error", reason: "aborted", error: message });

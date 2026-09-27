@@ -130,10 +130,22 @@ export interface Settlement {
 	attempt: string;
 	kind: "member" | "judge" | "summary" | "slicer";
 	hop?: number;
+	/** The transport that served the attempt. */
+	api: string;
 	provider: string;
 	model: string;
 	usage: Usage;
+	/** The attempt's own terminal. */
+	stopReason: StopReason;
+	errorMessage?: string;
+	/** `stopReason` is `error` or `aborted`. */
 	failed?: boolean;
+	/**
+	 * Settled after the request's outer response was already finished (a caller
+	 * abort finalized it). Never inside a report range; journaled through
+	 * `onLateSettlement` instead. Still counted in `run.lifetime` / `run.window`.
+	 */
+	late?: true;
 }
 
 export type ToolRequirement =
@@ -290,7 +302,13 @@ export interface MixtureHost {
 	/** Provider-specific context preparation for a member model. */
 	prepareContext(context: Context, model: Model<Api>): Promise<Context>;
 	conversationKey(context: Context, options: SimpleStreamOptions): string;
-	/** Upstream billed-attempt accounting, once per settlement, when it settles. */
+	/** Upstream billed-attempt accounting, once per settlement, when it settles; late settlements too. */
 	onSettlement?(run: MixtureRun, settlement: Settlement): void;
+	/**
+	 * Client-facing accounting for a settlement no outer response will report
+	 * (`settlement.late`). The session host journals it as one `model_usage`
+	 * entry while the run still belongs to its conversation.
+	 */
+	onLateSettlement?(run: MixtureRun, settlement: Settlement): void;
 	onEvent?(event: MixtureEvent): void;
 }

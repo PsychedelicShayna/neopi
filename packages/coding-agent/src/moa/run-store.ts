@@ -9,6 +9,7 @@ import type { ImageContent, ProviderSessionState } from "@oh-my-pi/pi-ai";
 import type { MixtureRun, MixtureRunKey } from "./types";
 
 export interface MixtureRunEntry {
+	/** Written only by {@link MixtureRunStore.install}. */
 	run: MixtureRun | undefined;
 	/** Provider session state per member id, scoped to this run. */
 	providerState: Map<string, Map<string, ProviderSessionState>>;
@@ -30,6 +31,8 @@ function serializeKey(key: MixtureRunKey): string {
 export class MixtureRunStore {
 	#entries = new Map<string, MixtureRunEntry>();
 	#executing = new Set<string>();
+	/** The entry each installed run executed in; ownership outlives replacement, not {@link clear}. */
+	#owners = new WeakMap<MixtureRun, MixtureRunEntry>();
 
 	/** Lock the key for one engine call; undefined when another call holds it. */
 	acquire(key: MixtureRunKey): MixtureRunLease | undefined {
@@ -52,6 +55,12 @@ export class MixtureRunStore {
 		};
 	}
 
+	/** Make `run` the leased entry's run; the only writer of `entry.run`. */
+	install(entry: MixtureRunEntry, run: MixtureRun): void {
+		entry.run = run;
+		this.#owners.set(run, entry);
+	}
+
 	/** The run that produced an outer response, if this store still holds it. */
 	findByResponseId(responseId: string): MixtureRun | undefined {
 		for (const entry of this.#entries.values()) {
@@ -64,6 +73,16 @@ export class MixtureRunStore {
 	holds(run: MixtureRun): boolean {
 		for (const entry of this.#entries.values()) if (entry.run === run) return true;
 		return false;
+	}
+
+	/**
+	 * Whether the entry that executed `run` is still this store's entry for its
+	 * key: true after a later run replaced it there, false once {@link clear}
+	 * dropped that entry, even if the key has a fresh entry since.
+	 */
+	owns(run: MixtureRun): boolean {
+		const owner = this.#owners.get(run);
+		return owner !== undefined && this.#entries.get(serializeKey(run.key)) === owner;
 	}
 
 	/** Every run this store holds. */

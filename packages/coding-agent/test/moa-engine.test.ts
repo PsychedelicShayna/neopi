@@ -28,6 +28,7 @@ import {
 	createMoaFixture,
 	createMoaSession,
 	DRAFT_THEN_EDIT_TOML,
+	FAKE_API,
 	FakeMembers,
 	type MoaFixture,
 } from "./helpers/moa-setup";
@@ -125,6 +126,21 @@ function events(session: AgentSession): AgentSessionEvent[] {
 		seen.push(event);
 	});
 	return seen;
+}
+
+function modelUsage(session: AgentSession) {
+	return session.sessionManager.getBranch().flatMap(entry => (entry.type === "model_usage" ? [entry] : []));
+}
+
+/** Abort while the editor is in flight; the editor reports its aborted usage only once `release` is called. */
+async function abortDuringEditor(session: AgentSession, editorCost: number): Promise<() => void> {
+	const editorAbort = Promise.withResolvers<void>();
+	members.script("editor", { waitForAbort: true, abortedAfter: editorAbort.promise, cost: editorCost });
+	const turn = session.sendUserMessage("long task");
+	while (members.callsTo("editor").length === 0) await Bun.sleep(5);
+	await session.abort();
+	await turn.catch(() => {});
+	return editorAbort.resolve;
 }
 
 describe("linear mixture in a session", () => {
@@ -522,6 +538,118 @@ describe("caller abort", () => {
 		expect(lastAssistant(session).stopReason).toBe("stop");
 		const runIds = new Set(checkpoints(session).map(checkpoint => checkpoint.run.id));
 		expect(runIds.size).toBe(2);
+	});
+
+	it("persists the engine's identified abort with the writer's usage, and journals the editor's late usage once", async () => {
+		const sessionDir = tempDir.join("sessions");
+		const manager = SessionManager.create(tempDir.join("project"), sessionDir);
+		const session = await mixtureSession(DRAFT_THEN_EDIT_TOML, manager);
+		const observe = vi.spyOn(fixture.authStorage.usage, "observe");
+		members.script("writer", { text: "draft", cost: 0.01 }, { text: "draft two", cost: 0.03 });
+		const release = await abortDuringEditor(session, 0.02);
+
+		// The loop has persisted the abort; the editor's aborted terminal has not arrived.
+		const branch = manager.getBranch();
+		const abortIndex = branch.findIndex(
+			entry =>
+				entry.type === "message" && entry.message.role === "assistant" && entry.message.stopReason === "aborted",
+		);
+		const abortEntry = branch[abortIndex];
+		if (abortEntry?.type !== "message" || abortEntry.message.role !== "assistant")
+			throw new Error("no aborted entry");
+		const aborted = abortEntry.message;
+		expect(aborted.responseId).toStartWith("moa:");
+		expect(aborted.usage.cost.total).toBeCloseTo(0.01, 10);
+		expect(aborted.usageBreakdown?.map(entry => [entry.model, entry.usage.cost.total])).toEqual([["writer", 0.01]]);
+		const checkpointIndex = branch.findIndex(
+			entry =>
+				entry.type === "custom" &&
+				entry.customType === MIXTURE_RUN_ENTRY_TYPE &&
+				(entry.data as MixtureCheckpoint).reason === "abort",
+		);
+		expect(checkpointIndex).toBeGreaterThanOrEqual(0);
+		expect(checkpointIndex).toBeLessThan(abortIndex);
+		const checkpointEntry = branch[checkpointIndex];
+		expect(checkpointEntry?.type === "custom" && (checkpointEntry.data as MixtureCheckpoint).outerResponseId).toBe(
+			aborted.responseId,
+		);
+		expect(session.getSessionStats().cost).toBeCloseTo(0.01, 10);
+		const entriesBefore = manager.getEntries().filter(entry => entry.type !== "model_usage").length;
+
+		release();
+		while (observe.mock.calls.length < 2) await Bun.sleep(5);
+		await Bun.sleep(10);
+		expect(
+			modelUsage(session).map(entry => [
+				entry.purpose,
+				entry.api,
+				entry.model,
+				entry.stopReason,
+				entry.usage.cost.total,
+			]),
+		).toEqual([["moa", FAKE_API, "editor", "aborted", 0.02]]);
+		// Finalization was the request's end: no second response, checkpoint or card.
+		expect(manager.getEntries().filter(entry => entry.type !== "model_usage")).toHaveLength(entriesBefore);
+		expect(session.getSessionStats().cost).toBeCloseTo(0.03, 10);
+
+		members.script("editor", { text: "answer two", cost: 0.04 });
+		await session.sendUserMessage("different task");
+		expect(lastAssistant(session).content).toEqual([{ type: "text", text: "answer two" }]);
+		expect(session.getSessionStats().cost).toBeCloseTo(0.1, 10);
+		expect(observe.mock.calls.map(([record]) => [record.model, record.costUsd])).toEqual([
+			["writer", 0.01],
+			["editor", 0.02],
+			["writer", 0.03],
+			["editor", 0.04],
+		]);
+
+		const file = manager.getSessionFile()!;
+		await session.dispose();
+		sessions.splice(0);
+		const reopened = await createMoaSession(fixture, {
+			sessionManager: await SessionManager.open(file, sessionDir),
+			settings: Settings.isolated(SETTINGS),
+		});
+		sessions.push(reopened);
+		expect(modelUsage(reopened)).toHaveLength(1);
+		expect(reopened.getSessionStats().cost).toBeCloseTo(0.1, 10);
+	});
+
+	it("writes no usage entry into the replacement conversation when /clear runs before the late usage", async () => {
+		const session = await mixtureSession();
+		const observe = vi.spyOn(fixture.authStorage.usage, "observe");
+		members.script("writer", { text: "draft", cost: 0.01 });
+		const release = await abortDuringEditor(session, 0.02);
+
+		expect(await session.resetSessionContext()).toBeDefined();
+		release();
+		while (observe.mock.calls.length < 2) await Bun.sleep(5);
+		await Bun.sleep(10);
+
+		expect(observe.mock.calls.map(([record]) => [record.model, record.costUsd])).toEqual([
+			["writer", 0.01],
+			["editor", 0.02],
+		]);
+		expect(session.sessionManager.getEntries().filter(entry => entry.type === "model_usage")).toEqual([]);
+		expect(session.getSessionStats().cost).toBe(0);
+	});
+
+	it("resumes the checkpointed editor on retry, reporting only the new attempt: the abort was committed and the late usage stays out", async () => {
+		const session = await mixtureSession();
+		members.script("writer", { text: "draft", cost: 0.01 });
+		const release = await abortDuringEditor(session, 0.02);
+		release();
+		while (modelUsage(session).length === 0) await Bun.sleep(5);
+
+		members.script("editor", { text: "final", cost: 0.04 });
+		expect(await session.retry()).toBe(true);
+		await session.waitForIdle();
+
+		expect(members.calls.map(call => call.model.id)).toEqual(["writer", "editor", "editor"]);
+		const outer = lastAssistant(session);
+		expect(outer.content).toEqual([{ type: "text", text: "final" }]);
+		expect(outer.usage.cost.total).toBeCloseTo(0.04, 10);
+		expect(session.getSessionStats().cost).toBeCloseTo(0.07, 10);
 	});
 });
 

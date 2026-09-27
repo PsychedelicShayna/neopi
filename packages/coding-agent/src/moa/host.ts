@@ -177,6 +177,25 @@ export function createSessionMixtureHost(deps: SessionMixtureHostDeps): SessionM
 				costUsd: settlement.usage.cost.total,
 			});
 		},
+		onLateSettlement(run, settlement) {
+			// No outer response will report this attempt, so it enters session totals as
+			// its own ledger entry, but only while the run still belongs to this
+			// conversation: a run dropped by /clear must not bill the replacement.
+			const sessionId = sessionManager.getSessionId();
+			if (!runs.owns(run) || run.key.host !== sessionId) return;
+			sessionManager.appendModelUsage(
+				{
+					purpose: "moa",
+					api: settlement.api,
+					provider: settlement.provider,
+					model: settlement.model,
+					usage: settlement.usage,
+					stopReason: settlement.stopReason,
+					errorMessage: settlement.errorMessage,
+				},
+				{ sessionId, parentId: sessionManager.getLeafId() },
+			);
+		},
 		onEvent,
 		resetConversation(): void {
 			runs.clear();

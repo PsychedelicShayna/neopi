@@ -23,11 +23,14 @@ export type OuterOutcome =
 	| { kind: "done"; reason: "stop" | "length" | "toolUse" }
 	| { kind: "error"; reason: "aborted" | "error"; message: string; status?: number; errorId?: number };
 
-export interface OuterFinish {
-	outcome: OuterOutcome;
+export interface OuterSettled {
 	usage: Usage;
 	usageBreakdown?: UsageBreakdownEntry[];
 	responseId?: string;
+}
+
+export interface OuterFinish extends OuterSettled {
+	outcome: OuterOutcome;
 }
 
 export class OuterWriter {
@@ -118,15 +121,24 @@ export class OuterWriter {
 		push?.();
 	}
 
+	/**
+	 * Stamp the settled identity and usage onto the live message and stop the
+	 * writer without a terminal event: on a caller abort the consumer copies this
+	 * message by reference and leaves the stream on the same abort.
+	 */
+	seal(settled: OuterSettled): void {
+		if (this.#finished) return;
+		this.#finished = true;
+		this.#stamp(settled);
+	}
+
 	/** Push exactly one terminal event. */
 	finish(finish: OuterFinish): void {
 		if (this.#finished) return;
 		this.endText();
 		this.#finished = true;
 		const message = this.message;
-		message.usage = finish.usage;
-		if (finish.usageBreakdown && finish.usageBreakdown.length > 0) message.usageBreakdown = finish.usageBreakdown;
-		if (finish.responseId) message.responseId = finish.responseId;
+		this.#stamp(finish);
 		const outcome = finish.outcome;
 		let push: () => void;
 		if (outcome.kind === "done") {
@@ -141,5 +153,12 @@ export class OuterWriter {
 		}
 		if (this.#held) this.#pendingTerminal = push;
 		else push();
+	}
+
+	#stamp(settled: OuterSettled): void {
+		this.message.usage = settled.usage;
+		if (settled.usageBreakdown && settled.usageBreakdown.length > 0)
+			this.message.usageBreakdown = settled.usageBreakdown;
+		if (settled.responseId) this.message.responseId = settled.responseId;
 	}
 }

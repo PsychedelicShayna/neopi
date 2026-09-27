@@ -41,7 +41,7 @@ import {
 	renderLimitNotice,
 } from "./envelopes";
 import { normalizeToolChoice, prepareMemberCall } from "./member-call";
-import { type OuterOutcome, OuterWriter, zeroUsage } from "./outer-stream";
+import { type OuterOutcome, type OuterSettled, OuterWriter, zeroUsage } from "./outer-stream";
 import {
 	assistantText,
 	classifyTail,
@@ -52,7 +52,7 @@ import {
 	isRepeatRequest,
 	textHash,
 } from "./request";
-import type { MixtureRunEntry } from "./run-store";
+import type { MixtureRunEntry, MixtureRunLease } from "./run-store";
 import { cfgMoaConversationBudgetTokens, cfgMoaHardMaxHops, cfgMoaMaxHops, cfgMoaPartBudgetTokens } from "./settings";
 import type {
 	HopRecord,
@@ -78,6 +78,9 @@ const ERROR_PREFIX = {
 	unsatisfiable: "toolchoice.unsatisfiable",
 	unsupported: "toolchoice.unsupported",
 } as const;
+
+/** The outer error message of a caller abort; the caller's loop words its own copy. */
+const CALLER_ABORT_MESSAGE = "Request was aborted";
 
 /** Add each reported counter of `add` into `total`; a counter no attempt reported stays absent. */
 function addCounters<T extends Record<string, number | undefined>>(
@@ -191,8 +194,7 @@ export function streamMixture(
 
 type MemberOutcome =
 	| { kind: "done"; message: AssistantMessage; truncated: boolean }
-	| { kind: "failed"; message: string; status?: number; errorId?: number }
-	| { kind: "aborted"; message: string };
+	| { kind: "failed"; message: string; status?: number; errorId?: number };
 
 class MixtureCall {
 	readonly #model: Model<Api>;
@@ -201,8 +203,26 @@ class MixtureCall {
 	readonly #host: MixtureHost;
 	readonly #writer: OuterWriter;
 	#entry!: MixtureRunEntry;
+	#lease: MixtureRunLease | undefined;
+	/** The run this call drives, once classification picked or started one. */
+	#run: MixtureRun | undefined;
 	/** Terminal member text streamed live on this call. */
 	#streamedLive = false;
+	/**
+	 * A caller abort finished this request's outer response. What is still in
+	 * flight afterwards only settles usage, late.
+	 */
+	#finalized = false;
+	readonly #onCallerAbort = (): void => {
+		try {
+			this.#finalizeAbort();
+		} catch (error) {
+			logger.error("mixture abort finalization failed", {
+				mixture: this.#model.id,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	};
 
 	constructor(
 		model: Model<Api>,
@@ -226,6 +246,14 @@ class MixtureCall {
 				`${ERROR_PREFIX.unsupported}: mixture/${name} cannot promise the native tool choice "${requirement.unsupported}"`,
 			);
 		}
+		const signal = this.#options.signal;
+		// Aborted before the engine could register its finalizer: touch no run state.
+		if (signal?.aborted) {
+			return this.#writer.finish({
+				outcome: { kind: "error", reason: "aborted", message: CALLER_ABORT_MESSAGE },
+				usage: zeroUsage(),
+			});
+		}
 		const key: MixtureRunKey = {
 			host: this.#host.id,
 			mixture: name,
@@ -234,11 +262,17 @@ class MixtureCall {
 		};
 		const lease = this.#host.runs.acquire(key);
 		if (!lease) return this.#reject(`mixture run ${name} is busy`);
+		this.#lease = lease;
 		this.#entry = lease.entry;
 		this.#writer.holdTerminal();
+		// Registered before streamMixture returns: every abort listener runs inside the
+		// same abort() call, while the caller's loop copies the outer message only on a
+		// later microtask, so the finalizer's writes are always in that copy.
+		signal?.addEventListener("abort", this.#onCallerAbort, { once: true });
 		try {
 			await this.#classify(key, requirement);
 		} finally {
+			signal?.removeEventListener("abort", this.#onCallerAbort);
 			lease.release();
 			this.#writer.releaseTerminal();
 		}
@@ -348,7 +382,7 @@ class MixtureCall {
 			toolRequirement: requirement.kind === "any" || requirement.kind === "named" ? requirement : undefined,
 			seq: 0,
 		};
-		this.#entry.run = run;
+		this.#host.runs.install(this.#entry, run);
 		this.#entry.topicImages = images;
 		this.#entry.providerState = new Map();
 		this.#entry.conversation = conversation;
@@ -374,7 +408,8 @@ class MixtureCall {
 	// -----------------------------------------------------------------------
 
 	async #loop(run: MixtureRun): Promise<void> {
-		while (run.status === "running") {
+		this.#run = run;
+		while (run.status === "running" && !this.#finalized) {
 			const phase = run.phase;
 			switch (phase.kind) {
 				case "hop_ready":
@@ -475,7 +510,10 @@ class MixtureCall {
 			messages: [envelopeMessage, ...hop.messages],
 		};
 		const prepared = await this.#host.prepareContext(memberContext, member.model);
+		// A caller abort finalized the request meanwhile: start no member call.
+		if (this.#finalized) return;
 		const outcome = await this.#generate(run, hop, member, prepared);
+		if (this.#finalized) return;
 		this.#afterGenerate(run, hop, member, outcome);
 	}
 
@@ -559,22 +597,23 @@ class MixtureCall {
 			});
 		}
 		if (final?.usage) {
+			const stopReason = final.stopReason;
 			this.#settle(run, hop, {
 				kind: "member",
 				hop: hop.index,
+				api: final.api,
 				provider: final.provider,
 				model: final.model,
 				usage: final.usage,
-				failed: terminal !== "done" || undefined,
+				stopReason,
+				errorMessage: final.errorMessage,
+				failed: stopReason === "error" || stopReason === "aborted" || undefined,
 			});
 		}
 		if (!final || !terminal) {
 			return { kind: "failed", message: `member ${member.id} stream ended without a result` };
 		}
 		if (terminal === "error") {
-			if (final.stopReason === "aborted" && this.#options.signal?.aborted) {
-				return { kind: "aborted", message: final.errorMessage ?? "aborted" };
-			}
 			return {
 				kind: "failed",
 				message: final.errorMessage ?? `member ${member.id} failed`,
@@ -587,7 +626,6 @@ class MixtureCall {
 
 	#afterGenerate(run: MixtureRun, hop: HopRecord, member: ResolvedModelMember, outcome: MemberOutcome): void {
 		hop.elapsedMs = Date.now() - hop.startedAt;
-		if (outcome.kind === "aborted") return this.#abort(run, hop, member, outcome.message);
 		if (outcome.kind === "failed") return this.#fail(run, hop, outcome);
 		const message = outcome.message;
 		const calls = message.content.filter(block => block.type === "toolCall");
@@ -714,21 +752,37 @@ class MixtureCall {
 		});
 	}
 
-	#abort(run: MixtureRun, hop: HopRecord, member: ResolvedModelMember, message: string): void {
-		hop.status = "aborted";
-		hop.output = "";
-		this.#normalizeContinuation(run, hop);
-		this.#emit({ type: "hop_end", run, hop, trace: this.#hopTrace(run, hop, member) });
+	/**
+	 * The caller aborted: finish the request now, inside the signal's abort
+	 * dispatch, with no await. The caller's loop copies the live outer message on
+	 * a later microtask, so the persisted abort carries this response's identity
+	 * and usage. The in-flight member call is left to settle late.
+	 */
+	#finalizeAbort(): void {
+		const run = this.#run;
+		if (this.#finalized || this.#writer.finished || run?.status !== "running") return;
+		this.#finalized = true;
+		const hop = run.hops.at(-1);
+		let note: string | undefined;
+		if (hop?.status === "running") {
+			hop.status = "aborted";
+			hop.output = "";
+			hop.elapsedMs = Date.now() - hop.startedAt;
+			this.#normalizeContinuation(run, hop);
+			this.#emit({ type: "hop_end", run, hop, trace: this.#hopTrace(run, hop, run.resolved.members[hop.memberId]) });
+			note = `aborted during hop ${hop.index} (${hop.memberId})`;
+		}
 		run.status = "checkpoint";
 		const pending: PendingResponse = {
 			responseId: this.#nextResponseId(run),
 			content: structuredClone(this.#writer.message.content),
 			stopReason: "aborted",
-			errorMessage: message,
+			errorMessage: CALLER_ABORT_MESSAGE,
 		};
 		const record = this.#recordResponse(run, pending, "failed");
-		this.#checkpoint(run, "abort", record, `aborted during hop ${hop.index} (${hop.memberId})`);
-		this.#finishWith(run, record, { kind: "error", reason: "aborted", message });
+		this.#checkpoint(run, "abort", record, note);
+		this.#writer.seal(this.#reported(run, record));
+		this.#lease?.release();
 	}
 
 	/** A failed or aborted call is redone from a resumable phase, never `generating`. */
@@ -763,8 +817,10 @@ class MixtureCall {
 	// Settlement, responses, checkpoints, traces
 	// -----------------------------------------------------------------------
 
-	#settle(run: MixtureRun, hop: HopRecord, settlement: Omit<Settlement, "attempt">): void {
+	#settle(run: MixtureRun, hop: HopRecord, settlement: Omit<Settlement, "attempt" | "late">): void {
 		const record: Settlement = { attempt: `${run.id}:${run.settlements.length + 1}`, ...settlement };
+		// After finalization no outer response of this request can report the attempt.
+		if (this.#finalized) record.late = true;
 		run.settlements.push(record);
 		run.lifetime.usd += record.usage.cost.total;
 		run.window.usd += record.usage.cost.total;
@@ -772,6 +828,7 @@ class MixtureCall {
 		addUsage(hopUsage, record.usage);
 		hop.usage = hopUsage;
 		this.#host.onSettlement?.(run, record);
+		if (record.late) this.#host.onLateSettlement?.(run, record);
 	}
 
 	#nextResponseId(run: MixtureRun): string {
@@ -795,7 +852,14 @@ class MixtureCall {
 	}
 
 	#finishWith(run: MixtureRun, record: OuterResponseRecord, outcome: OuterOutcome): void {
-		const reported = run.settlements.slice(record.report.from, record.report.to);
+		this.#writer.finish({ outcome, ...this.#reported(run, record) });
+	}
+
+	/** What an outer response reports: its range's settlements, never a late one. */
+	#reported(run: MixtureRun, record: OuterResponseRecord): OuterSettled {
+		const reported = run.settlements
+			.slice(record.report.from, record.report.to)
+			.filter(settlement => !settlement.late);
 		const usage = sumSettlements(reported);
 		usage.contextTokens = this.#contextTokens();
 		const usageBreakdown: UsageBreakdownEntry[] = reported.map(settlement => ({
@@ -804,7 +868,7 @@ class MixtureCall {
 			kind: settlement.kind,
 			usage: settlement.usage,
 		}));
-		this.#writer.finish({ outcome, usage, usageBreakdown, responseId: record.responseId });
+		return { usage, usageBreakdown, responseId: record.responseId };
 	}
 
 	/** Outer conversation occupancy, not the sum of member prompts. */
