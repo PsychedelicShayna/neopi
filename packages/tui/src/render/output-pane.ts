@@ -74,6 +74,10 @@ export function formatOutputPaneLines(options: OutputPaneFormatOptions, theme: T
 			? getSixelLineMask(rawLines, options.sixelContinuation)
 			: undefined;
 	let hasSixel = sixelMask?.some(Boolean) ?? false;
+	// Whether the rows hold a SIXEL span, raw or already replaced by its text
+	// fallback. Either way the span is shown whole when the caller uncaps it:
+	// capping the fallback would keep a tail of blanks and drop the label.
+	const sixelSpan = hasSixel;
 	if (hasSixel && getInlineImagePresentation() === "text") {
 		// A docked frame shows images as text. The mask spans the whole logical
 		// payload, so replace each span with one label row plus blanks: the row
@@ -99,7 +103,7 @@ export function formatOutputPaneLines(options: OutputPaneFormatOptions, theme: T
 	);
 
 	const configuredLimit = options.expanded ? options.expandedMaxLines : options.collapsedMaxLines;
-	const limit = hasSixel && options.uncapSixel ? undefined : configuredLimit;
+	const limit = sixelSpan && options.uncapSixel ? undefined : configuredLimit;
 	let visibleLines: readonly string[] = styledLines;
 	let hiddenCount = 0;
 

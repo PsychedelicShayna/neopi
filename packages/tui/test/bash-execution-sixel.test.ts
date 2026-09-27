@@ -240,6 +240,27 @@ describe("formatOutputPaneLines SIXEL presentation", () => {
 			darkTheme,
 		);
 
+	it("keeps the omitted-image label of a payload taller than the collapsed preview", () => {
+		Bun.env.PI_FORCE_IMAGE_PROTOCOL = "sixel";
+		Bun.env.PI_ALLOW_SIXEL_PASSTHROUGH = "1";
+		try {
+			// A 40-row payload in a collapsed bash pane (tail preview, 20 rows).
+			const rows = ["\x1bPq#0;2;0;0;0", ...Array.from({ length: 38 }, () => "#1~~~~-"), "#0????\x1b\\"];
+			const ui = { requestRender: () => {}, requestComponentRender: () => {} } as unknown as TUI;
+			const block = new BashExecutionComponent("printf big-sixel", ui, false);
+			block.appendOutput(rows.join("\n"));
+			block.setComplete(0, false);
+			setInlineImagePresentation("text");
+			block.invalidate();
+			const docked = block.render(80).map(line => Bun.stripANSI(line));
+			expect(docked.some(line => line.includes("[image omitted while docked]"))).toBe(true);
+			expect(docked.join("\n")).not.toContain("~~~~");
+		} finally {
+			delete Bun.env.PI_FORCE_IMAGE_PROTOCOL;
+			delete Bun.env.PI_ALLOW_SIXEL_PASSTHROUGH;
+		}
+	});
+
 	it("passes raw payload rows through as graphics", () => {
 		const result = format();
 		expect(result.hasSixel).toBe(true);
