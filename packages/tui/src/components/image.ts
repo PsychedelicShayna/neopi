@@ -1,5 +1,6 @@
 import { getKittyGraphics } from "../kitty-graphics";
 import {
+	encodeKittyDeletePlacement,
 	getCellDimensions,
 	getImageDimensions,
 	type ImageDimensions,
@@ -29,6 +30,7 @@ export interface ImageOptions {
 
 const EMPTY_IDS: readonly number[] = [];
 const EMPTY_TRANSMITS: readonly string[] = [];
+const EMPTY_DELETES: readonly string[] = [];
 const EMPTY_STALE_EPOCHS: ReadonlyArray<{ imageId: number; lastEpoch: number }> = [];
 const SAVE_CURSOR = "\x1b7";
 const RESTORE_CURSOR = "\x1b8";
@@ -38,6 +40,26 @@ const RESERVED_IMAGE_ROW = "\x1b[0m";
 
 /** Default count of inline images kept as live graphics before older ones fall back to text. */
 export const DEFAULT_MAX_INLINE_IMAGES = 8;
+
+/**
+ * How inline images present in the frame being composed: live terminal
+ * graphics, or their text fallback. The composer sets `"text"` only around a
+ * docked side-panel composition and restores the previous mode before the
+ * frame returns, so no other surface ever observes it.
+ */
+export type InlineImagePresentation = "graphics" | "text";
+
+let inlineImagePresentation: InlineImagePresentation = "graphics";
+
+/** Set the inline image presentation for the composition in progress. */
+export function setInlineImagePresentation(mode: InlineImagePresentation): void {
+	inlineImagePresentation = mode;
+}
+
+/** Inline image presentation for the composition in progress. */
+export function getInlineImagePresentation(): InlineImagePresentation {
+	return inlineImagePresentation;
+}
 
 /** Per-image direct-placement emit state tracked by {@link ImageBudget}. */
 interface PlacementEmitState {
@@ -205,6 +227,12 @@ export class ImageBudget {
 	 * placements) instead of every image ever registered.
 	 */
 	#watchedPlacements = new Set<PlacementEmitState>();
+	/** Image ids the in-flight pass renders as text because the presentation mode is `"text"`. */
+	#passTextOnly = new Set<number>();
+	/** Ids whose emit recorded an attach row since the last {@link snapshotAttachments}. */
+	#reEmitted = new Set<number>();
+	/** Placement deletes (`d=i`) owed by docked text frames; drained by the renderer. */
+	#dockedDeletes: string[] = [];
 
 	constructor(cap: number = DEFAULT_MAX_INLINE_IMAGES, requestRender: () => void = () => {}) {
 		this.#cap = normalizeCap(cap);
@@ -285,6 +313,7 @@ export class ImageBudget {
 		this.#passIds.length = 0;
 		this.#passSuppression.clear();
 		this.#passIndex.clear();
+		this.#passTextOnly.clear();
 		this.#stablePass = stable;
 		this.#surface = altScreen ? "alt" : "screen";
 		this.#split = altScreen ? this.#altSplit : this.#screenSplit;
@@ -311,6 +340,7 @@ export class ImageBudget {
 	observe(imageId: number): boolean {
 		const existing = this.#passSuppression.get(imageId);
 		if (existing !== undefined) return existing;
+		if (inlineImagePresentation === "text") this.#passTextOnly.add(imageId);
 		if (this.#stablePass) {
 			const suppressed = this.#cap > 0 && this.#split.suppressedIds.has(imageId);
 			this.#passSuppression.set(imageId, suppressed);
@@ -349,7 +379,102 @@ export class ImageBudget {
 		// passes replay this per id (see #stablePass) instead of re-deriving it
 		// from a reversed, tail-only walk.
 		split.suppressedIds = new Set(this.#passIds.slice(0, split.onTerminal));
+		// Only the pass the frame is emitted from decides deletes: a repeated pass
+		// may demote an image the discarded one still showed live.
+		if (this.#surface === "screen" && !retry) this.#collectDockedDeletes();
 		return retry;
+	}
+
+	/**
+	 * Queue a placement delete for every image this pass rendered as text only
+	 * because of the presentation mode, whose current placement is entirely in
+	 * the mutable viewport: a text repaint does not remove a direct Kitty
+	 * placement, and `d=i` removes it while keeping the transmitted data, so a
+	 * later graphics frame re-places it without a retransmit. A placement with
+	 * archived cells, or of unknown provenance, is never deleted — `d=i` would
+	 * take its scrollback cells with it. `d=I` is never issued here.
+	 */
+	#collectDockedDeletes(): void {
+		for (const imageId of this.#passTextOnly) {
+			if (!this.#passShowsLive(imageId)) continue;
+			const state = this.#placementState.get(imageId);
+			if (state === undefined || state.lastAttachTopFrameRow === undefined || state.cellsArchived) continue;
+			this.#dockedDeletes.push(encodeKittyDeletePlacement(imageId, state.epoch));
+			// The placement is gone; its epoch stays usable for the next emit.
+			state.lastAttachTopFrameRow = undefined;
+			this.#watchedPlacements.delete(state);
+		}
+	}
+
+	/** Placement deletes (`d=i`) owed by docked text frames since the last call; clears the queue. */
+	takeDockedPlacementDeletes(): readonly string[] {
+		if (this.#dockedDeletes.length === 0) return EMPTY_DELETES;
+		const deletes = this.#dockedDeletes;
+		this.#dockedDeletes = [];
+		return deletes;
+	}
+
+	/**
+	 * Copy every watched placement's attach row (physical screen row of its
+	 * block's first visible cell) before a paint rewrites them. The paint then
+	 * calls {@link observeRetirement} with this snapshot.
+	 */
+	snapshotAttachments(): ReadonlyMap<number, number | undefined> {
+		this.#reEmitted.clear();
+		const snapshot = new Map<number, number | undefined>();
+		if (this.#watchedPlacements.size === 0) return snapshot;
+		for (const [imageId, state] of this.#placementState) {
+			if (this.#watchedPlacements.has(state)) snapshot.set(imageId, state.lastAttachTopFrameRow);
+		}
+		return snapshot;
+	}
+
+	/**
+	 * Account for a paint that scrolled `pushed` physical rows into native
+	 * scrollback. Rows `[0, pushed)` of the screen as the paint began left it,
+	 * so a snapshot row below `pushed` archived that placement's cells — judged
+	 * by the snapshot even if the paint re-emitted it elsewhere. Placements the
+	 * paint did not re-emit (their line retired into history) moved with the
+	 * scroll: their stored row is rebased by `-pushed`, archived once negative.
+	 * Re-emitted rows were already stored post-scroll by
+	 * {@link resolvePlacementEmit}.
+	 */
+	observeRetirement(snapshot: ReadonlyMap<number, number | undefined>, pushed: number): void {
+		for (const [imageId, row] of snapshot) {
+			const state = this.#placementState.get(imageId);
+			if (state === undefined || row === undefined) continue;
+			if (row < pushed) this.#archive(state);
+			if (this.#reEmitted.has(imageId) || pushed === 0) continue;
+			state.lastAttachTopFrameRow = row - pushed;
+			if (state.lastAttachTopFrameRow < 0) this.#archive(state);
+		}
+		this.#reEmitted.clear();
+	}
+
+	/**
+	 * The terminal changed size under the frame. Its own reflow moves normal-
+	 * screen cells by an amount no paint measured: a height shrink can push up
+	 * to `shrunkRows` top rows into scrollback, and a width change rewraps rows
+	 * above and below each placement. Every attach row becomes unknown
+	 * provenance (never deleted by a docked frame). A placement whose cells the
+	 * reflow may have archived — any, on a width change; on a shrink, one whose
+	 * top was within the pushed band or whose row was already unknown — is
+	 * latched archived, so its next emit takes a fresh epoch instead of
+	 * replacing, and so deleting, cells that may now be in scrollback.
+	 */
+	observeNativeReflow(shrunkRows: number, widthChanged: boolean): void {
+		for (const state of this.#placementState.values()) {
+			const row = state.lastAttachTopFrameRow;
+			const possiblyArchived = widthChanged || (shrunkRows > 0 && (row === undefined || row < shrunkRows));
+			if (possiblyArchived) this.#archive(state);
+			state.lastAttachTopFrameRow = undefined;
+			this.#watchedPlacements.delete(state);
+		}
+	}
+
+	#archive(state: PlacementEmitState): void {
+		state.cellsArchived = true;
+		this.#watchedPlacements.delete(state);
 	}
 
 	/**
@@ -459,6 +584,7 @@ export class ImageBudget {
 		this.#idToKey.clear();
 		this.#placementState.clear();
 		this.#watchedPlacements.clear();
+		this.#dockedDeletes = [];
 		for (const surface of SURFACES) this.#liveIds[surface].clear();
 		return [...ids];
 	}
@@ -524,7 +650,10 @@ export class ImageBudget {
 	 * the placement covers, i.e. the block's first *visible* row, not its
 	 * origin (-1 when the writer has no frame-space position: alt-screen,
 	 * resize, ConPTY-truncated replays). `committedTo` is this frame's commit
-	 * target in the same frame-row space (-1 when unknown).
+	 * target in the same frame-row space (-1 when unknown). `remaining` is how
+	 * many rows the paint still scrolls after this emit: the stored row is the
+	 * block's first visible row as the paint leaves it, and a negative one
+	 * means its top rows scroll off in this very paint (archived at emit).
 	 *
 	 * Invariant: a placement id may be re-used (Kitty replace strips that id's
 	 * cells everywhere, scrollback included) only while none of the cells it
@@ -536,6 +665,7 @@ export class ImageBudget {
 		imageId: number,
 		attachTopFrameRow: number,
 		committedTo: number,
+		remaining = 0,
 	): { placementId: number; widthPx: number; heightPx: number } | null {
 		const state = this.#placementState.get(imageId);
 		if (!state) return null;
@@ -552,8 +682,11 @@ export class ImageBudget {
 			state.lastAttachTopFrameRow = undefined;
 		}
 		if (attachTopFrameRow >= 0) {
-			state.lastAttachTopFrameRow = attachTopFrameRow;
-			this.#watchedPlacements.add(state);
+			const settledRow = attachTopFrameRow - Math.max(0, remaining);
+			state.lastAttachTopFrameRow = settledRow;
+			this.#reEmitted.add(imageId);
+			if (settledRow < 0) this.#archive(state);
+			else this.#watchedPlacements.add(state);
 		}
 		return { placementId: state.epoch, widthPx: state.widthPx, heightPx: state.heightPx };
 	}
@@ -713,7 +846,7 @@ export class Image implements Component {
 
 	#cachedLines?: string[];
 	#cachedWidth?: number;
-	#cachedSuppressed = false;
+	#cachedTextOnly = false;
 	#cachedImageProtocol: typeof TERMINAL.imageProtocol = null;
 	#cachedCellWidthPx = 0;
 	#cachedCellHeightPx = 0;
@@ -746,7 +879,7 @@ export class Image implements Component {
 			heightPx: this.#dimensions.heightPx,
 			filename: this.#options.filename ?? null,
 			imageId: this.#imageId ?? null,
-			suppressed: this.#cachedSuppressed,
+			suppressed: this.#cachedTextOnly,
 		};
 	}
 
@@ -765,11 +898,15 @@ export class Image implements Component {
 		// toward (and are demoted by) the budget; without a protocol every image is
 		// already text.
 		const suppressed = hasProtocol && this.#budget !== undefined ? this.#budget.observe(this.#imageId ?? 0) : false;
+		// Presentation is decided after observe(), so the image keeps its budget
+		// slot and the pass ledger records the budget's own decision: a docked
+		// text fallback is never read as a demotion that deletes the graphic.
+		const textOnly = suppressed || getInlineImagePresentation() === "text";
 
 		if (
 			this.#cachedLines &&
 			this.#cachedWidth === width &&
-			this.#cachedSuppressed === suppressed &&
+			this.#cachedTextOnly === textOnly &&
 			this.#cachedImageProtocol === imageProtocol &&
 			this.#cachedCellWidthPx === cellDimensions.widthPx &&
 			this.#cachedCellHeightPx === cellDimensions.heightPx &&
@@ -784,7 +921,7 @@ export class Image implements Component {
 
 		let lines: string[];
 
-		if (hasProtocol && !suppressed) {
+		if (hasProtocol && !textOnly) {
 			// Transmit the data once (keyed by id); thereafter renderImage returns
 			// just the placement, so repaints never re-send the base64.
 			const needsTransmit = this.#imageId != null && (this.#budget?.shouldTransmit(this.#imageId) ?? false);
@@ -836,7 +973,7 @@ export class Image implements Component {
 
 		this.#cachedLines = lines;
 		this.#cachedWidth = width;
-		this.#cachedSuppressed = suppressed;
+		this.#cachedTextOnly = textOnly;
 		this.#cachedImageProtocol = imageProtocol;
 		this.#cachedCellWidthPx = cellDimensions.widthPx;
 		this.#cachedCellHeightPx = cellDimensions.heightPx;

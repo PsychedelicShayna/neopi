@@ -1,11 +1,16 @@
 import type { EditorTopBorder } from "../components/composer/types";
+import { getInlineImagePresentation, setInlineImagePresentation } from "../components/image";
+import type { HeightConstrainedComponent, LayoutRect, LayoutRenderer } from "../components/layout/geometry";
+import { SplitPane, type SplitPaneSize } from "../components/layout/split-pane";
 import { Spacer } from "../components/spacer";
+import type { MouseRoutable } from "../mouse";
 import { isInsideTerminalMultiplexer } from "../terminal-multiplexer";
 import { ProcessTerminal, type Terminal } from "../terminal";
 import {
 	type Component,
 	Container,
 	type ResizeScrollbackMode,
+	SEGMENT_RESET,
 	type TerminalFramePlan,
 	type TerminalFrameProvider,
 	TUI,
@@ -116,6 +121,37 @@ export interface ComposerStartOptions {
 	readonly deferInput?: boolean;
 }
 
+/** Dock options; the composer owns the SplitPane built from them. */
+export interface SidePanelDock {
+	readonly side: "left" | "right";
+	/** `{ ratio, min, max }` from settings. */
+	readonly width: SplitPaneSize;
+	/** Terminals narrower than this hide the dock. */
+	readonly splitAt: number;
+	/** Content width reserved for the chat column. */
+	readonly chatMinWidth: number;
+}
+
+/** Panel content the composer can dock beside the chat column. */
+export type DockablePanel = Component & HeightConstrainedComponent & MouseRoutable;
+
+/** Rects recorded by the last docked frame's join, in terminal columns and viewport rows. */
+export interface SidePanelGeometry {
+	readonly chatRect: LayoutRect;
+	readonly panelRect: LayoutRect;
+	readonly dividerCol: number;
+	readonly side: "left" | "right";
+}
+
+/** Options for {@link Composer.setSidePanel}. */
+export interface SetSidePanelOptions {
+	/**
+	 * Apply the resize-scrollback policy when the chat width changes (default
+	 * true). Teardown passes false so a quit never clears the user's scrollback.
+	 */
+	readonly refreshHistory?: boolean;
+}
+
 /**
  * Mount slot for the session-aware status component below the editor. Shows
  * placeholder rows during startup until the real component mounts.
@@ -186,6 +222,10 @@ export const PINNED_HUD_TOGGLE_ID = "@omp:toggle-pinned-hud";
  * matching closes stay and become band resumes via bgFill.
  */
 const NESTED_BG_OPEN_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[(?:4[0-7]|10[0-7]|48;[0-9;]*)m`, "g");
+
+function blankRows(count: number): string[] {
+	return Array.from({ length: count }, () => "");
+}
 
 /**
  * Candidate resolver for a row-level click target, if the component is one.
@@ -281,6 +321,41 @@ export class Composer implements TerminalFrameProvider {
 	#started = false;
 	#stopped = false;
 	#transferred = false;
+	// Side panel: the composer owns the SplitPane and is the only width measurer.
+	#sidePanel: DockablePanel | undefined;
+	#dock: SidePanelDock | undefined;
+	#split: SplitPane | undefined;
+	/** Whether the frame being composed (or the last one) chose the split. */
+	#docked = false;
+	#sidePanelGeometry: SidePanelGeometry | undefined;
+	/** Screen rows of the frame being composed; the chat column's fallback height. */
+	#frameRows = 0;
+	/** Which composition the chat column renders: a normal frame or the resize-buffer tail. */
+	#chatColumnMode: "frame" | "resize" = "frame";
+	#lastChatPlan: TerminalFramePlan = { viewport: [] };
+	/**
+	 * The chat pane of the docked split. Composes at the width the join hands
+	 * it, so the history it offers retires at the painted chat width, and pads
+	 * the top to the full height (the docked viewport is always `rows` tall).
+	 */
+	readonly #chatColumn: LayoutRenderer = (width, height) => {
+		const rows = height ?? this.#frameRows;
+		if (this.#chatColumnMode === "resize") {
+			const tail = this.#composeResizeColumn(width, rows);
+			return tail.length >= rows ? tail : [...blankRows(rows - tail.length), ...tail];
+		}
+		const plan = this.#composeChatColumn(width, rows);
+		this.#lastChatPlan = plan;
+		const padTop = Math.max(0, rows - plan.viewport.length);
+		if (padTop === 0) return plan.viewport;
+		// Click spans index viewport rows; the pad moves every painted row down.
+		this.#lastClickSpans = this.#lastClickSpans.map(span => ({
+			start: span.start + padTop,
+			end: span.end + padTop,
+			candidates: span.candidates,
+		}));
+		return [...blankRows(padTop), ...plan.viewport];
+	};
 
 	constructor(options: ComposerOptions = {}) {
 		ensureThemeSync();
@@ -348,6 +423,51 @@ export class Composer implements TerminalFrameProvider {
 			this.#resizeRetiredHeaderStart = undefined;
 		}
 		this.#lastNormalRows = rows;
+		// The two per-frame facts, decided once by the split's own measure: is
+		// this frame docked, and are inline images graphics or text.
+		const split = this.#split;
+		this.#docked = split !== undefined && split.measure(width).mode === "split";
+		if (split === undefined || !this.#docked) {
+			// Undocked or narrow: the composition is exactly the undocked frame.
+			this.#sidePanelGeometry = undefined;
+			return this.#composeChatColumn(width, rows);
+		}
+		const joined = this.#renderDocked(split, width, rows, "frame");
+		return { history: this.#lastChatPlan.history, viewport: joined };
+	}
+
+	/**
+	 * Join the chat column and the panel for a docked frame. Inline images
+	 * present as text only for the duration of this composition.
+	 */
+	#renderDocked(split: SplitPane, width: number, rows: number, mode: "frame" | "resize"): readonly string[] {
+		const previous = getInlineImagePresentation();
+		setInlineImagePresentation("text");
+		try {
+			this.#frameRows = rows;
+			this.#chatColumnMode = mode;
+			split.setHeight(rows);
+			const joined = split.render(width);
+			this.#recordSidePanelGeometry(split, width);
+			return joined;
+		} finally {
+			this.#chatColumnMode = "frame";
+			setInlineImagePresentation(previous);
+		}
+	}
+
+	#recordSidePanelGeometry(split: SplitPane, width: number): void {
+		const side = this.#dock?.side ?? "right";
+		const geometry = split.measure(width);
+		const chatRect = side === "right" ? geometry.left : geometry.right;
+		const panelRect = side === "right" ? geometry.right : geometry.left;
+		const dividerCol = split.dividerCol;
+		this.#sidePanelGeometry =
+			chatRect && panelRect && dividerCol !== undefined ? { chatRect, panelRect, dividerCol, side } : undefined;
+	}
+
+	/** The mutable viewport and history offer at `width`: the whole frame when undocked, the chat pane when docked. */
+	#composeChatColumn(width: number, rows: number): TerminalFramePlan {
 		const roots = this.#runtimeMounted
 			? [...this.#runtimeChildren, this.#statusHost]
 			: [this.#header, this.#bootstrapInputGap, this.editor, this.#statusHost];
@@ -511,6 +631,100 @@ export class Composer implements TerminalFrameProvider {
 		this.#hoveredClickId = id;
 	}
 
+	/** Click-candidate id the hover band currently follows, if any. */
+	get hoveredClickId(): string | undefined {
+		return this.#hoveredClickId;
+	}
+
+	/**
+	 * Dock, re-dock with new options, or undock (`undefined`). The chat width is
+	 * resolved before and after: a change refreshes native history under the
+	 * resize-scrollback policy (unless `refreshHistory` is false, as at
+	 * teardown, which also never requests a render); a pure side flip at the same
+	 * width only repaints, since retired rows depend on width alone.
+	 */
+	setSidePanel(panel: DockablePanel | undefined, dock?: SidePanelDock, options: SetSidePanelOptions = {}): void {
+		if (panel !== undefined && dock === undefined) throw new Error("setSidePanel needs dock options with a panel");
+		const refreshHistory = options.refreshHistory ?? true;
+		const columns = this.ui.terminal.columns;
+		const before = this.#effectiveChatWidth(columns);
+		const previousSide = this.#split === undefined ? undefined : this.#dock?.side;
+		if (panel === undefined || dock === undefined) {
+			this.#split = undefined;
+			this.#sidePanel = undefined;
+			this.#dock = undefined;
+		} else if (this.#split === undefined || panel !== this.#sidePanel || dock.side !== previousSide) {
+			this.#sidePanel = panel;
+			this.#dock = dock;
+			this.#split = this.#buildSplit(panel, dock);
+		} else {
+			const split = this.#split;
+			if (dock.side === "right") {
+				split.setRightSize(dock.width);
+				split.setLeftMinWidth(dock.chatMinWidth);
+			} else {
+				split.setLeftSize(dock.width);
+				split.setRightMinWidth(dock.chatMinWidth);
+			}
+			split.setSplitAt(dock.splitAt);
+			this.#dock = dock;
+		}
+		// Teardown: no history refresh and no render request, whatever changed.
+		if (!refreshHistory) return;
+		const after = this.#effectiveChatWidth(columns);
+		if (after !== before) {
+			this.ui.refreshHistoryAfterWidthChange();
+			this.ui.requestRender(true);
+			return;
+		}
+		const sideChanged = previousSide !== undefined && dock !== undefined && dock.side !== previousSide;
+		this.ui.requestRender(sideChanged);
+	}
+
+	/** True for the frame being composed / last composed when the split measured `split`. */
+	get sidePanelDocked(): boolean {
+		return this.#docked;
+	}
+
+	/** Rects recorded by the last docked frame's join; undefined when undocked or narrow. */
+	sidePanelGeometry(): SidePanelGeometry | undefined {
+		return this.#docked ? this.#sidePanelGeometry : undefined;
+	}
+
+	#buildSplit(panel: DockablePanel, dock: SidePanelDock): SplitPane {
+		// The reset keeps a style left open by either pane from bleeding across the divider.
+		const divider = (): string => `${SEGMENT_RESET} ${theme.fg("border", theme.boxRound.vertical)} `;
+		if (dock.side === "right") {
+			return new SplitPane({
+				left: this.#chatColumn,
+				right: panel,
+				rightSize: dock.width,
+				leftMinWidth: dock.chatMinWidth,
+				splitAt: dock.splitAt,
+				narrowPane: "left",
+				divider,
+			});
+		}
+		return new SplitPane({
+			left: panel,
+			right: this.#chatColumn,
+			leftSize: dock.width,
+			rightMinWidth: dock.chatMinWidth,
+			splitAt: dock.splitAt,
+			narrowPane: "right",
+			divider,
+		});
+	}
+
+	/** Width transcript rows wrap at for `columns`: the chat pane when the split would dock, else the terminal. */
+	#effectiveChatWidth(columns: number): number {
+		const split = this.#split;
+		if (split === undefined) return columns;
+		const geometry = split.measure(columns);
+		if (geometry.mode !== "split") return columns;
+		return (this.#dock?.side === "left" ? geometry.right?.width : geometry.left?.width) ?? columns;
+	}
+
 	/** Acknowledges one accepted header, replay, or transcript batch. */
 	acknowledgeHistory(id: number): void {
 		const offered = this.#offeredHistory;
@@ -539,6 +753,16 @@ export class Composer implements TerminalFrameProvider {
 		if (!this.#started || this.#stopped) return [];
 		const width = Math.max(1, viewport.columns);
 		const rows = Math.max(0, viewport.rows);
+		const split = this.#split;
+		this.#docked = split !== undefined && split.measure(width).mode === "split";
+		if (split === undefined || !this.#docked) {
+			this.#sidePanelGeometry = undefined;
+			return this.#composeResizeColumn(width, rows);
+		}
+		return this.#renderDocked(split, width, rows, "resize");
+	}
+
+	#composeResizeColumn(width: number, rows: number): readonly string[] {
 		const tail = this.#runtimeMounted
 			? this.#renderResizeTail(width, rows)
 			: this.#renderRoots([this.#bootstrapInputGap, this.editor, this.#statusHost], width);
@@ -558,6 +782,10 @@ export class Composer implements TerminalFrameProvider {
 
 	/** Replays committed presentation without changing logical retirement state. */
 	beginHistoryReplay(): void {
+		// A replay already pending re-renders at the latest width before it is
+		// written (#rerenderOfferedHistory), so a dock change coalescing with a
+		// settled resize must not queue a second copy.
+		if (this.#headerReplayPending || this.#offeredHistory?.kind === "replay") return;
 		if (this.#offeredHistory !== undefined) {
 			this.#historyReplayRequested = true;
 			return;

@@ -1,3 +1,4 @@
+import type { SidePanelController } from "./controllers/side-panel-controller";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, ImageContent, Model, Usage, UsageReport } from "@oh-my-pi/pi-ai";
@@ -152,6 +153,8 @@ export interface InteractiveModeContext {
 	togglePinnedHudExpanded(): void;
 	/** Point the inline hover band at a click-candidate id (or clear it). */
 	setClickHoverId(id: string | undefined): void;
+	/** Docked side panel controller (`app.sidebar.*`, inline mouse gate). */
+	readonly sidePanel: SidePanelController;
 	/** Clear loader, transient HUD/pending containers, streaming state, and pending tools. */
 	clearTransientSessionUi(): void;
 	settings: Settings;

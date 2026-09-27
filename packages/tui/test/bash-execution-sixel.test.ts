@@ -2,6 +2,9 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:
 import { BashExecutionComponent } from "@oh-my-pi/pi-tui/chat/bash-execution";
 import { getThemeByName, setThemeInstance, type Theme } from "@oh-my-pi/pi-tui/theme";
 import { sanitizeWithOptionalSixelPassthrough } from "@oh-my-pi/pi-tui/render/sixel";
+import { formatOutputPaneLines } from "@oh-my-pi/pi-tui/render/output-pane";
+import { setInlineImagePresentation } from "@oh-my-pi/pi-tui/components/image";
+import { ImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import type { TUI } from "@oh-my-pi/pi-tui";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 
@@ -53,6 +56,31 @@ describe("BashExecutionComponent SIXEL sanitization", () => {
 		expect(output).toContain("\x1bPq");
 		expect(output).toContain("\x1b\\");
 		expect(output).not.toContain("visible columns omitted");
+	});
+
+	it("keeps wide continuation rows of a payload split across streamed chunks", () => {
+		Bun.env.PI_FORCE_IMAGE_PROTOCOL = "sixel";
+		Bun.env.PI_ALLOW_SIXEL_PASSTHROUGH = "1";
+		vi.useFakeTimers();
+		try {
+			const wide = `#1${"~".repeat(5000)}-`;
+			// The start row arrives in one chunk, the wide row in the next.
+			const split = new BashExecutionComponent("printf sixel", ui, false);
+			split.appendOutput("\x1bPq#0;2;0;0;0\n");
+			vi.advanceTimersByTime(60);
+			split.appendOutput(`${wide}\n#0????\x1b\\`);
+			expect(split.getOutput()).toContain(wide);
+
+			// Same after the streaming cap has dropped the start row.
+			const capped = new BashExecutionComponent("printf sixel", ui, false);
+			capped.appendOutput(`\x1bPq#0;2;0;0;0\n${Array.from({ length: 120 }, () => "#1~~~~-").join("\n")}\n`);
+			vi.advanceTimersByTime(60);
+			capped.appendOutput(`${wide}\n#0????\x1b\\`);
+			expect(capped.getOutput()).not.toContain("\x1bPq");
+			expect(capped.getOutput()).toContain(wide);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("still truncates long non-SIXEL lines", () => {
@@ -187,5 +215,69 @@ describe("BashExecutionComponent expand footer", () => {
 		const rendered = component.render(120).join("\n");
 		expect(rendered).toContain("more lines");
 		expect(rendered).toContain("ctrl+o to expand");
+	});
+});
+
+describe("formatOutputPaneLines SIXEL presentation", () => {
+	const terminal = TERMINAL as unknown as { imageProtocol: ImageProtocol | null };
+	const originalProtocol = TERMINAL.imageProtocol;
+
+	beforeEach(() => {
+		setThemeInstance(darkTheme);
+		terminal.imageProtocol = ImageProtocol.Sixel;
+	});
+	afterEach(() => {
+		terminal.imageProtocol = originalProtocol;
+		setInlineImagePresentation("graphics");
+	});
+
+	// libsixel splits one payload across rows; only the first carries the start marker.
+	const payload = ["\x1bPq#0;2;0;0;0", "#1~~~~-", "#1@@@@-", "#0????\x1b\\"];
+	const lines = [...payload, "between", ...payload];
+	const format = () =>
+		formatOutputPaneLines(
+			{ lines, expanded: true, collapsedMaxLines: 100, styleLine: line => `<${line}>` },
+			darkTheme,
+		);
+
+	it("keeps the omitted-image label of a payload taller than the collapsed preview", () => {
+		Bun.env.PI_FORCE_IMAGE_PROTOCOL = "sixel";
+		Bun.env.PI_ALLOW_SIXEL_PASSTHROUGH = "1";
+		try {
+			// A 40-row payload in a collapsed bash pane (tail preview, 20 rows).
+			const rows = ["\x1bPq#0;2;0;0;0", ...Array.from({ length: 38 }, () => "#1~~~~-"), "#0????\x1b\\"];
+			const ui = { requestRender: () => {}, requestComponentRender: () => {} } as unknown as TUI;
+			const block = new BashExecutionComponent("printf big-sixel", ui, false);
+			block.appendOutput(rows.join("\n"));
+			block.setComplete(0, false);
+			setInlineImagePresentation("text");
+			block.invalidate();
+			const docked = block.render(80).map(line => Bun.stripANSI(line));
+			expect(docked.some(line => line.includes("[image omitted while docked]"))).toBe(true);
+			expect(docked.join("\n")).not.toContain("~~~~");
+		} finally {
+			delete Bun.env.PI_FORCE_IMAGE_PROTOCOL;
+			delete Bun.env.PI_ALLOW_SIXEL_PASSTHROUGH;
+		}
+	});
+
+	it("passes raw payload rows through as graphics", () => {
+		const result = format();
+		expect(result.hasSixel).toBe(true);
+		expect(result.lines).toEqual([...payload, "<between>", ...payload]);
+	});
+
+	it("replaces every payload row with a label and blanks while images are text", () => {
+		setInlineImagePresentation("text");
+		const result = format();
+		expect(result.hasSixel).toBe(false);
+		expect(result.lines).toHaveLength(lines.length);
+		const plain = result.lines.map(line => Bun.stripANSI(line));
+		// Each span is label + 3 blanks; the row between two payloads is untouched.
+		expect(plain.slice(0, 4)).toEqual(["<[image omitted while docked]>", "<>", "<>", "<>"]);
+		expect(plain[4]).toBe("<between>");
+		expect(plain.slice(5)).toEqual(["<[image omitted while docked]>", "<>", "<>", "<>"]);
+		expect(result.lines.join("")).not.toContain("\x1bP");
+		expect(result.lines.join("")).not.toContain("~~~~");
 	});
 });

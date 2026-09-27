@@ -1,3 +1,4 @@
+import { getInlineImagePresentation } from "../components/image";
 import { Text } from "../components/text";
 import { ImageProtocol, TERMINAL } from "../terminal-capabilities";
 import type { Theme } from "../theme/theme";
@@ -24,6 +25,11 @@ export interface OutputPaneFormatOptions {
 	styleLine?: (line: string, index: number) => string;
 	/** Keep sixel payload rows byte-for-byte and show the complete payload. */
 	uncapSixel?: boolean;
+	/**
+	 * The leading rows continue a SIXEL payload whose start row the producer
+	 * no longer retains (bounded streaming storage).
+	 */
+	sixelContinuation?: boolean;
 	showHiddenMarker?: boolean;
 	showExpandHint?: boolean;
 	showExpandHintWhenUncapped?: boolean;
@@ -62,16 +68,42 @@ function defaultHiddenLabel(hidden: number, shown: number, total: number, edge: 
  */
 export function formatOutputPaneLines(options: OutputPaneFormatOptions, theme: Theme): OutputPaneFormatResult {
 	const edge = options.edge ?? "head";
-	const rawLines = options.lines;
-	const sixelMask =
-		TERMINAL.imageProtocol === ImageProtocol.Sixel && rawLines.length > 0 ? getSixelLineMask(rawLines) : undefined;
-	const hasSixel = sixelMask?.some(Boolean) ?? false;
+	let rawLines = options.lines;
+	let sixelMask =
+		TERMINAL.imageProtocol === ImageProtocol.Sixel && rawLines.length > 0
+			? getSixelLineMask(rawLines, options.sixelContinuation)
+			: undefined;
+	let hasSixel = sixelMask?.some(Boolean) ?? false;
+	// Whether the rows hold a SIXEL span, raw or already replaced by its text
+	// fallback. Either way the span is shown whole when the caller uncaps it:
+	// capping the fallback would keep a tail of blanks and drop the label.
+	const sixelSpan = hasSixel;
+	if (hasSixel && getInlineImagePresentation() === "text") {
+		// A docked frame shows images as text. The mask spans the whole logical
+		// payload, so replace each span with one label row plus blanks: the row
+		// count is unchanged, and no continuation row can leak raw SIXEL bytes
+		// even when the block's head is later clipped or retired. The caller's
+		// raw lines are untouched, so undocked frames render the image again.
+		const mask = sixelMask;
+		let spanStart = true;
+		rawLines = rawLines.map((line, index) => {
+			if (!mask?.[index]) {
+				spanStart = true;
+				return line;
+			}
+			const replacement = spanStart ? theme.fg("muted", "[image omitted while docked]") : "";
+			spanStart = false;
+			return replacement;
+		});
+		sixelMask = undefined;
+		hasSixel = false;
+	}
 	const styledLines = rawLines.map((line, index) =>
 		sixelMask?.[index] ? line : (options.styleLine?.(line, index) ?? line),
 	);
 
 	const configuredLimit = options.expanded ? options.expandedMaxLines : options.collapsedMaxLines;
-	const limit = hasSixel && options.uncapSixel ? undefined : configuredLimit;
+	const limit = sixelSpan && options.uncapSixel ? undefined : configuredLimit;
 	let visibleLines: readonly string[] = styledLines;
 	let hiddenCount = 0;
 
@@ -233,7 +265,7 @@ export class OutputPane implements Component {
 
 	get hasSixel(): boolean {
 		if (TERMINAL.imageProtocol !== ImageProtocol.Sixel || this.#lines.length === 0) return false;
-		return getSixelLineMask(this.#lines).some(Boolean);
+		return getSixelLineMask(this.#lines, this.#options.sixelContinuation).some(Boolean);
 	}
 
 	getText(): string {

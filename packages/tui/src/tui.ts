@@ -861,6 +861,9 @@ export class TUI extends Container {
 	// Caps how many inline images render as live graphics; older ones fall back
 	// to text via a purge + full redraw. Cap is configured by the host app.
 	#imageBudget = new ImageBudget(DEFAULT_MAX_INLINE_IMAGES, () => this.requestRender());
+	/** Terminal size as of the last resize notification, for native-reflow accounting. */
+	#nativeColumns = 0;
+	#nativeRows = 0;
 	#ghosttyInitialImageDelayDone = false;
 	#ghosttyInitialImageDelayTimer: RenderTimer | undefined;
 	#ghosttyImageReadyAtMs = 0;
@@ -1273,9 +1276,12 @@ export class TUI extends Container {
 			this.invalidate();
 			this.requestRender(true);
 		});
+		// A restart (external editor, suspend) may follow a resize nobody reported.
+		this.#observeNativeReflow();
 		this.terminal.start(
 			data => this.#handleInput(data),
 			() => {
+				this.#observeNativeReflow();
 				if (this.#resizeProbe) {
 					// Warp echoes a height-only ±1 SIGWINCH on CSI ?1049l. The echo
 					// must not restart the alt borrow (that is the flicker loop),
@@ -1400,6 +1406,24 @@ export class TUI extends Container {
 	 * accumulated pull bounds CPR-less grow anchors, and the epoch retires the
 	 * in-flight CPR tag so a rewrap-invalidated reply cannot anchor a new geometry.
 	 */
+	/**
+	 * Hand the terminal's native reflow to the image budget: it moves normal-
+	 * screen cells by an amount no paint accounted for, so placement rows the
+	 * budget recorded stop being trustworthy. Measured against the last size
+	 * seen, so each SIGWINCH of a drag contributes its own shrink.
+	 */
+	#observeNativeReflow(): void {
+		const columns = this.terminal.columns;
+		const rows = this.terminal.rows;
+		const shrunk = Math.max(0, this.#nativeRows - rows);
+		const widthChanged = columns !== this.#nativeColumns;
+		this.#nativeColumns = columns;
+		this.#nativeRows = rows;
+		// A pure height grow pulls rows down from scrollback: nothing archives,
+		// but every attach row still moved.
+		this.#imageBudget.observeNativeReflow(shrunk, widthChanged);
+	}
+
 	#trackResizeBurst(): void {
 		const burstLastHeight = this.#resizeBurstLastHeight ?? this.#previousHeight;
 		if (this.terminal.rows > burstLastHeight) this.#resizeBurstGrew = true;
@@ -2617,7 +2641,13 @@ export class TUI extends Container {
 	 * unknown) and non-placement image lines (placeholder grids, sixel, iTerm2,
 	 * tmux-wrapped) pass through verbatim.
 	 */
-	#imageLineSequence(line: string, screenRow: number, frameRow: number, committedTo: number): string {
+	#imageLineSequence(
+		line: string,
+		screenRow: number,
+		frameRow: number,
+		committedTo: number,
+		remaining: number,
+	): string {
 		if (screenRow < 0) return line;
 		const parsed = parseKittyDirectPlacementLine(line);
 		if (!parsed) return line;
@@ -2628,6 +2658,7 @@ export class TUI extends Container {
 			parsed.imageId,
 			frameRow >= 0 ? frameRow - Math.min(parsed.rows - 1, screenRow) : -1,
 			committedTo,
+			remaining,
 		);
 		if (!placement) return line;
 		return encodeKittyPlacementLine({
@@ -2707,6 +2738,29 @@ export class TUI extends Container {
 		const provider = this.#frameProvider;
 		if (!provider?.beginHistoryReplay) return;
 		this.#resizeReplaySize = size;
+		// A height-only change reflows nothing, so append mode has nothing to
+		// replay; a latched reset and rebuild mode are handled by the refresh.
+		if (
+			!this.#clearScrollbackOnNextRender &&
+			this.#resizeScrollbackMode === "append" &&
+			width === this.#previousWidth
+		) {
+			return;
+		}
+		this.refreshHistoryAfterWidthChange();
+	}
+
+	/**
+	 * Refresh native history after a settled change of the width content is
+	 * wrapped at — a terminal resize, or a docked side panel changing the chat
+	 * column — per {@link ResizeScrollbackMode}. `preserve` leaves history alone.
+	 * Before the first paint there is nothing of ours to refresh: the first
+	 * frame already composes at the current width, and a rebuild here would
+	 * erase the parent shell's scrollback that `start()` was asked to keep.
+	 */
+	refreshHistoryAfterWidthChange(): void {
+		if (this.#stopped || !this.#hasEverRendered || this.#frameProvider?.beginHistoryReplay === undefined) return;
+		if (this.#resizeScrollbackMode === "preserve") return;
 		if (this.#clearScrollbackOnNextRender) {
 			this.#forceViewportRepaintOnNextRender = true;
 			return;
@@ -2715,8 +2769,7 @@ export class TUI extends Container {
 			this.#prepareForcedRender(true);
 			return;
 		}
-		if (width === this.#previousWidth) return;
-		provider.beginHistoryReplay();
+		this.#frameProvider.beginHistoryReplay();
 		this.#forceViewportRepaintOnNextRender = true;
 	}
 
@@ -2779,6 +2832,10 @@ export class TUI extends Container {
 		// out, and it runs once per emitted frame instead of once per retry.
 		let viewport = viewportRows;
 		this.#imageBudget.limitResidentImages();
+		// Attachment rows as the screen stands before this paint: the row loops
+		// below overwrite them with this paint's emits, and retirement must be
+		// judged against where each placement was when the scroll began.
+		const retirementSnapshot = this.#imageBudget.snapshotAttachments();
 		const history = offered !== undefined && offered.id > this.#acceptedHistoryBatchId ? offered : undefined;
 		if (offered !== undefined && offered.id <= this.#acceptedHistoryBatchId) provider?.acknowledgeHistory(offered.id);
 
@@ -2836,8 +2893,13 @@ export class TUI extends Container {
 			for (const id of this.#imageBudget.takeResetPurgeIds()) buffer += encodeKittyDeleteImage(id);
 			this.#imageBudget.resetPlacementEpochs();
 		}
+		const dockedPlacementDeletes = this.#imageBudget.takeDockedPlacementDeletes();
 		if (TERMINAL.imageProtocol === ImageProtocol.Kitty) {
 			for (const id of this.#imageBudget.takePurgeIds()) buffer += encodeKittyDeleteImage(id);
+			// A docked frame repaints these images as text; text erases leave a
+			// direct placement painted, so remove it (data stays resident). The
+			// destructive reset's `d=A` already covers them.
+			if (!destructiveReset) for (const sequence of dockedPlacementDeletes) buffer += sequence;
 		} else {
 			this.#imageBudget.takePurgeIds();
 		}
@@ -2865,6 +2927,7 @@ export class TUI extends Container {
 			!this.#forceViewportRepaintOnNextRender &&
 			!destructiveReset &&
 			this.#providerWindow.length > 0;
+		let pushed = 0;
 		if (diffable) {
 			for (let index = 0; index < rows; index++) {
 				const previous = this.#providerPreparedRows[index];
@@ -2881,7 +2944,7 @@ export class TUI extends Container {
 					current,
 					width,
 					newTop + index,
-					-1,
+					newTop + index,
 					-1,
 					this.#osc66SpacerGlyphWidth(prepared.lines, index),
 				)}`;
@@ -2895,7 +2958,7 @@ export class TUI extends Container {
 			// old viewport are committed history (correct to push), but old live
 			// viewport rows are not — erase them first so a scroll can only push
 			// committed rows and blanks, never an unfinished frame.
-			const pushed = Math.max(0, startTop + preparedHistory.lines.length + rows - height);
+			pushed = Math.max(0, startTop + preparedHistory.lines.length + rows - height);
 			if (pushed > this.#providerViewportTop && this.#providerWindow.length > 0) {
 				buffer += this.#eraseBelowRow(this.#providerViewportTop, height);
 			}
@@ -2915,13 +2978,18 @@ export class TUI extends Container {
 			}
 			for (let index = 0; index < rows; index++) {
 				if (screenRow > startTop) buffer += "\n";
+				// The APC lands on the clamped running cursor; rows written past the
+				// bottom have already scrolled the screen, so only the rest of this
+				// paint's scroll still moves what this row attaches.
+				const emitRow = Math.min(screenRow, height - 1);
 				buffer += this.#lineRewriteSequence(
 					prepared.rows[index]!,
 					width,
-					Math.min(screenRow, height - 1),
-					-1,
+					emitRow,
+					emitRow,
 					-1,
 					this.#osc66SpacerGlyphWidth(prepared.lines, index),
+					pushed - Math.max(0, screenRow - (height - 1)),
 				);
 				screenRow++;
 			}
@@ -2960,6 +3028,9 @@ export class TUI extends Container {
 		}
 		if (target) this.#recordHardwareCursorState(target);
 		else this.#recordHardwareCursorHidden();
+		// The destructive reset restarted every epoch instead; otherwise age the
+		// pre-paint attachments by this paint's scroll (0 on the diff path).
+		if (!destructiveReset) this.#imageBudget.observeRetirement(retirementSnapshot, pushed);
 		this.#providerWindow = mutablePreparedLines;
 		this.#providerPreparedRows = mutablePreparedRows;
 		this.#providerViewportTop = mutableTop;
@@ -3447,6 +3518,7 @@ export class TUI extends Container {
 		frameRow = -1,
 		committedTo = -1,
 		spacerGlyphWidth = -1,
+		remaining = 0,
 	): string {
 		// End every rewrite at column zero. ConPTY can materialize a pending
 		// wrap before a following cursor-addressing sequence even while DECAWM is
@@ -3463,7 +3535,7 @@ export class TUI extends Container {
 		if (spacerGlyphWidth >= 0) {
 			rewrite = spacerGlyphWidth >= width ? "" : `${SEGMENT_RESET}\x1b[${spacerGlyphWidth}C${ERASE_TO_END_OF_LINE}`;
 		} else if (line.isImage) {
-			rewrite = ERASE_LINE + this.#imageLineSequence(line.line, screenRow, frameRow, committedTo);
+			rewrite = ERASE_LINE + this.#imageLineSequence(line.line, screenRow, frameRow, committedTo, remaining);
 		} else {
 			const terminalLine = this.#terminalLine(line);
 			if (line.asciiWidth !== undefined) {

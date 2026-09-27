@@ -67,6 +67,9 @@ interface AppKeybindings {
 	"app.live.toggle": true;
 	"app.live.mute": true;
 	"app.live.destination.cycle": true;
+	"app.sidebar.toggle": true;
+	"app.sidebar.scrollUp": true;
+	"app.sidebar.scrollDown": true;
 }
 
 /** Application action identifier registered alongside the base TUI keybindings. */
@@ -267,6 +270,18 @@ export const KEYBINDINGS = {
 	"app.live.destination.cycle": {
 		defaultKeys: "ctrl+alt+l",
 		description: "Cycle where Enter sends composer text during live voice mode (primary / voice / both)",
+	},
+	"app.sidebar.toggle": {
+		defaultKeys: "alt+t",
+		description: "Toggle the side panel",
+	},
+	"app.sidebar.scrollUp": {
+		defaultKeys: "alt+shift+up",
+		description: "Scroll the side panel up",
+	},
+	"app.sidebar.scrollDown": {
+		defaultKeys: "alt+shift+down",
+		description: "Scroll the side panel down",
 	},
 } as const satisfies KeybindingDefinitions;
 

@@ -16,7 +16,12 @@ import type { TruncationMeta } from "../tools/output-meta";
 import { resolveImageOptions } from "../render/render-utils";
 import { OutputPane } from "../render/output-pane";
 import { loadXtermTerminal, readTerminalRows, styleTerminalRow } from "../tools/terminal-output";
-import { getSixelLineMask, isSixelPassthroughEnabled, sanitizeWithOptionalSixelPassthrough } from "../render/sixel";
+import {
+	getSixelLineMask,
+	isSixelPassthroughEnabled,
+	sanitizeWithOptionalSixelPassthrough,
+	sixelSpanContinues,
+} from "../render/sixel";
 import {
 	buildExecutionFrame,
 	buildStatusFooter,
@@ -47,6 +52,12 @@ export function bashPtyViewport(ui: TUI): { cols: number; rows: number } {
 
 export class BashExecutionComponent extends Container {
 	#outputLines: string[] = [];
+	/**
+	 * Whether the first retained output row continues a SIXEL payload whose
+	 * start row the streaming cap dropped. Raw rows stay untouched; this one bit
+	 * lets the output pane still classify the retained continuation rows.
+	 */
+	#outputStartsInSixel = false;
 	#status: ExecutionStatus = "running";
 	#exitCode: number | undefined = undefined;
 	#loader: Loader;
@@ -152,16 +163,24 @@ export class BashExecutionComponent extends Container {
 		if (this.#outputLines.length > 0 && incomingLines.length > 0) {
 			const lastIndex = this.#outputLines.length - 1;
 			const mergedLines = [`${this.#outputLines[lastIndex]}${incomingLines[0]}`, ...incomingLines.slice(1)];
-			const clampedMergedLines = this.#clampLinesPreservingSixel(mergedLines);
+			// The merged row enters with the span state the stored rows before it
+			// leave: a payload whose start arrived in an earlier chunk (or was
+			// dropped by the cap) keeps its wide continuation rows unclamped.
+			const entersInSixel = sixelSpanContinues(this.#outputLines.slice(0, lastIndex), this.#outputStartsInSixel);
+			const clampedMergedLines = this.#clampLinesPreservingSixel(mergedLines, entersInSixel);
 			this.#outputLines[lastIndex] = clampedMergedLines[0] ?? "";
 			this.#outputLines.push(...clampedMergedLines.slice(1));
 		} else {
-			this.#outputLines.push(...this.#clampLinesPreservingSixel(incomingLines));
+			this.#outputLines.push(...this.#clampLinesPreservingSixel(incomingLines, this.#outputStartsInSixel));
 		}
 
 		// Cap stored lines during streaming to avoid unbounded memory growth
 		if (this.#outputLines.length > STREAMING_LINE_CAP) {
-			this.#outputLines = this.#outputLines.slice(-STREAMING_LINE_CAP);
+			const dropped = this.#outputLines.length - STREAMING_LINE_CAP;
+			// Carry SIXEL span provenance across the cut: the mask over the rows
+			// held before it says whether the first kept row is mid-payload.
+			this.#outputStartsInSixel = sixelSpanContinues(this.#outputLines.slice(0, dropped), this.#outputStartsInSixel);
+			this.#outputLines = this.#outputLines.slice(dropped);
 		}
 
 		this.#displayDirty = true;
@@ -239,6 +258,7 @@ export class BashExecutionComponent extends Container {
 		while (rows.length > 0 && rows[rows.length - 1] === "") rows.pop();
 		const base = theme.getFgAnsi("muted");
 		this.#outputLines = rows.map(row => (row ? styleTerminalRow(row, base) : ""));
+		this.#outputStartsInSixel = false;
 		this.#displayDirty = true;
 	}
 
@@ -301,14 +321,14 @@ export class BashExecutionComponent extends Container {
 		// the raw payload; the collapsed preview shows only the tail window.
 		const sixelLineMask =
 			TERMINAL.imageProtocol === ImageProtocol.Sixel && isSixelPassthroughEnabled()
-				? getSixelLineMask(availableLines)
+				? getSixelLineMask(availableLines, this.#outputStartsInSixel)
 				: undefined;
 		const hasSixelOutput = sixelLineMask?.some(Boolean) ?? false;
 		const showingAllLines = this.#expanded || hasSixelOutput;
 		// Only the collapsed preview hides lines; when the full output is shown
 		// the footer must not keep advertising hidden lines / ctrl+o.
 		const hiddenLineCount = showingAllLines ? 0 : Math.max(0, availableLines.length - PREVIEW_LINES);
-		this.#outputPane.configure({ uncapSixel: hasSixelOutput });
+		this.#outputPane.configure({ uncapSixel: hasSixelOutput, sixelContinuation: this.#outputStartsInSixel });
 		this.#outputPane.setLines(availableLines);
 
 		// Rebuild content container
@@ -364,9 +384,9 @@ export class BashExecutionComponent extends Container {
 		return this.#ptyMode ? line : theme.fg("muted", line);
 	}
 
-	#clampLinesPreservingSixel(lines: string[]): string[] {
+	#clampLinesPreservingSixel(lines: string[], startsInside = false): string[] {
 		if (lines.length === 0) return [];
-		const sixelLineMask = getSixelLineMask(lines);
+		const sixelLineMask = getSixelLineMask(lines, startsInside);
 		if (!sixelLineMask.some(Boolean)) {
 			return lines.map(clampDisplayLine);
 		}
@@ -376,6 +396,7 @@ export class BashExecutionComponent extends Container {
 	#setOutput(output: string): void {
 		const clean = sanitizeWithOptionalSixelPassthrough(output, sanitizeText);
 		this.#outputLines = clean ? this.#clampLinesPreservingSixel(clean.split("\n")) : [];
+		this.#outputStartsInSixel = false;
 	}
 
 	/**

@@ -19,7 +19,7 @@ import { Row } from "./row";
 /** Pane selected when a split collapses below its width constraints. */
 export type PaneSide = "left" | "right";
 
-/** Fixed or proportional sizing constraints for the left pane. */
+/** Fixed or proportional sizing constraints for the constrained pane. */
 export interface SplitPaneSize {
 	fixed?: number;
 	ratio?: number;
@@ -33,6 +33,10 @@ export interface SplitPaneOptions {
 	right: LayoutContent;
 	leftSize?: SplitPaneSize;
 	rightMinWidth?: number;
+	/** Constraints for the right pane. Mutually exclusive with `leftSize`. */
+	rightSize?: SplitPaneSize;
+	/** Minimum content width reserved for the left pane when `rightSize` is set. */
+	leftMinWidth?: number;
 	splitAt?: number;
 	narrowPane?: PaneSide;
 	height?: number;
@@ -75,8 +79,11 @@ export class SplitPane implements Component, MouseRoutable {
 	readonly #left: LayoutContent;
 	readonly #right: LayoutContent;
 	readonly #row: Row;
-	#leftSize: SplitPaneSize;
-	#rightMinWidth: number;
+	/** Pane whose width the size constraints bound; the other pane takes the remainder. */
+	readonly #constrained: PaneSide;
+	#size: SplitPaneSize;
+	/** Minimum content width reserved for the unconstrained pane. */
+	#otherMinWidth: number;
 	#splitAt: number;
 	#narrowPane: PaneSide | undefined;
 	#height: number | undefined;
@@ -92,13 +99,12 @@ export class SplitPane implements Component, MouseRoutable {
 	constructor(options: SplitPaneOptions) {
 		this.#left = options.left;
 		this.#right = options.right;
-		this.#leftSize = {
-			fixed: optionalLayoutSize(options.leftSize?.fixed),
-			ratio: options.leftSize?.ratio === undefined ? undefined : layoutRatio(options.leftSize.ratio, 0),
-			min: optionalLayoutSize(options.leftSize?.min),
-			max: optionalLayoutSize(options.leftSize?.max),
-		};
-		this.#rightMinWidth = layoutSize(options.rightMinWidth);
+		if (options.leftSize !== undefined && options.rightSize !== undefined) {
+			throw new Error("SplitPane accepts leftSize or rightSize, not both");
+		}
+		this.#constrained = options.rightSize !== undefined ? "right" : "left";
+		this.#size = normalizeSplitPaneSize(options.rightSize ?? options.leftSize);
+		this.#otherMinWidth = layoutSize(this.#constrained === "right" ? options.leftMinWidth : options.rightMinWidth);
 		this.#splitAt = layoutSize(options.splitAt);
 		this.#narrowPane = options.narrowPane;
 		this.#height = optionalLayoutSize(options.height);
@@ -162,21 +168,28 @@ export class SplitPane implements Component, MouseRoutable {
 
 	/** Update fixed/proportional left-pane constraints. */
 	setLeftSize(size: SplitPaneSize): void {
-		const next: SplitPaneSize = {
-			fixed: optionalLayoutSize(size.fixed),
-			ratio: size.ratio === undefined ? undefined : layoutRatio(size.ratio, 0),
-			min: optionalLayoutSize(size.min),
-			max: optionalLayoutSize(size.max),
-		};
+		this.#setSize("left", size);
+	}
+
+	/** Update fixed/proportional right-pane constraints; the pane must have been built with `rightSize`. */
+	setRightSize(size: SplitPaneSize): void {
+		this.#setSize("right", size);
+	}
+
+	#setSize(pane: PaneSide, size: SplitPaneSize): void {
+		if (pane !== this.#constrained) {
+			throw new Error(`SplitPane constrains the ${this.#constrained} pane; cannot set the ${pane} size`);
+		}
+		const next = normalizeSplitPaneSize(size);
 		if (
-			next.fixed === this.#leftSize.fixed &&
-			next.ratio === this.#leftSize.ratio &&
-			next.min === this.#leftSize.min &&
-			next.max === this.#leftSize.max
+			next.fixed === this.#size.fixed &&
+			next.ratio === this.#size.ratio &&
+			next.min === this.#size.min &&
+			next.max === this.#size.max
 		) {
 			return;
 		}
-		this.#leftSize = next;
+		this.#size = next;
 		this.#measureMemo = undefined;
 	}
 
@@ -188,11 +201,23 @@ export class SplitPane implements Component, MouseRoutable {
 		this.#measureMemo = undefined;
 	}
 
-	/** Update the minimum content width reserved for the right pane. */
+	/** Update the minimum content width reserved for the right pane (left-constrained panes). */
 	setRightMinWidth(width: number): void {
+		this.#setOtherMinWidth("right", width);
+	}
+
+	/** Update the minimum content width reserved for the left pane (right-constrained panes). */
+	setLeftMinWidth(width: number): void {
+		this.#setOtherMinWidth("left", width);
+	}
+
+	#setOtherMinWidth(pane: PaneSide, width: number): void {
+		if (pane === this.#constrained) {
+			throw new Error(`SplitPane constrains the ${this.#constrained} pane; its minimum comes from its size`);
+		}
 		const next = layoutSize(width);
-		if (next === this.#rightMinWidth) return;
-		this.#rightMinWidth = next;
+		if (next === this.#otherMinWidth) return;
+		this.#otherMinWidth = next;
 		this.#measureMemo = undefined;
 	}
 
@@ -229,14 +254,14 @@ export class SplitPane implements Component, MouseRoutable {
 		const dividerWidth = visibleWidth(divider);
 		const suffixWidth = visibleWidth(suffix);
 		const splitAvailable = Math.max(0, width - prefixWidth - dividerWidth - suffixWidth);
-		const leftMinimum = layoutSize(this.#leftSize.min);
-		const leftMaximum =
-			this.#leftSize.max === undefined
+		const constrainedMinimum = layoutSize(this.#size.min);
+		const constrainedMaximum =
+			this.#size.max === undefined
 				? Number.MAX_SAFE_INTEGER
-				: Math.max(leftMinimum, layoutSize(this.#leftSize.max));
+				: Math.max(constrainedMinimum, layoutSize(this.#size.max));
 		const canSplit =
 			this.#narrowPane === undefined ||
-			(width >= this.#splitAt && splitAvailable >= leftMinimum + this.#rightMinWidth);
+			(width >= this.#splitAt && splitAvailable >= constrainedMinimum + this.#otherMinWidth);
 		if (!canSplit) {
 			const available = Math.max(0, width - prefixWidth - suffixWidth);
 			const rect: LayoutRect = { row: 0, col: prefixWidth, width: available, height: this.#height ?? 0 };
@@ -247,11 +272,14 @@ export class SplitPane implements Component, MouseRoutable {
 		}
 
 		const desired =
-			this.#leftSize.fixed !== undefined
-				? this.#leftSize.fixed
-				: Math.floor(width * layoutRatio(this.#leftSize.ratio, 0.5));
-		const maximumForRight = Math.max(0, splitAvailable - this.#rightMinWidth);
-		const leftWidth = Math.max(0, Math.min(leftMaximum, maximumForRight, Math.max(leftMinimum, desired)));
+			this.#size.fixed !== undefined ? this.#size.fixed : Math.floor(width * layoutRatio(this.#size.ratio, 0.5));
+		const maximumForOther = Math.max(0, splitAvailable - this.#otherMinWidth);
+		const constrainedWidth = Math.max(
+			0,
+			Math.min(constrainedMaximum, maximumForOther, Math.max(constrainedMinimum, desired)),
+		);
+		const leftWidth =
+			this.#constrained === "left" ? constrainedWidth : Math.max(0, splitAvailable - constrainedWidth);
 		const rightWidth = Math.max(0, splitAvailable - leftWidth);
 		const geometry: SplitPaneGeometry = {
 			mode: "split",
@@ -314,7 +342,12 @@ export class SplitPane implements Component, MouseRoutable {
 			if (this.#rowMode !== "split" || leftWidth !== this.#rowLeftWidth) {
 				this.#row.setChildren([
 					{ content: this.#left, width: leftWidth, align: this.#align },
-					{ content: this.#right, grow: 1, minWidth: this.#rightMinWidth, align: this.#align },
+					{
+						content: this.#right,
+						grow: 1,
+						minWidth: this.#constrained === "left" ? this.#otherMinWidth : 0,
+						align: this.#align,
+					},
 				]);
 				this.#rowMode = "split";
 				this.#rowLeftWidth = leftWidth;
@@ -346,4 +379,13 @@ export class SplitPane implements Component, MouseRoutable {
 		}
 		return lines;
 	}
+}
+
+function normalizeSplitPaneSize(size: SplitPaneSize | undefined): SplitPaneSize {
+	return {
+		fixed: optionalLayoutSize(size?.fixed),
+		ratio: size?.ratio === undefined ? undefined : layoutRatio(size.ratio, 0),
+		min: optionalLayoutSize(size?.min),
+		max: optionalLayoutSize(size?.max),
+	};
 }
