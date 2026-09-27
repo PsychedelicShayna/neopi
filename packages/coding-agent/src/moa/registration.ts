@@ -31,7 +31,7 @@ export async function discoverRegistrableMixtures(ctx: MixtureRegistrationContex
 			documentEnvelopes: entry.envelopes,
 			documentRoles: entry.roles,
 		});
-		const { errors, warnings } = validateMixture(resolved, { names });
+		const { errors, warnings } = validateMixture(resolved, { settings: ctx.settings, names });
 		const mixture = entry.definition.name;
 		for (const issue of warnings) {
 			logger.warn("Mixture definition warning", { mixture, file: entry.path, ...issue });

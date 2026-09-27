@@ -150,7 +150,10 @@ export function createSessionMixtureHost(deps: SessionMixtureHostDeps): SessionM
 				documentEnvelopes: registered.presets.envelopes,
 				documentRoles: registered.presets.roles,
 			});
-			const { errors } = validateMixture(fresh, { names: catalog.roster().map(mixture => mixture.definition.name) });
+			const { errors } = validateMixture(fresh, {
+				settings,
+				names: catalog.roster().map(mixture => mixture.definition.name),
+			});
 			if (errors.length > 0) {
 				return `mixture/${name} no longer validates: ${errors.map(issue => `${issue.code} (${issue.message})`).join("; ")}`;
 			}

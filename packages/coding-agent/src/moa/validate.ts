@@ -12,7 +12,9 @@ import {
 	mixtureEdgeId,
 	TRANSIT_PART_NAMES,
 } from "@oh-my-pi/pi-tui/overlays/mixture-types";
+import type { Settings } from "../config/settings";
 import { DEFAULT_EDGE_ENVELOPE, type EnvelopeContext, isInlineTemplate, renderEnvelope } from "./envelopes";
+import { cfgMoaHardMaxHops } from "./settings";
 import type { MixtureIssue, ResolvedMixture } from "./types";
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
@@ -22,6 +24,8 @@ const KNOWN_PARTS = new Set<string>(TRANSIT_PART_NAMES);
 const IMPLEMENTED_MILESTONE = "M1";
 
 export interface ValidateMixtureContext {
+	/** The settings the mixture runs under: `moa.hard_max_hops` bounds `limits.max_hops`. */
+	settings: Settings;
 	/** Every mixture name in the merged roster (or the document being saved), including this one. */
 	names?: readonly string[];
 }
@@ -139,7 +143,7 @@ function templateIssues(template: string, path: string, errors: MixtureIssue[]):
 	}
 }
 
-export function validateMixture(resolved: ResolvedMixture, ctx: ValidateMixtureContext = {}): MixtureValidation {
+export function validateMixture(resolved: ResolvedMixture, ctx: ValidateMixtureContext): MixtureValidation {
 	const definition = resolved.definition;
 	const errors: MixtureIssue[] = [...resolved.issues];
 	const warnings: MixtureIssue[] = [];
@@ -315,6 +319,17 @@ export function validateMixture(resolved: ResolvedMixture, ctx: ValidateMixtureC
 				path: `members[${index}]`,
 				message: `member ${member.id} has no path from the entry`,
 			});
+		});
+	}
+
+	// E15 limits.exceeds
+	const maxHops = definition.limits?.maxHops;
+	const hardMaxHops = cfgMoaHardMaxHops.get(ctx.settings);
+	if (maxHops !== undefined && maxHops > hardMaxHops) {
+		errors.push({
+			code: "limits.exceeds",
+			path: "limits.max_hops",
+			message: `limits.max_hops (${maxHops}) exceeds moa.hard_max_hops (${hardMaxHops})`,
 		});
 	}
 

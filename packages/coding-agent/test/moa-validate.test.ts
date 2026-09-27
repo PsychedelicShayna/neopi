@@ -86,7 +86,7 @@ function check(
 		documentEnvelopes: doc.envelopes,
 		documentRoles: doc.roles,
 	});
-	return { resolved, ...validateMixture(resolved, { names: doc.mixtures.map(mixture => mixture.name) }) };
+	return { resolved, ...validateMixture(resolved, { settings, names: doc.mixtures.map(mixture => mixture.name) }) };
 }
 
 function codes(issues: MixtureIssue[]): string[] {
@@ -243,6 +243,17 @@ describe("validateMixture error codes", () => {
 		const definition = linear();
 		definition.edges[0]!.x = {};
 		expect(codes(check(definition).errors)).toEqual(["edge.x.empty"]);
+	});
+
+	it("refuses limits.max_hops above moa.hard_max_hops with limits.exceeds, and accepts it at the cap", () => {
+		const definition = linear();
+		const settings = Settings.isolated({ "moa.hard_max_hops": 10 });
+		definition.limits = { maxHops: 11 };
+		expect(check(definition, settings).errors.map(issue => [issue.code, issue.path])).toEqual([
+			["limits.exceeds", "limits.max_hops"],
+		]);
+		definition.limits = { maxHops: 10 };
+		expect(check(definition, settings).errors).toEqual([]);
 	});
 });
 
