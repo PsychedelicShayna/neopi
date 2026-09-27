@@ -152,7 +152,8 @@ export function renderChainInput(
 			CHAIN_FRAMING_RESERVE;
 		transcript = fitTranscript(messages, Math.max(0, model.contextWindow - reserved), tokenizer);
 	} else {
-		transcript = formatSessionHistoryMarkdown(messages as unknown[], TRANSCRIPT_FORMAT).trim();
+		// No known window to fit against: keep summaries one-line, as the formatter bounds them.
+		transcript = formatSessionHistoryMarkdown(messages as unknown[]).trim();
 	}
 	if (!transcript) return input;
 	// compile, not render: the post-render formatter would rewrite the draft's whitespace and tables.
