@@ -39,6 +39,26 @@ const RESERVED_IMAGE_ROW = "\x1b[0m";
 /** Default count of inline images kept as live graphics before older ones fall back to text. */
 export const DEFAULT_MAX_INLINE_IMAGES = 8;
 
+/**
+ * How inline images present in the frame being composed: live terminal
+ * graphics, or their text fallback. The composer sets `"text"` only around a
+ * docked side-panel composition and restores the previous mode before the
+ * frame returns, so no other surface ever observes it.
+ */
+export type InlineImagePresentation = "graphics" | "text";
+
+let inlineImagePresentation: InlineImagePresentation = "graphics";
+
+/** Set the inline image presentation for the composition in progress. */
+export function setInlineImagePresentation(mode: InlineImagePresentation): void {
+	inlineImagePresentation = mode;
+}
+
+/** Inline image presentation for the composition in progress. */
+export function getInlineImagePresentation(): InlineImagePresentation {
+	return inlineImagePresentation;
+}
+
 /** Per-image direct-placement emit state tracked by {@link ImageBudget}. */
 interface PlacementEmitState {
 	widthPx: number;
@@ -713,7 +733,7 @@ export class Image implements Component {
 
 	#cachedLines?: string[];
 	#cachedWidth?: number;
-	#cachedSuppressed = false;
+	#cachedTextOnly = false;
 	#cachedImageProtocol: typeof TERMINAL.imageProtocol = null;
 	#cachedCellWidthPx = 0;
 	#cachedCellHeightPx = 0;
@@ -746,7 +766,7 @@ export class Image implements Component {
 			heightPx: this.#dimensions.heightPx,
 			filename: this.#options.filename ?? null,
 			imageId: this.#imageId ?? null,
-			suppressed: this.#cachedSuppressed,
+			suppressed: this.#cachedTextOnly,
 		};
 	}
 
@@ -765,11 +785,15 @@ export class Image implements Component {
 		// toward (and are demoted by) the budget; without a protocol every image is
 		// already text.
 		const suppressed = hasProtocol && this.#budget !== undefined ? this.#budget.observe(this.#imageId ?? 0) : false;
+		// Presentation is decided after observe(), so the image keeps its budget
+		// slot and the pass ledger records the budget's own decision: a docked
+		// text fallback is never read as a demotion that deletes the graphic.
+		const textOnly = suppressed || getInlineImagePresentation() === "text";
 
 		if (
 			this.#cachedLines &&
 			this.#cachedWidth === width &&
-			this.#cachedSuppressed === suppressed &&
+			this.#cachedTextOnly === textOnly &&
 			this.#cachedImageProtocol === imageProtocol &&
 			this.#cachedCellWidthPx === cellDimensions.widthPx &&
 			this.#cachedCellHeightPx === cellDimensions.heightPx &&
@@ -784,7 +808,7 @@ export class Image implements Component {
 
 		let lines: string[];
 
-		if (hasProtocol && !suppressed) {
+		if (hasProtocol && !textOnly) {
 			// Transmit the data once (keyed by id); thereafter renderImage returns
 			// just the placement, so repaints never re-send the base64.
 			const needsTransmit = this.#imageId != null && (this.#budget?.shouldTransmit(this.#imageId) ?? false);
@@ -836,7 +860,7 @@ export class Image implements Component {
 
 		this.#cachedLines = lines;
 		this.#cachedWidth = width;
-		this.#cachedSuppressed = suppressed;
+		this.#cachedTextOnly = textOnly;
 		this.#cachedImageProtocol = imageProtocol;
 		this.#cachedCellWidthPx = cellDimensions.widthPx;
 		this.#cachedCellHeightPx = cellDimensions.heightPx;

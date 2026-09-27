@@ -1,5 +1,19 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import {
+	getInlineImagePresentation,
+	Image,
+	ImageBudget,
+	setInlineImagePresentation,
+} from "@oh-my-pi/pi-tui/components/image";
 import { SplitPane, type SplitPaneOptions } from "@oh-my-pi/pi-tui/components/layout/split-pane";
+import { getKittyGraphics, setKittyGraphics } from "@oh-my-pi/pi-tui/kitty-graphics";
+import {
+	type CellDimensions,
+	getCellDimensions,
+	ImageProtocol,
+	setCellDimensions,
+	TERMINAL,
+} from "@oh-my-pi/pi-tui/terminal-capabilities";
 import { type ResizeScrollbackMode, TUI } from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "./virtual-terminal";
 
@@ -136,5 +150,65 @@ describe("TUI.refreshHistoryAfterWidthChange", () => {
 		} finally {
 			preserve.tui.stop();
 		}
+	});
+});
+
+describe("inline image presentation mode", () => {
+	const terminal = TERMINAL as unknown as { imageProtocol: ImageProtocol | null };
+	const originalProtocol = TERMINAL.imageProtocol;
+	const originalGraphics = { ...getKittyGraphics() };
+	let originalCells: CellDimensions;
+	const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGNgAAAAAgABSK+kcQAAAABJRU5ErkJggg==";
+
+	beforeEach(() => {
+		originalCells = { ...getCellDimensions() };
+		setCellDimensions({ widthPx: 10, heightPx: 10 });
+		terminal.imageProtocol = ImageProtocol.Kitty;
+		setKittyGraphics({ unicodePlaceholders: false });
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+		setInlineImagePresentation("graphics");
+		setCellDimensions(originalCells);
+		terminal.imageProtocol = originalProtocol;
+		setKittyGraphics(originalGraphics);
+	});
+
+	it("renders the text fallback at the graphic's height without a budget demotion", () => {
+		const budget = new ImageBudget(8, () => {});
+		const observe = vi.spyOn(budget, "observe");
+		const image = new Image(
+			PNG,
+			"image/png",
+			{ fallbackColor: text => text },
+			{ maxWidthCells: 4, maxHeightCells: 4, budget, imageKey: "mode" },
+			{ widthPx: 40, heightPx: 40 },
+		);
+		const pass = (): readonly string[] => {
+			budget.beginPass();
+			const lines = image.render(40);
+			budget.endPass();
+			return lines;
+		};
+
+		const graphic = pass();
+		expect(graphic.at(-1)).toContain("\x1b_G");
+		expect(getInlineImagePresentation()).toBe("graphics");
+
+		setInlineImagePresentation("text");
+		const text = pass();
+		expect(text).toHaveLength(graphic.length);
+		expect(text.join("")).not.toContain("\x1b_G");
+		expect(Bun.stripANSI(text.at(-1) ?? "")).toContain("image/png");
+
+		setInlineImagePresentation("graphics");
+		const again = pass();
+		expect(again.at(-1)).toContain("a=p");
+
+		// observe() ran in every mode and never reported a demotion.
+		expect(observe).toHaveBeenCalledTimes(3);
+		expect(observe.mock.results.map(result => result.value)).toEqual([false, false, false]);
+		expect(budget.takePurgeIds()).toEqual([]);
 	});
 });
