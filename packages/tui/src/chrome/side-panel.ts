@@ -44,6 +44,12 @@ interface RegisteredSection {
 	/** Registration sequence; keeps ties in registration order across replacement. */
 	sequence: number;
 	titleRows: PanelRows;
+	/**
+	 * Whether the body had rows when it last rendered. A collapsed section
+	 * renders no body (no wasted work, no render-time side effects), so its
+	 * title-only row is kept or dropped by what the body last showed.
+	 */
+	hadRows: boolean;
 }
 
 /** What a document row belongs to, for hit-testing after scroll. */
@@ -83,7 +89,12 @@ export class SidePanel implements HeightConstrainedComponent, MouseRoutable {
 			existing.section = section;
 			existing.titleRows.invalidate();
 		} else {
-			this.#sections.set(section.id, { section, sequence: this.#nextSequence++, titleRows: new PanelRows() });
+			this.#sections.set(section.id, {
+				section,
+				sequence: this.#nextSequence++,
+				titleRows: new PanelRows(),
+				hadRows: true,
+			});
 		}
 		this.#onChange();
 		return () => {
@@ -148,18 +159,20 @@ export class SidePanel implements HeightConstrainedComponent, MouseRoutable {
 		const tags: DocumentRowTag[] = [];
 		for (const entry of this.#ordered()) {
 			const { section } = entry;
-			const body = contentWidth > 0 ? renderLayoutContent(section.content, contentWidth, undefined) : [];
+			let body: readonly string[] = [];
+			if (!section.collapsed) {
+				body = contentWidth > 0 ? renderLayoutContent(section.content, contentWidth, undefined) : [];
+				entry.hadRows = body.length > 0;
+			}
 			// A section with nothing to show contributes no title either, so an
 			// empty todo list leaves only the placeholder rather than a bare header.
-			if (body.length === 0) continue;
+			if (!entry.hadRows) continue;
 			entry.titleRows.setLines([this.#titleLine(section, contentWidth)]);
 			document.push(...entry.titleRows.render(contentWidth));
 			tags.push({ sectionId: section.id, kind: "title", bodyRow: 0 });
-			if (!section.collapsed) {
-				for (let row = 0; row < body.length; row++) {
-					document.push(body[row]!);
-					tags.push({ sectionId: section.id, kind: "body", bodyRow: row });
-				}
+			for (let row = 0; row < body.length; row++) {
+				document.push(body[row]!);
+				tags.push({ sectionId: section.id, kind: "body", bodyRow: row });
 			}
 			document.push("");
 			tags.push({ sectionId: section.id, kind: "gap", bodyRow: 0 });

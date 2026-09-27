@@ -131,6 +131,35 @@ describe("SidePanel", () => {
 		expect(panel.scrollOffset).toBe(before);
 	});
 
+	it("renders nothing of a collapsed section but its title", () => {
+		const rendered: number[] = [];
+		const panel = new SidePanel();
+		panel.register({
+			id: "plan",
+			title: "PLAN",
+			// Render-time side effect (image-budget observes, large plans): recorded per call.
+			content: width => {
+				rendered.push(width);
+				return rows("task", 50);
+			},
+		});
+		panel.setHeight(10);
+		panel.render(WIDTH);
+		expect(rendered.length).toBe(1);
+
+		panel.setCollapsed("plan", true);
+		for (let frame = 0; frame < 3; frame++) {
+			const view = plain(panel.render(WIDTH)).filter(line => line !== "");
+			expect(view).toHaveLength(1);
+			expect(view[0]).toStartWith("PLAN");
+		}
+		expect(rendered.length).toBe(1);
+
+		panel.setCollapsed("plan", false);
+		expect(plain(panel.render(WIDTH))).toContain("task0");
+		expect(rendered.length).toBe(2);
+	});
+
 	it("replaces a section by id in place and removes it on unregister", () => {
 		const panel = new SidePanel();
 		panel.register(section("todo", ["first"], 10));
