@@ -142,6 +142,24 @@ describe("SidePanelController", () => {
 		}
 
 		warn.mockClear();
+		const negative = await harness(120, {
+			"sidebar.enabled": true,
+			"sidebar.width.min": -1,
+			"sidebar.width.max": -1,
+		});
+		try {
+			negative.controller.applySettings();
+			negative.controller.applySettings();
+			await negative.settle();
+			const warnings = warn.mock.calls.filter(([, meta]) => JSON.stringify(meta).includes("sidebar.width"));
+			expect(warnings).toHaveLength(1);
+			// Defaults (32–48, ratio 0.3 of 120 → 36), not a zero-width panel.
+			expect(negative.composer.sidePanelGeometry()?.panelRect.width).toBe(36);
+		} finally {
+			negative.stop();
+		}
+
+		warn.mockClear();
 		const bounds = await harness(120, { "sidebar.enabled": true, "sidebar.width.min": 50, "sidebar.width.max": 40 });
 		try {
 			bounds.controller.applySettings();

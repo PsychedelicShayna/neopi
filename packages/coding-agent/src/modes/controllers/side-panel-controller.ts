@@ -178,7 +178,18 @@ export class SidePanelController {
 		}
 		let min = cfgSidebarWidthMin.get(settings);
 		let max = cfgSidebarWidthMax.get(settings);
-		if (min > max) {
+		// Each bound must be a positive column count on its own: SplitPane
+		// normalizes a non-positive one to 0, which passes min <= max yet leaves
+		// the panel nothing but its divider.
+		if (min < 1 || max < 1) {
+			this.#warnInvalid(
+				cfgSidebarWidthMin.id,
+				{ min, max },
+				"sidebar.width.min and sidebar.width.max must be positive",
+			);
+			min = cfgSidebarWidthMin.default;
+			max = cfgSidebarWidthMax.default;
+		} else if (min > max) {
 			this.#warnInvalid(cfgSidebarWidthMin.id, { min, max }, "sidebar.width.min exceeds sidebar.width.max");
 			min = cfgSidebarWidthMin.default;
 			max = cfgSidebarWidthMax.default;
