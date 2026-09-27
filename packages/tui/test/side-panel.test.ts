@@ -95,6 +95,23 @@ describe("SidePanel", () => {
 			expect(text).toHaveLength(1);
 			expect(text.some(line => line.startsWith("TODO"))).toBe(false);
 		}
+
+		// Collapsed while it had rows: the title holds even after its content empties.
+		let tasks = rows("task", 3);
+		const collapsed = new SidePanel();
+		collapsed.register({ id: "todo", title: "TODO", content: () => tasks });
+		collapsed.setHeight(6);
+		collapsed.render(WIDTH);
+		collapsed.setCollapsed("todo", true);
+		tasks = [];
+		const held = plain(collapsed.render(WIDTH)).filter(line => line !== "");
+		expect(held).toHaveLength(1);
+		expect(held[0]).toStartWith("TODO");
+		// Expanded and found empty: back to the single placeholder row.
+		collapsed.setCollapsed("todo", false);
+		const cleared = plain(collapsed.render(WIDTH)).filter(line => line !== "");
+		expect(cleared).toHaveLength(1);
+		expect(cleared[0]?.startsWith("TODO")).toBe(false);
 	});
 
 	it("hit-tests titles and bodies against the scrolled document", () => {
