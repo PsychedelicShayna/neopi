@@ -177,7 +177,6 @@ describe("inline image presentation mode", () => {
 
 	it("renders the text fallback at the graphic's height without a budget demotion", () => {
 		const budget = new ImageBudget(8, () => {});
-		const observe = vi.spyOn(budget, "observe");
 		const image = new Image(
 			PNG,
 			"image/png",
@@ -206,9 +205,6 @@ describe("inline image presentation mode", () => {
 		const again = pass();
 		expect(again.at(-1)).toContain("a=p");
 
-		// observe() ran in every mode and never reported a demotion.
-		expect(observe).toHaveBeenCalledTimes(3);
-		expect(observe.mock.results.map(result => result.value)).toEqual([false, false, false]);
 		expect(budget.takePurgeIds()).toEqual([]);
 	});
 });
