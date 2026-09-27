@@ -19,7 +19,7 @@ import { formatModelRoleAlias } from "../config/model-roles";
 import { getModelMatchPreferences, resolveModelRoleValue } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import chainInputWithContext from "../prompts/chains/input-with-context.md" with { type: "text" };
-import { obfuscateMessages, obfuscateProviderContext } from "../secrets/message-transform";
+import { obfuscateMessages, obfuscateProviderContext, obfuscateToolArguments } from "../secrets/message-transform";
 import type { SecretObfuscator } from "../secrets/obfuscator";
 import chainSystemPrompt from "../prompts/chains/system.md" with { type: "text" };
 import { estimateToolSchemaTokens } from "@oh-my-pi/pi-tui/status-line/context-usage";
@@ -188,14 +188,10 @@ function redactMessageText(obfuscator: SecretObfuscator, message: AgentMessage):
 			);
 		}
 	}
-	// Custom messages (IRC and the like) carry formatter-visible prose in details.
+	// Custom messages (IRC, async results, …) carry formatter-visible text anywhere in details.
 	const details = redacted.details;
 	if (details && typeof details === "object" && !Array.isArray(details)) {
-		const next: Record<string, unknown> = { ...(details as Record<string, unknown>) };
-		for (const field of ["message", "body"]) {
-			if (typeof next[field] === "string") next[field] = obfuscator.obfuscate(next[field] as string);
-		}
-		redacted.details = next;
+		redacted.details = obfuscateToolArguments(obfuscator, details as Record<string, unknown>);
 	}
 	return redacted as unknown as AgentMessage;
 }
