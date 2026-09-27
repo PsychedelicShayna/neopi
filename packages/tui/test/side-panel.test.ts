@@ -63,7 +63,9 @@ describe("SidePanel", () => {
 		const bottom = panel.render(WIDTH);
 		expect(plain(bottom)).toContain("c7");
 		// The thumb sits on the bottom rows once scrolled to the end.
-		const thumbRows = bottom.map((line, index) => (Bun.stripANSI(line).endsWith("┃") ? index : -1)).filter(i => i >= 0);
+		const thumbRows = bottom
+			.map((line, index) => (Bun.stripANSI(line).endsWith("┃") ? index : -1))
+			.filter(i => i >= 0);
 		expect(thumbRows.at(-1)).toBe(height - 1);
 		expect(thumbRows[0]).toBeGreaterThan(0);
 

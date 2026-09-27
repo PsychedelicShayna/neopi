@@ -193,7 +193,10 @@ describe("SidePanelController", () => {
 				// Out-of-range rows are not routed.
 				expect(h.controller.routeInlineMouse(click(24, panelRect.col + 1))).toBe(false);
 				// While the alt screen owns the display no viewport is published: nothing routes.
-				const overlay = h.composer.ui.showOverlay({ render: () => ["modal"], invalidate: () => {} }, { fullscreen: true });
+				const overlay = h.composer.ui.showOverlay(
+					{ render: () => ["modal"], invalidate: () => {} },
+					{ fullscreen: true },
+				);
 				await h.settle();
 				expect(h.controller.routeInlineMouse(click(1, panelRect.col + 1))).toBe(false);
 				overlay.hide();

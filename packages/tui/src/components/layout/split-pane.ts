@@ -256,7 +256,9 @@ export class SplitPane implements Component, MouseRoutable {
 		const splitAvailable = Math.max(0, width - prefixWidth - dividerWidth - suffixWidth);
 		const constrainedMinimum = layoutSize(this.#size.min);
 		const constrainedMaximum =
-			this.#size.max === undefined ? Number.MAX_SAFE_INTEGER : Math.max(constrainedMinimum, layoutSize(this.#size.max));
+			this.#size.max === undefined
+				? Number.MAX_SAFE_INTEGER
+				: Math.max(constrainedMinimum, layoutSize(this.#size.max));
 		const canSplit =
 			this.#narrowPane === undefined ||
 			(width >= this.#splitAt && splitAvailable >= constrainedMinimum + this.#otherMinWidth);
@@ -276,7 +278,8 @@ export class SplitPane implements Component, MouseRoutable {
 			0,
 			Math.min(constrainedMaximum, maximumForOther, Math.max(constrainedMinimum, desired)),
 		);
-		const leftWidth = this.#constrained === "left" ? constrainedWidth : Math.max(0, splitAvailable - constrainedWidth);
+		const leftWidth =
+			this.#constrained === "left" ? constrainedWidth : Math.max(0, splitAvailable - constrainedWidth);
 		const rightWidth = Math.max(0, splitAvailable - leftWidth);
 		const geometry: SplitPaneGeometry = {
 			mode: "split",

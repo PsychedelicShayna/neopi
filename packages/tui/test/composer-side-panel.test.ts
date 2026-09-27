@@ -48,7 +48,13 @@ interface Harness {
 }
 
 async function setup(
-	options: { columns?: number; rows?: number; mode?: ResizeScrollbackMode; entries?: number; chrome?: Component[] } = {},
+	options: {
+		columns?: number;
+		rows?: number;
+		mode?: ResizeScrollbackMode;
+		entries?: number;
+		chrome?: Component[];
+	} = {},
 ): Promise<Harness> {
 	const rows = options.rows ?? 24;
 	const term = new VirtualTerminal(options.columns ?? 120, rows, 5000);
@@ -930,7 +936,10 @@ describe("Composer side panel: placement accounting (scripted provider)", () => 
 				const previous = getInlineImagePresentation();
 				setInlineImagePresentation("text");
 				try {
-					return { viewport: ["EDITOR"], history: { id: historyId, rows: ledger(image.render(40)), kind: "replay" } };
+					return {
+						viewport: ["EDITOR"],
+						history: { id: historyId, rows: ledger(image.render(40)), kind: "replay" },
+					};
 				} finally {
 					setInlineImagePresentation(previous);
 				}
@@ -971,7 +980,10 @@ describe("Composer side panel: placement accounting (scripted provider)", () => 
 		try {
 			await s.paint(() => ({ viewport: ["EDITOR"] }));
 			// 20 history rows retire while the block's APC lands at viewport index 1 (rows −3..1).
-			await s.paint(image => ({ history: lines("h", 20), viewport: [...image.slice(-2), ...lines("t", 7), "EDITOR"] }));
+			await s.paint(image => ({
+				history: lines("h", 20),
+				viewport: [...image.slice(-2), ...lines("t", 7), "EDITOR"],
+			}));
 			expect(s.term.graphicsPlacements().some(entry => entry.imageId === s.id)).toBe(true);
 			const commands = await s.dockedReplay(image => [...lines("h", 20), ...image, ...lines("t", 7)]);
 			expect(commands.filter(command => command.a === "d")).toEqual([]);
@@ -980,4 +992,3 @@ describe("Composer side panel: placement accounting (scripted provider)", () => 
 		}
 	});
 });
-

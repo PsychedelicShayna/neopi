@@ -2617,7 +2617,13 @@ export class TUI extends Container {
 	 * unknown) and non-placement image lines (placeholder grids, sixel, iTerm2,
 	 * tmux-wrapped) pass through verbatim.
 	 */
-	#imageLineSequence(line: string, screenRow: number, frameRow: number, committedTo: number, remaining: number): string {
+	#imageLineSequence(
+		line: string,
+		screenRow: number,
+		frameRow: number,
+		committedTo: number,
+		remaining: number,
+	): string {
 		if (screenRow < 0) return line;
 		const parsed = parseKittyDirectPlacementLine(line);
 		if (!parsed) return line;
@@ -2710,7 +2716,11 @@ export class TUI extends Container {
 		this.#resizeReplaySize = size;
 		// A height-only change reflows nothing, so append mode has nothing to
 		// replay; a latched reset and rebuild mode are handled by the refresh.
-		if (!this.#clearScrollbackOnNextRender && this.#resizeScrollbackMode === "append" && width === this.#previousWidth) {
+		if (
+			!this.#clearScrollbackOnNextRender &&
+			this.#resizeScrollbackMode === "append" &&
+			width === this.#previousWidth
+		) {
 			return;
 		}
 		this.refreshHistoryAfterWidthChange();

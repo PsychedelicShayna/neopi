@@ -5,7 +5,11 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import { cfgSidebarEnabled } from "@oh-my-pi/pi-coding-agent/modes/settings";
-import { renderTodoLines, TODO_LINE_BUDGET, TodoSection } from "@oh-my-pi/pi-coding-agent/modes/side-panel/todo-section";
+import {
+	renderTodoLines,
+	TODO_LINE_BUDGET,
+	TodoSection,
+} from "@oh-my-pi/pi-coding-agent/modes/side-panel/todo-section";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -118,5 +122,4 @@ describe("InteractiveMode todo HUD and side panel", () => {
 		expect(undocked).not.toContain("alpha task");
 		expect(plain(mode.todoContainer.render(80))).toContain("beta task");
 	});
-
 });
