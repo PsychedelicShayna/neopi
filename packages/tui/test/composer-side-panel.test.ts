@@ -725,6 +725,33 @@ describe("Composer side panel: inline images", () => {
 		});
 	}
 
+	it("a native height shrink leaves a placement's old epoch untouched by the dock", async () => {
+		const h = await setup({ entries: 2, mode: "append" });
+		try {
+			h.transcript.addChild(new ImageBlock(h.composer.ui.imageBudget, "shrink", 4));
+			h.composer.ui.requestRender();
+			await h.settle();
+			const id = idOf(h, "shrink");
+			const before = h.term.graphicsPlacements().find(entry => entry.imageId === id);
+			expect(before).toBeDefined();
+			const epoch = before?.placementId;
+
+			// The terminal shrinks under the frame: its reflow may push the image's
+			// top rows into scrollback, a move no paint accounted for.
+			h.writes.length = 0;
+			h.term.resize(120, 6);
+			await h.scheduler.advance(h.term, 500);
+			h.writes.length = 0;
+			h.composer.setSidePanel(h.panel, { ...RIGHT, splitAt: 100 });
+			await h.scheduler.advance(h.term, 500);
+			const deletes = kittyCommands(h.writes.join("")).filter(command => command.a === "d");
+			// No delete of any kind may target the placement the shrink moved.
+			expect(deletes.filter(command => command.i === id && (command.p === epoch || command.d === "I"))).toEqual([]);
+		} finally {
+			h.composer.stop();
+		}
+	});
+
 	it("(2b) a placement known only from a resize-buffer paint is never deleted on dock", async () => {
 		const h = await setup({ entries: 2, mode: "append" });
 		try {

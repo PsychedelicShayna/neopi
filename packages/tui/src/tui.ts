@@ -861,6 +861,9 @@ export class TUI extends Container {
 	// Caps how many inline images render as live graphics; older ones fall back
 	// to text via a purge + full redraw. Cap is configured by the host app.
 	#imageBudget = new ImageBudget(DEFAULT_MAX_INLINE_IMAGES, () => this.requestRender());
+	/** Terminal size as of the last resize notification, for native-reflow accounting. */
+	#nativeColumns = 0;
+	#nativeRows = 0;
 	#ghosttyInitialImageDelayDone = false;
 	#ghosttyInitialImageDelayTimer: RenderTimer | undefined;
 	#ghosttyImageReadyAtMs = 0;
@@ -1273,9 +1276,12 @@ export class TUI extends Container {
 			this.invalidate();
 			this.requestRender(true);
 		});
+		// A restart (external editor, suspend) may follow a resize nobody reported.
+		this.#observeNativeReflow();
 		this.terminal.start(
 			data => this.#handleInput(data),
 			() => {
+				this.#observeNativeReflow();
 				if (this.#resizeProbe) {
 					// Warp echoes a height-only ±1 SIGWINCH on CSI ?1049l. The echo
 					// must not restart the alt borrow (that is the flicker loop),
@@ -1400,6 +1406,24 @@ export class TUI extends Container {
 	 * accumulated pull bounds CPR-less grow anchors, and the epoch retires the
 	 * in-flight CPR tag so a rewrap-invalidated reply cannot anchor a new geometry.
 	 */
+	/**
+	 * Hand the terminal's native reflow to the image budget: it moves normal-
+	 * screen cells by an amount no paint accounted for, so placement rows the
+	 * budget recorded stop being trustworthy. Measured against the last size
+	 * seen, so each SIGWINCH of a drag contributes its own shrink.
+	 */
+	#observeNativeReflow(): void {
+		const columns = this.terminal.columns;
+		const rows = this.terminal.rows;
+		const shrunk = Math.max(0, this.#nativeRows - rows);
+		const widthChanged = columns !== this.#nativeColumns;
+		this.#nativeColumns = columns;
+		this.#nativeRows = rows;
+		// A pure height grow pulls rows down from scrollback: nothing archives,
+		// but every attach row still moved.
+		this.#imageBudget.observeNativeReflow(shrunk, widthChanged);
+	}
+
 	#trackResizeBurst(): void {
 		const burstLastHeight = this.#resizeBurstLastHeight ?? this.#previousHeight;
 		if (this.terminal.rows > burstLastHeight) this.#resizeBurstGrew = true;

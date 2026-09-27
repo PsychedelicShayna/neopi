@@ -451,6 +451,27 @@ export class ImageBudget {
 		this.#reEmitted.clear();
 	}
 
+	/**
+	 * The terminal changed size under the frame. Its own reflow moves normal-
+	 * screen cells by an amount no paint measured: a height shrink can push up
+	 * to `shrunkRows` top rows into scrollback, and a width change rewraps rows
+	 * above and below each placement. Every attach row becomes unknown
+	 * provenance (never deleted by a docked frame). A placement whose cells the
+	 * reflow may have archived — any, on a width change; on a shrink, one whose
+	 * top was within the pushed band or whose row was already unknown — is
+	 * latched archived, so its next emit takes a fresh epoch instead of
+	 * replacing, and so deleting, cells that may now be in scrollback.
+	 */
+	observeNativeReflow(shrunkRows: number, widthChanged: boolean): void {
+		for (const state of this.#placementState.values()) {
+			const row = state.lastAttachTopFrameRow;
+			const possiblyArchived = widthChanged || (shrunkRows > 0 && (row === undefined || row < shrunkRows));
+			if (possiblyArchived) this.#archive(state);
+			state.lastAttachTopFrameRow = undefined;
+			this.#watchedPlacements.delete(state);
+		}
+	}
+
 	#archive(state: PlacementEmitState): void {
 		state.cellsArchived = true;
 		this.#watchedPlacements.delete(state);
