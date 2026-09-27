@@ -2707,6 +2707,22 @@ export class TUI extends Container {
 		const provider = this.#frameProvider;
 		if (!provider?.beginHistoryReplay) return;
 		this.#resizeReplaySize = size;
+		// A height-only change reflows nothing, so append mode has nothing to
+		// replay; a latched reset and rebuild mode are handled by the refresh.
+		if (!this.#clearScrollbackOnNextRender && this.#resizeScrollbackMode === "append" && width === this.#previousWidth) {
+			return;
+		}
+		this.refreshHistoryAfterWidthChange();
+	}
+
+	/**
+	 * Refresh native history after a settled change of the width content is
+	 * wrapped at — a terminal resize, or a docked side panel changing the chat
+	 * column — per {@link ResizeScrollbackMode}. `preserve` leaves history alone.
+	 */
+	refreshHistoryAfterWidthChange(): void {
+		if (this.#stopped || this.#frameProvider?.beginHistoryReplay === undefined) return;
+		if (this.#resizeScrollbackMode === "preserve") return;
 		if (this.#clearScrollbackOnNextRender) {
 			this.#forceViewportRepaintOnNextRender = true;
 			return;
@@ -2715,8 +2731,7 @@ export class TUI extends Container {
 			this.#prepareForcedRender(true);
 			return;
 		}
-		if (width === this.#previousWidth) return;
-		provider.beginHistoryReplay();
+		this.#frameProvider.beginHistoryReplay();
 		this.#forceViewportRepaintOnNextRender = true;
 	}
 

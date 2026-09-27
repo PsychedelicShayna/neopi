@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { SplitPane, type SplitPaneOptions } from "@oh-my-pi/pi-tui/components/layout/split-pane";
+import { type ResizeScrollbackMode, TUI } from "@oh-my-pi/pi-tui";
+import { VirtualTerminal } from "./virtual-terminal";
 
 const DIVIDER = " │ ";
 
@@ -66,5 +68,73 @@ describe("SplitPane rightSize", () => {
 		});
 		expect(left.measure(100)).toMatchObject({ left: { width: 30 }, right: { width: 67 } });
 		expect(() => left.setRightSize({ ratio: 0.5 })).toThrow();
+	});
+});
+
+describe("TUI.refreshHistoryAfterWidthChange", () => {
+	function harness(mode: ResizeScrollbackMode): {
+		tui: TUI;
+		replays: () => number;
+		paint: () => string;
+	} {
+		const term = new VirtualTerminal(40, 8);
+		const writes: string[] = [];
+		const realWrite = term.write.bind(term);
+		term.write = (data: string) => {
+			writes.push(data);
+			realWrite(data);
+		};
+		let replays = 0;
+		const tui = new TUI(term);
+		tui.setResizeScrollback(mode);
+		tui.setFrameProvider({
+			renderFrame: () => ({ viewport: ["row"] }),
+			acknowledgeHistory: () => {},
+			beginHistoryReplay: () => {
+				replays++;
+			},
+		});
+		tui.start();
+		tui.renderNow();
+		return {
+			tui,
+			replays: () => replays,
+			paint: () => {
+				writes.length = 0;
+				tui.renderNow();
+				return writes.join("");
+			},
+		};
+	}
+
+	it("applies the resize-scrollback policy once per width change", () => {
+		const rebuild = harness("rebuild");
+		try {
+			rebuild.tui.refreshHistoryAfterWidthChange();
+			// The latch is already set: a second request (a coalesced resize) adds no replay.
+			rebuild.tui.refreshHistoryAfterWidthChange();
+			expect(rebuild.replays()).toBe(1);
+			expect(rebuild.paint()).toContain("\x1b[3J");
+		} finally {
+			rebuild.tui.stop();
+		}
+
+		const append = harness("append");
+		try {
+			append.tui.refreshHistoryAfterWidthChange();
+			expect(append.replays()).toBe(1);
+			expect(append.paint()).not.toContain("\x1b[3J");
+		} finally {
+			append.tui.stop();
+		}
+
+		const preserve = harness("preserve");
+		try {
+			preserve.tui.refreshHistoryAfterWidthChange();
+			expect(preserve.replays()).toBe(0);
+			expect(preserve.paint()).not.toContain("\x1b[3J");
+		} finally {
+			preserve.tui.stop();
+		}
 	});
 });
