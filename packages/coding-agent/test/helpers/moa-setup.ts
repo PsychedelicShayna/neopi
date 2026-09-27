@@ -198,10 +198,11 @@ export async function createMoaFixture(tempDir: TempDir, mixturesToml = DRAFT_TH
 export interface MoaSessionOptions {
 	sessionManager?: SessionManager;
 	settings?: Settings;
-	model?: Model;
+	/** The starting model; `null` lets the session restore one (session file, then the default role). */
+	model?: Model | null;
 }
 
-/** A real session over the fixture's registry, starting on `fake/other`. */
+/** A real session over the fixture's registry, starting on `fake/other` unless `model` says otherwise. */
 export async function createMoaSession(fixture: MoaFixture, options: MoaSessionOptions = {}): Promise<AgentSession> {
 	const { session } = await createAgentSession({
 		cwd: fixture.cwd,
@@ -210,7 +211,7 @@ export async function createMoaSession(fixture: MoaFixture, options: MoaSessionO
 		authStorage: fixture.authStorage,
 		modelRegistry: fixture.registry,
 		settings: options.settings ?? Settings.isolated({ "compaction.enabled": false }),
-		model: options.model ?? fixture.registry.find(FAKE_PROVIDER, "other"),
+		model: options.model === null ? undefined : (options.model ?? fixture.registry.find(FAKE_PROVIDER, "other")),
 		disableExtensionDiscovery: true,
 		skills: [],
 		contextFiles: [],
