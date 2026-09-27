@@ -1613,7 +1613,7 @@ loudly as a backstop:
 | Title generation, `getTitleModels` (`packages/coding-agent/src/utils/title-generator.ts:124-147`) | skip `currentModel` when `isMixtureModel` |
 | Auto-learn capture, `createAutoLearnCaptureRunner` (`sdk.ts:1395-1430`) | when `sourceAgent.state.model` is a mixture, resolve `@smol` for the capture agent; if none, skip capture |
 | Provider context transform, `transformProviderContext` (`sdk.ts:3993-4014`) | model-neutral steps only for the synthetic model (§4.4) |
-| Tool dialect, `dialectResolver` (`sdk.ts:4250` → `resolveDialect`, `:847-859`) | `isMixtureModel(dialectModel) ? undefined : resolveDialect(cfgToolsFormat.get(settings), dialectModel)`. A tools-off mixture registers `supportsTools: false` (a truthful capability flag, §9.2), which `tools.format = "auto"` would otherwise turn into an owned in-band dialect. The engine is the mixture's tool contract: it emits native tool-call blocks for members that may call tools (§8.1), rejects `any`/`named` requirements at step 0 when nothing can satisfy them (§4.4), and must not have the in-band tool prompt appended to the outer system prompt (which `inherit` members receive), the terminal text scanned for in-band calls, or a second abort controller merged into its signal (`agent-loop.ts:1938-1946`). It also keeps the abort finalization premise (§4.5) true. Members that need an in-band dialect for their own model get it inside the member call, from the host's stream function, as any other request would. |
+| Tool dialect, `dialectResolver` (`sdk.ts:4250` → `resolveDialect`, `:847-859`) | `isMixtureModel(dialectModel) ? undefined : (resolveDialect(cfgToolsFormat.get(settings), dialectModel) ?? resolveOwnedDialectFromEnv(Bun.env.PI_DIALECT))`. A tools-off mixture registers `supportsTools: false` (a truthful capability flag, §9.2), which `tools.format = "auto"` would otherwise turn into an owned in-band dialect. The engine is the mixture's tool contract: it emits native tool-call blocks for members that may call tools (§8.1), rejects `any`/`named` requirements at step 0 when nothing can satisfy them (§4.4), and must not have the in-band tool prompt appended to the outer system prompt (which `inherit` members receive), the terminal text scanned for in-band calls, or a second abort controller merged into its signal (`agent-loop.ts:1938-1946`). It also keeps the abort finalization premise (§4.5) true. Members that need an in-band dialect for their own model get it inside the member call, from the host's stream function, as any other request would. **The resolver's answer is final.** Today the loop and the side-request builder apply `?? resolveOwnedDialectFromEnv(Bun.env.PI_DIALECT)` after the resolver (`packages/agent/src/agent-loop.ts:1853-1854`, `packages/agent/src/agent.ts:882-884`), so `PI_DIALECT=glm` would re-own a mixture's stream despite the exclusion. Both sites change to `config.getDialect ? config.getDialect(model) : (config.dialect ?? resolveOwnedDialectFromEnv(Bun.env.PI_DIALECT))` (and the `#dialectResolver` twin), which is what the resolver's contract already states (`agent.ts:282-284`, "Authoritative when set … replaces dialect"); the environment fallback survives only for callers that install no resolver (the existing `prompt-tools-loop` contract). The coding-agent resolver above carries the `PI_DIALECT` fallback for non-mixture models itself, in the same position it had before, so `PI_DIALECT` behaviour is unchanged for every model except a mixture. |
 | `sideStreamFn` / `advisorStreamFn` (`sdk.ts:4373-4374`) and any `completeSimple` on the live model | wrap: `if (isMixtureModel(model)) throw new ConfigurationError("mixture models cannot serve side requests")`; the process-wide dispatcher (§9.2) additionally refuses a catalog with no headless host, so a stray call fails loudly either way |
 | Advisors, chains (`chains/runner.ts` resolves `@prose`), commit, judge chain | rejected by `resolveMixture`'s recursion rule when a role points at a mixture, and by the same wrapper at call time |
 
@@ -2761,6 +2761,35 @@ None open. Every question raised in rounds 1 to 3 is answered in §15.
 - No task board; the `task` tool and hub messaging are untouched.
 
 ## 19. Revision log
+
+### Amendment 6.5 (Grok via MoaImpl3: `PI_DIALECT` bypasses the resolver)
+
+- Found by Grok: after 6.4, `dialectResolver` returning `undefined` for a
+  mixture still fell through to `resolveOwnedDialectFromEnv(Bun.env.PI_DIALECT)`
+  in the loop (`agent-loop.ts:1853-1854`) and the side-request builder
+  (`agent.ts:882-884`), so an environment dialect re-owned the mixture's
+  stream and reopened the 6.4 abort-premise gap. Not fixable inside
+  coding-agent: `Dialect` has no "native" value and the loop reads the
+  environment itself.
+- **Ruling (option 1):** an installed resolver is authoritative with no
+  environment fallback, at both sites, matching the resolver's documented
+  contract (`agent.ts:282-284`). The environment fallback remains for
+  callers with no resolver. The coding-agent resolver (§4.9 table) applies
+  `?? resolveOwnedDialectFromEnv(Bun.env.PI_DIALECT)` itself for
+  non-mixture models, in the position the loop used to apply it, so
+  `PI_DIALECT` behaviour is unchanged everywhere except for mixtures.
+- This is the single `packages/agent` change in the MoA work; it is
+  permitted because it is provider- and model-agnostic (a contract
+  correction for every caller), while the mixture-conditional logic stays
+  in the coding-agent resolver.
+- Rejected (option 2): adding a "native" sentinel to `packages/ai`'s `Dialect`
+  union, which widens a closed type and every switch over it to say what
+  `undefined` already says once the resolver is honoured.
+- Tests: the abort regression runs with `PI_DIALECT` set to an owned dialect
+  and the persisted abort is still identified; a non-mixture model under the
+  same `PI_DIALECT` still receives the owned dialect through the coding-agent
+  resolver; the existing no-resolver env-fallback contract
+  (`packages/agent/test/prompt-tools-loop.test.ts:222`) is unchanged.
 
 ### Amendment 6.4 (MoaImpl3: owned dialect breaks the abort premise)
 
