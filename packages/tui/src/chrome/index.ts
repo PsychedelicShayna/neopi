@@ -15,6 +15,7 @@ export * from "./select-list-mouse-routing";
 export * from "./selector-helpers";
 export * from "./shared";
 export * from "./side-panel";
+export * from "./side-panel-fullscreen";
 export * from "./streaming-panel";
 export * from "./tool-activity";
 export * from "./transcript-container";
