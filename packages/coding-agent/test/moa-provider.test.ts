@@ -1,11 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { clearCustomApis } from "@oh-my-pi/pi-ai";
 import { streamSimple } from "@oh-my-pi/pi-ai/stream";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { MixtureCatalog, registerMixtureApi } from "@oh-my-pi/pi-coding-agent/moa/provider";
 import { discoverRegistrableMixtures } from "@oh-my-pi/pi-coding-agent/moa/registration";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { logger, TempDir } from "@oh-my-pi/pi-utils";
 import {
 	createMoaFixture,
 	createMoaSession,
@@ -26,6 +26,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+	vi.restoreAllMocks();
 	for (const session of sessions.splice(0)) await session.dispose();
 	fixture.authStorage.close();
 	clearCustomApis();
@@ -89,7 +90,8 @@ describe("keyless mixture registration", () => {
 		expect(model.reasoning).toBe(true);
 	});
 
-	it("never registers a definition with errors", async () => {
+	it("never registers a definition with errors, and logs why", async () => {
+		const warn = vi.spyOn(logger, "warn");
 		await Bun.write(
 			`${fixture.agentDir}/MIXTURES.toml`,
 			`${DRAFT_THEN_EDIT_TOML}
@@ -127,6 +129,11 @@ instructions = "which?"
 		expect(mixtureModel()).toBeDefined();
 		expect(fixture.registry.find("mixture", "broken")).toBeUndefined();
 		expect(fixture.registry.find("mixture", "routed")).toBeUndefined();
+		const refusals = warn.mock.calls.flatMap(([message, context]) =>
+			message === "Mixture refused at registration" ? [`${context?.mixture}:${context?.code}`] : [],
+		);
+		expect(refusals).toContain("broken:edge.x.empty");
+		expect(refusals).toContain("routed:unsupported.feature");
 	});
 
 	it("removes and restores the model across a one → zero → one roster", async () => {
