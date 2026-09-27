@@ -626,11 +626,20 @@ describe("engine contract through a session host", () => {
 		host.commitPersisted(r4);
 		expect(writerRequest()).toBe("four");
 
-		// Nothing matches: the whole list is the tail, and its trailing user messages fold into the prompt.
+		// Nothing matches: the whole list is the tail, and its user messages fold into the prompt.
 		const unanchored = [user("unrelated"), user("five")];
 		expect(findAnchor(currentRun(), unanchored)).toEqual({ index: -1, kind: "none" });
-		await call(unanchored);
+		const r5 = await call(unanchored);
+		host.commitPersisted(r5);
 		expect(writerRequest()).toBe("unrelated\n\nfive");
+
+		// An assistant message the run never produced does not restart the prompt: every
+		// operator message in an unanchored tail folds in order.
+		const foreign: AssistantMessage = { ...stripped(r4), content: [{ type: "text", text: "from elsewhere" }] };
+		const withAssistant = [user("six"), foreign, user("seven")];
+		expect(findAnchor(currentRun(), withAssistant)).toEqual({ index: -1, kind: "none" });
+		await call(withAssistant);
+		expect(writerRequest()).toBe("six\n\nseven");
 	});
 
 	it("gives a follow-up run the operator-facing conversation before its prompt", async () => {

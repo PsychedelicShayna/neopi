@@ -121,36 +121,33 @@ export function findAnchor(run: MixtureRun, messages: readonly Message[]): { ind
 }
 
 export interface ClassifiedTail {
-	/** The operator's prompt: the trailing run of user messages, folded in order. */
+	/** The operator's prompt: every user message in the tail, folded in order. */
 	operator?: { text: string; images: ImageContent[]; index: number };
 	toolResults: ToolResultMessage[];
 }
 
 /**
  * Walk a tail. `toolResult` messages are collected; developer messages and
- * history-rewrite summaries are ignored for classification; the user messages
- * after the tail's last assistant message form the operator prompt (queued
- * prompts fold in order). Earlier tail history is conversation, not prompt.
+ * history-rewrite summaries are ignored for classification; every other user
+ * message is operator text, folded in order into one prompt (an assistant
+ * message in the tail does not restart it). `index` is the first one's position.
  */
 export function classifyTail(tail: readonly Message[]): ClassifiedTail {
 	const toolResults: ToolResultMessage[] = [];
+	const texts: string[] = [];
+	const images: ImageContent[] = [];
 	let operatorStart = -1;
 	tail.forEach((message, index) => {
 		if (message.role === "toolResult") toolResults.push(message);
-		if (message.role === "assistant") operatorStart = -1;
-		if (message.role === "user" && message.historyRewriteAt === undefined && operatorStart < 0) operatorStart = index;
-	});
-	if (operatorStart < 0) return { toolResults };
-	const texts: string[] = [];
-	const images: ImageContent[] = [];
-	for (const message of tail.slice(operatorStart)) {
-		if (message.role !== "user" || message.historyRewriteAt !== undefined) continue;
+		if (message.role !== "user" || message.historyRewriteAt !== undefined) return;
+		if (operatorStart < 0) operatorStart = index;
 		const text = userText(message);
 		if (text) texts.push(text);
 		if (typeof message.content !== "string") {
 			for (const block of message.content) if (block.type === "image") images.push(block);
 		}
-	}
+	});
+	if (operatorStart < 0) return { toolResults };
 	return { operator: { text: texts.join("\n\n"), images, index: operatorStart }, toolResults };
 }
 
