@@ -1099,6 +1099,15 @@ export interface ContextSnapshot {
 	lastMessageTimestamp?: number;
 }
 
+/** One upstream attempt's share of an aggregated response's usage. */
+export interface UsageBreakdownEntry {
+	provider: string;
+	model: string;
+	/** What the attempt was for, e.g. `member`, `judge`, `summary`. */
+	kind: string;
+	usage: Usage;
+}
+
 export interface AssistantMessage {
 	role: "assistant";
 	content: (
@@ -1135,6 +1144,12 @@ export interface AssistantMessage {
 	 */
 	upstreamModel?: string;
 	usage: Usage;
+	/**
+	 * Per-attempt split of `usage` for a response an aggregating model (a
+	 * mixture of agents) assembled from several upstream calls. For display and
+	 * routed-model statistics only; `usage` stays the authoritative total.
+	 */
+	usageBreakdown?: UsageBreakdownEntry[];
 	stopReason: StopReason;
 	stopDetails?: StopDetails | null;
 	errorMessage?: string;
