@@ -19,7 +19,7 @@ import { formatModelRoleAlias } from "../config/model-roles";
 import { getModelMatchPreferences, resolveModelRoleValue } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import chainInputWithContext from "../prompts/chains/input-with-context.md" with { type: "text" };
-import { obfuscateMessages, obfuscateProviderContext } from "../secrets/message-transform";
+import { deobfuscateToolArguments, obfuscateMessages, obfuscateProviderContext } from "../secrets/message-transform";
 import type { SecretObfuscator } from "../secrets/obfuscator";
 import chainSystemPrompt from "../prompts/chains/system.md" with { type: "text" };
 import { estimateToolSchemaTokens } from "@oh-my-pi/pi-tui/status-line/context-usage";
@@ -36,6 +36,14 @@ const CHAIN_SKIP = "chain step skipped";
 const CHAIN_FRAMING_RESERVE = 1_000;
 /** Output room reserved when the model reports no output limit. */
 const CHAIN_DEFAULT_OUTPUT_RESERVE = 8_192;
+/** After compaction the summaries are all a step has of older turns, so they are kept whole. */
+const TRANSCRIPT_FORMAT = { expandSummaries: true } as const;
+
+/** Output tokens a context step reserves and then requests: never more than a quarter window. */
+function chainOutputReserve(model: Pick<Model, "contextWindow" | "maxTokens">): number {
+	const quarter = model.contextWindow ? Math.floor(model.contextWindow / 4) : CHAIN_DEFAULT_OUTPUT_RESERVE;
+	return Math.min(model.maxTokens || CHAIN_DEFAULT_OUTPUT_RESERVE, quarter);
+}
 const CHAIN_ABORT = "chain aborted";
 
 /** Cancels a running chain as a whole or skips just the step in flight. */
@@ -98,7 +106,8 @@ export interface RunChainOptions {
  * most recent turns.
  */
 function fitTranscript(messages: readonly AgentMessage[], budget: number, tokenizer: Tokenizer): string {
-	const render = (start: number) => formatSessionHistoryMarkdown(messages.slice(start) as unknown[]).trim();
+	const render = (start: number) =>
+		formatSessionHistoryMarkdown(messages.slice(start) as unknown[], TRANSCRIPT_FORMAT).trim();
 	// Smallest start index whose rendering fits; rendering size only shrinks as start grows.
 	let low = 0;
 	let high = messages.length;
@@ -139,11 +148,11 @@ export function renderChainInput(
 		const reserved =
 			tokenizer.countTokens([system, step.prompt, input]) +
 			estimateToolSchemaTokens(tools, tokenizer) +
-			Math.min(model.maxTokens || CHAIN_DEFAULT_OUTPUT_RESERVE, Math.floor(model.contextWindow / 4)) +
+			chainOutputReserve(model) +
 			CHAIN_FRAMING_RESERVE;
 		transcript = fitTranscript(messages, Math.max(0, model.contextWindow - reserved), tokenizer);
 	} else {
-		transcript = formatSessionHistoryMarkdown(messages as unknown[]).trim();
+		transcript = formatSessionHistoryMarkdown(messages as unknown[], TRANSCRIPT_FORMAT).trim();
 	}
 	if (!transcript) return input;
 	// compile, not render: the post-render formatter would rewrite the draft's whitespace and tables.
@@ -166,7 +175,7 @@ function redactMessageText(obfuscator: SecretObfuscator, message: AgentMessage):
 			return obfuscateMessages(obfuscator, [message as Message])[0] as AgentMessage;
 	}
 	const redacted: Record<string, unknown> = { ...message };
-	for (const field of ["content", "summary", "shortSummary", "command", "output"]) {
+	for (const field of ["content", "summary", "shortSummary", "command", "output", "code"]) {
 		const value = redacted[field];
 		if (typeof value === "string") {
 			redacted[field] = obfuscator.obfuscate(value);
@@ -177,6 +186,15 @@ function redactMessageText(obfuscator: SecretObfuscator, message: AgentMessage):
 					: block,
 			);
 		}
+	}
+	// Custom messages (IRC and the like) carry formatter-visible prose in details.
+	const details = redacted.details;
+	if (details && typeof details === "object" && !Array.isArray(details)) {
+		const next: Record<string, unknown> = { ...(details as Record<string, unknown>) };
+		for (const field of ["message", "body"]) {
+			if (typeof next[field] === "string") next[field] = obfuscator.obfuscate(next[field] as string);
+		}
+		redacted.details = next;
 	}
 	return redacted as unknown as AgentMessage;
 }
@@ -217,10 +235,21 @@ export async function runChainStep(
 		cwdResolver: () => options.cwd,
 		getApiKey: requestModel => options.modelRegistry.resolver(requestModel, providerSessionId),
 		// Same provider boundary as the primary session: configured secrets leave as placeholders.
-		streamFn: hidesSecrets
-			? (streamModel, context, streamOptions) =>
-					streamSimple(streamModel, obfuscateProviderContext(obfuscator, context), streamOptions)
-			: streamSimple,
+		// A context step also requests no more output than its transcript budget reserved.
+		streamFn: (streamModel, context, streamOptions) =>
+			streamSimple(
+				streamModel,
+				hidesSecrets ? obfuscateProviderContext(obfuscator, context) : context,
+				step.context && streamModel.contextWindow
+					? {
+							...streamOptions,
+							maxTokens: Math.min(streamOptions?.maxTokens ?? Infinity, chainOutputReserve(streamModel)),
+						}
+					: streamOptions,
+			),
+		// ...and placeholders the model copies into a tool call become real values before it runs.
+		transformToolCallArguments:
+			hidesSecrets && obfuscator ? args => deobfuscateToolArguments(obfuscator, args) : undefined,
 		intentTracing: false,
 	});
 	agent.setDisableReasoning(shouldDisableReasoning(thinkingLevel));

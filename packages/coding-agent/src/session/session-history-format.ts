@@ -44,6 +44,8 @@ export interface HistoryFormatOptions {
 	 * still collapse to a one-liner.
 	 */
 	expandPrimaryContext?: boolean;
+	/** Render branch and compaction summaries whole instead of as one-liners. */
+	expandSummaries?: boolean;
 	/**
 	 * Append the unified diff (from a tool result's `details.diff`) below
 	 * edit/apply_patch tool lines, instead of just the path. The advisor sets
@@ -614,13 +616,17 @@ export function formatSessionHistoryMarkdown(messages: unknown[], opts?: History
 			}
 			case "branchSummary": {
 				const branchMsg = msg as BranchSummaryMessage;
-				lines.push(`[branch] from ${branchMsg.fromId}: ${oneLine(branchMsg.summary)}`, "");
+				const summary = opts?.expandSummaries ? branchMsg.summary.trim() : oneLine(branchMsg.summary);
+				lines.push(`[branch] from ${branchMsg.fromId}: ${summary}`, "");
 				lastWatchedLabel = undefined;
 				break;
 			}
 			case "compactionSummary": {
 				const compactMsg = msg as CompactionSummaryMessage;
-				lines.push(`[compaction] ${oneLine(compactMsg.summary)}`, "");
+				lines.push(
+					`[compaction] ${opts?.expandSummaries ? compactMsg.summary.trim() : oneLine(compactMsg.summary)}`,
+					"",
+				);
 				lastWatchedLabel = undefined;
 				break;
 			}
