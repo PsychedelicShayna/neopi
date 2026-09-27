@@ -364,6 +364,20 @@ export class InputController {
 			// These actions target the main transcript/editor rather than the
 			// focused prompt. Keep focused components' own bindings authoritative.
 			this.ctx.ui.addInputListener(data => {
+				if (this.ctx.keybindings.matches(data, "app.sidebar.toggle")) {
+					// The same key closes the fullscreen form; under any other overlay it is inert.
+					if (this.ctx.ui.hasOverlay() && !this.ctx.sidePanel.fullscreenOpen) return undefined;
+					this.ctx.sidePanel.toggle();
+					return { consume: true };
+				}
+				if (
+					this.ctx.keybindings.matches(data, "app.sidebar.scrollUp") ||
+					this.ctx.keybindings.matches(data, "app.sidebar.scrollDown")
+				) {
+					if (this.ctx.ui.hasOverlay() || !this.ctx.sidePanel.docked) return undefined;
+					this.ctx.sidePanel.scrollBy(this.ctx.keybindings.matches(data, "app.sidebar.scrollUp") ? -3 : 3);
+					return { consume: true };
+				}
 				if (this.ctx.keybindings.matches(data, "app.thinking.toggle")) {
 					if (this.ctx.ui.hasOverlay()) return undefined;
 					this.ctx.toggleThinkingBlockVisibility();
@@ -767,6 +781,12 @@ export class InputController {
 		if (this.ctx.ui.hasOverlay()) return undefined;
 		const event = parseSgrMouse(data);
 		if (!event) return undefined;
+		if (this.ctx.sidePanel.routeInlineMouse(event)) {
+			// Outside the chat column: the panel dropped the band; forget the target
+			// so moving back onto the same card paints it again.
+			this.#lastHoverClickId = undefined;
+			return { consume: true };
+		}
 		if (event.motion) this.#updateHoverHighlight(event.row);
 		else if (event.leftClick) this.#focusClickedAgent(event.row);
 		return { consume: true };

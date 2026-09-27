@@ -149,7 +149,6 @@ import { StreamRedactor } from "../stream/redactor";
 import {
 	FEED_MODEL_BADGE_WIDTH,
 	formatFeedModelBadge,
-	formatMoreItems,
 	isFeedModelBadgeEnabled,
 	replaceTabs,
 	shortenEmbeddedPaths,
@@ -168,15 +167,15 @@ import {
 	type TodoHudStateEntryData,
 } from "../tools/todo";
 import {
-	formatPhaseDisplayName,
 	isClosedTodo,
-	selectCollapsedTodos,
 	setActiveTodoDescriptionsProvider,
 	todoMatchesAnyDescription,
 } from "@oh-my-pi/pi-tui/tools/todo";
 import { vocalizer } from "../tts/vocalizer";
 import { applyHyperlinkSetting, fileHyperlink } from "@oh-my-pi/pi-tui/render/hyperlink";
 import { renderTreeList } from "@oh-my-pi/pi-tui/render/tree-list";
+import { formatTodoLine, renderTodoLines, TODO_LINE_BUDGET, TodoSection } from "./side-panel/todo-section";
+import { SidePanelController } from "./controllers/side-panel-controller";
 import { formatStartupChangelogSummary, type StartupChangelogSelection } from "../utils/changelog";
 import { copyToClipboard } from "../utils/clipboard";
 import type { EventBus } from "../utils/event-bus";
@@ -312,6 +311,12 @@ import {
 	cfgDisplayCollapseCompacted,
 	cfgDisplayHideToolActivity,
 	cfgDisplayPinnedAgents,
+	cfgSidebarEnabled,
+	cfgSidebarSide,
+	cfgSidebarSplitAt,
+	cfgSidebarWidthMax,
+	cfgSidebarWidthMin,
+	cfgSidebarWidthRatio,
 	cfgDisplayShowTokenUsage,
 	cfgDisplayShowTurnTime,
 	cfgGitEnabled,
@@ -387,6 +392,12 @@ const cfgLiveUiSettings = combine({
 	"tui.vimMode": cfgTuiVimMode,
 	"tui.vimModeDisplay": cfgTuiVimModeDisplay,
 	"display.pinnedAgents": cfgDisplayPinnedAgents,
+	"sidebar.enabled": cfgSidebarEnabled,
+	"sidebar.side": cfgSidebarSide,
+	"sidebar.width.ratio": cfgSidebarWidthRatio,
+	"sidebar.width.min": cfgSidebarWidthMin,
+	"sidebar.width.max": cfgSidebarWidthMax,
+	"sidebar.splitAt": cfgSidebarSplitAt,
 	"compaction.idleEnabled": cfgCompactionIdleEnabled,
 	"compaction.idleThresholdTokens": cfgCompactionIdleThresholdTokens,
 	"compaction.idleTimeoutSeconds": cfgCompactionIdleTimeoutSeconds,
@@ -491,28 +502,6 @@ const LIVE_DESTINATION_LABELS: Record<LiveInputDestination, string> = {
 	both: "main and voice agents",
 };
 
-const HUD_NOTE_SUP_DIGITS: Record<string, string> = {
-	"0": "\u2070",
-	"1": "\u00b9",
-	"2": "\u00b2",
-	"3": "\u00b3",
-	"4": "\u2074",
-	"5": "\u2075",
-	"6": "\u2076",
-	"7": "\u2077",
-	"8": "\u2078",
-	"9": "\u2079",
-};
-
-function formatHudNoteMarker(count: number): string {
-	if (count <= 0) return "";
-	const sub = String(count)
-		.split("")
-		.map(d => HUD_NOTE_SUP_DIGITS[d] ?? d)
-		.join("");
-	return theme.fg("dim", chalk.italic(` \u207a${sub}`));
-}
-
 type GoalSubcommand = "set" | "show" | "pause" | "resume" | "drop" | "budget";
 
 const GOAL_SUBCOMMANDS = new Set<GoalSubcommand>(["set", "show", "pause", "resume", "drop", "budget"]);
@@ -610,6 +599,8 @@ class TodoHudContainer extends AnchoredLiveContainer {
 		if (this.mode.isCompactTodoMode()) {
 			return [];
 		}
+		// Docked: the todo list lives in the side panel for this frame.
+		if (this.mode.composer.sidePanelDocked) return [];
 		return super.render(width);
 	}
 }
@@ -1027,6 +1018,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	 */
 	#todoPhasesOwner?: AgentSession;
 	#todoHudHidden = false;
+	readonly #todoSection = new TodoSection(() => this.ui.requestRender());
+	#sidePanelController!: SidePanelController;
 	hideThinkingBlock = false;
 	#sessionsWithDisplayableThinkingContent = new WeakSet<AgentSession>();
 	/** Whether the visible session has produced thinking content the user can reveal. */
@@ -1321,6 +1314,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.requestRender();
 	}
 
+	/** The side panel host: toggle, scroll, sections, inline mouse. */
+	get sidePanel(): SidePanelController {
+		return this.#sidePanelController;
+	}
+
 	setClickHoverId(id: string | undefined): void {
 		this.composer.setHoveredClickId(id);
 	}
@@ -1489,6 +1487,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.judgmentBatchProgressContainer.addChild(this.#judgmentBatchProgressHud);
 		this.statusContainer = new StatusHudContainer(this);
 		this.todoContainer = new TodoHudContainer(this);
+		this.#sidePanelController = new SidePanelController({
+			ui: this.ui,
+			composer: this.composer,
+			settings: this.settings,
+			keybindings: this.keybindings,
+		});
+		this.#sidePanelController.register(this.#todoSection);
 		this.subagentContainer = new AnchoredLiveContainer();
 		this.btwContainer = new AnchoredLiveContainer();
 		this.omfgContainer = new AnchoredLiveContainer();
@@ -1813,6 +1818,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			// container and collapse again; everything else is turn-scoped.
 			{ transient: [this.editorContainer] },
 		);
+		this.#sidePanelController.applySettings();
 		this.ui.setFocus(this.editor);
 		this.syncComposerShape();
 
@@ -2031,6 +2037,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				clearMermaidCache();
 				this.statusLine.invalidate();
 				this.ui.invalidate();
+				this.#sidePanelController.invalidate();
 				this.updateEditorBorderColor();
 				if (event.ephemeral || isInsideTerminalMultiplexer()) {
 					// Theme previews and multiplexer panes use a non-destructive viewport
@@ -2053,6 +2060,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			void setSymbolPreset("nerd").then(() => {
 				this.statusLine.invalidate();
 				this.ui.invalidate();
+				this.#sidePanelController.invalidate();
 				this.ui.requestRender();
 			});
 		});
@@ -2994,6 +3002,18 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (any("composer.shape")) this.syncComposerShape();
 		if (any("tui.vimMode", "tui.vimModeDisplay")) this.#applyVimModeSetting();
 		if (any("display.pinnedAgents")) this.applyPinnedAgentsSetting();
+		if (
+			any(
+				"sidebar.enabled",
+				"sidebar.side",
+				"sidebar.width.ratio",
+				"sidebar.width.min",
+				"sidebar.width.max",
+				"sidebar.splitAt",
+			)
+		) {
+			this.#sidePanelController.applySettings();
+		}
 		if (any("compaction.idleEnabled", "compaction.idleThresholdTokens", "compaction.idleTimeoutSeconds")) {
 			this.#eventController.refreshIdleCompactionTimer();
 		}
@@ -3067,17 +3087,20 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (any("tui.textSizing")) {
 			this.#applyTextSizingSetting();
 			this.ui.invalidate();
+			this.#sidePanelController.invalidate();
 			resetDisplay = true;
 		}
 		if (any("tui.tight")) {
 			setTuiTight(cfgTuiTight.get(this.settings));
 			this.ui.invalidate();
+			this.#sidePanelController.invalidate();
 			this.ui.requestRender();
 		}
 		if (any("tui.hyperlinks")) {
 			// The tui.hyperlinks effect already re-applied the flag; repaint cached rows.
 			this.statusLine.invalidate();
 			this.ui.invalidate();
+			this.#sidePanelController.invalidate();
 			this.ui.requestRender();
 		}
 		if (any("tui.titleState")) setTerminalTitleStateEnabled(cfgTuiTitleState.get(this.settings));
@@ -3402,24 +3425,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		});
 	}
 
-	#formatTodoLine(todo: TodoItem, prefix: string, matched: boolean): string {
-		const checkbox = theme.checkbox;
-		const marker = formatHudNoteMarker(todo.notes?.length ?? 0);
-		switch (todo.status) {
-			case "completed":
-				return theme.fg("success", `${prefix}${checkbox.checked} ${chalk.strikethrough(todo.content)}`) + marker;
-			case "in_progress":
-				return theme.fg("accent", `${prefix}${checkbox.unchecked} ${todo.content}`) + marker;
-			case "abandoned":
-				return theme.fg("error", `${prefix}${checkbox.unchecked} ${chalk.strikethrough(todo.content)}`) + marker;
-			case "blocked":
-				return theme.fg("warning", `${prefix}${checkbox.unchecked} ${todo.content} (blocked)`) + marker;
-			default:
-				if (matched) return theme.fg("accent", `${prefix}${checkbox.unchecked} ${todo.content}`) + marker;
-				return theme.fg("dim", `${prefix}${checkbox.unchecked} ${todo.content}`) + marker;
-		}
-	}
-
 	#getActiveSubagentDescriptions(): string[] {
 		const out: string[] = [];
 		for (const session of this.#observerRegistry.getSessions()) {
@@ -3571,14 +3576,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#modelCycleClearTimer.unref?.();
 	}
 
-	#getActivePhase(phases: TodoPhase[]): TodoPhase | undefined {
-		const nonEmpty = phases.filter(phase => phase.tasks.length > 0);
-		const active = nonEmpty.find(phase =>
-			phase.tasks.some(task => task.status === "pending" || task.status === "in_progress"),
-		);
-		return active ?? nonEmpty[nonEmpty.length - 1];
-	}
-
 	#scheduleObserverUiSync(kind: SessionObserverChangeKind): void {
 		if (kind !== "progress") {
 			this.#observerUiSyncNeedsTodoReconcile = true;
@@ -3613,119 +3610,19 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	#renderTodoList(): void {
 		this.todoContainer.clear();
-		if (this.#todoHudHidden) return;
-		const phases = this.todoPhases.filter(phase => phase.tasks.length > 0);
-		if (phases.length === 0) return;
-		const expanded = this.todoExpanded;
-		const multiPhase = phases.length > 1;
-		const activeIdx = phases.indexOf(this.#getActivePhase(phases) ?? phases[0]);
-		// Fixed budgets keep the HUD bounded regardless of plan size / progress.
-		const subsequentStageCap = 4; // stages shown after the active one (a trailing summary row covers the rest)
-		const activeTaskCap = 5; // open tasks previewed for the active stage
-
 		const activeDescs = this.#getActiveSubagentDescriptions();
-		// A pending todo "lights up" (accent) when an in-flight subagent is doing
-		// its work, matched by normalized content overlap.
-		const isMatched = (todo: TodoItem): boolean =>
-			activeDescs.length > 0 && todoMatchesAnyDescription(todo.content, activeDescs);
-
-		// Task subtree for a phase. Collapsed runs the shared walking-viewport
-		// policy (completed/abandoned omitted, active work pulled to the head,
-		// then following pending tasks) so the HUD and the transient tool result
-		// can never disagree about the current work (#5873). Expanded lists all.
-		const renderTasks = (phase: TodoPhase): string[] => {
-			if (expanded) {
-				return renderTreeList(
-					{
-						items: phase.tasks,
-						expanded: true,
-						renderItem: todo => this.#formatTodoLine(todo, "", isMatched(todo)),
-					},
-					theme,
-				);
-			}
-			const selection = selectCollapsedTodos(phase.tasks, isMatched, activeTaskCap);
-			return renderTreeList(
-				{
-					items: selection.items,
-					itemType: "task",
-					trailingSummary: selection.summary,
-					renderItem: todo => this.#formatTodoLine(todo, "", isMatched(todo)),
-				},
-				theme,
-			);
-		};
-
-		// One phase node. The active stage is highlighted with normal-brightness task
-		// progress; other stages render their whole row (name + progress) in the
-		// brighter muted gray. Overall progress lives in the tree spine (below).
-		const renderPhase = (phase: TodoPhase, oneBased: number, isActive: boolean): string | string[] => {
-			const label = multiPhase ? formatPhaseDisplayName(phase.name, oneBased) : phase.name;
-			// Closed, not just completed: the collapsed task window hides abandoned
-			// tasks too, so counting only completions leaves the phase reading stuck.
-			const done = phase.tasks.filter(isClosedTodo).length;
-			const progress = ` · ${done}/${phase.tasks.length}`;
-			if (!isActive) {
-				const header = theme.fg("muted", label) + theme.fg("dim", progress);
-				return expanded ? [header, ...renderTasks(phase)] : header;
-			}
-			const header = theme.bold(theme.fg("accent", label)) + theme.fg("dim", progress);
-			return [header, ...renderTasks(phase)];
-		};
-
-		// Collapsed: active stage + a bounded number of following stages, with a
-		// "… n more stages" row for anything past the cap. Expanded: every stage
-		// from the top. Roman numerals stay tied to the real phase index.
-		const baseIdx = expanded ? 0 : activeIdx;
-		const phaseSlice = expanded ? phases.slice(baseIdx) : phases.slice(baseIdx, baseIdx + 1 + subsequentStageCap);
-		const hiddenStages = phases.length - baseIdx - phaseSlice.length;
-
-		// Flatten the stage tree into content rows plus a per-row top-level spine
-		// glyph (`├─` for stage rows, `│` for continuations). The spine never
-		// closes downward — a short elbow tail (`└────`) ends the block instead,
-		// so spine + bend + tail form one continuous progress path.
-		const spineGlyphs: string[] = [];
-		const contentLines: string[] = [];
-		const pushBlock = (block: string | string[]): void => {
-			const rows = Array.isArray(block) ? block : [block];
-			if (rows.length === 0) return;
-			spineGlyphs.push(`${theme.tree.branch} `);
-			contentLines.push(replaceTabs(rows[0]!));
-			for (let i = 1; i < rows.length; i++) {
-				spineGlyphs.push(`${theme.tree.vertical}  `);
-				contentLines.push(replaceTabs(rows[i]!));
-			}
-		};
-		for (let i = 0; i < phaseSlice.length; i++) {
-			pushBlock(renderPhase(phaseSlice[i], baseIdx + i + 1, baseIdx + i === activeIdx));
-		}
-		if (hiddenStages > 0) {
-			pushBlock(theme.fg("muted", formatMoreItems(hiddenStages, "stage")));
-		}
-
-		// Closing tail: hook + a few horizontals. Every tail cell is 1 column in
-		// both glyph sets, so string slicing below splits it by visible cells.
-		const tailLen = 6;
-		const tail = theme.tree.hook + theme.tree.horizontal.repeat(Math.max(0, tailLen - visibleWidth(theme.tree.hook)));
-
-		// Overall progress (summed across every stage) fills the path in reading
-		// order: down the spine, around the bend, out along the tail.
-		// Clamp so partial progress lights at least one cell; a closed plan fills
-		// the entire path until the configured auto-clear removes the HUD.
-		const totalTasks = phases.reduce((sum, phase) => sum + phase.tasks.length, 0);
-		const closedTasks = phases.reduce((sum, phase) => sum + phase.tasks.filter(isClosedTodo).length, 0);
-		const pathLen = contentLines.length + tailLen;
-		let filled = Math.round((closedTasks / totalTasks) * pathLen);
-		if (closedTasks > 0) filled = Math.max(filled, 1);
-		if (closedTasks < totalTasks) filled = Math.min(filled, pathLen - 1);
-
-		const lines = ["", theme.bold(theme.fg("accent", "TODO"))];
-		for (let i = 0; i < contentLines.length; i++) {
-			lines.push(` ${theme.fg(i < filled ? "accent" : "dim", spineGlyphs[i]!)}${contentLines[i]}`);
-		}
-		const tailFilled = Math.max(0, Math.min(filled - contentLines.length, tail.length));
-		lines.push(` ${theme.fg("accent", tail.slice(0, tailFilled))}${theme.fg("dim", tail.slice(tailFilled))}`);
-		this.todoContainer.addChild(new Text(lines.join("\n"), 1, 0));
+		// The section and the HUD read one todo state; the hidden HUD stays current
+		// while docked, so undocking or narrowing needs no further todo call.
+		this.#todoSection.update({ phases: this.todoPhases, activeDescs, hidden: this.#todoHudHidden });
+		if (this.#todoHudHidden) return;
+		const lines = renderTodoLines({
+			phases: this.todoPhases,
+			expanded: this.todoExpanded,
+			activeDescs,
+			budget: TODO_LINE_BUDGET,
+		});
+		if (lines.length === 0) return;
+		this.todoContainer.addChild(new Text(["", theme.bold(theme.fg("accent", "TODO")), ...lines].join("\n"), 1, 0));
 	}
 
 	isCompactTodoMode(): boolean {
@@ -3747,7 +3644,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		const header = `${theme.bold(theme.fg("accent", "TODO"))} ${theme.fg("dim", `${closedTasks}/${totalTasks}`)}`;
 		const taskStr = activeTask
-			? this.#formatTodoLine(activeTask, "", isMatched(activeTask))
+			? formatTodoLine(activeTask, "", isMatched(activeTask))
 			: theme.fg("success", `${theme.checkbox.checked} done`);
 		const rightLine = `${header} ${theme.fg("dim", "·")} ${taskStr}`;
 
@@ -6096,6 +5993,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#agentRegistryUnsubscribe?.();
 		this.#agentRegistryUnsubscribe = undefined;
 		this.#agentRegistrySubscriptionTarget = undefined;
+		// Undock while the TUI can still paint, without a history refresh: a quit
+		// must leave scrollback exactly as painted.
+		this.#sidePanelController.dispose();
 		this.#eventController.dispose();
 		this.#codexResetFireworksController.dispose();
 		this.statusLine.dispose();
