@@ -14,6 +14,8 @@ export interface MixtureRunEntry {
 	providerState: Map<string, Map<string, ProviderSessionState>>;
 	/** Images attached to the operator prompt that started the run; forwarded to the entry hop. */
 	topicImages: ImageContent[];
+	/** `{{conversation}}` of the prompt that started the run: the operator-facing history before it. */
+	conversation: string;
 }
 
 export interface MixtureRunLease {
@@ -36,7 +38,7 @@ export class MixtureRunStore {
 		this.#executing.add(id);
 		let entry = this.#entries.get(id);
 		if (!entry) {
-			entry = { run: undefined, providerState: new Map(), topicImages: [] };
+			entry = { run: undefined, providerState: new Map(), topicImages: [], conversation: "" };
 			this.#entries.set(id, entry);
 		}
 		let released = false;

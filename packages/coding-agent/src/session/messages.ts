@@ -188,7 +188,8 @@ function textFromContent(content: unknown): string {
 	return parts.join("\n\n");
 }
 
-function thinkingFromContent(content: unknown): string {
+/** Every thinking block of an assistant content array, trimmed, in order; redacted thinking skipped. */
+export function thinkingFromContent(content: unknown): string {
 	if (!Array.isArray(content)) return "";
 	const parts: string[] = [];
 	for (const block of content) {

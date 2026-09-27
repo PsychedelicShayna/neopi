@@ -276,8 +276,12 @@ export interface MixtureHost {
 	/** `MixtureRunKey.host`. */
 	id: string;
 	runs: MixtureRunStore;
-	/** The currently registered resolution for a mixture name, re-resolved at run start. */
-	resolve(name: string): ResolvedMixture | undefined;
+	/**
+	 * Resolve a registered mixture afresh for a new run (role reassignments and
+	 * credential changes since registration apply). A mixture that is not
+	 * registered, or no longer validates, yields the reason as a string.
+	 */
+	resolveRun(name: string): ResolvedMixture | string;
 	settings: Settings;
 	/** Member calls. Session: the settings-aware stream function. */
 	stream: StreamFn;
