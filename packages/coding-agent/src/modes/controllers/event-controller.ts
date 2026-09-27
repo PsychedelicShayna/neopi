@@ -306,6 +306,13 @@ export class EventController {
 			todo_auto_clear: e => this.#handleTodoAutoClear(e),
 			irc_message: e => this.#handleIrcMessage(e),
 			notice: e => this.#handleNotice(e),
+			mixture_hop_end: async () => this.ctx.ui.requestRender(),
+			mixture_limit: async () => this.ctx.ui.requestRender(),
+			mixture_checkpoint: async () => this.ctx.ui.requestRender(),
+			mixture_run_end: async () => {
+				this.ctx.statusLine.invalidate();
+				this.ctx.ui.requestRender();
+			},
 			model_changed: async () => {
 				this.ctx.statusLine.invalidate();
 				this.ctx.ui.requestRender();

@@ -106,6 +106,7 @@ import {
 } from "@oh-my-pi/pi-utils";
 import type { AdvisorConfig } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { formatUsageResetWindow } from "@oh-my-pi/pi-tui/overlays/usage-display";
+import type { MixtureSessionEvent, SessionMixtureHost } from "../moa/host";
 import { loadAdvisorTranscriptCosts } from "../advisor";
 import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, type AsyncJob, AsyncJobManager } from "../async";
 import { reset as resetCapabilities } from "../capability";
@@ -743,6 +744,7 @@ export class AgentSession implements SettingsScope {
 	/** Last (enable, providerId) tuple resolved by `#syncAppendOnlyContext` — used to skip no-op invalidations. */
 	#lastAppendOnlyResolution?: { enable: boolean; providerId: string | undefined };
 	#eventListeners: AgentSessionEventListener[] = [];
+	#mixtureHost: Pick<SessionMixtureHost, "commitPersisted"> | undefined;
 	#activeToolExecutionUpdates = new Map<string, Extract<AgentSessionEvent, { type: "tool_execution_update" }>>();
 	#runStateListeners = new Set<(state: "running" | "idle") => void>();
 	#commandMetadataChangedListeners: CommandMetadataChangedListener[] = [];
@@ -2910,6 +2912,16 @@ export class AgentSession implements SettingsScope {
 		this.#emit({ type: "notice", level, message, source });
 	}
 
+	/** Forward a mixture run's event (trace card payload) to session listeners. */
+	emitMixtureEvent(event: MixtureSessionEvent): void {
+		this.#emit(event);
+	}
+
+	/** Bind the session's mixture host, which commits mixture responses once they are persisted. */
+	attachMixtureHost(host: Pick<SessionMixtureHost, "commitPersisted">): void {
+		this.#mixtureHost = host;
+	}
+
 	#recordToolExecutionStart(event: Extract<AgentEvent, { type: "tool_execution_start" }>): void {
 		const data: ToolExecutionStartData = {
 			toolCallId: event.toolCallId,
@@ -3344,6 +3356,9 @@ export class AgentSession implements SettingsScope {
 			}
 		} else {
 			this.#persistSessionMessageIfMissing(message);
+			// A mixture response is committed only once its entry is in the session: the
+			// commit advances the run's reporting watermark and input cursor.
+			if (message.role === "assistant") this.#mixtureHost?.commitPersisted(message);
 		}
 		this.#chronicler.onPrimaryMessagePersisted(message);
 	}

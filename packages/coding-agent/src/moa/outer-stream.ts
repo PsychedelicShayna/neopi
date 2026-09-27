@@ -36,6 +36,8 @@ export class OuterWriter {
 	#textIndex: number | undefined;
 	#textOpen = false;
 	#finished = false;
+	#held = false;
+	#pendingTerminal: (() => void) | undefined;
 
 	constructor(model: Model<Api>) {
 		this.message = {
@@ -101,6 +103,21 @@ export class OuterWriter {
 		this.stream.push({ type: "toolcall_end", contentIndex: index, toolCall: call, partial: this.message });
 	}
 
+	/**
+	 * Hold the terminal event until {@link releaseTerminal}: a consumer that reacts to
+	 * the terminal event (a retry, the next tool round) must find the run unlocked.
+	 */
+	holdTerminal(): void {
+		this.#held = true;
+	}
+
+	releaseTerminal(): void {
+		this.#held = false;
+		const push = this.#pendingTerminal;
+		this.#pendingTerminal = undefined;
+		push?.();
+	}
+
 	/** Push exactly one terminal event. */
 	finish(finish: OuterFinish): void {
 		if (this.#finished) return;
@@ -111,15 +128,18 @@ export class OuterWriter {
 		if (finish.usageBreakdown && finish.usageBreakdown.length > 0) message.usageBreakdown = finish.usageBreakdown;
 		if (finish.responseId) message.responseId = finish.responseId;
 		const outcome = finish.outcome;
+		let push: () => void;
 		if (outcome.kind === "done") {
 			message.stopReason = outcome.reason;
-			this.stream.push({ type: "done", reason: outcome.reason, message });
-			return;
+			push = () => this.stream.push({ type: "done", reason: outcome.reason, message });
+		} else {
+			message.stopReason = outcome.reason;
+			message.errorMessage = outcome.message;
+			if (outcome.status !== undefined) message.errorStatus = outcome.status;
+			if (outcome.errorId !== undefined) message.errorId = outcome.errorId;
+			push = () => this.stream.push({ type: "error", reason: outcome.reason, error: message });
 		}
-		message.stopReason = outcome.reason;
-		message.errorMessage = outcome.message;
-		if (outcome.status !== undefined) message.errorStatus = outcome.status;
-		if (outcome.errorId !== undefined) message.errorId = outcome.errorId;
-		this.stream.push({ type: "error", reason: outcome.reason, error: message });
+		if (this.#held) this.#pendingTerminal = push;
+		else push();
 	}
 }

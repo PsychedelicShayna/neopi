@@ -190,10 +190,12 @@ class MixtureCall {
 		const lease = this.#host.runs.acquire(key);
 		if (!lease) return this.#reject(`mixture run ${name} is busy`);
 		this.#entry = lease.entry;
+		this.#writer.holdTerminal();
 		try {
 			await this.#classify(key, requirement);
 		} finally {
 			lease.release();
+			this.#writer.releaseTerminal();
 		}
 	}
 

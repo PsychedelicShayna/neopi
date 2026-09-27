@@ -281,7 +281,9 @@ import { normalizePromptPath } from "./utils/prompt-path";
 import { buildNamedToolChoice } from "./utils/tool-choice";
 import { VibeSessionRegistry } from "./vibe/runtime";
 import { registerLocalInferenceApi } from "./tiny/local-inference-api";
-import { registerMixtureApi } from "./moa/provider";
+import { streamMixture } from "./moa/engine";
+import { createSessionMixtureHost } from "./moa/host";
+import { isMixtureModel, registerMixtureApi } from "./moa/provider";
 import { retainMixtureCatalog } from "./moa/registration";
 import { buildWorkspaceTree, type WorkspaceTree } from "./workspace-tree";
 
@@ -4004,7 +4006,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// only when a provider fetches them, never held as pixels here.
 			blobBroker,
 		);
-		const transformProviderContext = async (context: Context, transformModel: Model): Promise<Context> => {
+		const transformModelContext = async (
+			context: Context,
+			transformModel: Model,
+			reminder: DateCwdReminderInjector,
+		): Promise<Context> => {
 			let transformed = obfuscator ? obfuscateProviderContext(obfuscator, context) : context;
 			transformed = await snapcompactInline.transform(transformed, transformModel);
 			transformed = clampProviderContextImages(transformed, transformModel);
@@ -4019,13 +4025,26 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// their tool-schema prefix cache (#7404). Chat mode sends it only when
 			// `date` is re-included, without the cwd (the chat prompt carries that).
 			if (chatMode && !chatModeIncludes(chatMode, "date")) return transformed;
-			return dateCwdReminder.transform(
+			return reminder.transform(
 				transformed,
 				formatLocalCalendarDate(),
 				chatMode ? "" : normalizePromptPath(sessionManager.getCwd()),
 				chatMode !== undefined,
 			);
 		};
+		// A mixture is a synthetic model with no provider: its images, snapcompact frames,
+		// and URL decoration belong to each member's own request (the session mixture
+		// host runs the full pipeline per member). Only the model-neutral obfuscation runs
+		// here; the date/cwd reminder also moves to the members, because the stateful
+		// injector would otherwise fold it into the operator's prompt text.
+		const transformProviderContext = async (context: Context, transformModel: Model): Promise<Context> => {
+			if (isMixtureModel(transformModel)) {
+				return obfuscator ? obfuscateProviderContext(obfuscator, context) : context;
+			}
+			return transformModelContext(context, transformModel, dateCwdReminder);
+		};
+		const transformMemberContext = (context: Context, memberModel: Model): Promise<Context> =>
+			transformModelContext(context, memberModel, new DateCwdReminderInjector());
 		const onPayload = async (payload: unknown, model?: Model, signal?: AbortSignal) => {
 			return await extensionRunner.emitBeforeProviderRequest(payload, model, signal);
 		};
@@ -4103,6 +4122,17 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				preferWebsockets: streamOptions?.preferWebsockets ?? resolveOpenAIWebsocketPreference(settings),
 			});
 		};
+		// One mixture host per session, living only in the primary wrapper's closure (never in
+		// primaryStreamFn, which the auto-learn capture agent also uses).
+		const sessionMixtureHost = createSessionMixtureHost({
+			sessionManager,
+			modelRegistry,
+			settings,
+			stream: settingsAwareStreamFn,
+			prepareContext: transformMemberContext,
+			emit: event => session?.emitMixtureEvent(event),
+			notice: (level, message) => session?.emitNotice(level, message, "mixture"),
+		});
 		const codeModeState: { namespacesInfo?: unknown } = {};
 		const transformToolCallArguments = (args: Record<string, unknown>): Record<string, unknown> => {
 			let result = args;
@@ -4161,6 +4191,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 							error: err instanceof Error ? err.message : String(err),
 						});
 					}
+				}
+				if (isMixtureModel(streamModel)) {
+					return streamMixture(streamModel, context, streamOptions, sessionMixtureHost);
 				}
 				const externalThinking =
 					cfgExternalThinking.get(settings) &&
@@ -4443,6 +4476,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		});
 		hasSession = true;
 		credentialNoticeSession = session;
+		session.attachMixtureHost(sessionMixtureHost);
 		// A caller-supplied store belongs to the caller (the CLI keeps it in sync itself).
 		if (ownsAuthStorage) createAuthStorageSettingsSync(session, authStorage);
 		// One coalesced prompt rebuild for every prompt input (rule bucketing, the
