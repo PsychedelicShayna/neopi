@@ -322,9 +322,14 @@ Internals (one scrolling owner, A4):
   the primitive `HubFrame` uses at `packages/tui/src/overlays/hub-frame.ts:65-68`),
   then, unless collapsed, the content rendered via `renderLayoutContent(content,
   width, undefined)` (`geometry.ts:193-201`: natural height, no clipping),
-  then one blank separator. Each document row is tagged with `{ sectionId,
-  kind: "title" | "body" | "gap", bodyRow }` in a parallel array (the
-  row→section map).
+  then one blank separator. A **collapsed** section does not render its
+  body at all (6d7cc21d23); its visibility is decided by the row count its
+  body produced the last time it was expanded, so a section collapsed while
+  it had rows keeps its title row even if its content later empties, until
+  it is expanded again. A section is *visible* when it is expanded and its
+  body rendered at least one row, or collapsed with a last-known non-zero
+  body. Each document row is tagged with `{ sectionId, kind: "title" |
+  "body" | "gap", bodyRow }` in a parallel array (the row→section map).
 - **Viewport.** `scrollOffset` is re-clamped on every render with
   `clampScrollOffset(offset, documentRows, height)`
   (`packages/tui/src/components/scroll-viewport.ts:39-43`), so shrink,
@@ -334,10 +339,13 @@ Internals (one scrolling owner, A4):
   thumb from `scrollbarThumbRange(height, documentRows, scrollOffset)`
   (`:105-121`), as `ScrollView` does. Rows are `fitLayoutLine`d
   (`geometry.ts:184-191`) and padded to exactly `height` rows.
-- **Placeholder** (R2.3). With no registered sections, or when every
-  section's content renders zero rows, the document is one
-  `theme.fg("dim", "nothing to show")` row; the panel never asks to be
-  undocked, so a todo clear costs no history refresh.
+- **Placeholder** (R2.3). When no section is *visible* (in the sense of
+  the Document bullet: none registered, or every expanded section renders
+  zero rows and every collapsed section last rendered zero), the document
+  is one `theme.fg("dim", "nothing to show")` row; the panel never asks to
+  be undocked, so a todo clear costs no history refresh. A section collapsed
+  while it had rows therefore holds the panel out of the placeholder state
+  until it is expanded and found empty.
 - **Mouse.** `routeMouse(event, line, col)`: `row = line + scrollOffset`;
   wheel → `scrollBy(±3)`; a `title` row click → `toggleCollapsed`; a `body`
   row → `content.routeMouse(event, bodyRow, col)` when the content is
@@ -964,10 +972,13 @@ config file it MUST be TOML; YAML is banned for anything new.
 | `sidebar.width.max` | number | `48` | Maximum Width (columns) |
 | `sidebar.splitAt` | number | `110` | Dock Threshold — Terminals narrower than this hide the dock; the toggle opens the panel fullscreen instead |
 
-Validation in `applySettings`: `ratio` clamped to `[0.1, 0.6]`, `min ≤ max`,
-`splitAt ≥ min + chatMinWidth + dividerWidth`; out-of-range values warn once
-via the registry's warn-once diagnostics (`config/registry.ts:808-817`) and
-fall back to the default.
+Validation in `applySettings`, in this order: `ratio` clamped to
+`[0.1, 0.6]`; `min ≥ 1` and `max ≥ 1` (539a3485c6: `SplitPane` normalizes
+a non-positive bound to 0, which would leave the panel as its divider
+alone); then `min ≤ max`; then `splitAt ≥ min + chatMinWidth +
+dividerWidth`. A value that fails warns once via the registry's warn-once
+diagnostics (`config/registry.ts:808-817`) and falls back to its default
+(so `-1/-1` becomes `32/48`).
 
 `sidebar.enabled` is the value `toggle()` flips, so the dock state persists
 across sessions like `hideThinkingBlock`.
@@ -1171,7 +1182,7 @@ image protocol set as in `packages/tui/test/image-render.test.ts:58`; no
 | --- | --- |
 | exact height | `render(width)` returns exactly `height` rows for zero, one, and three sections at any `height`, including 1 and 0. Regression: the provider contract throw (`tui.ts:2667-2672`). |
 | scroll reaches the last row | three sections whose document is 3× `height`: `scrollBy(+height)` twice shows the last section's last row; the thumb is on the bottom rows; `scrollBy(+999)` clamps; after `setCollapsed` of the tallest section and after `setHeight(height + 10)` the offset is re-clamped and the last row stays visible. Regression: A4 — "N more" with nothing to scroll, or an offset past the end after shrink. |
-| empty placeholder | no sections, and one section rendering zero rows: exactly `height` rows with a single dim placeholder and no title rows. Regression: a blank column or a title with nothing under it. |
+| empty placeholder | no sections, and one expanded section rendering zero rows: exactly `height` rows with a single dim placeholder and no title rows. Then: a section with rows, collapsed, whose content is then emptied — the title row stays and no placeholder appears; expanding it renders zero body rows and the panel returns to the placeholder. Regression: a blank column, a title with nothing under it on an expanded section, or a collapsed title vanishing because its hidden body changed. |
 | collapse and mouse after scroll | with `scrollOffset > 0`, a click on a visible title row collapses **that** section (not the one at the unscrolled row); a body click reaches the content's `routeMouse` with the body-local row; a wheel event pans. Regression: hit-testing against unscrolled rows. |
 | section replace by id | `register` with an existing id replaces the content in place and keeps the order; `unregister` removes it. Regression: duplicate TODO sections after a session resume. |
 
