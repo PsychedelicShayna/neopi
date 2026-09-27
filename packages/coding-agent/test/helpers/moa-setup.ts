@@ -57,6 +57,8 @@ export interface MemberReply {
 	error?: { message: string; status?: number };
 	/** Wait for the caller's abort signal, then end with `error`/`reason: "aborted"`. */
 	waitForAbort?: boolean;
+	/** Optional usage meters the attempt reports beside tokens and USD. */
+	meters?: Pick<Usage, "premiumRequests" | "credits">;
 	/** Emit a tool call block before finishing. */
 	toolCall?: { name: string; arguments: Record<string, unknown> };
 }
@@ -67,8 +69,9 @@ export interface MemberCall {
 	options?: SimpleStreamOptions;
 }
 
-function usageFor(cost: number): Usage {
+function usageFor(cost: number, meters?: MemberReply["meters"]): Usage {
 	return {
+		...meters,
 		input: 100,
 		output: 50,
 		cacheRead: 0,
@@ -108,7 +111,7 @@ export class FakeMembers {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: usageFor(reply.cost ?? 0.01),
+			usage: usageFor(reply.cost ?? 0.01, reply.meters),
 			stopReason: "stop",
 			timestamp: Date.now(),
 		};

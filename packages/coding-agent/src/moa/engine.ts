@@ -79,6 +79,24 @@ const ERROR_PREFIX = {
 	unsupported: "toolchoice.unsupported",
 } as const;
 
+/** Add each reported counter of `add` into `total`; a counter no attempt reported stays absent. */
+function addCounters<T extends Record<string, number | undefined>>(
+	total: T | undefined,
+	add: T | undefined,
+): T | undefined {
+	if (!add) return total;
+	const sum: Record<string, number | undefined> = { ...total };
+	for (const [key, value] of Object.entries(add)) {
+		if (value !== undefined) sum[key] = (sum[key] ?? 0) + value;
+	}
+	return sum as T;
+}
+
+/**
+ * Sum one settled attempt into a response total. Every additive meter is kept
+ * (premium requests, credits, server tools, cache TTLs, orchestration);
+ * `contextTokens` is not additive and is set from the outer context instead.
+ */
 function addUsage(total: Usage, usage: Usage): void {
 	total.input += usage.input;
 	total.output += usage.output;
@@ -87,6 +105,16 @@ function addUsage(total: Usage, usage: Usage): void {
 	total.totalTokens += usage.totalTokens;
 	if (usage.reasoningTokens !== undefined)
 		total.reasoningTokens = (total.reasoningTokens ?? 0) + usage.reasoningTokens;
+	if (usage.premiumRequests !== undefined)
+		total.premiumRequests = (total.premiumRequests ?? 0) + usage.premiumRequests;
+	const credits = addCounters(total.credits, usage.credits);
+	if (credits) total.credits = credits;
+	const server = addCounters(total.server, usage.server);
+	if (server) total.server = server;
+	const cttl = addCounters(total.cttl, usage.cttl);
+	if (cttl) total.cttl = cttl;
+	const orchestration = addCounters(total.orchestration, usage.orchestration);
+	if (orchestration) total.orchestration = orchestration;
 	total.cost.input += usage.cost.input;
 	total.cost.output += usage.cost.output;
 	total.cost.cacheRead += usage.cost.cacheRead;

@@ -421,6 +421,42 @@ describe("member error, retry, and usage accounting", () => {
 		).toBe(false);
 		expect(reopened.getSessionStats().cost).toBeCloseTo(0.034, 10);
 	});
+
+	it("keeps premium requests and credits of every member attempt, live and after reload", async () => {
+		const sessionDir = tempDir.join("sessions");
+		const manager = SessionManager.create(tempDir.join("project"), sessionDir);
+		const session = await mixtureSession(DRAFT_THEN_EDIT_TOML, manager);
+		members.script("writer", {
+			text: "draft",
+			meters: { premiumRequests: 1, credits: { cost: 2, committedCost: 2 } },
+		});
+		members.script("editor", { text: "final", meters: { premiumRequests: 3, credits: { cost: 5, acuCost: 0.5 } } });
+		await session.sendUserMessage("question");
+
+		const outer = lastAssistant(session);
+		expect(outer.usage.premiumRequests).toBe(4);
+		expect(outer.usage.credits).toEqual({ cost: 7, committedCost: 2, acuCost: 0.5 });
+		const live = session.getSessionStats();
+		expect([live.premiumRequests, live.credits]).toEqual([4, { cost: 7, committedCost: 2, acuCost: 0.5 }]);
+
+		const file = manager.getSessionFile()!;
+		await session.dispose();
+		sessions.splice(0);
+		const reopened = await createMoaSession(fixture, {
+			sessionManager: await SessionManager.open(file, sessionDir),
+			settings: Settings.isolated(SETTINGS),
+		});
+		sessions.push(reopened);
+		const reloaded = reopened.getSessionStats();
+		expect([reloaded.premiumRequests, reloaded.credits]).toEqual([4, { cost: 7, committedCost: 2, acuCost: 0.5 }]);
+	});
+
+	it("leaves a meter absent when no member attempt reports it", async () => {
+		const session = await mixtureSession();
+		await session.sendUserMessage("question");
+		const usage = lastAssistant(session).usage;
+		expect(["premiumRequests", "credits", "server", "cttl", "orchestration"].filter(key => key in usage)).toEqual([]);
+	});
 });
 
 describe("caller abort", () => {
