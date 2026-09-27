@@ -326,9 +326,11 @@ Internals (one scrolling owner, A4):
   body at all (6d7cc21d23); its visibility is decided by the row count its
   body produced the last time it was expanded, so a section collapsed while
   it had rows keeps its title row even if its content later empties, until
-  it is expanded again. A section is *visible* when it is expanded and its
-  body rendered at least one row, or collapsed with a last-known non-zero
-  body. Each document row is tagged with `{ sectionId, kind: "title" |
+  it is expanded again. The exact predicate: `visible = expanded ?
+  bodyRows > 0 : (neverRendered || lastExpandedBodyRows > 0)` — the
+  last-known count starts as "never rendered" at registration, so a section
+  registered already collapsed shows its title until its first expansion
+  decides otherwise. Each document row is tagged with `{ sectionId, kind: "title" |
   "body" | "gap", bodyRow }` in a parallel array (the row→section map).
 - **Viewport.** `scrollOffset` is re-clamped on every render with
   `clampScrollOffset(offset, documentRows, height)`
@@ -977,8 +979,11 @@ Validation in `applySettings`, in this order: `ratio` clamped to
 a non-positive bound to 0, which would leave the panel as its divider
 alone); then `min ≤ max`; then `splitAt ≥ min + chatMinWidth +
 dividerWidth`. A value that fails warns once via the registry's warn-once
-diagnostics (`config/registry.ts:808-817`) and falls back to its default
-(so `-1/-1` becomes `32/48`).
+diagnostics (`config/registry.ts:808-817`) and falls back: `ratio`, `min`,
+and `max` to their defaults (so `-1/-1` becomes `32/48`); `splitAt` to
+`max(110, min + chatMinWidth + dividerWidth)` (A4, 9c350e0006), so the
+fallback itself always satisfies the constraint it replaces — a bare `110`
+would not when `min` is raised.
 
 `sidebar.enabled` is the value `toggle()` flips, so the dock state persists
 across sessions like `hideThinkingBlock`.
