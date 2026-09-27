@@ -25,6 +25,11 @@ export interface OutputPaneFormatOptions {
 	styleLine?: (line: string, index: number) => string;
 	/** Keep sixel payload rows byte-for-byte and show the complete payload. */
 	uncapSixel?: boolean;
+	/**
+	 * The leading rows continue a SIXEL payload whose start row the producer
+	 * no longer retains (bounded streaming storage).
+	 */
+	sixelContinuation?: boolean;
 	showHiddenMarker?: boolean;
 	showExpandHint?: boolean;
 	showExpandHintWhenUncapped?: boolean;
@@ -65,7 +70,9 @@ export function formatOutputPaneLines(options: OutputPaneFormatOptions, theme: T
 	const edge = options.edge ?? "head";
 	let rawLines = options.lines;
 	let sixelMask =
-		TERMINAL.imageProtocol === ImageProtocol.Sixel && rawLines.length > 0 ? getSixelLineMask(rawLines) : undefined;
+		TERMINAL.imageProtocol === ImageProtocol.Sixel && rawLines.length > 0
+			? getSixelLineMask(rawLines, options.sixelContinuation)
+			: undefined;
 	let hasSixel = sixelMask?.some(Boolean) ?? false;
 	if (hasSixel && getInlineImagePresentation() === "text") {
 		// A docked frame shows images as text. The mask spans the whole logical
@@ -254,7 +261,7 @@ export class OutputPane implements Component {
 
 	get hasSixel(): boolean {
 		if (TERMINAL.imageProtocol !== ImageProtocol.Sixel || this.#lines.length === 0) return false;
-		return getSixelLineMask(this.#lines).some(Boolean);
+		return getSixelLineMask(this.#lines, this.#options.sixelContinuation).some(Boolean);
 	}
 
 	getText(): string {

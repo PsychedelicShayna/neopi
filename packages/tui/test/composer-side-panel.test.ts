@@ -902,6 +902,41 @@ describe("Composer side panel: raw SIXEL passthrough", () => {
 		}
 	});
 
+	it("docked: a streamed payload longer than the retention cap never leaks continuation rows", async () => {
+		const h = await setup({ entries: 1, mode: "append" });
+		try {
+			h.composer.setSidePanel(h.panel, RIGHT);
+			await h.settle();
+			h.writes.length = 0;
+			// 150 payload rows: the streaming cap keeps only the last 100, so the
+			// retained rows no longer include the DCS start. Not completed.
+			const rows = ["\x1bPq#0;2;0;0;0", ...Array.from({ length: 148 }, () => "#1~~~~-"), "#0????\x1b\\"];
+			const block = new BashExecutionComponent("printf big-sixel", h.composer.ui, false);
+			block.appendOutput(`before\n${rows.join("\n")}\nafter`);
+			h.transcript.addChild(block);
+			h.composer.ui.requestRender();
+			await h.settle();
+			for (let index = 1; index < 30; index++) h.transcript.addChild(new Text(ledgerLine(index), 0, 0));
+			h.composer.ui.requestRender();
+			await h.settle();
+			expect(raw(h.writes.join(""))).toBe(false);
+			// The text after the payload still paints: only payload rows were blanked.
+			expect(Bun.stripANSI(h.writes.join(""))).toContain("after");
+			expect([...h.history(), ...h.viewport()].some(row => row.includes("~~~~") || row.includes("????"))).toBe(
+				false,
+			);
+
+			// Completed and undocked, the surviving raw rows pass through again.
+			block.setComplete(0, false);
+			h.writes.length = 0;
+			h.composer.setSidePanel(undefined);
+			await h.settle();
+			expect(h.writes.join("")).toContain("#1~~~~-");
+		} finally {
+			h.composer.stop();
+		}
+	});
+
 	it("(5d) undocked: all four payload rows pass through live and on retirement", async () => {
 		const h = await setup({ entries: 1, mode: "append" });
 		try {
