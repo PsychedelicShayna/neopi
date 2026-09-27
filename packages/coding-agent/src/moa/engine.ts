@@ -31,7 +31,7 @@ import type {
 import { mixtureEdgeId } from "@oh-my-pi/pi-tui/overlays/mixture-types";
 import { logger } from "@oh-my-pi/pi-utils";
 import { thinkingFromContent } from "../session/messages";
-import { fitHopRequest, truncateToTokens } from "./budget";
+import { fitHopRequest, type HopParts, truncateToTokens } from "./budget";
 import {
 	DEFAULT_EDGE_ENVELOPE,
 	ENTRY_ENVELOPE,
@@ -420,12 +420,17 @@ class MixtureCall {
 		const systemPrompt = [...(member.inherit ? (this.#context.systemPrompt ?? []) : []), member.rolePrompt].filter(
 			text => text !== "",
 		);
-		const frame = renderEnvelope(template, { ...envelopeContext, conversation: "", x: {} });
+		const assemble = (parts: HopParts) =>
+			renderEnvelope(template, {
+				...envelopeContext,
+				conversation: parts.conversation ?? "",
+				x: { output: parts.output, input: parts.input, reasoning: parts.reasoning, tool_trace: parts.toolTrace },
+			});
 		const fitted = fitHopRequest({
 			target: member.model,
 			maxTokens: member.maxTokens,
 			systemPrompt,
-			frame,
+			assemble,
 			parts: { ...partsOf(envelopeContext.x), conversation: envelopeContext.conversation },
 			hopMessages: [],
 			partBudgetTokens: cfgMoaPartBudgetTokens.get(settings),
@@ -436,17 +441,7 @@ class MixtureCall {
 				message: `${ERROR_PREFIX.contextExceeded}: member ${member.id}'s hop needs ${fitted.neededTokens} tokens but ${fitted.availableTokens} fit; lower max_traversals or narrow the tool allow-list`,
 			});
 		}
-		const fittedParts = fitted.parts;
-		const input = renderEnvelope(template, {
-			...envelopeContext,
-			conversation: fittedParts.conversation ?? "",
-			x: {
-				output: fittedParts.output,
-				input: fittedParts.input,
-				reasoning: fittedParts.reasoning,
-				tool_trace: fittedParts.toolTrace,
-			},
-		});
+		const input = fitted.envelope;
 
 		const hop: HopRecord = {
 			index: run.hops.length + 1,

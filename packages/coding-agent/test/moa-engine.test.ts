@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { Tokenizer } from "@oh-my-pi/pi-agent-core";
 import {
 	type AssistantMessage,
 	clearCustomApis,
@@ -10,6 +11,7 @@ import {
 } from "@oh-my-pi/pi-ai";
 import { streamSimple } from "@oh-my-pi/pi-ai/stream";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { fitHopRequest, type HopParts, truncateToTokens } from "@oh-my-pi/pi-coding-agent/moa/budget";
 import { streamMixture } from "@oh-my-pi/pi-coding-agent/moa/engine";
 import { createSessionMixtureHost, type SessionMixtureHost } from "@oh-my-pi/pi-coding-agent/moa/host";
 import { MIXTURE_API, MixtureCatalog, registerMixtureApi } from "@oh-my-pi/pi-coding-agent/moa/provider";
@@ -716,5 +718,101 @@ describe("engine contract through a session host", () => {
 		expect(envelopeRequest(members.callsTo("writer")[1]?.context.messages[0])).toBe("two");
 		expect(envelope).toContain("User: one");
 		expect(envelope).toContain("Assistant: editor reply");
+	});
+});
+
+describe("hop fitting", () => {
+	const SYSTEM = ["Tighten the draft."];
+	// Varied words: a repeated phrase would trip the member stream's loop detector.
+	const LONG = Array.from({ length: 3_000 }, (_, index) => `word${index}`).join(" ");
+	const PARTS: HopParts = { output: LONG, input: LONG, reasoning: LONG, conversation: LONG };
+	const RESERVE = 100;
+
+	function assemble(parts: HopParts): string {
+		return [
+			"You are the editor.",
+			parts.output ? `<output>\n${parts.output}\n</output>` : "",
+			parts.input ? `<input>\n${parts.input}\n</input>` : "",
+			parts.reasoning ? `<reasoning>\n${parts.reasoning}\n</reasoning>` : "",
+			parts.conversation ? `<conversation>\n${parts.conversation}\n</conversation>` : "",
+		].join("\n");
+	}
+
+	async function target(extra: number) {
+		await ensureFixture();
+		const base = fixture.registry.find("fake", "editor")!;
+		const tokenizer = new Tokenizer(base);
+		const fixed = tokenizer.countTokens([...SYSTEM, assemble({})]);
+		return { model: { ...base, contextWindow: RESERVE + fixed + extra }, tokenizer, fixed };
+	}
+
+	it.each([0, 3, 12, 40])(
+		"never assembles more than the window allows with %i tokens left after the frame",
+		async extra => {
+			const { model, tokenizer, fixed } = await target(extra);
+			const fitted = fitHopRequest({
+				target: model,
+				maxTokens: RESERVE,
+				systemPrompt: SYSTEM,
+				assemble,
+				parts: PARTS,
+				hopMessages: [],
+				partBudgetTokens: 4_000,
+			});
+			if (!fitted.ok) throw new Error(`expected a fit, needed ${fitted.neededTokens}`);
+			expect(tokenizer.countTokens([...SYSTEM, fitted.envelope])).toBeLessThanOrEqual(fixed + extra);
+			expect(fitted.envelope).toBe(assemble(fitted.parts));
+		},
+	);
+
+	it("refuses the hop, reporting the frame's need, when the frame alone does not fit", async () => {
+		const { model, fixed } = await target(-1);
+		const fitted = fitHopRequest({
+			target: model,
+			maxTokens: RESERVE,
+			systemPrompt: SYSTEM,
+			assemble,
+			parts: PARTS,
+			hopMessages: [],
+			partBudgetTokens: 4_000,
+		});
+		expect(fitted).toEqual({ ok: false, neededTokens: fixed, availableTokens: fixed - 1 });
+	});
+
+	it.each([0, 1, 5, 9, 50])("truncates within a budget of %i tokens, omitting what cannot fit", async budget => {
+		const tokenizer = new Tokenizer((await target(0)).model);
+		const truncated = truncateToTokens(LONG, budget, tokenizer);
+		expect(tokenizer.countTokens(truncated)).toBeLessThanOrEqual(budget);
+		if (truncated) expect(truncated).toContain("[… truncated");
+	});
+
+	it("hands a tight editor a request that fits its window, with the draft truncated", async () => {
+		const tight = DRAFT_THEN_EDIT_TOML.replace('model = "fake/editor"', 'model = "tight/editor"');
+		await ensureFixture(tight);
+		fixture.registry.registerProvider("tight", {
+			baseUrl: "http://127.0.0.1:1/v1",
+			apiKey: "k",
+			api: "moa-fake",
+			models: [
+				{
+					id: "editor",
+					name: "editor",
+					reasoning: true,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 700,
+					maxTokens: 100,
+				},
+			],
+		});
+		const session = await mixtureSession(tight);
+		members.script("writer", { text: LONG });
+		await session.sendUserMessage("go");
+		const call = members.calls.find(entry => entry.model.provider === "tight")!;
+		const tokenizer = new Tokenizer(call.model);
+		const sent = tokenizer.countTokens([...(call.context.systemPrompt ?? []), userText(call.context.messages[0])]);
+		expect(sent).toBeLessThanOrEqual(600);
+		expect(userText(call.context.messages[0])).toContain("[… truncated");
+		expect(lastAssistant(session).stopReason).toBe("stop");
 	});
 });
