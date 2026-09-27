@@ -78,6 +78,8 @@ export interface ResolvedMixture {
 	members: Record<string, ResolvedMember>;
 	/** Every preset the mixture references, inlined, keyed by preset name. */
 	envelopes: Record<string, string>;
+	/** Document-level presets the definition was resolved against; run start re-resolves with them. */
+	presets: { envelopes: Record<string, string>; roles: Record<string, string> };
 	/** What the graph can actually reach. */
 	uses: { judge: boolean; summary: boolean; slicer: boolean };
 	judgePlan?: RoleChainCandidate[];

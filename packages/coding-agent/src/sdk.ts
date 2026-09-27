@@ -281,6 +281,8 @@ import { normalizePromptPath } from "./utils/prompt-path";
 import { buildNamedToolChoice } from "./utils/tool-choice";
 import { VibeSessionRegistry } from "./vibe/runtime";
 import { registerLocalInferenceApi } from "./tiny/local-inference-api";
+import { registerMixtureApi } from "./moa/provider";
+import { retainMixtureCatalog } from "./moa/registration";
 import { buildWorkspaceTree, type WorkspaceTree } from "./workspace-tree";
 
 import {
@@ -1496,6 +1498,7 @@ export function createAutoLearnCaptureRunner(
  */
 export async function createAgentSession(options: CreateAgentSessionOptions = {}): Promise<CreateAgentSessionResult> {
 	registerLocalInferenceApi();
+	registerMixtureApi();
 	const extensionRoots = options.extensionRoots?.();
 	const explicit = extensionRoots?.explicit ?? options.additionalExtensionPaths ?? [];
 	const mode = extensionRoots?.mode ?? (options.disableExtensionDiscovery ? "explicit-only" : "merge");
@@ -2516,6 +2519,17 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// cache that `npi models find` uses before the online refresh continues in
 		// the background.
 		await modelRegistry.refreshRuntimeProviders("offline");
+		// Mixtures register after extension providers and runtime hydration, so member
+		// selectors resolve against the full catalog and session-model restore below sees
+		// `mixture/<name>`. The catalog belongs to the registry: a subagent sharing it only
+		// retains, and the provider is unregistered when the last holder releases.
+		const mixtureOwner = `session:${sessionManager.getSessionId()}:${Bun.randomUUIDv7()}`;
+		const mixtureCatalog = await logger.time("retainMixtureCatalog", () =>
+			retainMixtureCatalog(mixtureOwner, { cwd, agentDir, registry: modelRegistry, settings }),
+		);
+		const releaseMixtureCatalog = () => mixtureCatalog.release(mixtureOwner);
+		startupCleanup.defer(releaseMixtureCatalog);
+		disposeCallbacks.add(releaseMixtureCatalog);
 		// Online runtime discovery must not steal the event loop from the first UI
 		// frame. Explicit deferred model selectors still start it immediately
 		// because they await it below; normal UI startup receives a one-shot

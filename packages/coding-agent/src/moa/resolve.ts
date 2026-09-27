@@ -208,5 +208,6 @@ export function resolveMixture(input: MixtureDefinition, ctx: ResolveMixtureCont
 		}),
 	).toString(16);
 
-	return { definition, members, envelopes, uses, judgePlan, readOnlyTools, issues, revision };
+	const presets = { envelopes: { ...ctx.documentEnvelopes }, roles: { ...ctx.documentRoles } };
+	return { definition, members, envelopes, presets, uses, judgePlan, readOnlyTools, issues, revision };
 }
