@@ -330,6 +330,34 @@ class Block implements Component {
 }
 
 describe("Composer side panel: overlays, hover, clicks, cursor", () => {
+	it("paints the divider at the join column on every row, status line included", async () => {
+		const esc = String.fromCharCode(27);
+		// A status-line-shaped row: background SGR left open, an OSC 8 hyperlink,
+		// wide glyphs, and rule characters running past the chat width.
+		const status = `${esc}[48;2;15;18;22m π > ${esc}]8;;file:///tmp${esc}\\🌳 repo${esc}]8;;${esc}\\ ▶${"─".repeat(200)}`;
+		const h = await setup({ entries: 3, chrome: [new Text("EDITOR", 0, 0), new Text(status, 0, 0)] });
+		try {
+			h.composer.setSidePanel(h.panel, RIGHT);
+			await h.settle();
+			const dividerCol = h.composer.sidePanelGeometry()?.dividerCol;
+			expect(dividerCol).toBe(81);
+			const view = h.term.getViewport();
+			expect(view.some(row => row.includes("π >"))).toBe(true);
+			for (const row of view) {
+				// Divider cells " │" at columns 81–82 (the VT trims trailing blanks).
+				let col = 0;
+				let found = "";
+				for (const ch of row) {
+					if (col >= 81 && col < 83) found += ch;
+					col += Bun.stringWidth(ch);
+				}
+				expect(found).toBe(" │");
+			}
+		} finally {
+			h.composer.stop();
+		}
+	});
+
 	it("composites a non-fullscreen overlay across both columns and restores them", async () => {
 		const h = await setup({ entries: 5 });
 		try {
