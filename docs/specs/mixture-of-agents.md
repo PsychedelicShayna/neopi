@@ -597,10 +597,13 @@ export interface Settlement {
   attempt: string;                      // unique per billed attempt
   kind: "member" | "judge" | "summary" | "slicer";
   hop?: number;
+  api: string;                          // transport that served the attempt: AssistantMessage.api, JudgmentResult.api
   provider: string;
   model: string;
   usage: Usage;                         // packages/catalog/src/types.ts
-  failed?: boolean;
+  stopReason: StopReason;               // the attempt's own terminal: "stop" | "length" | "toolUse" | "error" | "aborted"; a judgment is "stop" on an answer, "error" on a thrown failure
+  errorMessage?: string;                // when stopReason is "error" | "aborted"
+  failed?: boolean;                     // stopReason === "error" || stopReason === "aborted"
   /**
    * Settled after the request's outer response had already been finished
    * (§4.5 abort finalization). Never inside any outer response's report range;
@@ -1344,7 +1347,10 @@ outer response will ever carry it; the engine flags it `late: true`, fires
 `onSettlement` (broker, exactly once, as for any attempt) and
 `onLateSettlement`. The session host implements `onLateSettlement` by
 appending **one** `model_usage` entry
-(`sessionManager.appendModelUsage({ purpose: "moa", provider, model, usage }, { sessionId, parentId: leaf })`,
+(`sessionManager.appendModelUsage({ purpose: "moa", api, provider, model, usage, stopReason, errorMessage }, { sessionId, parentId: leaf })`,
+every field taken from the `Settlement` itself, so the ledger records the
+attempt's real transport and terminal (a late member call that ended in a
+genuine `error` is journaled as `error`, not as `aborted`);
 the same off-transcript ledger `journalJudgmentUsage` uses,
 `packages/coding-agent/src/judgment/index.ts:77-86`), **only if the run is
 still current**: `runs.owns(run)` on the host's store and
@@ -2748,6 +2754,21 @@ None open. Every question raised in rounds 1 to 3 is answered in §15.
 - No task board; the `task` tool and hub messaging are untouched.
 
 ## 19. Revision log
+
+### Amendment 6.3 (MoaImpl3: `model_usage` requires `api` and `stopReason`)
+
+- `Settlement` gains `api`, `stopReason`, and optional `errorMessage`,
+  populated at each settle site from the settled result (`AssistantMessage.api`
+  / `.stopReason` for member, summary, and slicer attempts; `JudgmentResult.api`
+  and `"stop"` / `"error"` for judgments). `failed` is now defined as
+  `stopReason` being `error` or `aborted`.
+- The late-settlement journal passes those fields through to
+  `appendModelUsage` (`ModelUsageEntry` requires `api` and `stopReason`,
+  `packages/coding-agent/src/session/session-entries.ts:81-92`).
+- Rejected: deriving `api` from the hop's member model in the host (wrong for
+  judge, summary, and slicer settlements, which have no hop) and deriving
+  `stopReason` as `failed ? "aborted" : "stop"` (misfiles a late genuine
+  `error` or `length` as an abort). The ledger records what happened.
 
 ### Amendment 6.2 (Astra M1-A1: Esc races the engine's abort)
 
