@@ -19,7 +19,7 @@ import { formatModelRoleAlias } from "../config/model-roles";
 import { getModelMatchPreferences, resolveModelRoleValue } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import chainInputWithContext from "../prompts/chains/input-with-context.md" with { type: "text" };
-import { deobfuscateToolArguments, obfuscateMessages, obfuscateProviderContext } from "../secrets/message-transform";
+import { obfuscateMessages, obfuscateProviderContext } from "../secrets/message-transform";
 import type { SecretObfuscator } from "../secrets/obfuscator";
 import chainSystemPrompt from "../prompts/chains/system.md" with { type: "text" };
 import { estimateToolSchemaTokens } from "@oh-my-pi/pi-tui/status-line/context-usage";
@@ -247,9 +247,9 @@ export async function runChainStep(
 						}
 					: streamOptions,
 			),
-		// ...and placeholders the model copies into a tool call become real values before it runs.
-		transformToolCallArguments:
-			hidesSecrets && obfuscator ? args => deobfuscateToolArguments(obfuscator, args) : undefined,
+		// Tool calls keep placeholders as the model wrote them: a chain model reads the whole
+		// transcript and may be prompt-injected, so restoring secrets would let it send them out
+		// through a granted egress tool (web_search needs no approval).
 		intentTracing: false,
 	});
 	agent.setDisableReasoning(shouldDisableReasoning(thinkingLevel));
