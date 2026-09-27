@@ -1,9 +1,24 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import {
+	getInlineImagePresentation,
+	Image,
+	type ImageBudget,
+	setInlineImagePresentation,
+} from "@oh-my-pi/pi-tui/components/image";
+import { getKittyGraphics, setKittyGraphics } from "@oh-my-pi/pi-tui/kitty-graphics";
+import {
+	type CellDimensions,
+	getCellDimensions,
+	ImageProtocol,
+	setCellDimensions,
+	TERMINAL,
+} from "@oh-my-pi/pi-tui/terminal-capabilities";
+import { BashExecutionComponent } from "@oh-my-pi/pi-tui/chat/bash-execution";
 import { SidePanel } from "@oh-my-pi/pi-tui/chrome/side-panel";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { COMPOSER_DEFAULTS, Composer, type SidePanelDock } from "@oh-my-pi/pi-tui/prompt/composer";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import { type Component, type ResizeScrollbackMode, Text } from "@oh-my-pi/pi-tui";
+import { type Component, type ResizeScrollbackMode, type TerminalFramePlan, Text, TUI } from "@oh-my-pi/pi-tui";
 import { withoutTerminalMultiplexer } from "./terminal-multiplexer-environment";
 import { VirtualRenderScheduler } from "./virtual-render-scheduler";
 import { VirtualTerminal } from "./virtual-terminal";
@@ -25,6 +40,7 @@ interface Harness {
 	transcript: TranscriptContainer;
 	panel: SidePanel;
 	writes: string[];
+	scheduler: VirtualRenderScheduler;
 	settle(): Promise<void>;
 	/** Native scrollback above the live screen, as plain text rows. */
 	history(): string[];
@@ -68,6 +84,7 @@ async function setup(
 		transcript,
 		panel,
 		writes,
+		scheduler,
 		settle,
 		history: () => {
 			const buffer = term.getScrollBuffer();
@@ -433,3 +450,534 @@ describe("Composer side panel: overlays, hover, clicks, cursor", () => {
 		}
 	});
 });
+
+const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGNgAAAAAgABSK+kcQAAAABJRU5ErkJggg==";
+
+interface KittyCommand {
+	a: string | undefined;
+	d: string | undefined;
+	i: number;
+	p: number | undefined;
+}
+
+/** Every Kitty graphics command in `data`, in order. */
+function kittyCommands(data: string): KittyCommand[] {
+	const commands: KittyCommand[] = [];
+	for (const match of data.matchAll(/\x1b_G([^;\x1b]*)(?:;[^\x1b]*)?\x1b\\/g)) {
+		const fields = new Map(match[1]!.split(",").map(field => field.split("=") as [string, string]));
+		commands.push({
+			a: fields.get("a"),
+			d: fields.get("d"),
+			i: Number(fields.get("i")),
+			p: fields.has("p") ? Number(fields.get("p")) : undefined,
+		});
+	}
+	return commands;
+}
+
+/** A transcript image block; `live` keeps it an active (non-retirable) block. */
+class ImageBlock implements Component {
+	readonly image: Image;
+	constructor(
+		budget: ImageBudget,
+		key: string,
+		rows: number,
+		private readonly live = false,
+	) {
+		this.image = new Image(
+			PNG,
+			"image/png",
+			{ fallbackColor: text => text },
+			{ maxWidthCells: rows, maxHeightCells: rows, budget, imageKey: key },
+			{ widthPx: rows * 10, heightPx: rows * 10 },
+		);
+	}
+	isTranscriptBlockFinalized(): boolean {
+		return !this.live;
+	}
+	render(width: number): readonly string[] {
+		return this.image.render(width);
+	}
+	invalidate(): void {
+		this.image.invalidate();
+	}
+}
+
+describe("Composer side panel: inline images", () => {
+	const terminal = TERMINAL as unknown as { id: string; imageProtocol: ImageProtocol | null };
+	const originalProtocol = TERMINAL.imageProtocol;
+	const originalId = TERMINAL.id;
+	const originalGraphics = { ...getKittyGraphics() };
+	let originalCells: CellDimensions;
+
+	beforeEach(() => {
+		originalCells = { ...getCellDimensions() };
+		setCellDimensions({ widthPx: 10, heightPx: 10 });
+		terminal.imageProtocol = ImageProtocol.Kitty;
+		terminal.id = "xterm";
+		setKittyGraphics({ unicodePlaceholders: false });
+	});
+
+	afterEach(() => {
+		setCellDimensions(originalCells);
+		terminal.imageProtocol = originalProtocol;
+		terminal.id = originalId;
+		setKittyGraphics(originalGraphics);
+	});
+
+	function idOf(h: Harness, key: string): number {
+		return h.composer.ui.imageBudget.acquireId(key);
+	}
+
+	/**
+	 * Whether the terminal holds a placement of `id`. The VT engine reports a
+	 * placement's row as of its emission (scrolling does not move it), so
+	 * presence is the observable; rows are asserted through the painted text.
+	 */
+	function placed(h: Harness, id: number): boolean {
+		return h.term.graphicsPlacements().some(placement => placement.imageId === id);
+	}
+
+	for (const mode of ["append", "preserve"] as const) {
+		it(`(1) ${mode}: deletes a fully live placement once with d=i and re-places it without a retransmit`, async () => {
+			const h = await setup({ entries: 2, mode });
+			try {
+				h.transcript.addChild(new ImageBlock(h.composer.ui.imageBudget, "one", 4));
+				h.composer.ui.requestRender();
+				await h.settle();
+				const id = idOf(h, "one");
+				expect(placed(h, id)).toBe(true);
+				const placementId = h.term.graphicsPlacements().find(placement => placement.imageId === id)?.placementId;
+
+				h.writes.length = 0;
+				h.composer.setSidePanel(h.panel, RIGHT);
+				await h.settle();
+				const dock = kittyCommands(h.writes.join(""));
+				expect(dock.filter(command => command.a === "d")).toEqual([{ a: "d", d: "i", i: id, p: placementId }]);
+				expect(placed(h, id)).toBe(false);
+				expect(h.viewport().some(row => row.includes("image/png"))).toBe(true);
+
+				h.writes.length = 0;
+				h.composer.setSidePanel(undefined);
+				await h.settle();
+				const undock = kittyCommands(h.writes.join(""));
+				expect(undock.some(command => command.a === "p" && command.i === id)).toBe(true);
+				expect(undock.some(command => (command.a === "t" || command.a === "T") && command.i === id)).toBe(false);
+				expect(placed(h, id)).toBe(true);
+			} finally {
+				h.composer.stop();
+			}
+		});
+	}
+
+	it("(1b)(3)(4) rebuild: the dock reset deletes all, docked images stay text, undock retransmits", async () => {
+		const h = await setup({ entries: 2, mode: "rebuild" });
+		try {
+			h.transcript.addChild(new ImageBlock(h.composer.ui.imageBudget, "one", 4));
+			h.composer.ui.requestRender();
+			await h.settle();
+			const id = idOf(h, "one");
+			expect(placed(h, id)).toBe(true);
+
+			h.writes.length = 0;
+			h.composer.setSidePanel(h.panel, RIGHT);
+			await h.settle();
+			const dock = kittyCommands(h.writes.join(""));
+			expect(dock.some(command => command.a === "d" && command.d === "A")).toBe(true);
+			expect(dock.some(command => command.a === "d" && command.d === "i")).toBe(false);
+			expect(dock.some(command => command.a === "p")).toBe(false);
+			expect(h.term.graphicsPlacements()).toEqual([]);
+			expect(h.viewport().some(row => row.includes("image/png"))).toBe(true);
+
+			// (3) An image arriving while docked renders text and places nothing.
+			h.writes.length = 0;
+			h.transcript.addChild(new ImageBlock(h.composer.ui.imageBudget, "two", 3));
+			h.composer.ui.requestRender();
+			await h.settle();
+			const second = idOf(h, "two");
+			expect(kittyCommands(h.writes.join("")).filter(command => command.i === second)).toEqual([]);
+			expect(h.term.graphicsPlacements()).toEqual([]);
+
+			// (4) Undock: the reset dropped transmit tracking, so the replay re-sends the data.
+			h.writes.length = 0;
+			h.composer.setSidePanel(undefined);
+			await h.settle();
+			const undock = kittyCommands(h.writes.join(""));
+			for (const image of [id, second]) {
+				expect(undock.some(command => command.a === "t" && command.i === image)).toBe(true);
+				expect(undock.some(command => command.a === "p" && command.i === image)).toBe(true);
+				expect(placed(h, image)).toBe(true);
+			}
+		} finally {
+			h.composer.stop();
+		}
+	});
+
+	it("(1c) an image introduced by a scrolling paint is live and deleted once on dock", async () => {
+		const h = await setup({ entries: 30, mode: "append" });
+		try {
+			const before = h.history().length;
+			h.transcript.addChild(new ImageBlock(h.composer.ui.imageBudget, "scroll", 6));
+			h.composer.ui.requestRender();
+			await h.settle();
+			expect(h.history().length).toBeGreaterThan(before);
+			const id = idOf(h, "scroll");
+			expect(placed(h, id)).toBe(true);
+
+			h.writes.length = 0;
+			h.composer.setSidePanel(h.panel, RIGHT);
+			await h.settle();
+			const deletes = kittyCommands(h.writes.join("")).filter(command => command.a === "d");
+			expect(deletes).toEqual([{ a: "d", d: "i", i: id, p: 1 }]);
+			expect(placed(h, id)).toBe(false);
+		} finally {
+			h.composer.stop();
+		}
+	});
+
+	it("(1d) an image first drawn mid-scroll records its post-scroll row and is deleted once on dock", async () => {
+		const h = await setup({ rows: 10, mode: "append" });
+		try {
+			// One paint: 20 one-row entries retire while a 5-row image lands at viewport rows 0–4.
+			for (let index = 0; index < 20; index++) h.transcript.addChild(new Text(`S${index}`, 0, 0));
+			h.transcript.addChild(new ImageBlock(h.composer.ui.imageBudget, "mid", 5));
+			for (let index = 0; index < 2; index++) h.transcript.addChild(new Text(`T${index}`, 0, 0));
+			h.writes.length = 0;
+			h.composer.ui.requestRender();
+			await h.settle();
+			const id = idOf(h, "mid");
+			const placement = h.term.graphicsPlacements().find(entry => entry.imageId === id);
+			expect(placement?.numRows).toBe(5);
+			// The entries retired above; the block's reserved rows fill viewport rows 0–4.
+			expect(h.history().filter(row => /^S\d+$/.test(row))).toHaveLength(20);
+			expect(h.viewport()).toEqual(["", "", "", "", "", "", "T0", "", "T1", "EDITOR"]);
+
+			h.writes.length = 0;
+			h.composer.setSidePanel(h.panel, { ...RIGHT, splitAt: 100 });
+			await h.settle();
+			const deletes = kittyCommands(h.writes.join("")).filter(command => command.a === "d");
+			expect(deletes).toEqual([{ a: "d", d: "i", i: id, p: placement?.placementId }]);
+		} finally {
+			h.composer.stop();
+		}
+	});
+
+	for (const mode of ["append", "preserve"] as const) {
+		it(`(2) ${mode}: an image scrolled into scrollback is never deleted on dock`, async () => {
+			const h = await setup({ entries: 2, mode });
+			try {
+				h.transcript.addChild(new ImageBlock(h.composer.ui.imageBudget, "archived", 4));
+				h.composer.ui.requestRender();
+				await h.settle();
+				const id = idOf(h, "archived");
+				for (let index = 2; index < 40; index++) h.transcript.addChild(new Text(ledgerLine(index), 0, 0));
+				h.composer.ui.requestRender();
+				await h.settle();
+				// The block's rows (after two entries) are now far above the live screen.
+				expect(entryRows(h.history()).length).toBeGreaterThan(20);
+				expect(placed(h, id)).toBe(true);
+				const history = h.history();
+
+				h.writes.length = 0;
+				h.composer.setSidePanel(h.panel, RIGHT);
+				await h.settle();
+				const deletes = kittyCommands(h.writes.join("")).filter(command => command.a === "d");
+				expect(deletes).toEqual([]);
+				expect(placed(h, id)).toBe(true);
+				expect(h.history().slice(0, history.length)).toEqual(history);
+			} finally {
+				h.composer.stop();
+			}
+		});
+	}
+
+	it("(2b) a placement known only from a resize-buffer paint is never deleted on dock", async () => {
+		const h = await setup({ entries: 2, mode: "append" });
+		try {
+			h.writes.length = 0;
+			h.term.resize(118, 24);
+			await h.settle();
+			// The terminal borrowed the alternate buffer for the resize; the image is first
+			// placed there, with no normal-screen attach row.
+			h.transcript.addChild(new ImageBlock(h.composer.ui.imageBudget, "alt", 3));
+			h.composer.ui.requestRender();
+			await h.settle();
+			const id = idOf(h, "alt");
+			const borrowed = h.writes.join("");
+			expect(borrowed).toContain("\x1b[?1049h");
+			expect(kittyCommands(borrowed).some(command => command.a === "p" && command.i === id)).toBe(true);
+
+			h.writes.length = 0;
+			h.composer.setSidePanel(h.panel, RIGHT);
+			await h.scheduler.advance(h.term, 500);
+			const settled = h.writes.join("");
+			expect(settled).toContain("\x1b[?1049l");
+			expect(h.composer.sidePanelDocked).toBe(true);
+			expect(kittyCommands(settled).filter(command => command.a === "d")).toEqual([]);
+			expect(h.viewport().some(row => row.includes("image/png"))).toBe(true);
+		} finally {
+			h.composer.stop();
+		}
+	});
+
+	it("(6) an image in a fullscreen overlay above the dock renders as a graphic", async () => {
+		const h = await setup({ entries: 2, mode: "append" });
+		try {
+			h.composer.setSidePanel(h.panel, RIGHT);
+			await h.settle();
+			const modal = new ImageBlock(h.composer.ui.imageBudget, "modal", 4);
+			h.writes.length = 0;
+			const handle = h.composer.ui.showOverlay(modal, { fullscreen: true });
+			await h.settle();
+			const id = idOf(h, "modal");
+			const commands = kittyCommands(h.writes.join(""));
+			expect(commands.some(command => command.a === "p" && command.i === id)).toBe(true);
+			handle.hide();
+			await h.settle();
+			expect(h.composer.sidePanelDocked).toBe(true);
+		} finally {
+			h.composer.stop();
+		}
+	});
+});
+
+describe("Composer side panel: raw SIXEL passthrough", () => {
+	const terminal = TERMINAL as unknown as { imageProtocol: ImageProtocol | null };
+	const originalProtocol = TERMINAL.imageProtocol;
+	const originalForce = Bun.env.PI_FORCE_IMAGE_PROTOCOL;
+	const originalAllow = Bun.env.PI_ALLOW_SIXEL_PASSTHROUGH;
+	const PAYLOAD = "\x1bPq#0;2;0;0;0\n#1~~~~-\n#1@@@@-\n#0????\x1b\\";
+	const LABEL = "[image omitted while docked]";
+
+	beforeEach(() => {
+		terminal.imageProtocol = ImageProtocol.Sixel;
+		Bun.env.PI_FORCE_IMAGE_PROTOCOL = "sixel";
+		Bun.env.PI_ALLOW_SIXEL_PASSTHROUGH = "1";
+	});
+
+	afterEach(() => {
+		terminal.imageProtocol = originalProtocol;
+		if (originalForce === undefined) delete Bun.env.PI_FORCE_IMAGE_PROTOCOL;
+		else Bun.env.PI_FORCE_IMAGE_PROTOCOL = originalForce;
+		if (originalAllow === undefined) delete Bun.env.PI_ALLOW_SIXEL_PASSTHROUGH;
+		else Bun.env.PI_ALLOW_SIXEL_PASSTHROUGH = originalAllow;
+	});
+
+	function bash(h: Harness, complete: boolean): BashExecutionComponent {
+		const block = new BashExecutionComponent("printf sixel", h.composer.ui, false);
+		block.appendOutput(`before\n${PAYLOAD}\nafter`);
+		if (complete) block.setComplete(0, false);
+		h.transcript.addChild(block);
+		h.composer.ui.requestRender();
+		return block;
+	}
+
+	/** Chat-column text of a docked viewport row. */
+	const chat = (row: string | undefined): string => (row ?? "").slice(0, 81).trim();
+	const raw = (data: string): boolean => data.includes("\x1bPq") || data.includes("~~~~") || data.includes("@@@@");
+
+	it("(5a)(5c) docked: label plus blanks live, in retirement, and in a rebuild replay", async () => {
+		const h = await setup({ entries: 1, mode: "rebuild" });
+		try {
+			h.composer.setSidePanel(h.panel, RIGHT);
+			await h.settle();
+			h.writes.length = 0;
+			bash(h, true);
+			await h.settle();
+			const view = h.viewport();
+			const label = view.findIndex(row => chat(row) === LABEL);
+			expect(label).toBeGreaterThan(0);
+			expect(view.slice(label + 1, label + 4).map(chat)).toEqual(["", "", ""]);
+			expect(chat(view[label + 4])).toBe("after");
+			expect(raw(h.writes.join(""))).toBe(false);
+
+			// (5c) Retire the block while docked, then rebuild: both copies are label + blanks.
+			for (let index = 1; index < 30; index++) h.transcript.addChild(new Text(ledgerLine(index), 0, 0));
+			h.composer.ui.requestRender();
+			await h.settle();
+			const retired = h.history().map(row => row.trim());
+			const at = retired.indexOf(LABEL);
+			expect(at).toBeGreaterThanOrEqual(0);
+			expect(retired.slice(at + 1, at + 4)).toEqual(["", "", ""]);
+			h.composer.setSidePanel(h.panel, { ...RIGHT, width: { ratio: 0.4, min: 32, max: 48 } });
+			await h.settle();
+			const replayed = h.history().map(row => row.trim());
+			expect(replayed.filter(row => row === LABEL)).toHaveLength(1);
+			expect(raw(h.writes.join(""))).toBe(false);
+		} finally {
+			h.composer.stop();
+		}
+	});
+
+	it("(5b) docked: a clipped payload head leaves blank rows, never raw continuation bytes", async () => {
+		const probe = await setup({ entries: 0 });
+		let rows: number;
+		try {
+			probe.composer.setSidePanel(probe.panel, RIGHT);
+			bash(probe, false);
+			await probe.settle();
+			const view = probe.viewport();
+			const top = view.findIndex(row => chat(row).startsWith("─"));
+			const label = view.findIndex(row => chat(row) === LABEL);
+			// Rows the block occupies from two below its label to the bottom of the chat column.
+			rows = 24 - top - (label - top + 2);
+		} finally {
+			probe.composer.stop();
+		}
+		const h = await setup({ rows, entries: 0 });
+		try {
+			h.composer.setSidePanel(h.panel, RIGHT);
+			await h.settle();
+			h.writes.length = 0;
+			bash(h, false);
+			await h.settle();
+			const view = h.viewport().map(chat);
+			expect(view).not.toContain(LABEL);
+			expect(view.slice(0, 2)).toEqual(["", ""]);
+			expect(view).toContain("after");
+			expect(raw(h.writes.join(""))).toBe(false);
+		} finally {
+			h.composer.stop();
+		}
+	});
+
+	it("(5d) undocked: all four payload rows pass through live and on retirement", async () => {
+		const h = await setup({ entries: 1, mode: "append" });
+		try {
+			h.writes.length = 0;
+			bash(h, true);
+			await h.settle();
+			const live = h.writes.join("");
+			for (const row of PAYLOAD.split("\n")) expect(live).toContain(row);
+			h.writes.length = 0;
+			for (let index = 1; index < 30; index++) h.transcript.addChild(new Text(ledgerLine(index), 0, 0));
+			h.composer.ui.requestRender();
+			await h.settle();
+			const retired = h.writes.join("");
+			for (const row of PAYLOAD.split("\n")) expect(retired).toContain(row);
+			expect(retired).not.toContain(LABEL);
+		} finally {
+			h.composer.stop();
+		}
+	});
+});
+
+/**
+ * Scripted provider; these configurations are unreachable through Composer
+ * today because blocks holding an Image retire whole. They pin the placement
+ * accounting contract for a future producer or retirement policy that could
+ * reach them, driving real TUI paints with a real Image and ImageBudget.
+ */
+describe("Composer side panel: placement accounting (scripted provider)", () => {
+	const terminal = TERMINAL as unknown as { id: string; imageProtocol: ImageProtocol | null };
+	const originalProtocol = TERMINAL.imageProtocol;
+	const originalId = TERMINAL.id;
+	const originalGraphics = { ...getKittyGraphics() };
+	let originalCells: CellDimensions;
+
+	beforeEach(() => {
+		originalCells = { ...getCellDimensions() };
+		setCellDimensions({ widthPx: 10, heightPx: 10 });
+		terminal.imageProtocol = ImageProtocol.Kitty;
+		terminal.id = "xterm";
+		setKittyGraphics({ unicodePlaceholders: false });
+	});
+
+	afterEach(() => {
+		setCellDimensions(originalCells);
+		terminal.imageProtocol = originalProtocol;
+		terminal.id = originalId;
+		setKittyGraphics(originalGraphics);
+	});
+
+	function scripted(height: number) {
+		const term = new VirtualTerminal(40, height, 1000);
+		const writes: string[] = [];
+		const realWrite = term.write.bind(term);
+		vi.spyOn(term, "write").mockImplementation((data: string) => {
+			writes.push(data);
+			realWrite(data);
+		});
+		const scheduler = new VirtualRenderScheduler();
+		const tui = new TUI(term, true, { renderScheduler: scheduler });
+		let plan: () => TerminalFramePlan = () => ({ viewport: [] });
+		let nextId = 1;
+		tui.setFrameProvider({ renderFrame: () => plan(), acknowledgeHistory: () => {} });
+		const image = new Image(
+			PNG,
+			"image/png",
+			{ fallbackColor: text => text },
+			{ maxWidthCells: 5, maxHeightCells: 5, budget: tui.imageBudget, imageKey: "scripted" },
+			{ widthPx: 40, heightPx: 40 },
+		);
+		const id = tui.imageBudget.acquireId("scripted");
+		const paint = async (next: (image: readonly string[]) => { history?: string[]; viewport: string[] }) => {
+			const historyId = nextId++;
+			plan = () => {
+				const frame = next(image.render(40));
+				return {
+					viewport: frame.viewport,
+					history: frame.history === undefined ? undefined : { id: historyId, rows: frame.history },
+				};
+			};
+			tui.requestRender();
+			await scheduler.settle(term);
+		};
+		/** The docked composition: a replay rendered with images as text, scoped like the composer's. */
+		const dockedReplay = async (ledger: (image: readonly string[]) => string[]) => {
+			const historyId = nextId++;
+			plan = () => {
+				const previous = getInlineImagePresentation();
+				setInlineImagePresentation("text");
+				try {
+					return { viewport: ["EDITOR"], history: { id: historyId, rows: ledger(image.render(40)), kind: "replay" } };
+				} finally {
+					setInlineImagePresentation(previous);
+				}
+			};
+			writes.length = 0;
+			tui.requestRender();
+			await scheduler.settle(term);
+			expect(getInlineImagePresentation()).toBe("graphics");
+			return kittyCommands(writes.join(""));
+		};
+		tui.start();
+		return { term, tui, id, paint, dockedReplay, settle: () => scheduler.settle(term) };
+	}
+
+	const lines = (prefix: string, count: number): string[] => Array.from({ length: count }, (_, i) => `${prefix}${i}`);
+
+	it("(2c) a placement whose line retired into history is rebased by later scrolls", async () => {
+		const s = scripted(12);
+		try {
+			await s.settle();
+			// Block top at physical row 5.
+			await s.paint(image => ({ viewport: [...lines("a", 5), ...image, "b0", "EDITOR"] }));
+			expect(s.term.graphicsPlacements().some(entry => entry.imageId === s.id)).toBe(true);
+			// Its APC line retires in a 10-row batch while the screen scrolls 2 (5 → 3, still live).
+			await s.paint(image => ({ history: [...lines("a", 5), ...image], viewport: ["b0", "c0", "c1", "EDITOR"] }));
+			// A further paint scrolls 4 (3 → −1): its top rows reach scrollback.
+			await s.paint(() => ({ history: ["b0"], viewport: [...lines("c", 6), "EDITOR"] }));
+			const commands = await s.dockedReplay(image => [...lines("a", 5), ...image, "b0"]);
+			expect(commands.filter(command => command.a === "d")).toEqual([]);
+			expect(s.term.graphicsPlacements().some(entry => entry.imageId === s.id)).toBe(true);
+		} finally {
+			s.tui.stop();
+		}
+	});
+
+	it("(1d twin) a placement whose top scrolls off in the paint that draws it is archived at emit", async () => {
+		const s = scripted(10);
+		try {
+			await s.paint(() => ({ viewport: ["EDITOR"] }));
+			// 20 history rows retire while the block's APC lands at viewport index 1 (rows −3..1).
+			await s.paint(image => ({ history: lines("h", 20), viewport: [...image.slice(-2), ...lines("t", 7), "EDITOR"] }));
+			expect(s.term.graphicsPlacements().some(entry => entry.imageId === s.id)).toBe(true);
+			const commands = await s.dockedReplay(image => [...lines("h", 20), ...image, ...lines("t", 7)]);
+			expect(commands.filter(command => command.a === "d")).toEqual([]);
+		} finally {
+			s.tui.stop();
+		}
+	});
+});
+
