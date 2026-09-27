@@ -601,6 +601,13 @@ export interface Settlement {
   model: string;
   usage: Usage;                         // packages/catalog/src/types.ts
   failed?: boolean;
+  /**
+   * Settled after the request's outer response had already been finished
+   * (§4.5 abort finalization). Never inside any outer response's report range;
+   * journaled once as a `model_usage` entry instead (§4.7 "Late settlements").
+   * Still counted in `run.lifetime` / `run.window` and trace headers.
+   */
+  late?: true;
 }
 
 export interface FanoutGroup {                           // §8.3
@@ -749,8 +756,17 @@ export interface MixtureHost {
    * Upstream billed-attempt accounting, exactly once per settlement, at the
    * moment the attempt settles (member call done/error/abort, judgment,
    * summary, slicer). Independent of any outer response and of `commit`.
+   * Fires for late settlements too.
    */
   onSettlement?(run: MixtureRun, settlement: Settlement): void;
+  /**
+   * Client-facing accounting for a settlement that no outer response will ever
+   * report (`settlement.late`). The session host journals it as one
+   * `model_usage` entry when the run still belongs to this conversation, and
+   * drops the journal (not the broker record) otherwise; the headless host has
+   * no per-conversation ledger and ignores it. See §4.7 "Late settlements".
+   */
+  onLateSettlement?(run: MixtureRun, settlement: Settlement): void;
   onEvent?(event: MixtureEvent): void;
 }
 
@@ -1190,16 +1206,54 @@ auto-compaction threshold reads it through `correctedPromptTokens`
 (`packages/coding-agent/src/session/session-stats.ts:47-50`).
 
 **Abort.** `options.signal` is combined with the run deadline into every
-member call and judgment. On a caller abort the current hop is marked
-`aborted`, its partial output is dropped from the run (it was visible as a
-streaming trace only if it was the terminal hop), its settled usage and
-applied tool results are kept, the continuation is normalized exactly as for
-an error return (never `generating`), the run is checkpointed with
-`status: "checkpoint"`, and the outer message ends with
-`error`/`reason: "aborted"`. The next message on the same conversation resumes
-as a steer (§6.3) once steering hops exist (M3); until then the abort notice
-states that the next message starts a new run. The engine distinguishes its
-own deadline from the caller's signal by checking which controller fired.
+member call and judgment. A caller abort is finalized **synchronously inside
+the engine's own `abort` listener on `options.signal`**, registered while
+`streamMixture` runs (before it returns the outer stream), because the agent
+loop reacts to the same signal asynchronously: its listener only resolves a
+race promise (`packages/agent/src/agent-loop.ts:2105-2110`), and
+`finishAbortedStream` (`:2074-2094`) runs on a later microtask, spreads the
+live partial it holds **by reference** (`partialMessage = event.partial`,
+`:2264`, `:2363`; the writer pushes `partial: this.message`), and emits that
+copy as the session's aborted assistant message (`:2648-2649`,
+`:2678-2685`). Every abort listener fires synchronously within the same
+`abort()` call, whether it sits on the loop's source signal or on an
+`AbortSignal.any` dependent, so a listener that does its whole job without
+awaiting always finishes before the loop's copy is taken. The finalizer
+therefore, with no `await`:
+
+1. marks the current hop `aborted`, drops its partial output from the run
+   (it was visible as a streaming trace only if it was the terminal hop),
+   keeps settled usage and applied tool results, and normalizes the
+   continuation exactly as for an error return (never `generating`);
+2. sets `run.status = "checkpoint"`, allocates the response id, builds the
+   `PendingResponse` from the writer's current content with
+   `stopReason: "aborted"`, and records it with `lastRequest.outcome = "failed"`;
+   its report range covers the settlements that exist **now**, which excludes
+   the in-flight member call;
+3. writes the outer-return checkpoint (`reason: "abort"`,
+   `sessionManager.appendCustomEntry` is synchronous), so it precedes the
+   assistant entry in the branch;
+4. **mutates the writer's live message in place**: `responseId`, `usage` (the
+   report range's sum), `usageBreakdown`; the loop's spread then carries them,
+   so the persisted abort is identified and `commit` (§4.2) advances the
+   watermark and cursor on `message_end`;
+5. releases the run lease and marks the request **finalized**.
+
+After finalization the engine's asynchronous continuation for that request is
+inert: when the in-flight member's terminal event arrives, its usage (if any)
+is settled **late** (`Settlement.late`, §4.7), `onSettlement` and
+`onLateSettlement` fire, and nothing else happens: no second response, no
+second checkpoint, no terminal event on the outer stream (the loop has left
+the iterator), no trace publication. If the abort fires while no member call
+is in flight (between hops), the finalizer runs the same steps with nothing
+to settle later.
+
+The next message on the same conversation resumes as a steer (§6.3) once
+steering hops exist (M3); until then the abort notice states that the next
+message starts a new run. The engine distinguishes its own deadline from the
+caller's signal by checking which controller fired; a deadline abort is not a
+caller abort and takes the §4.7 limit path, whose response is produced by the
+engine in the ordinary way.
 
 ### 4.6 Fitting a hop request to the target model
 
@@ -1273,10 +1327,49 @@ that reported usage, every judgment attempt (§5: through the judge's attempt
 callback, including parse retries and failed candidates; the winning
 `JudgmentResult.usage` is not added a second time), summarizer calls
 (through `completeImpl`), slicer calls. `run.lifetime.usd` and
-`run.window.usd` are sums. The engine never writes `model_usage` entries, so
+`run.window.usd` are sums over every settlement, late or not. Report ranges
+(`[reportedThrough, settlements.length)` and `report: { from, to }`) are
+computed over **non-late** settlements only. The engine writes no
+`model_usage` entry for a settlement inside a report range, so
 `SessionStatsTracker` (`packages/coding-agent/src/session/session-stats.ts:150-173`),
-which sums assistant `usage` plus `model_usage` entries, sees each
-settlement through the committed outer responses' deltas.
+which sums assistant `usage` plus `model_usage` entries, sees each such
+settlement exactly once, through the committed outer responses' deltas.
+
+**Late settlements.** A settlement is **late** when it arrives after the
+request's outer response has already been finished (today: the member call
+that was in flight when a caller abort was finalized, §4.5; the rule is
+general and also covers a judge or summarizer attempt that lands after its
+request finished). A late settlement is never inside a report range, so no
+outer response will ever carry it; the engine flags it `late: true`, fires
+`onSettlement` (broker, exactly once, as for any attempt) and
+`onLateSettlement`. The session host implements `onLateSettlement` by
+appending **one** `model_usage` entry
+(`sessionManager.appendModelUsage({ purpose: "moa", provider, model, usage }, { sessionId, parentId: leaf })`,
+the same off-transcript ledger `journalJudgmentUsage` uses,
+`packages/coding-agent/src/judgment/index.ts:77-86`), **only if the run is
+still current**: `runs.owns(run)` on the host's store and
+`run.key.host === sessionManager.getSessionId()`. `owns(run)` is true while
+the store **entry** that executed the run is still the store's entry for its
+key (identity, not key presence): the store records the owning entry when the
+engine installs a run into its lease (`store.install(entry, run)`, the only
+writer of `entry.run`, keeps a `WeakMap<MixtureRun, MixtureRunEntry>`), and
+`owns(run)` checks `#entries.get(serializeKey(run.key)) === ownerOf(run)`.
+A run replaced by a later run on the same key therefore stays owned (same
+entry), while `clear()` (`/clear`, through `resetConversation()`, which runs
+before the `reset_boundary` is appended) drops the entry, so a late
+settlement for a cleared run is journaled nowhere (the broker already has
+it) and never writes into the replacement conversation's window. `holds(run)`
+(`entry.run === run`) keeps its existing meaning for `onEvent` and the A2
+replay rule; it is not the ownership test.
+`activeModelUsageEntries` (`session-stats.ts:63-76`) then counts the entry
+in the same window as the run's committed responses. The headless host
+ignores `onLateSettlement`: the gateway has no per-conversation ledger and
+the broker record is the only accounting it owes.
+
+Invariant, stated once: every settlement reaches the broker exactly once
+(`onSettlement`), and reaches client-facing session statistics exactly once,
+either through the committed outer response whose report range contains it
+or, when `late`, through its `model_usage` entry, never both.
 
 **Session totals: the statistics seam.** `getSessionStats()` sums assistant
 usage from **live agent state** (`packages/coding-agent/src/session/session-stats.ts:114-115`,
@@ -2439,6 +2532,20 @@ Acceptance:
   aborted outer message) and the notice says the next message starts a new
   run; the next prompt does start a new run. Steering the checkpointed member
   is M3.
+- Abort finalization, through a real `AgentSession` with a scripted writer
+  that completes with billed usage and a scripted editor that blocks and
+  reports its aborted usage only after a deliberate delay: Esc during the
+  editor persists an aborted assistant message carrying the engine's
+  `responseId`, `usage` equal to the writer's settlement, and its
+  `usageBreakdown`; the checkpoint entry precedes it in the branch; `commit`
+  advances the watermark and cursor for it; the editor's late usage appears
+  as exactly one `model_usage` entry in the branch; `getSessionStats().cost`
+  equals writer plus editor after the next prompt (a new run) and after a
+  reload from file; the broker observed each attempt exactly once; no second
+  checkpoint, response, or trace card is written after finalization; and when
+  `/clear` runs before the editor's late usage arrives, the broker record
+  still exists but no `model_usage` entry is written after the
+  `reset_boundary`.
 - Step 0b anchoring is proved with successive operator prompts after a
   completed run: the `responseId` anchor in-session; with `responseId`
   stripped from the history, the committed cursor; with rewritten history,
@@ -2641,6 +2748,52 @@ None open. Every question raised in rounds 1 to 3 is answered in §15.
 - No task board; the `task` tool and hub messaging are untouched.
 
 ## 19. Revision log
+
+### Amendment 6.2 (Astra M1-A1: Esc races the engine's abort)
+
+Ruling: option (a), coding-agent only; `packages/agent` is untouched.
+
+- **Synchronous abort finalization** (§4.5): the engine registers its own
+  `abort` listener on `options.signal` while `streamMixture` runs and does
+  the whole finalization without awaiting: mark the hop, normalize the
+  continuation, record the aborted `PendingResponse` (report range = the
+  settlements that exist at that instant), write the checkpoint, mutate the
+  writer's live message with `responseId`/`usage`/`usageBreakdown`, release
+  the lease. Ordering is guaranteed by the loop's own design, not by listener
+  registration order: every listener fires synchronously inside `abort()`,
+  while the loop's reaction (`finishAbortedStream`,
+  `packages/agent/src/agent-loop.ts:2074-2094`) runs on a later microtask and
+  spreads the partial it holds by reference (`:2264`, `:2363`). The persisted
+  abort is therefore identified and its usage committed on `message_end`.
+  After finalization the request is inert: the in-flight member's terminal
+  only settles usage; no second response, checkpoint, terminal event, or card.
+- **Late settlements** (§4.1 `Settlement.late`, §4.2 `onLateSettlement`,
+  §4.7): a settlement arriving after its request's response was finished is
+  never in a report range; the session host journals it as one `model_usage`
+  entry (the existing off-transcript ledger, summed by
+  `activeModelUsageEntries`) only while the run is still current; `/clear`
+  empties the run store first, so nothing is written into the replacement
+  conversation; the headless host ignores it. Broker: exactly once via
+  `onSettlement`, unchanged. Session total: exactly once, via the committed
+  response or the journal entry, never both.
+- **Why not carry the settlement into the next run's first report**
+  (MoaImpl2's alternative (a) as offered): it makes the next run's committed
+  delta depend on a previous run, contradicts §4.7's "report ranges are this
+  run's settlements", has no home when the entry was dropped by `/clear`, and
+  under M3 would double-count with a later steer response unless flagged
+  anyway. The `late` flag is needed in either design; once it exists, the
+  existing `model_usage` ledger is the correct sink.
+- **Why not option (b)** (an agent-loop handshake that awaits the stream's
+  own abort terminal with a time bound): it changes `packages/agent` abort
+  semantics for every provider to serve one custom API, or adds a
+  model-conditional branch to the core loop; it delays Esc by up to the
+  bound on every mixture abort; and it still needs the late-settlement rule
+  for a member whose abort terminal outlives the bound. Option (a) meets all
+  four requirements (Esc responsive, broker exactly-once, session total
+  correct across the next prompt and a reload, no old-run writes into a
+  replacement session) with two testable invariants and no core change.
+- **Deadline abort** is unchanged: it is not a caller abort and takes the
+  §4.7 limit path with an ordinary engine-produced response.
 
 ### Amendment 6.1 (M1 implementation questions from MoaImpl)
 
