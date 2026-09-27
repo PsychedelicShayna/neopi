@@ -1221,8 +1221,14 @@ copy as the session's aborted assistant message (`:2648-2649`,
 `:2678-2685`). Every abort listener fires synchronously within the same
 `abort()` call, whether it sits on the loop's source signal or on an
 `AbortSignal.any` dependent, so a listener that does its whole job without
-awaiting always finishes before the loop's copy is taken. The finalizer
-therefore, with no `await`:
+awaiting always finishes before the loop's copy is taken. The by-reference
+premise requires the **native** tool dialect: under an owned dialect the loop
+wraps the stream in `wrapInbandToolStream` (`agent-loop.ts:2025-2038`), whose
+projector re-seeds its own partial (`{ ...seed, content: [] }`,
+`packages/ai/src/dialect/owned-stream.ts:207`), and the loop's reference is
+that copy, which the finalizer's stamp never reaches. Mixture models
+therefore never receive an owned dialect (§4.9). The finalizer, with no
+`await`:
 
 1. marks the current hop `aborted`, drops its partial output from the run
    (it was visible as a streaming trace only if it was the terminal hop),
@@ -1607,6 +1613,7 @@ loudly as a backstop:
 | Title generation, `getTitleModels` (`packages/coding-agent/src/utils/title-generator.ts:124-147`) | skip `currentModel` when `isMixtureModel` |
 | Auto-learn capture, `createAutoLearnCaptureRunner` (`sdk.ts:1395-1430`) | when `sourceAgent.state.model` is a mixture, resolve `@smol` for the capture agent; if none, skip capture |
 | Provider context transform, `transformProviderContext` (`sdk.ts:3993-4014`) | model-neutral steps only for the synthetic model (§4.4) |
+| Tool dialect, `dialectResolver` (`sdk.ts:4250` → `resolveDialect`, `:847-859`) | `isMixtureModel(dialectModel) ? undefined : resolveDialect(cfgToolsFormat.get(settings), dialectModel)`. A tools-off mixture registers `supportsTools: false` (a truthful capability flag, §9.2), which `tools.format = "auto"` would otherwise turn into an owned in-band dialect. The engine is the mixture's tool contract: it emits native tool-call blocks for members that may call tools (§8.1), rejects `any`/`named` requirements at step 0 when nothing can satisfy them (§4.4), and must not have the in-band tool prompt appended to the outer system prompt (which `inherit` members receive), the terminal text scanned for in-band calls, or a second abort controller merged into its signal (`agent-loop.ts:1938-1946`). It also keeps the abort finalization premise (§4.5) true. Members that need an in-band dialect for their own model get it inside the member call, from the host's stream function, as any other request would. |
 | `sideStreamFn` / `advisorStreamFn` (`sdk.ts:4373-4374`) and any `completeSimple` on the live model | wrap: `if (isMixtureModel(model)) throw new ConfigurationError("mixture models cannot serve side requests")`; the process-wide dispatcher (§9.2) additionally refuses a catalog with no headless host, so a stray call fails loudly either way |
 | Advisors, chains (`chains/runner.ts` resolves `@prose`), commit, judge chain | rejected by `resolveMixture`'s recursion rule when a role points at a mixture, and by the same wrapper at call time |
 
@@ -2754,6 +2761,25 @@ None open. Every question raised in rounds 1 to 3 is answered in §15.
 - No task board; the `task` tool and hub messaging are untouched.
 
 ## 19. Revision log
+
+### Amendment 6.4 (MoaImpl3: owned dialect breaks the abort premise)
+
+- **Mixtures never take an owned tool dialect** (§4.9 table): the session's
+  `dialectResolver` returns `undefined` for `isMixtureModel`. Found by
+  MoaImpl3: with `tools.format = "auto"` a tools-off mixture's truthful
+  `supportsTools: false` selects an owned dialect, the loop wraps the outer
+  stream in `wrapInbandToolStream`, and its projector's re-seeded partial
+  (`owned-stream.ts:207`) is what `finishAbortedStream` copies, so the
+  6.2 finalizer's in-place stamp never reached the persisted abort (all three
+  abort tests pass under `native`). The exclusion is the standing rule, not
+  only the abort fix: an owned dialect would also inject the in-band tool
+  prompt into the outer system prompt that `inherit` members receive, scan
+  the terminal member's text for in-band calls, and merge a second abort
+  controller into the engine's signal. The engine is the mixture's tool
+  contract; members needing an in-band dialect get it inside their own call.
+- §4.5's abort paragraph now states the native-dialect premise explicitly.
+- Rejected: flipping `supportsTools` (a truthful capability flag used by the
+  hub and by `agent=` validation) and any change to `packages/ai`.
 
 ### Amendment 6.3 (MoaImpl3: `model_usage` requires `api` and `stopReason`)
 
