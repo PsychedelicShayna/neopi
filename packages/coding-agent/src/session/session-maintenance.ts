@@ -71,6 +71,7 @@ import type { CompactOptions, ContextUsage } from "../extensibility/extensions/t
 import type { GoalModeState } from "../goals/state";
 import { resolveMemoryBackend } from "../memory-backend/resolve";
 import type { MemoryBackendOperationContext } from "../memory-backend/types";
+import { isMixtureModel } from "../moa/provider";
 import { computeNonMessageTokens, type NonMessageTokenSource } from "@oh-my-pi/pi-tui/status-line/context-usage";
 import { createPlanReadMatcher } from "../plan-mode/plan-protection";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
@@ -3312,6 +3313,8 @@ export class SessionMaintenance {
 			// scan below doesn't reintroduce them; the filter just suppresses
 			// inclusion in this caller's candidate chain.
 			if (filter && !filter(model)) return;
+			// A mixture cannot summarize: it only runs as the primary agent's model.
+			if (isMixtureModel(model)) return;
 			candidates.push(model);
 		};
 

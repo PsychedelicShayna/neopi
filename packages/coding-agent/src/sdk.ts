@@ -26,6 +26,7 @@ import type {
 import { resolveApiKeyOnce } from "@oh-my-pi/pi-ai/auth-retry";
 import type { DiscoverAuthStorageOptions } from "@oh-my-pi/pi-ai/auth-broker/discover";
 import type { Dialect } from "@oh-my-pi/pi-ai/dialect";
+import { ConfigurationError } from "@oh-my-pi/pi-ai/error";
 import { prewarmOpenAICodexResponses } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import { isOpenAICodexWebSocketPreferred } from "@oh-my-pi/pi-ai/providers/openai-codex-transport";
 import { withCredentialRedaction } from "@oh-my-pi/pi-ai/providers/transform-messages";
@@ -1393,6 +1394,8 @@ export interface AutoLearnCaptureRunnerOptions {
 	onPayload?: SimpleStreamOptions["onPayload"];
 	onResponse?: SimpleStreamOptions["onResponse"];
 	createSessionId?: () => string;
+	/** The capture model when the session model is a mixture (`@smol`); undefined skips capture. */
+	resolveMixtureCaptureModel?: () => Model | undefined;
 }
 
 /** Build a private capture runner over a detached message snapshot and provider session. */
@@ -1402,7 +1405,10 @@ export function createAutoLearnCaptureRunner(
 	return async (content, signal) => {
 		const captureTools = options.captureTools();
 		if (captureTools.length === 0 || signal?.aborted) return;
-		const captureModel = options.sourceAgent.state.model;
+		const sourceModel = options.sourceAgent.state.model;
+		// A mixture only runs as the primary agent's model; capture runs on `@smol` instead.
+		const captureModel =
+			sourceModel && isMixtureModel(sourceModel) ? options.resolveMixtureCaptureModel?.() : sourceModel;
 		if (!captureModel) return;
 
 		const captureSessionId = options.createSessionId?.() ?? Bun.randomUUIDv7();
@@ -4122,6 +4128,14 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				preferWebsockets: streamOptions?.preferWebsockets ?? resolveOpenAIWebsocketPreference(settings),
 			});
 		};
+		// Side requests (advisor, `/btw`, handoff, IRC replies) never run a mixture: it is
+		// an orchestration of member calls, not a model a side channel can talk to.
+		const sideStreamFn: StreamFn = (streamModel, context, streamOptions) => {
+			if (isMixtureModel(streamModel)) {
+				throw new ConfigurationError("mixture models cannot serve side requests");
+			}
+			return settingsAwareStreamFn(streamModel, context, streamOptions);
+		};
 		// One mixture host per session, living only in the primary wrapper's closure (never in
 		// primaryStreamFn, which the auto-learn capture agent also uses).
 		const sessionMixtureHost = createSessionMixtureHost({
@@ -4417,8 +4431,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			transformProviderContext,
 			onPayload,
 			onResponse,
-			sideStreamFn: settingsAwareStreamFn,
-			advisorStreamFn: settingsAwareStreamFn,
+			sideStreamFn,
+			advisorStreamFn: sideStreamFn,
 			convertToLlm: convertToLlmFinal,
 			rebuildSystemPrompt,
 			getXdevToolEntries: () => (toolSession.xdev ? xdevEntries(toolSession.xdev) : []),
@@ -4928,6 +4942,12 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 
 		const runAutoLearnCapture = createAutoLearnCaptureRunner({
 			sourceAgent: agent,
+			resolveMixtureCaptureModel: () =>
+				resolveModelRoleValue(
+					"@smol",
+					modelRegistry.getAvailable().filter(candidate => !isMixtureModel(candidate)),
+					{ settings },
+				).model,
 			captureTools: () =>
 				(["manage_skill", "learn"] as const)
 					.map(name => session.getToolByName(name))
