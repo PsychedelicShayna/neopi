@@ -789,11 +789,22 @@ Two hosts:
 
 - **Session host** (`createSessionMixtureHost(session, agent)` in
   `moa/host.ts`, one per session, held by the primary wrapper's closure, never
-  registered anywhere): `stream` = the session's `settingsAwareStreamFn`
-  (`packages/coding-agent/src/sdk.ts:4076-4079`: credential redaction,
-  provider concurrency, slow-mode policy, per-request `loopGuard`,
+  registered anywhere): `stream` = the session's `primaryStreamFn`
+  (`packages/coding-agent/src/sdk.ts:4123-4131`), which fills
+  `thinkingBudgets`, `kimiApiFormat` (when `providers.kimiApiFormat` is not
+  `auto`), and `preferWebsockets` from live settings with `??` and then calls
+  `settingsAwareStreamFn` (`:4116-4119`: credential redaction, provider
+  concurrency, slow-mode policy, per-request `loopGuard`,
   `fitOutputTokensToContextWindow`, and the `liveSteering` off-switch,
-  `packages/coding-agent/src/session/settings-stream-fn.ts:139-163`);
+  `packages/coding-agent/src/session/settings-stream-fn.ts:139-163`) with the
+  model it was handed. Against a member model every per-request setting
+  therefore applies to that member: a Kimi member on an explicit format gets
+  that wire protocol, a Codex member follows the websocket policy. The mixture
+  branch itself stays in the primary wrapper ahead of `primaryStreamFn`
+  (§4.9), so the capture agent never enters a run; a member call re-entering
+  `primaryStreamFn` cannot reach the branch because a member is never a
+  mixture (§1.4). `settingsAwareStreamFn` alone would drop those three
+  settings for every member (Codex P1 on PR #113);
   `resolver` = `modelRegistry.resolver(model, sessionId)`
   (`packages/coding-agent/src/config/model-registry.ts:2856-2858`, the
   rotation-capable `ApiKeyResolver`, never `getApiKey`'s one-shot string);
@@ -899,6 +910,14 @@ deadline), `fetch`, `onPayload`, `onResponse`, `onSseEvent`,
 fields (only when the member sets none), `thinkingBudgets`,
 `hideThinkingSummary`, `maxRetryDelayMs`, `streamFirstEventTimeoutMs`,
 `streamIdleTimeoutMs`, `cursorExternalToolExecutor`.
+
+**Filled by the host's stream function**, not by this seam: `kimiApiFormat`
+and `preferWebsockets` are dropped here (they are outer-model policy) and
+re-derived per member by `primaryStreamFn` from live settings
+(`sdk.ts:4123-4131`, §4.2); `thinkingBudgets` is preserved when the caller
+set it and otherwise filled the same way. The headless host's `streamSimple`
+has no settings to consult, so a gateway member runs with the provider
+defaults for those three, as any gateway request does.
 
 **Recomputed per member:**
 
@@ -2761,6 +2780,26 @@ None open. Every question raised in rounds 1 to 3 is answered in §15.
 - No task board; the `task` tool and hub messaging are untouched.
 
 ## 19. Revision log
+
+### Amendment 6.6 (Codex P1 on PR #113: members miss per-request settings)
+
+- The session host's `stream` is `primaryStreamFn`, not
+  `settingsAwareStreamFn` (§4.2). `primaryStreamFn` only `??`-fills
+  `thinkingBudgets`, `kimiApiFormat`, and `preferWebsockets` from live
+  settings and calls `settingsAwareStreamFn` with the model it was handed,
+  so those settings apply against each member model; wired to
+  `settingsAwareStreamFn`, a Kimi member on an explicit format used the wrong
+  wire protocol and a Codex member ignored the websocket policy.
+- §4.4 now states which options the seam drops for the stream function to
+  re-derive per member (`kimiApiFormat`, `preferWebsockets`) and that the
+  headless host runs with provider defaults for them.
+- The §4.9 auto-learn rule is unchanged: it fixes where the mixture branch
+  sits (the primary wrapper, ahead of `primaryStreamFn`), not which function
+  member calls pass through; a member is never a mixture, so a member call
+  cannot re-enter the branch.
+- Test: a member on a provider whose wire format follows `providers.kimiApiFormat`
+  receives the explicit format, and a Codex member receives the websocket
+  preference, both read from settings at call time.
 
 ### Amendment 6.5 (Grok via MoaImpl3: `PI_DIALECT` bypasses the resolver)
 
