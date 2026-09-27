@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -17,6 +17,7 @@ import { COMPOSER_DEFAULTS, Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { cfgTasksTodoClearDelay } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
 
 const plain = (lines: readonly string[]): string => Bun.stripANSI(lines.join("\n"));
@@ -103,7 +104,16 @@ describe("InteractiveMode todo HUD and side panel", () => {
 		resetSettingsForTest();
 	});
 
-	const frame = (): string => plain(composer.renderFrame({ columns: 120, rows: 30 }).viewport);
+	const frame = (rows = 30): string => plain(composer.renderFrame({ columns: 120, rows }).viewport);
+	const dock = (enabled: boolean): void => {
+		cfgSidebarEnabled.override(session.settings, enabled);
+		mode.sidePanel.applySettings();
+	};
+
+	afterEach(() => {
+		vi.useRealTimers();
+		term.resize(120, 30);
+	});
 
 	it("hides the HUD while docked and shows the current phases the moment it undocks", () => {
 		mode.sidePanel.applySettings();
@@ -121,5 +131,50 @@ describe("InteractiveMode todo HUD and side panel", () => {
 		expect(undocked).toContain("beta task");
 		expect(undocked).not.toContain("alpha task");
 		expect(plain(mode.todoContainer.render(80))).toContain("beta task");
+	});
+
+	it("reveals both the HUD and the section after the auto-dismiss hides them", async () => {
+		dock(true);
+		vi.useFakeTimers();
+		cfgTasksTodoClearDelay.override(session.settings, 0);
+		const closed: TodoPhase[] = [{ name: "Done", tasks: [{ content: "closed task", status: "completed" }] }];
+		session.sessionManager.appendCustomEntry("user_todo_edit", { phases: closed });
+		session.setTodoPhases(closed);
+		mode.setTodos(session.getTodoPhases());
+		// The real auto-clear: the timer fires, the dismissal persists, the list hides.
+		vi.advanceTimersByTime(0);
+		await session.settleInFlightMessagePersistence();
+		await session.sessionManager.flush();
+		vi.advanceTimersByTime(0);
+		const dismissed = frame();
+		expect(composer.sidePanelDocked).toBe(true);
+		expect(dismissed).not.toContain("closed task");
+		expect(dismissed).toContain("nothing to show");
+
+		mode.setTodoExpanded(true);
+		expect(frame()).toContain("closed task");
+		dock(false);
+		const undocked = frame();
+		expect(composer.sidePanelDocked).toBe(false);
+		expect(undocked).toContain("closed task");
+		mode.setTodoExpanded(false);
+		mode.setTodos([]);
+	});
+
+	it("keeps the compact one-line summary on a short docked terminal", () => {
+		dock(true);
+		mode.setTodos([{ name: "Short", tasks: [{ content: "compact task", status: "in_progress" }] }]);
+		term.resize(120, 16);
+		const docked = frame(16);
+		expect(composer.sidePanelDocked).toBe(true);
+		expect(mode.isCompactTodoMode()).toBe(true);
+		// The HUD yields (compact rule first), the section still renders in the panel,
+		// and the status row still merges the one-line TODO summary.
+		expect(mode.todoContainer.render(80)).toEqual([]);
+		expect(docked).toContain("compact task");
+		const status = plain(mode.statusContainer.render(80));
+		expect(status).toContain("TODO 0/1");
+		expect(status).toContain("compact task");
+		mode.setTodos([]);
 	});
 });
