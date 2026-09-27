@@ -225,11 +225,13 @@ jobs:
            run: bazelisk --bazelrc="${{ steps.cache.outputs.rc }}" build --config=rustfmt //crates/...
 
    # Provides the native addons every downstream TS job installs. PRs never
-   # build: they fetch the latest release's Linux x64 pair from the
-   # @oh-my-pi/pi-natives-linux-x64 npm leaf instead. The workspace loader
-   # skips its version sentinel for workspace loads, so release addons load
-   # fine under a newer checkout; a PR whose TS tests depend on changed
-   # native behavior fails visibly and the native side lands via main.
+   # build: they fetch the Linux x64 pair from the @oh-my-pi/pi-natives-linux-x64
+   # npm leaf at the version packages/natives declares, never `@latest`. This
+   # fork trails upstream releases, and an upstream publish must not swap the
+   # addons under an unchanged checkout (upstream 18.3.5 broke DesktopSession
+   # and the install-method sentinel check for fork PRs pinned at 18.3.2). A PR
+   # whose TS tests depend on changed native behavior fails visibly and the
+   # native side lands via main.
    # Main (kata, cluster remote cache) builds all Linux-hosted targets with
    # bazel. Job name says "bazel" for continuity with required checks.
    native_addons:
@@ -238,13 +240,18 @@ jobs:
       steps:
          - uses: actions/checkout@v4
 
-         # ---- PR path: latest release addons from npm ----
+         # ---- PR path: release addons from npm, pinned to the workspace version ----
          - name: Fetch release native addons (npm)
            if: github.event_name == 'pull_request'
            shell: bash
            run: |
               set -euo pipefail
-              tarball="$(npm view @oh-my-pi/pi-natives-linux-x64@latest dist.tarball)"
+              version="$(jq -r .version packages/natives/package.json)"
+              tarball="$(npm view "@oh-my-pi/pi-natives-linux-x64@${version}" dist.tarball)"
+              if [[ -z "$tarball" ]]; then
+                echo "::error::@oh-my-pi/pi-natives-linux-x64@${version} is not published"
+                exit 1
+              fi
               echo "Fetching $tarball"
               curl -fsSL --retry 3 "$tarball" | tar -xz -C "$RUNNER_TEMP"
               mkdir -p bazel-bin/natives-linux-x64-baseline bazel-bin/natives-linux-x64-modern
