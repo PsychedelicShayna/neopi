@@ -126,10 +126,15 @@ export function kindOf(value: RoleChainCandidate | Model): JudgeKind {
  * The `judge` role's candidates in attempt order, drawn from credentialed
  * judge-capable models. From the first native candidate on, only native
  * candidates remain: a prompted model never stands in for a failed native
- * judgment, whose calibrated probabilities it cannot reproduce.
+ * judgment, whose calibrated probabilities it cannot reproduce. `pool`
+ * narrows the candidates (a mixture's judge plan excludes mixture models).
  */
-function judgeRoleChain(settings: Settings, registry: ModelRegistry): RoleChainCandidate[] {
-	const chain = resolveRoleChain("judge", settings, roleCandidatePool("judge", settings, registry));
+export function judgeRoleChain(
+	settings: Settings,
+	registry: ModelRegistry,
+	pool: Model[] = roleCandidatePool("judge", settings, registry),
+): RoleChainCandidate[] {
+	const chain = resolveRoleChain("judge", settings, pool);
 	const firstNative = chain.findIndex(candidate => kindOf(candidate) === "native");
 	if (firstNative < 0) return chain;
 	return chain.filter((candidate, index) => index < firstNative || kindOf(candidate) === "native");

@@ -1,0 +1,71 @@
+/**
+ * Per-host mixture run state, keyed by the serialized run key. `acquire` is an
+ * execution lock: a second call for a key whose run is executing does not wait,
+ * it is told the run is busy. Non-serializable per-run state (provider session
+ * maps per member, the operator's images for the entry hop) lives on the entry,
+ * never in a checkpoint.
+ */
+import type { ImageContent, ProviderSessionState } from "@oh-my-pi/pi-ai";
+import type { MixtureRun, MixtureRunKey } from "./types";
+
+export interface MixtureRunEntry {
+	run: MixtureRun | undefined;
+	/** Provider session state per member id, scoped to this run. */
+	providerState: Map<string, Map<string, ProviderSessionState>>;
+	/** Images attached to the operator prompt that started the run; forwarded to the entry hop. */
+	topicImages: ImageContent[];
+}
+
+export interface MixtureRunLease {
+	entry: MixtureRunEntry;
+	release(): void;
+}
+
+function serializeKey(key: MixtureRunKey): string {
+	return JSON.stringify([key.host, key.mixture, key.lineage, key.conversation]);
+}
+
+export class MixtureRunStore {
+	#entries = new Map<string, MixtureRunEntry>();
+	#executing = new Set<string>();
+
+	/** Lock the key for one engine call; undefined when another call holds it. */
+	acquire(key: MixtureRunKey): MixtureRunLease | undefined {
+		const id = serializeKey(key);
+		if (this.#executing.has(id)) return undefined;
+		this.#executing.add(id);
+		let entry = this.#entries.get(id);
+		if (!entry) {
+			entry = { run: undefined, providerState: new Map(), topicImages: [] };
+			this.#entries.set(id, entry);
+		}
+		let released = false;
+		return {
+			entry,
+			release: () => {
+				if (released) return;
+				released = true;
+				this.#executing.delete(id);
+			},
+		};
+	}
+
+	/** The run that produced an outer response, if this store still holds it. */
+	findByResponseId(responseId: string): MixtureRun | undefined {
+		for (const entry of this.#entries.values()) {
+			if (entry.run?.outerResponses.some(response => response.responseId === responseId)) return entry.run;
+		}
+		return undefined;
+	}
+
+	/** Every run this store holds. */
+	runs(): MixtureRun[] {
+		const runs: MixtureRun[] = [];
+		for (const entry of this.#entries.values()) if (entry.run) runs.push(entry.run);
+		return runs;
+	}
+
+	clear(): void {
+		this.#entries.clear();
+	}
+}
