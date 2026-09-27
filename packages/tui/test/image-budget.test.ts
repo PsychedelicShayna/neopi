@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { TUI } from "@oh-my-pi/pi-tui";
-import { Image, ImageBudget } from "@oh-my-pi/pi-tui/components/image";
+import { Image, ImageBudget, setInlineImagePresentation } from "@oh-my-pi/pi-tui/components/image";
 import { Text } from "@oh-my-pi/pi-tui/components/text";
 import {
 	encodeKittyVirtualPlacement,
@@ -294,6 +294,83 @@ describe("ImageBudget", () => {
 		expect(after.suppressed).toEqual([true, true, false, false]);
 		expect(after.retry).toBe(false);
 		expect(after.purge).toEqual([]);
+	});
+});
+
+describe("ImageBudget docked placement accounting", () => {
+	afterEach(() => setInlineImagePresentation("graphics"));
+
+	function placed(budget: ImageBudget, key: string, row: number): number {
+		const id = budget.acquireId(key);
+		budget.registerPlacementGeometry(id, 40, 40);
+		budget.resolvePlacementEmit(id, row, -1);
+		return id;
+	}
+
+	/** One docked pass that renders `ids` as text; returns the deletes it owes. */
+	function dockedPass(budget: ImageBudget, ids: readonly number[]): readonly string[] {
+		setInlineImagePresentation("text");
+		budget.beginPass();
+		for (const id of ids) budget.observe(id);
+		budget.endPass();
+		setInlineImagePresentation("graphics");
+		return budget.takeDockedPlacementDeletes();
+	}
+
+	it("deletes a live placement once with d=i and leaves archived ones alone", () => {
+		const budget = new ImageBudget(8, () => {});
+		const live = placed(budget, "live", 3);
+		const straddling = placed(budget, "straddling", 1);
+		// A paint scrolls two rows off: only the placement starting above row 2 archived.
+		budget.observeRetirement(budget.snapshotAttachments(), 2);
+
+		const deletes = dockedPass(budget, [live, straddling]);
+		expect(deletes).toEqual([`\x1b_Ga=d,d=i,i=${live},p=1,q=2\x1b\\`]);
+		expect(deletes.join("")).not.toContain("d=I");
+		expect(budget.takePurgeIds()).toEqual([]);
+		// The next docked frame owes nothing: the placement is already gone.
+		expect(dockedPass(budget, [live, straddling])).toEqual([]);
+		// Archived cells advance the epoch on the next emit; the deleted one reuses its id.
+		expect(budget.resolvePlacementEmit(straddling, 0, -1)?.placementId).toBe(2);
+		expect(budget.resolvePlacementEmit(live, 0, -1)?.placementId).toBe(1);
+	});
+
+	it("judges a placement re-emitted mid-paint by its pre-paint row", () => {
+		const budget = new ImageBudget(8, () => {});
+		const moved = placed(budget, "moved", 1);
+		const stays = placed(budget, "stays", 3);
+		const snapshot = budget.snapshotAttachments();
+		// Both re-emit lower during the paint; neither stored row is below `pushed`.
+		budget.resolvePlacementEmit(moved, 5, -1);
+		budget.resolvePlacementEmit(stays, 6, -1);
+		budget.observeRetirement(snapshot, 2);
+
+		expect(dockedPass(budget, [moved, stays])).toEqual([`\x1b_Ga=d,d=i,i=${stays},p=1,q=2\x1b\\`]);
+	});
+
+	it("rebases placements not re-emitted by the paint's scroll", () => {
+		const budget = new ImageBudget(8, () => {});
+		const retired = placed(budget, "retired", 5);
+		const reEmitted = placed(budget, "re-emitted", 6);
+		let snapshot = budget.snapshotAttachments();
+		budget.resolvePlacementEmit(reEmitted, 6, -1);
+		// Scroll 2: 5 → 3 for the one whose line retired; the re-emitted one keeps 6.
+		budget.observeRetirement(snapshot, 2);
+		snapshot = budget.snapshotAttachments();
+		// Scroll 4: 3 < 4 archives; 6 does not.
+		budget.observeRetirement(snapshot, 4);
+
+		expect(dockedPass(budget, [retired, reEmitted])).toEqual([`\x1b_Ga=d,d=i,i=${reEmitted},p=1,q=2\x1b\\`]);
+	});
+
+	it("archives at emit a placement whose top scrolls off in the same paint", () => {
+		const budget = new ImageBudget(8, () => {});
+		const id = budget.acquireId("mid-scroll");
+		budget.registerPlacementGeometry(id, 40, 40);
+		budget.snapshotAttachments();
+		// Attached at physical row 5 with 8 scrolls still to come: its top leaves the screen.
+		budget.resolvePlacementEmit(id, 5, -1, 8);
+		expect(dockedPass(budget, [id])).toEqual([]);
 	});
 });
 
