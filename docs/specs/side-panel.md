@@ -547,7 +547,10 @@ Details, numbered for review:
    startsInside = false)` starts its `inSequence` state from
    `startsInside`; `BashExecutionComponent` computes the pre-slice mask
    before each cap slice, records whether the first kept row is inside a
-   span (chained across successive slices, reset by `setComplete`), and
+   span (chained across successive slices; cleared only when the output is
+   replaced wholesale — `setComplete` with an `output`, outside PTY mode,
+   `bash-execution.ts:292-294`, `:393-396` — because a completion that
+   keeps the streamed rows keeps their provenance), and
    passes it as `OutputPaneFormatOptions.sixelContinuation`, which
    `formatOutputPaneLines` forwards as `startsInside`. The raw rows and the
    memory bound are unchanged; the only new state is that bit. The pane
@@ -1365,10 +1368,12 @@ Phases 0–3 needs it.
   exact for well-formed payloads, because each slice reads the mask over
   every row it held, terminator included: a terminator that is about to
   be dropped is seen before it goes, the rows after it mask false, and the
-  bit clears. A payload that never terminates keeps the bit set until
-  `setComplete` resets it, which errs toward blanking text rows while
-  docked, never toward leaking payload bytes. Bounded by one command's
-  streaming lifetime.
+  bit clears. A payload that never terminates keeps the bit set for as
+  long as its streamed rows remain the block's output — through a
+  `setComplete` that supplies no replacement output — which errs toward
+  blanking text rows while docked, never toward leaking payload bytes; a
+  completion that replaces the output clears it. Bounded by one command's
+  output lifetime.
 - **`splitAt` flapping** during a drag resize: each crossing costs a full
   repaint plus a replay. The resize path already coalesces
   (`#prepareResizeReplay`, `tui.ts:2693-2720`); no extra debounce.
