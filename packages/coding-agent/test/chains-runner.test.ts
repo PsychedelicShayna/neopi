@@ -191,6 +191,7 @@ describe("renderChainInput", () => {
 		} as unknown as AgentMessage;
 		const out = renderChainInput(step, "draft", [compacted, user("do the thing we agreed")], {
 			contextWindow: 100_000,
+			maxTokens: 8_192,
 		});
 		expect(out).toContain("Final decision: ship behind a flag.");
 	});
