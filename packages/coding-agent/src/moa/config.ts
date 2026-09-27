@@ -230,7 +230,11 @@ function parseMember(raw: unknown, where: string, warnings: string[]): MixtureMe
 
 function isTransitPartName(value: string): value is TransitPartName {
 	return (
-		value === "output" || value === "input" || value === "reasoning" || value === "toolTrace" || value === "transcript"
+		value === "output" ||
+		value === "input" ||
+		value === "reasoning" ||
+		value === "toolTrace" ||
+		value === "transcript"
 	);
 }
 
@@ -305,12 +309,7 @@ function parseEdge(raw: unknown, where: string, warnings: string[]): MixtureEdge
 	return edge;
 }
 
-function parseFanout(
-	raw: Record<string, unknown>,
-	fanout: FanoutEdge,
-	where: string,
-	warnings: string[],
-): FanoutEdge {
+function parseFanout(raw: Record<string, unknown>, fanout: FanoutEdge, where: string, warnings: string[]): FanoutEdge {
 	if (raw.slices === "same" || raw.slices === "auto") {
 		fanout.slices = raw.slices;
 	} else if (Array.isArray(raw.slices)) {
@@ -473,7 +472,8 @@ export async function loadMixturesConfigFile(filePath: string): Promise<Mixtures
 	try {
 		text = await Bun.file(filePath).text();
 	} catch (err) {
-		if (!isEnoent(err)) logger.warn("Mixture config: failed to read for edit", { path: filePath, error: String(err) });
+		if (!isEnoent(err))
+			logger.warn("Mixture config: failed to read for edit", { path: filePath, error: String(err) });
 		return { mixtures: [] };
 	}
 	return parseMixturesText(text, filePath);

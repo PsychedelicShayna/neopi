@@ -108,7 +108,13 @@ export interface FanoutEdge extends EdgeBase {
 
 export type TransitPartName = "output" | "input" | "reasoning" | "toolTrace" | "transcript";
 
-export const TRANSIT_PART_NAMES: readonly TransitPartName[] = ["output", "input", "reasoning", "toolTrace", "transcript"];
+export const TRANSIT_PART_NAMES: readonly TransitPartName[] = [
+	"output",
+	"input",
+	"reasoning",
+	"toolTrace",
+	"transcript",
+];
 
 export interface TranscriptSpec {
 	optimize?: "verbatim" | "compact" | "snapcompact";

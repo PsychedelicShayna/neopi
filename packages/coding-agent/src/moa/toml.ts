@@ -105,9 +105,10 @@ function pushMember(lines: string[], member: MixtureMember): void {
 		lines.push(`instructions = ${tomlString(question.instructions)}`);
 		if (question.type === "choice") {
 			// TOML has no null: an empty rubric means "the option name suffices".
-			const criteria = Object.entries(question.criteria).map(
-				([label, rubric]): [string, string] => [label, tomlString(rubric ?? "")],
-			);
+			const criteria = Object.entries(question.criteria).map(([label, rubric]): [string, string] => [
+				label,
+				tomlString(rubric ?? ""),
+			]);
 			lines.push(`criteria = ${inlineTable(criteria)}`);
 		} else if (question.type === "score") {
 			lines.push(`criteria = ${tomlStringArray(question.criteria)}`);
@@ -134,8 +135,7 @@ function pushMember(lines: string[], member: MixtureMember): void {
 		lines.push("[mixtures.members.terminate]", `instructions = ${tomlString(member.terminate.instructions)}`);
 		if (member.terminate.criteria) lines.push(`criteria = ${conditionCriteria(member.terminate.criteria)}`);
 		if (member.terminate.state) lines.push(`state = ${tomlStringArray(member.terminate.state.map(snakePart))}`);
-		if (member.terminate.threshold !== undefined)
-			lines.push(`threshold = ${tomlNumber(member.terminate.threshold)}`);
+		if (member.terminate.threshold !== undefined) lines.push(`threshold = ${tomlNumber(member.terminate.threshold)}`);
 	}
 }
 
