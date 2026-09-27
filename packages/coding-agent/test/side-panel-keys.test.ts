@@ -4,7 +4,7 @@ import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/inp
 import { SidePanelController } from "@oh-my-pi/pi-coding-agent/modes/controllers/side-panel-controller";
 import { cfgSidebarEnabled } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
-import { Text } from "@oh-my-pi/pi-tui";
+import { type Component, Text } from "@oh-my-pi/pi-tui";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { TreeSelectorComponent } from "@oh-my-pi/pi-tui/overlays/tree-selector";
@@ -83,6 +83,37 @@ describe("app.sidebar.toggle routing", () => {
 			await h.settle();
 			expect(received).toEqual([ALT_T]);
 			expect(cfgSidebarEnabled.get(h.settings)).toBe(false);
+		} finally {
+			h.stop();
+		}
+	});
+
+	it("gives alt+t to a dialog stacked above the fullscreen panel", async () => {
+		const h = await harness(100);
+		try {
+			h.term.sendInput(ALT_T);
+			await h.settle();
+			expect(h.sidePanel.fullscreenOpen).toBe(true);
+
+			const received: string[] = [];
+			const dialog: Component = {
+				render: () => ["dialog"],
+				invalidate: () => {},
+				handleInput: (data: string) => received.push(data),
+			};
+			h.composer.ui.showOverlay(dialog);
+			await h.settle();
+			h.term.sendInput(ALT_T);
+			await h.settle();
+			expect(received).toEqual([ALT_T]);
+			expect(h.sidePanel.fullscreenOpen).toBe(true);
+
+			// Once the dialog closes, the key closes the panel again.
+			h.composer.ui.hideOverlay();
+			await h.settle();
+			h.term.sendInput(ALT_T);
+			await h.settle();
+			expect(h.sidePanel.fullscreenOpen).toBe(false);
 		} finally {
 			h.stop();
 		}

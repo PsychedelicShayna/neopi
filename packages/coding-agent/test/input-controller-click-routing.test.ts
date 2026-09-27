@@ -54,7 +54,7 @@ function makeHarness() {
 		showStatus: () => {},
 		setClickHoverId: () => {},
 		// No docked panel: every report continues to row routing.
-		sidePanel: { routeInlineMouse: () => false, fullscreenOpen: false, docked: false },
+		sidePanel: { routeInlineMouse: () => false, fullscreenActive: false, docked: false },
 	} as unknown as InteractiveModeContext;
 	const controller = new InputController(ctx);
 	controller.setupKeyHandlers();

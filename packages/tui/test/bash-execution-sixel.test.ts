@@ -58,6 +58,31 @@ describe("BashExecutionComponent SIXEL sanitization", () => {
 		expect(output).not.toContain("visible columns omitted");
 	});
 
+	it("keeps wide continuation rows of a payload split across streamed chunks", () => {
+		Bun.env.PI_FORCE_IMAGE_PROTOCOL = "sixel";
+		Bun.env.PI_ALLOW_SIXEL_PASSTHROUGH = "1";
+		vi.useFakeTimers();
+		try {
+			const wide = `#1${"~".repeat(5000)}-`;
+			// The start row arrives in one chunk, the wide row in the next.
+			const split = new BashExecutionComponent("printf sixel", ui, false);
+			split.appendOutput("\x1bPq#0;2;0;0;0\n");
+			vi.advanceTimersByTime(60);
+			split.appendOutput(`${wide}\n#0????\x1b\\`);
+			expect(split.getOutput()).toContain(wide);
+
+			// Same after the streaming cap has dropped the start row.
+			const capped = new BashExecutionComponent("printf sixel", ui, false);
+			capped.appendOutput(`\x1bPq#0;2;0;0;0\n${Array.from({ length: 120 }, () => "#1~~~~-").join("\n")}\n`);
+			vi.advanceTimersByTime(60);
+			capped.appendOutput(`${wide}\n#0????\x1b\\`);
+			expect(capped.getOutput()).not.toContain("\x1bPq");
+			expect(capped.getOutput()).toContain(wide);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("still truncates long non-SIXEL lines", () => {
 		Bun.env.PI_FORCE_IMAGE_PROTOCOL = "sixel";
 		Bun.env.PI_ALLOW_SIXEL_PASSTHROUGH = "1";

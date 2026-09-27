@@ -283,6 +283,38 @@ describe("Composer side panel: history and geometry", () => {
 		}
 	});
 
+	it("docking before the first paint leaves the parent terminal's scrollback alone", async () => {
+		const term = new VirtualTerminal(120, 24, 5000);
+		for (let index = 0; index < 40; index++) term.write(`shell line ${index}\r\n`);
+		const writes: string[] = [];
+		const realWrite = term.write.bind(term);
+		vi.spyOn(term, "write").mockImplementation((data: string) => {
+			writes.push(data);
+			realWrite(data);
+		});
+		const scheduler = new VirtualRenderScheduler();
+		const composer = new Composer({
+			terminal: term,
+			tuiOptions: { renderScheduler: scheduler },
+			preferences: { ...COMPOSER_DEFAULTS, quiet: true, resizeScrollback: "rebuild" },
+		});
+		const panel = new SidePanel();
+		composer.setRuntimeChildren([new TranscriptContainer(), new Text("EDITOR", 0, 0)]);
+		// InteractiveMode.init configures the panel before it starts the composer.
+		composer.setSidePanel(panel, RIGHT);
+		composer.start({ clearScrollback: false });
+		try {
+			await scheduler.settle(term);
+			expect(composer.sidePanelDocked).toBe(true);
+			const written = writes.join("");
+			expect(written).not.toContain("\x1b[3J");
+			expect(written).not.toContain("\x1b[2J");
+			expect(term.getScrollBuffer().some(row => row.startsWith("shell line 0"))).toBe(true);
+		} finally {
+			composer.stop();
+		}
+	});
+
 	it("bypasses the split when the terminal is narrower than the dock threshold", async () => {
 		for (const [columns, splitAt] of [
 			[100, 110],

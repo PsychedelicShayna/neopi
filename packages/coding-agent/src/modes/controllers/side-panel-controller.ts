@@ -37,6 +37,7 @@ export class SidePanelController {
 	readonly #host: SidePanelHost;
 	readonly #panel: SidePanel;
 	#fullscreen: OverlayHandle | undefined;
+	#fullscreenComponent: SidePanelFullscreenComponent | undefined;
 
 	constructor(host: SidePanelHost) {
 		this.#host = host;
@@ -80,6 +81,7 @@ export class SidePanelController {
 			toggleKeys: this.#host.keybindings.getKeys("app.sidebar.toggle"),
 			rows: () => ui.terminal.rows,
 		});
+		this.#fullscreenComponent = component;
 		this.#fullscreen = ui.showOverlay(component, {
 			anchor: "top-left",
 			width: "100%",
@@ -94,11 +96,20 @@ export class SidePanelController {
 	closeFullscreen(): void {
 		const handle = this.#fullscreen;
 		this.#fullscreen = undefined;
+		this.#fullscreenComponent = undefined;
 		handle?.hide();
 	}
 
 	get fullscreenOpen(): boolean {
 		return this.#fullscreen !== undefined;
+	}
+
+	/**
+	 * Whether the fullscreen form is open and is the active overlay (holds
+	 * focus). A dialog stacked above it keeps its own keys, the toggle included.
+	 */
+	get fullscreenActive(): boolean {
+		return this.#fullscreenComponent !== undefined && this.#host.ui.getFocused() === this.#fullscreenComponent;
 	}
 
 	scrollBy(delta: number): void {

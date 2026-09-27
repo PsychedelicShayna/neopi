@@ -368,8 +368,10 @@ export class InputController {
 					// The inline tree selector binds Alt+T to its no-tools filter; its
 					// own binding stays authoritative, as for Alt+L above.
 					if (this.ctx.ui.getFocused() instanceof TreeSelectorComponent) return undefined;
-					// The same key closes the fullscreen form; under any other overlay it is inert.
-					if (this.ctx.ui.hasOverlay() && !this.ctx.sidePanel.fullscreenOpen) return undefined;
+					// The same key closes the fullscreen form while that form is the active
+					// overlay; under any other overlay, including a dialog stacked above the
+					// form, the focused component keeps the key.
+					if (this.ctx.ui.hasOverlay() && !this.ctx.sidePanel.fullscreenActive) return undefined;
 					this.ctx.sidePanel.toggle();
 					return { consume: true };
 				}
