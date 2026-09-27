@@ -155,6 +155,27 @@ describe("SidePanelController", () => {
 		}
 	});
 
+	it("raises the dock threshold to what custom minimum widths need", async () => {
+		// 60-column panel + 60-column chat + divider need 123 columns; the default 110 cannot dock them.
+		const h = await harness(120, { "sidebar.width.min": 60, "sidebar.width.max": 80, "sidebar.splitAt": 110 });
+		try {
+			h.controller.toggle();
+			await h.settle();
+			// 120 columns is narrow for these widths: the toggle shows the fullscreen form.
+			expect(h.controller.fullscreenOpen).toBe(true);
+			expect(cfgSidebarEnabled.get(h.settings)).toBe(false);
+			h.controller.closeFullscreen();
+			h.term.resize(130, 24);
+			await h.settle();
+			h.controller.toggle();
+			await h.settle();
+			expect(h.controller.docked).toBe(true);
+			expect(h.composer.sidePanelGeometry()?.panelRect.width).toBeGreaterThanOrEqual(60);
+		} finally {
+			h.stop();
+		}
+	});
+
 	for (const side of ["right", "left"] as const) {
 		it(`routes inline mouse by column on a ${side} dock`, async () => {
 			const h = await harness(120, { "sidebar.enabled": true, "sidebar.side": side });

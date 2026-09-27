@@ -176,7 +176,10 @@ export class SidePanelController {
 		const smallest = min + CHAT_MIN_WIDTH + DIVIDER_WIDTH;
 		if (splitAt < smallest) {
 			this.#warnInvalid(cfgSidebarSplitAt.id, splitAt, `below the ${smallest} columns a dock needs`);
-			splitAt = cfgSidebarSplitAt.default;
+			// The default may be too small for custom minimums as well; the
+			// threshold must admit both panes, or a wide toggle would enable a
+			// dock the split can never show and never offer the fullscreen form.
+			splitAt = Math.max(cfgSidebarSplitAt.default, smallest);
 		}
 		return {
 			side: cfgSidebarSide.get(settings),
