@@ -48,6 +48,7 @@ export type AuthProviderId =
 	| "minimax-code"
 	| "minimax-code-cn"
 	| "mistral"
+	| "mixture"
 	| "moonshot"
 	| "muse-code"
 	| "nanogpt"
