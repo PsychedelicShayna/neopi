@@ -580,6 +580,7 @@ Details, numbered for review:
 
    ```ts
    // output-pane.ts, after sixelMask/hasSixel (:66-68), before styling
+   const sixelSpan = hasSixel;                                    // remembered for the cap decision
    if (hasSixel && getInlineImagePresentation() === "text") {
      let spanStart = true;
      rawLines = rawLines.map((line, i) => {
@@ -588,15 +589,24 @@ Details, numbered for review:
        spanStart = false;
        return out;
      });
-     sixelMask = undefined; hasSixel = false;                     // downstream treats them as text
+     sixelMask = undefined; hasSixel = false;                     // styling and the result see text
    }
+   // Cap decision uses sixelSpan, not hasSixel: rows that held a span stay
+   // uncapped under `uncapSixel` in text mode exactly as in graphics mode,
+   // so docked and undocked row counts match and the label is never cut
+   // off by a tail preview (360a3e99f4).
+   const limit = sixelSpan && options.uncapSixel ? undefined : configuredLimit;
    ```
 
    Consequences: the row count is unchanged (a 4-row payload becomes label +
    3 blanks; a capped streaming payload becomes label + blanks over its
    surviving rows, because the branch starts with `spanStart = true` and
    the continuation bit marks row 0 as mid-span, so the first surviving row
-   carries the label),
+   carries the label; and the rows stay **uncapped** whenever the caller
+   passes `uncapSixel`, because the cap decision reads whether the rows
+   *held* a span, not the post-transform `hasSixel` — otherwise bash's tail
+   preview would cap a long payload to its last rows and drop the label,
+   360a3e99f4), the returned `hasSixel` reports the rows as text,
    the underlying `#outputLines` of the producer keep the raw bytes
    (`bash-execution.ts:378`, undocked frames render them again), and
    because `Image`-free producers re-render on every frame at the composer's
