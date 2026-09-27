@@ -365,6 +365,9 @@ export class InputController {
 			// focused prompt. Keep focused components' own bindings authoritative.
 			this.ctx.ui.addInputListener(data => {
 				if (this.ctx.keybindings.matches(data, "app.sidebar.toggle")) {
+					// The inline tree selector binds Alt+T to its no-tools filter; its
+					// own binding stays authoritative, as for Alt+L above.
+					if (this.ctx.ui.getFocused() instanceof TreeSelectorComponent) return undefined;
 					// The same key closes the fullscreen form; under any other overlay it is inert.
 					if (this.ctx.ui.hasOverlay() && !this.ctx.sidePanel.fullscreenOpen) return undefined;
 					this.ctx.sidePanel.toggle();
