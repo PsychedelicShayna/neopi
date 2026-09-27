@@ -344,7 +344,13 @@ Internals (one scrolling owner, A4):
   `MouseRoutable` (`isLayoutMouseRoutable`, `geometry.ts:167-169`); `gap`
   rows and clicks on the scrollbar column are consumed.
 - **Change notification.** `register`/`unregister`/`setCollapsed`/`scrollBy`
-  and a section's own `update` call `onChange` (installed by the controller).
+  call `onChange` (installed by the controller, mapped to
+  `ui.requestRender()`). A section's own update path calls it **only when
+  the data arrives outside a host path that already requests a render**;
+  otherwise it stores state and nothing more, exactly like the HUD
+  containers. Calling it from a path that already requests a render turns
+  one coalesced burst into two requests (`subagent-hud-render`'s
+  one-request contract; regression fixed in `414a215185`).
 - `invalidate()` invalidates every section component and `PanelRows`;
   `dispose()` disposes section components. Both are called explicitly by the
   controller (§3.4) because the panel is not in the TUI child tree.
@@ -1003,8 +1009,12 @@ Change (one canonical todo-view state, A5):
   (the panel's `fitLayoutLine` pads). The HUD keeps wrapping the same rows
   in `Text(…, 1, 0)` with its blank line and `TODO` header exactly as today,
   so the HUD output is byte-identical. The section is always expanded; the
-  document scroll (§3.2) reaches every row. `update()` stores the input and
-  calls the panel's `onChange`.
+  document scroll (§3.2) reaches every row. `update()` **stores the input
+  only**: every caller of `#renderTodoList` (the observer flush,
+  `setTodos`, `setTodoExpanded`, auto-dismiss, reconcile, `reloadTodos`)
+  already requests a render right after it, so the section, like the HUD
+  container it mirrors, requests none of its own. `TodoSection`'s
+  constructor takes no argument.
 - `/todo expand|collapse` are unchanged. `expand` clears `#todoHudHidden`,
   which `#renderTodoList` forwards as `hidden: false`, so it reveals the
   section exactly as it reveals the HUD; `collapse` only affects the HUD's
@@ -1213,6 +1223,7 @@ export class MixtureTraceSection implements SidePanelSection {
   readonly id = "mixture-trace";
   readonly title = "MIXTURE";
   readonly order = 20;
+  /** Session events arrive outside any render-requesting host path, so this section does notify (§3.2 rule). */
   constructor(private readonly onChange: () => void) {}
   /** Live path: every mixture_* AgentSessionEvent, each carrying MixtureTraceDetails. */
   handleEvent(event: Extract<AgentSessionEvent, { type: `mixture_${string}` }>): void;
