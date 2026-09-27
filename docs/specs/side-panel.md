@@ -452,17 +452,28 @@ Details, numbered for review:
      \` ${theme.fg("border", theme.boxRound.vertical)} \``. Otherwise update
      in place: `setRightSize`/`setLeftSize`, `setLeftMinWidth`/`setRightMinWidth`,
      `setSplitAt`.
-   - `after = this.#effectiveChatWidth(columns)`. If `after !== before` and
-     `refreshHistory` → `this.ui.refreshHistoryAfterWidthChange()` (§3.6)
-     then `this.ui.requestRender(true)`. If `after !== before` and
-     `!refreshHistory` (teardown) → nothing: no refresh, no render request.
-     If only `side` changed → `requestRender(true)` (retired rows are
-     width-only; **no** history refresh in any mode). Otherwise
-     `requestRender()`.
-   - **Teardown order** (G2.1). `SidePanelController.dispose()` runs while
-     the TUI can still paint (controllers are disposed before `ui.stop()`),
-     so `refreshHistory: false` is what prevents the rebuild-mode ED3 at
-     quit, not the `#stopped` guard in §3.6.
+   - `after = this.#effectiveChatWidth(columns)`. With `refreshHistory`
+     (the default): if `after !== before` →
+     `this.ui.refreshHistoryAfterWidthChange()` (§3.6) then
+     `this.ui.requestRender(true)`; if only `side` changed →
+     `requestRender(true)` (retired rows are width-only; **no** history
+     refresh in any mode); otherwise `requestRender()`. With
+     `refreshHistory: false` (teardown) → **nothing**, whatever changed: no
+     refresh and no render request, even when the chat width is unchanged
+     (G1, `7574990dca`: the post-stop undock must schedule no paint).
+   - **Teardown order** (G2.1, corrected by G1 `7574990dca`).
+     `InteractiveMode.stop` calls `ui.stop()` **first**, while the panel is
+     still docked: `TUI.stop`'s history flush (`beginHistoryFlush`,
+     `composer.ts:797-808`) composes the docked frame, so the not-yet-retired
+     transcript tail reaches the terminal wrapped at the chat width it was
+     painted at, never at the full terminal width. `SidePanelController.dispose()`
+     runs **after** `ui.stop()` and calls `setSidePanel(undefined, undefined,
+     { refreshHistory: false })`, which refreshes no history and requests no
+     render; with the TUI already stopped there is nothing to paint, and the
+     flag guarantees the undock cannot latch a rebuild-mode ED3 either way.
+     Pinned by `packages/coding-agent/test/side-panel-teardown.test.ts`: four
+     100-column unretired entries, dock at 120 columns, quit — every entry
+     reaches the terminal at the 81-column chat width, no ED3.
    - **Coalescing with a physical resize** (A2). Under rebuild, the TUI's
      `clearScrollback` latch makes a second request a plain forced repaint
      (`tui.ts:2151-2154`, `:2710-2713`). Under append, `Composer.beginHistoryReplay`
@@ -811,11 +822,14 @@ Behaviour:
   return `true`; divider or pad columns → clear the hover target, return
   `true` (consumed, no chat action). Both sides are covered because
   `chatRect`/`panelRect` come from the join.
-- `invalidate()` → `panel.invalidate()`. `dispose()` (G2.1) →
-  `closeFullscreen()`, `panel.dispose()`, `composer.setSidePanel(undefined,
-  undefined, { refreshHistory: false })`, and no `requestRender`. It runs
-  from `InteractiveMode`'s teardown while the TUI can still paint; the flag
-  is what keeps a quit from rebuilding scrollback.
+- `invalidate()` → `panel.invalidate()`. `dispose()` (G2.1, order per G1
+  `7574990dca`) → `closeFullscreen()`, `panel.dispose()`,
+  `composer.setSidePanel(undefined, undefined, { refreshHistory: false })`,
+  and no `requestRender`. It runs from `InteractiveMode.stop` **after**
+  `ui.stop()`, so the quit flush has already written the transcript tail at
+  the docked chat width; the flag keeps the trailing undock from touching
+  history, and `setSidePanel` with `refreshHistory: false` schedules no
+  paint on a stopped TUI.
 
 Wiring in `InteractiveMode`:
 
