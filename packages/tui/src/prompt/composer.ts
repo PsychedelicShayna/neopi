@@ -631,6 +631,11 @@ export class Composer implements TerminalFrameProvider {
 		this.#hoveredClickId = id;
 	}
 
+	/** Click-candidate id the hover band currently follows, if any. */
+	get hoveredClickId(): string | undefined {
+		return this.#hoveredClickId;
+	}
+
 	/**
 	 * Dock, re-dock with new options, or undock (`undefined`). The chat width is
 	 * resolved before and after: a change refreshes native history under the

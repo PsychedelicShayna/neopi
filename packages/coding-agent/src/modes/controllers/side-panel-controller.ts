@@ -128,8 +128,13 @@ export class SidePanelController {
 		const local = event.row - viewport.top;
 		if (local < 0 || local >= viewport.length) return false;
 		if (withinColumns(geometry.chatRect, event.col)) return false;
-		// Leaving the chat column drops the hovered card's band.
-		composer.setHoveredClickId(undefined);
+		// Leaving the chat column drops the hovered card's band. The consumed
+		// event reaches no other repaint, so repaint here — only when a band
+		// was actually showing, never for plain motion over the panel.
+		if (composer.hoveredClickId !== undefined) {
+			composer.setHoveredClickId(undefined);
+			ui.requestRender();
+		}
 		if (withinColumns(geometry.panelRect, event.col)) {
 			this.#panel.routeMouse(event, local - geometry.panelRect.row, event.col - geometry.panelRect.col);
 		}

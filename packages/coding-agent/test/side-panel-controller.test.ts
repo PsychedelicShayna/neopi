@@ -184,12 +184,21 @@ describe("SidePanelController", () => {
 				// Panel body row 1 (under the title): routed with the panel-local row.
 				expect(h.controller.routeInlineMouse(click(1, panelRect.col + 1))).toBe(true);
 				expect(routed).toEqual([0]);
-				// Divider: consumed with no action; the chat hover band is dropped.
-				expect(h.controller.routeInlineMouse(click(cardRow, dividerCol + 1))).toBe(true);
-				expect(routed).toEqual([0]);
+				// Divider: consumed with no action; the painted hover band clears on its own.
+				h.composer.setHoveredClickId("AgentA");
 				h.composer.ui.requestRender();
 				await h.settle();
+				expect(h.term.getViewportRowBackgroundColumns(cardRow).length).toBeGreaterThan(0);
+				expect(h.controller.routeInlineMouse(click(cardRow, dividerCol + 1))).toBe(true);
+				expect(routed).toEqual([0]);
+				await h.settle();
 				expect(h.term.getViewportRowBackgroundColumns(cardRow)).toEqual([]);
+				// With no hover target left, further motion over the divider paints nothing.
+				const writes = vi.spyOn(h.term, "write");
+				expect(h.controller.routeInlineMouse(click(cardRow, dividerCol + 1))).toBe(true);
+				await h.settle();
+				expect(writes).not.toHaveBeenCalled();
+				writes.mockRestore();
 				// Out-of-range rows are not routed.
 				expect(h.controller.routeInlineMouse(click(24, panelRect.col + 1))).toBe(false);
 				// While the alt screen owns the display no viewport is published: nothing routes.
