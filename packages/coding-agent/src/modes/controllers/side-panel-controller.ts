@@ -142,8 +142,9 @@ export class SidePanelController {
 	}
 
 	/**
-	 * Teardown, while the TUI can still paint: undock without a history refresh
-	 * (a quit must never clear scrollback) and without requesting a render.
+	 * Teardown, after the TUI's stop flush has retired the tail at the docked
+	 * width: undock without a history refresh (a quit must never clear
+	 * scrollback) and without requesting a render.
 	 */
 	dispose(): void {
 		this.closeFullscreen();

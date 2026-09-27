@@ -5993,9 +5993,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#agentRegistryUnsubscribe?.();
 		this.#agentRegistryUnsubscribe = undefined;
 		this.#agentRegistrySubscriptionTarget = undefined;
-		// Undock while the TUI can still paint, without a history refresh: a quit
-		// must leave scrollback exactly as painted.
-		this.#sidePanelController.dispose();
 		this.#eventController.dispose();
 		this.#codexResetFireworksController.dispose();
 		this.statusLine.dispose();
@@ -6018,6 +6015,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.ui.stop();
 			this.#ownsStartedUi = false;
 		}
+		// Undock only after the stop flush: the un-retired tail must reach
+		// scrollback at the docked chat width it was painted at, and the undock
+		// itself refreshes no history, so a quit leaves scrollback as painted.
+		this.#sidePanelController.dispose();
 		this.isInitialized = false;
 	}
 

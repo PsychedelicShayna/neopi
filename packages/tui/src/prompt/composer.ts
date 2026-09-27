@@ -635,7 +635,7 @@ export class Composer implements TerminalFrameProvider {
 	 * Dock, re-dock with new options, or undock (`undefined`). The chat width is
 	 * resolved before and after: a change refreshes native history under the
 	 * resize-scrollback policy (unless `refreshHistory` is false, as at
-	 * teardown, which also requests no render); a pure side flip at the same
+	 * teardown, which also never requests a render); a pure side flip at the same
 	 * width only repaints, since retired rows depend on width alone.
 	 */
 	setSidePanel(panel: DockablePanel | undefined, dock?: SidePanelDock, options: SetSidePanelOptions = {}): void {
@@ -664,9 +664,10 @@ export class Composer implements TerminalFrameProvider {
 			split.setSplitAt(dock.splitAt);
 			this.#dock = dock;
 		}
+		// Teardown: no history refresh and no render request, whatever changed.
+		if (!refreshHistory) return;
 		const after = this.#effectiveChatWidth(columns);
 		if (after !== before) {
-			if (!refreshHistory) return;
 			this.ui.refreshHistoryAfterWidthChange();
 			this.ui.requestRender(true);
 			return;
