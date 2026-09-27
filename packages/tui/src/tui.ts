@@ -2754,9 +2754,12 @@ export class TUI extends Container {
 	 * Refresh native history after a settled change of the width content is
 	 * wrapped at — a terminal resize, or a docked side panel changing the chat
 	 * column — per {@link ResizeScrollbackMode}. `preserve` leaves history alone.
+	 * Before the first paint there is nothing of ours to refresh: the first
+	 * frame already composes at the current width, and a rebuild here would
+	 * erase the parent shell's scrollback that `start()` was asked to keep.
 	 */
 	refreshHistoryAfterWidthChange(): void {
-		if (this.#stopped || this.#frameProvider?.beginHistoryReplay === undefined) return;
+		if (this.#stopped || !this.#hasEverRendered || this.#frameProvider?.beginHistoryReplay === undefined) return;
 		if (this.#resizeScrollbackMode === "preserve") return;
 		if (this.#clearScrollbackOnNextRender) {
 			this.#forceViewportRepaintOnNextRender = true;
