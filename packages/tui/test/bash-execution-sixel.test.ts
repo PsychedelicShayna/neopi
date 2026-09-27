@@ -2,6 +2,9 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:
 import { BashExecutionComponent } from "@oh-my-pi/pi-tui/chat/bash-execution";
 import { getThemeByName, setThemeInstance, type Theme } from "@oh-my-pi/pi-tui/theme";
 import { sanitizeWithOptionalSixelPassthrough } from "@oh-my-pi/pi-tui/render/sixel";
+import { formatOutputPaneLines } from "@oh-my-pi/pi-tui/render/output-pane";
+import { setInlineImagePresentation } from "@oh-my-pi/pi-tui/components/image";
+import { ImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import type { TUI } from "@oh-my-pi/pi-tui";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 
@@ -187,5 +190,48 @@ describe("BashExecutionComponent expand footer", () => {
 		const rendered = component.render(120).join("\n");
 		expect(rendered).toContain("more lines");
 		expect(rendered).toContain("ctrl+o to expand");
+	});
+});
+
+describe("formatOutputPaneLines SIXEL presentation", () => {
+	const terminal = TERMINAL as unknown as { imageProtocol: ImageProtocol | null };
+	const originalProtocol = TERMINAL.imageProtocol;
+
+	beforeEach(() => {
+		setThemeInstance(darkTheme);
+		terminal.imageProtocol = ImageProtocol.Sixel;
+	});
+	afterEach(() => {
+		terminal.imageProtocol = originalProtocol;
+		setInlineImagePresentation("graphics");
+	});
+
+	// libsixel splits one payload across rows; only the first carries the start marker.
+	const payload = ["\x1bPq#0;2;0;0;0", "#1~~~~-", "#1@@@@-", "#0????\x1b\\"];
+	const lines = [...payload, "between", ...payload];
+	const format = () =>
+		formatOutputPaneLines(
+			{ lines, expanded: true, collapsedMaxLines: 100, styleLine: line => `<${line}>` },
+			darkTheme,
+		);
+
+	it("passes raw payload rows through as graphics", () => {
+		const result = format();
+		expect(result.hasSixel).toBe(true);
+		expect(result.lines).toEqual([...payload, "<between>", ...payload]);
+	});
+
+	it("replaces every payload row with a label and blanks while images are text", () => {
+		setInlineImagePresentation("text");
+		const result = format();
+		expect(result.hasSixel).toBe(false);
+		expect(result.lines).toHaveLength(lines.length);
+		const plain = result.lines.map(line => Bun.stripANSI(line));
+		// Each span is label + 3 blanks; the row between two payloads is untouched.
+		expect(plain.slice(0, 4)).toEqual(["<[image omitted while docked]>", "<>", "<>", "<>"]);
+		expect(plain[4]).toBe("<between>");
+		expect(plain.slice(5)).toEqual(["<[image omitted while docked]>", "<>", "<>", "<>"]);
+		expect(result.lines.join("")).not.toContain("\x1bP");
+		expect(result.lines.join("")).not.toContain("~~~~");
 	});
 });

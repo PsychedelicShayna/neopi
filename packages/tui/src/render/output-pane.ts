@@ -1,3 +1,4 @@
+import { getInlineImagePresentation } from "../components/image";
 import { Text } from "../components/text";
 import { ImageProtocol, TERMINAL } from "../terminal-capabilities";
 import type { Theme } from "../theme/theme";
@@ -62,10 +63,30 @@ function defaultHiddenLabel(hidden: number, shown: number, total: number, edge: 
  */
 export function formatOutputPaneLines(options: OutputPaneFormatOptions, theme: Theme): OutputPaneFormatResult {
 	const edge = options.edge ?? "head";
-	const rawLines = options.lines;
-	const sixelMask =
+	let rawLines = options.lines;
+	let sixelMask =
 		TERMINAL.imageProtocol === ImageProtocol.Sixel && rawLines.length > 0 ? getSixelLineMask(rawLines) : undefined;
-	const hasSixel = sixelMask?.some(Boolean) ?? false;
+	let hasSixel = sixelMask?.some(Boolean) ?? false;
+	if (hasSixel && getInlineImagePresentation() === "text") {
+		// A docked frame shows images as text. The mask spans the whole logical
+		// payload, so replace each span with one label row plus blanks: the row
+		// count is unchanged, and no continuation row can leak raw SIXEL bytes
+		// even when the block's head is later clipped or retired. The caller's
+		// raw lines are untouched, so undocked frames render the image again.
+		const mask = sixelMask;
+		let spanStart = true;
+		rawLines = rawLines.map((line, index) => {
+			if (!mask?.[index]) {
+				spanStart = true;
+				return line;
+			}
+			const replacement = spanStart ? theme.fg("muted", "[image omitted while docked]") : "";
+			spanStart = false;
+			return replacement;
+		});
+		sixelMask = undefined;
+		hasSixel = false;
+	}
 	const styledLines = rawLines.map((line, index) =>
 		sixelMask?.[index] ? line : (options.styleLine?.(line, index) ?? line),
 	);
