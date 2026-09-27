@@ -725,6 +725,27 @@ describe("provider context for members", () => {
 			);
 		expect(delivered).toHaveLength(7);
 	});
+
+	it("gives every member call the session's per-request provider options, as a native model gets them", async () => {
+		const settings = Settings.isolated({
+			...SETTINGS,
+			"providers.kimiApiFormat": "anthropic",
+			"providers.openaiWebsockets": "off",
+			"thinkingBudgets.medium": 12_345,
+		});
+		const session = await mixtureSession(DRAFT_THEN_EDIT_TOML, undefined, settings);
+		await session.sendUserMessage("question");
+		await session.setModel(fixture.registry.find("fake", "other")!);
+		await session.sendUserMessage("follow-up");
+
+		const observed = (modelId: string) => {
+			const options = members.callsTo(modelId)[0]?.options;
+			return [options?.kimiApiFormat, options?.preferWebsockets, options?.thinkingBudgets?.medium];
+		};
+		expect(observed("other")).toEqual(["anthropic", false, 12_345]);
+		expect(observed("writer")).toEqual(observed("other"));
+		expect(observed("editor")).toEqual(observed("other"));
+	});
 });
 
 describe("engine contract through a session host", () => {

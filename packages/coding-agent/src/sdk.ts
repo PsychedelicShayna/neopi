@@ -4138,12 +4138,15 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			return settingsAwareStreamFn(streamModel, context, streamOptions);
 		};
 		// One mixture host per session, living only in the primary wrapper's closure (never in
-		// primaryStreamFn, which the auto-learn capture agent also uses).
+		// primaryStreamFn, which the auto-learn capture agent also uses). Member calls do go
+		// through primaryStreamFn: it fills the per-request provider options against the
+		// member model it is handed, and a member is never a mixture, so it cannot re-enter
+		// the branch.
 		const sessionMixtureHost = createSessionMixtureHost({
 			sessionManager,
 			modelRegistry,
 			settings,
-			stream: settingsAwareStreamFn,
+			stream: primaryStreamFn,
 			prepareContext: transformMemberContext,
 			emit: event => session?.emitMixtureEvent(event),
 			notice: (level, message) => session?.emitNotice(level, message, "mixture"),
