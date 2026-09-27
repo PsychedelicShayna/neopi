@@ -60,6 +60,12 @@ export class MixtureRunStore {
 		return undefined;
 	}
 
+	/** Whether `run` is still one of this store's runs (not dropped by {@link clear}). */
+	holds(run: MixtureRun): boolean {
+		for (const entry of this.#entries.values()) if (entry.run === run) return true;
+		return false;
+	}
+
 	/** Every run this store holds. */
 	runs(): MixtureRun[] {
 		const runs: MixtureRun[] = [];
@@ -67,6 +73,7 @@ export class MixtureRunStore {
 		return runs;
 	}
 
+	/** Drop every run; a call still executing keeps its entry but is no longer held. */
 	clear(): void {
 		this.#entries.clear();
 	}

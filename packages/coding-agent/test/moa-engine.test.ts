@@ -461,6 +461,44 @@ describe("member error, retry, and usage accounting", () => {
 	});
 });
 
+describe("conversation reset", () => {
+	it("runs both members again for the same prompt after /clear, and counts only the fresh attempts", async () => {
+		const session = await mixtureSession();
+		const observe = vi.spyOn(fixture.authStorage.usage, "observe");
+		members.script("writer", { text: "draft one", cost: 0.01 }, { text: "draft two", cost: 0.03 });
+		members.script("editor", { text: "answer one", cost: 0.02 }, { text: "answer two", cost: 0.04 });
+		await session.sendUserMessage("Q");
+		const before = lastAssistant(session);
+
+		expect(await session.resetSessionContext()).toBeDefined();
+		await session.sendUserMessage("Q");
+
+		expect(members.calls.map(call => call.model.id)).toEqual(["writer", "editor", "writer", "editor"]);
+		const after = lastAssistant(session);
+		expect(after.content).toEqual([{ type: "text", text: "answer two" }]);
+		expect(after.responseId).not.toBe(before.responseId);
+		expect(after.usage.cost.total).toBeCloseTo(0.07, 10);
+		expect(session.getSessionStats().cost).toBeCloseTo(0.07, 10);
+		expect(observe.mock.calls.slice(2).map(([record]) => [record.model, record.costUsd])).toEqual([
+			["writer", 0.03],
+			["editor", 0.04],
+		]);
+	});
+
+	it("runs both members again for the same prompt after branching back to it", async () => {
+		const session = await mixtureSession();
+		members.script("editor", { text: "answer one" }, { text: "answer two" });
+		await session.sendUserMessage("Q");
+		const prompt = session.sessionManager
+			.getBranch()
+			.find(entry => entry.type === "message" && entry.message.role === "user")!;
+		expect((await session.branch(prompt.id)).cancelled).toBe(false);
+		await session.sendUserMessage("Q");
+		expect(members.calls.map(call => call.model.id)).toEqual(["writer", "editor", "writer", "editor"]);
+		expect(lastAssistant(session).content).toEqual([{ type: "text", text: "answer two" }]);
+	});
+});
+
 describe("caller abort", () => {
 	it("checkpoints the run, says the next message starts a new run, and starts one", async () => {
 		const session = await mixtureSession();

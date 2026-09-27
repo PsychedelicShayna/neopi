@@ -49,6 +49,12 @@ export interface SessionMixtureHostDeps {
 export interface SessionMixtureHost extends MixtureHost {
 	/** Called after the session appended an assistant entry: commits it when it is a mixture response. */
 	commitPersisted(message: AssistantMessage): void;
+	/**
+	 * The session replaced its conversation (`/clear`, a new or switched session, a
+	 * branch, tree navigation): drop every run so nothing replays or resumes across the
+	 * boundary. A run still finishing afterwards persists nothing.
+	 */
+	resetConversation(): void;
 }
 
 function traceSummary(details: MixtureTraceDetails): string {
@@ -95,6 +101,8 @@ export function createSessionMixtureHost(deps: SessionMixtureHostDeps): SessionM
 	};
 
 	const onEvent = (event: MixtureEvent): void => {
+		// A run dropped by a conversation reset must not write into the replacement transcript.
+		if (!runs.holds(event.run)) return;
 		switch (event.type) {
 			case "hop_end":
 				persistCard(event.trace);
@@ -170,6 +178,9 @@ export function createSessionMixtureHost(deps: SessionMixtureHostDeps): SessionM
 			});
 		},
 		onEvent,
+		resetConversation(): void {
+			runs.clear();
+		},
 		commitPersisted(message: AssistantMessage): void {
 			if (!isMixtureModel(message) || !message.responseId) return;
 			const run = runs.findByResponseId(message.responseId);

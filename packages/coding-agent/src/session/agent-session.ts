@@ -745,7 +745,7 @@ export class AgentSession implements SettingsScope {
 	/** Last (enable, providerId) tuple resolved by `#syncAppendOnlyContext` — used to skip no-op invalidations. */
 	#lastAppendOnlyResolution?: { enable: boolean; providerId: string | undefined };
 	#eventListeners: AgentSessionEventListener[] = [];
-	#mixtureHost: Pick<SessionMixtureHost, "commitPersisted"> | undefined;
+	#mixtureHost: Pick<SessionMixtureHost, "commitPersisted" | "resetConversation"> | undefined;
 	#activeToolExecutionUpdates = new Map<string, Extract<AgentSessionEvent, { type: "tool_execution_update" }>>();
 	#runStateListeners = new Set<(state: "running" | "idle") => void>();
 	#commandMetadataChangedListeners: CommandMetadataChangedListener[] = [];
@@ -2918,8 +2918,11 @@ export class AgentSession implements SettingsScope {
 		this.#emit(event);
 	}
 
-	/** Bind the session's mixture host, which commits mixture responses once they are persisted. */
-	attachMixtureHost(host: Pick<SessionMixtureHost, "commitPersisted">): void {
+	/**
+	 * Bind the session's mixture host: it commits mixture responses once they are persisted,
+	 * and drops its runs whenever the conversation is replaced.
+	 */
+	attachMixtureHost(host: Pick<SessionMixtureHost, "commitPersisted" | "resetConversation">): void {
 		this.#mixtureHost = host;
 	}
 
@@ -5523,6 +5526,7 @@ export class AgentSession implements SettingsScope {
 		// calls, and error state. agent.reset() keeps the model and system prompt.
 		this.#releaseQueuedTtsrReservations();
 		this.agent.reset();
+		this.#mixtureHost?.resetConversation();
 		this.#pendingNextTurnMessages = [];
 		this.#experimentalContextNotesReminder = undefined;
 		this.#scheduledHiddenNextTurnGeneration = undefined;
@@ -9033,6 +9037,7 @@ export class AgentSession implements SettingsScope {
 			try {
 				this.#releaseQueuedTtsrReservations();
 				this.agent.reset();
+				this.#mixtureHost?.resetConversation();
 				this.tokenRate.reset();
 				if (options?.drop && previousSessionFile) {
 					try {
@@ -10622,6 +10627,7 @@ export class AgentSession implements SettingsScope {
 			}
 
 			this.agent.replaceMessages(sessionContext.messages);
+			this.#mixtureHost?.resetConversation();
 			this.#reseedTokenRate();
 			this.#advisors.resetSessionState({ preserveCost: true });
 			this.#todo.syncFromBranch();
@@ -10938,6 +10944,7 @@ export class AgentSession implements SettingsScope {
 
 			if (!skipConversationRestore) {
 				this.agent.replaceMessages(sessionContext.messages);
+				this.#mixtureHost?.resetConversation();
 				this.#advisors.resetSessionState();
 				this.#closeCodexProviderSessionsForHistoryRewrite();
 			}
@@ -11073,6 +11080,7 @@ export class AgentSession implements SettingsScope {
 			}
 
 			this.agent.replaceMessages(sessionContext.messages);
+			this.#mixtureHost?.resetConversation();
 			this.#advisors.resetSessionState();
 			this.#closeCodexProviderSessionsForHistoryRewrite();
 			advisorRecordersDetached = false;
@@ -11397,6 +11405,7 @@ export class AgentSession implements SettingsScope {
 		const stateContext = this.sessionManager.buildSessionContext();
 		const displayContext = this.#withEvalStateContext(deobfuscateSessionContext(stateContext, this.#obfuscator));
 		this.agent.replaceMessages(displayContext.messages);
+		this.#mixtureHost?.resetConversation();
 		this.#rehydrateCheckpointRewindState();
 		this.#advisors.resetSessionState({ preserveCost: true });
 		this.#todo.syncFromBranch();
