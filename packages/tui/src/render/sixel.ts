@@ -44,6 +44,19 @@ export function getSixelLineMask(lines: readonly string[], startsInside = false)
 	});
 }
 
+/**
+ * Whether a SIXEL payload is still open after `lines`: the span state the
+ * next row enters with. `startsInside` is the state `lines[0]` enters with.
+ */
+export function sixelSpanContinues(lines: readonly string[], startsInside = false): boolean {
+	let inSequence = startsInside;
+	for (const line of lines) {
+		if (containsSixelSequence(line)) inSequence = true;
+		if (inSequence && (line.includes(SIXEL_END_SEQUENCE) || line.includes(SIXEL_END_BELL))) inSequence = false;
+	}
+	return inSequence;
+}
+
 /** Returns true when the line contains a SIXEL start sequence. */
 export function isSixelLine(line: string): boolean {
 	return containsSixelSequence(line);
