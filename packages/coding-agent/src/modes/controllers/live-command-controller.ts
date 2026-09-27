@@ -367,13 +367,16 @@ export class LiveCommandController {
 
 	#finish(session: LiveSessionController, error?: Error): void {
 		if (this.#session !== session) return;
+		// Stop first, while this session still owns the composer: stopping settles an accepted
+		// handoff synchronously, and its onDelegated must still find the committed speech.
+		const stopping = session.stop();
 		this.#session = undefined;
 		this.#release();
 		if (error) {
 			this.#showPhase("error");
 			this.#ctx.showError(error.message);
 		}
-		const settling = session.stop().catch(cause => {
+		const settling = stopping.catch(cause => {
 			logger.debug("Live session cleanup failed", { error: errorFrom(cause).message });
 		});
 		this.#settling = settling;
