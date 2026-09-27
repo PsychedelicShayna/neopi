@@ -156,6 +156,23 @@ export function commitMixtureResponse(run: MixtureRun, responseId: string): Oute
 	return record;
 }
 
+/**
+ * The step-0 rejection for a caller that requires a tool call (`any`/`named`) no
+ * member may produce; undefined when the requirement is satisfiable or optional.
+ */
+function unsatisfiableRequirement(resolved: ResolvedMixture, requirement: ToolRequirement): string | undefined {
+	if (requirement.kind !== "any" && requirement.kind !== "named") return undefined;
+	const satisfiable = Object.values(resolved.members).some(
+		member =>
+			member.kind === "model" &&
+			member.toolPolicy !== false &&
+			(requirement.kind === "any" || member.toolPolicy === true || member.toolPolicy.includes(requirement.name)),
+	);
+	if (satisfiable) return undefined;
+	const wanted = requirement.kind === "any" ? "a tool call" : `a call to ${requirement.name}`;
+	return `${ERROR_PREFIX.unsatisfiable}: the caller requires ${wanted}, but no member of mixture/${resolved.definition.name} may call tools`;
+}
+
 /** Run a mixture as a model. The session host is the only M1 caller. */
 export function streamMixture(
 	model: Model<Api>,
@@ -240,8 +257,11 @@ class MixtureCall {
 		const messages = this.#context.messages;
 		const existing = this.#entry.run;
 
-		// Step 0a: a repeat of the last request, checked before the cursor.
+		// Step 0a: a repeat of the last request, checked before the cursor. The requirement
+		// belongs to this call, not to the request it repeats: check it before any replay.
 		if (existing && existing.status !== "done" && isRepeatRequest(existing, messages)) {
+			const unsatisfiable = unsatisfiableRequirement(existing.resolved, requirement);
+			if (unsatisfiable) return this.#reject(unsatisfiable);
 			const outcome = existing.lastRequest.outcome;
 			if (outcome === "responded") {
 				const pending = existing.outerResponses.find(
@@ -257,7 +277,11 @@ class MixtureCall {
 			const pending = existing.outerResponses.find(
 				response => response.responseId === existing.lastRequest.responseId,
 			);
-			if (pending) return this.#replay(existing, pending);
+			if (pending) {
+				const unsatisfiable = unsatisfiableRequirement(existing.resolved, requirement);
+				if (unsatisfiable) return this.#reject(unsatisfiable);
+				return this.#replay(existing, pending);
+			}
 		}
 
 		// Step 0b: anchor, then walk the tail.
@@ -282,6 +306,8 @@ class MixtureCall {
 			return this.#reject("mixture run state does not match these tool results; send a new message");
 		}
 		if (existing?.status === "checkpoint") {
+			const unsatisfiable = unsatisfiableRequirement(existing.resolved, requirement);
+			if (unsatisfiable) return this.#reject(unsatisfiable);
 			existing.lastRequest = request;
 			existing.status = "running";
 			return this.#loop(existing);
@@ -299,22 +325,8 @@ class MixtureCall {
 	): Promise<void> {
 		const resolved = this.#host.resolveRun(key.mixture);
 		if (typeof resolved === "string") return this.#reject(resolved);
-		if (requirement.kind === "any" || requirement.kind === "named") {
-			const satisfiable = Object.values(resolved.members).some(
-				member =>
-					member.kind === "model" &&
-					member.toolPolicy !== false &&
-					(requirement.kind === "any" ||
-						member.toolPolicy === true ||
-						member.toolPolicy.includes(requirement.name)),
-			);
-			if (!satisfiable) {
-				const wanted = requirement.kind === "any" ? "a tool call" : `a call to ${requirement.name}`;
-				return this.#reject(
-					`${ERROR_PREFIX.unsatisfiable}: the caller requires ${wanted}, but no member of mixture/${key.mixture} may call tools`,
-				);
-			}
-		}
+		const unsatisfiable = unsatisfiableRequirement(resolved, requirement);
+		if (unsatisfiable) return this.#reject(unsatisfiable);
 		const now = Date.now();
 		const run: MixtureRun = {
 			id: Bun.randomUUIDv7(),

@@ -586,6 +586,36 @@ describe("engine contract through a session host", () => {
 		},
 	);
 
+	const REQUIRED_CHOICES: ToolChoice[] = ["required", "any", { type: "function", name: "yield" }];
+
+	it.each(REQUIRED_CHOICES)(
+		"rejects toolChoice %j on a repeat of a completed request, then still replays for auto",
+		async toolChoice => {
+			const first = await call([user("Q")], "auto");
+			for (const committed of [false, true]) {
+				if (committed) host.commitPersisted(first);
+				const forced = await call([user("Q")], toolChoice);
+				expect(forced.stopReason).toBe("error");
+				expect(forced.errorMessage?.startsWith("toolchoice.unsatisfiable")).toBe(true);
+			}
+			const replay = await call([user("Q")], "auto");
+			expect(replay.responseId).toBe(first.responseId);
+			expect(members.calls).toHaveLength(2);
+		},
+	);
+
+	it.each(REQUIRED_CHOICES)(
+		"rejects toolChoice %j on a retry of a failed request before any member reruns",
+		async toolChoice => {
+			members.script("editor", { error: { message: "overloaded", status: 529 } });
+			const failed = await call([user("Q")], "auto");
+			expect(failed.stopReason).toBe("error");
+			const forced = await call([user("Q")], toolChoice);
+			expect(forced.errorMessage?.startsWith("toolchoice.unsatisfiable")).toBe(true);
+			expect(members.calls).toHaveLength(2);
+		},
+	);
+
 	it("reports usage from the committed watermark: a response issued before commit reports from the same start", async () => {
 		const first = await call([user("one")]);
 		expect(first.usage.cost.total).toBeCloseTo(0.02, 10);
