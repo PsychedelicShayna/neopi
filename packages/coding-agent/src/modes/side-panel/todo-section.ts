@@ -211,18 +211,16 @@ export interface TodoSectionState {
  * The todo list as a side-panel section. Always expanded — the panel's
  * document scroll reaches every row — and empty (so the panel shows its
  * placeholder, not a bare title) when hidden or when no phase has tasks.
+ * Like the HUD it mirrors, it requests no render of its own: every caller of
+ * `InteractiveMode#renderTodoList` already requests one, so a burst of
+ * updates costs one frame request, not one per rebuild.
  */
 export class TodoSection implements SidePanelSection {
 	readonly id = "todo";
 	readonly title = "TODO";
 	readonly order = 10;
 	collapsed?: boolean;
-	readonly #onChange: () => void;
 	#state: TodoSectionState = { phases: [], activeDescs: [], hidden: false };
-
-	constructor(onChange: () => void) {
-		this.#onChange = onChange;
-	}
 
 	readonly content = (width: number): readonly string[] => {
 		const state = this.#state;
@@ -238,8 +236,8 @@ export class TodoSection implements SidePanelSection {
 		return new Text(lines.join("\n"), 0, 0).render(width);
 	};
 
+	/** Store the state the next frame renders; the caller requests that frame. */
 	update(state: TodoSectionState): void {
 		this.#state = state;
-		this.#onChange();
 	}
 }

@@ -57,7 +57,7 @@ describe("renderTodoLines", () => {
 	});
 
 	it("section renders nothing while dismissed and the expanded list otherwise", () => {
-		const section = new TodoSection(() => {});
+		const section = new TodoSection();
 		section.update({ phases: PLAN, activeDescs: [], hidden: true });
 		expect(section.content(40)).toEqual([]);
 		section.update({ phases: PLAN, activeDescs: [], hidden: false });

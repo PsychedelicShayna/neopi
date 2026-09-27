@@ -1018,7 +1018,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	 */
 	#todoPhasesOwner?: AgentSession;
 	#todoHudHidden = false;
-	readonly #todoSection = new TodoSection(() => this.ui.requestRender());
+	readonly #todoSection = new TodoSection();
 	#sidePanelController!: SidePanelController;
 	hideThinkingBlock = false;
 	#sessionsWithDisplayableThinkingContent = new WeakSet<AgentSession>();
