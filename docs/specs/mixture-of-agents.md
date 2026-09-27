@@ -1,7 +1,7 @@
 # Mixture of Agents (MoA): implementation specification
 
-Status: revision 6 (2026-09-27), after Shayna's round-1 to round-3
-decisions and six rounds of Grok and Astra critique. Implements
+Status: revision 6.1 (2026-09-27), approved at revision 6 by both critics,
+amended for M1 implementation questions. Implements
 [PsychedelicShayna/neopi#94](https://github.com/PsychedelicShayna/neopi/issues/94).
 Prior art: `docs/research/2026-09-26-multi-agent-orchestration.md` and the
 OmniRoute read-only survey summarized in §8.4. Proxy context: Shayna's
@@ -1073,7 +1073,7 @@ The cursor is **not** touched here.
 | steer | `paused` | steering hop at the paused member; a new soft-limit window is granted (§4.7) |
 | steer | `done`, `error` | the run is over; the steer text is an operator prompt: new run with it as topic |
 | operator prompt | none, `done`, `error` (not a retry) | new run; topic = the text; images forwarded to the entry hop |
-| operator prompt | `paused`, `checkpoint` | treated as a steer (the pause/checkpoint notice told the operator so); `/mixture reset` or a new conversation starts fresh |
+| operator prompt | `paused`, `checkpoint` | treated as a steer (the pause/checkpoint notice told the operator so); `/mixture reset` or a new conversation starts fresh. **Before M3 ships steering hops**, this row instead starts a new run and the abort/checkpoint notice says so (§14 M1); M3 replaces the row with the steer |
 | operator prompt | `running` | cannot happen in the session (the lock rejects it); in the gateway it is the busy error |
 | developer or notice messages only, no steer, no prompt | `checkpoint` | **continue**: resume at `run.phase` without a steering hop (a one-at-a-time steering queue can deliver a notice ahead of the user's steer, §6.2) |
 | developer or notice messages only | any other | error: `"mixture received no new input"` |
@@ -1197,8 +1197,9 @@ applied tool results are kept, the continuation is normalized exactly as for
 an error return (never `generating`), the run is checkpointed with
 `status: "checkpoint"`, and the outer message ends with
 `error`/`reason: "aborted"`. The next message on the same conversation resumes
-as a steer (§6.3). The engine distinguishes its own deadline from the caller's
-signal by checking which controller fired.
+as a steer (§6.3) once steering hops exist (M3); until then the abort notice
+states that the next message starts a new run. The engine distinguishes its
+own deadline from the caller's signal by checking which controller fired.
 
 ### 4.6 Fitting a hop request to the target model
 
@@ -1775,11 +1776,17 @@ They are independent.
   trace card.
 - `show = "never"`: the card carries no output body (the hop header and
   decisions still appear); the output still crosses edges as `x` declares.
-- `show = "final"`: the output body appears only when the hop turns out to be
-  terminal (in which case it is also the outer text).
+- `show = "final"`: the output is shown only when the hop turns out to be
+  terminal, and then as the outer text, not in the card.
 - `edge.show` overrides the source member's setting when that edge is taken.
 - The terminal hop's output is always the outer `text` (validation warns on
-  `show = "never"` for a terminal member, E10).
+  `show = "never"` for a terminal member, E10). **The terminal hop still
+  gets a card**, published like any other, but its `output` body is always
+  omitted (`visible: false`): the answer is the outer text directly beneath
+  it, and duplicating it would be noise. The card exists because its header
+  is the run's last persisted totals (`run.usd`, `run.hops`), which
+  projections read instead of summing hop usages (§7.1); without it a
+  hydrated panel would miss the terminal hop's cost.
 
 Effective visibility is therefore known only after step 6's decision, which
 is why the trace is published then (`hop.visible`), while `hop_start` and the
@@ -2136,10 +2143,14 @@ export function isMixtureModel(model: Model<Api>): boolean;
 ```
 
 - **One stable dispatcher.** `registerMixtureApi()` calls
-  `registerCustomApi(MIXTURE_API, dispatch)` with **no `sourceId`**, exactly
-  as `registerLocalInferenceApi` does (`packages/coding-agent/src/tiny/local-inference-api.ts:166-168`),
-  so `syncExtensionSources` / `clearSourceRegistrations`
-  (`model-registry.ts:2955-2964`, `:2914-2931`) never touch it. The
+  `registerCustomApi(MIXTURE_API, dispatch)` with **no `sourceId`**, so
+  `syncExtensionSources` / `clearSourceRegistrations`
+  (`model-registry.ts:2955-2964`, `:2914-2931`) never touch it.
+  `registerLocalInferenceApi` reaches the same safety a different way: it
+  passes `LOCAL_INFERENCE_SOURCE`
+  (`packages/coding-agent/src/tiny/local-inference-api.ts:166-168`), a
+  constant that is never an extension path, so `unregisterCustomApis` never
+  matches it. The
   dispatcher closes over nothing: it resolves a **headless host** from a
   module-level `Map<baseUrl, MixtureHost>` by `model.baseUrl`. Only the
   gateway installs one (`installHeadlessHost`). A model whose catalog has no
@@ -2344,7 +2355,7 @@ the judge with a scripted candidate plan; no `mock.module`.
 | File | Contract |
 |---|---|
 | `packages/coding-agent/test/moa-config.test.ts` | `parseMixturesDoc` turns a malformed member into a warning and keeps the valid mixtures; `serializeMixturesConfig` round-trips every document shape in §1.2 through `Bun.TOML.parse`; project shadows user by name in `discoverMixtures`, including an ancestor `.omp/MIXTURES.toml` |
-| `packages/coding-agent/test/moa-validate.test.ts` | one fixture per error code asserts the code and path; the M2 courtroom fixture yields zero errors; a two-member cycle with no terminate/route/cap yields exactly `cycle.unbounded`; `@default` bound to a mixture yields `member.model.recursive` for a member that uses it; an explicitly configured judge role bound to a mixture yields `helper.unresolved` on a routed graph; a linear graph whose `@default` is a mixture and whose judge chain has no native candidate resolves with zero errors and no `judgePlan`; a routed graph in the same configuration resolves with a plan that excludes the mixture; a verdict entry yields `entry.verdict`; a not-yet-shipped feature yields `unsupported.feature` |
+| `packages/coding-agent/test/moa-validate.test.ts` | one fixture per error code asserts the code and path; the M2 courtroom fixture yields zero errors (an M2 test: its `defend`/`judge` presets and `route`/`terminate` arrive with M2; at M1 the validate tests use M1 fixtures only, and the courtroom fixture is asserted to carry `unsupported.feature` among its errors); a two-member cycle with no terminate/route/cap yields exactly `cycle.unbounded`; `@default` bound to a mixture yields `member.model.recursive` for a member that uses it; an explicitly configured judge role bound to a mixture yields `helper.unresolved` on a routed graph; a linear graph whose `@default` is a mixture and whose judge chain has no native candidate resolves with zero errors and no `judgePlan`; a routed graph in the same configuration resolves with a plan that excludes the mixture; a verdict entry yields `entry.verdict`; a not-yet-shipped feature yields `unsupported.feature` |
 | `packages/coding-agent/test/moa-provider.test.ts` | with an empty auth store, **immediately** after `setRoster` and with no refresh: `getAvailable()` includes `mixture/<name>`, `hasConfiguredAuth` is true, `setModel` succeeds; the model survives `syncExtensionSources([])` and a forced `refresh()`; a definition with errors is absent; `setRoster` one → zero → one removes and restores the model; two sessions **sharing one registry** each `retain`, one releases, and the other still resolves `setModel(mixture/name)`; the last release unregisters; a `streamSimple` on a catalog with no headless host fails with the documented error |
 | `packages/coding-agent/test/moa-engine.test.ts` | linear A→B: the outer message contains only B's text (no thinking blocks) and B's captured context contains A's output and not A's reasoning when `x` omits it; `show = "never"` on A publishes a card without an output body while B still receives it, and an edge-level `show` override on the taken edge wins; member `error` on the first hop ends the outer stream with `error`/`reason: "error"` and the member's `errorStatus`, and an **identical** retry request (`[user U]` again) is recognised as a retry, re-runs only the failed member, and does not report "no new input"; the same after a consumed tool-result request errors, with the results applied once; a repeat of a **successful** tool-producing request with zero results applied replays the same outer tool-call ids without regenerating, and a repeat after a partial batch replays the remaining ids; caller abort yields `checkpoint` and the next message steers `activeMemberId`; `terminate` ends the run; `route` picks the judged edge, takes `fallback` below `min_confidence` on a native judge, ignores the floor on a one-hot judge, and pauses when the fallback is exhausted; `max_hops` with `pause` stops with the notice and the next message resumes with a fresh window while the hard cap still stops; each outer response's `usage` equals the settlements since the previous **committed** response, a second response issued before `commit` reports from the same `from`, `commit` advances the watermark and the cursor, the delta includes a failed judge attempt and the summarizer call, `usageBreakdown` names the real providers, and `onSettlement` fires exactly once per attempt across an errored response and its retry; two successive tool rounds resume correctly through the cursor alone (no `responseId`); a call outside the allow-list fails the hop before any tool event; a `length` stop with tool calls discards them; a queued user steer at a hop boundary ends the stream at a checkpoint, an agent-source steer does not, and a notice delivered ahead of the steer produces a continue then a second checkpoint; `toolChoice` `"required"`, `"any"`, `{ type: "function", name }`, and `{ type: "function", function: { name } }` each either produce a qualifying outer tool call (via the terminal member or the closing call) or end with `toolchoice.unsatisfiable`, including on a tools-disabled graph, and `{ type: "computer" }` ends with `toolchoice.unsupported`; with a required named tool, an intermediate tool-enabled member that calls `read` fails the run with `member.tool.detour` before any outer tool event, and a terminal member that first returns text without the tool has that text buffered and the closing call's result is the only outer content; more than five operator images reach an entry member whose provider budget allows them; a fan-out group with `quorum = 2` completes after two branches and aborts the straggler after `grace_ms` of active time, its join receives both outputs, branch tool calls across two rounds are demultiplexed back to the right branch, a group admitted with fewer than `N + 1` remaining hard-cap hops stops with `hard_cap` before any branch runs, and a budget hit mid-group cancels siblings |
 | `packages/coding-agent/test/moa-transit.test.ts` | `compact` summarizes only hops after `throughHop` on the second traversal and its call is settled; `verbatim` inserts the omission marker; `snapcompact` against the real package on a small transcript yields image blocks plus the archive's text head and tail on a vision target and fails validation on a non-vision target; `fitHopRequest` on a 32k-window target keeps the tool round intact and drops the fold first |
@@ -2366,14 +2377,17 @@ Scope: `mixture-types.ts`, TOML loader and emitter, `resolveMixture`
 (members, presets, `uses` analysis; helper and judge resolution only when
 reachable, with the implicit-pool filter; explicit recursion rejection),
 `validateMixture` (E1–E10, E17, E19, E22 plus the capability gate), bundled
-`entry`/`handoff`/`closing` envelopes and the `moa-parts` partial,
+`entry`/`handoff` envelopes and the `moa-parts` partial (`closing.md` ships
+with the closing call in M3),
 `auth/mixture.kdl`, runtime keyless registration (`auth: "none"`: the
 validator ternary, the immediate `#keylessProviders` add, and the
 post-`#loadModels` re-add), `registerMixtureApi`, `MixtureCatalog` with
 retain/release and `setRoster` (including empty), the session host with
 `commit`, the outer message writer, `prepareMemberCall` (all
 preserved/recomputed/dropped rules; per-member provider state; tool-choice
-normalization and the closing call), the `transformProviderContext` bypass
+normalization with `toolchoice.unsatisfiable` / `toolchoice.unsupported` at
+step 0, which is every case under forced-off tools; the closing call itself
+is M3), the `transformProviderContext` bypass
 for the synthetic model, `fitHopRequest`, the linear engine
 (`x.output`/`input`/`reasoning`, tools forced off, no conditions, no
 back-edges), step 0a/0b (request identity, all four anchors, the committed
@@ -2393,10 +2407,11 @@ Acceptance:
 - With the `draft-then-edit` document in `~/.omp/agent/MIXTURES.toml`,
   `/model` lists `mixture/draft-then-edit` with no credential for the
   `mixture` provider; selecting it and sending a prompt yields the editor's
-  text as the reply, one collapsible trace card for the writer that appears
+  text as the reply, one collapsible trace card per hop (the writer's with
+  its output body, the editor's with header and totals only) appearing
   **above** the answer while the turn is still streaming, and an outer
   message whose content is a single text block. Reloading the session
-  renders the same card-then-answer sequence.
+  renders the same cards-then-answer sequence.
 - Switching the session to an Anthropic model afterwards and completing a
   turn succeeds (no signature 400).
 - `x = {}` on the edge is refused at registration with `edge.x.empty` in the
@@ -2420,8 +2435,17 @@ Acceptance:
   turn from live state), `cost` is unchanged; the broker ledger holds one
   record per attempt; the retried response's own `usage` covers only the
   second attempt.
+- Esc mid-run checkpoints the run (checkpoint entry, `status: "checkpoint"`,
+  aborted outer message) and the notice says the next message starts a new
+  run; the next prompt does start a new run. Steering the checkpointed member
+  is M3.
+- Step 0b anchoring is proved with successive operator prompts after a
+  completed run: the `responseId` anchor in-session; with `responseId`
+  stripped from the history, the committed cursor; with rewritten history,
+  the text hash; with none matching, the whole list as the tail. The
+  two-tool-round cursor case is M3.
 - `moa-config`, `moa-validate`, `moa-provider`, and the linear, error,
-  retry, abort, usage/commit, tool-choice, image-budget, and cursor cases of
+  retry, abort, usage/commit, tool-choice, image-budget, and anchor cases of
   `moa-engine` pass.
 
 ### M2: graph control, limits, pause and resume
@@ -2617,6 +2641,33 @@ None open. Every question raised in rounds 1 to 3 is answered in §15.
 - No task board; the `task` tool and hub messaging are untouched.
 
 ## 19. Revision log
+
+### Amendment 6.1 (M1 implementation questions from MoaImpl)
+
+- **Abort before steering exists (Q1):** until M3 ships steering hops, an
+  operator prompt on a `checkpoint` run starts a new run and the abort
+  notice says so; no partial steer through the entry/handoff envelope. M3
+  replaces that behaviour with the steer (§4.5 step-0 table, abort
+  paragraph, M1 acceptance).
+- **Closing call (Q2):** M1 carries tool-choice normalization and the
+  step-0 `toolchoice.unsatisfiable` / `toolchoice.unsupported` rejection
+  only; under forced-off tools every `any`/`named` requirement is rejected
+  there. `closing.md` and the closing call ship together in M3 (§14 M1
+  scope corrected; §4.4 already said so).
+- **Courtroom validation (Q3):** the zero-error courtroom assertion is an M2
+  test; M1 validate tests use M1 fixtures and assert the courtroom fixture
+  carries `unsupported.feature` (§13).
+- **Anchor cases (Q4):** M1 proves step 0b's four anchors with successive
+  operator prompts after a completed run; the two-tool-round cursor case is
+  M3 (§14 M1 acceptance).
+- **Terminal hop card (Q5):** the terminal hop gets a card like any other
+  hop, always without its output body (the answer is the outer text beneath
+  it); the card exists because its header carries the run's final totals,
+  which projections read instead of summing hop usages (§7, M1 acceptance).
+- **Factual correction:** `registerLocalInferenceApi` does pass a
+  `sourceId` (`LOCAL_INFERENCE_SOURCE`, `local-inference-api.ts:167`); it is
+  safe because that constant is never an extension path. The mixture API
+  passes none (§9.2).
 
 ### Round 6 (Astra r6; Grok satisfied at r5, endorsing both)
 
