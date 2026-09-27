@@ -38,6 +38,7 @@ type FakeEditor = {
 	setCollapsedText(text: string): void;
 	composerChips(): unknown[];
 	addToHistory(text: string): void;
+	clearSubmittedDraft(): void;
 	clearDraft(historyText?: string): void;
 	setActionKeys(action: string, keys: string[]): void;
 	setCustomKeyHandler(key: string, handler: () => void): void;
@@ -70,6 +71,7 @@ function createContext(sessionOverride?: InteractiveModeContext["session"]) {
 			return [];
 		},
 		addToHistory,
+		clearSubmittedDraft: vi.fn(),
 		clearDraft(historyText?: string) {
 			if (historyText !== undefined) addToHistory(historyText);
 			editorText = "";

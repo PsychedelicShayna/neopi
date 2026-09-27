@@ -2563,6 +2563,11 @@ export class Editor implements Component, Focusable {
 		return true;
 	}
 
+	/** Drop the submitted-draft snapshot once no host will restore it; it retains paste payloads. */
+	clearSubmittedDraft(): void {
+		this.#submittedDraft = undefined;
+	}
+
 	/** Drop every registered atom expansion (draft cleared or replaced by the host). */
 	clearAtoms(): void {
 		this.#atoms.clear();

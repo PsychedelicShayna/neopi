@@ -181,6 +181,21 @@ describe("renderChainInput", () => {
 		expect(withTool).not.toContain("older context");
 	});
 
+	it("keeps a compaction summary whole, since it is all that remains of older turns", () => {
+		const summary = `The operator chose the retry design. ${"detail ".repeat(60)}Final decision: ship behind a flag.`;
+		const compacted = {
+			role: "compactionSummary",
+			summary,
+			tokensBefore: 1,
+			timestamp: 0,
+		} as unknown as AgentMessage;
+		const out = renderChainInput(step, "draft", [compacted, user("do the thing we agreed")], {
+			contextWindow: 100_000,
+			maxTokens: 8_192,
+		});
+		expect(out).toContain("Final decision: ship behind a flag.");
+	});
+
 	it("drops the oldest messages that do not fit the step model's window", () => {
 		const messages = [user("old ".repeat(4000)), user("recent question")];
 		const out = renderChainInput(step, "draft", messages, { contextWindow: 6000, maxTokens: 1000 });

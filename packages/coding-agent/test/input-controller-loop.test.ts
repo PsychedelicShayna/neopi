@@ -31,6 +31,7 @@ function createLoopContext(options: {
 		pendingImageLinks: [],
 		imageLinks: undefined,
 		addToHistory: vi.fn(),
+		clearSubmittedDraft: vi.fn(),
 		setText: vi.fn(),
 		getText: () => "",
 		getExpandedText: () => "",
