@@ -107,6 +107,7 @@ import {
 import type { AdvisorConfig } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { formatUsageResetWindow } from "@oh-my-pi/pi-tui/overlays/usage-display";
 import type { MixtureSessionEvent, SessionMixtureHost } from "../moa/host";
+import { isMixtureModel } from "../moa/provider";
 import { loadAdvisorTranscriptCosts } from "../advisor";
 import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, type AsyncJob, AsyncJobManager } from "../async";
 import { reset as resetCapabilities } from "../capability";
@@ -3276,7 +3277,9 @@ export class AgentSession implements SettingsScope {
 		if (message.role === "assistant") {
 			const assistantMsg = message as AssistantMessage;
 			if (this.#recovery.isClassifierRefusal(assistantMsg)) return;
-			if (isEmptyErrorTurn(assistantMsg)) return;
+			// An errored mixture response is kept even when empty: it is the durable record of
+			// billed member attempts that session totals read after retry cleanup and reload.
+			if (isEmptyErrorTurn(assistantMsg) && !isMixtureModel(assistantMsg)) return;
 			if (assistantMsg.stopReason !== "aborted" && assistantMsg.stopReason !== "error" && assistantMsg.usage) {
 				assistantMsg.contextSnapshot = {
 					promptTokens: calculatePromptTokens(assistantMsg.usage),
@@ -3741,18 +3744,22 @@ export class AgentSession implements SettingsScope {
 				await this.#recovery.onAssistantSettledSuccessfully(assistantMsg);
 				// Broker deployments: report this request's burn so the broker can
 				// attribute token usage per install. No-op with a local auth store.
-				this.#modelRegistry.authStorage.usage.observe({
-					provider: assistantMsg.provider,
-					model: assistantMsg.model,
-					at: assistantMsg.timestamp,
-					usage: {
-						input: assistantMsg.usage.input,
-						output: assistantMsg.usage.output,
-						cacheRead: assistantMsg.usage.cacheRead,
-						cacheWrite: assistantMsg.usage.cacheWrite,
-					},
-					costUsd: assistantMsg.usage.cost.total,
-				});
+				// Mixture responses are skipped: each member attempt was observed once
+				// when it settled, and a response only reports a delta of those.
+				if (!isMixtureModel(assistantMsg)) {
+					this.#modelRegistry.authStorage.usage.observe({
+						provider: assistantMsg.provider,
+						model: assistantMsg.model,
+						at: assistantMsg.timestamp,
+						usage: {
+							input: assistantMsg.usage.input,
+							output: assistantMsg.usage.output,
+							cacheRead: assistantMsg.usage.cacheRead,
+							cacheWrite: assistantMsg.usage.cacheWrite,
+						},
+						costUsd: assistantMsg.usage.cost.total,
+					});
+				}
 				// Persist which account served this turn so a resumed process can
 				// re-pin it and keep the provider's account-scoped prompt cache
 				// warm (broker-mode sticky routing is process-local).

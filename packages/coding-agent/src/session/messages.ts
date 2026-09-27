@@ -70,6 +70,7 @@ export {
 
 import { formatOutputNotice } from "@oh-my-pi/pi-tui/tools/output-meta";
 import { titleTextFromSkillPrompt } from "@oh-my-pi/pi-tui/chat/skill-title-input";
+import { MIXTURE_TRACE_MESSAGE_TYPE } from "@oh-my-pi/pi-tui/overlays/mixture-types";
 
 /**
  * Logs provider-error turns so their actual cause is available outside the
@@ -1076,6 +1077,8 @@ function convertOne(m: AgentMessage, interruptedNext: boolean): Message[] {
 		}
 		case "custom": {
 			if (!isCustomMessageContent(m.content)) return [];
+			// Mixture trace cards are display-only: the answer they annotate is in the context already.
+			if (m.customType === MIXTURE_TRACE_MESSAGE_TYPE) return [];
 			if (isSteeringUserMessage(m)) {
 				const converted = convertMessageToLlm(wrapSteeringUserMessage(m));
 				return converted ? [converted] : [];
