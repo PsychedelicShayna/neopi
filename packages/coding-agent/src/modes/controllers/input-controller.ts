@@ -979,9 +979,17 @@ export class InputController {
 			// with the harness, but still consume the speech dictated into them; image drafts
 			// always reach the main agent.
 			let liveRoute: LiveSubmitRoute = "primary";
-			if (/^[/!$]/.test(text)) {
-				if (this.ctx.liveCallActive && !this.ctx.discardLiveSpeech()) liveRoute = "held";
-			} else liveRoute = this.ctx.routeLiveSubmit(text, { hasImages: hasPendingImages });
+			if (this.ctx.liveCallActive) {
+				// `$` is a harness command only when it parses as REPL input; `$HOME` stays prose.
+				const harnessCommand =
+					/^[/!]/.test(text) ||
+					parseReplEvalInput(text, this.ctx.session.extensionRunner?.getEvalBackendAliases()) !== undefined;
+				if (harnessCommand) {
+					if (!this.ctx.discardLiveSpeech()) liveRoute = "held";
+				} else {
+					liveRoute = this.ctx.routeLiveSubmit(text, { hasImages: hasPendingImages });
+				}
+			}
 			if (liveRoute === "held") {
 				this.#holdForLiveHandoff(text);
 				return;
@@ -1213,14 +1221,27 @@ export class InputController {
 							: inputImages.map(() => undefined);
 						this.ctx.editor.imageLinks = this.ctx.editor.pendingImageLinks;
 					}
-					// An untouched draft comes back as displayed, large pastes still collapsed.
-					if (outcome.text !== typedText || !this.ctx.editor.restoreSubmittedDraft()) {
-						this.ctx.editor.setCollapsedText(outcome.text);
+					if (outcome.text === typedText && this.ctx.editor.restoreSubmittedDraft()) {
+						// An untouched draft comes back as displayed, large pastes still collapsed.
+					} else {
+						// A later step failed: Up still recalls what was typed, and a large rewrite
+						// shows collapsed.
+						this.ctx.editor.addToHistory(typedText);
+						if (outcome.text.length > CHAIN_DISPLAY_COLLAPSE_CHARS) {
+							this.ctx.editor.setText("");
+							this.ctx.editor.insertPaste(outcome.text);
+						} else {
+							this.ctx.editor.setCollapsedText(outcome.text);
+						}
 					}
+					this.ctx.editor.clearSubmittedDraft();
 					return;
 				}
 				text = outcome.text;
 			}
+			// The submitted-draft snapshot served the live hold and the chain; it holds paste
+			// payloads, so release it once the prompt is on its way.
+			this.ctx.editor.clearSubmittedDraft();
 			// Only the prompt about to reach the main agent, after hooks and the chain.
 			if (this.ctx.liveCallActive) this.ctx.shareLiveSubmit(text);
 
@@ -1416,8 +1437,11 @@ export class InputController {
 		if (resolved === SEND_WITHOUT_CHAIN || !resolved || control.signal.aborted) {
 			this.ctx.editor.setChainLock(undefined);
 			const send = resolved === SEND_WITHOUT_CHAIN && !control.signal.aborted;
-			// Sending: the composer held the draft only for the lock.
-			if (send) this.ctx.editor.setText("");
+			// Sending: the composer held the draft only for the lock, restored pastes included.
+			if (send) {
+				this.ctx.editor.clearPasteState();
+				this.ctx.editor.setText("");
+			}
 			return { text, send };
 		}
 		const chain = resolved;

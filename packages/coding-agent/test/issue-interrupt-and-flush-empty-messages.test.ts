@@ -29,6 +29,7 @@ function createContext(options?: {
 				return editorText;
 			},
 			addToHistory: vi.fn(),
+			clearSubmittedDraft: vi.fn(),
 			pendingImages: options?.pendingImages ? [...options.pendingImages] : ([] as ImageContent[]),
 			pendingImageLinks:
 				options?.pendingImageLinks ??

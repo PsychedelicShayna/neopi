@@ -31,6 +31,7 @@ type FakeEditor = {
 	setText(text: string): void;
 	getText(): string;
 	addToHistory(text: string): void;
+	clearSubmittedDraft(): void;
 	setActionKeys(action: string, keys: string[]): void;
 	setCustomKeyHandler(key: string, handler: () => void): void;
 	clearCustomKeyHandlers(): void;
@@ -123,6 +124,7 @@ function createContext(): {
 			return editorText;
 		},
 		addToHistory: vi.fn(),
+		clearSubmittedDraft: vi.fn(),
 		setActionKeys: vi.fn(),
 		setCustomKeyHandler: vi.fn(),
 		clearCustomKeyHandlers: vi.fn(),
