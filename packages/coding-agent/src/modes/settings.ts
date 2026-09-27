@@ -561,6 +561,111 @@ export const cfgDisplayPinnedAgents = register({
 	},
 });
 
+export const cfgSidebarEnabled = register({
+	id: "sidebar.enabled",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "appearance",
+		group: "Side Panel",
+		label: "Side Panel",
+		description: "Dock a panel beside the chat for the todo list and other live sections",
+	},
+});
+
+export const cfgSidebarSide = register({
+	id: "sidebar.side",
+	type: "enum",
+	values: ["right", "left"] as const,
+	default: "right",
+	ui: {
+		tab: "appearance",
+		group: "Side Panel",
+		label: "Side",
+		description: "Which edge the panel docks to",
+		options: [
+			{ value: "right", label: "Right" },
+			{ value: "left", label: "Left" },
+		],
+	},
+});
+
+export const cfgSidebarWidthRatio = register({
+	id: "sidebar.width.ratio",
+	type: "number",
+	default: 0.3,
+	ui: {
+		tab: "appearance",
+		group: "Side Panel",
+		label: "Width Ratio",
+		description: "Panel share of terminal columns before bounds",
+		options: [
+			{ value: "0.2", label: "20%" },
+			{ value: "0.25", label: "25%" },
+			{ value: "0.3", label: "30%" },
+			{ value: "0.35", label: "35%" },
+			{ value: "0.4", label: "40%" },
+			{ value: "0.5", label: "50%" },
+		],
+	},
+});
+
+export const cfgSidebarWidthMin = register({
+	id: "sidebar.width.min",
+	type: "number",
+	default: 32,
+	ui: {
+		tab: "appearance",
+		group: "Side Panel",
+		label: "Minimum Width (columns)",
+		description: "Narrowest the docked panel may be",
+		options: [
+			{ value: "24", label: "24" },
+			{ value: "28", label: "28" },
+			{ value: "32", label: "32" },
+			{ value: "36", label: "36" },
+			{ value: "40", label: "40" },
+		],
+	},
+});
+
+export const cfgSidebarWidthMax = register({
+	id: "sidebar.width.max",
+	type: "number",
+	default: 48,
+	ui: {
+		tab: "appearance",
+		group: "Side Panel",
+		label: "Maximum Width (columns)",
+		description: "Widest the docked panel may be",
+		options: [
+			{ value: "40", label: "40" },
+			{ value: "48", label: "48" },
+			{ value: "56", label: "56" },
+			{ value: "64", label: "64" },
+		],
+	},
+});
+
+export const cfgSidebarSplitAt = register({
+	id: "sidebar.splitAt",
+	type: "number",
+	default: 110,
+	ui: {
+		tab: "appearance",
+		group: "Side Panel",
+		label: "Dock Threshold",
+		description: "Terminals narrower than this hide the dock; the toggle opens the panel fullscreen instead",
+		options: [
+			{ value: "100", label: "100 columns" },
+			{ value: "110", label: "110 columns" },
+			{ value: "120", label: "120 columns" },
+			{ value: "140", label: "140 columns" },
+			{ value: "160", label: "160 columns" },
+		],
+	},
+});
+
 export const cfgDisplaySmoothStreaming = register({
 	id: "display.smoothStreaming",
 	type: "boolean",
