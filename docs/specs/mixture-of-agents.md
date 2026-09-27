@@ -1114,6 +1114,7 @@ The cursor is **not** touched here.
 | operator prompt | `paused`, `checkpoint` | treated as a steer (the pause/checkpoint notice told the operator so); `/mixture reset` or a new conversation starts fresh. **Before M3 ships steering hops**, this row instead starts a new run and the abort/checkpoint notice says so (§14 M1); M3 replaces the row with the steer |
 | operator prompt | `running` | cannot happen in the session (the lock rejects it); in the gateway it is the busy error |
 | developer or notice messages only, no steer, no prompt | `checkpoint` | **continue**: resume at `run.phase` without a steering hop (a one-at-a-time steering queue can deliver a notice ahead of the user's steer, §6.2) |
+| developer or notice messages only, and the anchor came from the cursor with **no** message in the context carrying `lastRequest.responseId` | `done`, `error` | **recovery retry**: the session removed the response it was given (an empty-stop drop, `packages/coding-agent/src/session/turn-recovery.ts:864-941`, or a loop-detector retry) and appended its own reminder; start a **new run** with the previous run's topic, topic images, and conversation, as if the operator had re-sent the prompt. The reminder text reaches no member (members see only their envelopes, §3); the dropped response's settlements leave session totals with the dropped entry, as a native empty stop's usage does, and the broker already holds them (§4.7). The session's own retry cap ends a mixture that keeps returning empty |
 | developer or notice messages only | any other | error: `"mixture received no new input"` |
 
 A run whose `resolved.revision` differs from the currently registered
@@ -2404,7 +2405,7 @@ unregisterable and block save.
 
 | Code | Level | Rule |
 |---|---|---|
-| E1 `name.invalid` / `name.duplicate` | error | `name` matches `[a-z0-9][a-z0-9._-]*`, unique in the merged roster |
+| E1 `name.invalid` / `name.duplicate` | error | `name` matches `[a-z0-9][a-z0-9._-]*`, unique in the merged roster. Two declarations of one name **in the same file** are both kept by the loader and both refused (`name.duplicate` logged for each); a later file on the search path that declares the name once still shadows an earlier file's single declaration cleanly (§1.1) |
 | E2 `member.model.unresolved` / `member.model.recursive` | error | every model member's selector resolves; the resolved model's `api` is not `mixture` (§1.4) |
 | E3 `members.empty` / `member.id` | error | at least one member; ids match `[a-z0-9][a-z0-9_-]*`, unique |
 | E4 `member.prompt.missing` / `member.role.unresolved` | error | a model member has `system_prompt` or a resolvable `role` |
@@ -2780,6 +2781,24 @@ None open. Every question raised in rounds 1 to 3 is answered in §15.
 - No task board; the `task` tool and hub messaging are untouched.
 
 ## 19. Revision log
+
+### Amendment 6.7 (Codex P2s on PR #113: recovery continuations, in-file duplicates)
+
+- **Recovery retry row** (§4.5 step-0 table): when the session drops a
+  committed mixture response (empty-stop recovery,
+  `turn-recovery.ts:864-941`; loop-detector retry) and continues with only a
+  developer or notice tail, the engine starts a new run from the previous
+  run's topic, images, and conversation instead of erroring with "no new
+  input". The reminder text reaches no member. Rejected: reopening the `done`
+  run at its terminal member, because it requires rolling `reportedThrough`
+  and `cursor` back past a committed response, breaking the commit-only-
+  advances invariant that replay, restore, and the two-ledger accounting
+  depend on; and it retries the least likely place to succeed. Dropped
+  settlements leave session totals with the dropped entry, matching native
+  empty-stop semantics; the broker is unaffected.
+- **In-file duplicate names** (E1): both declarations are kept for validation
+  and both refused; cross-file shadowing unchanged. No behaviour change to
+  the rule, only its loader precondition made explicit.
 
 ### Amendment 6.6 (Codex P1 on PR #113: members miss per-request settings)
 
