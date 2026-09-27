@@ -363,6 +363,26 @@ describe("ImageBudget docked placement accounting", () => {
 		expect(dockedPass(budget, [retired, reEmitted])).toEqual([`\x1b_Ga=d,d=i,i=${reEmitted},p=1,q=2\x1b\\`]);
 	});
 
+	it("queues deletes only from the pass the frame accepts", () => {
+		// Cap 1 with two images: the first pass discovers the stricter budget and
+		// is repeated; the repeat demotes the older image (d=I purge) and keeps the other.
+		const budget = new ImageBudget(1, () => {});
+		const older = placed(budget, "older", 2);
+		const newer = placed(budget, "newer", 6);
+		setInlineImagePresentation("text");
+		let passes = 0;
+		do {
+			passes++;
+			budget.beginPass();
+			budget.observe(older);
+			budget.observe(newer);
+		} while (budget.endPass());
+		setInlineImagePresentation("graphics");
+		expect(passes).toBe(2);
+		expect(budget.takeDockedPlacementDeletes()).toEqual([`\x1b_Ga=d,d=i,i=${newer},p=1,q=2\x1b\\`]);
+		expect(budget.takePurgeIds()).toEqual([older]);
+	});
+
 	it("archives at emit a placement whose top scrolls off in the same paint", () => {
 		const budget = new ImageBudget(8, () => {});
 		const id = budget.acquireId("mid-scroll");

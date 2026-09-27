@@ -379,7 +379,9 @@ export class ImageBudget {
 		// passes replay this per id (see #stablePass) instead of re-deriving it
 		// from a reversed, tail-only walk.
 		split.suppressedIds = new Set(this.#passIds.slice(0, split.onTerminal));
-		if (this.#surface === "screen") this.#collectDockedDeletes();
+		// Only the pass the frame is emitted from decides deletes: a repeated pass
+		// may demote an image the discarded one still showed live.
+		if (this.#surface === "screen" && !retry) this.#collectDockedDeletes();
 		return retry;
 	}
 
