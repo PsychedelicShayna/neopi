@@ -8,6 +8,7 @@ import {
 	type AgentTool,
 	AppendOnlyContextManager,
 	filterProviderReplayMessages,
+	resolveOwnedDialectFromEnv,
 	type StreamFn,
 	type ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
@@ -4246,11 +4247,15 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			intentTracing: cfgToolsIntentTracing.get(settings),
 			pruneToolDescriptions: resolveInlineToolDescriptors(),
 			// Per request against the model actually requested, so `tools.format`
-			// changes and model switches reach the next provider call. A mixture never
-			// takes an owned dialect: its engine is its tool contract, and the in-band
-			// wrapper would re-seed the partial the engine's abort finalizer stamps.
+			// changes and model switches reach the next provider call. The resolver is
+			// authoritative, so it carries the `PI_DIALECT` fallback itself. A mixture
+			// never takes an owned dialect: its engine is its tool contract, and the
+			// in-band wrapper would re-seed the partial the engine's abort finalizer stamps.
 			dialectResolver: dialectModel =>
-				isMixtureModel(dialectModel) ? undefined : resolveDialect(cfgToolsFormat.get(settings), dialectModel),
+				isMixtureModel(dialectModel)
+					? undefined
+					: (resolveDialect(cfgToolsFormat.get(settings), dialectModel) ??
+						resolveOwnedDialectFromEnv(Bun.env.PI_DIALECT)),
 			abortOnFabricatedToolResult: cfgToolsAbortOnFabricatedResult.get(settings),
 			speculativeToolExecution,
 			getToolChoice: () => session?.nextToolChoiceDirective(),

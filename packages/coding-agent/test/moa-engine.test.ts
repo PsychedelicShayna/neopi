@@ -653,6 +653,39 @@ describe("caller abort", () => {
 	});
 });
 
+describe("tool dialect under PI_DIALECT", () => {
+	let previous: string | undefined;
+	beforeEach(() => {
+		previous = Bun.env.PI_DIALECT;
+		Bun.env.PI_DIALECT = "glm";
+	});
+	afterEach(() => {
+		if (previous === undefined) delete Bun.env.PI_DIALECT;
+		else Bun.env.PI_DIALECT = previous;
+	});
+
+	it("keeps a mixture on the native dialect, so the persisted abort is still identified", async () => {
+		const session = await mixtureSession();
+		members.script("writer", { text: "draft", cost: 0.01 });
+		const release = await abortDuringEditor(session, 0.02);
+		release();
+		const aborted = lastAssistant(session);
+		expect(aborted.stopReason).toBe("aborted");
+		expect(aborted.responseId).toStartWith("moa:");
+		expect(aborted.usage.cost.total).toBeCloseTo(0.01, 10);
+	});
+
+	it("still gives a non-mixture model the environment's owned dialect", async () => {
+		await ensureFixture();
+		const session = await createMoaSession(fixture, { settings: Settings.isolated(SETTINGS) });
+		sessions.push(session);
+		await session.sendUserMessage("question");
+		const call = members.callsTo("other")[0];
+		expect(call?.context.tools).toBeUndefined();
+		expect((call?.context.systemPrompt ?? []).join("\n")).toContain("<tool_call>");
+	});
+});
+
 describe("provider context for members", () => {
 	it("delivers more than five operator images to an entry member whose provider allows them", async () => {
 		const vision = DRAFT_THEN_EDIT_TOML.replace('model = "fake/writer"', 'model = "openrouter/vision"');

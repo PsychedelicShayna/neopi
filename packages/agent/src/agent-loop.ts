@@ -1850,8 +1850,11 @@ async function prepareProviderCall(
 
 	const llmMessages = await config.convertToLlm(messages);
 	const normalizedMessages = normalizeMessagesForProvider(llmMessages, model);
-	const ownedDialect: Dialect | undefined =
-		(config.getDialect ? config.getDialect(model) : config.dialect) ?? resolveOwnedDialectFromEnv(Bun.env.PI_DIALECT);
+	// An installed resolver is authoritative (its `undefined` means native); the
+	// environment fallback applies only to callers without one.
+	const ownedDialect: Dialect | undefined = config.getDialect
+		? config.getDialect(model)
+		: (config.dialect ?? resolveOwnedDialectFromEnv(Bun.env.PI_DIALECT));
 	const pruneToolDescriptions = !!config.pruneToolDescriptions && !ownedDialect;
 	let llmContext: Context;
 	if (config.appendOnlyContext) {
