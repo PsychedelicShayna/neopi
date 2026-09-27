@@ -551,13 +551,19 @@ Details, numbered for review:
    mask over the surviving rows sees plain text. The mask therefore carries
    **one bit of provenance across the cap**: `getSixelLineMask(lines,
    startsInside = false)` starts its `inSequence` state from
-   `startsInside`; `BashExecutionComponent` computes the pre-slice mask
-   before each cap slice, records whether the first kept row is inside a
-   span (chained across successive slices; cleared only when the output is
-   replaced wholesale — `setComplete` with an `output`, outside PTY mode,
+   `startsInside`; `render/sixel.ts` exports the companion
+   `sixelSpanContinues(lines, startsInside): boolean`, the span state the
+   given rows leave behind. `BashExecutionComponent` uses it in two places
+   (6854352fe2): `appendOutput` clamps each incoming chunk with the span
+   state the already-stored rows leave, so a wide continuation row that
+   arrives in a later chunk is preserved byte-for-byte instead of being
+   truncated as text; and before each cap slice it records whether the
+   first kept row is inside a span (chained across successive slices
+   through the same helper; cleared only when the output is replaced
+   wholesale — `setComplete` with an `output`, outside PTY mode,
    `bash-execution.ts:292-294`, `:393-396` — because a completion that
    keeps the streamed rows keeps their provenance), and
-   passes it as `OutputPaneFormatOptions.sixelContinuation`, which
+   passes that bit as `OutputPaneFormatOptions.sixelContinuation`, which
    `formatOutputPaneLines` forwards as `startsInside`. The raw rows and the
    memory bound are unchanged; the only new state is that bit. The pane
    then gains one branch, gated on the scoped presentation mode:
@@ -780,7 +786,10 @@ export class SidePanelController {
   toggle(): void;
   /** Idempotent: hide exactly the controller's fullscreen overlay (if any) and clear its handle. */
   closeFullscreen(): void;
+  /** The fullscreen form's overlay exists (handle held). */
   get fullscreenOpen(): boolean;
+  /** The fullscreen form is open and holds focus: no dialog is stacked above it. */
+  get fullscreenActive(): boolean;
   scrollBy(delta: number): void;
   register(section: SidePanelSection): () => void;
   unregister(id: string): void;
@@ -859,11 +868,16 @@ Wiring in `InteractiveMode`:
 Wiring in `InputController`:
 
 - In the global editor-actions listener (`input-controller.ts:366-415`), add
-  `app.sidebar.toggle` → `ctx.sidePanel.toggle()`, guarded by `if
-  (ctx.ui.hasOverlay() && !ctx.sidePanel.fullscreenOpen) return undefined;`
-  so the same key closes the fullscreen form and is inert under other
-  overlays; `app.sidebar.scrollUp/Down` → `ctx.sidePanel.scrollBy(∓3)` when
-  docked, guarded like `app.thinking.toggle` (`:367-371`).
+  `app.sidebar.toggle` → `ctx.sidePanel.toggle()` with two guards. First,
+  `if (ctx.ui.hasOverlay() && !ctx.sidePanel.fullscreenActive) return
+  undefined;` (abf1e499e1): the key closes the fullscreen form only while
+  that form holds focus; a dialog stacked above the form keeps `alt+t` for
+  itself, and the key is inert under every other overlay. Second, defer to
+  a focused inline `TreeSelectorComponent` — `alt+t` is its no-tools
+  filter — exactly as the listener already defers `alt+l` and
+  `ctrl+shift+o` to it (`:392-400`; 7e3ebd5dac). `app.sidebar.scrollUp/Down`
+  → `ctx.sidePanel.scrollBy(∓3)` when docked, guarded like
+  `app.thinking.toggle` (`:367-371`).
 - In `#handleInlineMouse` (`:764-773`), after the overlay check and before
   row routing: `if (this.ctx.sidePanel.routeInlineMouse(event)) return {
   consume: true };`.
@@ -904,7 +918,11 @@ Extract the body:
  * column — per {@link ResizeScrollbackMode}. `preserve` leaves history alone.
  */
 refreshHistoryAfterWidthChange(): void {
-  if (this.#stopped || this.#frameProvider?.beginHistoryReplay === undefined) return;
+  // A dock configured before the first paint (InteractiveMode.init docks
+  // before Composer.start) has no history of its own to refresh; latching a
+  // rebuild here would ED3 the parent shell's scrollback that
+  // start({ clearScrollback: false }) promised to keep (98f478df6e).
+  if (this.#stopped || !this.#hasEverRendered || this.#frameProvider?.beginHistoryReplay === undefined) return;
   if (this.#resizeScrollbackMode === "preserve") return;
   if (this.#clearScrollbackOnNextRender) {
     this.#forceViewportRepaintOnNextRender = true;
@@ -918,6 +936,10 @@ refreshHistoryAfterWidthChange(): void {
   this.#forceViewportRepaintOnNextRender = true;
 }
 ```
+
+The `#hasEverRendered` guard mirrors `#prepareResizeReplay`'s own
+(`tui.ts:2724-2727` in the implemented tree): neither a pre-start dock nor a pre-start resize has
+anything to replay, and both must leave the inherited scrollback alone.
 
 `#prepareResizeReplay` keeps its guards (including the `width ===
 #previousWidth` height-only skip for append, `:2718`) and calls this method
