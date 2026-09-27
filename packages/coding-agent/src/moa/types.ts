@@ -249,6 +249,9 @@ export type MixtureLifecycleRecord =
 /** Custom entry type of checkpoints and lifecycle records. */
 export const MIXTURE_RUN_ENTRY_TYPE = "mixture_run";
 
+/** `model_usage` purpose of a late mixture settlement: a member attempt no outer response reports. */
+export const MIXTURE_USAGE_PURPOSE = "moa";
+
 export type MixtureEvent =
 	| { type: "run_start"; run: MixtureRun; trace: Extract<MixtureTraceDetails, { kind: "run_start" }> }
 	| {

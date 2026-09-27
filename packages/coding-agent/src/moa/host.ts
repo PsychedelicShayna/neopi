@@ -19,6 +19,7 @@ import { resolveMixture } from "./resolve";
 import { MixtureRunStore } from "./run-store";
 import {
 	MIXTURE_RUN_ENTRY_TYPE,
+	MIXTURE_USAGE_PURPOSE,
 	type MixtureEvent,
 	type MixtureHost,
 	type MixtureLifecycleRecord,
@@ -188,7 +189,7 @@ export function createSessionMixtureHost(deps: SessionMixtureHostDeps): SessionM
 			if (!runs.owns(run) || run.key.host !== sessionId) return;
 			sessionManager.appendModelUsage(
 				{
-					purpose: "moa",
+					purpose: MIXTURE_USAGE_PURPOSE,
 					api: settlement.api,
 					provider: settlement.provider,
 					model: settlement.model,

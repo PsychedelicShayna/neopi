@@ -591,11 +591,14 @@ describe("caller abort", () => {
 		// Finalization was the request's end: no second response, checkpoint or card.
 		expect(manager.getEntries().filter(entry => entry.type !== "model_usage")).toHaveLength(entriesBefore);
 		expect(session.getSessionStats().cost).toBeCloseTo(0.03, 10);
+		// The late attempt was routed like any other: it counts beside the committed one.
+		expect(session.getSessionStats().routedModels).toEqual({ "fake/writer": 1, "fake/editor": 1 });
 
 		members.script("editor", { text: "answer two", cost: 0.04 });
 		await session.sendUserMessage("different task");
 		expect(lastAssistant(session).content).toEqual([{ type: "text", text: "answer two" }]);
 		expect(session.getSessionStats().cost).toBeCloseTo(0.1, 10);
+		expect(session.getSessionStats().routedModels).toEqual({ "fake/writer": 2, "fake/editor": 2 });
 		expect(observe.mock.calls.map(([record]) => [record.model, record.costUsd])).toEqual([
 			["writer", 0.01],
 			["editor", 0.02],
@@ -613,6 +616,7 @@ describe("caller abort", () => {
 		sessions.push(reopened);
 		expect(modelUsage(reopened)).toHaveLength(1);
 		expect(reopened.getSessionStats().cost).toBeCloseTo(0.1, 10);
+		expect(reopened.getSessionStats().routedModels).toEqual({ "fake/writer": 2, "fake/editor": 2 });
 	});
 
 	it("writes no usage entry into the replacement conversation when /clear runs before the late usage", async () => {

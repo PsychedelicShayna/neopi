@@ -9,6 +9,7 @@ import type { AssistantMessage, Model, ProviderResponseMetadata, Usage } from "@
 import { isRecord } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import { isMixtureModel } from "../moa/provider";
+import { MIXTURE_USAGE_PURPOSE } from "../moa/types";
 import type { Settings } from "../config/settings";
 
 import type { ContextUsage } from "../extensibility/extensions/types";
@@ -193,13 +194,19 @@ export class SessionStatsTracker {
 			}
 		}
 		const window = activeWindowEntries(this.#host.sessionManager.getBranch());
-		for (const entry of window) if (entry.type === "model_usage") addUsage(entry.usage);
+		const countRouted = (provider: string, model: string): void => {
+			const routed = `${provider}/${model}`;
+			routedModels[routed] = (routedModels[routed] ?? 0) + 1;
+		};
+		for (const entry of window) {
+			if (entry.type !== "model_usage") continue;
+			addUsage(entry.usage);
+			// A late mixture attempt was routed to its member like a reported one.
+			if (entry.purpose === MIXTURE_USAGE_PURPOSE) countRouted(entry.provider, entry.model);
+		}
 		for (const response of activeMixtureResponses(window)) {
 			if (response.usage) addUsage(response.usage);
-			for (const attempt of response.usageBreakdown ?? []) {
-				const routed = `${attempt.provider}/${attempt.model}`;
-				routedModels[routed] = (routedModels[routed] ?? 0) + 1;
-			}
+			for (const attempt of response.usageBreakdown ?? []) countRouted(attempt.provider, attempt.model);
 		}
 		return {
 			sessionFile: this.#host.sessionManager.getSessionFile(),
