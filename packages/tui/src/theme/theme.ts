@@ -353,9 +353,9 @@ async function reloadCurrentTheme(): Promise<void> {
 		if (requestId !== themeLoadRequestId) return;
 		assignTheme(loadedTheme);
 	} catch {
+		const fallbackTheme = await loadTheme("dark", getCurrentThemeOptions());
 		if (requestId !== themeLoadRequestId) return;
-		assignTheme(await loadTheme("dark", getCurrentThemeOptions()));
-		if (requestId !== themeLoadRequestId) return;
+		assignTheme(fallbackTheme);
 	}
 	notifyThemeChange({ ephemeral: true });
 }
