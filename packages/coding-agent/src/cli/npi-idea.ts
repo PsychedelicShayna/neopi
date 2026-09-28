@@ -1,4 +1,4 @@
-import { prompt } from "@oh-my-pi/pi-utils";
+import * as prompt from "@oh-my-pi/pi-utils/prompt";
 import ideaPrompt from "../prompts/idea-funnel.md" with { type: "text" };
 import { isNpiExecutable } from "./npi-update";
 
