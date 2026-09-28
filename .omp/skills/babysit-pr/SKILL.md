@@ -16,7 +16,11 @@ applies. A push or a green snapshot is progress, not an end point.
 
 ## 0. Set up
 
+Run every block below in one shell. `pipefail` makes a pipeline fail when
+any stage fails, so a dropped page reads as an error, not as a short list.
+
 ```sh
+set -o pipefail
 PR=<number>
 REPO=PsychedelicShayna/neopi
 OWNER=${REPO%/*} NAME=${REPO#*/}
@@ -30,7 +34,7 @@ BOTS=$(gh api "repos/$REPO/contents/docs/agents/pr-review-bots.md?ref=$BASE" \
     -H 'Accept: application/vnd.github.raw' |
   awk -F'|' '/^## Configured bots/{f=1; next} f && /^#/{exit}
     f && /^\|/ && !/^\| *Bot *\|/ && !/^\| *-/{print $3}' |
-  grep -o '`[^`]*`' | tr -d '`' | jq -Rsc 'split("\n") | map(select(length > 0))')
+  grep -o '`[^`]*`' | tr -d '`' | jq -Rsc 'split("\n") | map(select(length > 0))') || BOTS='[]'
 [ "$BOTS" != "[]" ] || echo "no configured bots read from $BASE: the bot audit cannot pass"
 ```
 
@@ -58,7 +62,8 @@ BOTS=$(gh api "repos/$REPO/contents/docs/agents/pr-review-bots.md?ref=$BASE" \
       .[0] as $pr | [.[1][].commits[]] as $c
       | ($pr.user.login == $o and $pr.head.repo.owner.login == $o)
         and ($c | length) > 0 and ($c | length) == $pr.commits
-        and all($c[]; .commit.verification.verified and .committer.login == $o)')
+        and all($c[]; .commit.verification.verified and .committer.login == $o)') ||
+    LOCAL_RUN=false
   ```
 
   Recompute it whenever the head changes; a later push can turn an owner
@@ -109,7 +114,10 @@ gh api --paginate --slurp "repos/$REPO/issues/$PR/comments?per_page=100" | jq '
 # for the gate audit in step 8. `replied` is true when someone other than
 # the thread's first author has answered in it. --paginate
 # follows the first pageInfo in the response, so reviewThreads' pageInfo
-# must come before its nodes. --jq runs once per page.
+# must come before its nodes. --jq runs once per page, so a failure after
+# the first page leaves partial output: it goes to a .part file that replaces
+# $THREADS only when the whole request succeeded.
+rm -f "$THREADS"
 gh api graphql --paginate -F owner=$OWNER -F name=$NAME -F pr=$PR -f query='
   query($owner:String!,$name:String!,$pr:Int!,$endCursor:String){
     repository(owner:$owner,name:$name){pullRequest(number:$pr){
@@ -125,8 +133,12 @@ gh api graphql --paginate -F owner=$OWNER -F name=$NAME -F pr=$PR -f query='
      security: ($c[0].body | contains("codex-security-review-finding")),
      replies: (.comments.totalCount - 1),
      truncated: (.comments.totalCount > ($c | length)),
-     replied: any($c[1:][]; .author.login != $c[0].author.login)}' | tee "$THREADS"
+     replied: any($c[1:][]; .author.login != $c[0].author.login)}' > "$THREADS.part" &&
+  mv "$THREADS.part" "$THREADS" && cat "$THREADS"
 ```
+
+If any command in the block fails, the snapshot is incomplete: take it
+again. A missing `$THREADS` file fails the gate in step 8.
 
 Before you triage a thread, fetch all of it through the thread's `comments`
 connection with the command below. The snapshot keeps only fields derived
@@ -270,7 +282,8 @@ in the fresh step 1 output whose `author` is in `$BOTS` and whose `replied`
 is false:
 
 ```sh
-if [ "$BOTS" = "[]" ]; then echo "GATE FAILS: no configured bots read from $BASE"
+if [ ! -e "$THREADS" ]; then echo "GATE FAILS: no complete thread snapshot"
+elif [ "$BOTS" = "[]" ]; then echo "GATE FAILS: no configured bots read from $BASE"
 else jq -c --argjson bots "$BOTS" \
   'select(.author as $a | ($bots | index($a)) and (.replied | not))' "$THREADS"
 fi
