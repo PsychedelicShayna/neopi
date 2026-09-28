@@ -182,6 +182,12 @@ export interface AutocompleteItem {
 	icon?: string;
 	/** Dim hint text shown inline after cursor when this item is selected */
 	hint?: string;
+	/**
+	 * Accepting this item leaves a complete slash command (no required argument
+	 * follows), so Enter applies it and submits in one keypress. Items without
+	 * it only apply, and the popup reopens for the next argument.
+	 */
+	submitsCommand?: boolean;
 }
 
 type Awaitable<T> = T | Promise<T>;

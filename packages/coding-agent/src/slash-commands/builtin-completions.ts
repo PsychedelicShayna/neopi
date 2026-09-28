@@ -11,7 +11,8 @@ import type { SubcommandDef, TuiSlashCommandRuntime } from "./types";
 
 /**
  * Build getArgumentCompletions from declarative subcommand definitions.
- * Returns subcommand names filtered by prefix in the dropdown.
+ * Returns subcommand names filtered by prefix in the dropdown. A subcommand
+ * without `usage` takes no argument, so accepting it with Enter also runs it.
  */
 export function buildArgumentCompletions(subcommands: SubcommandDef[]): (prefix: string) => AutocompleteItem[] | null {
 	return (argumentPrefix: string) => {
@@ -23,10 +24,18 @@ export function buildArgumentCompletions(subcommands: SubcommandDef[]): (prefix:
 				value: `${s.name} `,
 				label: s.name,
 				description: s.description,
-				hint: s.usage,
+				// Ghost text continues from the cursor: the rest of the name, then its usage.
+				hint: ghostHint(s.name.slice(lower.length), s.usage),
+				submitsCommand: s.usage === undefined,
 			}));
 		return matches.length > 0 ? matches : null;
 	};
+}
+
+/** Ghost text after the cursor: the untyped rest of a completion, then any usage. */
+export function ghostHint(rest: string, usage?: string): string | undefined {
+	const hint = usage ? `${rest} ${usage}` : rest;
+	return hint.length > 0 ? hint : undefined;
 }
 
 /** /mcp subcommands whose argument is a server name (per their `usage: "<name>..."`). */
@@ -100,7 +109,7 @@ export function buildMcpArgumentCompletions(
 		}
 		const matches: AutocompleteItem[] = serverNames
 			.filter(name => name.toLowerCase().startsWith(namePrefix))
-			.map(name => ({ value: `${rawSubcommand} ${name} `, label: name }));
+			.map(name => ({ value: `${rawSubcommand} ${name} `, label: name, submitsCommand: true }));
 		return matches.length > 0 ? matches : null;
 	};
 }
@@ -140,8 +149,8 @@ async function buildMcpRemoveCompletions(
 		.filter(name => name.toLowerCase().startsWith(namePrefix))
 		.map(name =>
 			projectNameSet.has(name)
-				? { value: `${rawSubcommand} ${name} `, label: name }
-				: { value: `${rawSubcommand} ${name} --scope user `, label: `${name} (user)` },
+				? { value: `${rawSubcommand} ${name} `, label: name, submitsCommand: true }
+				: { value: `${rawSubcommand} ${name} --scope user `, label: `${name} (user)`, submitsCommand: true },
 		)
 		.sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" }));
 	return matches.length > 0 ? matches : null;
@@ -214,13 +223,18 @@ export function buildModelSelectorCompletions(
 			if (!configured) continue;
 			const alias = formatModelRoleAlias(role);
 			if (!alias.toLowerCase().includes(query)) continue;
-			matches.push({ value: `${alias}${suffix} `, label: alias, description: configured });
+			matches.push({ value: `${alias}${suffix} `, label: alias, description: configured, submitsCommand: true });
 		}
 		const scoped = session.scopedModels.map(entry => entry.model);
 		for (const model of scoped.length > 0 ? scoped : session.modelRegistry.getAvailable()) {
 			const selector = `${model.provider}/${model.id}`;
 			if (!selector.toLowerCase().includes(query)) continue;
-			matches.push({ value: `${selector}${suffix} `, label: selector, description: model.name });
+			matches.push({
+				value: `${selector}${suffix} `,
+				label: selector,
+				description: model.name,
+				submitsCommand: true,
+			});
 		}
 		return matches.length > 0 ? matches : null;
 	};
