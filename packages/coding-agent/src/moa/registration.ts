@@ -60,7 +60,9 @@ async function retainScope(
 	const scope = MixtureCatalog.for(ctx.registry).scope(ctx.cwd, ctx.agentDir);
 	scope.retain(owner);
 	try {
-		if (!scope.hasRoster) scope.setRoster(restoredRoster ?? (await discoverRegistrableMixtures(ctx)));
+		await scope.initializeRoster(() =>
+			restoredRoster !== undefined ? Promise.resolve(restoredRoster) : discoverRegistrableMixtures(ctx),
+		);
 	} catch (error) {
 		try {
 			scope.release(owner);

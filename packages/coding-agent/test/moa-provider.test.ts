@@ -213,6 +213,44 @@ describe("workspace-scoped rosters on a shared registry", () => {
 	beforeEach(async () => {
 		await Bun.write(path.join(fixture.agentDir, "MIXTURES.toml"), "");
 	});
+	it("keeps the first session's mixture available when concurrent discovery uses different model filters", async () => {
+		const cwd = await workspace("concurrent-roster-ws", DRAFT_THEN_EDIT_TOML);
+		const scope = MixtureCatalog.for(fixture.registry).scope(cwd, fixture.agentDir);
+		scope.retain("first");
+		scope.retain("second");
+		const allowed = Settings.isolated(SETTINGS);
+		const excluded = Settings.isolated(SETTINGS);
+		cfgEnabledModels.override(excluded, ["fake/other", "mixture/draft-then-edit"]);
+		const later = Promise.withResolvers<void>();
+		try {
+			const first = scope.initializeRoster(() =>
+				discoverRegistrableMixtures({
+					cwd,
+					agentDir: fixture.agentDir,
+					registry: fixture.registry,
+					settings: allowed,
+				}),
+			);
+			const second = scope.initializeRoster(async () => {
+				await later.promise;
+				return discoverRegistrableMixtures({
+					cwd,
+					agentDir: fixture.agentDir,
+					registry: fixture.registry,
+					settings: excluded,
+				});
+			});
+			await first;
+			later.resolve();
+			await second;
+			const live = await sessionIn(cwd);
+			expect(await run(live, "draft-then-edit")).toEqual({ calls: ["writer", "editor"], error: undefined });
+		} finally {
+			later.resolve();
+			scope.release("first");
+			scope.release("second");
+		}
+	});
 
 	function failNextRegistration(error: Error): void {
 		const registerProvider = fixture.registry.registerProvider.bind(fixture.registry);

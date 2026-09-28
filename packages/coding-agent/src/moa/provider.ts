@@ -76,6 +76,8 @@ export interface MixtureScope {
 	readonly key: string;
 	/** Whether this scope has a roster since its last owner released it; an empty roster counts. */
 	readonly hasRoster: boolean;
+	/** Share first-owner discovery so concurrent sessions cannot overwrite its roster. */
+	initializeRoster(load: () => Promise<readonly ResolvedMixture[]>): Promise<void>;
 	/** A session or gateway holds this scope. */
 	retain(owner: string): void;
 	/** The last owner drops this scope's roster and the provider re-registers the rest. */
@@ -94,6 +96,7 @@ export interface MixtureScope {
 interface ScopeState {
 	owners: Set<string>;
 	roster: ResolvedMixture[] | undefined;
+	initialization?: Promise<void>;
 }
 
 /**
@@ -134,6 +137,19 @@ export class MixtureCatalog {
 			key,
 			get hasRoster() {
 				return scopes.get(key)?.roster !== undefined;
+			},
+			async initializeRoster(load) {
+				const state = scopes.get(key);
+				if (!state) throw new Error(`Mixture scope ${key} must be retained before discovery`);
+				if (state.roster !== undefined) return;
+				state.initialization ??= (async () => {
+					const roster = await load();
+					// Neither a retired scope nor an explicit save may be overwritten by stale discovery.
+					if (scopes.get(key) === state && state.roster === undefined) setRoster(roster);
+				})().finally(() => {
+					state.initialization = undefined;
+				});
+				await state.initialization;
 			},
 			retain(owner) {
 				let state = scopes.get(key);

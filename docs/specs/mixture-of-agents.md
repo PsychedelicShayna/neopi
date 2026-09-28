@@ -2308,6 +2308,7 @@ export class MixtureCatalog {
 export interface MixtureScope {
   readonly key: string;                        // the serialized candidate-path list
   retain(owner: string): void;                 // a session or gateway holds this scope; the first owner triggers discovery for it
+  initializeRoster(load: () => Promise<readonly ResolvedMixture[]>): Promise<void>; // concurrent holders share first-owner discovery
   release(owner: string): void;                // the last owner of a scope drops its roster and re-registers the union
   setRoster(mixtures: ResolvedMixture[]): void;   // this scope's definitions; the provider registers the union over live scopes
   roster(): readonly ResolvedMixture[];        // this scope's registered definitions only
@@ -2345,12 +2346,14 @@ export function isMixtureModel(model: Model<Api>): boolean;
   keyless bit of §9.1).
 - **Session identity is not in the registry; workspace identity is.** A
   session's `MixtureHost` lives in the primary wrapper's closure (§4.9).
-  `createAgentSession` calls
-  `MixtureCatalog.for(registry).scope(cwd, agentDir).retain(sessionId)` and,
-  when that scope has no roster yet,
-  `scope.setRoster(resolveMixtures(discoverMixtures(cwd, agentDir)))` after
-  extension provider registrations and runtime-provider hydration
-  (`sdk.ts:2497-2512` and the following block). A child that borrows the
+  `MixtureWorkspace.retain` holds
+  `MixtureCatalog.for(registry).scope(cwd, agentDir)` and starts roster
+  discovery through `scope.initializeRoster(load)` after extension provider
+  registrations and runtime-provider hydration. Concurrent holders of one
+  scope await the same first-owner discovery; a slower session with different
+  enabled-model settings cannot overwrite that roster. A scope retired while
+  discovery is in flight cannot install a stale result into a later scope
+  with the same key. A child that borrows the
   registry and the cwd finds its scope's roster and only retains. Session
   teardown calls `scope.release(sessionId)`; the last owner of a scope drops
   that scope's roster, and the provider is unregistered when no live scope
