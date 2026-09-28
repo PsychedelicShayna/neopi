@@ -884,8 +884,6 @@ export class AgentSession implements SettingsScope {
 	#getEvalPreludes: (() => readonly EvalPreludeDefinition[]) | undefined;
 	#reconcileBrowserMcpFilter: AgentSessionConfig["reconcileBrowserMcpFilter"];
 	#skillDescriptions: SkillDescriptionCatalog;
-	#promptSkillsSource: readonly Skill[] | undefined;
-	#promptSkills: readonly Skill[] = [];
 	/**
 	 * Backs `ctx.setInterval`/`setTimeout`/`clearTimer` for the runner-less
 	 * command-context fallback (SDK embeddings with no extension runner). Lazily
@@ -8704,16 +8702,6 @@ export class AgentSession implements SettingsScope {
 	/** Skills loaded by SDK (empty if --no-skills or skills: [] was passed) */
 	get skills(): readonly Skill[] {
 		return this.#tools.skills;
-	}
-
-	/** Descriptions frozen when this session's system prompt was built. */
-	get renderedSkills(): readonly Skill[] {
-		const skills = this.skills;
-		if (skills !== this.#promptSkillsSource) {
-			this.#promptSkillsSource = skills;
-			this.#promptSkills = this.#skillDescriptions.snapshot(skills);
-		}
-		return this.#promptSkills;
 	}
 
 	/** Frozen skill-URI hint visibility snapshot (see {@link SessionTools.skillHintVisible}). */

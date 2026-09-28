@@ -3,6 +3,19 @@ import { deflateSync, inflateSync } from "node:zlib";
 import { untilAborted } from "@oh-my-pi/pi-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import type { ElementHandle, ElementScreenshotOptions, Page } from "puppeteer-core";
+import type { ImageResizeOptions } from "../../utils/image-resize";
+import type { SessionSnapshot } from "./tab-protocol";
+
+/** Shared model-image budget for browser, frame, diff, and cmux captures. */
+export function browserScreenshotResizeOptions(session: SessionSnapshot): ImageResizeOptions {
+	return {
+		maxWidth: session.browserScreenshotMaxWidth ?? 1024,
+		maxHeight: session.browserScreenshotMaxHeight ?? 1024,
+		maxBytes: 150 * 1024,
+		jpegQuality: 70,
+		excludeWebP: session.excludeWebP,
+	};
+}
 
 /** Options accepted by tab.screenshot(). */
 export interface ScreenshotOptions {

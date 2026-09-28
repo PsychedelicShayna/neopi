@@ -107,7 +107,7 @@ interface HubHarness {
 	onUnassign: ReturnType<typeof vi.fn>;
 	onLoginRequest: ReturnType<typeof vi.fn>;
 	onCancel: ReturnType<typeof vi.fn>;
-	onFallbackChainChange: Mock<(role: string, chain: string[], effort?: { selector: string; selection: HubEffortSelection }) => void>;
+	onFallbackChainChange: Mock<(role: string, chain: string[], effort?: { selector: string; selection: HubEffortSelection }, copiedSelections?: Readonly<Record<string, HubEffortSelection>>) => void>;
 }
 
 const openHubs: ModelHubComponent[] = [];
@@ -130,20 +130,29 @@ function createHub(options: {
 	const onUnassign = vi.fn();
 	const onLoginRequest = vi.fn();
 	const onCancel = vi.fn();
-	// Mirror the controller: persist chain edits so the hub's re-read sees them.
-	const onFallbackChainChange = vi.fn((role: string, chain: string[], effort?: { selector: string; selection: HubEffortSelection }) => {
+	// Mirror the controller's chain/metadata result in the isolated overlay used by this UI fixture.
+	const onFallbackChainChange = vi.fn((
+		role: string,
+		chain: string[],
+		effort?: { selector: string; selection: HubEffortSelection },
+		copiedSelections?: Readonly<Record<string, HubEffortSelection>>,
+	) => {
 		const chains = { ...cfgRetryFallbackChains.get(settings) };
-		if (chain.length === 0) {
-			delete chains[role];
-		} else {
-			chains[role] = chain;
+		if (chain.length === 0) delete chains[role];
+		else chains[role] = chain;
+		const selections = { ...cfgFallbackEffortSelections.get(settings)[role] };
+		for (const selector of Object.keys(selections)) if (!chain.includes(selector)) delete selections[selector];
+		if (effort) selections[effort.selector] = effort.selection;
+		if (copiedSelections) {
+			for (const [selector, selection] of Object.entries(copiedSelections)) {
+				if (chain.includes(selector) && !(selector in selections)) selections[selector] = selection;
+			}
 		}
 		cfgRetryFallbackChains.override(settings, chains);
-		if (effort) {
-			const stored = { ...cfgFallbackEffortSelections.get(settings) };
-			stored[role] = { ...stored[role], [effort.selector]: effort.selection };
-			cfgFallbackEffortSelections.override(settings, stored);
-		}
+		const stored = { ...cfgFallbackEffortSelections.get(settings) };
+		if (chain.length === 0) delete stored[role];
+		else stored[role] = selections;
+		cfgFallbackEffortSelections.override(settings, stored);
 	});
 	const hub = new ModelHubComponent(
 		ui,
@@ -1104,6 +1113,245 @@ describe("ModelHub", () => {
 			// Cursor followed the moved entry: x removes model-a, not model-b.
 			hub.handleInput("x");
 			expect(onFallbackChainChange).toHaveBeenLastCalledWith("default", ["test/model-b"]);
+		});
+
+		test("y on a configured primary appends its model to another role without changing other chains", () => {
+			const a = makeModel("test", "model-a");
+			const b = makeModel("test", "model-b");
+			const settings = Settings.isolated({
+				modelRoles: { default: "test/model-a" },
+				"retry.fallbackChains": { smol: ["test/model-b"], slow: ["test/model-a"] },
+			});
+			const { hub, onFallbackChainChange } = createHub({ models: [a, b], scoped: true, settings });
+
+			enterRolesView(hub);
+			hub.handleInput("y"); // default primary model
+			hub.handleInput(DOWN); // smol role
+			hub.handleInput("p");
+
+			expect(onFallbackChainChange).toHaveBeenCalledWith("smol", ["test/model-b", "test/model-a"]);
+			expect(cfgRetryFallbackChains.get(settings).slow).toEqual(["test/model-a"]);
+		});
+
+		test("y on a routed role primary keeps its upstream when pasted into another chain", () => {
+			const model = getBundledModel("openrouter", "z-ai/glm-4.7");
+			if (!model) throw new Error("Expected bundled OpenRouter model z-ai/glm-4.7");
+			const settings = Settings.isolated({
+				modelRoles: { default: "openrouter/z-ai/glm-4.7@fireworks" },
+			});
+			const { hub, onFallbackChainChange } = createHub({ models: [model], scoped: true, settings });
+
+			enterRolesView(hub);
+			hub.handleInput("y");
+			hub.handleInput(DOWN); // smol role
+			hub.handleInput("p");
+
+			expect(onFallbackChainChange).toHaveBeenCalledWith("smol", ["openrouter/z-ai/glm-4.7@fireworks"]);
+		});
+
+		test("y on a fallback preserves its configured effort and appends only once", () => {
+			const a = makeModel("test", "model-a");
+			const b = makeModel("test", "model-b");
+			const settings = Settings.isolated({
+				"retry.fallbackChains": { default: ["test/model-a:low"], smol: ["test/model-b"] },
+			});
+			const { hub, onFallbackChainChange } = createHub({ models: [a, b], scoped: true, settings });
+
+			enterRolesView(hub);
+			hub.handleInput(DOWN); // default fallback
+			hub.handleInput("y");
+			hub.handleInput(DOWN); // smol role
+			hub.handleInput("p");
+			hub.handleInput("p");
+
+			expect(onFallbackChainChange).toHaveBeenCalledTimes(1);
+			expect(onFallbackChainChange).toHaveBeenCalledWith("smol", ["test/model-b", "test/model-a:low"]);
+			expect(cfgRetryFallbackChains.get(settings).default).toEqual(["test/model-a:low"]);
+		});
+
+		test("Shift+Y from a later fallback appends missing entries in source order to the target chain", () => {
+			const models = ["model-a", "model-b", "model-c"].map(id => makeModel("test", id));
+			const source = ["test/model-a:low", "test/model-b", "test/model-c"];
+			const settings = Settings.isolated({
+				"retry.fallbackChains": { default: source, smol: ["test/model-b"], slow: ["test/model-c"] },
+			});
+			const { hub, onFallbackChainChange } = createHub({ models, scoped: true, settings });
+
+			enterRolesView(hub);
+			hub.handleInput(DOWN); // first default fallback
+			hub.handleInput(DOWN); // middle default fallback
+			hub.handleInput("Y");
+			hub.handleInput(DOWN); // last default fallback
+			hub.handleInput(DOWN); // smol role
+			hub.handleInput("p");
+
+			expect(onFallbackChainChange).toHaveBeenCalledWith("smol", [
+				"test/model-b",
+				"test/model-a:low",
+				"test/model-c",
+			]);
+			expect(cfgRetryFallbackChains.get(settings).default).toEqual(source);
+			expect(cfgRetryFallbackChains.get(settings).slow).toEqual(["test/model-c"]);
+		});
+
+		test("p on a model-keyed chain header appends a yanked fallback without replacing the source", () => {
+			const a = makeModel("test", "model-a");
+			const b = makeModel("test", "model-b");
+			const settings = Settings.isolated({
+				"retry.fallbackChains": { default: ["test/model-a"], "test/*": ["test/model-b"] },
+			});
+			const { hub, onFallbackChainChange } = createHub({ models: [a, b], scoped: true, settings });
+
+			enterRolesView(hub);
+			hub.handleInput(DOWN); // default fallback
+			hub.handleInput("y");
+			hub.handleInput(UP); // default role
+			hub.handleInput(UP); // + New fallback…
+			hub.handleInput(UP); // test/* fallback
+			hub.handleInput(UP); // test/* chain header
+			hub.handleInput("p");
+
+			expect(onFallbackChainChange).toHaveBeenCalledWith("test/*", ["test/model-b", "test/model-a"]);
+			expect(cfgRetryFallbackChains.get(settings).default).toEqual(["test/model-a"]);
+		});
+
+		test("y snapshots a routed primary's fixed effort and saves it with the target chain", () => {
+			const model = getBundledModel("openrouter", "z-ai/glm-4.7");
+			if (!model) throw new Error("Expected bundled OpenRouter model z-ai/glm-4.7");
+			const selector = "openrouter/z-ai/glm-4.7@fireworks";
+			const settings = Settings.isolated({});
+			settings.setRoleModelAndEffort("default", selector, { mode: "fixed", level: ThinkingLevel.High }, "global");
+			const { hub, onFallbackChainChange } = createHub({ models: [model], scoped: true, settings });
+			enterRolesView(hub);
+			hub.handleInput("y");
+			settings.setRoleEffortSelection("default", { mode: "fixed", level: ThinkingLevel.Low });
+			hub.handleInput(DOWN); // smol role
+			hub.handleInput("p");
+			expect(onFallbackChainChange).toHaveBeenCalledWith("smol", [selector], undefined, {
+				[selector]: { mode: "fixed", level: ThinkingLevel.High },
+			});
+			expect(cfgFallbackEffortSelections.get(settings).smol?.[selector]).toEqual({
+				mode: "fixed", level: ThinkingLevel.High,
+			});
+		});
+
+		test("y copies a routed primary's Auto allowlist without aliasing its mutable source", () => {
+			const model = getBundledModel("openrouter", "z-ai/glm-4.7");
+			if (!model) throw new Error("Expected bundled OpenRouter model z-ai/glm-4.7");
+			const selector = "openrouter/z-ai/glm-4.7@fireworks";
+			const allowed = [Effort.Low, Effort.High];
+			const settings = Settings.isolated({});
+			settings.setRoleModelAndEffort("default", selector, {
+				mode: "auto", selector: "openrouter/z-ai/glm-4.7", allowed,
+			}, "global");
+			const { hub } = createHub({ models: [model], scoped: true, settings });
+			enterRolesView(hub);
+			hub.handleInput("y");
+			allowed.push(Effort.Max);
+			hub.handleInput(DOWN);
+			hub.handleInput("p");
+			expect(cfgFallbackEffortSelections.get(settings).smol?.[selector]).toEqual({
+				mode: "auto", selector: "openrouter/z-ai/glm-4.7", allowed: [Effort.Low, Effort.High],
+			});
+		});
+
+		test("y copies effective overlay role effort even without a persisted role source", () => {
+			const model = makeModel("test", "model-a");
+			const settings = Settings.isolated({
+				modelRoles: { default: "test/model-a" },
+				roleEffortSelections: { default: { mode: "fixed", level: ThinkingLevel.Off } },
+			});
+			const { hub } = createHub({ models: [model], scoped: true, settings });
+			enterRolesView(hub);
+			hub.handleInput("y");
+			hub.handleInput(DOWN);
+			hub.handleInput("p");
+			expect(cfgFallbackEffortSelections.get(settings).smol?.["test/model-a"]).toEqual({
+				mode: "fixed", level: ThinkingLevel.Off,
+			});
+		});
+
+		test("y converts a legacy primary thinking suffix to fallback effort metadata", () => {
+			const model = getBundledModel("openrouter", "z-ai/glm-4.7");
+			if (!model) throw new Error("Expected bundled OpenRouter model z-ai/glm-4.7");
+			const selector = "openrouter/z-ai/glm-4.7@fireworks";
+			const settings = Settings.isolated({ modelRoles: { default: `${selector}:high` } });
+			const { hub } = createHub({ models: [model], scoped: true, settings });
+			enterRolesView(hub);
+			hub.handleInput("y");
+			hub.handleInput(DOWN);
+			hub.handleInput("p");
+			expect(cfgRetryFallbackChains.get(settings).smol).toEqual([selector]);
+			expect(cfgFallbackEffortSelections.get(settings).smol?.[selector]).toEqual({
+				mode: "fixed", level: ThinkingLevel.High,
+			});
+		});
+
+		test("Y copies sparse Auto and fixed metadata in order without replacing duplicate target effort", () => {
+			const a = "test/model-a";
+			const b = "test/model-b";
+			const c = "test/model-c@route";
+			const settings = Settings.isolated({
+				"retry.fallbackChains": { default: [a, b, c], smol: [b] },
+				"retry.fallbackEffortSelections": {
+					default: {
+						[a]: { mode: "auto", allowed: [Effort.Low, Effort.High] },
+						[b]: { mode: "fixed", level: ThinkingLevel.Low },
+						[c]: { mode: "fixed", level: ThinkingLevel.High },
+					},
+					smol: { [b]: { mode: "fixed", level: ThinkingLevel.Off } },
+				},
+			});
+			const models = ["model-a", "model-b", "model-c"].map(id => makeModel("test", id));
+			const { hub, onFallbackChainChange } = createHub({ models, scoped: true, settings });
+			enterRolesView(hub);
+			hub.handleInput(DOWN); // first default fallback
+			hub.handleInput("Y");
+			const sourceSelections = cfgFallbackEffortSelections.get(settings);
+			(sourceSelections.default[a] as { allowed: Effort[] }).allowed.push(Effort.Max);
+			hub.handleInput(DOWN);
+			hub.handleInput(DOWN);
+			hub.handleInput(DOWN); // smol role
+			hub.handleInput("p");
+			hub.handleInput("p"); // deduped: no second persistence
+			expect(onFallbackChainChange).toHaveBeenCalledTimes(1);
+			expect(cfgRetryFallbackChains.get(settings).smol).toEqual([b, a, c]);
+			expect(cfgFallbackEffortSelections.get(settings).smol).toEqual({
+				[b]: { mode: "fixed", level: ThinkingLevel.Off },
+				[a]: { mode: "auto", allowed: [Effort.Low, Effort.High] },
+				[c]: { mode: "fixed", level: ThinkingLevel.High },
+			});
+			expect(cfgFallbackEffortSelections.get(settings).default[b]).toEqual({
+				mode: "fixed", level: ThinkingLevel.Low,
+			});
+		});
+
+		test("y on one fallback copies Auto metadata into a model-keyed chain without changing source", () => {
+			const selector = "test/model-a@upstream";
+			const settings = Settings.isolated({
+				"retry.fallbackChains": { default: [selector], "test/*": ["test/model-b"] },
+				"retry.fallbackEffortSelections": {
+					default: { [selector]: { mode: "auto", allowed: [Effort.Medium, Effort.Max] } },
+				},
+			});
+			const { hub } = createHub({
+				models: [makeModel("test", "model-a"), makeModel("test", "model-b")], scoped: true, settings,
+			});
+			enterRolesView(hub);
+			hub.handleInput(DOWN);
+			hub.handleInput("y");
+			hub.handleInput(UP); // default role
+			hub.handleInput(UP); // + New fallback…
+			hub.handleInput(UP); // test/* fallback
+			hub.handleInput(UP); // test/* header
+			hub.handleInput("p");
+			expect(cfgRetryFallbackChains.get(settings)["test/*"]).toEqual(["test/model-b", selector]);
+			expect(cfgFallbackEffortSelections.get(settings)["test/*"]?.[selector]).toEqual({
+				mode: "auto", allowed: [Effort.Medium, Effort.Max],
+			});
+			expect(cfgFallbackEffortSelections.get(settings).default?.[selector]).toEqual({
+				mode: "auto", allowed: [Effort.Medium, Effort.Max],
+			});
 		});
 
 		test("windows the roles list so model-keyed chains past the panel height stay reachable", () => {

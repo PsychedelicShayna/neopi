@@ -39,7 +39,7 @@ import type {
 	WorkerOutbound,
 } from "./tab-protocol";
 
-import { cfgBrowserScreenshotDir } from "./settings";
+import { cfgBrowserScreenshotDir, cfgBrowserScreenshotMaxHeight, cfgBrowserScreenshotMaxWidth } from "./settings";
 
 // Coding-agent binary/bundle workers route through the CLI entrypoint with a
 // hidden argv mode, so compiled/npm builds only need one JavaScript entry.
@@ -603,6 +603,8 @@ export async function runInTab(name: string, opts: RunInTabOptions): Promise<Run
 		{
 			cwd: opts.session.cwd,
 			browserScreenshotDir: expandBrowserScreenshotDir(opts.session),
+			browserScreenshotMaxWidth: cfgBrowserScreenshotMaxWidth.get(opts.session.settings),
+			browserScreenshotMaxHeight: cfgBrowserScreenshotMaxHeight.get(opts.session.settings),
 			excludeWebP: webpExclusionForModel(opts.session.getActiveModel?.()),
 		},
 	);
