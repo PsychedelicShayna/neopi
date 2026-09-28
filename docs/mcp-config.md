@@ -447,6 +447,28 @@ The active profile's user file supplies two cross-source overrides:
 
 `/mcp enable` and `/mcp disable` update `enabled` directly when the definition is in an OMP-owned writable file. OMP does not mutate another tool's config: for such sources, those commands maintain the user-level allowlist or denylist instead and remove a conflicting stale override.
 
+## Per-run allowlist (`--mcp`, `mcp.includeServers`)
+
+A run can connect only some servers without touching any config file:
+
+- `--mcp <globs>` takes comma-separated Bun globs matched against server names, like `--skills`. An exact server name is a valid glob. It sets the `mcp.includeServers` session setting.
+- `mcp.includeServers: []` (or unset) means **unrestricted**: every available server connects. It does not mean "no servers". Use `--no-mcp` (SDK: `enableMCP: false`) to disable MCP for the run.
+- Excluded servers are never spawned or connected. That includes `/mcp reload`, the project-config and browser-filter reconcilers, `/mcp enable`, `/mcp add` and the extensions dashboard. A direct connect of an excluded server fails with an allowlist error.
+- `disabledServers` and `enabled: false` still win: an allowlisted server that is disabled stays off.
+- An entry without glob metacharacters (`* ? [ ] { } \`) that names no available server is an error. The CLI exits with status 2, and `createAgentSession` throws `MCPUnknownServerError` (its `serverNames` lists the offending entries) before any server starts. A glob that matches nothing only logs a warning.
+
+SDK embedders set the allowlist per session on the `Settings` instance they pass to `createAgentSession`:
+
+```ts
+import { cfgMcpIncludeServers, createAgentSession, Settings } from "@oh-my-pi/pi-coding-agent";
+
+const settings = await Settings.init({ cwd, inMemory: true });
+cfgMcpIncludeServers.override(settings, ["github", "linear-*"]);
+const { session } = await createAgentSession({ cwd, settings });
+```
+
+The override lives on that `Settings` instance only, so concurrent sessions with their own `Settings` keep independent allowlists. The exported `cfgMcpIncludeServers` handle doubles as the capability marker for hosts that probe a NeoPi build.
+
 ## `/mcp add` vs editing JSON directly
 
 Use `/mcp add` when you want guided setup.

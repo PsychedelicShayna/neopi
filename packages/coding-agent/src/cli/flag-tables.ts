@@ -230,6 +230,12 @@ export const STRING_SETTERS: Record<string, StringSetter> = {
 	"--skills": (result, value) => {
 		result.skills = value.split(",").map(s => s.trim());
 	},
+	"--mcp": (result, value) => {
+		result.mcp = value
+			.split(",")
+			.map(s => s.trim())
+			.filter(Boolean);
+	},
 	"--chat-include": (result, value) => {
 		result.chatInclude = value
 			.split(",")
@@ -326,6 +332,7 @@ export const VALUELESS_FLAGS: ReadonlySet<string> = new Set([
 	"--print-thoughts",
 	"--no-extensions",
 	"--no-skills",
+	"--no-mcp",
 	"--no-rules",
 	"--no-title",
 	"--no-ui",

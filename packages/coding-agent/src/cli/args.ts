@@ -86,6 +86,9 @@ export interface Args {
 	export?: string;
 	noSkills?: boolean;
 	skills?: string[];
+	noMcp?: boolean;
+	/** MCP server name globs admitted for this run (`--mcp`). */
+	mcp?: string[];
 	noRules?: boolean;
 	noTitle?: boolean;
 	/** `--mode rpc` only: run extensions without a UI so no `extension_ui_request` dialogs reach the host. */
@@ -284,6 +287,8 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			result.noExtensions = true;
 		} else if (arg === "--no-skills") {
 			result.noSkills = true;
+		} else if (arg === "--no-mcp") {
+			result.noMcp = true;
 		} else if (arg === "--no-rules") {
 			result.noRules = true;
 		} else if (arg === "--no-title") {
