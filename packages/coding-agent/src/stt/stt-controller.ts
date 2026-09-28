@@ -1,7 +1,6 @@
 import type { ApiKeyResolver } from "@oh-my-pi/pi-ai";
 import { transcribeAudio } from "@oh-my-pi/pi-ai/transcription";
 import type { Api, Model } from "@oh-my-pi/pi-catalog/types";
-import { AudioCapture } from "@oh-my-pi/pi-natives";
 import type { ModelBrowserRegistry } from "@oh-my-pi/pi-tui/overlays/model-browser";
 import { logger } from "@oh-my-pi/pi-utils";
 import { resolveRoleChain } from "../config/model-resolver";
@@ -12,6 +11,7 @@ import { type SttStreamHandle, sttClient } from "./asr-client";
 import { downloadSttModel, isSttModelCached } from "./downloader";
 import { resolveSttModelSpec, type SttModelKey } from "./models";
 import { evaluateSubmitTrigger } from "./submit-trigger";
+import { sharedAudioCapture } from "./shared-audio-capture";
 import { WavFileRecorder } from "./wav-file-recorder";
 
 import { cfgSttLanguage, cfgSttSubmitTrigger } from "./settings";
@@ -94,7 +94,7 @@ export class STTController {
 			this.#registry = dependencies?.registry;
 			this.#getSessionId = dependencies?.getSessionId;
 		} else {
-			this.#createCapture = onAudio => new AudioCapture(16_000, onAudio);
+			this.#createCapture = onAudio => sharedAudioCapture(16_000, onAudio);
 			this.#settings = createCaptureOrDependencies?.settings ?? settings;
 			this.#registry = createCaptureOrDependencies?.registry;
 			this.#getSessionId = createCaptureOrDependencies?.getSessionId;

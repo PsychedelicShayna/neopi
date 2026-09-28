@@ -3,12 +3,12 @@ import * as os from "node:os";
 import { join } from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { AudioCapture } from "@oh-my-pi/pi-natives";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 import type { AgentSession } from "../session/agent-session";
 import type { CustomMessageDelivery } from "../session/agent-session";
 import type { AgentSessionEvent } from "../session/agent-session-events";
 import { type CustomMessage, LIVE_DELEGATION_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../session/messages";
+import { sharedAudioCapture } from "../stt/shared-audio-capture";
 import { resolveLiveInstructions } from "./personas";
 import agentFinalMessageTemplate from "./prompts/agent-final-message.md" with { type: "text" };
 import operatorSharedMessageTemplate from "./prompts/operator-shared-message.md" with { type: "text" };
@@ -107,7 +107,7 @@ export interface LiveSessionControllerOptions {
 	thinkingFlushMs?: number;
 	/** Test seam: builds the realtime transport; defaults to CodexLiveTransport. */
 	createTransport?(options: ConstructorParameters<typeof CodexLiveTransport>[0]): LiveTransportLike;
-	/** Test seam: builds the microphone recorder; defaults to the native AudioCapture. */
+	/** Test seam: builds the microphone recorder; defaults to the shared native capture. */
 	createRecorder?(
 		sampleRate: number,
 		callback: (error: Error | null, samples: Float32Array) => void,
@@ -285,8 +285,7 @@ export class LiveSessionController {
 				? thinkingFlushMs
 				: DEFAULT_THINKING_FLUSH_MS;
 		this.#createTransport = options.createTransport ?? (transportOptions => new CodexLiveTransport(transportOptions));
-		this.#createRecorder =
-			options.createRecorder ?? ((sampleRate, callback) => new AudioCapture(sampleRate, callback));
+		this.#createRecorder = options.createRecorder ?? sharedAudioCapture;
 	}
 
 	/** Current realtime call phase. */
