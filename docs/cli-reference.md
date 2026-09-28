@@ -208,11 +208,12 @@ with a once-per-second `ppid` poll as a fallback. When the parent dies, the run:
 
 1. aborts the session, which kills the running tool (for example a foreground
    bash command);
-2. disposes the session and tears down the child processes it owns within about
+2. disposes the session with a SIGHUP reason, preserving an interrupted model
+   turn for resume, and tears down the child processes it owns within about
    2 seconds: MCP servers (stdio servers run in their own `setsid` process group
    on POSIX systems other than macOS; the whole group gets SIGTERM, then
    SIGKILL), async jobs, LSP servers, eval kernels, and every other
-   process-cleanup registration;
+   process-cleanup registration, including exit-only registrations;
 3. exits with status 129, the same as SIGHUP.
 
 Pass `--no-exit-with-parent` when the run should outlive its launcher on
