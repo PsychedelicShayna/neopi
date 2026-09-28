@@ -107,7 +107,14 @@ interface HubHarness {
 	onUnassign: ReturnType<typeof vi.fn>;
 	onLoginRequest: ReturnType<typeof vi.fn>;
 	onCancel: ReturnType<typeof vi.fn>;
-	onFallbackChainChange: Mock<(role: string, chain: string[], effort?: { selector: string; selection: HubEffortSelection }, copiedSelections?: Readonly<Record<string, HubEffortSelection>>) => void>;
+	onFallbackChainChange: Mock<
+		(
+			role: string,
+			chain: string[],
+			effort?: { selector: string; selection: HubEffortSelection },
+			copiedSelections?: Readonly<Record<string, HubEffortSelection>>,
+		) => void
+	>;
 }
 
 const openHubs: ModelHubComponent[] = [];
@@ -131,29 +138,31 @@ function createHub(options: {
 	const onLoginRequest = vi.fn();
 	const onCancel = vi.fn();
 	// Mirror the controller's chain/metadata result in the isolated overlay used by this UI fixture.
-	const onFallbackChainChange = vi.fn((
-		role: string,
-		chain: string[],
-		effort?: { selector: string; selection: HubEffortSelection },
-		copiedSelections?: Readonly<Record<string, HubEffortSelection>>,
-	) => {
-		const chains = { ...cfgRetryFallbackChains.get(settings) };
-		if (chain.length === 0) delete chains[role];
-		else chains[role] = chain;
-		const selections = { ...cfgFallbackEffortSelections.get(settings)[role] };
-		for (const selector of Object.keys(selections)) if (!chain.includes(selector)) delete selections[selector];
-		if (effort) selections[effort.selector] = effort.selection;
-		if (copiedSelections) {
-			for (const [selector, selection] of Object.entries(copiedSelections)) {
-				if (chain.includes(selector) && !(selector in selections)) selections[selector] = selection;
+	const onFallbackChainChange = vi.fn(
+		(
+			role: string,
+			chain: string[],
+			effort?: { selector: string; selection: HubEffortSelection },
+			copiedSelections?: Readonly<Record<string, HubEffortSelection>>,
+		) => {
+			const chains = { ...cfgRetryFallbackChains.get(settings) };
+			if (chain.length === 0) delete chains[role];
+			else chains[role] = chain;
+			const selections = { ...cfgFallbackEffortSelections.get(settings)[role] };
+			for (const selector of Object.keys(selections)) if (!chain.includes(selector)) delete selections[selector];
+			if (effort) selections[effort.selector] = effort.selection;
+			if (copiedSelections) {
+				for (const [selector, selection] of Object.entries(copiedSelections)) {
+					if (chain.includes(selector) && !(selector in selections)) selections[selector] = selection;
+				}
 			}
-		}
-		cfgRetryFallbackChains.override(settings, chains);
-		const stored = { ...cfgFallbackEffortSelections.get(settings) };
-		if (chain.length === 0) delete stored[role];
-		else stored[role] = selections;
-		cfgFallbackEffortSelections.override(settings, stored);
-	});
+			cfgRetryFallbackChains.override(settings, chains);
+			const stored = { ...cfgFallbackEffortSelections.get(settings) };
+			if (chain.length === 0) delete stored[role];
+			else stored[role] = selections;
+			cfgFallbackEffortSelections.override(settings, stored);
+		},
+	);
 	const hub = new ModelHubComponent(
 		ui,
 		createModelBrowserSource(settings),
@@ -169,10 +178,11 @@ function createHub(options: {
 					if (scope === "project") settings.setProjectRoleEffortSelection(role, selection);
 					else settings.setRoleEffortSelection(role, selection);
 				};
-				if (result instanceof Promise) return result.then(applied => {
-					if (applied !== false) save();
-					return applied;
-				});
+				if (result instanceof Promise)
+					return result.then(applied => {
+						if (applied !== false) save();
+						return applied;
+					});
 				if (result !== false) save();
 				return result;
 			},
@@ -180,7 +190,8 @@ function createHub(options: {
 			onLoginRequest: options.callbacks?.onLoginRequest ?? onLoginRequest,
 			onCycleOrderChange: options.callbacks?.onCycleOrderChange,
 			onFallbackChainChange: options.callbacks?.onFallbackChainChange ?? onFallbackChainChange,
-			onEffortRulesChange: options.callbacks?.onEffortRulesChange ?? (rules => cfgEffortRules.override(settings, rules)),
+			onEffortRulesChange:
+				options.callbacks?.onEffortRulesChange ?? (rules => cfgEffortRules.override(settings, rules)),
 			onCancel: options.callbacks?.onCancel ?? onCancel,
 		},
 		options.hub,
@@ -678,7 +689,7 @@ describe("ModelHub", () => {
 			const settings = Settings.isolated({});
 			const assignment = Promise.withResolvers<boolean>();
 			let attempts = 0;
-			const onAssign = vi.fn(() => attempts++ === 0 ? assignment.promise : true);
+			const onAssign = vi.fn(() => (attempts++ === 0 ? assignment.promise : true));
 			const { hub } = createHub({ models: [model], scoped: true, settings, callbacks: { onAssign } });
 
 			hub.handleInput("\n"); // Select model.
@@ -922,11 +933,16 @@ describe("ModelHub", () => {
 		test("Enter on a chip already holding this model unassigns it", () => {
 			const model = makeModel("test", "toggled-model");
 			const settings = Settings.isolated({ modelRoles: { smol: "test/toggled-model" } });
-			const { hub } = createHub({ models: [model], scoped: true, settings, callbacks: {
-				onUnassign: (role, scope) => {
-					if (scope === "global") settings.setModelRole(role, undefined);
+			const { hub } = createHub({
+				models: [model],
+				scoped: true,
+				settings,
+				callbacks: {
+					onUnassign: (role, scope) => {
+						if (scope === "global") settings.setModelRole(role, undefined);
+					},
 				},
-			} });
+			});
 			installTestTheme();
 
 			hub.handleInput("\n"); // Sidebar → model list.
@@ -987,7 +1003,9 @@ describe("ModelHub", () => {
 			resumed.hub.handleInput("\n");
 			resumed.hub.handleInput("\n"); // confirm Inherit
 			expect(cfgRetryFallbackChains.get(settings).default).toEqual(["test/retry-fallback-model"]);
-			expect(cfgFallbackEffortSelections.get(settings).default?.["test/retry-fallback-model"]).toEqual({ mode: "inherit" });
+			expect(cfgFallbackEffortSelections.get(settings).default?.["test/retry-fallback-model"]).toEqual({
+				mode: "inherit",
+			});
 		});
 
 		test("overflowing role strip scrolls left so the selected chip stays visible", () => {
@@ -1047,7 +1065,8 @@ describe("ModelHub", () => {
 			hub.handleInput("\n"); // model → effort choices
 			hub.handleInput("\n"); // Inherit
 			expect(onFallbackChainChange).toHaveBeenCalledWith("default", ["test/model-a"], {
-				selector: "test/model-a", selection: { mode: "inherit" },
+				selector: "test/model-a",
+				selection: { mode: "inherit" },
 			});
 			expect(onAssign).not.toHaveBeenCalled();
 			expect(normalize(hub.render(220))).toContain("↳ test/model-a");
@@ -1069,7 +1088,8 @@ describe("ModelHub", () => {
 			hub.handleInput("\n"); // save
 			expect(cfgRetryFallbackChains.get(settings).default).toEqual(["test/*"]);
 			expect(cfgFallbackEffortSelections.get(settings).default?.["test/*"]).toEqual({
-				mode: "auto", allowed: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
+				mode: "auto",
+				allowed: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
 			});
 		});
 
@@ -1089,7 +1109,8 @@ describe("ModelHub", () => {
 			hub.handleInput("\n"); // model → effort choices
 			hub.handleInput("\n"); // Inherit
 			expect(onFallbackChainChange).toHaveBeenLastCalledWith("default", ["test/model-b"], {
-				selector: "test/model-b", selection: { mode: "inherit" },
+				selector: "test/model-b",
+				selection: { mode: "inherit" },
 			});
 
 			hub.handleInput("x"); // cursor landed on the replaced entry — remove it
@@ -1231,7 +1252,8 @@ describe("ModelHub", () => {
 				[selector]: { mode: "fixed", level: ThinkingLevel.High },
 			});
 			expect(cfgFallbackEffortSelections.get(settings).smol?.[selector]).toEqual({
-				mode: "fixed", level: ThinkingLevel.High,
+				mode: "fixed",
+				level: ThinkingLevel.High,
 			});
 		});
 
@@ -1241,9 +1263,16 @@ describe("ModelHub", () => {
 			const selector = "openrouter/z-ai/glm-4.7@fireworks";
 			const allowed = [Effort.Low, Effort.High];
 			const settings = Settings.isolated({});
-			settings.setRoleModelAndEffort("default", selector, {
-				mode: "auto", selector: "openrouter/z-ai/glm-4.7", allowed,
-			}, "global");
+			settings.setRoleModelAndEffort(
+				"default",
+				selector,
+				{
+					mode: "auto",
+					selector: "openrouter/z-ai/glm-4.7",
+					allowed,
+				},
+				"global",
+			);
 			const { hub } = createHub({ models: [model], scoped: true, settings });
 			enterRolesView(hub);
 			hub.handleInput("y");
@@ -1251,7 +1280,9 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN);
 			hub.handleInput("p");
 			expect(cfgFallbackEffortSelections.get(settings).smol?.[selector]).toEqual({
-				mode: "auto", selector: "openrouter/z-ai/glm-4.7", allowed: [Effort.Low, Effort.High],
+				mode: "auto",
+				selector: "openrouter/z-ai/glm-4.7",
+				allowed: [Effort.Low, Effort.High],
 			});
 		});
 
@@ -1267,7 +1298,8 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN);
 			hub.handleInput("p");
 			expect(cfgFallbackEffortSelections.get(settings).smol?.["test/model-a"]).toEqual({
-				mode: "fixed", level: ThinkingLevel.Off,
+				mode: "fixed",
+				level: ThinkingLevel.Off,
 			});
 		});
 
@@ -1283,7 +1315,8 @@ describe("ModelHub", () => {
 			hub.handleInput("p");
 			expect(cfgRetryFallbackChains.get(settings).smol).toEqual([selector]);
 			expect(cfgFallbackEffortSelections.get(settings).smol?.[selector]).toEqual({
-				mode: "fixed", level: ThinkingLevel.High,
+				mode: "fixed",
+				level: ThinkingLevel.High,
 			});
 		});
 
@@ -1322,7 +1355,8 @@ describe("ModelHub", () => {
 				[c]: { mode: "fixed", level: ThinkingLevel.High },
 			});
 			expect(cfgFallbackEffortSelections.get(settings).default[b]).toEqual({
-				mode: "fixed", level: ThinkingLevel.Low,
+				mode: "fixed",
+				level: ThinkingLevel.Low,
 			});
 		});
 
@@ -1335,7 +1369,9 @@ describe("ModelHub", () => {
 				},
 			});
 			const { hub } = createHub({
-				models: [makeModel("test", "model-a"), makeModel("test", "model-b")], scoped: true, settings,
+				models: [makeModel("test", "model-a"), makeModel("test", "model-b")],
+				scoped: true,
+				settings,
 			});
 			enterRolesView(hub);
 			hub.handleInput(DOWN);
@@ -1347,10 +1383,12 @@ describe("ModelHub", () => {
 			hub.handleInput("p");
 			expect(cfgRetryFallbackChains.get(settings)["test/*"]).toEqual(["test/model-b", selector]);
 			expect(cfgFallbackEffortSelections.get(settings)["test/*"]?.[selector]).toEqual({
-				mode: "auto", allowed: [Effort.Medium, Effort.Max],
+				mode: "auto",
+				allowed: [Effort.Medium, Effort.Max],
 			});
 			expect(cfgFallbackEffortSelections.get(settings).default?.[selector]).toEqual({
-				mode: "auto", allowed: [Effort.Medium, Effort.Max],
+				mode: "auto",
+				allowed: [Effort.Medium, Effort.Max],
 			});
 		});
 
@@ -1416,7 +1454,8 @@ describe("ModelHub", () => {
 			hub.handleInput("\n");
 			hub.handleInput("\n"); // confirm fallback effort
 			expect(onFallbackChainChange).toHaveBeenLastCalledWith("test/model-a", ["test/model-b"], {
-				selector: "test/model-b", selection: { mode: "inherit" },
+				selector: "test/model-b",
+				selection: { mode: "inherit" },
 			});
 			const rendered = normalize(hub.render(220));
 			expect(rendered).toContain("test/model-a");
@@ -1439,7 +1478,8 @@ describe("ModelHub", () => {
 			hub.handleInput("\n");
 			hub.handleInput("\n"); // confirm fallback effort
 			expect(onFallbackChainChange).toHaveBeenLastCalledWith("test/*", ["test/model-b"], {
-				selector: "test/model-b", selection: { mode: "inherit" },
+				selector: "test/model-b",
+				selection: { mode: "inherit" },
 			});
 		});
 
@@ -1465,7 +1505,8 @@ describe("ModelHub", () => {
 			hub.handleInput("\n");
 			hub.handleInput("\n"); // confirm fallback effort
 			expect(onFallbackChainChange).toHaveBeenLastCalledWith("test/model-a", ["test/model-b"], {
-				selector: "test/model-b", selection: { mode: "inherit" },
+				selector: "test/model-b",
+				selection: { mode: "inherit" },
 			});
 		});
 
@@ -1503,10 +1544,12 @@ describe("ModelHub", () => {
 			hub.handleInput("\x1b[C"); // Inherit → Off
 			hub.handleInput("\n");
 			expect(onFallbackChainChange).toHaveBeenLastCalledWith("default", [selector], {
-				selector, selection: { mode: "fixed", level: ThinkingLevel.Off },
+				selector,
+				selection: { mode: "fixed", level: ThinkingLevel.Off },
 			});
 			expect(cfgFallbackEffortSelections.get(settings).default?.[selector]).toEqual({
-				mode: "fixed", level: ThinkingLevel.Off,
+				mode: "fixed",
+				level: ThinkingLevel.Off,
 			});
 		});
 
@@ -1523,7 +1566,8 @@ describe("ModelHub", () => {
 			hub.handleInput(" "); // disable minimal
 			hub.handleInput("\n");
 			expect(cfgFallbackEffortSelections.get(settings).default?.["test/*"]).toEqual({
-				mode: "auto", allowed: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
+				mode: "auto",
+				allowed: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
 			});
 			expect(cfgRetryFallbackChains.get(settings).default).toEqual(["test/*"]);
 		});
@@ -1537,7 +1581,8 @@ describe("ModelHub", () => {
 			hub.handleInput("\n"); // confirm the preselected effort without changing it
 			expect(cfgRetryFallbackChains.get(settings).default).toEqual(["test/*"]);
 			expect(cfgFallbackEffortSelections.get(settings).default?.["test/*"]).toEqual({
-				mode: "fixed", level: ThinkingLevel.High,
+				mode: "fixed",
+				level: ThinkingLevel.High,
 			});
 		});
 
@@ -1545,15 +1590,22 @@ describe("ModelHub", () => {
 			const settings = Settings.isolated({ "retry.fallbackChains": { default: ["test/*"] } });
 			let reject = true;
 			const { hub } = createHub({
-				models: [makeModel("test", "model-a")], scoped: true, settings,
-				callbacks: { onFallbackChainChange: (role, _chain, effort) => {
-					if (reject) {
-						reject = false;
-						return false;
-					}
-					if (effort) cfgFallbackEffortSelections.override(settings, { [role]: { [effort.selector]: effort.selection } });
-					return true;
-				} },
+				models: [makeModel("test", "model-a")],
+				scoped: true,
+				settings,
+				callbacks: {
+					onFallbackChainChange: (role, _chain, effort) => {
+						if (reject) {
+							reject = false;
+							return false;
+						}
+						if (effort)
+							cfgFallbackEffortSelections.override(settings, {
+								[role]: { [effort.selector]: effort.selection },
+							});
+						return true;
+					},
+				},
 			});
 			enterRolesView(hub);
 			hub.handleInput(DOWN);
@@ -1564,7 +1616,8 @@ describe("ModelHub", () => {
 			expect(cfgFallbackEffortSelections.get(settings).default).toBeUndefined();
 			hub.handleInput("\n"); // retry same staged choice
 			expect(cfgFallbackEffortSelections.get(settings).default?.["test/*"]).toEqual({
-				mode: "fixed", level: ThinkingLevel.Off,
+				mode: "fixed",
+				level: ThinkingLevel.Off,
 			});
 		});
 
@@ -1587,10 +1640,12 @@ describe("ModelHub", () => {
 			hub.handleInput("\n");
 			expect(cfgRetryFallbackChains.get(settings).default).toEqual(["test/model@default", route]);
 			expect(cfgFallbackEffortSelections.get(settings).default?.["test/model@default"]).toEqual({
-				mode: "fixed", level: ThinkingLevel.Off,
+				mode: "fixed",
+				level: ThinkingLevel.Off,
 			});
 			expect(cfgFallbackEffortSelections.get(settings).default?.[route]).toEqual({
-				mode: "fixed", level: ThinkingLevel.Off,
+				mode: "fixed",
+				level: ThinkingLevel.Off,
 			});
 		});
 	});
@@ -1949,12 +2004,18 @@ describe("ModelHub", () => {
 			if (!model) throw new Error("Expected bundled reasoning model");
 			const settings = Settings.isolated({ modelRoleStorage: "project" });
 			const assigned = vi.fn();
-			const { hub } = createHub({ models: [model], scoped: true, settings,
-				callbacks: { onAssign: (selectedModel, role, level, selector, scope, selection) => {
-					assigned(selectedModel, role, level, selector, scope, selection);
-					settings.setProjectModelRole(role, selector);
-					return true;
-				} } });
+			const { hub } = createHub({
+				models: [model],
+				scoped: true,
+				settings,
+				callbacks: {
+					onAssign: (selectedModel, role, level, selector, scope, selection) => {
+						assigned(selectedModel, role, level, selector, scope, selection);
+						settings.setProjectModelRole(role, selector);
+						return true;
+					},
+				},
+			});
 			hub.handleInput("\n"); // model list
 			hub.handleInput("\n"); // role choices
 			hub.handleInput("\n"); // project default role
@@ -2019,7 +2080,9 @@ describe("ModelHub", () => {
 			hub.handleInput("\n"); // save all permitted
 			expect(onAssign.mock.calls[0]?.[3]).toBe("openai/gpt-5.?");
 			expect(onAssign.mock.calls[0]?.[5]).toEqual({
-				mode: "auto", allowed: [...getSupportedEfforts(model)], selector: "openai/gpt-5.?",
+				mode: "auto",
+				allowed: [...getSupportedEfforts(model)],
+				selector: "openai/gpt-5.?",
 			});
 		});
 
@@ -2069,9 +2132,10 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN); // second pattern, with an exact row between
 			hub.handleInput("[");
 			expect(cfgEffortRules.get(settings).map(rule => rule.selector)).toEqual([
-				"*/gpt-5.?", "openai/gpt-5.5", "openai/*",
+				"*/gpt-5.?",
+				"openai/gpt-5.5",
+				"openai/*",
 			]);
 		});
-
 	});
 });

@@ -868,7 +868,14 @@ export class SelectorController {
 			this.ctx.session.modelRegistry,
 			this.ctx.session.scopedModels,
 			{
-				onAssign: async (model, role, thinkingLevel, selector, scope: ModelRoleSelectionScope | undefined, selection) => {
+				onAssign: async (
+					model,
+					role,
+					thinkingLevel,
+					selector,
+					scope: ModelRoleSelectionScope | undefined,
+					selection,
+				) => {
 					const releaseDefaultMutation = role === "default" ? await this.#acquireDefaultRoleMutation() : undefined;
 					const configuredStorage = cfgModelRoleStorage.get(this.ctx.settings);
 					const targetScope = configuredStorage === "project" ? (scope ?? "project") : "global";
@@ -1032,7 +1039,8 @@ export class SelectorController {
 				onFallbackChainChange: (role, chain, effort, copiedSelections) => {
 					try {
 						const selections = { ...cfgFallbackEffortSelections.get(this.ctx.settings)[role] };
-						for (const selector of Object.keys(selections)) if (!chain.includes(selector)) delete selections[selector];
+						for (const selector of Object.keys(selections))
+							if (!chain.includes(selector)) delete selections[selector];
 						if (effort) selections[effort.selector] = effort.selection;
 						if (copiedSelections) {
 							for (const [selector, selection] of Object.entries(copiedSelections)) {

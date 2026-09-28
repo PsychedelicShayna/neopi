@@ -27,7 +27,13 @@ import { isFireworksFastModelId, toFireworksBaseModelId } from "@oh-my-pi/pi-cat
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { logger, prompt, sleepLong } from "@oh-my-pi/pi-utils";
-import { cfgEffortPolicyMode, EffortPolicyError, resolveImplicitEffort, type EffortOrigin, type EffortSelection } from "../config/effort-policy";
+import {
+	cfgEffortPolicyMode,
+	EffortPolicyError,
+	resolveImplicitEffort,
+	type EffortOrigin,
+	type EffortSelection,
+} from "../config/effort-policy";
 import type { ModelRegistry } from "../config/model-registry";
 import { formatModelStringWithRouting, resolveModelOverride } from "../config/model-resolver";
 
@@ -209,7 +215,11 @@ export interface TurnRecoveryHost {
 	textOutputCommitted(): boolean;
 	thinkingLevel(): ThinkingLevel | undefined;
 	configuredThinkingLevel(): ConfiguredThinkingLevel | undefined;
-	setThinkingLevel(level: ConfiguredThinkingLevel | undefined, origin?: EffortOrigin, selection?: EffortSelection): void;
+	setThinkingLevel(
+		level: ConfiguredThinkingLevel | undefined,
+		origin?: EffortOrigin,
+		selection?: EffortSelection,
+	): void;
 	autoSelection(): EffortSelection | undefined;
 	thinkingOrigin(): EffortOrigin;
 	thinkingRevision(): number;
@@ -1886,7 +1896,11 @@ export class TurnRecovery {
 		}
 	}
 
-	#resolveFallbackEffort(role: string, selector: RetryFallbackSelector, candidate: Model): {
+	#resolveFallbackEffort(
+		role: string,
+		selector: RetryFallbackSelector,
+		candidate: Model,
+	): {
 		level: ConfiguredThinkingLevel | undefined;
 		effective?: ConfiguredThinkingLevel;
 		origin: EffortOrigin;
@@ -1895,26 +1909,53 @@ export class TurnRecovery {
 	} {
 		const configured = this.#host.configuredThinkingLevel();
 		const saved = getFallbackEffortSelection(this.#host.settings, role, selector);
-		const selection = saved ?? (selector.thinkingLevel === undefined
-			? { mode: "inherit" } as const
-			: { mode: "fixed", level: selector.thinkingLevel } as const);
+		const selection =
+			saved ??
+			(selector.thinkingLevel === undefined
+				? ({ mode: "inherit" } as const)
+				: ({ mode: "fixed", level: selector.thinkingLevel } as const));
 		const inherited = selection.mode === "inherit";
 		const origin = inherited ? this.#host.thinkingOrigin() : "fallback";
-		const requested = selection.mode === "fixed" ? selection.level : selection.mode === "auto" ? AUTO_THINKING : configured;
+		const requested =
+			selection.mode === "fixed" ? selection.level : selection.mode === "auto" ? AUTO_THINKING : configured;
 		const autoSelection = inherited ? this.#host.autoSelection() : selection.mode === "auto" ? selection : undefined;
 		if (cfgEffortPolicyMode.get(this.#host.settings) !== "replacement") {
 			return { level: requested, origin, selection: autoSelection };
 		}
-		if ((origin === "manual" || origin === "caller") && requested !== undefined &&
-			requested !== AUTO_THINKING && requested !== ThinkingLevel.Off &&
-			requested !== ThinkingLevel.Inherit && !getSupportedEfforts(candidate).includes(requested)) {
-			throw new EffortPolicyError(candidate, getSupportedEfforts(candidate), [], undefined, [], selector.raw, origin);
+		if (
+			(origin === "manual" || origin === "caller") &&
+			requested !== undefined &&
+			requested !== AUTO_THINKING &&
+			requested !== ThinkingLevel.Off &&
+			requested !== ThinkingLevel.Inherit &&
+			!getSupportedEfforts(candidate).includes(requested)
+		) {
+			throw new EffortPolicyError(
+				candidate,
+				getSupportedEfforts(candidate),
+				[],
+				undefined,
+				[],
+				selector.raw,
+				origin,
+			);
 		}
-		const decision = resolveImplicitEffort(this.#host.settings, candidate,
-			autoSelection ?? (requested === AUTO_THINKING ? { mode: "auto" } : { mode: "fixed", level: requested ?? ThinkingLevel.Inherit }),
-			origin);
-		return { level: requested, effective: requested === AUTO_THINKING ? AUTO_THINKING : decision.level,
-			origin, selection: autoSelection, disclosure: decision.disclosure };
+		const decision = resolveImplicitEffort(
+			this.#host.settings,
+			candidate,
+			autoSelection ??
+				(requested === AUTO_THINKING
+					? { mode: "auto" }
+					: { mode: "fixed", level: requested ?? ThinkingLevel.Inherit }),
+			origin,
+		);
+		return {
+			level: requested,
+			effective: requested === AUTO_THINKING ? AUTO_THINKING : decision.level,
+			origin,
+			selection: autoSelection,
+			disclosure: decision.disclosure,
+		};
 	}
 	/**
 	 * Whether applying `candidate` at `selector`'s thinking level would leave the
@@ -2015,9 +2056,11 @@ export class TurnRecovery {
 				pinned: options?.pinFallback === true,
 			};
 		} else {
-			if ((currentOrigin === "manual" || currentOrigin === "caller") &&
+			if (
+				(currentOrigin === "manual" || currentOrigin === "caller") &&
 				this.#activeRetryFallback.lastAppliedFallbackRevision !== undefined &&
-				this.#activeRetryFallback.lastAppliedFallbackRevision !== currentRevision) {
+				this.#activeRetryFallback.lastAppliedFallbackRevision !== currentRevision
+			) {
 				this.#activeRetryFallback.manualSelectionObserved = true;
 				this.#activeRetryFallback.manualThinkingLevel = currentThinkingLevel;
 				this.#activeRetryFallback.manualEffortOrigin = currentOrigin;
@@ -2308,28 +2351,57 @@ export class TurnRecovery {
 		if (!apiKey) return false;
 
 		const currentThinkingLevel = this.#host.configuredThinkingLevel();
-		const restoreOriginal = !manualSelectionObserved &&
+		const restoreOriginal =
+			!manualSelectionObserved &&
 			currentThinkingLevel === lastAppliedFallbackThinkingLevel &&
-			(lastAppliedFallbackEffortOrigin === undefined || this.#host.thinkingOrigin() === lastAppliedFallbackEffortOrigin) &&
+			(lastAppliedFallbackEffortOrigin === undefined ||
+				this.#host.thinkingOrigin() === lastAppliedFallbackEffortOrigin) &&
 			(lastAppliedFallbackRevision === undefined || this.#host.thinkingRevision() === lastAppliedFallbackRevision);
-		const restoreManual = manualSelectionObserved &&
-			this.#host.thinkingRevision() === lastAppliedFallbackRevision;
-		const thinkingToApply = restoreOriginal ? originalThinkingLevel : restoreManual ? manualThinkingLevel : currentThinkingLevel;
-		const origin = restoreOriginal ? originalEffortOrigin ?? "inherited" :
-			restoreManual ? manualEffortOrigin ?? "manual" : this.#host.thinkingOrigin();
-		const selection = restoreOriginal ? originalAutoSelection :
-			restoreManual ? manualAutoSelection : this.#host.autoSelection();
+		const restoreManual = manualSelectionObserved && this.#host.thinkingRevision() === lastAppliedFallbackRevision;
+		const thinkingToApply = restoreOriginal
+			? originalThinkingLevel
+			: restoreManual
+				? manualThinkingLevel
+				: currentThinkingLevel;
+		const origin = restoreOriginal
+			? (originalEffortOrigin ?? "inherited")
+			: restoreManual
+				? (manualEffortOrigin ?? "manual")
+				: this.#host.thinkingOrigin();
+		const selection = restoreOriginal
+			? originalAutoSelection
+			: restoreManual
+				? manualAutoSelection
+				: this.#host.autoSelection();
 		if (cfgEffortPolicyMode.get(this.#host.settings) === "replacement") {
 			try {
-				if ((origin === "manual" || origin === "caller") && thinkingToApply !== undefined &&
-					thinkingToApply !== AUTO_THINKING && thinkingToApply !== ThinkingLevel.Off &&
-					thinkingToApply !== ThinkingLevel.Inherit && !getSupportedEfforts(primaryModel).includes(thinkingToApply)) {
-					throw new EffortPolicyError(primaryModel, getSupportedEfforts(primaryModel), [], undefined, [], originalSelector.raw, origin);
+				if (
+					(origin === "manual" || origin === "caller") &&
+					thinkingToApply !== undefined &&
+					thinkingToApply !== AUTO_THINKING &&
+					thinkingToApply !== ThinkingLevel.Off &&
+					thinkingToApply !== ThinkingLevel.Inherit &&
+					!getSupportedEfforts(primaryModel).includes(thinkingToApply)
+				) {
+					throw new EffortPolicyError(
+						primaryModel,
+						getSupportedEfforts(primaryModel),
+						[],
+						undefined,
+						[],
+						originalSelector.raw,
+						origin,
+					);
 				}
-				const decision = resolveImplicitEffort(this.#host.settings, primaryModel,
-					selection ?? (thinkingToApply === AUTO_THINKING
-						? { mode: "auto" }
-						: { mode: "fixed", level: thinkingToApply ?? ThinkingLevel.Inherit }), origin);
+				const decision = resolveImplicitEffort(
+					this.#host.settings,
+					primaryModel,
+					selection ??
+						(thinkingToApply === AUTO_THINKING
+							? { mode: "auto" }
+							: { mode: "fixed", level: thinkingToApply ?? ThinkingLevel.Inherit }),
+					origin,
+				);
 				if (decision.disclosure) this.#host.emitNotice(decision.disclosure);
 			} catch (error) {
 				if (!(error instanceof EffortPolicyError)) throw error;

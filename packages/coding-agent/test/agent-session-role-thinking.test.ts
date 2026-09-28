@@ -518,7 +518,11 @@ describe("AgentSession role model thinking behavior", () => {
 		const sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 		sessionSettings = Settings.isolated();
 		cfgDefaultThinkingLevel.set(sessionSettings, AUTO_THINKING);
-		const autoSelection = { mode: "auto" as const, allowed: [Effort.Medium], selector: `${model.provider}/${model.id}` };
+		const autoSelection = {
+			mode: "auto" as const,
+			allowed: [Effort.Medium],
+			selector: `${model.provider}/${model.id}`,
+		};
 		session = new AgentSession({
 			agent,
 			sessionManager,
@@ -652,7 +656,9 @@ describe("AgentSession role model thinking behavior", () => {
 		vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 		vi.spyOn(autoThinkingClassifier, "classifyDifficulty").mockRejectedValue(new Error("classifier down"));
 
-		cfgEffortRules.set(sessionSettings, [{ selector: `${model.provider}/${model.id}`, allowed: [Effort.Low, Effort.High] }]);
+		cfgEffortRules.set(sessionSettings, [
+			{ selector: `${model.provider}/${model.id}`, allowed: [Effort.Low, Effort.High] },
+		]);
 		session.setThinkingLevel(AUTO_THINKING);
 		await session.prompt("Investigate a regression");
 
@@ -660,8 +666,12 @@ describe("AgentSession role model thinking behavior", () => {
 		expect(session.thinkingLevel).toBe(Effort.Low);
 		expect(session.autoResolvedThinkingLevel()).toBe(Effort.Low);
 		expect(session.agent.state.thinkingLevel).toBe(Effort.Low);
-		expect(session.sessionManager.getEntries().filter(entry => entry.type === "thinking_level_change").at(-1))
-			.toMatchObject({ thinkingLevel: Effort.Low, configured: AUTO_THINKING });
+		expect(
+			session.sessionManager
+				.getEntries()
+				.filter(entry => entry.type === "thinking_level_change")
+				.at(-1),
+		).toMatchObject({ thinkingLevel: Effort.Low, configured: AUTO_THINKING });
 	});
 
 	it("uses the lowest permitted effort after a later classification failure", async () => {
@@ -672,7 +682,9 @@ describe("AgentSession role model thinking behavior", () => {
 			modelRoles: { default: `${model.provider}/${model.id}` },
 		});
 		vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
-		cfgEffortRules.set(sessionSettings, [{ selector: `${model.provider}/${model.id}`, allowed: [Effort.Low, Effort.High] }]);
+		cfgEffortRules.set(sessionSettings, [
+			{ selector: `${model.provider}/${model.id}`, allowed: [Effort.Low, Effort.High] },
+		]);
 		vi.spyOn(autoThinkingClassifier, "classifyDifficulty")
 			.mockResolvedValueOnce(Effort.High)
 			.mockRejectedValueOnce(new Error("classifier down"));

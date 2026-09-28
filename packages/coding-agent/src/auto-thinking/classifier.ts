@@ -107,21 +107,28 @@ export async function classifyDifficulty(
 ): Promise<Effort | undefined> {
 	if (cfgEffortPolicyMode.get(deps.settings) === "replacement") {
 		const supported = getSupportedEfforts(deps.model);
-		const allowed = deps.allowedEfforts ?? resolveImplicitEffort(deps.settings, deps.model, { mode: "auto" }).candidates;
+		const allowed =
+			deps.allowedEfforts ?? resolveImplicitEffort(deps.settings, deps.model, { mode: "auto" }).candidates;
 		const candidates = THINKING_EFFORTS.filter(effort => supported.includes(effort) && allowed.includes(effort));
 		if (!candidates.length) {
-			throw new Error(`No permitted Auto effort for ${deps.model.provider}/${deps.model.id}; supported: ${supported.join(", ") || "none"}; permitted: ${allowed.join(", ") || "none"}`);
+			throw new Error(
+				`No permitted Auto effort for ${deps.model.provider}/${deps.model.id}; supported: ${supported.join(", ") || "none"}; permitted: ${allowed.join(", ") || "none"}`,
+			);
 		}
 		deps.signal?.throwIfAborted();
 		if (candidates.length === 1) return candidates[0];
 		const state = { request: await readEffortContext(promptText, deps.sessionManager, deps.onContextFallback) };
 		deps.signal?.throwIfAborted();
-		const criteria = Object.fromEntries(candidates.map(effort => [
-			effort,
-			effort === Effort.Minimal
-				? "Simple lookup or mechanical edit requiring the least reasoning."
-				: effort === Effort.Max ? MAX_CRITERION : LEVEL_CRITERIA[effort as Exclude<Level, "max">],
-		])) as Record<Effort, string>;
+		const criteria = Object.fromEntries(
+			candidates.map(effort => [
+				effort,
+				effort === Effort.Minimal
+					? "Simple lookup or mechanical edit requiring the least reasoning."
+					: effort === Effort.Max
+						? MAX_CRITERION
+						: LEVEL_CRITERIA[effort as Exclude<Level, "max">],
+			]),
+		) as Record<Effort, string>;
 		const question: ChoiceQuestion = { type: "choice", instructions: effortQuestionInstructions, criteria };
 		const judge = resolveEffortJudge({
 			settings: deps.settings,

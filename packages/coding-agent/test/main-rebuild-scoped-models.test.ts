@@ -212,23 +212,35 @@ describe("buildSessionOptions --models scope selection", () => {
 
 	it("lets CLI suffixes bypass implicit policy, but keeps saved and bare scope efforts implicit", async () => {
 		const target = buildModel({
-			id: "a", name: "a", api: "anthropic-messages", provider: "prov",
-			baseUrl: "https://example.com", reasoning: true,
+			id: "a",
+			name: "a",
+			api: "anthropic-messages",
+			provider: "prov",
+			baseUrl: "https://example.com",
+			reasoning: true,
 			thinking: { mode: "effort", efforts: [Effort.Low, Effort.High] },
-			input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: 128_000, maxTokens: 8_192,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 8_192,
 		});
 		const settings = Settings.isolated({ enabledModels: ["prov/a:high"] });
 		const scoped = await resolveModelScope(["prov/a:high"], { getAvailable: () => [target] }, undefined, settings);
-		const saved = await buildSessionOptions(
-			parseArgs([]), scoped, SessionManager.inMemory(), registry(), settings,
-		);
+		const saved = await buildSessionOptions(parseArgs([]), scoped, SessionManager.inMemory(), registry(), settings);
 		const explicit = await buildSessionOptions(
-			parseArgs(["--models", "prov/a:high"]), scoped, SessionManager.inMemory(), registry(), settings,
+			parseArgs(["--models", "prov/a:high"]),
+			scoped,
+			SessionManager.inMemory(),
+			registry(),
+			settings,
 		);
 		const bareScope = await resolveModelScope(["prov/a"], { getAvailable: () => [target] }, undefined, settings);
 		const bare = await buildSessionOptions(
-			parseArgs(["--models", "prov/a"]), bareScope, SessionManager.inMemory(), registry(), settings,
+			parseArgs(["--models", "prov/a"]),
+			bareScope,
+			SessionManager.inMemory(),
+			registry(),
+			settings,
 		);
 		expect(saved.thinkingOrigin).toBe("default");
 		expect(saved.scopedModels?.[0]).toMatchObject({ thinkingLevel: Effort.High, explicitThinkingLevel: false });

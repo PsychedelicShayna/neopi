@@ -251,7 +251,8 @@ export async function readCommittedChroniclerBatches(rootDir: string): Promise<r
 	const sources = new Set<string>();
 	for (const { checkpoint } of batches) {
 		for (const entry of checkpoint.entries) {
-			if (sources.has(entry.id)) throw new ChroniclerCorruptionError(`entry ${entry.id} belongs to multiple committed batches`);
+			if (sources.has(entry.id))
+				throw new ChroniclerCorruptionError(`entry ${entry.id} belongs to multiple committed batches`);
 			sources.add(entry.id);
 		}
 	}

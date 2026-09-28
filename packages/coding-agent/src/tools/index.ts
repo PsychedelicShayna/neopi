@@ -410,7 +410,11 @@ export interface ToolSession {
 	/** Get the current session model object (provider/api capabilities), regardless of how it was chosen. */
 	getActiveModel?: () => Model | undefined;
 	/** Live configured effort, not the last concrete Auto result; direct calls inherit its provenance. */
-	getActiveEffort?: () => { level: ConfiguredThinkingLevel | undefined; origin: EffortOrigin; selection?: EffortSelection };
+	getActiveEffort?: () => {
+		level: ConfiguredThinkingLevel | undefined;
+		origin: EffortOrigin;
+		selection?: EffortSelection;
+	};
 	/** Surface direct-call effort adjustments even when an eval helper returns only its answer. */
 	onEffortDisclosure?: (message: string) => void;
 	/** Get the session's live per-family service tiers (undefined = none). Source of truth for subagent `tier.subagent: inherit`. */

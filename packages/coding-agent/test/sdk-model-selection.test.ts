@@ -907,7 +907,11 @@ describe("createAgentSession deferred model pattern resolution", () => {
 			expect(session.configuredThinkingLevel()).toBe(ThinkingLevel.High);
 			expect(session.effortOrigin).toBe("role");
 			expect(manager.getBranch().find(entry => entry.type === "thinking_level_change")).toEqual(
-				expect.objectContaining({ thinkingLevel: Effort.Low, configured: ThinkingLevel.High, effortOrigin: "role" }),
+				expect.objectContaining({
+					thinkingLevel: Effort.Low,
+					configured: ThinkingLevel.High,
+					effortOrigin: "role",
+				}),
 			);
 			await manager.ensureOnDisk();
 		} finally {

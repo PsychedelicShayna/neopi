@@ -209,7 +209,10 @@ export async function runEvalJudgment(
 	return withBridgeTimeoutPause(options.emitStatus, async () => {
 		await evalRequestSlots.acquire(signal);
 		try {
-			return { ...toEvalJudgmentResult(await judge.judge({ state, questions }, { signal })), ...(notices.length ? { notices } : {}) };
+			return {
+				...toEvalJudgmentResult(await judge.judge({ state, questions }, { signal })),
+				...(notices.length ? { notices } : {}),
+			};
 		} finally {
 			evalRequestSlots.release();
 		}

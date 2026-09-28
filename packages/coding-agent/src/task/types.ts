@@ -121,7 +121,9 @@ function createTaskSchema(options: {
 	evalToolsEnabled: boolean;
 }): BaseType {
 	const agent = taskAgentSchemaRule(options.defaultAgent);
-	const effortField = options.effortEnabled ? { "effort?": options.effortMode === "legacy" ? legacyEffortRule : effortRule } : {};
+	const effortField = options.effortEnabled
+		? { "effort?": options.effortMode === "legacy" ? legacyEffortRule : effortRule }
+		: {};
 	const toolsField = options.evalToolsEnabled ? { "tools?": "string[]" } : {};
 	if (options.batchEnabled) {
 		if (options.isolationEnabled) {

@@ -7,7 +7,13 @@
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentEvent, AgentIdentity, AgentMessage, AgentTelemetryConfig } from "@oh-my-pi/pi-agent-core";
-import { AgentBusyError, EventLoopKeepalive, ThinkingLevel, recordHandoff, resolveTelemetry } from "@oh-my-pi/pi-agent-core";
+import {
+	AgentBusyError,
+	EventLoopKeepalive,
+	ThinkingLevel,
+	recordHandoff,
+	resolveTelemetry,
+} from "@oh-my-pi/pi-agent-core";
 import { Effort, THINKING_EFFORTS, type Api, type Model, type ServiceTierByFamily, type Usage } from "@oh-my-pi/pi-ai";
 import { logger, popLoopPhase, prompt, pushLoopPhase, untilAborted } from "@oh-my-pi/pi-utils";
 import {
@@ -19,7 +25,15 @@ import {
 import type { Rule } from "../capability/rule";
 import type { EffectiveExtensionRoots } from "../capability/types";
 import { ModelRegistry } from "../config/model-registry";
-import { cfgEffortPolicyMode, cfgFallbackEffortSelections, EffortPolicyError, resolveImplicitEffort, type EffortDecision, type EffortOrigin, type EffortSelection } from "../config/effort-policy";
+import {
+	cfgEffortPolicyMode,
+	cfgFallbackEffortSelections,
+	EffortPolicyError,
+	resolveImplicitEffort,
+	type EffortDecision,
+	type EffortOrigin,
+	type EffortSelection,
+} from "../config/effort-policy";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import {
 	extractExplicitThinkingSelector,
@@ -333,8 +347,10 @@ function installSubagentRetryFallbackChain(args: {
 	cfgRetryFallbackChains.override(settings, fallbackChains);
 	if (fallbackSelectors.length === 0 && inheritedFallbackChain) {
 		const selections = cfgFallbackEffortSelections.get(settings);
-		const source = inheritedFallbackRole && cfgRetryFallbackChains.get(settings)[inheritedFallbackRole] !== undefined
-			? inheritedFallbackRole : "default";
+		const source =
+			inheritedFallbackRole && cfgRetryFallbackChains.get(settings)[inheritedFallbackRole] !== undefined
+				? inheritedFallbackRole
+				: "default";
 		const inherited = selections[source];
 		if (inherited) cfgFallbackEffortSelections.override(settings, { ...selections, [role]: inherited });
 	}
@@ -3808,11 +3824,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			const inheritedFallbackRole = modelRole ?? resolveExplicitModelRole(modelPatterns, subagentSettings);
 			const inheritedRetryFallbackChain =
 				configuredModelPatterns.length === 1
-					? resolveSubagentInheritedRetryFallbackChain(
-							subagentSettings,
-							modelRegistry,
-							inheritedFallbackRole,
-						)
+					? resolveSubagentInheritedRetryFallbackChain(subagentSettings, modelRegistry, inheritedFallbackRole)
 					: undefined;
 			const {
 				model,
@@ -3877,34 +3889,59 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				progress.contextWindow = model.contextWindow;
 			}
 			const mode = cfgEffortPolicyMode.get(settings);
-			const callerSelectors = callerModelSelector === undefined ? [] :
-				Array.isArray(callerModelSelector) ? callerModelSelector : [callerModelSelector];
-			const callerLevel = callerSelectors.map(selector => extractExplicitThinkingSelector(selector, undefined, {
-				isLiteralModelId: (provider, id) => modelRegistry.find(provider, id) !== undefined,
-			})).find(level => level !== undefined);
+			const callerSelectors =
+				callerModelSelector === undefined
+					? []
+					: Array.isArray(callerModelSelector)
+						? callerModelSelector
+						: [callerModelSelector];
+			const callerLevel = callerSelectors
+				.map(selector =>
+					extractExplicitThinkingSelector(selector, undefined, {
+						isLiteralModelId: (provider, id) => modelRegistry.find(provider, id) !== undefined,
+					}),
+				)
+				.find(level => level !== undefined);
 			const role = modelRole ?? resolveExplicitModelRole(callerModelSelector, settings);
 			const savedRoleSelection = role ? settings.getRoleEffortSelection(role) : undefined;
-			const replacementEffort = options.effort !== undefined && THINKING_EFFORTS.includes(options.effort as Effort)
-				? options.effort as Effort : undefined;
+			const replacementEffort =
+				options.effort !== undefined && THINKING_EFFORTS.includes(options.effort as Effort)
+					? (options.effort as Effort)
+					: undefined;
 			if (mode === "replacement" && options.effort !== undefined && replacementEffort === undefined) {
-				throw new Error(`Legacy effort hint ${options.effort} requires effort.mode=legacy; use minimal, low, medium, high, xhigh, or max.`);
+				throw new Error(
+					`Legacy effort hint ${options.effort} requires effort.mode=legacy; use minimal, low, medium, high, xhigh, or max.`,
+				);
 			}
 			if (mode === "legacy" && replacementEffort !== undefined) {
-				throw new Error(`Concrete effort ${replacementEffort} requires effort.mode=replacement; use lo, med, or hi.`);
+				throw new Error(
+					`Concrete effort ${replacementEffort} requires effort.mode=replacement; use lo, med, or hi.`,
+				);
 			}
-			const spawnEffortCeiling = mode === "legacy" && options.effort !== undefined ? cfgTaskMaxEffort.get(settings) : undefined;
-			const effortLevel = mode === "legacy" && options.effort !== undefined
-				? resolveTaskEffortLevel(model, options.effort as "lo" | "med" | "hi", spawnEffortCeiling)
-				: replacementEffort;
-			const origin: EffortOrigin = effortLevel !== undefined || callerLevel !== undefined ? "caller" :
-				role ? "role" : "default";
-			const selection: EffortSelection | undefined = effortLevel !== undefined ? { mode: "fixed", level: effortLevel } :
-				callerLevel !== undefined && callerLevel !== "auto" ? { mode: "fixed", level: callerLevel } :
-				callerLevel === "auto" ? { mode: "auto" } :
-				savedRoleSelection?.mode !== "inherit" ? savedRoleSelection :
-				thinkingLevel === "auto" || resolvedThinkingLevel === "auto" ? { mode: "auto" } :
-				thinkingLevel !== undefined ? { mode: "fixed", level: thinkingLevel } :
-				resolvedThinkingLevel !== undefined ? { mode: "fixed", level: resolvedThinkingLevel } : undefined;
+			const spawnEffortCeiling =
+				mode === "legacy" && options.effort !== undefined ? cfgTaskMaxEffort.get(settings) : undefined;
+			const effortLevel =
+				mode === "legacy" && options.effort !== undefined
+					? resolveTaskEffortLevel(model, options.effort as "lo" | "med" | "hi", spawnEffortCeiling)
+					: replacementEffort;
+			const origin: EffortOrigin =
+				effortLevel !== undefined || callerLevel !== undefined ? "caller" : role ? "role" : "default";
+			const selection: EffortSelection | undefined =
+				effortLevel !== undefined
+					? { mode: "fixed", level: effortLevel }
+					: callerLevel !== undefined && callerLevel !== "auto"
+						? { mode: "fixed", level: callerLevel }
+						: callerLevel === "auto"
+							? { mode: "auto" }
+							: savedRoleSelection?.mode !== "inherit"
+								? savedRoleSelection
+								: thinkingLevel === "auto" || resolvedThinkingLevel === "auto"
+									? { mode: "auto" }
+									: thinkingLevel !== undefined
+										? { mode: "fixed", level: thinkingLevel }
+										: resolvedThinkingLevel !== undefined
+											? { mode: "fixed", level: resolvedThinkingLevel }
+											: undefined;
 			let decision: EffortDecision | undefined;
 			if (model && mode === "replacement") {
 				try {
@@ -3912,7 +3949,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				} catch (cause) {
 					if (!(cause instanceof EffortPolicyError)) throw cause;
 					const alternatives: string[] = cause.supported.length
-						? [`${model.provider}/${model.id}:${cause.supported[0]} (explicit override)`] : [];
+						? [`${model.provider}/${model.id}:${cause.supported[0]} (explicit override)`]
+						: [];
 					const configured = Object.entries(settings.getModelRoles());
 					for (const [label, selector] of configured) {
 						if (!selector) continue;
@@ -3922,9 +3960,14 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						const suffix = extractExplicitThinkingSelector(selector, undefined, {
 							isLiteralModelId: (provider, id) => modelRegistry.find(provider, id) !== undefined,
 						});
-						const roleSelection: EffortSelection | undefined = saved && saved.mode !== "inherit" ? saved :
-							suffix === "auto" ? { mode: "auto" } :
-							suffix ? { mode: "fixed", level: suffix } : undefined;
+						const roleSelection: EffortSelection | undefined =
+							saved && saved.mode !== "inherit"
+								? saved
+								: suffix === "auto"
+									? { mode: "auto" }
+									: suffix
+										? { mode: "fixed", level: suffix }
+										: undefined;
 						try {
 							resolveImplicitEffort(settings, alternative, roleSelection, "role");
 							alternatives.push(`@${label} (${alternative.provider}/${alternative.id})`);
@@ -3932,17 +3975,31 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 							if (!(error instanceof EffortPolicyError)) throw error;
 						}
 					}
-					throw new EffortPolicyError(model, cause.supported, cause.permitted, cause.selector,
-						alternatives.slice(0, 8), callerSelectors[0] ?? modelPatterns[0] ?? `${model.provider}/${model.id}`, origin);
+					throw new EffortPolicyError(
+						model,
+						cause.supported,
+						cause.permitted,
+						cause.selector,
+						alternatives.slice(0, 8),
+						callerSelectors[0] ?? modelPatterns[0] ?? `${model.provider}/${model.id}`,
+						origin,
+					);
 				}
 			}
-			const effectiveThinkingLevel = mode === "replacement"
-				? selection?.mode === "auto" || callerLevel === "auto" ? "auto" :
-					selection?.mode === "fixed" ? selection.level : (effortLevel ?? (explicitThinkingLevel ? resolvedThinkingLevel : (thinkingLevel ?? resolvedThinkingLevel)))
-				: effortLevel ?? (explicitThinkingLevel ? resolvedThinkingLevel : (thinkingLevel ?? resolvedThinkingLevel));
+			const effectiveThinkingLevel =
+				mode === "replacement"
+					? selection?.mode === "auto" || callerLevel === "auto"
+						? "auto"
+						: selection?.mode === "fixed"
+							? selection.level
+							: (effortLevel ??
+								(explicitThinkingLevel ? resolvedThinkingLevel : (thinkingLevel ?? resolvedThinkingLevel)))
+					: (effortLevel ??
+						(explicitThinkingLevel ? resolvedThinkingLevel : (thinkingLevel ?? resolvedThinkingLevel)));
 			const effortDisclosure = decision?.disclosure;
 			if (model) {
-				const displayLevel = effectiveThinkingLevel === "auto" ? undefined : (decision?.level ?? effectiveThinkingLevel);
+				const displayLevel =
+					effectiveThinkingLevel === "auto" ? undefined : (decision?.level ?? effectiveThinkingLevel);
 				progress.resolvedModelIdentity = formatModelStringWithRouting(model);
 				progress.resolvedThinkingLevel = displayLevel;
 				progress.resolvedModel =
@@ -4453,7 +4510,12 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			if (err instanceof EffortPolicyError) effortPolicyError = err;
 			exitCode = 1;
 			if (!abortSignal.aborted) {
-				error = err instanceof EffortPolicyError ? err.message : err instanceof Error ? err.stack || err.message : String(err);
+				error =
+					err instanceof EffortPolicyError
+						? err.message
+						: err instanceof Error
+							? err.stack || err.message
+							: String(err);
 			}
 		} finally {
 			closeUnadoptedSessionManager?.();
@@ -4639,15 +4701,16 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		sessionFile: subtaskSessionFile,
 		startTime,
 	});
-	if (effortPolicyError) result.effortPolicy = {
-		model: effortPolicyError.model,
-		supported: [...effortPolicyError.supported],
-		permitted: [...effortPolicyError.permitted],
-		selector: effortPolicyError.selector,
-		requested: effortPolicyError.requested,
-		origin: effortPolicyError.origin,
-		alternatives: [...effortPolicyError.alternatives],
-	};
+	if (effortPolicyError)
+		result.effortPolicy = {
+			model: effortPolicyError.model,
+			supported: [...effortPolicyError.supported],
+			permitted: [...effortPolicyError.permitted],
+			selector: effortPolicyError.selector,
+			requested: effortPolicyError.requested,
+			origin: effortPolicyError.origin,
+			alternatives: [...effortPolicyError.alternatives],
+		};
 	AgentRegistry.global().setHistory(id, { outputPath: result.outputPath });
 	return result;
 }

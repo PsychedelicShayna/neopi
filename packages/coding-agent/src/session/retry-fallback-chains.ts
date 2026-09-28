@@ -182,13 +182,20 @@ export function getFallbackEffortSelection(
 	chainKey: string,
 	candidate: RetryFallbackSelector,
 ): EffortSelection | undefined {
-	const selections = cfgFallbackEffortSelections.get(settings)[chainKey] ??
-		(cfgRetryFallbackChains.get(settings)[chainKey] === undefined ? cfgFallbackEffortSelections.get(settings).default : undefined);
+	const selections =
+		cfgFallbackEffortSelections.get(settings)[chainKey] ??
+		(cfgRetryFallbackChains.get(settings)[chainKey] === undefined
+			? cfgFallbackEffortSelections.get(settings).default
+			: undefined);
 	if (!selections) return undefined;
 	if (Object.hasOwn(selections, candidate.raw)) return selections[candidate.raw];
-	for (const entry of cfgRetryFallbackChains.get(settings)[chainKey] ?? cfgRetryFallbackChains.get(settings).default ?? []) {
-		if ((entry.endsWith("/*") && candidate.raw.startsWith(entry.slice(0, -1))) ||
-			(/[*?[\]{}]/.test(entry) && new Bun.Glob(entry).match(candidate.raw))) {
+	for (const entry of cfgRetryFallbackChains.get(settings)[chainKey] ??
+		cfgRetryFallbackChains.get(settings).default ??
+		[]) {
+		if (
+			(entry.endsWith("/*") && candidate.raw.startsWith(entry.slice(0, -1))) ||
+			(/[*?[\]{}]/.test(entry) && new Bun.Glob(entry).match(candidate.raw))
+		) {
 			if (Object.hasOwn(selections, entry)) return selections[entry];
 		}
 	}
@@ -312,8 +319,11 @@ export function validateRetryFallbackChains(
 				report(`Invalid fallback selector format in ${keyKind} '${key}': ${selectorStr}`);
 				continue;
 			}
-			if (/[*?[\]{}]/.test(selectorStr) &&
-				resolveModelRoleValue(selectorStr, modelRegistry.getAll("all"), { settings }).model) continue;
+			if (
+				/[*?[\]{}]/.test(selectorStr) &&
+				resolveModelRoleValue(selectorStr, modelRegistry.getAll("all"), { settings }).model
+			)
+				continue;
 			if (!modelRegistry.find(parsed.provider, parsed.id) && !isDiscoveryPending(parsed.provider)) {
 				report(`Fallback chain for ${keyKind} '${key}' references unknown model: ${selectorStr}`);
 			}

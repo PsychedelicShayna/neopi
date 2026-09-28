@@ -470,7 +470,12 @@ describe("Settings", () => {
 
 			const staleAgainstEffort = await Settings.loadIsolated({ cwd: projectDir, agentDir });
 			const effortEditor = await Settings.loadIsolated({ cwd: projectDir, agentDir });
-			staleAgainstEffort.setRoleModelAndEffort("reviewer", "mock/stale", { mode: "fixed", level: Effort.High }, "global");
+			staleAgainstEffort.setRoleModelAndEffort(
+				"reviewer",
+				"mock/stale",
+				{ mode: "fixed", level: Effort.High },
+				"global",
+			);
 			effortEditor.setRoleEffortSelection("reviewer", { mode: "fixed", level: Effort.Low });
 			await effortEditor.flush();
 			await staleAgainstEffort.flush();
@@ -482,7 +487,6 @@ describe("Settings", () => {
 				},
 			});
 		});
-
 	});
 
 	describe("status line segment validation", () => {

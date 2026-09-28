@@ -240,14 +240,20 @@ function validateShapeParams(batchEnabled: boolean, params: TaskParams): string 
  */
 
 /** Reject an out-of-range `effort` selector on internal/stale-transcript calls that bypass the wire schema. */
-function validateEffort(effort: TaskParams["effort"], label: string, mode: "replacement" | "legacy"): string | undefined {
+function validateEffort(
+	effort: TaskParams["effort"],
+	label: string,
+	mode: "replacement" | "legacy",
+): string | undefined {
 	if (effort === undefined) return undefined;
 	if (mode === "replacement") {
 		return THINKING_EFFORTS.includes(effort as (typeof THINKING_EFFORTS)[number])
-			? undefined : `${label} has a legacy or invalid \`effort\` value ${JSON.stringify(effort)}. In replacement mode use minimal, low, medium, high, xhigh, or max. Legacy lo/med/hi hints require effort.mode=legacy.`;
+			? undefined
+			: `${label} has a legacy or invalid \`effort\` value ${JSON.stringify(effort)}. In replacement mode use minimal, low, medium, high, xhigh, or max. Legacy lo/med/hi hints require effort.mode=legacy.`;
 	}
 	return TASK_EFFORTS.includes(effort as (typeof TASK_EFFORTS)[number])
-		? undefined : `${label} has an invalid \`effort\` value ${JSON.stringify(effort)}. In legacy mode use lo, med, or hi.`;
+		? undefined
+		: `${label} has an invalid \`effort\` value ${JSON.stringify(effort)}. In legacy mode use lo, med, or hi.`;
 }
 
 /** Normalize wire strings to the nominal provider Effort enum after validating the call. */
@@ -258,7 +264,11 @@ function normalizeTaskEffort(effort: TaskParams["effort"]): TaskEffort | undefin
 	return concrete;
 }
 
-function validateSpawnParams(params: TaskParams, batchEnabled: boolean, mode: "replacement" | "legacy"): string | undefined {
+function validateSpawnParams(
+	params: TaskParams,
+	batchEnabled: boolean,
+	mode: "replacement" | "legacy",
+): string | undefined {
 	const hasTask = typeof params.task === "string" && params.task.trim() !== "";
 	const tasks = params.tasks;
 	if (batchEnabled && tasks !== undefined) {
@@ -273,7 +283,11 @@ function validateSpawnParams(params: TaskParams, batchEnabled: boolean, mode: "r
 			if (!item || typeof item.task !== "string" || item.task.trim() === "") {
 				return `Task ${i + 1}${item?.name ? ` (\`${item.name}\`)` : ""} is missing \`task\`. Every task needs complete, self-contained instructions.`;
 			}
-			const effortError = validateEffort(item.effort, `Task ${i + 1}${item.name ? ` (\`${item.name}\`)` : ""}`, mode);
+			const effortError = validateEffort(
+				item.effort,
+				`Task ${i + 1}${item.name ? ` (\`${item.name}\`)` : ""}`,
+				mode,
+			);
 			if (effortError) return effortError;
 		}
 		const seen = new Map<string, string>();
@@ -731,7 +745,9 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		// item's agent type against the session's actual default agent.
 		const defaultAgent = resolveSpawnPolicy(this.session.getSessionSpawns()).defaultAgent;
 		const batchEnabled = this.#isBatchEnabled();
-		const validationError = validateShapeParams(batchEnabled, params) ?? validateSpawnParams(params, batchEnabled, cfgEffortPolicyMode.get(this.session.settings));
+		const validationError =
+			validateShapeParams(batchEnabled, params) ??
+			validateSpawnParams(params, batchEnabled, cfgEffortPolicyMode.get(this.session.settings));
 		if (validationError) {
 			return createTaskModeError(validationError);
 		}

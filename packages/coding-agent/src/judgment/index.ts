@@ -34,7 +34,14 @@ import { logger, prompt } from "@oh-my-pi/pi-utils";
 import { MAX_THINKING_SUFFIX_OPTIONS, splitThinkingSuffix } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import { classifyDifficulty } from "../auto-thinking/classifier";
 import type { EffortContextSession } from "../auto-thinking/context";
-import { cfgEffortPolicyMode, cfgFallbackEffortSelections, cfgRoleEffortSelections, resolveImplicitEffort, type EffortOrigin, type EffortSelection } from "../config/effort-policy";
+import {
+	cfgEffortPolicyMode,
+	cfgFallbackEffortSelections,
+	cfgRoleEffortSelections,
+	resolveImplicitEffort,
+	type EffortOrigin,
+	type EffortSelection,
+} from "../config/effort-policy";
 import type { ModelRegistry } from "../config/model-registry";
 import { formatModelStringWithRouting, resolveRoleChain, type RoleChainCandidate } from "../config/model-resolver";
 import { formatModelRoleAlias, roleCandidatePool } from "../config/model-roles";
@@ -201,21 +208,23 @@ export class ChainJudge implements Judge {
 		let lastUnavailable: string | undefined;
 		const candidates = this.#resolveCandidates();
 		const rejections = this.#rejections();
-		let inheritedSelection: EffortSelection | undefined = this.#role === "effort"
-			? { mode: "fixed", level: ThinkingLevel.XHigh }
-			: undefined;
+		let inheritedSelection: EffortSelection | undefined =
+			this.#role === "effort" ? { mode: "fixed", level: ThinkingLevel.XHigh } : undefined;
 		for (const candidate of candidates) {
 			if (signal?.aborted) {
 				throw signal.reason instanceof Error ? signal.reason : new AIError.AbortError("judgment aborted");
 			}
 			const configured = this.#configuredSelection(candidate);
 			if (configured.selection && configured.selection.mode !== "inherit") inheritedSelection = configured.selection;
-			const selection = configured.selection?.mode === "inherit" || !configured.selection
-				? inheritedSelection
-				: configured.selection;
-			const origin: EffortOrigin = !configured.fallback ? "role"
-				: configured.selection && configured.selection.mode !== "inherit" ? "fallback"
-				: "inherited";
+			const selection =
+				configured.selection?.mode === "inherit" || !configured.selection
+					? inheritedSelection
+					: configured.selection;
+			const origin: EffortOrigin = !configured.fallback
+				? "role"
+				: configured.selection && configured.selection.mode !== "inherit"
+					? "fallback"
+					: "inherited";
 			const identity = formatModelStringWithRouting(candidate.model);
 			const skippedUntil = rejections.get(identity);
 			if (skippedUntil !== undefined) {
@@ -249,7 +258,9 @@ export class ChainJudge implements Judge {
 			}
 		}
 		if (candidates.length === 0) throw new Error(`judgment: no ${this.#role} model available`);
-		throw new Error(`judgment: every ${this.#role} candidate failed: ${lastFailure ?? lastUnavailable ?? "unknown error"}`);
+		throw new Error(
+			`judgment: every ${this.#role} candidate failed: ${lastFailure ?? lastUnavailable ?? "unknown error"}`,
+		);
 	}
 
 	#rejections(): Map<string, number> {
@@ -267,20 +278,25 @@ export class ChainJudge implements Judge {
 
 	#buildCandidates(): RoleChainCandidate[] {
 		const { settings, registry, sessionModel } = this.#deps;
-		const candidates = this.#role === "effort"
-			? resolveRoleChain("effort", settings, roleCandidatePool("effort", settings, registry))
-			: judgeRoleChain(settings, registry);
-		if (this.#role === "effort" && (
-			cfgRoleEffortSelections.get(settings).effort?.mode === "auto" ||
-			splitThinkingSuffix(settings.getModelRole("effort") ?? "", -1, MAX_THINKING_SUFFIX_OPTIONS).level === "auto" ||
-			candidates.some(candidate =>
-				candidate.thinkingLevel === "auto" ||
-				cfgFallbackEffortSelections.get(settings).effort?.[candidate.selector]?.mode === "auto",
-			)
-		)) {
+		const candidates =
+			this.#role === "effort"
+				? resolveRoleChain("effort", settings, roleCandidatePool("effort", settings, registry))
+				: judgeRoleChain(settings, registry);
+		if (
+			this.#role === "effort" &&
+			(cfgRoleEffortSelections.get(settings).effort?.mode === "auto" ||
+				splitThinkingSuffix(settings.getModelRole("effort") ?? "", -1, MAX_THINKING_SUFFIX_OPTIONS).level ===
+					"auto" ||
+				candidates.some(
+					candidate =>
+						candidate.thinkingLevel === "auto" ||
+						cfgFallbackEffortSelections.get(settings).effort?.[candidate.selector]?.mode === "auto",
+				))
+		) {
 			throw new Error("@effort cannot use Auto for its own role or fallbacks; configure a fixed concrete effort");
 		}
-		if (this.#role === "effort" || !sessionModel || candidates.some(candidate => kindOf(candidate) === "native")) return candidates;
+		if (this.#role === "effort" || !sessionModel || candidates.some(candidate => kindOf(candidate) === "native"))
+			return candidates;
 		const sessionIdentity = formatModelStringWithRouting(sessionModel);
 		if (candidates.some(candidate => formatModelStringWithRouting(candidate.model) === sessionIdentity)) {
 			return candidates;
@@ -315,9 +331,10 @@ export class ChainJudge implements Judge {
 		}
 		// Resolve metadata after getApiKey so the session-sticky credential is recorded first.
 		const metadata = this.#deps.metadataResolver?.(model.provider);
-		const effort = this.#role === "effort"
-			? { reasoning: this.#effortForCandidate(candidate, selection, origin) }
-			: this.#judgeEffortForCandidate(candidate, selection, origin);
+		const effort =
+			this.#role === "effort"
+				? { reasoning: this.#effortForCandidate(candidate, selection, origin) }
+				: this.#judgeEffortForCandidate(candidate, selection, origin);
 		const backend = chatTextBackend(model, {
 			apiKey,
 			reasoning: effort?.reasoning,
@@ -341,23 +358,36 @@ export class ChainJudge implements Judge {
 		const settings = this.#deps.settings;
 		const primarySelector = settings.getModelRole(this.#role)?.trim() || formatModelRoleAlias(this.#role);
 		const fallback = candidate.selector !== primarySelector;
-		const selection = (fallback ? cfgFallbackEffortSelections.get(settings)[this.#role]?.[candidate.selector] : cfgRoleEffortSelections.get(settings)[this.#role])
-			?? (candidate.thinkingLevel === undefined ? undefined
-				: candidate.thinkingLevel === "auto" ? { mode: "auto" as const }
-				: candidate.thinkingLevel === ThinkingLevel.Inherit ? { mode: "inherit" as const }
-				: { mode: "fixed" as const, level: candidate.thinkingLevel });
+		const selection =
+			(fallback
+				? cfgFallbackEffortSelections.get(settings)[this.#role]?.[candidate.selector]
+				: cfgRoleEffortSelections.get(settings)[this.#role]) ??
+			(candidate.thinkingLevel === undefined
+				? undefined
+				: candidate.thinkingLevel === "auto"
+					? { mode: "auto" as const }
+					: candidate.thinkingLevel === ThinkingLevel.Inherit
+						? { mode: "inherit" as const }
+						: { mode: "fixed" as const, level: candidate.thinkingLevel });
 		return { selection, fallback };
 	}
 
-	#judgeEffortForCandidate(candidate: RoleChainCandidate, selection: EffortSelection | undefined, origin: EffortOrigin): {
-		reasoning?: Effort;
-		resolveReasoning?: (text: TextPrompt, options: JudgeOptions) => Promise<Effort>;
-	} | undefined {
-		if (cfgEffortPolicyMode.get(this.#deps.settings) === "legacy" || !selection || selection.mode === "inherit") return undefined;
+	#judgeEffortForCandidate(
+		candidate: RoleChainCandidate,
+		selection: EffortSelection | undefined,
+		origin: EffortOrigin,
+	):
+		| {
+				reasoning?: Effort;
+				resolveReasoning?: (text: TextPrompt, options: JudgeOptions) => Promise<Effort>;
+		  }
+		| undefined {
+		if (cfgEffortPolicyMode.get(this.#deps.settings) === "legacy" || !selection || selection.mode === "inherit")
+			return undefined;
 		const decision = resolveImplicitEffort(this.#deps.settings, candidate.model, selection, origin);
 		if (selection.mode === "fixed") {
 			if (decision.disclosure) this.#deps.onEffortDisclosure?.(decision.disclosure);
-			return { reasoning: decision.level === ThinkingLevel.Off ? undefined : decision.level as Effort };
+			return { reasoning: decision.level === ThinkingLevel.Off ? undefined : (decision.level as Effort) };
 		}
 		return {
 			resolveReasoning: async (text, options) => {
@@ -381,33 +411,47 @@ export class ChainJudge implements Judge {
 					if (options.signal?.aborted || isAbortOrTimeout(error)) throw error;
 					const lowest = THINKING_EFFORTS.find(effort => decision.candidates.includes(effort));
 					if (!lowest) throw error;
-					this.#deps.onEffortDisclosure?.(`@judge Auto classification failed: ${String(error)}. Using lowest permitted effort ${lowest}.`);
+					this.#deps.onEffortDisclosure?.(
+						`@judge Auto classification failed: ${String(error)}. Using lowest permitted effort ${lowest}.`,
+					);
 					return lowest;
 				}
 			},
 		};
 	}
 
-	#effortForCandidate(candidate: RoleChainCandidate, inherited: EffortSelection | undefined, origin: EffortOrigin): Effort {
+	#effortForCandidate(
+		candidate: RoleChainCandidate,
+		inherited: EffortSelection | undefined,
+		origin: EffortOrigin,
+	): Effort {
 		const settings = this.#deps.settings;
 		const selection: EffortSelection = inherited ?? { mode: "fixed", level: ThinkingLevel.XHigh };
 		if (selection.mode === "auto" || candidate.thinkingLevel === "auto") {
 			throw new Error("@effort role cannot use Auto: choose a concrete fixed effort");
 		}
-		const fixed = selection.mode === "inherit"
-			? { mode: "fixed" as const, level: candidate.thinkingLevel === undefined ? ThinkingLevel.XHigh : candidate.thinkingLevel as ThinkingLevel }
-			: selection;
+		const fixed =
+			selection.mode === "inherit"
+				? {
+						mode: "fixed" as const,
+						level:
+							candidate.thinkingLevel === undefined
+								? ThinkingLevel.XHigh
+								: (candidate.thinkingLevel as ThinkingLevel),
+					}
+				: selection;
 		if (fixed.level === ThinkingLevel.Off || fixed.level === ThinkingLevel.Inherit) {
 			throw new Error("@effort role requires an enabled concrete reasoning effort");
 		}
 		const resolved = resolveImplicitEffort(settings, candidate.model, fixed, origin);
 		if (resolved.disclosure) this.#deps.onEffortDisclosure?.(resolved.disclosure);
 		if (!resolved.level || !getSupportedEfforts(candidate.model).includes(resolved.level as Effort)) {
-			throw new Error(`@effort role has no supported concrete effort for ${candidate.model.provider}/${candidate.model.id}`);
+			throw new Error(
+				`@effort role has no supported concrete effort for ${candidate.model.provider}/${candidate.model.id}`,
+			);
 		}
 		return resolved.level as Effort;
 	}
-
 }
 
 /** Keyword completions through the shared on-device tiny-model worker. */

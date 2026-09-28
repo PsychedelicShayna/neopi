@@ -339,9 +339,12 @@ describe("runEvalCompletion", () => {
 			origin: "role",
 			selection: { mode: "auto", allowed: [Effort.Medium] },
 		});
-		cfgEffortRules.set(session.settings, [{
-			selector: "p/slow", allowed: [Effort.Low, Effort.Medium, Effort.High],
-		}]);
+		cfgEffortRules.set(session.settings, [
+			{
+				selector: "p/slow",
+				allowed: [Effort.Low, Effort.Medium, Effort.High],
+			},
+		]);
 		const spy = vi.spyOn(ai, "completeSimple").mockResolvedValue(assistant({ text: "answer" }));
 
 		const result = await runEvalCompletionAndWait({ prompt: "q" }, { session });
@@ -352,7 +355,8 @@ describe("runEvalCompletion", () => {
 
 	it("applies a fallback entry's own fixed effort and rule instead of inheriting the failed model's effort", async () => {
 		const fallback = makeModel("p", "fallback", {
-			api: "anthropic-messages", reasoning: true,
+			api: "anthropic-messages",
+			reasoning: true,
 			thinking: { efforts: [Effort.Low, Effort.Medium, Effort.High], mode: "anthropic-adaptive" },
 		});
 		const session = makeSession({ available: [REASONING_SLOW, fallback], roles: { slow: "p/slow" } });
@@ -361,12 +365,16 @@ describe("runEvalCompletion", () => {
 			slow: { "p/fallback": { mode: "fixed", level: ThinkingLevel.Medium } },
 		});
 		cfgEffortRules.set(session.settings, [{ selector: "p/fallback", allowed: [Effort.Low, Effort.High] }]);
-		const spy = vi.spyOn(ai, "completeSimple")
+		const spy = vi
+			.spyOn(ai, "completeSimple")
 			.mockResolvedValueOnce(assistant({ stopReason: "error", errorMessage: "primary unavailable" }))
 			.mockResolvedValueOnce(assistant({ text: "fallback answer" }));
 
 		const result = await runEvalCompletionAndWait({ prompt: "q", model: "slow" }, { session });
-		expect(spy.mock.calls.map(call => (call[2] as { reasoning?: Effort }).reasoning)).toEqual([Effort.High, Effort.Low]);
+		expect(spy.mock.calls.map(call => (call[2] as { reasoning?: Effort }).reasoning)).toEqual([
+			Effort.High,
+			Effort.Low,
+		]);
 		expect(result.details.notices).toContainEqual(expect.stringContaining("medium adjusted to low"));
 	});
 

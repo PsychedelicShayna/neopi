@@ -220,14 +220,24 @@ export async function runChainStep(
 	const requested = concreteThinkingLevel(resolved.thinkingLevel);
 	const role = resolveExplicitModelRole(selector, options.settings) ?? (step.model ? undefined : CHAIN_DEFAULT_ROLE);
 	const saved = role ? options.settings.getRoleEffortSelection(role) : undefined;
-	const selection = saved?.mode === "inherit" ? undefined : saved ??
-		(resolved.thinkingLevel === "auto" ? { mode: "auto" as const } :
-			requested ? { mode: "fixed" as const, level: requested } : undefined);
-	const decision = cfgEffortPolicyMode.get(options.settings) === "replacement"
-		? resolveImplicitEffort(options.settings, resolved.model, selection, "role")
-		: undefined;
+	const selection =
+		saved?.mode === "inherit"
+			? undefined
+			: (saved ??
+				(resolved.thinkingLevel === "auto"
+					? { mode: "auto" as const }
+					: requested
+						? { mode: "fixed" as const, level: requested }
+						: undefined));
+	const decision =
+		cfgEffortPolicyMode.get(options.settings) === "replacement"
+			? resolveImplicitEffort(options.settings, resolved.model, selection, "role")
+			: undefined;
 	if (decision?.disclosure) options.onEffortNotice?.(decision.disclosure);
-	let thinkingLevel = decision?.level ?? (requested && resolveThinkingLevelForModel(resolved.model, requested)) ?? ThinkingLevel.Inherit;
+	let thinkingLevel =
+		decision?.level ??
+		(requested && resolveThinkingLevelForModel(resolved.model, requested)) ??
+		ThinkingLevel.Inherit;
 	if (selection?.mode === "auto" && decision) {
 		try {
 			const classified = await classifyDifficulty(input, {

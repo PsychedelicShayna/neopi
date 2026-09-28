@@ -1077,16 +1077,25 @@ function sameScopedModelSet(
 	const entries = new Map(a.map(entry => [`${entry.model.provider}/${entry.model.id}`, entry]));
 	return b.every(entry => {
 		const previous = entries.get(`${entry.model.provider}/${entry.model.id}`);
-		return previous !== undefined && previous.thinkingLevel === entry.thinkingLevel &&
-			Boolean(previous.explicitThinkingLevel) === Boolean(entry.explicitThinkingLevel);
+		return (
+			previous !== undefined &&
+			previous.thinkingLevel === entry.thinkingLevel &&
+			Boolean(previous.explicitThinkingLevel) === Boolean(entry.explicitThinkingLevel)
+		);
 	});
 }
 
 /** Minimal session surface the post-discovery scope rebuild mutates. */
 export interface ScopedModelSink {
 	readonly isDisposed: boolean;
-	readonly scopedModels: ReadonlyArray<{ model: Model; thinkingLevel?: ThinkingLevel; explicitThinkingLevel?: boolean }>;
-	setScopedModels(scopedModels: Array<{ model: Model; thinkingLevel?: ThinkingLevel; explicitThinkingLevel?: boolean }>): void;
+	readonly scopedModels: ReadonlyArray<{
+		model: Model;
+		thinkingLevel?: ThinkingLevel;
+		explicitThinkingLevel?: boolean;
+	}>;
+	setScopedModels(
+		scopedModels: Array<{ model: Model; thinkingLevel?: ThinkingLevel; explicitThinkingLevel?: boolean }>,
+	): void;
 }
 
 /**
@@ -1486,8 +1495,11 @@ export async function buildSessionOptions(
 			preferences: modelMatchPreferences,
 		});
 		const requestedEffortSuffix = parseConfiguredThinkingLevel(parsed.model.slice(parsed.model.lastIndexOf(":") + 1));
-		if (!parsed.thinking && requestedEffortSuffix !== undefined &&
-			(!resolved.model || resolved.thinkingLevel !== undefined)) {
+		if (
+			!parsed.thinking &&
+			requestedEffortSuffix !== undefined &&
+			(!resolved.model || resolved.thinkingLevel !== undefined)
+		) {
 			options.thinkingOrigin = "caller";
 		}
 		if (resolved.warning) {
@@ -1517,26 +1529,36 @@ export async function buildSessionOptions(
 		} else if (resolved.model) {
 			options.model = resolved.model;
 			options.rebindModelAfterDiscovery = true;
-			const configuredRoleEffort = !parsed.thinking && options.thinkingOrigin !== "caller" && resolved.configuredRole
-				? activeSettings.getRoleEffortSelection(resolved.configuredRole)
-				: undefined;
-			const roleLevel = configuredRoleEffort?.mode === "auto" ? AUTO_THINKING :
-				configuredRoleEffort?.mode === "fixed" ? configuredRoleEffort.level : undefined;
+			const configuredRoleEffort =
+				!parsed.thinking && options.thinkingOrigin !== "caller" && resolved.configuredRole
+					? activeSettings.getRoleEffortSelection(resolved.configuredRole)
+					: undefined;
+			const roleLevel =
+				configuredRoleEffort?.mode === "auto"
+					? AUTO_THINKING
+					: configuredRoleEffort?.mode === "fixed"
+						? configuredRoleEffort.level
+						: undefined;
 			// The recorded role must carry the effort the session actually starts
 			// at, or the first cycle back into `default` overrides it.
 			activeSettings.overrideModelRoles({
 				default: formatModelSelectorValue(
 					resolved.selector ?? `${resolved.model.provider}/${resolved.model.id}`,
-					parsed.thinking ?? roleLevel ??
-						(options.thinkingOrigin === "caller" ? requestedEffortSuffix : undefined) ?? resolved.thinkingLevel,
+					parsed.thinking ??
+						roleLevel ??
+						(options.thinkingOrigin === "caller" ? requestedEffortSuffix : undefined) ??
+						resolved.thinkingLevel,
 				),
 			});
 			if (!parsed.thinking && (roleLevel !== undefined || resolved.thinkingLevel !== undefined)) {
-				options.thinkingLevel = roleLevel ??
-					(options.thinkingOrigin === "caller" ? requestedEffortSuffix : undefined) ?? resolved.thinkingLevel;
-				options.thinkingOrigin = configuredRoleEffort || resolved.configuredRole && options.thinkingOrigin !== "caller"
-					? "role"
-					: "caller";
+				options.thinkingLevel =
+					roleLevel ??
+					(options.thinkingOrigin === "caller" ? requestedEffortSuffix : undefined) ??
+					resolved.thinkingLevel;
+				options.thinkingOrigin =
+					configuredRoleEffort || (resolved.configuredRole && options.thinkingOrigin !== "caller")
+						? "role"
+						: "caller";
 				if (configuredRoleEffort?.mode === "auto") options.autoSelection = configuredRoleEffort;
 			}
 		}

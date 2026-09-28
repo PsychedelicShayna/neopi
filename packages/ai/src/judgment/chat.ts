@@ -50,9 +50,7 @@ export function chatTextBackend(model: Model<Api>, options: ChatTextBackendOptio
 		model: model.id,
 		parseRetries: 2,
 		async complete(prompt: TextPrompt, judge: JudgeOptions): Promise<TextCompletion> {
-			const reasoning = options.resolveReasoning
-				? await options.resolveReasoning(prompt, judge)
-				: options.reasoning;
+			const reasoning = options.resolveReasoning ? await options.resolveReasoning(prompt, judge) : options.reasoning;
 			const response = await retryTransientCompletion(
 				() =>
 					completeSimple(

@@ -2986,7 +2986,12 @@ export class SessionManager {
 	}
 
 	/** Append a thinking level change as child of current leaf, then advance leaf. Returns entry id. */
-	appendThinkingLevelChange(thinkingLevel?: string, configured?: string, effortOrigin?: ThinkingLevelChangeEntry["effortOrigin"], autoSelection?: ThinkingLevelChangeEntry["autoSelection"]): string {
+	appendThinkingLevelChange(
+		thinkingLevel?: string,
+		configured?: string,
+		effortOrigin?: ThinkingLevelChangeEntry["effortOrigin"],
+		autoSelection?: ThinkingLevelChangeEntry["autoSelection"],
+	): string {
 		const entry: ThinkingLevelChangeEntry = {
 			type: "thinking_level_change",
 			...this.#freshEntryFields(),

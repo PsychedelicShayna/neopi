@@ -63,7 +63,12 @@ import type { EffectiveExtensionRoots } from "./capability/types";
 import { type ChatModeConfig, chatActiveToolNames, chatModeIncludes } from "./chat/chat-mode";
 import { buildChatSystemPrompt } from "./chat/chat-system-prompt";
 import { shouldEnableAppendOnlyContext } from "./config/append-only-context-mode";
-import { cfgEffortPolicyMode, resolveImplicitEffort, type EffortOrigin, type EffortSelection } from "./config/effort-policy";
+import {
+	cfgEffortPolicyMode,
+	resolveImplicitEffort,
+	type EffortOrigin,
+	type EffortSelection,
+} from "./config/effort-policy";
 import { shouldInlineToolDescriptors } from "./config/inline-tool-descriptors-mode";
 import { isAuthenticated, kNoAuth, ModelRegistry } from "./config/model-registry";
 import {
@@ -1827,22 +1832,32 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	const hasExplicitModel = options.model !== undefined || deferredModelPatterns.length > 0;
 	const modelMatchPreferences = getModelMatchPreferences(settings);
 	const defaultRoleValue = settings.getModelRole("default");
-	const requestedModelRole = resolveExplicitModelRole(options.modelPattern, settings) ??
-		(!hasExplicitModel ? sessionManager.getLastModelChangeRole() ?? "default" : undefined);
+	const requestedModelRole =
+		resolveExplicitModelRole(options.modelPattern, settings) ??
+		(!hasExplicitModel ? (sessionManager.getLastModelChangeRole() ?? "default") : undefined);
 	const roleEffortSelection = requestedModelRole ? settings.getRoleEffortSelection(requestedModelRole) : undefined;
-	let thinkingOrigin: EffortOrigin = options.thinkingOrigin ?? (
-		options.thinkingLevel !== undefined ? "caller" :
-		hasThinkingEntry ? existingSession.effortOrigin ?? (roleEffortSelection || defaultRoleValue ? "role" : "default") :
-		roleEffortSelection || (!hasExplicitModel && defaultRoleValue) ? "role" : "default"
-	);
-	let startupAutoSelection = options.autoSelection ?? (
-		(thinkingOrigin === "caller" || thinkingOrigin === "manual") &&
+	let thinkingOrigin: EffortOrigin =
+		options.thinkingOrigin ??
+		(options.thinkingLevel !== undefined
+			? "caller"
+			: hasThinkingEntry
+				? (existingSession.effortOrigin ?? (roleEffortSelection || defaultRoleValue ? "role" : "default"))
+				: roleEffortSelection || (!hasExplicitModel && defaultRoleValue)
+					? "role"
+					: "default");
+	let startupAutoSelection =
+		options.autoSelection ??
+		((thinkingOrigin === "caller" || thinkingOrigin === "manual") &&
 		(options.thinkingLevel !== undefined || options.thinkingOrigin !== undefined)
 			? undefined
-			: hasThinkingEntry ? existingSession.autoSelection ??
-				(existingSession.effortOrigin === "role" && roleEffortSelection?.mode === "auto" ? roleEffortSelection : undefined) :
-				roleEffortSelection?.mode === "auto" ? roleEffortSelection : undefined
-	);
+			: hasThinkingEntry
+				? (existingSession.autoSelection ??
+					(existingSession.effortOrigin === "role" && roleEffortSelection?.mode === "auto"
+						? roleEffortSelection
+						: undefined))
+				: roleEffortSelection?.mode === "auto"
+					? roleEffortSelection
+					: undefined);
 	let startupThinkingOverride = options.thinkingLevel;
 	let startupRoleSelection = roleEffortSelection;
 	const initialThinkingOrigin = thinkingOrigin;
@@ -1948,7 +1963,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		if (level === undefined && hasExplicitModel && restoredSessionThinkingLevel !== undefined) {
 			level = restoredSessionThinkingLevel;
 		}
-		if (level === undefined && !hasThinkingEntry && startupRoleSelection?.mode === "fixed") level = startupRoleSelection.level;
+		if (level === undefined && !hasThinkingEntry && startupRoleSelection?.mode === "fixed")
+			level = startupRoleSelection.level;
 		if (level === undefined && !hasThinkingEntry && startupRoleSelection?.mode === "auto") level = AUTO_THINKING;
 		if (level === undefined && !hasThinkingEntry && restoredSessionThinkingLevel !== undefined) {
 			level = restoredSessionThinkingLevel;
@@ -2268,7 +2284,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			getActiveEffort: () => ({
 				level: session ? session.configuredThinkingLevel() : thinkingLevel,
 				origin: session?.effortOrigin ?? thinkingOrigin,
-				selection: session ? session.autoSelection : thinkingLevel === AUTO_THINKING ? startupAutoSelection : undefined,
+				selection: session
+					? session.autoSelection
+					: thinkingLevel === AUTO_THINKING
+						? startupAutoSelection
+						: undefined,
 			}),
 			onEffortDisclosure: message => session?.emitNotice("warning", message, "effort-policy"),
 			getServiceTierByFamily: () => session?.serviceTierByFamily,
@@ -2857,13 +2877,15 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						allowAutoAlias: true,
 						isLiteralModelId: (provider, id) => modelRegistry.find(provider, id) !== undefined,
 					});
-					const roleSuffix = !trimmedSelector.includes("/") && trimmedSelector.includes(":")
-						? parseConfiguredThinkingLevel(trimmedSelector.slice(trimmedSelector.lastIndexOf(":") + 1))
-						: undefined;
-					const callerEffort = options.thinkingOrigin === undefined || options.thinkingOrigin === "caller"
-						? rawParsed?.thinkingLevel ??
-							(resolved.model?.id.toLowerCase() === trimmedSelector.toLowerCase() ? undefined : roleSuffix)
-						: undefined;
+					const roleSuffix =
+						!trimmedSelector.includes("/") && trimmedSelector.includes(":")
+							? parseConfiguredThinkingLevel(trimmedSelector.slice(trimmedSelector.lastIndexOf(":") + 1))
+							: undefined;
+					const callerEffort =
+						options.thinkingOrigin === undefined || options.thinkingOrigin === "caller"
+							? (rawParsed?.thinkingLevel ??
+								(resolved.model?.id.toLowerCase() === trimmedSelector.toLowerCase() ? undefined : roleSuffix))
+							: undefined;
 					if (resolved.configuredPatterns && resolved.configuredPatterns.length > 0) {
 						const primaryPatterns: Array<{
 							pattern: string;
@@ -2905,17 +2927,24 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						const originalSelection = resolved.configuredRole
 							? settings.getRoleEffortSelection(resolved.configuredRole)
 							: undefined;
-						const originalLevel = options.thinkingLevel ?? callerEffort ??
-							(originalSelection?.mode === "auto" ? AUTO_THINKING :
-								originalSelection?.mode === "fixed" ? originalSelection.level : parsedOriginal?.thinkingLevel);
+						const originalLevel =
+							options.thinkingLevel ??
+							callerEffort ??
+							(originalSelection?.mode === "auto"
+								? AUTO_THINKING
+								: originalSelection?.mode === "fixed"
+									? originalSelection.level
+									: parsedOriginal?.thinkingLevel);
 						const retryFallback: InitialRetryFallbackState = {
 							role: chainKey,
 							originalSelector,
 							originalThinkingLevel: originalLevel,
 							originalEffortOrigin: callerEffort ? "caller" : thinkingOrigin,
-							originalAutoSelection: originalLevel === AUTO_THINKING
-								? options.autoSelection ?? (callerEffort ? undefined : thinkingOrigin === "role" ? originalSelection : undefined)
-								: undefined,
+							originalAutoSelection:
+								originalLevel === AUTO_THINKING
+									? (options.autoSelection ??
+										(callerEffort ? undefined : thinkingOrigin === "role" ? originalSelection : undefined))
+									: undefined,
 						};
 						return [
 							...primaryPatterns,
@@ -3095,9 +3124,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						thinkingOrigin = "fallback";
 					}
 					if (cfgEffortPolicyMode.get(settings) === "replacement" && selectedModel.reasoning) {
-						const effortSelection = startupThinkingOverride === AUTO_THINKING
-							? startupAutoSelection ?? { mode: "auto" as const }
-							: { mode: "fixed" as const, level: startupThinkingOverride ?? ThinkingLevel.Inherit };
+						const effortSelection =
+							startupThinkingOverride === AUTO_THINKING
+								? (startupAutoSelection ?? { mode: "auto" as const })
+								: { mode: "fixed" as const, level: startupThinkingOverride ?? ThinkingLevel.Inherit };
 						try {
 							resolveImplicitEffort(settings, selectedModel, effortSelection, thinkingOrigin);
 						} catch (error) {
@@ -3105,8 +3135,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 							continue;
 						}
 					}
-				} else if (selectedExplicitThinkingLevel && options.thinkingLevel === undefined &&
-					(thinkingOrigin === "caller" || !startupRoleSelection)) {
+				} else if (
+					selectedExplicitThinkingLevel &&
+					options.thinkingLevel === undefined &&
+					(thinkingOrigin === "caller" || !startupRoleSelection)
+				) {
 					startupThinkingOverride = callerEffort ?? selectedThinkingLevel;
 					startupAutoSelection = startupThinkingOverride === AUTO_THINKING ? startupAutoSelection : undefined;
 				}
@@ -3178,8 +3211,12 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						formatModelStringWithRouting(selectedModel),
 						effectiveThinkingLevel,
 					);
-					modelFallbackMessage = [modelFallbackMessage, `Fallback: ${usageFallbackReason.from} -> ${target}\n${usageFallbackReason.reason}`]
-						.filter(Boolean).join("\n");
+					modelFallbackMessage = [
+						modelFallbackMessage,
+						`Fallback: ${usageFallbackReason.from} -> ${target}\n${usageFallbackReason.reason}`,
+					]
+						.filter(Boolean)
+						.join("\n");
 				}
 				preconnectModelHost(selectedModel.baseUrl);
 				break;

@@ -61,10 +61,10 @@ describe("issue #775: per-model defaultLevel", () => {
 			settings,
 			modelRegistry,
 		});
-		session.setThinkingLevel(Effort.Low);
+		session.setThinkingLevel(Effort.Low, false, "default");
 	}
 
-	it("setModel adopts model.thinking.defaultLevel when present", async () => {
+	it("setModel adopts model.thinking.defaultLevel over an implicit low default", async () => {
 		const sonnet = getSonnet();
 		const opus = getOpus();
 		const opusWithDefault: Model = {
@@ -76,7 +76,7 @@ describe("issue #775: per-model defaultLevel", () => {
 			},
 		};
 
-		const settings = Settings.isolated({ defaultThinkingLevel: Effort.Medium });
+		const settings = Settings.isolated({ defaultThinkingLevel: Effort.Low });
 		await createSession(sonnet, settings);
 		expect(session.thinkingLevel).toBe(Effort.Low);
 
@@ -89,11 +89,32 @@ describe("issue #775: per-model defaultLevel", () => {
 		const sonnet = getSonnet();
 		const opus = getOpus();
 
-		const settings = Settings.isolated({ defaultThinkingLevel: Effort.Medium });
+		const settings = Settings.isolated({ defaultThinkingLevel: Effort.Low });
 		await createSession(sonnet, settings);
 		expect(session.thinkingLevel).toBe(Effort.Low);
 
 		await session.setModel(opus);
+
+		expect(session.thinkingLevel).toBe(Effort.Low);
+	});
+
+	it("setModel preserves a manual effort over model.thinking.defaultLevel", async () => {
+		const sonnet = getSonnet();
+		const opus = getOpus();
+		const opusWithDefault: Model = {
+			...opus,
+			thinking: {
+				mode: "anthropic-adaptive",
+				efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+				defaultLevel: Effort.XHigh,
+			},
+		};
+
+		const settings = Settings.isolated({ defaultThinkingLevel: Effort.Low });
+		await createSession(sonnet, settings);
+		session.setThinkingLevel(Effort.Low);
+
+		await session.setModel(opusWithDefault);
 
 		expect(session.thinkingLevel).toBe(Effort.Low);
 	});

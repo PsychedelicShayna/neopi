@@ -7,8 +7,7 @@ import type { SessionMessageEntry } from "../session/session-entries";
 import type { SessionManager } from "../session/session-manager";
 
 /** No live Chronicler access: only the session's branch and artifact location. */
-export type EffortContextSession = Pick<SessionManager, "getBranch"> &
-	Partial<Pick<SessionManager, "getArtifactsDir">>;
+export type EffortContextSession = Pick<SessionManager, "getBranch"> & Partial<Pick<SessionManager, "getArtifactsDir">>;
 
 type TranscriptEntry = Pick<SessionMessageEntry, "id" | "message">;
 
@@ -17,7 +16,10 @@ const renderContext = prompt.compile(contextTemplate);
 function messageText(message: TranscriptEntry["message"]): string | undefined {
 	if (message.role !== "user") return undefined;
 	if (typeof message.content === "string") return message.content;
-	return message.content.filter(block => block.type === "text").map(block => block.text).join("\n");
+	return message.content
+		.filter(block => block.type === "text")
+		.map(block => block.text)
+		.join("\n");
 }
 
 /** Build context from one frozen active-branch transcript and one immutable commit snapshot. */
@@ -46,9 +48,7 @@ export function renderEffortContext(
 		}
 	}
 	const uncovered = transcript.filter(entry => entry.id !== pendingId && !included.has(entry.id));
-	const history = uncovered.length
-		? formatSessionDumpText({ messages: uncovered.map(entry => entry.message) })
-		: "";
+	const history = uncovered.length ? formatSessionDumpText({ messages: uncovered.map(entry => entry.message) }) : "";
 	// Rendering without post-formatting preserves verbatim request and transcript whitespace.
 	return renderContext({ diary, history: history.trim(), request: promptText });
 }
@@ -68,7 +68,8 @@ export async function readEffortContext(
 	}
 	try {
 		const batches = await readCommittedChroniclerBatches(path.join(artifacts, "chronicler"));
-		if (batches.length === 0) onFallback?.("No committed Chronicler diary; classifying from the active-branch transcript.");
+		if (batches.length === 0)
+			onFallback?.("No committed Chronicler diary; classifying from the active-branch transcript.");
 		return renderEffortContext(promptText, transcript, batches);
 	} catch {
 		onFallback?.("Chronicler diary is unreadable; classifying from the active-branch transcript.");

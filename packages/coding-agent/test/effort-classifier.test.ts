@@ -7,10 +7,19 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { classifyDifficulty } from "../src/auto-thinking/classifier";
 import { readEffortContext, renderEffortContext } from "../src/auto-thinking/context";
-import { ChroniclerStore, readCommittedChroniclerBatches, type CommittedChroniclerBatch } from "../src/chronicler/store";
+import {
+	ChroniclerStore,
+	readCommittedChroniclerBatches,
+	type CommittedChroniclerBatch,
+} from "../src/chronicler/store";
 import { ModelRegistry } from "../src/config/model-registry";
 import { Settings } from "../src/config/settings";
-import { EffortPolicyError, cfgFallbackEffortSelections, resolveImplicitEffort, type EffortSelection } from "../src/config/effort-policy";
+import {
+	EffortPolicyError,
+	cfgFallbackEffortSelections,
+	resolveImplicitEffort,
+	type EffortSelection,
+} from "../src/config/effort-policy";
 import { cfgModelRoleStorage } from "../src/config/model-settings";
 import { cfgRetryFallbackChains } from "../src/session/settings";
 import { resolveJudge } from "../src/judgment";
@@ -19,9 +28,17 @@ import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
 const timestamp = "2026-09-28T10:00:00.000Z";
 const model = buildModel({
-	id: "classifier", name: "classifier", api: "openai-completions", provider: "mock", baseUrl: "https://example.com",
-	reasoning: true, thinking: { mode: "effort", efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh] },
-	input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128_000, maxTokens: 16_384,
+	id: "classifier",
+	name: "classifier",
+	api: "openai-completions",
+	provider: "mock",
+	baseUrl: "https://example.com",
+	reasoning: true,
+	thinking: { mode: "effort", efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh] },
+	input: ["text"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 128_000,
+	maxTokens: 16_384,
 });
 
 function registry(models: Model[] = [model]): ModelRegistry {
@@ -36,13 +53,33 @@ function transcript(id: string, text: string) {
 	return { id, message: { role: "user" as const, content: text, timestamp: Date.parse(timestamp) } };
 }
 
-function batch(entries: string[], beats: { title: string; body: string; sources: string[] }[], carry: { text: string; sources: string[] } | null = null): CommittedChroniclerBatch {
+function batch(
+	entries: string[],
+	beats: { title: string; body: string; sources: string[] }[],
+	carry: { text: string; sources: string[] } | null = null,
+): CommittedChroniclerBatch {
 	return {
-		checkpoint: { version: 1, batchId: "committed", sessionId: "session-a", committedAt: timestamp,
-			entries: entries.map(id => ({ id, parentId: null, timestamp })), beats: [], carry },
-		beats: beats.map((beat, index) => ({ id: String(index), path: "beat.md", sessionId: "session-a", capturedAt: timestamp,
-			model: "mock/classifier", kind: "decision" as const, topics: [], eventTime: timestamp,
-			related: [], ...beat })),
+		checkpoint: {
+			version: 1,
+			batchId: "committed",
+			sessionId: "session-a",
+			committedAt: timestamp,
+			entries: entries.map(id => ({ id, parentId: null, timestamp })),
+			beats: [],
+			carry,
+		},
+		beats: beats.map((beat, index) => ({
+			id: String(index),
+			path: "beat.md",
+			sessionId: "session-a",
+			capturedAt: timestamp,
+			model: "mock/classifier",
+			kind: "decision" as const,
+			topics: [],
+			eventTime: timestamp,
+			related: [],
+			...beat,
+		})),
 	};
 }
 
@@ -50,13 +87,32 @@ describe("on-demand effort classification", () => {
 	afterEach(() => vi.restoreAllMocks());
 
 	it("offers only sparse allowed levels and sends the candidate's fixed reasoning effort to the provider", async () => {
-		const settings = Settings.isolated({ modelRoles: { effort: "mock/classifier:xhigh", judge: "mock/unavailable" } });
-		const call = vi.spyOn(ai, "completeSimple").mockImplementation(async (_model, context, options) => ({
-			api: model.api, provider: model.provider, model: model.id, stopReason: "stop", content: [{ type: "text", text: "high" }],
-			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-		} as never));
+		const settings = Settings.isolated({
+			modelRoles: { effort: "mock/classifier:xhigh", judge: "mock/unavailable" },
+		});
+		const call = vi.spyOn(ai, "completeSimple").mockImplementation(
+			async (_model, context, options) =>
+				({
+					api: model.api,
+					provider: model.provider,
+					model: model.id,
+					stopReason: "stop",
+					content: [{ type: "text", text: "high" }],
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+				}) as never,
+		);
 		const effort = await classifyDifficulty("solve the bug", {
-			settings, registry: registry(), model, allowedEfforts: [Effort.Low, Effort.High],
+			settings,
+			registry: registry(),
+			model,
+			allowedEfforts: [Effort.Low, Effort.High],
 		});
 		expect(effort).toBe(Effort.High);
 		expect(call).toHaveBeenCalledTimes(1);
@@ -72,7 +128,10 @@ describe("on-demand effort classification", () => {
 	it("returns a singleton without contacting the classifier", async () => {
 		const call = vi.spyOn(ai, "completeSimple");
 		const effort = await classifyDifficulty("anything", {
-			settings: Settings.isolated({}), registry: registry(), model, allowedEfforts: [Effort.High],
+			settings: Settings.isolated({}),
+			registry: registry(),
+			model,
+			allowedEfforts: [Effort.High],
 		});
 		expect(effort).toBe(Effort.High);
 		expect(call).not.toHaveBeenCalled();
@@ -81,9 +140,14 @@ describe("on-demand effort classification", () => {
 	it("rejects an Auto classifier role rather than recursively classifying", async () => {
 		const settings = Settings.isolated({ modelRoles: { effort: "mock/classifier:auto" } });
 		const call = vi.spyOn(ai, "completeSimple");
-		await expect(classifyDifficulty("anything", {
-			settings, registry: registry(), model, allowedEfforts: [Effort.Low, Effort.High],
-		})).rejects.toThrow("Auto");
+		await expect(
+			classifyDifficulty("anything", {
+				settings,
+				registry: registry(),
+				model,
+				allowedEfforts: [Effort.Low, Effort.High],
+			}),
+		).rejects.toThrow("Auto");
 		expect(call).not.toHaveBeenCalled();
 	});
 	it("applies global policy to a direct judgment's fixed implicit effort on the wire", async () => {
@@ -92,14 +156,24 @@ describe("on-demand effort classification", () => {
 			"effort.rules": [{ selector: "mock/classifier", allowed: [Effort.Low, Effort.High] }],
 		});
 		const requests = vi.spyOn(ai, "completeSimple").mockResolvedValue({
-			api: model.api, provider: model.provider, model: model.id, stopReason: "stop",
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			stopReason: "stop",
 			content: [{ type: "text", text: "high" }],
 		} as never);
 		const notices: string[] = [];
-		const judge = resolveJudge({ settings, registry: registry(), onEffortDisclosure: notice => notices.push(notice) });
-		await judge.judge({ state: "classify", questions: {
-			level: { type: "choice", instructions: "Pick a level", criteria: { low: "easy", high: "hard" } },
-		} });
+		const judge = resolveJudge({
+			settings,
+			registry: registry(),
+			onEffortDisclosure: notice => notices.push(notice),
+		});
+		await judge.judge({
+			state: "classify",
+			questions: {
+				level: { type: "choice", instructions: "Pick a level", criteria: { low: "easy", high: "hard" } },
+			},
+		});
 		expect(requests.mock.calls[0]?.[2]?.reasoning).toBe(Effort.High);
 		expect(requests.mock.calls[0]?.[2]?.disableReasoning).not.toBe(true);
 		expect(notices.join(" ")).toContain("adjusted to high");
@@ -107,10 +181,17 @@ describe("on-demand effort classification", () => {
 
 	it("inherits the preceding requested effort through fallback and resolves it against the fallback model", async () => {
 		const backup = buildModel({
-			id: "backup", name: "backup", api: "openai-completions", provider: "mock", baseUrl: "https://example.com",
-			reasoning: true, thinking: { mode: "effort", efforts: [Effort.Low, Effort.High] },
-			input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: 128_000, maxTokens: 16_384,
+			id: "backup",
+			name: "backup",
+			api: "openai-completions",
+			provider: "mock",
+			baseUrl: "https://example.com",
+			reasoning: true,
+			thinking: { mode: "effort", efforts: [Effort.Low, Effort.High] },
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 16_384,
 		});
 		const settings = Settings.isolated({
 			modelRoles: { judge: "mock/classifier:high" },
@@ -118,19 +199,28 @@ describe("on-demand effort classification", () => {
 			"retry.fallbackEffortSelections": { judge: { "mock/backup": { mode: "inherit" } } },
 			"effort.rules": [{ selector: "mock/backup", allowed: [Effort.Low] }],
 		});
-		const requests = vi.spyOn(ai, "completeSimple")
+		const requests = vi
+			.spyOn(ai, "completeSimple")
 			.mockRejectedValueOnce(new Error("primary unavailable"))
 			.mockResolvedValue({
-				api: backup.api, provider: backup.provider, model: backup.id, stopReason: "stop",
+				api: backup.api,
+				provider: backup.provider,
+				model: backup.id,
+				stopReason: "stop",
 				content: [{ type: "text", text: "low" }],
 			} as never);
 		const notices: string[] = [];
 		const judge = resolveJudge({
-			settings, registry: registry([model, backup]), onEffortDisclosure: notice => notices.push(notice),
+			settings,
+			registry: registry([model, backup]),
+			onEffortDisclosure: notice => notices.push(notice),
 		});
-		await judge.judge({ state: "classify", questions: {
-			level: { type: "choice", instructions: "Pick a level", criteria: { low: "easy", high: "hard" } },
-		} });
+		await judge.judge({
+			state: "classify",
+			questions: {
+				level: { type: "choice", instructions: "Pick a level", criteria: { low: "easy", high: "hard" } },
+			},
+		});
 		expect(requests.mock.calls[0]?.[0].id).toBe("classifier");
 		expect(requests.mock.calls[0]?.[2]?.reasoning).toBe(Effort.High);
 		expect(requests.mock.calls[1]?.[0].id).toBe("backup");
@@ -145,13 +235,19 @@ describe("on-demand effort classification", () => {
 			"effort.rules": [{ selector: "mock/classifier", allowed: [Effort.Low, Effort.High] }],
 		});
 		const calls = vi.spyOn(ai, "completeSimple").mockResolvedValue({
-			api: model.api, provider: model.provider, model: model.id, stopReason: "stop",
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			stopReason: "stop",
 			content: [{ type: "text", text: "high" }],
 		} as never);
 		const judge = resolveJudge({ settings, registry: registry() });
-		await judge.judge({ state: "a hard debugging request", questions: {
-			level: { type: "choice", instructions: "Pick a level", criteria: { low: "easy", high: "hard" } },
-		} });
+		await judge.judge({
+			state: "a hard debugging request",
+			questions: {
+				level: { type: "choice", instructions: "Pick a level", criteria: { low: "easy", high: "hard" } },
+			},
+		});
 		expect(calls).toHaveBeenCalledTimes(2);
 		expect(calls.mock.calls[0]?.[2]?.reasoning).toBe(Effort.High);
 		expect(calls.mock.calls[1]?.[2]?.reasoning).toBe(Effort.High);
@@ -162,32 +258,52 @@ describe("on-demand effort classification", () => {
 			modelRoles: { judge: "mock/classifier:auto", effort: "mock/classifier:xhigh" },
 			"effort.rules": [{ selector: "mock/classifier", allowed: [Effort.Low, Effort.High] }],
 		});
-		const calls = vi.spyOn(ai, "completeSimple")
+		const calls = vi
+			.spyOn(ai, "completeSimple")
 			.mockRejectedValueOnce(new Error("classifier offline"))
 			.mockResolvedValue({
-				api: model.api, provider: model.provider, model: model.id, stopReason: "stop",
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
+				stopReason: "stop",
 				content: [{ type: "text", text: "low" }],
 			} as never);
 		const notices: string[] = [];
-		const judge = resolveJudge({ settings, registry: registry(), onEffortDisclosure: notice => notices.push(notice) });
-		const result = await judge.judge({ state: "classify", questions: {
-			level: { type: "choice", instructions: "Pick a level", criteria: { low: "easy", high: "hard" } },
-		} });
+		const judge = resolveJudge({
+			settings,
+			registry: registry(),
+			onEffortDisclosure: notice => notices.push(notice),
+		});
+		const result = await judge.judge({
+			state: "classify",
+			questions: {
+				level: { type: "choice", instructions: "Pick a level", criteria: { low: "easy", high: "hard" } },
+			},
+		});
 		expect(result.answers.level.choice).toBe("low");
 		expect(calls.mock.calls[1]?.[2]?.reasoning).toBe(Effort.Low);
 		expect(notices.join(" ")).toContain("classifier offline");
 		expect(notices.join(" ")).toContain("lowest permitted effort low");
 	});
-
 });
 
 describe("committed branch-safe effort context", () => {
 	it("excludes mixed/off-branch beats but retains their active sources; carries only cover their own sources", () => {
-		const entries = [transcript("active", "active source"), transcript("other", "other active source"), transcript("pending", "pending request")];
-		const snapshots = [batch(["active", "fork", "other"], [
-			{ title: "mixed", body: "off-branch secret", sources: ["active", "fork"] },
-			{ title: "safe", body: "safe diary content", sources: ["other"] },
-		], { text: "carry context", sources: ["other"] })];
+		const entries = [
+			transcript("active", "active source"),
+			transcript("other", "other active source"),
+			transcript("pending", "pending request"),
+		];
+		const snapshots = [
+			batch(
+				["active", "fork", "other"],
+				[
+					{ title: "mixed", body: "off-branch secret", sources: ["active", "fork"] },
+					{ title: "safe", body: "safe diary content", sources: ["other"] },
+				],
+				{ text: "carry context", sources: ["other"] },
+			),
+		];
 		const context = renderEffortContext("pending request", entries, snapshots);
 		expect(context).toContain("safe diary content");
 		expect(context).toContain("carry context");
@@ -198,18 +314,21 @@ describe("committed branch-safe effort context", () => {
 	});
 
 	it("preserves source transcript for committed no-beat and unadmitted carry-only batches", () => {
-		const context = renderEffortContext("current", [transcript("source", "retained history")], [
-			batch(["source"], [], { sources: ["source", "fork"], text: "off-branch carry" }),
-			batch(["source"], []),
-		]);
+		const context = renderEffortContext(
+			"current",
+			[transcript("source", "retained history")],
+			[batch(["source"], [], { sources: ["source", "fork"], text: "off-branch carry" }), batch(["source"], [])],
+		);
 		expect(context).toContain("retained history");
 		expect(context).not.toContain("off-branch carry");
 	});
 
 	it("admits a carry-only batch while retaining unrelated sources in the transcript", () => {
-		const context = renderEffortContext("current", [
-			transcript("covered", "historical detail"), transcript("uncovered", "fresh detail"),
-		], [batch(["covered", "uncovered"], [], { sources: ["covered"], text: "admitted carry" })]);
+		const context = renderEffortContext(
+			"current",
+			[transcript("covered", "historical detail"), transcript("uncovered", "fresh detail")],
+			[batch(["covered", "uncovered"], [], { sources: ["covered"], text: "admitted carry" })],
+		);
 		expect(context).toContain("admitted carry");
 		expect(context).toContain("fresh detail");
 		expect(context).not.toContain("historical detail");
@@ -220,23 +339,54 @@ describe("committed branch-safe effort context", () => {
 		try {
 			const artifacts = path.join(temp.path(), "artifacts");
 			const root = path.join(artifacts, "chronicler");
-			const manager = { getBranch: (): SessionEntry[] => [{ type: "message", id: "source", parentId: null, timestamp,
-				message: { role: "user", content: "full transcript", timestamp: Date.parse(timestamp) } }],
-				getArtifactsDir: () => artifacts };
+			const manager = {
+				getBranch: (): SessionEntry[] => [
+					{
+						type: "message",
+						id: "source",
+						parentId: null,
+						timestamp,
+						message: { role: "user", content: "full transcript", timestamp: Date.parse(timestamp) },
+					},
+				],
+				getArtifactsDir: () => artifacts,
+			};
 			const fallbackNotices: string[] = [];
-			expect(await readEffortContext("current", manager, message => fallbackNotices.push(message))).toContain("full transcript");
+			expect(await readEffortContext("current", manager, message => fallbackNotices.push(message))).toContain(
+				"full transcript",
+			);
 			await expect(fs.stat(root)).rejects.toThrow();
-			const store = new ChroniclerStore(root, { sessionId: "session-a", project: temp.path(), model: "mock/classifier" });
+			const store = new ChroniclerStore(root, {
+				sessionId: "session-a",
+				project: temp.path(),
+				model: "mock/classifier",
+			});
 			await store.open();
 			const capture = store.beginBatch([{ id: "source", parentId: null, timestamp }]);
-			store.stageBeat(capture, { title: "Committed", kind: "decision", body: "persisted story", topics: [], eventTime: timestamp, sources: ["source"], related: [] });
+			store.stageBeat(capture, {
+				title: "Committed",
+				kind: "decision",
+				body: "persisted story",
+				topics: [],
+				eventTime: timestamp,
+				sources: ["source"],
+				related: [],
+			});
 			capture.finalized = true;
 			await store.commitBatch(capture);
 			await fs.rm(path.join(root, "INDEX.md"));
 			const snapshot = await readCommittedChroniclerBatches(root);
 			expect(snapshot[0]?.beats[0]?.body).toBe("persisted story");
 			const later = store.beginBatch([{ id: "later", parentId: "source", timestamp }]);
-			store.stageBeat(later, { title: "Later", kind: "decision", body: "newer story", topics: [], eventTime: timestamp, sources: ["later"], related: [] });
+			store.stageBeat(later, {
+				title: "Later",
+				kind: "decision",
+				body: "newer story",
+				topics: [],
+				eventTime: timestamp,
+				sources: ["later"],
+				related: [],
+			});
 			later.finalized = true;
 			await store.commitBatch(later);
 			await fs.rm(path.join(root, "INDEX.md"));
@@ -269,8 +419,10 @@ describe("implicit effort policy resolution", () => {
 				{ selector: "mock/classifier", allowed: [Effort.Medium, Effort.High] },
 			],
 		});
-		expect(resolveImplicitEffort(settings, model, { mode: "auto", allowed: [Effort.Low, Effort.High] }, "role").candidates)
-			.toEqual([Effort.High]);
+		expect(
+			resolveImplicitEffort(settings, model, { mode: "auto", allowed: [Effort.Low, Effort.High] }, "role")
+				.candidates,
+		).toEqual([Effort.High]);
 		const fixed = resolveImplicitEffort(settings, model, { mode: "fixed", level: Effort.XHigh }, "role");
 		expect(fixed.level).toBe(Effort.High);
 		expect(fixed.disclosure).toContain("mock/classifier");
@@ -293,10 +445,12 @@ describe("implicit effort policy resolution", () => {
 		const auto = { mode: "auto" as const, allowed: [Effort.Low, Effort.XHigh] };
 		expect(resolveImplicitEffort(settings, model, auto, "caller").candidates).toEqual([Effort.Low]);
 		expect(resolveImplicitEffort(settings, model, auto, "manual").candidates).toEqual([Effort.Low]);
-		expect(() => resolveImplicitEffort(settings, model, { mode: "auto", allowed: [Effort.XHigh] }, "role"))
-			.toThrow(EffortPolicyError);
-		expect(() => resolveImplicitEffort(settings, model, { mode: "auto", allowed: [Effort.XHigh] }, "caller"))
-			.toThrow(EffortPolicyError);
+		expect(() => resolveImplicitEffort(settings, model, { mode: "auto", allowed: [Effort.XHigh] }, "role")).toThrow(
+			EffortPolicyError,
+		);
+		expect(() => resolveImplicitEffort(settings, model, { mode: "auto", allowed: [Effort.XHigh] }, "caller")).toThrow(
+			EffortPolicyError,
+		);
 	});
 	it("rejects impossible implicit defaults and fallback Inherit without a permitted effort", () => {
 		const highOnly = { ...model, thinking: { ...model.thinking!, efforts: [Effort.High] } };
@@ -304,17 +458,22 @@ describe("implicit effort policy resolution", () => {
 			"effort.rules": [{ selector: "mock/classifier", allowed: [Effort.Low] }],
 		});
 		expect(() => resolveImplicitEffort(settings, highOnly, undefined, "default")).toThrow(EffortPolicyError);
-		expect(() => resolveImplicitEffort(settings, highOnly, { mode: "inherit" }, "fallback")).toThrow(EffortPolicyError);
-		expect(() => resolveImplicitEffort(settings, highOnly, { mode: "fixed", level: "inherit" }, "inherited"))
-			.toThrow(EffortPolicyError);
+		expect(() => resolveImplicitEffort(settings, highOnly, { mode: "inherit" }, "fallback")).toThrow(
+			EffortPolicyError,
+		);
+		expect(() => resolveImplicitEffort(settings, highOnly, { mode: "fixed", level: "inherit" }, "inherited")).toThrow(
+			EffortPolicyError,
+		);
 	});
 
 	it("leaves implicit effort inert for a model without controllable reasoning instead of blocking the session", () => {
 		const plain = { ...model, id: "plain", reasoning: false };
 		const settings = Settings.isolated({});
 		expect(resolveImplicitEffort(settings, plain, { mode: "auto" }, "default").candidates).toEqual([]);
-		expect(resolveImplicitEffort(settings, plain, { mode: "fixed", level: Effort.High }, "role"))
-			.toMatchObject({ level: undefined, candidates: [] });
+		expect(resolveImplicitEffort(settings, plain, { mode: "fixed", level: Effort.High }, "role")).toMatchObject({
+			level: undefined,
+			candidates: [],
+		});
 		expect(resolveImplicitEffort(settings, plain, { mode: "inherit" }, "fallback").candidates).toEqual([]);
 	});
 });
@@ -346,9 +505,11 @@ describe("atomic role and fallback effort settings", () => {
 		settings.setFallbackChainAndEfforts("default", ["mock/classifier"], {
 			"mock/classifier": { mode: "auto", allowed: [Effort.High] },
 		});
-		expect(() => settings.setFallbackChainAndEfforts("default", ["mock/other"], {
-			"mock/other": { mode: "auto", allowed: ["unknown"] } as unknown as EffortSelection,
-		})).toThrow();
+		expect(() =>
+			settings.setFallbackChainAndEfforts("default", ["mock/other"], {
+				"mock/other": { mode: "auto", allowed: ["unknown"] } as unknown as EffortSelection,
+			}),
+		).toThrow();
 		expect(cfgRetryFallbackChains.get(settings).default).toEqual(["mock/classifier"]);
 		expect(cfgFallbackEffortSelections.get(settings).default).toEqual({
 			"mock/classifier": { mode: "auto", allowed: [Effort.High] },
