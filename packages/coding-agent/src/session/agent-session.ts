@@ -6266,6 +6266,19 @@ export class AgentSession implements SettingsScope {
 		return this.#prewalk.state;
 	}
 
+	/** Plan-mode state listeners; see {@link subscribePlanModeChanged}. */
+	#planModeListeners = new Set<(state: PlanModeState | undefined) => void>();
+
+	/**
+	 * Observe every {@link setPlanModeState} call, whichever path makes it (host
+	 * mode switches, plan approval, PlanYolo). Listeners run synchronously after
+	 * the state lands; returns an unsubscribe function.
+	 */
+	subscribePlanModeChanged(listener: (state: PlanModeState | undefined) => void): () => void {
+		this.#planModeListeners.add(listener);
+		return () => this.#planModeListeners.delete(listener);
+	}
+
 	setPlanModeState(state: PlanModeState | undefined): void {
 		this.#planModeState = state;
 		if (state?.enabled) {
@@ -6277,6 +6290,13 @@ export class AgentSession implements SettingsScope {
 			// Drop any unconsumed forced decision so a post-plan execution turn
 			// does not inherit a stale `required` tool choice.
 			this.#toolChoiceQueue.removeByLabel("plan-mode-decision");
+		}
+		for (const listener of this.#planModeListeners) {
+			try {
+				listener(state);
+			} catch (err) {
+				logger.error("Plan mode listener threw", { err });
+			}
 		}
 	}
 

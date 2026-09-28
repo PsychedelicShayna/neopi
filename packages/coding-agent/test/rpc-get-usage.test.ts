@@ -192,6 +192,7 @@ describe("get_usage", () => {
 				onHostToolUpdate: () => {},
 				onHostUriResult: () => {},
 				onToolApprovalResponse: () => {},
+				onPlanProposalResponse: () => {},
 			};
 			return { dispatcher: new RpcInputDispatcher({ deps, ready }), outputs };
 		};

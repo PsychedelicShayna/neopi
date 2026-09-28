@@ -50,6 +50,7 @@ import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameEncoder } from 
 import { claimRpcInput, readRpcInputFrames } from "./rpc-input";
 import { pageRpcMessages, RPC_MESSAGES_PAGE_BUSY_ERROR, RpcMessagesPageError } from "./rpc-messages";
 import { RpcOutputWriter } from "./rpc-output";
+import { isRpcPlanProposalResponse, RpcPlanModeController, RpcSetModeError } from "./rpc-plan-mode";
 import {
 	RpcExtensionUserMessageTracker,
 	RpcPromptResults,
@@ -77,6 +78,7 @@ import type {
 	RpcHostUriRequest,
 	RpcHostUriResult,
 	RpcOpenSessionResult,
+	RpcPlanProposalResponse,
 	RpcReadyFrame,
 	RpcResponse,
 	RpcSessionState,
@@ -250,6 +252,7 @@ export interface RpcInputFrameDeps {
 	onHostToolUpdate: (frame: RpcHostToolUpdate) => void;
 	onHostUriResult: (frame: RpcHostUriResult) => void;
 	onToolApprovalResponse: (frame: RpcToolApprovalResponse) => void;
+	onPlanProposalResponse: (frame: RpcPlanProposalResponse) => void;
 }
 
 /**
@@ -288,6 +291,11 @@ export function dispatchRpcControlFrame(parsed: unknown, deps: RpcInputFrameDeps
 
 	if (isRpcToolApprovalResponse(parsed)) {
 		deps.onToolApprovalResponse(parsed);
+		return true;
+	}
+
+	if (isRpcPlanProposalResponse(parsed)) {
+		deps.onPlanProposalResponse(parsed);
 		return true;
 	}
 
@@ -885,6 +893,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	});
 	const subagentRegistry = subagentEventBus ? new RpcSubagentRegistry(subagentEventBus, output) : undefined;
 	const rpcRoles = new RpcRoles(session, launchModel);
+	const planMode = new RpcPlanModeController(session, output);
 
 	// Shutdown request flag (wrapped in object to allow mutation with const)
 	const shutdownState = { requested: false };
@@ -1099,6 +1108,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		onHostToolUpdate: frame => hostToolBridge.handleUpdate(frame),
 		onHostUriResult: frame => hostUriBridge.handleResult(frame),
 		onToolApprovalResponse: frame => toolApprovalBridge.handleResponse(frame),
+		onPlanProposalResponse: frame => planMode.handleProposalResponse(frame),
 	};
 	const inputDispatcher = new RpcInputDispatcher({
 		deps: dispatchFrameDeps,
@@ -1146,6 +1156,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		sessionEvents.forward(event);
 		promptResults.observe(event);
 		settleWatcher.observe(event);
+		planMode.observe(event);
 	});
 
 	// Discriminates a store failure from any other dispose rejection below.
@@ -1405,6 +1416,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					contextUsage: session.getContextUsage(),
 					activeRole: rpcRoles.activeRole(),
 					chatMode: session.chatMode?.mode ?? "off",
+					...planMode.state,
 				};
 				return success(id, "get_state", state);
 			}
@@ -1424,6 +1436,15 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				const outcome = await setRpcChatMode(session, command);
 				if (!outcome.ok) return error(id, "set_chat_mode", outcome.message, outcome.code);
 				return success(id, "set_chat_mode", outcome.state);
+			}
+
+			case "set_mode": {
+				try {
+					return success(id, "set_mode", await planMode.setMode(command.mode, command.planFilePath));
+				} catch (err) {
+					if (!(err instanceof RpcSetModeError)) throw err;
+					return error(id, "set_mode", err.message, err.code);
+				}
 			}
 
 			case "get_available_commands": {
@@ -1872,6 +1893,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	// stdin closed — RPC client is gone. Fail pending side-channel requests
 	// first so active/queued commands can settle, then drain accepted work.
 	pendingExtensionRequests.rejectAll("RPC client disconnected before extension UI response completed");
+	planMode.close();
 	hostToolBridge.close("RPC client disconnected before host tool execution completed");
 	hostUriBridge.clear("RPC client disconnected before host URI request completed");
 	toolApprovalBridge.close("RPC client disconnected before tool approval response completed");

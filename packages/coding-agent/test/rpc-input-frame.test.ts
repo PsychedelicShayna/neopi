@@ -40,6 +40,7 @@ const makeDeps = (
 		onHostToolUpdate: () => {},
 		onHostUriResult: () => {},
 		onToolApprovalResponse: () => {},
+		onPlanProposalResponse: () => {},
 	};
 	return { deps, outputs };
 };
@@ -332,6 +333,7 @@ describe("RpcInputDispatcher", () => {
 						isSettled: true,
 						todoPhases: [],
 						chatMode: "off",
+						mode: "default",
 					},
 				};
 			}

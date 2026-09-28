@@ -49,3 +49,28 @@ export function resolvePlanModelTransition(
 	}
 	return { kind: "apply", model: resolved.model, thinkingLevel: planThinkingLevel, deferred: isStreaming };
 }
+
+/** The model and thinking level a session ran before plan mode switched it. */
+export interface PlanPreviousModel {
+	model: Model;
+	thinkingLevel?: ConfiguredThinkingLevel;
+}
+
+/** The action that restores the pre-plan model when plan mode exits. */
+export type PlanModelRestore =
+	/** Same model: only reapply its thinking level (a model switch would reset provider-side sessions). */
+	| { kind: "thinking"; thinkingLevel: ConfiguredThinkingLevel | undefined }
+	/** Switch back to `model`; `deferred` while mid-stream, like {@link PlanModelTransition}. */
+	| { kind: "apply"; model: Model; thinkingLevel: ConfiguredThinkingLevel | undefined; deferred: boolean };
+
+/** Decide how to restore the pre-plan model captured on plan entry. */
+export function resolvePlanModelRestore(
+	currentModel: Model | undefined,
+	previous: PlanPreviousModel,
+	isStreaming: boolean,
+): PlanModelRestore {
+	if (modelsAreEqual(currentModel, previous.model)) {
+		return { kind: "thinking", thinkingLevel: previous.thinkingLevel };
+	}
+	return { kind: "apply", model: previous.model, thinkingLevel: previous.thinkingLevel, deferred: isStreaming };
+}
