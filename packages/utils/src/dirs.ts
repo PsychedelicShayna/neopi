@@ -201,6 +201,20 @@ export function relativePathWithinRoot(root: string, candidate: string): string 
 	return relativePathWithinNormalizedRoot(normalizedRoot, normalizedCandidate) || null;
 }
 
+const TEST_FORBIDDEN_AGENT_DIR_ENV = "NPI_TEST_FORBIDDEN_AGENT_DIR";
+
+function assertTestPathIsNotRealAgentDir(candidate: string, kind: "agent" | "sessions"): void {
+	const forbidden = process.env[TEST_FORBIDDEN_AGENT_DIR_ENV];
+	if (!forbidden) return;
+	const resolvedForbidden = normalizePathForComparison(forbidden);
+	const resolvedCandidate = normalizePathForComparison(candidate);
+	if (relativePathWithinNormalizedRoot(resolvedForbidden, resolvedCandidate) === null) return;
+	throw new Error(
+		`Test resolved ${kind} directory to the real user agent directory: ${candidate}. ` +
+			"Isolate the test with PI_CODING_AGENT_DIR, setAgentDir(), or an explicit agent/session directory.",
+	);
+}
+
 let projectDir: string | undefined;
 
 /** Get the project directory. */
@@ -588,6 +602,7 @@ export function getProfileRootDir(profile: string | undefined): string {
 }
 /** Get the agent config directory (~/.omp/agent). */
 export function getAgentDir(): string {
+	assertTestPathIsNotRealAgentDir(dirs.agentDir, "agent");
 	return dirs.agentDir;
 }
 
@@ -906,7 +921,9 @@ export function getComposerCacheDir(agentDir?: string): string {
 
 /** Get the sessions directory (~/.omp/agent/sessions). */
 export function getSessionsDir(agentDir?: string): string {
-	return dirs.agentSubdir(agentDir, "sessions", "data");
+	const sessionsDir = dirs.agentSubdir(agentDir, "sessions", "data");
+	assertTestPathIsNotRealAgentDir(sessionsDir, "sessions");
+	return sessionsDir;
 }
 
 /** Get the content-addressed blob store directory (~/.omp/agent/blobs). */
