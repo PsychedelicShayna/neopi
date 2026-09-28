@@ -109,6 +109,13 @@ limitation).
 TOML keys are `snake_case` (decided), matching the proxy's draft TOML; the
 TypeScript types are camelCase and the loader maps between them.
 
+The loader refuses a file larger than `MAX_FILE_BYTES` (4 MiB, a code
+constant in `moa/validate.ts`) before parsing it: the file is skipped with
+the warning `file.too_large` naming the path, the size, and the cap, and
+discovery continues with the other files. A definition file is read at
+startup by every session, so its cost must be bounded before any parser or
+compiler sees it (E23, §11).
+
 ### 1.2 Document shape
 
 ```toml
@@ -2429,6 +2436,30 @@ run on the `ResolvedMixture` (so model and preset resolution has already
 happened) at registration and at save. Errors make the mixture
 unregisterable and block save.
 
+**Size bounds come first.** Registration validates every discovered
+definition at startup, so the work a definition can cause must be bounded
+before any pass that scales with it. `resolveMixture` and `validateMixture`
+both begin with the E23 check against the code constants of `moa/validate.ts`
+(`MAX_MEMBERS = 32`, `MAX_EDGES = 128`, `MAX_EDGE_TARGETS = 256` for the sum
+over edges of the target count plus one per `join`, `MAX_STATE_PARTS = 8`
+for every `state` and `slices` array, `MAX_TEXT_CHARS = 65 536` for every
+string handed to a model or a template compiler; the loader's
+`MAX_FILE_BYTES = 4 MiB` is §1.1). Constants, not settings: a project file
+must not be able to raise them. An oversized definition yields exactly one
+error, `limits.graph_size` (arrays) or `limits.text_size` (strings), at the
+offending path with the count and the cap in the message; resolution and
+every graph pass are skipped (`resolveMixture` returns no members, no
+envelopes, `uses` all false, and that one issue; `validateMixture` returns
+that one error and no warnings, ignoring `resolved.issues`), and
+registration refuses the mixture and logs the error. Every graph pass is
+then bounded by the caps and is iterative, never recursive: adjacency is
+built once per validation as `Map<memberId, MixtureEdge[]>` beside a
+`Map<memberId, MixtureMember>`, cycle detection is a three-colour walk on an
+explicit stack, reachability is an index-pointer breadth-first walk, and
+`effectiveToolPolicy` (`moa/resolve.ts`) and the E6–E9 edge checks read the
+maps instead of scanning the arrays per member. `moa.hard_max_hops` bounds
+execution only, never validation.
+
 | Code | Level | Rule |
 |---|---|---|
 | E1 `name.invalid` / `name.duplicate` | error | `name` matches `[a-z0-9][a-z0-9._-]*`, unique in the merged roster. Two declarations of one name **in the same file** are both kept by the loader and both refused (`name.duplicate` logged for each); a later file on the search path that declares the name once still shadows an earlier file's single declaration cleanly (§1.1) |
@@ -2453,6 +2484,7 @@ unregisterable and block save.
 | E20 `fanout.join` / `fanout.branches` / `fanout.branch.tools` / `fanout.slices` / `fanout.quorum` / `fanout.branch.verdict` | error | `join` present and names a member not in `to`; ≥ 2 branches; branch tools ⊆ read-only set; explicit `slices` length equals branch count; `1 ≤ quorum ≤ branches`; no verdict branches |
 | E21 `helper.unresolved` | error | `moa.summary_model` / `moa.slicer_model` / an explicitly configured judge role needed by the definition but unresolvable, recursive, or outside the `enabledModels` allowed pool (§1.4, §5) |
 | E22 `fanout.branch.controls` | warning | a branch member has `route`, `terminate`, or outgoing edges; they are ignored in the branch role |
+| E23 `limits.graph_size` / `limits.text_size` | error | checked first, alone: `members`, `edges`, the edge-target sum, every `state`/`slices` array, and every model- or compiler-bound string are within the code constants above; an oversized definition gets this one error and no other pass runs |
 
 ### 11.1 Capability gate
 
@@ -2807,6 +2839,32 @@ None open. Every question raised in rounds 1 to 3 is answered in §15.
 - No task board; the `task` tool and hub messaging are untouched.
 
 ## 19. Revision log
+
+### Amendment 6.9 (Codex security P2 r4118194866, post-merge: unbounded validation work)
+
+- `hasCycle` was a recursive DFS with no cap (a 50k-member linear graph
+  threw `RangeError` after seconds at startup), `outgoing()` scanned every
+  edge per member, and the E17 walk used `queue.shift`; `effectiveToolPolicy`
+  and the per-edge `members.find` did quadratic work before validation.
+- E23: size caps as code constants in `moa/validate.ts` (`MAX_MEMBERS = 32`,
+  `MAX_EDGES = 128`, `MAX_EDGE_TARGETS = 256`, `MAX_STATE_PARTS = 8`,
+  `MAX_TEXT_CHARS = 65 536`) checked first in both `resolveMixture` and
+  `validateMixture`; one error (`limits.graph_size` / `limits.text_size`),
+  every other pass skipped. The loader refuses a file over
+  `MAX_FILE_BYTES = 4 MiB` with `file.too_large` before parsing (§1.1).
+- Every graph pass iterative over adjacency maps built once per validation
+  (explicit-stack three-colour cycle detection, index-pointer BFS); the
+  detector is exported so a test can prove it on a chain far above the cap.
+- Tests (`moa-validate.test.ts`, `moa-config.test.ts`): `MAX_MEMBERS + 1`
+  members in a chain yield exactly one `limits.graph_size` error at `members`
+  without throwing; exactly `MAX_MEMBERS` members and `MAX_EDGES` edges
+  validate with no size error; a fan-out edge whose target sum exceeds
+  `MAX_EDGE_TARGETS` yields `limits.graph_size` at that edge; a 70 000-char
+  `system_prompt` yields `limits.text_size` at that member; the exported
+  cycle detector on a 100 000-node chain returns false without throwing (the
+  test runner's default timeout is the bound; no wall-clock assertion); a
+  5 MiB `MIXTURES.toml` is skipped with `file.too_large` and a sibling file
+  still loads.
 
 ### Amendment 6.8 (Codex security P2 on PR #113: `enabledModels` not enforced)
 
