@@ -319,7 +319,8 @@ class MixtureCall {
 		}
 
 		// Step 0b: anchor, then walk the tail.
-		const anchor = existing ? findAnchor(existing, messages).index : -1;
+		const found = existing ? findAnchor(existing, messages) : undefined;
+		const anchor = found?.index ?? -1;
 		const tail = messages.slice(anchor + 1);
 		const classified = classifyTail(tail);
 		const request = {
@@ -345,6 +346,19 @@ class MixtureCall {
 			existing.lastRequest = request;
 			existing.status = "running";
 			return this.#loop(existing);
+		}
+		// Recovery retry: a cursor anchor means no message carries any response of this run, so
+		// the session dropped the one it was given (empty-stop recovery, a loop-detector retry)
+		// and continued with its own reminder. Re-run the request; the reminder reaches no member.
+		if ((existing?.status === "done" || existing?.status === "error") && found?.kind === "cursor") {
+			return this.#startRun(
+				key,
+				requirement,
+				request,
+				existing.topic,
+				this.#entry.topicImages,
+				this.#entry.conversation,
+			);
 		}
 		return this.#reject("mixture received no new input");
 	}

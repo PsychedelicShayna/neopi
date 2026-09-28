@@ -516,6 +516,29 @@ describe("conversation reset", () => {
 	});
 });
 
+describe("session recovery continuations", () => {
+	it("retries the whole request in a new run after an empty-stop drop, and no member sees the reminder", async () => {
+		const session = await mixtureSession();
+		members.script("writer", { text: "draft one", cost: 0.01 }, { text: "draft two", cost: 0.03 });
+		members.script("editor", { text: "", cost: 0.02 }, { text: "final", cost: 0.04 });
+		await session.sendUserMessage("Q");
+		await session.waitForIdle();
+
+		expect(members.calls.map(call => call.model.id)).toEqual(["writer", "editor", "writer", "editor"]);
+		expect(envelopeRequest(members.callsTo("writer")[1]?.context.messages[0])).toBe("Q");
+		expect(members.calls.every(call => call.context.messages.every(message => message.role !== "developer"))).toBe(
+			true,
+		);
+		expect(JSON.stringify(members.calls.map(call => call.context))).not.toContain(
+			"Stopped without actionable output",
+		);
+		const outer = lastAssistant(session);
+		expect([outer.stopReason, outer.content]).toEqual(["stop", [{ type: "text", text: "final" }]]);
+		const runIds = new Set(checkpoints(session).map(checkpoint => checkpoint.run.id));
+		expect(runIds.size).toBe(2);
+	});
+});
+
 describe("caller abort", () => {
 	it("checkpoints the run, says the next message starts a new run, and starts one", async () => {
 		const session = await mixtureSession();
