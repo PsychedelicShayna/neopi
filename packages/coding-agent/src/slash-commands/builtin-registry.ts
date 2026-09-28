@@ -69,6 +69,8 @@ export const BUILTIN_SLASH_COMMAND_DEFS: ReadonlyArray<BuiltinSlashCommand> = BU
 		subcommands: command.subcommands,
 		inlineHint: command.inlineHint,
 		getTuiAutocompleteDescription: command.getTuiAutocompleteDescription,
+		getTuiArgumentCompletions: command.getTuiArgumentCompletions,
+		getTuiInlineHint: command.getTuiInlineHint,
 	}),
 );
 
@@ -77,7 +79,12 @@ function materializeTuiBuiltinSlashCommand(
 	runtime?: TuiSlashCommandRuntime,
 ): TuiBuiltinSlashCommand {
 	const materialized: TuiBuiltinSlashCommand = { ...cmd };
-	if (cmd.subcommands) {
+	const customCompletions = cmd.getTuiArgumentCompletions;
+	if (customCompletions) {
+		materialized.getArgumentCompletions = prefix => customCompletions(prefix, runtime);
+		materialized.getInlineHint =
+			cmd.getTuiInlineHint ?? (cmd.subcommands ? buildSubcommandInlineHint(cmd.subcommands) : undefined);
+	} else if (cmd.subcommands) {
 		materialized.getArgumentCompletions =
 			cmd.name === "mcp" && runtime
 				? buildMcpArgumentCompletions(cmd.subcommands, runtime)
