@@ -1,5 +1,6 @@
 import {
 	type GitBuildIdentity,
+	realpathOrResolved,
 	resolveGitBuildIdentity,
 	UNKNOWN_GIT_BUILD_IDENTITY,
 } from "../src/utils/git-build-identity";
@@ -18,7 +19,12 @@ export async function resolveBuildIdentity(repoRoot: string): Promise<BuildIdent
 	try {
 		return await resolveGitBuildIdentity(repoRoot);
 	} catch {
+		// The CI SHA describes the workflow's checkout; trust it only when that
+		// checkout is exactly this tree.
 		const ciSha = Bun.env.GITHUB_SHA;
-		return ciSha ? { gitSha: ciSha, dirty: false } : UNKNOWN_GIT_BUILD_IDENTITY;
+		const workspace = Bun.env.GITHUB_WORKSPACE;
+		if (!ciSha || !workspace) return UNKNOWN_GIT_BUILD_IDENTITY;
+		const [root, expected] = await Promise.all([realpathOrResolved(workspace), realpathOrResolved(repoRoot)]);
+		return root === expected ? { gitSha: ciSha, dirty: false } : UNKNOWN_GIT_BUILD_IDENTITY;
 	}
 }

@@ -45,6 +45,9 @@ export async function resolveGitBuildInfo(checkoutRoot: string): Promise<BuildIn
 
 /** Build identity baked into compiled binaries (`PI_BUILD_GIT_*` defines). */
 function bakedBuildInfo(): BuildInfo | undefined {
+	// Only compiled binaries carry these defines; a source tree must never take
+	// provenance from its runtime environment.
+	if (process.env.PI_COMPILED !== "true") return undefined;
 	const gitSha = process.env.PI_BUILD_GIT_SHA;
 	if (gitSha === undefined) return undefined;
 	const dirty = process.env.PI_BUILD_GIT_DIRTY;

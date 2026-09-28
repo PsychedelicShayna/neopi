@@ -16,7 +16,8 @@ export interface GitBuildIdentity {
 
 export const UNKNOWN_GIT_BUILD_IDENTITY: GitBuildIdentity = Object.freeze({ gitSha: null, dirty: null });
 
-async function realpathOrResolved(p: string): Promise<string> {
+/** Realpath of `p`, or its resolved form when it does not exist. */
+export async function realpathOrResolved(p: string): Promise<string> {
 	try {
 		return await fs.realpath(p);
 	} catch {

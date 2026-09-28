@@ -110,6 +110,24 @@ describe("BUILD_INFO", () => {
 	});
 });
 
+describe("BUILD_INFO in a source tree", () => {
+	test("ignores compile-time provenance variables inherited from the environment", async () => {
+		const expectedSha = (await $`git rev-parse HEAD`.cwd(checkoutRoot).quiet().text()).trim();
+		const module = path.join(checkoutRoot, "packages", "coding-agent", "src", "build-info.ts");
+		const probe = path.join(await tempDir("env"), "probe.ts");
+		await Bun.write(
+			probe,
+			`import { BUILD_INFO } from ${JSON.stringify(module)};\nconsole.log(BUILD_INFO.gitSha);\n`,
+		);
+		const result = await $`${process.execPath} ${probe}`
+			.env({ ...process.env, PI_BUILD_GIT_SHA: "0".repeat(40), PI_BUILD_GIT_DIRTY: "false" })
+			.quiet()
+			.nothrow();
+		expect(result.exitCode).toBe(0);
+		expect(result.text().trim()).toBe(expectedSha);
+	});
+});
+
 describe("resolveBuildIdentity (build scripts)", () => {
 	test("bakes the checkout's commit with tracked-only dirtiness", async () => {
 		const { dir, sha } = await gitRepo("build", "base\n");
