@@ -2005,9 +2005,15 @@ export class AgentSession implements SettingsScope {
 				);
 			},
 		});
-		this.#cancelExitRecorder = postmortem.register(`agent-session:${this.sessionManager.getSessionId()}`, reason => {
-			this.#recordSessionExit(reason);
-		});
+		// A keep-alive postmortem.cleanup() pass does not end the session and
+		// must not consume the once-only diagnostic before the eventual exit.
+		this.#cancelExitRecorder = postmortem.register(
+			`agent-session:${this.sessionManager.getSessionId()}`,
+			reason => {
+				this.#recordSessionExit(reason);
+			},
+			{ exitOnly: true },
+		);
 		this.#cancelFatalRecoveryHint = postmortem.registerFatalRecoveryHint(() => {
 			const sessionId = this.sessionManager.getSessionId();
 			if (!sessionId || !this.sessionManager.getSessionFile()) return undefined;

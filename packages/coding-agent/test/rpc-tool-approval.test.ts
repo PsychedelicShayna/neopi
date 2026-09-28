@@ -131,12 +131,12 @@ async function spawnChild(options: {
 
 let promptCount = 0;
 
-/** Sends a scripted tool call; resolves with its `tool_execution_start` frame and the prompt's settlement. */
+/** Sends a scripted tool call; prompt settlement is awaited on demand (EOF need not emit one). */
 async function promptToolCall(
 	child: RpcChild,
 	tool: string,
 	input: unknown,
-): Promise<{ start: RpcFrame; settled: Promise<RpcFrame> }> {
+): Promise<{ start: RpcFrame; settled: () => Promise<RpcFrame> }> {
 	const id = `prompt-${++promptCount}`;
 	const seen = child.frames.length;
 	const response = await child.request({ id, type: "prompt", message: `CALL ${tool} ${JSON.stringify(input)}` });
@@ -144,7 +144,7 @@ async function promptToolCall(
 	const start = await child.waitFor(
 		frame => frame.type === "tool_execution_start" && frame.toolName === tool && child.frames.indexOf(frame) >= seen,
 	);
-	const settled = child.waitFor(frame => frame.type === "prompt_result" && frame.id === id);
+	const settled = () => child.waitFor(frame => frame.type === "prompt_result" && frame.id === id);
 	return { start, settled };
 }
 
@@ -197,7 +197,7 @@ describe("RPC structured tool approval", () => {
 		const allowed = await toolEnd(child, once.start.toolCallId);
 		expect(allowed.isError).toBe(false);
 		expect(resultText(allowed)).toContain("approved-once");
-		await once.settled;
+		await once.settled();
 		const notices = child.frames.filter(frame => frame.method === "notify").map(frame => frame.message);
 		expect(notices).toContain(`approval-requested:${once.start.toolCallId}`);
 		expect(notices).toContain(`approval-resolved:${once.start.toolCallId}:true`);
@@ -208,7 +208,7 @@ describe("RPC structured tool approval", () => {
 		expect(revisedRequest.args).toEqual({ command: "echo revised" });
 		child.send({ type: "tool_approval_response", id: revisedRequest.id, decision: "allow_once" });
 		expect(resultText(await toolEnd(child, revised.start.toolCallId))).toContain("revised");
-		await revised.settled;
+		await revised.settled();
 
 		// deny with a reason: the tool fails with the host's reason.
 		const deny = await promptToolCall(child, "bash", { command: "echo never-runs" });
@@ -217,7 +217,7 @@ describe("RPC structured tool approval", () => {
 		const denied = await toolEnd(child, deny.start.toolCallId);
 		expect(denied.isError).toBe(true);
 		expect(resultText(denied)).toContain("not on my watch");
-		await deny.settled;
+		await deny.settled();
 
 		// abort while pending: the request is cancelled and the tool is denied.
 		const abort = await promptToolCall(child, "bash", { command: "echo aborted-call" });
@@ -227,7 +227,7 @@ describe("RPC structured tool approval", () => {
 		expect(cancel.targetId).toBe(abortRequest.id);
 		const aborted = await toolEnd(child, abort.start.toolCallId);
 		expect(aborted.isError).toBe(true);
-		await abort.settled;
+		await abort.settled();
 		// A late answer to the cancelled request changes nothing.
 		child.send({ type: "tool_approval_response", id: abortRequest.id, decision: "allow_once" });
 
@@ -236,12 +236,12 @@ describe("RPC structured tool approval", () => {
 		const sessionRequest = await approvalRequest(child, first.start.toolCallId);
 		child.send({ type: "tool_approval_response", id: sessionRequest.id, decision: "allow_session" });
 		expect((await toolEnd(child, first.start.toolCallId)).isError).toBe(false);
-		await first.settled;
+		await first.settled();
 		const repeat = await promptToolCall(child, "bash", { command: "echo session-two" });
 		const repeated = await toolEnd(child, repeat.start.toolCallId);
 		expect(repeated.isError).toBe(false);
 		expect(resultText(repeated)).toContain("session-two");
-		await repeat.settled;
+		await repeat.settled();
 		expect(
 			child.frames.some(
 				frame => frame.type === "tool_approval_request" && frame.toolCallId === repeat.start.toolCallId,
@@ -278,7 +278,7 @@ describe("RPC structured tool approval", () => {
 		const uiDenied = await toolEnd(child, ui.start.toolCallId);
 		expect(uiDenied.isError).toBe(true);
 		expect(resultText(uiDenied)).toContain("Tool call denied by user: bash");
-		await ui.settled;
+		await ui.settled();
 
 		const opted = await child.request({ type: "set_approval_handler", handler: "host" });
 		expect(opted).toMatchObject({ success: true, data: { handler: "host" } });
@@ -286,7 +286,7 @@ describe("RPC structured tool approval", () => {
 		// A configured deny still denies without asking the host.
 		const write = await promptToolCall(child, "write", { path: "denied.txt", content: "no" });
 		expect((await toolEnd(child, write.start.toolCallId)).isError).toBe(true);
-		await write.settled;
+		await write.settled();
 		expect(child.frames.some(frame => frame.type === "tool_approval_request")).toBe(false);
 
 		// A prompt override under yolo still prompts, now through the host frame.
@@ -295,7 +295,7 @@ describe("RPC structured tool approval", () => {
 		expect(request).toMatchObject({ toolName: "bash", tier: "exec", approvalMode: "yolo" });
 		child.send({ type: "tool_approval_response", id: request.id, cancelled: true });
 		expect((await toolEnd(child, host.start.toolCallId)).isError).toBe(true);
-		await host.settled;
+		await host.settled();
 		expect(
 			child.frames.filter(frame => frame.type === "extension_ui_request" && frame.method === "select"),
 		).toHaveLength(1);
@@ -339,7 +339,7 @@ describe("RPC eval prelude approval", () => {
 		const denied = await toolEnd(child, deny.start.toolCallId);
 		expect(resultText(denied)).toContain("Eval prelude call denied by user: browser");
 		expect(resultText(denied)).toContain("no browsing");
-		await deny.settled;
+		await deny.settled();
 
 		// allow_session: the call runs, and later prelude calls run without a request.
 		const first = await promptToolCall(child, "eval", cell);
@@ -348,11 +348,11 @@ describe("RPC eval prelude approval", () => {
 		const allowed = await toolEnd(child, first.start.toolCallId);
 		expect(allowed.isError).toBe(false);
 		expect(resultText(allowed)).toContain("[]");
-		await first.settled;
+		await first.settled();
 		const repeat = await promptToolCall(child, "eval", cell);
 		const repeated = await toolEnd(child, repeat.start.toolCallId);
 		expect(repeated.isError).toBe(false);
-		await repeat.settled;
+		await repeat.settled();
 		expect(child.frames.filter(frame => frame.type === "tool_approval_request")).toHaveLength(2);
 		expect(fs.existsSync(path.join(child.agentDir, "config.yml"))).toBe(true);
 		expect(fs.readFileSync(path.join(child.agentDir, "config.yml"), "utf8")).toBe(config);
@@ -373,7 +373,7 @@ describe("RPC eval prelude approval", () => {
 		expect(resultText(await toolEnd(child, call.start.toolCallId))).toContain(
 			"Eval prelude call denied by user: browser",
 		);
-		await call.settled;
+		await call.settled();
 		expect(child.frames.some(frame => frame.type === "tool_approval_request")).toBe(false);
 	}, 120_000);
 });
