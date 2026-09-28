@@ -87,6 +87,5 @@ Maintainers review the submitted behavior and the contributor's understanding
 of it—not the volume of generated code. Respond to review feedback yourself,
 and only apply suggestions you have checked.
 
-Pull requests may be closed when they skip required prior discussion, lack the
-human-written explanation, contain unreviewed agent output, or mix unrelated
-changes.
+Pull requests may be closed when they skip required prior discussion, contain
+unreviewed agent output, or mix unrelated changes.
