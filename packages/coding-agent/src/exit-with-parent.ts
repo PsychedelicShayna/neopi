@@ -12,6 +12,7 @@
  * registered with postmortem cleanup) within a fixed budget, then hard-exits
  * with {@link EXIT_WITH_PARENT_EXIT_CODE}.
  */
+import { Process, ProcessStatus } from "@oh-my-pi/pi-natives";
 import { logger, postmortem } from "@oh-my-pi/pi-utils";
 import { disposeAllVmContexts } from "./eval/js/context-manager";
 import { disposeAllKernelSessions } from "./eval/py/executor";
@@ -81,6 +82,7 @@ export function exitWithParent(options: ExitWithParentOptions = {}): ExitWithPar
 	const teardownMs = options.teardownMs ?? EXIT_WITH_PARENT_TEARDOWN_MS;
 	const watchdog = watchParentProcess({
 		parentPid: options.parentPid,
+		natives: { Process, ProcessStatus },
 		onParentExit: () => void tearDownAfterParentExit([...targets], watchdog.parentPid, exitCode, teardownMs),
 	});
 	return {

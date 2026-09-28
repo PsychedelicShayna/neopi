@@ -7,14 +7,21 @@
  * parent pid, then detects its death two ways:
  *
  * - a native process handle (`pidfd` on Linux) whose `waitForExit()` settles
- *   the moment the parent exits;
- * - a fallback poll that notices reparenting (`process.ppid` changing) or a
- *   parent pid that no longer answers signal 0.
+ *   the moment the parent exits, when the caller supplies the native API;
+ * - a poll that notices reparenting (`process.ppid` changing) or a parent pid
+ *   that no longer answers signal 0.
+ *
+ * The native API is injected rather than imported so this module stays out of
+ * the native addon's load cost: the CLI entry imports it statically, before
+ * its speculative first frame.
  */
-import { Process, ProcessStatus } from "@oh-my-pi/pi-natives";
+import type * as Natives from "@oh-my-pi/pi-natives";
 
-/** Default interval for the fallback parent-liveness poll. */
+/** Default interval for the parent-liveness poll. */
 export const PARENT_WATCHDOG_POLL_MS = 1_000;
+
+/** The part of `@oh-my-pi/pi-natives` the watchdog uses for its native parent handle. */
+export type ParentWatchdogNatives = Pick<typeof Natives, "Process" | "ProcessStatus">;
 
 /** Options for {@link watchParentProcess}. */
 export interface ParentWatchdogOptions {
@@ -24,8 +31,13 @@ export interface ParentWatchdogOptions {
 	 * process and `process.ppid` no longer names the original host.
 	 */
 	parentPid?: number;
-	/** Fallback poll interval in milliseconds. Defaults to {@link PARENT_WATCHDOG_POLL_MS}. */
+	/** Poll interval in milliseconds. Defaults to {@link PARENT_WATCHDOG_POLL_MS}. */
 	pollIntervalMs?: number;
+	/**
+	 * Native process API (`{ Process, ProcessStatus }` from `@oh-my-pi/pi-natives`).
+	 * With it, parent death is noticed immediately; without it, by the poll.
+	 */
+	natives?: ParentWatchdogNatives;
 	/**
 	 * Invoked at most once, asynchronously, when the parent is gone — including
 	 * when it was already gone at install time. Never invoked after `stop()`.
@@ -78,10 +90,11 @@ export function watchParentProcess(options: ParentWatchdogOptions): ParentWatchd
 	// restrictive seccomp), Process.fromPid returns null even when the parent
 	// is alive. Null means "no native handle", never "dead": the poll below
 	// still decides liveness. PI_TEST_NO_NATIVES forces that fallback in tests.
-	let parentProcess: Process | null = null;
-	if (!process.env.PI_TEST_NO_NATIVES) {
+	const natives = process.env.PI_TEST_NO_NATIVES ? undefined : options.natives;
+	let parentProcess: Natives.Process | null = null;
+	if (natives) {
 		try {
-			parentProcess = Process.fromPid(parentPid);
+			parentProcess = natives.Process.fromPid(parentPid);
 		} catch {}
 	}
 
@@ -90,9 +103,9 @@ export function watchParentProcess(options: ParentWatchdogOptions): ParentWatchd
 	// runs; reparenting is detected instead by `process.ppid` changing.
 	const isParentAlive = (): boolean => {
 		if (process.ppid !== parentPid) return false;
-		if (parentProcess) {
+		if (parentProcess && natives) {
 			try {
-				return parentProcess.status() === ProcessStatus.Running;
+				return parentProcess.status() === natives.ProcessStatus.Running;
 			} catch {}
 		}
 		try {
