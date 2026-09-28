@@ -1,12 +1,18 @@
 import * as net from "node:net";
 import * as path from "node:path";
 import { $which, logger } from "@oh-my-pi/pi-utils";
-import { isSettingsInitialized, settings } from "../config/settings";
+import { findScopedSettings, Settings } from "../config/settings";
 import { cfgLaunchBrokerScope, cfgLaunchBrokerSlice } from "./settings";
 import type { DaemonSpawnOptions } from "./spawn-options";
 
 /** Connect budget for the user-manager probe; a live manager answers a local socket connect immediately. */
 const USER_MANAGER_PROBE_TIMEOUT_MS = 250;
+/**
+ * How long a scoped launch may take to produce a reachable broker before the launcher is killed
+ * and the broker is started directly; well under the client's 10 s connect budget, so the direct
+ * broker still has time to come up when systemd hangs.
+ */
+export const SCOPE_STARTUP_TIMEOUT_MS = 4_000;
 
 /** Where a freshly spawned daemon broker runs. */
 export type BrokerPlacement =
@@ -37,12 +43,25 @@ export interface BrokerPlacementInput {
 	env: Record<string, string | undefined>;
 }
 
-/** The broker settings, or their defaults for processes that never initialized settings. */
-export function brokerScopeSettings(): { enabled: boolean; slice: string } {
-	if (!isSettingsInitialized()) {
-		return { enabled: cfgLaunchBrokerScope.default, slice: cfgLaunchBrokerSlice.default };
+/**
+ * Effective `launch.brokerScope` / `launch.brokerSlice` for a broker spawn: the active session's or
+ * the process's settings when one is loaded, otherwise the persisted global and project config for
+ * `cwd` (`npi ps` and SDK embedders spawn brokers without initializing the settings singleton).
+ */
+export async function brokerScopeSettings(cwd: string): Promise<{ enabled: boolean; slice: string }> {
+	let effective = findScopedSettings();
+	if (!effective) {
+		try {
+			effective = await Settings.loadReadOnly({ cwd });
+		} catch (error) {
+			logger.warn("Failed to read broker placement settings; using defaults", {
+				cwd,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return { enabled: cfgLaunchBrokerScope.default, slice: cfgLaunchBrokerSlice.default };
+		}
 	}
-	return { enabled: cfgLaunchBrokerScope.get(settings), slice: cfgLaunchBrokerSlice.get(settings) };
+	return { enabled: cfgLaunchBrokerScope.get(effective), slice: cfgLaunchBrokerSlice.get(effective) };
 }
 
 /** Unique transient scope name for one broker spawn; the hash ties it to its project in `systemctl --user`. */
@@ -110,7 +129,12 @@ export interface LaunchedBroker {
 	settle(): void;
 }
 
-function spawnDetachedBroker(launch: BrokerLaunch, cmd: string[]): { exited: Promise<number> } {
+interface SpawnedBroker {
+	exited: Promise<number>;
+	kill(signal?: NodeJS.Signals | number): void;
+}
+
+function spawnDetachedBroker(launch: BrokerLaunch, cmd: string[]): SpawnedBroker {
 	const child = Bun.spawn(cmd, {
 		cwd: launch.cwd,
 		env: launch.env,
@@ -125,10 +149,17 @@ function spawnDetachedBroker(launch: BrokerLaunch, cmd: string[]): { exited: Pro
 
 /**
  * Spawn the broker where `placement` says and log the placement. A scoped launch that exits
- * non-zero before {@link LaunchedBroker.settle} (the scope could not be created, e.g. a rejected
- * slice name) is retried once in the client's cgroup, so a broken scope setup never strands clients.
+ * non-zero (the scope could not be created, e.g. a rejected slice name) or has not produced a
+ * reachable broker within `startupTimeoutMs` (systemd hanging) before {@link LaunchedBroker.settle}
+ * is replaced once by a broker in the client's cgroup — the launcher is killed first — so a broken
+ * scope setup never strands clients.
  */
-export function launchBroker(launch: BrokerLaunch, placement: BrokerPlacement, runtimeDir: string): LaunchedBroker {
+export function launchBroker(
+	launch: BrokerLaunch,
+	placement: BrokerPlacement,
+	runtimeDir: string,
+	startupTimeoutMs = SCOPE_STARTUP_TIMEOUT_MS,
+): LaunchedBroker {
 	if (placement.kind === "inherit") {
 		spawnDetachedBroker(launch, launch.cmd);
 		logger.info("Daemon broker placed in the spawning client's cgroup", { runtimeDir, reason: placement.reason });
@@ -141,20 +172,32 @@ export function launchBroker(launch: BrokerLaunch, placement: BrokerPlacement, r
 		unit: placement.unit,
 		slice: placement.slice,
 	});
-	void child.exited.then(exitCode => {
-		if (settled || exitCode === 0) return;
+	const deadline = setTimeout(() => {
+		if (settled) return;
+		child.kill("SIGKILL");
+		fallBack({ timeoutMs: startupTimeoutMs });
+	}, startupTimeoutMs);
+	deadline.unref();
+	const settle = (): void => {
 		settled = true;
+		clearTimeout(deadline);
+	};
+	const fallBack = (failure: Record<string, unknown>): void => {
+		if (settled) return;
+		settle();
 		spawnDetachedBroker(launch, launch.cmd);
 		logger.warn("Daemon broker scope launch failed; placed in the spawning client's cgroup", {
 			runtimeDir,
 			unit: placement.unit,
 			slice: placement.slice,
-			exitCode,
+			...failure,
 		});
-	});
-	return {
-		settle() {
-			settled = true;
-		},
 	};
+	void child.exited.then(exitCode => {
+		// Exit 0 is a scoped broker that already ran and left (e.g. it lost the lease race to a live
+		// broker); the client connects to whichever broker holds the endpoint.
+		if (exitCode === 0) settle();
+		else fallBack({ exitCode });
+	});
+	return { settle };
 }

@@ -2,7 +2,15 @@ import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
-import { APP_NAME, getGlobalDaemonRuntimeDir, isEexist, isEnoent, logger, postmortem } from "@oh-my-pi/pi-utils";
+import {
+	APP_NAME,
+	getGlobalDaemonRuntimeDir,
+	getProjectDir,
+	isEexist,
+	isEnoent,
+	logger,
+	postmortem,
+} from "@oh-my-pi/pi-utils";
 import { hostHasInheritableConsole } from "../eval/py/spawn-options";
 import { resolveWorkerSpawnCmd, workerEnvFromParent } from "../subprocess/worker-client";
 import { canonicalProjectDir, daemonBrokerEndpoint, daemonRuntimeDir } from "./paths";
@@ -49,6 +57,11 @@ export interface DaemonBrokerClientOptions {
 	runtimeDir?: string;
 	/** Last-client shutdown grace override in milliseconds. */
 	idleGraceMs?: number;
+	/**
+	 * Directory whose project config supplies broker placement settings when no settings instance
+	 * is loaded in this process; defaults to the project directory.
+	 */
+	settingsCwd?: string;
 }
 
 export interface DaemonCompletionUnregisterOptions {
@@ -146,6 +159,7 @@ class SocketDaemonClient implements DaemonBrokerClient {
 	readonly #token: string;
 	readonly #seenCompletionIds = new Set<string>();
 	readonly #idleGraceMs: number | undefined;
+	readonly #settingsCwd: string;
 	readonly #pending = new Map<string, PendingRequest>();
 	readonly #completionSinks = new Map<string, (notification: DaemonCompletionNotification) => Promise<void> | void>();
 	readonly #completionUnsubscribes = new Set<string>();
@@ -165,6 +179,7 @@ class SocketDaemonClient implements DaemonBrokerClient {
 		this.#endpoint = daemonBrokerEndpoint(projectDir, runtimeDir);
 		this.#token = token;
 		this.#idleGraceMs = options.idleGraceMs;
+		this.#settingsCwd = options.settingsCwd ?? projectDir;
 	}
 
 	async request(operation: DaemonOperation, signal?: AbortSignal): Promise<DaemonRpcResult> {
@@ -329,7 +344,7 @@ class SocketDaemonClient implements DaemonBrokerClient {
 		};
 		if (this.#idleGraceMs !== undefined) overlay[DAEMON_IDLE_GRACE_ENV] = String(this.#idleGraceMs);
 		const env = workerEnvFromParent(overlay);
-		const { enabled, slice } = brokerScopeSettings();
+		const { enabled, slice } = await brokerScopeSettings(this.#settingsCwd);
 		const placement = await resolveBrokerPlacement({
 			platform: process.platform,
 			enabled,
@@ -513,6 +528,8 @@ export async function daemonClientForGlobal(service: string): Promise<DaemonBrok
 	return sharedDaemonClient(`global:${canonical}`, () =>
 		createDaemonBrokerClient(canonical, {
 			runtimeDir: canonical,
+			// A machine-global broker has no project; its placement follows this process's config.
+			settingsCwd: getProjectDir(),
 		}),
 	);
 }

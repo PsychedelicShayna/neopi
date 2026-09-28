@@ -2,10 +2,13 @@
 // manager's private endpoint and resolves a stand-in `systemd-run` on PATH, so the decision and the
 // fallback run exactly as they do against a live manager, without creating real systemd units.
 import { afterEach, describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { getProjectAgentDir, TempDir } from "@oh-my-pi/pi-utils";
+import { resetSettingsForTest } from "../../src/config/settings";
 import { type BrokerPlacement, launchBroker, resolveBrokerPlacement } from "../../src/launch/broker-placement";
+import { createDaemonBrokerClient } from "../../src/launch/client";
 
 const cleanups: (() => void)[] = [];
 
@@ -55,7 +58,7 @@ function placementFor(fake: FakeSystemd, overrides: { platform?: NodeJS.Platform
 }
 
 /** Run the broker command through `launchBroker` and resolve with how it reports being launched. */
-async function launchedVia(fake: FakeSystemd, placement: BrokerPlacement): Promise<string> {
+async function launchedVia(fake: FakeSystemd, placement: BrokerPlacement, startupTimeoutMs?: number): Promise<string> {
 	const reportSocket = path.join(fake.root, "report.sock");
 	const { promise, resolve } = Promise.withResolvers<string>();
 	const listener = Bun.listen({
@@ -74,6 +77,7 @@ async function launchedVia(fake: FakeSystemd, placement: BrokerPlacement): Promi
 		},
 		placement,
 		fake.root,
+		startupTimeoutMs,
 	);
 	return promise;
 }
@@ -136,5 +140,89 @@ describe("launchBroker", () => {
 	it("starts the broker directly when the scope launcher fails", async () => {
 		const fake = await fakeSystemd("exit 1", true);
 		expect(await launchedVia(fake, await placementFor(fake, {}))).toBe("direct");
+	});
+
+	it("kills a hanging scope launcher and starts the broker directly once the startup deadline passes", async () => {
+		const fake = await fakeSystemd("", true);
+		const pidFile = path.join(fake.root, "launcher.pid");
+		// Stand-in systemd-run that never starts the broker, like a manager that accepts the socket but
+		// stalls. The broker env's PATH holds only the stand-in, so the hang uses an absolute binary.
+		await Bun.write(
+			path.join(fake.env.PATH, "systemd-run"),
+			`#!/bin/sh\necho $$ > "${pidFile}"\nexec "${process.execPath}" -e "setTimeout(() => {}, 30_000)"\n`,
+		);
+		// Runs before the temp dir removal registered by fakeSystemd, while the pid file still exists.
+		cleanups.unshift(() => {
+			try {
+				process.kill(Number.parseInt(readFileSync(pidFile, "utf8"), 10), "SIGKILL");
+			} catch {
+				// Already gone: the expected outcome.
+			}
+		});
+		const launched = await launchedVia(fake, await placementFor(fake, {}), 300);
+		const launcherPid = Number.parseInt(await Bun.file(pidFile).text(), 10);
+		let launcherAlive = true;
+		try {
+			process.kill(launcherPid, 0);
+		} catch {
+			launcherAlive = false;
+		}
+		expect(launched).toBe("direct");
+		expect(launcherAlive).toBe(false);
+	});
+});
+
+describe("daemon broker client placement", () => {
+	const savedEnv = { PATH: process.env.PATH, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR };
+
+	afterEach(() => {
+		for (const [key, value] of Object.entries(savedEnv)) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+		resetSettingsForTest();
+	});
+
+	/**
+	 * Start a broker through a real client with no settings loaded in this process, and report whether
+	 * the spawn went through the (recording, then exec'ing) stand-in `systemd-run`.
+	 */
+	async function spawnedThroughScope(brokerScope: boolean): Promise<boolean> {
+		resetSettingsForTest();
+		const fake = await fakeSystemd("", true);
+		const marker = path.join(fake.root, "systemd-run-invoked");
+		// Stand-in systemd-run: record the call, skip its options, then exec the broker like `--scope` does.
+		await Bun.write(
+			path.join(fake.env.PATH, "systemd-run"),
+			`#!/bin/sh\necho "$@" > "${marker}"\nwhile [ "\${1#--}" != "$1" ]; do shift; done\nexec "$@"\n`,
+		);
+		const projectDir = path.join(fake.root, "project");
+		await fs.mkdir(getProjectAgentDir(projectDir), { recursive: true });
+		await Bun.write(
+			path.join(getProjectAgentDir(projectDir), "config.yml"),
+			`launch:\n  brokerScope: ${brokerScope}\n`,
+		);
+		process.env.PATH = `${fake.env.PATH}${path.delimiter}${savedEnv.PATH ?? ""}`;
+		process.env.XDG_RUNTIME_DIR = fake.env.XDG_RUNTIME_DIR;
+		const client = await createDaemonBrokerClient(projectDir, {
+			runtimeDir: path.join(fake.root, "broker-run"),
+			idleGraceMs: 100,
+		});
+		try {
+			const ping = await client.request({ op: "ping" });
+			expect(ping.op).toBe("ping");
+			await client.request({ op: "shutdown" });
+		} finally {
+			client.close();
+		}
+		return Bun.file(marker).exists();
+	}
+
+	it("keeps the broker out of a scope when the persisted project config sets launch.brokerScope: false", async () => {
+		expect(await spawnedThroughScope(false)).toBe(false);
+	});
+
+	it("launches the broker through systemd-run when the persisted config enables the scope", async () => {
+		expect(await spawnedThroughScope(true)).toBe(true);
 	});
 });
