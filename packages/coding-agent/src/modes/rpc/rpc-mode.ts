@@ -59,6 +59,7 @@ import {
 import { RpcSessionEventForwarder } from "./rpc-session-events";
 import { isRpcSessionSettled, RpcSessionSettleWatcher } from "./rpc-session-settle";
 import { RpcSubagentRegistry, readRpcSubagentTranscript } from "./rpc-subagents";
+import { getRpcUsage, RpcUsageUnavailableError } from "./rpc-usage";
 import type {
 	RpcCommand,
 	RpcExtensionUIRequest,
@@ -284,19 +285,27 @@ export function dispatchRpcControlFrame(parsed: unknown, deps: RpcInputFrameDeps
 }
 
 /**
+ * Commands dispatched in the background instead of on the serial queue:
+ * `bash` so a later `abort_bash` can overtake it, and `get_usage` because
+ * upstream usage fetches can take seconds and must not hold up `prompt`.
+ */
+const CONCURRENT_RPC_COMMANDS: ReadonlySet<RpcCommand["type"]> = new Set<RpcCommand["type"]>(["bash", "get_usage"]);
+
+/**
  * Dispatch a single parsed frame from the RPC input stream.
  *
- * Bash commands are dispatched in the background so the caller can keep reading
- * subsequent frames while a shell command is still running. This lets a client
- * send `abort_bash` while a long-running `bash` is in flight. Response
- * correlation is preserved via each command's `id`; ordering across concurrent
- * commands is not guaranteed and clients MUST match on `id`.
+ * Concurrent commands ({@link CONCURRENT_RPC_COMMANDS}) are dispatched in the
+ * background so the caller can keep reading subsequent frames while one is
+ * still running. This lets a client send `abort_bash` while a long-running
+ * `bash` is in flight, or `prompt` while `get_usage` waits on a provider.
+ * Response correlation is preserved via each command's `id`; ordering across
+ * concurrent commands is not guaranteed and clients MUST match on `id`.
  *
  * @returns `undefined` when the frame was routed to a side-channel handler
  *   (extension UI response, host tool/URI frames) or dispatched in the
- *   background (`bash`). Otherwise a promise that resolves once the response
- *   for the command has been emitted via `output`. Errors from `handleCommand`
- *   on non-`bash` commands propagate; the caller is expected to wrap them.
+ *   background. Otherwise a promise that resolves once the response for the
+ *   command has been emitted via `output`. Errors from `handleCommand` on
+ *   serial commands propagate; the caller is expected to wrap them.
  */
 export function dispatchRpcInputFrame(parsed: unknown, deps: RpcInputFrameDeps): Promise<void> | undefined {
 	if (dispatchRpcControlFrame(parsed, deps)) return undefined;
@@ -306,17 +315,17 @@ export function dispatchRpcInputFrame(parsed: unknown, deps: RpcInputFrameDeps):
 	// the union here.
 	const command = parsed as RpcCommand;
 
-	// `bash` can run for a long time. Dispatch it in the background so a
-	// subsequent `abort_bash` frame can be read and handled without waiting
-	// for the shell command to finish on its own. The response is emitted
-	// when `handleCommand` resolves; clients correlate via `command.id`.
-	if (command.type === "bash") {
+	// Concurrent commands can run for a long time. Dispatch them in the
+	// background so later frames (e.g. `abort_bash`, `prompt`) are handled
+	// without waiting for them. The response is emitted when `handleCommand`
+	// resolves; clients correlate via `command.id`.
+	if (CONCURRENT_RPC_COMMANDS.has(command.type)) {
 		const task = (async () => {
 			try {
 				deps.output(await deps.handleCommand(command));
 			} catch (err: unknown) {
 				const message = err instanceof Error ? err.message : String(err);
-				deps.output(deps.errorResponse(command.id, "bash", message));
+				deps.output(deps.errorResponse(command.id, command.type, message));
 			}
 		})();
 		deps.trackBackgroundTask?.(task);
@@ -332,10 +341,11 @@ export function dispatchRpcInputFrame(parsed: unknown, deps: RpcInputFrameDeps):
  * Serializes ordinary RPC commands while allowing control frames to dispatch immediately.
  *
  * With a `ready` gate, control frames (extension UI responses, host tool/URI
- * results) still dispatch on arrival, but every command, `bash` included, waits
- * for the gate to settle. RPC mode settles it once extension startup finishes,
- * so an extension that asks the host a question during `session_start` gets the
- * answer instead of deadlocking startup (issue #110).
+ * results) still dispatch on arrival, but every command, concurrent ones
+ * (`bash`, `get_usage`) included, waits for the gate to settle. RPC mode
+ * settles it once extension startup finishes, so an extension that asks the
+ * host a question during `session_start` gets the answer instead of
+ * deadlocking startup (issue #110).
  */
 export class RpcInputDispatcher {
 	#tail: Promise<void> = Promise.resolve();
@@ -367,7 +377,7 @@ export class RpcInputDispatcher {
 			if (dispatchRpcControlFrame(parsed, this.#deps)) return;
 
 			const command = parsed as RpcCommand;
-			if (command.type === "bash") {
+			if (CONCURRENT_RPC_COMMANDS.has(command.type)) {
 				const gate = this.#gate;
 				if (gate) {
 					this.#track(
@@ -1077,8 +1087,8 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		ready: startup.promise,
 	});
 	// Keep the stdin reader moving: side-channel frames dispatch immediately,
-	// ordinary commands serialize through inputDispatcher, and bash remains
-	// background-dispatched so abort_bash can overtake it. Frames are read
+	// ordinary commands serialize through inputDispatcher, and bash/get_usage
+	// stay background-dispatched so later frames can overtake them. Frames are read
 	// line-by-line by readRpcInputFrames so a single malformed line is reported
 	// as an error frame and the loop keeps running instead of throwing out of
 	// the reader and killing the whole process (issue #5194).
@@ -1620,6 +1630,22 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			case "get_session_stats": {
 				const stats = session.getSessionStats();
 				return success(id, "get_session_stats", stats);
+			}
+
+			case "get_usage": {
+				try {
+					const usage = await getRpcUsage(
+						{
+							authStorage: session.modelRegistry.authStorage,
+							fetchUsageReports: () => session.fetchUsageReports(),
+						},
+						command,
+					);
+					return success(id, "get_usage", usage);
+				} catch (err: unknown) {
+					if (err instanceof RpcUsageUnavailableError) return error(id, "get_usage", err.message, err.code);
+					throw err;
+				}
 			}
 
 			case "export_html": {

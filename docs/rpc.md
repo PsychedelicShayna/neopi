@@ -26,7 +26,7 @@ Behavior notes:
 - RPC mode disables automatic session title generation by default to avoid an extra model call.
 - RPC/ACP host defaults cover task isolation/execution, memory, advisor, tier, async-job, and bash auto-background settings. They are applied only when a path is not explicitly configured; project/global config, `--config`, and isolated settings remain authoritative. Todo settings are not host-defaulted.
 - The process claims stdin before extension discovery, then parses it one non-empty JSONL line at a time. Malformed JSON emits a recoverable `command: "parse"` failure and does not terminate the loop.
-- At startup it writes a `ready` frame, then starts reading stdin while extensions initialize. Control frames (`extension_ui_response`, `host_tool_result`, `host_tool_update`, `host_uri_result`) are dispatched on arrival, so an extension that asks a dialog question during `session_start` receives the host's answer. Commands, `bash` included, are queued and processed in arrival order once initialization completes. Hosts that send no startup dialog answers observe no change in frame order.
+- At startup it writes a `ready` frame, then starts reading stdin while extensions initialize. Control frames (`extension_ui_response`, `host_tool_result`, `host_tool_update`, `host_uri_result`) are dispatched on arrival, so an extension that asks a dialog question during `session_start` receives the host's answer. Commands, the concurrent `bash` and `get_usage` included, are queued and processed in arrival order once initialization completes. Hosts that send no startup dialog answers observe no change in frame order.
 - When stdin closes, pending extension UI, host-tool, and host-URI requests are rejected; accepted commands are drained, the session is disposed, pending stdout is delivered, and the process exits with code `0`.
 - Responses/events are written as one JSON object per line.
 
@@ -34,6 +34,7 @@ Behavior notes:
 
 | String | Feature |
 | --- | --- |
+| `get_usage` | The `get_usage` command returns account-level provider usage reports. See [Session](#session). |
 
 ## Transport and Framing
 
@@ -193,6 +194,7 @@ correlate it via `id`. Ordering across concurrent commands is not guaranteed
 ### Session
 
 - `{ id?, type: "get_session_stats" }`
+- `{ id?, type: "get_usage", provider?: string, refresh?: boolean, redact?: boolean }`
 - `{ id?, type: "export_html", outputPath?: string }`
 - `{ id?, type: "switch_session", sessionPath: string }`
 - `{ id?, type: "branch", entryId: string }`
@@ -200,6 +202,37 @@ correlate it via `id`. Ordering across concurrent commands is not guaranteed
 - `{ id?, type: "get_last_assistant_text" }`
 - `{ id?, type: "set_session_name", name: string }`
 - `{ id?, type: "handoff", customInstructions?: string }`
+
+`get_usage` returns `data: { generatedAt: number, reports: UsageReport[] }`: the
+same report objects `npi usage --json` prints in its `reports` field, without
+the provider-specific `raw` payload. `UsageReport` is defined in
+[`packages/ai/src/usage.ts`](../packages/ai/src/usage.ts). `generatedAt` is
+the epoch-ms time the response was built; each report carries its own
+`fetchedAt`. The reports come from the session's auth storage, so they share
+its usage cache and in-flight coalescing with the status line and `/usage`:
+back-to-back requests make one upstream fetch.
+
+- `provider` keeps only reports for that provider id (case-insensitive). An
+  unknown id yields `reports: []` with `success: true`.
+- `refresh: true` invalidates the cached reports for `provider` (or every
+  provider) before fetching, like `npi usage invalidate [--provider <id>]`.
+- `redact: true` masks account identifiers (`metadata.email`, `accountId`,
+  `projectId`, `orgId`, `orgName`, and the `accountId`/`projectId`/`orgId` of
+  each limit's `scope`) exactly as `npi usage --redact` does. Masked values keep
+  a short prefix, e.g. `al*`, so hosts can still tell accounts apart.
+- Providers without credentials or without a usage endpoint are absent. A
+  failed fetch of one account is absorbed by the usage cache (last good report
+  or omission), as in `npi usage`. When the fetch as a whole fails, every
+  provider it would have covered is reported with `limits: []` and a `notes`
+  entry that describes the failure, and the command still succeeds.
+- The command fails with `code: "usage_unavailable"` only when the session has
+  no initialized auth storage.
+
+Like `bash`, `get_usage` is dispatched concurrently: a `prompt` or other
+command sent while it waits on a slow provider is handled without waiting for
+it, and the `get_usage` response may arrive after later responses. Match
+responses on `id`. There is no usage push event; poll `get_usage`, for example
+after `agent_end`.
 
 ### Messages
 
