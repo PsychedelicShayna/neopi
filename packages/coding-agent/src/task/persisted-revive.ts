@@ -12,7 +12,12 @@ import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import { createAgentSession } from "../sdk";
 import type { AgentSession } from "../session/agent-session";
 import type { AuthStorage } from "../session/auth-storage";
-import { extractSessionInit, hasConversationalHistory, SessionManager } from "../session/session-manager";
+import {
+	extractSessionInit,
+	hasConversationalHistory,
+	PendingSessionManager,
+	SessionManager,
+} from "../session/session-manager";
 import type { EventBus } from "../utils/event-bus";
 import {
 	attachIrcWakeTurnMonitor,
@@ -117,6 +122,9 @@ export function createPersistedSubagentReviverFactory(
 					`Cannot revive subagent "${ref.id}": session file "${sessionFile}" has no message history (truncated to header/session_init). The agent was not revived.`,
 				);
 			}
+			// Until createAgentSession adopts it, a setup failure must close the
+			// manager so its session lease does not outlive the failed revive.
+			using pendingManager = new PendingSessionManager(reopened);
 			// Rebuild the same advisor opt-in the original spawn resolved: `"on"` =
 			// advisor-role model, anything else = the explicit pattern stamped onto
 			// this session's `modelRoles.advisor`. Absent = unadvised (the
@@ -213,6 +221,7 @@ export function createPersistedSubagentReviverFactory(
 							customTools: mcpProxyTools.length > 0 ? mcpProxyTools : undefined,
 						}),
 			});
+			pendingManager.handOff();
 			// Clamp the active set to the persisted list: createAgentSession's
 			// `alwaysInclude` can re-add non-defaultInactive extension/custom tools
 			// the original run didn't carry. Unknown/missing names are ignored.

@@ -864,6 +864,21 @@ export class SessionManager {
 		this.#adoptLease(this.#takeLease(this.#sessionFile));
 	}
 
+	/**
+	 * Run factory work for a manager that has not been handed to a caller yet.
+	 * If it throws, the manager is discarded, so drop its lease: the process-wide
+	 * lease table would otherwise keep the file locked against other processes
+	 * until this process exits.
+	 */
+	async #releaseLeaseOnFailure<T>(work: () => Promise<T>): Promise<T> {
+		try {
+			return await work();
+		} catch (error) {
+			this.#adoptLease(undefined);
+			throw error;
+		}
+	}
+
 	#clearDiskError(): void {
 		this.#diskFailure = undefined;
 		this.#diskFailureLogged = false;
@@ -1872,7 +1887,15 @@ export class SessionManager {
 					`Cannot resume session "${resolvedSessionFile}": the session header is missing or malformed. The file was not modified.`,
 				);
 			}
+			// Strict opens (persisted-task revival) must not adopt an empty file.
+			if (loaded.entries.length === 0 && options?.throwIfMissing) {
+				throw new Error(
+					`Cannot resume session "${resolvedSessionFile}": the session file holds no entries. The file was not modified.`,
+				);
+			}
 		} catch (error) {
+			// The lease stays provisional until validation passes; a rejected open
+			// must leave the file acquirable by other processes.
 			lease?.release();
 			throw error;
 		}
@@ -1883,11 +1906,6 @@ export class SessionManager {
 
 		const { entries: fileEntries, titleSlot } = loaded;
 		if (fileEntries.length === 0) {
-			if (options?.throwIfMissing) {
-				throw new Error(
-					`Cannot resume session "${resolvedSessionFile}": the session file holds no entries. The file was not modified.`,
-				);
-			}
 			// Explicit but empty/missing path (e.g. --session flag): start fresh but
 			// keep the requested path and materialize the header immediately.
 			this.#resetToNewSession(options?.newSession, resolvedSessionFile);
@@ -2054,13 +2072,14 @@ export class SessionManager {
 				const oldArtifactsDir = artifactsDirectoryFor(oldSessionFile);
 				const newArtifactsDir = artifactsDirectoryFor(newSessionFile);
 				const sessionPathChanged = path.resolve(oldSessionFile) !== path.resolve(newSessionFile);
-				// Own the destination before moving the file into it.
-				const destinationLease = sessionPathChanged ? this.#takeLease(newSessionFile) : undefined;
 				const artifactPathChanged =
 					oldArtifactsDir !== null &&
 					newArtifactsDir !== null &&
 					path.resolve(oldArtifactsDir) !== path.resolve(newArtifactsDir);
 				sessionFileExisted = this.#storage.existsSync(oldSessionFile);
+				// Own the destination before moving the file into it. Taken right
+				// before the guarded block, whose failure path releases it.
+				const destinationLease = sessionPathChanged ? this.#takeLease(newSessionFile) : undefined;
 
 				let sessionMoved = false;
 				let artifactsRenamed = false;
@@ -2202,7 +2221,7 @@ export class SessionManager {
 		manager.#entries = structuredClone(this.#entries);
 		manager.#index.rebuild(manager.#entries);
 		manager.#forceFileCreation = true;
-		await manager.#rewriteAtomically();
+		await manager.#releaseLeaseOnFailure(() => manager.#rewriteAtomically());
 		return manager;
 	}
 
@@ -3476,10 +3495,12 @@ export class SessionManager {
 			manager.#index.rebuild(history);
 		}
 		manager.#forceFileCreation = true;
-		await manager.#rewriteAtomically();
-		if (options?.copyArtifacts !== false) {
-			await copySessionArtifacts(sourcePath, manager.#sessionFile!);
-		}
+		await manager.#releaseLeaseOnFailure(async () => {
+			await manager.#rewriteAtomically();
+			if (options?.copyArtifacts !== false) {
+				await copySessionArtifacts(sourcePath, manager.#sessionFile!);
+			}
+		});
 		return manager;
 	}
 
@@ -3596,10 +3617,12 @@ export class SessionManager {
 		const loaded = options?.throwIfMissing
 			? await loadSessionFile(filePath, storage, { throwIfMissing: true })
 			: probed;
-		await manager.#setSessionFile(filePath, loaded, {
-			throwIfMissing: options?.throwIfMissing,
-			newSession: { parentSession: options?.parentSession },
-		});
+		await manager.#releaseLeaseOnFailure(() =>
+			manager.#setSessionFile(filePath, loaded, {
+				throwIfMissing: options?.throwIfMissing,
+				newSession: { parentSession: options?.parentSession },
+			}),
+		);
 		return manager;
 	}
 
@@ -3748,7 +3771,7 @@ export class SessionManager {
 					const manager = await SessionManager.open(breadcrumb.sessionFile, undefined, storage, {
 						initialCwd: breadcrumbCwd,
 					});
-					await manager.moveTo(cwd, sessionDir);
+					await manager.#releaseLeaseOnFailure(() => manager.moveTo(cwd, sessionDir));
 					return manager;
 				}
 				if (candidateForMove) {
@@ -3772,7 +3795,11 @@ export class SessionManager {
 				await manager.setSessionFile(chosenSession);
 				return manager;
 			} catch (error) {
-				if (!(error instanceof SessionInUseError)) throw error;
+				if (!(error instanceof SessionInUseError)) {
+					// This manager is never returned; free whatever it adopted.
+					manager.#adoptLease(undefined);
+					throw error;
+				}
 				skipped.add(path.resolve(chosenSession));
 				chosenSession = await findMostRecentNonEmptySession(dir, storage, skipped);
 			}
@@ -3829,6 +3856,34 @@ export class SessionManager {
 	static async listAllForPicker(storage: SessionStorage = new FileSessionStorage()): Promise<SessionInfo[]> {
 		const pinned = await loadPinnedSessionIds();
 		return sortPinnedFirst(filterSessionsForPicker(await listAllSessions(storage), pinned), pinned);
+	}
+}
+
+/**
+ * Scope guard for an opened manager that no live session owns yet. Leaving the
+ * `using` scope before {@link handOff} closes it, which releases its session
+ * lease, so a failed setup never keeps the transcript locked against other
+ * processes for the rest of this process's life.
+ */
+export class PendingSessionManager implements Disposable {
+	#manager: SessionManager | undefined;
+
+	constructor(manager: SessionManager) {
+		this.#manager = manager;
+	}
+
+	/** A live owner (an AgentSession) now closes the manager; leaving the scope no longer does. */
+	handOff(): void {
+		this.#manager = undefined;
+	}
+
+	[Symbol.dispose](): void {
+		const manager = this.#manager;
+		if (!manager) return;
+		this.#manager = undefined;
+		void manager.close().catch(error => {
+			logger.warn("Failed to close an abandoned session manager", { error: String(error) });
+		});
 	}
 }
 
