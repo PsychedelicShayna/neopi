@@ -57,6 +57,58 @@ export function sixelSpanContinues(lines: readonly string[], startsInside = fals
 	return inSequence;
 }
 
+/** Earliest SIXEL terminator (`ST` or `BEL`) in `text`, if any. */
+function findSixelTerminator(text: string): { index: number; length: number } | undefined {
+	const st = text.indexOf(SIXEL_END_SEQUENCE);
+	const bel = text.indexOf(SIXEL_END_BELL);
+	if (st < 0 && bel < 0) return undefined;
+	if (bel < 0 || (st >= 0 && st < bel)) return { index: st, length: SIXEL_END_SEQUENCE.length };
+	return { index: bel, length: SIXEL_END_BELL.length };
+}
+
+/**
+ * Replace every SIXEL sequence in `lines` with `replacement`, keeping all
+ * other text. Only the payload bytes go: output before a start marker or
+ * after a terminator on the same row survives, each sequence gets its own
+ * replacement (two payloads on consecutive rows are two replacements), and
+ * the continuation rows of a multi-row payload become empty. `startsInside`
+ * marks rows that continue a payload whose start row was dropped upstream;
+ * the first such row carries the replacement.
+ */
+export function replaceSixelSequences(lines: readonly string[], replacement: string, startsInside = false): string[] {
+	let inside = startsInside;
+	let replaced = !startsInside;
+	return lines.map(line => {
+		let out = "";
+		let rest = line;
+		// A continued payload owes its label to the first retained row even when
+		// that row is blank (the retention cut can land on an empty payload row).
+		if (inside && !replaced) {
+			out += replacement;
+			replaced = true;
+		}
+		while (rest.length > 0) {
+			if (inside) {
+				const end = findSixelTerminator(rest);
+				if (end === undefined) break;
+				rest = rest.slice(end.index + end.length);
+				inside = false;
+				continue;
+			}
+			const start = SIXEL_START_REGEX.exec(rest);
+			if (!start) {
+				out += rest;
+				break;
+			}
+			out += rest.slice(0, start.index) + replacement;
+			rest = rest.slice(start.index + start[0].length);
+			inside = true;
+			replaced = true;
+		}
+		return out;
+	});
+}
+
 /** Returns true when the line contains a SIXEL start sequence. */
 export function isSixelLine(line: string): boolean {
 	return containsSixelSequence(line);

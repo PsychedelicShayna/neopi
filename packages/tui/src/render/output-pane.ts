@@ -5,7 +5,7 @@ import type { Theme } from "../theme/theme";
 import type { Component } from "../tui";
 import { getPaddingX } from "../utils";
 import { truncateToVisualLines } from "../chrome/visual-truncate";
-import { getSixelLineMask } from "./sixel";
+import { getSixelLineMask, replaceSixelSequences } from "./sixel";
 import { formatExpandHint, replaceTabs } from "./render-utils";
 
 /** Which side of an output stream remains visible when the pane is capped. */
@@ -79,22 +79,18 @@ export function formatOutputPaneLines(options: OutputPaneFormatOptions, theme: T
 	// capping the fallback would keep a tail of blanks and drop the label.
 	const sixelSpan = hasSixel;
 	if (hasSixel && getInlineImagePresentation() === "text") {
-		// A docked frame shows images as text. The mask spans the whole logical
-		// payload, so replace each span with one label row plus blanks: the row
-		// count is unchanged, and no continuation row can leak raw SIXEL bytes
-		// even when the block's head is later clipped or retired. The caller's
-		// raw lines are untouched, so undocked frames render the image again.
-		const mask = sixelMask;
-		let spanStart = true;
-		rawLines = rawLines.map((line, index) => {
-			if (!mask?.[index]) {
-				spanStart = true;
-				return line;
-			}
-			const replacement = spanStart ? theme.fg("muted", "[image omitted while docked]") : "";
-			spanStart = false;
-			return replacement;
-		});
+		// A docked frame shows images as text. Replace each SIXEL sequence's
+		// bytes with one label: surrounding output on the same row survives,
+		// every payload gets its own label, and a multi-row payload's
+		// continuation rows become blank, so the row count is unchanged and no
+		// continuation row can leak raw SIXEL bytes even when the block's head
+		// is later clipped or retired. The caller's raw lines are untouched, so
+		// undocked frames render the image again.
+		rawLines = replaceSixelSequences(
+			rawLines,
+			theme.fg("muted", "[image omitted while docked]"),
+			options.sixelContinuation,
+		);
 		sixelMask = undefined;
 		hasSixel = false;
 	}

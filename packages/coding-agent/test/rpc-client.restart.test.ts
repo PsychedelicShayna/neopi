@@ -43,6 +43,27 @@ describe("RpcClient lifecycle (issue #4079 B)", () => {
 		expect(state.tokensPerSecond).toBeNull();
 	}, 20_000);
 
+	test("delivers mixture trace events to session-event listeners", async () => {
+		const details = { v: 1, runId: "run", mixture: "draft-then-edit", seq: 1, at: 0 };
+		const frames = [
+			{ type: "notice", level: "info", message: "control" },
+			{ type: "mixture_hop_end", details: { ...details, kind: "hop" } },
+			{ type: "mixture_limit", details: { ...details, kind: "limit" } },
+			{ type: "mixture_checkpoint", details: { ...details, kind: "checkpoint" } },
+			{ type: "mixture_run_end", details: { ...details, kind: "run_end" } },
+		];
+		using client = new RpcClient({
+			cliPath: MOCK_AGENT,
+			env: { MOCK_RPC_SESSION_EVENTS: JSON.stringify(frames) },
+		});
+		const seen: string[] = [];
+		client.onSessionEvent(event => seen.push(event.type));
+
+		await client.start();
+		await client.getState();
+		expect([...new Set(seen)]).toEqual(frames.map(frame => frame.type));
+	}, 20_000);
+
 	test("preserves getMessages snapshot behavior while a v2 page walk is unavailable", async () => {
 		using client = new RpcClient({
 			cliPath: MOCK_AGENT,

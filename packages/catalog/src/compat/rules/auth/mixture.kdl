@@ -1,0 +1,4 @@
+auth "mixture" {
+	name "Mixture of Agents"
+	allows-missing-api-key #true
+}

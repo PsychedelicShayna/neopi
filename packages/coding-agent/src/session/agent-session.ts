@@ -106,6 +106,8 @@ import {
 } from "@oh-my-pi/pi-utils";
 import type { AdvisorConfig } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { formatUsageResetWindow } from "@oh-my-pi/pi-tui/overlays/usage-display";
+import type { MixtureSessionEvent, SessionMixtureHost } from "../moa/host";
+import { isMixtureModel } from "../moa/provider";
 import { loadAdvisorTranscriptCosts } from "../advisor";
 import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, type AsyncJob, AsyncJobManager } from "../async";
 import { reset as resetCapabilities } from "../capability";
@@ -748,6 +750,7 @@ export class AgentSession implements SettingsScope {
 	/** Last (enable, providerId) tuple resolved by `#syncAppendOnlyContext` — used to skip no-op invalidations. */
 	#lastAppendOnlyResolution?: { enable: boolean; providerId: string | undefined };
 	#eventListeners: AgentSessionEventListener[] = [];
+	#mixtureHost: Pick<SessionMixtureHost, "commitPersisted" | "resetConversation"> | undefined;
 	#activeToolExecutionUpdates = new Map<string, Extract<AgentSessionEvent, { type: "tool_execution_update" }>>();
 	#runStateListeners = new Set<(state: "running" | "idle") => void>();
 	#commandMetadataChangedListeners: CommandMetadataChangedListener[] = [];
@@ -2921,6 +2924,19 @@ export class AgentSession implements SettingsScope {
 		this.#emit({ type: "notice", level, message, source });
 	}
 
+	/** Forward a mixture run's event (trace card payload) to session listeners. */
+	emitMixtureEvent(event: MixtureSessionEvent): void {
+		this.#emit(event);
+	}
+
+	/**
+	 * Bind the session's mixture host: it commits mixture responses once they are persisted,
+	 * and drops its runs whenever the conversation is replaced.
+	 */
+	attachMixtureHost(host: Pick<SessionMixtureHost, "commitPersisted" | "resetConversation">): void {
+		this.#mixtureHost = host;
+	}
+
 	#recordToolExecutionStart(event: Extract<AgentEvent, { type: "tool_execution_start" }>): void {
 		const data: ToolExecutionStartData = {
 			toolCallId: event.toolCallId,
@@ -3275,7 +3291,9 @@ export class AgentSession implements SettingsScope {
 		if (message.role === "assistant") {
 			const assistantMsg = message as AssistantMessage;
 			if (this.#recovery.isClassifierRefusal(assistantMsg)) return;
-			if (isEmptyErrorTurn(assistantMsg)) return;
+			// An errored mixture response is kept even when empty: it is the durable record of
+			// billed member attempts that session totals read after retry cleanup and reload.
+			if (isEmptyErrorTurn(assistantMsg) && !isMixtureModel(assistantMsg)) return;
 			if (assistantMsg.stopReason !== "aborted" && assistantMsg.stopReason !== "error" && assistantMsg.usage) {
 				assistantMsg.contextSnapshot = {
 					promptTokens: calculatePromptTokens(assistantMsg.usage),
@@ -3355,6 +3373,9 @@ export class AgentSession implements SettingsScope {
 			}
 		} else {
 			this.#persistSessionMessageIfMissing(message);
+			// A mixture response is committed only once its entry is in the session: the
+			// commit advances the run's reporting watermark and input cursor.
+			if (message.role === "assistant") this.#mixtureHost?.commitPersisted(message);
 		}
 		this.#chronicler.onPrimaryMessagePersisted(message);
 	}
@@ -3737,18 +3758,22 @@ export class AgentSession implements SettingsScope {
 				await this.#recovery.onAssistantSettledSuccessfully(assistantMsg);
 				// Broker deployments: report this request's burn so the broker can
 				// attribute token usage per install. No-op with a local auth store.
-				this.#modelRegistry.authStorage.usage.observe({
-					provider: assistantMsg.provider,
-					model: assistantMsg.model,
-					at: assistantMsg.timestamp,
-					usage: {
-						input: assistantMsg.usage.input,
-						output: assistantMsg.usage.output,
-						cacheRead: assistantMsg.usage.cacheRead,
-						cacheWrite: assistantMsg.usage.cacheWrite,
-					},
-					costUsd: assistantMsg.usage.cost.total,
-				});
+				// Mixture responses are skipped: each member attempt was observed once
+				// when it settled, and a response only reports a delta of those.
+				if (!isMixtureModel(assistantMsg)) {
+					this.#modelRegistry.authStorage.usage.observe({
+						provider: assistantMsg.provider,
+						model: assistantMsg.model,
+						at: assistantMsg.timestamp,
+						usage: {
+							input: assistantMsg.usage.input,
+							output: assistantMsg.usage.output,
+							cacheRead: assistantMsg.usage.cacheRead,
+							cacheWrite: assistantMsg.usage.cacheWrite,
+						},
+						costUsd: assistantMsg.usage.cost.total,
+					});
+				}
 				// Persist which account served this turn so a resumed process can
 				// re-pin it and keep the provider's account-scoped prompt cache
 				// warm (broker-mode sticky routing is process-local).
@@ -5512,6 +5537,7 @@ export class AgentSession implements SettingsScope {
 		// calls, and error state. agent.reset() keeps the model and system prompt.
 		this.#releaseQueuedTtsrReservations();
 		this.agent.reset();
+		this.#mixtureHost?.resetConversation();
 		this.#pendingNextTurnMessages = [];
 		this.#experimentalContextNotesReminder = undefined;
 		this.#scheduledHiddenNextTurnGeneration = undefined;
@@ -9047,6 +9073,7 @@ export class AgentSession implements SettingsScope {
 			try {
 				this.#releaseQueuedTtsrReservations();
 				this.agent.reset();
+				this.#mixtureHost?.resetConversation();
 				this.tokenRate.reset();
 				if (options?.drop && previousSessionFile) {
 					try {
@@ -10639,6 +10666,7 @@ export class AgentSession implements SettingsScope {
 			}
 
 			this.agent.replaceMessages(sessionContext.messages);
+			this.#mixtureHost?.resetConversation();
 			this.#reseedTokenRate();
 			this.#advisors.resetSessionState({ preserveCost: true });
 			this.#todo.syncFromBranch();
@@ -10955,6 +10983,7 @@ export class AgentSession implements SettingsScope {
 
 			if (!skipConversationRestore) {
 				this.agent.replaceMessages(sessionContext.messages);
+				this.#mixtureHost?.resetConversation();
 				this.#advisors.resetSessionState();
 				this.#closeCodexProviderSessionsForHistoryRewrite();
 			}
@@ -11090,6 +11119,7 @@ export class AgentSession implements SettingsScope {
 			}
 
 			this.agent.replaceMessages(sessionContext.messages);
+			this.#mixtureHost?.resetConversation();
 			this.#advisors.resetSessionState();
 			this.#closeCodexProviderSessionsForHistoryRewrite();
 			advisorRecordersDetached = false;
@@ -11414,6 +11444,7 @@ export class AgentSession implements SettingsScope {
 		const stateContext = this.sessionManager.buildSessionContext();
 		const displayContext = this.#withEvalStateContext(deobfuscateSessionContext(stateContext, this.#obfuscator));
 		this.agent.replaceMessages(displayContext.messages);
+		this.#mixtureHost?.resetConversation();
 		this.#rehydrateCheckpointRewindState();
 		this.#advisors.resetSessionState({ preserveCost: true });
 		this.#todo.syncFromBranch();
