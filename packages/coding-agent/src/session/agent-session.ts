@@ -6078,8 +6078,21 @@ export class AgentSession implements SettingsScope {
 	}
 
 	/** Replaces host-owned RPC tools before the next model call. */
-	refreshRpcHostTools(rpcTools: AgentTool[]): Promise<void> {
-		return this.#tools.refreshRpcHostTools(rpcTools);
+	async refreshRpcHostTools(rpcTools: AgentTool[]): Promise<void> {
+		const stash = this.#chatModeStashedTools;
+		const previousHostNames = new Set(stash?.enabled.filter(name => this.#tools.hasRpcHostTool(name)));
+		await this.#tools.refreshRpcHostTools(rpcTools, !this.#chatMode);
+		if (this.#chatMode && stash && this.#chatModeStashedTools === stash) {
+			const registered = new Set(rpcTools.map(tool => tool.name));
+			const retained = [...previousHostNames].filter(name => registered.has(name));
+			this.#chatModeStashedTools = {
+				enabled: [
+					...stash.enabled.filter(name => !previousHostNames.has(name)),
+					...new Set([...retained, ...rpcTools.filter(tool => !tool.hidden).map(tool => tool.name)]),
+				],
+				mounted: stash.mounted.filter(name => !previousHostNames.has(name) || registered.has(name)),
+			};
+		}
 	}
 
 	/** Whether auto-compaction is currently running */

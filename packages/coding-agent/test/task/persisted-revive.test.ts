@@ -249,6 +249,49 @@ describe("persisted subagent revival", () => {
 		expect(emit).toHaveBeenCalledWith({ type: "session_start" });
 	});
 
+	it("disposes and detaches a revived session when tool clamp or extension setup fails", async () => {
+		for (const failedStep of ["tools", "extensions"] as const) {
+			const cwd = makeTempDir(`@pi-revive-setup-${failedStep}-`);
+			const sessionFile = await createPersistedSession(cwd);
+			const registry = AgentRegistry.global();
+			const ref = registry.register(createRef(sessionFile));
+			let disposed = false;
+			const createSpy = vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+				const runner =
+					failedStep === "extensions"
+						? {
+								initialize: () => {
+									throw new Error("extensions failed");
+								},
+								onError: () => {},
+								emit: async () => {},
+							}
+						: undefined;
+				const revived = createRevivedSession([], runner).session;
+				revived.setActiveToolsByName = async () => {
+					if (failedStep === "tools") throw new Error("tools failed");
+				};
+				revived.dispose = async () => {
+					disposed = true;
+					expect(registry.get(ref.id)?.status).toBe("parked");
+					await options?.sessionManager?.close();
+				};
+				registry.attachSession(ref.id, revived);
+				return { session: revived } as CreateAgentSessionResult;
+			});
+			const reviver = await createFactory(cwd)(ref);
+			if (!reviver) throw new Error("Expected a persisted reviver");
+			await expect(reviver(ref)).rejects.toThrow(`${failedStep} failed`);
+			expect(disposed).toBe(true);
+			expect(ref.session).toBeNull();
+			expect(ref.status).toBe("parked");
+			const reopened = await SessionManager.open(sessionFile, undefined, undefined, { throwIfMissing: true });
+			await reopened.close();
+			registry.unregister(ref.id, ref);
+			createSpy.mockRestore();
+		}
+	}, 60_000);
+
 	it("loads only extensions allowed by the live owner's root policy", async () => {
 		const cwd = makeTempDir("@pi-revive-owner-roots-");
 		const sessionFile = await createPersistedSession(cwd, false, "default");
