@@ -199,4 +199,35 @@ describe("advisor config editor warnings and synthetic default row", () => {
 		expect(frame).toContain('advisor "Bad" dropped');
 		expect(warnings).toEqual([]);
 	});
+	it("saves shared-only repairs with the original document identity", async () => {
+		const doc: WatchdogConfigDoc = { advisors: [], warnings: ["malformed source"] };
+		const metadata = new WeakSet<WatchdogConfigDoc>([doc]);
+		let saved: WatchdogConfigDoc | undefined;
+		const overlay = new AdvisorConfigOverlayComponent({} as TUI, deps, "project", doc, {
+			loadDoc: async () => ({ advisors: [] }),
+			save: async (_scope, candidate) => {
+				if (!metadata.has(candidate)) throw new Error("lost document metadata");
+				saved = structuredClone(candidate);
+			},
+			apply: async () => {},
+			close: () => {},
+			requestRender: () => {},
+			notify: () => {},
+		});
+
+		overlay.handleInput("\x1b[B"); // synthetic advisor → add
+		overlay.handleInput("\x1b[B"); // add → shared instructions
+		overlay.handleInput("\r");
+		overlay.handleInput("Repaired shared instructions");
+		overlay.handleInput("\x11"); // Ctrl+Q submits the hook editor.
+		overlay.handleInput("s");
+		await Bun.sleep(0);
+
+		expect(saved).toEqual({
+			advisors: [],
+			instructions: "Repaired shared instructions",
+			warnings: ["malformed source"],
+		});
+		expect(doc.advisors).toHaveLength(1); // synthetic UI row is restored after persistence.
+	});
 });

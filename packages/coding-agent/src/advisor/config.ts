@@ -570,10 +570,13 @@ function watchdogAdvisorMapValues(
 	return parsed instanceof type.errors ? undefined : watchdogAdvisorValues(editableAdvisorConfig(parsed));
 }
 
-function watchdogAdvisorKnownValuesMatch(map: YAMLMap<unknown, unknown>, advisor: AdvisorConfig): boolean {
+function watchdogAdvisorOriginUnchanged(map: YAMLMap<unknown, unknown>, origin: WatchdogAdvisorOrigin): boolean {
+	if (origin.fingerprint !== undefined) {
+		return watchdogAdvisorFingerprint(map.toJSON()) === origin.fingerprint;
+	}
 	const currentValues = watchdogAdvisorMapValues(map);
 	if (!currentValues) return false;
-	const expectedValues = watchdogAdvisorValues(advisor);
+	const expectedValues = watchdogAdvisorValues(origin.base);
 	return WATCHDOG_ADVISOR_KEYS.every(key => Bun.deepEquals(currentValues[key], expectedValues[key]));
 }
 
@@ -717,7 +720,7 @@ function patchWatchdogDocument(source: string, doc: WatchdogConfigDoc, baseline?
 			resolved =>
 				!claimedOrigins.has(resolved.origin) &&
 				resolved.existing &&
-				watchdogAdvisorKnownValuesMatch(resolved.existing.map, resolved.origin.base),
+				watchdogAdvisorOriginUnchanged(resolved.existing.map, resolved.origin),
 		)
 		.map(resolved => resolved.existing!)
 		.sort((left, right) => right.index - left.index);

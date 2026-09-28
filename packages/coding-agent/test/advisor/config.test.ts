@@ -633,6 +633,21 @@ describe("WATCHDOG.yml file round-trip", () => {
 		expect(saved).toContain("# row owner");
 	});
 
+	it("preserves a concurrently changed future field when a stale editor removes its advisor", async () => {
+		const file = path.join(tmp, "WATCHDOG.yml");
+		await Bun.write(file, "advisors:\n  - name: Reviewer\n    futureId: original # future owner\n");
+		const stale = await loadWatchdogConfigFile(file);
+		await Bun.write(file, "advisors:\n  - name: Reviewer\n    futureId: concurrent # future owner\n");
+		stale.advisors.splice(0, 1);
+		await saveWatchdogConfigFile(file, stale);
+
+		const saved = await Bun.file(file).text();
+		expect(YAML.parse(saved)).toEqual({
+			advisors: [{ name: "Reviewer", futureId: "concurrent" }],
+		});
+		expect(saved).toContain("# future owner");
+	});
+
 	it("does not resurrect an advisor renamed or deleted by a newer editor", async () => {
 		const file = path.join(tmp, "WATCHDOG.yml");
 		await Bun.write(file, "advisors:\n  - name: Original\n    futureId: keep\n");

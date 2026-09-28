@@ -352,6 +352,12 @@ describe("Settings", () => {
 					expectedExtra: { disabledAdvisor: false },
 					expectedComment: "# scalar alias",
 				},
+				{
+					source:
+						"advisor: &sharedAdvisor false # anchored scalar\nbackup: *sharedAdvisor\nfutureFeature: keep # unrelated\n",
+					expectedExtra: { backup: { enabled: true } },
+					expectedComment: "# anchored scalar",
+				},
 			];
 			for (const testCase of cases) {
 				await Bun.write(getConfigPath(), testCase.source);

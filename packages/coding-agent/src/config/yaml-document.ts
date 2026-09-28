@@ -1,4 +1,15 @@
-import { Document, isAlias, isMap, isNode, isScalar, isSeq, parseDocument, type ParsedNode, type YAMLMap } from "yaml";
+import {
+	Document,
+	isAlias,
+	isCollection,
+	isMap,
+	isNode,
+	isScalar,
+	isSeq,
+	parseDocument,
+	type ParsedNode,
+	type YAMLMap,
+} from "yaml";
 
 /** One path-level change to apply without rebuilding the surrounding YAML document. */
 export type YamlPathMutation =
@@ -34,6 +45,9 @@ function copyNodePresentation(source: unknown, target: unknown): void {
 	target.commentBefore = source.commentBefore;
 	target.comment = source.comment;
 	target.spaceBefore = source.spaceBefore;
+	if ((isScalar(source) || isCollection(source)) && (isScalar(target) || isCollection(target))) {
+		target.anchor = source.anchor;
+	}
 }
 
 /** Replace an alias at one path with an independent node containing its resolved value. */
