@@ -1,16 +1,20 @@
 /**
  * Host tool-approval seam. A mode whose host renders its own approval UI (RPC
  * `set_approval_handler { handler: "host" }`) registers a requester on the
- * {@link ExtensionRunner}; `ExtensionToolWrapper` then routes every approval
- * that would open the UI select dialog to the requester instead. Policy
- * resolution is unchanged: the requester only sees calls that already
- * resolved to "prompt" (or carry provider safety checks).
+ * {@link ExtensionRunner}; `ExtensionToolWrapper` and eval prelude host calls
+ * then route every approval that would open the UI select dialog to the
+ * requester instead. Policy resolution is unchanged: the requester only sees
+ * calls that already resolved to "prompt" (or carry provider safety checks).
  */
 import type { ToolTier } from "@oh-my-pi/pi-agent-core";
 import type { ComputerSafetyCheck } from "@oh-my-pi/pi-ai";
 import type { ApprovalMode } from "../../tools/approval";
 
 export interface ToolApprovalRequest {
+	/**
+	 * The agent tool call id, or the synthetic id of a call made from inside an
+	 * eval cell (`prelude-<name>-<uuid>`, `js-<tool>-<uuid>`).
+	 */
 	toolCallId: string;
 	toolName: string;
 	/** The exact input that runs when approved (after any `tool_call` handler revision). */

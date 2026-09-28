@@ -301,3 +301,79 @@ describe("RPC structured tool approval", () => {
 		).toHaveLength(1);
 	}, 120_000);
 });
+
+/** Issue #119: an eval cell calling the browser prelude raises the prelude's own approval. */
+describe("RPC eval prelude approval", () => {
+	// `eval` itself is allowed so the only prompting call is the prelude's host call.
+	const config = "tools:\n  approval:\n    eval: allow\n";
+	const cell = { language: "js", code: "return JSON.stringify(await browser.tabs());" };
+
+	function preludeRequest(child: RpcChild, after: number): Promise<RpcFrame> {
+		return child.waitFor(
+			frame =>
+				frame.type === "tool_approval_request" &&
+				frame.toolName === "browser" &&
+				child.frames.indexOf(frame) >= after,
+		);
+	}
+
+	test("host handler receives prelude approvals as tool_approval_request", async () => {
+		const child = await spawnChild({ mode: "rpc-ui", approvalMode: "always-ask", config });
+		const opted = await child.request({ type: "set_approval_handler", handler: "host" });
+		expect(opted).toMatchObject({ success: true, data: { handler: "host" } });
+
+		// deny with a reason: the prelude call fails inside the cell with the host's reason.
+		const deny = await promptToolCall(child, "eval", cell);
+		const denyRequest = await preludeRequest(child, child.frames.indexOf(deny.start));
+		expect(denyRequest).toMatchObject({
+			toolName: "browser",
+			args: { action: "tabs" },
+			tier: "exec",
+			approvalMode: "always-ask",
+			details: [],
+			timeout: 600_000,
+		});
+		expect(denyRequest.toolCallId).toStartWith("prelude-browser-");
+		expect(denyRequest.safetyChecks).toBeUndefined();
+		child.send({ type: "tool_approval_response", id: denyRequest.id, decision: "deny", reason: "no browsing" });
+		const denied = await toolEnd(child, deny.start.toolCallId);
+		expect(resultText(denied)).toContain("Eval prelude call denied by user: browser");
+		expect(resultText(denied)).toContain("no browsing");
+		await deny.settled;
+
+		// allow_session: the call runs, and later prelude calls run without a request.
+		const first = await promptToolCall(child, "eval", cell);
+		const sessionRequest = await preludeRequest(child, child.frames.indexOf(first.start));
+		child.send({ type: "tool_approval_response", id: sessionRequest.id, decision: "allow_session" });
+		const allowed = await toolEnd(child, first.start.toolCallId);
+		expect(allowed.isError).toBe(false);
+		expect(resultText(allowed)).toContain("[]");
+		await first.settled;
+		const repeat = await promptToolCall(child, "eval", cell);
+		const repeated = await toolEnd(child, repeat.start.toolCallId);
+		expect(repeated.isError).toBe(false);
+		await repeat.settled;
+		expect(child.frames.filter(frame => frame.type === "tool_approval_request")).toHaveLength(2);
+		expect(fs.existsSync(path.join(child.agentDir, "config.yml"))).toBe(true);
+		expect(fs.readFileSync(path.join(child.agentDir, "config.yml"), "utf8")).toBe(config);
+
+		// No `Allow tool:` select appeared while the host handler was active.
+		expect(child.frames.some(frame => frame.type === "extension_ui_request" && frame.method === "select")).toBe(
+			false,
+		);
+	}, 120_000);
+
+	test("without the host handler the prelude still asks through the select dialog", async () => {
+		const child = await spawnChild({ mode: "rpc-ui", approvalMode: "always-ask", config });
+		const call = await promptToolCall(child, "eval", cell);
+		const dialog = await child.waitFor(frame => frame.type === "extension_ui_request" && frame.method === "select");
+		expect(dialog.title).toBe("Allow tool: browser");
+		expect(dialog.options).toEqual(["Approve", "Deny"]);
+		child.send({ type: "extension_ui_response", id: dialog.id, value: "Deny" });
+		expect(resultText(await toolEnd(child, call.start.toolCallId))).toContain(
+			"Eval prelude call denied by user: browser",
+		);
+		await call.settled;
+		expect(child.frames.some(frame => frame.type === "tool_approval_request")).toBe(false);
+	}, 120_000);
+});

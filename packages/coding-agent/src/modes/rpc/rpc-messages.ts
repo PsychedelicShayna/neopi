@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { isRecord } from "@oh-my-pi/pi-utils";
+import { getMessageEntryId } from "../../session/message-entry-ids";
 
 const DEFAULT_RPC_MESSAGE_PAGE_LIMIT = 100;
 const MAX_RPC_MESSAGE_PAGE_LIMIT = 256;
@@ -29,8 +30,15 @@ export interface RpcMessageSnapshot {
 	messageCount: number;
 }
 
+/**
+ * A paged message plus the id of the session entry it was persisted as — the
+ * id `get_entries` reports and `branch` accepts. Absent only for context the
+ * session injects without persisting (e.g. per-turn mode reminders).
+ */
+export type RpcPageMessage = AgentMessage & { entryId?: string };
+
 export interface RpcMessagesPage {
-	messages: AgentMessage[];
+	messages: RpcPageMessage[];
 	nextCursor?: string;
 	totalMessages: number;
 }
@@ -108,13 +116,15 @@ export function pageRpcMessages(
 		offset = cursor.offset;
 	}
 
-	const page: AgentMessage[] = [];
+	const page: RpcPageMessage[] = [];
 	let pageBytes = 2;
 	while (offset + page.length < messages.length && page.length < limit) {
 		const message = messages[offset + page.length];
-		const messageBytes = Buffer.byteLength(JSON.stringify(message), "utf8") + (page.length === 0 ? 0 : 1);
+		const entryId = getMessageEntryId(message);
+		const pageMessage: RpcPageMessage = entryId === undefined ? message : { ...message, entryId };
+		const messageBytes = Buffer.byteLength(JSON.stringify(pageMessage), "utf8") + (page.length === 0 ? 0 : 1);
 		if (page.length > 0 && pageBytes + messageBytes > MAX_RPC_MESSAGE_PAGE_BYTES) break;
-		page.push(message);
+		page.push(pageMessage);
 		pageBytes += messageBytes;
 	}
 

@@ -28,7 +28,7 @@ Behavior notes:
 - RPC/ACP host defaults cover task isolation/execution, memory, advisor, tier, async-job, and bash auto-background settings. They are applied only when a path is not explicitly configured; project/global config, `--config`, and isolated settings remain authoritative. Todo settings are not host-defaulted.
 - The process claims stdin before extension discovery, then parses it one non-empty JSONL line at a time. Malformed JSON emits a recoverable `command: "parse"` failure and does not terminate the loop.
 - At startup it writes a `ready` frame, then starts reading stdin while extensions initialize. Control frames (`extension_ui_response`, `tool_approval_response`, `plan_proposal_response`, `host_tool_result`, `host_tool_update`, `host_uri_result`) are dispatched on arrival, so an extension that asks a dialog question during `session_start` receives the host's answer. `negotiate_protocol` is also answered on arrival during startup, since it needs no session, so a bounded host handshake completes while a startup dialog is open. Commands, `bash` included, are queued and processed in arrival order once initialization completes. Hosts that send no startup dialog answers observe no change in frame order.
-- When stdin closes, pending extension UI, tool approval, host-tool, and host-URI requests are rejected and a pending plan proposal resolves as `refine`; accepted commands are drained, the session is disposed, pending stdout is delivered, and the process exits with code `0`.
+- When stdin closes, pending extension UI, tool approval, host-tool, and host-URI requests are rejected and a pending plan proposal resolves as `refine` (announced with `plan_proposal_cancel`, `reason: "shutdown"`); accepted commands are drained, the session is disposed, pending stdout is delivered, and the process exits with code `0`.
 - Responses/events are written as one JSON object per line.
 
 ### Capabilities
@@ -42,6 +42,8 @@ Behavior notes:
 | `set_mode` | `set_mode` command, `get_state` `mode`/`planMode`, `mode_changed` event, and the `plan_proposal_request`/`plan_proposal_response` round trip. See [Plan Mode Sub-Protocol](#plan-mode-sub-protocol). |
 | `new_session` | `--new-session` is accepted, and a flagless protocol launch never auto-resumes: the process starts a fresh session in the default per-cwd session directory regardless of `autoResume` (see [Startup](#startup)). |
 | `session_lease` | A process holds an exclusive lifetime lease on every session file it writes, so two processes never append to one transcript. `--session <file>` onto a file another process holds fails at startup with a `startup_error` stderr line; `switch_session` and `branch` onto one fail with `code: "session_in_use"` (see [Session lease](#session-lease)). |
+| `plan_proposal_cancel` | A pending plan proposal that resolves without a host answer is announced with a `plan_proposal_cancel` frame, and a later `plan_proposal_response` for it fails with `code: "proposal_cancelled"`. See [`plan_proposal_cancel`](#plan_proposal_cancel). |
+| `prompt_entry_ids` | `prompt`, `steer`, `follow_up` and `abort_and_prompt` responses carry `data.userEntryId`, the id of the session entry their message is written as, and every `get_messages_page` message carries the `entryId` of its entry. See [Entry ids](#entry-ids). |
 
 ### Session lease
 
@@ -119,7 +121,7 @@ Clients MUST continue reading stdout after closing stdin. Normal EOF and extensi
 11. Subagent frames (`subagent_lifecycle`, `subagent_progress`, `subagent_event`), gated by `set_subagent_subscription`
 12. Builtin slash-command side channels (`command_output`, `session_info_update`, `config_update`)
 13. Tool approval requests/cancellations (`tool_approval_request`, `tool_approval_cancel`), only after `set_approval_handler` with `handler: "host"`
-14. Plan mode frames (`mode_changed`, `plan_proposal_request`); see [Plan Mode Sub-Protocol](#plan-mode-sub-protocol)
+14. Plan mode frames (`mode_changed`, `plan_proposal_request`, `plan_proposal_cancel`); see [Plan Mode Sub-Protocol](#plan-mode-sub-protocol)
 
 ### Inbound frame categories (stdin)
 
@@ -228,7 +230,7 @@ correlate it via `id`. Ordering across concurrent commands is not guaranteed
 - `{ id?, type: "get_usage", provider?: string, refresh?: boolean, redact?: boolean }`
 - `{ id?, type: "export_html", outputPath?: string }`
 - `{ id?, type: "switch_session", sessionPath: string }` — fails with `code: "session_in_use"` when another process holds the file (see [Session lease](#session-lease))
-- `{ id?, type: "branch", entryId: string }` — same `session_in_use` code if the branch file is held elsewhere
+- `{ id?, type: "branch", entryId: string }` — same `session_in_use` code if the branch file is held elsewhere. `entryId` must be a user request: a user message or a user-invoked `/skill:` prompt (a `custom_message` entry); `data.text` is the request as typed, `/skill:<name> <args>` for a skill prompt
 - `{ id?, type: "get_branch_messages" }`
 - `{ id?, type: "get_last_assistant_text" }`
 - `{ id?, type: "set_session_name", name: string }`
@@ -270,7 +272,7 @@ after `agent_end`.
 - `{ id?, type: "get_messages" }`
 - `{ id?, type: "get_messages_page", cursor?: string, limit?: number }`
 
-`get_messages_page` returns a stable chronological page with `messages`, `totalMessages`, and an opaque `nextCursor` when more messages remain. Cursors are bound to the session ID, durable leaf, and message count. The server rejects stale cursors if the session changes between requests, and refuses to start a paging walk while the session is streaming or compacting. Failed page requests carry a machine-readable `code` on the error response — `session_busy` (session is streaming or compacting) or `stale_cursor` (the snapshot behind the cursor changed, e.g. a background bash appended a message between pages) — so clients can react without matching error-message text. Pages contain at most 256 messages and normally stay below the v1 physical-frame ceiling. A v1 caller can page ordinary histories, but an individual message whose response exceeds that ceiling produces an overflow error; retrieving it losslessly requires negotiated v2 framing.
+`get_messages_page` returns a stable chronological page with `messages`, `totalMessages`, and an opaque `nextCursor` when more messages remain. Cursors are bound to the session ID, durable leaf, and message count. The server rejects stale cursors if the session changes between requests, and refuses to start a paging walk while the session is streaming or compacting. Failed page requests carry a machine-readable `code` on the error response — `session_busy` (session is streaming or compacting) or `stale_cursor` (the snapshot behind the cursor changed, e.g. a background bash appended a message between pages) — so clients can react without matching error-message text. Pages contain at most 256 messages and normally stay below the v1 physical-frame ceiling. A v1 caller can page ordinary histories, but an individual message whose response exceeds that ceiling produces an overflow error; retrieving it losslessly requires negotiated v2 framing. Every paged message carries `entryId`, the id of the session entry it came from (see [Entry ids](#entry-ids)).
 
 The bundled TypeScript `RpcClient.getMessages()` and Python `RpcClient.get_messages()` drain this paged endpoint automatically after negotiating v2. They retain the legacy monolithic command when connected to a v1 server, and on either `session_busy` or `stale_cursor` they discard partial pages and fall back to the legacy best-effort snapshot. Direct `getMessagesPage()` and `get_messages_page()` calls remain strict so incremental hosts never mix snapshots silently.
 
@@ -322,6 +324,21 @@ Data payloads are command-specific and defined in `rpc-types.ts`.
 A failed provider turn is not a failed command: the prompt response is still `success: true`, and the turn ends with a normal terminal `agent_end` whose last assistant message has `stopReason: "error"`. Use `prompt_result.status` rather than parsing that message.
 
 Local-only slash commands may emit `command_output` frames before completing. They do not emit `agent_end`.
+
+#### Entry ids
+
+`prompt` (with or without `streamingBehavior`), `abort_and_prompt`, `steer` and `follow_up` answer with the id of the session entry their message is written as:
+
+```json
+{ "id": "req_2", "type": "response", "command": "steer", "success": true, "data": { "userEntryId": "3f9a1c07" } }
+```
+
+- The id is allocated when the command is accepted, so the response still arrives before the turn runs. The entry is written under exactly that id once the message reaches the session: at the start of the turn for a prompt, when the queue delivers it for a steer, follow-up, or queued prompt. From then on it is the `id` in `get_entries` and the `entryId` of the message in `get_messages_page`.
+- The entry is a `message` entry with `role: "user"`, or a `custom_message` entry (`customType: "skill-prompt"`) for a `/skill:` prompt. `branch` accepts either kind and removes that turn together with everything after it. Hidden context the session writes just before the message in the same turn (magic-keyword notices, attachment notes) has its own entries and stays on the branch.
+- `userEntryId` is absent when the prompt writes no entry of its own: an extension command, a locally consumed TypeScript or MCP prompt command (including a failed one), or a builtin slash command consumed on the spot (`data.agentInvoked` is set; a builtin that schedules its own turn, like `/retry`, reports `agentInvoked: true` and still writes no new user entry). A custom command that returns a prompt instead receives the id of the resulting user entry.
+- A message that never reaches the session writes no entry: a prompt that fails or is dropped before the turn starts (its `prompt_result` reports `agentInvoked: false` or `status: "error"`), or a queued steer/follow-up cancelled before the queue delivers it. Such unused reservations are released; a session change also releases any remaining reservations.
+
+Each `get_messages_page` message carries `entryId`, including custom messages (`custom_message` entries), the compaction summary (`compaction` entry) and branch summaries (`branch_summary` entry). Context the session injects per turn without persisting it (for example Vibe-mode context) has no entry and no `entryId`.
 
 ### Yield vs settled
 
@@ -844,7 +861,7 @@ This is the most important operational behavior.
 `prompt` and `abort_and_prompt` are **acknowledged immediately**:
 
 ```json
-{ "id": "req_1", "type": "response", "command": "prompt", "success": true }
+{ "id": "req_1", "type": "response", "command": "prompt", "success": true, "data": { "userEntryId": "3f9a1c07" } }
 ```
 
 That means:
@@ -934,7 +951,7 @@ A tool call that needs approval (its policy resolves to `prompt`, or it carries 
 { "id": "req_1", "type": "set_approval_handler", "handler": "host" }
 ```
 
-The response payload is `{ "handler": "host" }`. `handler: "ui"` switches back; any other value fails with `success: false`. The setting works in `--mode rpc`, `--mode rpc-ui`, and with `--no-ui`. Hosts that never send the command see the `select` dialog exactly as before. Which calls require approval does not change: a configured `tools.approval.<name>: deny` still denies without a request, and only calls that would have shown the dialog emit one.
+The response payload is `{ "handler": "host" }`. `handler: "ui"` switches back; any other value fails with `success: false`. The setting works in `--mode rpc`, `--mode rpc-ui`, and with `--no-ui`. Hosts that never send the command see the `select` dialog exactly as before. Which calls require approval does not change: a configured `tools.approval.<name>: deny` still denies without a request, and only calls that would have shown the dialog emit one. This covers approvals raised from inside an `eval` cell as well: tools called through the eval bridge and eval prelude host calls (such as `browser.*` or `computer.*`) emit `tool_approval_request` under the host handler, so no `Allow tool:` select appears while it is active.
 
 ### Outbound request
 
@@ -953,7 +970,8 @@ The response payload is `{ "handler": "host" }`. `handler: "ui"` switches back; 
 }
 ```
 
-- `toolCallId` matches the `tool_execution_start` event of the same call. Approval runs inside tool execution, so the request is always written after that `tool_execution_start` frame; hosts can attach it to the in-flight tool item.
+- `toolCallId` matches the `tool_execution_start` event of the same call. Approval runs inside tool execution, so the request is always written after that `tool_execution_start` frame; hosts can attach it to the in-flight tool item. Calls made from inside an `eval` cell have no agent tool call of their own: they carry a synthetic id (`prelude-<name>-<uuid>` for an eval prelude host call such as `browser`, `js-<tool>-<uuid>` for a bridged tool) that matches no `tool_execution_start`. Their request is written while the enclosing `eval` call is executing, between its `tool_execution_start` and `tool_execution_end`.
+- For an eval prelude call, `toolName` is the prelude name (`browser`, `computer`), `args` are the prelude call's parameters (for example `{ "action": "tabs" }`), and `details` is `[]`. A denial fails the prelude call inside the cell with `Eval prelude call denied by user: <name>`, followed by `Reason: <reason>` when the host gave one.
 - `args` is the exact input that runs when approved, including any revision a `tool_call` extension handler made.
 - `tier` is the resolved tool tier (`read | write | exec`); `approvalMode` is the session approval mode (`always-ask | write | yolo`).
 - `reason` is present only when the policy gave one. `details` are the tool's own approval detail lines, without the `Allow tool:` header.
@@ -1131,7 +1149,7 @@ Capability: `set_mode`. It mirrors ACP `session/set_mode`: a host switches the s
 Response data: `{ "mode": "plan" | "default", "planFilePath"?: string }`. `planFilePath` is present only for `plan`.
 
 - `mode: "plan"` enters plan mode like the interactive `/plan`: the session gets a plan-mode state with `planFilePath` (the supplied path, else the path of the plan state being re-entered, else `local://PLAN.md`) and `workflow` (carried over, else `"parallel"`); the built-in `write` tool joins the active tools so the agent can draft the plan and submit it; the session switches to the `plan` model role when one is configured; and a `mode_change` entry is appended to the session. Sending `plan` while already in plan mode only retargets the plan file when `planFilePath` differs.
-- `mode: "default"` leaves plan mode: plan state and the proposal handler are cleared, the pre-plan tools return, the pre-plan model and thinking level are restored, and a `mode_change` entry is appended. If a plan proposal is pending, it is first resolved as `refine` without feedback. Sending `default` outside plan mode succeeds without changes. The exit is all-or-nothing: if restoring the pre-plan model or tools fails, the command fails and the session stays in plan mode with the plan tools, the plan model, and its proposal handler, so a retry can complete the exit.
+- `mode: "default"` leaves plan mode: plan state and the proposal handler are cleared, the pre-plan tools return, the pre-plan model and thinking level are restored, and a `mode_change` entry is appended. If a plan proposal is pending, it is first resolved as `refine` without feedback and cancelled with `reason: "mode_change"` (before `mode_changed`). Sending `default` outside plan mode succeeds without changes. The exit is all-or-nothing: if restoring the pre-plan model or tools fails, the command fails and the session stays in plan mode with the plan tools, the plan model, and its proposal handler, so a retry can complete the exit.
 - A model or thinking level the host picks while planning (`set_model`, `cycle_model`, `set_role`, `set_thinking_level`, or `/model`) is kept when plan mode ends. The pre-plan model and thinking level are restored only while the session still runs the exact model and thinking level plan mode switched to. On a session transition, that model must also have been carried live into the new conversation; a loaded session's own model is kept even if it matches the plan model and thinking level.
 - Plan mode and chat mode are mutually exclusive. Chat mode runs without tools, and plan mode adds `write` to draft and propose the plan. `set_mode { mode: "plan" }` fails with `mode_blocked` while chat mode is on, and entering chat mode fails while plan mode is on (see [`set_chat_mode`](#set_chat_mode-payload)). So leaving plan mode never reactivates tools under chat mode.
 - A session transition ends the plan mode `set_mode` entered, whichever path runs it: `new_session`, `switch_session`, `open_session`, `branch`, `handoff`, or the same through a slash command or an extension. The plan belongs to the conversation that was left. A pending proposal resolves as `refine`, plan state and the proposal handler clear, and `mode_changed { mode: "default" }` is written. The pre-plan tools return. The pre-plan model returns only when the transition carried the live plan model over, as after `new_session` or `branch`. A switched-to or opened session keeps the model it loaded, even when it is identical to the plan model; the entry snapshot is never applied to it. No `mode_change` entry is appended. The transition's response is written after this cleanup finishes. Send `set_mode { mode: "plan" }` again to plan in the new conversation.
@@ -1176,10 +1194,31 @@ The host answers on stdin. The answer is a control frame: it is dispatched on ar
 
 - `approve`: the approved file becomes the plan reference for the next turn, plan mode is cleared (`mode_changed { mode: "default" }`), the pre-plan tools and model are restored (a model switch waits for the turn to end), the plan is autosaved when `plan.autosave` is on, and the agent is told to proceed with the implementation.
 - `refine`: plan mode stays on, the reviewed file becomes the plan-mode target, and the agent is asked to revise and resubmit. Non-empty `feedback` is appended to that tool result under `Reviewer feedback:`, so the agent sees the note.
-- Any `decision` other than `approve` counts as `refine`. A proposal the host never answers resolves as `refine` without feedback when the turn is aborted (`abort`, `abort_and_prompt`), when `set_mode { mode: "default" }` arrives, or when stdin closes; it never resolves as `approve`. No further frame is written for a proposal resolved this way; hosts should dismiss an open approval prompt on the turn's `agent_end`. There is no proposal timeout.
-- Responses with an unknown or already-resolved `id` are ignored.
+- Any `decision` other than `approve` counts as `refine`. A proposal the host never answers resolves as `refine` without feedback, never as `approve`, and RPC mode announces it with one `plan_proposal_cancel` frame (see below). There is no proposal timeout.
+- Responses with an unknown or already-answered `id` are ignored.
 
 A host that never sends `set_mode` keeps the previous behavior in both `--mode rpc` and `--mode rpc-ui`: no proposal handler is installed, so an `xd://propose` write fails with "No plan is awaiting approval", and no tools or models change.
+
+### `plan_proposal_cancel`
+
+Capability: `plan_proposal_cancel`. Written exactly once when a pending proposal resolves without a host answer; `id` is the `plan_proposal_request` id:
+
+```json
+{ "type": "plan_proposal_cancel", "id": "7342", "reason": "abort" }
+```
+
+| `reason` | When |
+| --- | --- |
+| `abort` | The proposing turn was aborted (`abort`, `abort_and_prompt`). |
+| `mode_change` | `set_mode { mode: "default" }` arrived; the frame precedes that command's `mode_changed` and response. |
+| `agent_end` | The run ended with the proposal still pending; the frame follows that `agent_end`. |
+| `shutdown` | stdin closed. |
+
+Hosts should dismiss the matching plan card on this frame. A proposal that was answered is never cancelled. A `plan_proposal_response` sent for a cancelled `id` fails with a response frame correlated by that `id`:
+
+```json
+{ "id": "7342", "type": "response", "command": "plan_proposal_response", "success": false, "error": "Plan proposal 7342 was cancelled (abort)", "code": "proposal_cancelled" }
+```
 
 ## Error Model and Recoverability
 

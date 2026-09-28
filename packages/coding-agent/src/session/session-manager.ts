@@ -86,6 +86,7 @@ import {
 	type SessionLoadResult,
 	visitEntriesFromFile,
 } from "./session-loader";
+import { setMessageEntryId } from "./message-entry-ids";
 import { generateId, migrateToCurrentVersion } from "./session-migrations";
 import {
 	computeDefaultSessionDir,
@@ -726,6 +727,13 @@ export class SessionManager {
 	#hasTitleSlot = true;
 	#entries: SessionEntry[] = [];
 	#index = new SessionEntryIndex();
+	/**
+	 * Ids handed out by {@link reserveEntryId} and not yet written. Fresh ids
+	 * avoid them so the entry a caller reserved for cannot lose its id to an
+	 * unrelated append in between.
+	 */
+	#reservedEntryIds = new Set<string>();
+	#takenEntryIds = { has: (id: string): boolean => this.#index.has(id) || this.#reservedEntryIds.has(id) };
 
 	/** File reflects all current entries; appends can go incrementally. */
 	#fileIsCurrent = false;
@@ -1569,6 +1577,7 @@ export class SessionManager {
 
 		this.#entries = [];
 		this.#index.clear();
+		this.#reservedEntryIds.clear();
 		this.#fileIsCurrent = false;
 		this.#rewriteRequired = false;
 		this.#forceFileCreation = false;
@@ -1604,14 +1613,37 @@ export class SessionManager {
 		this.#titleSource = header.titleSource;
 		this.#titleUpdatedAt = header.timestamp;
 		this.#index.rebuild(entries);
+		this.#reservedEntryIds.clear();
 	}
 
-	#freshEntryFields(): { id: string; parentId: string | null; timestamp: string } {
+	#freshEntryFields(reservedId?: string): { id: string; parentId: string | null; timestamp: string } {
 		return {
-			id: generateId(this.#index),
+			id: this.#claimReservedEntryId(reservedId) ?? generateId(this.#takenEntryIds),
 			parentId: this.#index.leafId(),
 			timestamp: nowIso(),
 		};
+	}
+
+	/**
+	 * Allocate the id a not-yet-written entry will carry, so a caller can report
+	 * it before the write happens (RPC `prompt` answers with the user entry id
+	 * before the turn persists anything). Pass the id to the append that writes
+	 * the entry; release it if the submission does not reach persistence.
+	 */
+	reserveEntryId(): string {
+		const id = generateId(this.#takenEntryIds);
+		this.#reservedEntryIds.add(id);
+		return id;
+	}
+	/** Release an id when its submission is rejected, cancelled, or dropped. */
+	releaseEntryId(id: string | undefined): void {
+		if (id !== undefined) this.#reservedEntryIds.delete(id);
+	}
+
+	/** Consume a reservation: only ids from {@link reserveEntryId} that are still free are honored. */
+	#claimReservedEntryId(id: string | undefined): string | undefined {
+		if (id === undefined || !this.#reservedEntryIds.delete(id)) return undefined;
+		return this.#index.has(id) ? undefined : id;
 	}
 
 	#setLeaf(id: string | null): void {
@@ -1996,6 +2028,7 @@ export class SessionManager {
 		this.#reconcileSessionDirForFallback();
 
 		const timestamp = nowIso();
+		this.#reservedEntryIds.clear();
 		this.#sessionId = mintSessionId();
 		this.#sessionFile = path.join(this.#sessionDir, `${fileSafeTimestamp(timestamp)}_${this.#sessionId}.jsonl`);
 		this.#syncLease();
@@ -2887,10 +2920,11 @@ export class SessionManager {
 			| EvalExecutionMessage
 			| PythonExecutionMessage
 			| FileMentionMessage,
+		reservedId?: string,
 	): string {
-		const entry: SessionMessageEntry = { type: "message", ...this.#freshEntryFields(), message };
+		const entry: SessionMessageEntry = { type: "message", ...this.#freshEntryFields(reservedId), message };
 		this.#recordEntry(entry);
-		return entry.id;
+		return setMessageEntryId(message, entry.id);
 	}
 
 	/**
@@ -2912,7 +2946,7 @@ export class SessionManager {
 		const activeLeafId = this.#index.leafId();
 		const entry: SessionMessageEntry = {
 			type: "message",
-			id: generateId(this.#index),
+			id: generateId(this.#takenEntryIds),
 			parentId,
 			timestamp: nowIso(),
 			message,
@@ -2936,7 +2970,7 @@ export class SessionManager {
 		const activeLeafId = this.#index.leafId();
 		const entry: ModelUsageEntry = {
 			type: "model_usage",
-			id: generateId(this.#index),
+			id: generateId(this.#takenEntryIds),
 			parentId: owner.parentId,
 			timestamp: nowIso(),
 			...usage,
@@ -3076,6 +3110,7 @@ export class SessionManager {
 	 * @param display Whether to show in TUI (true = styled display, false = hidden)
 	 * @param details Optional extension-specific metadata (not sent to LLM)
 	 * @param attribution Who initiated this message for billing/attribution semantics
+	 * @param reservedId Id from {@link reserveEntryId} to write the entry under
 	 */
 	appendCustomMessageEntry<T = unknown>(
 		customType: string | undefined,
@@ -3084,9 +3119,10 @@ export class SessionManager {
 		details?: T,
 		attribution: MessageAttribution | undefined = "agent",
 		timestamp?: number,
+		reservedId?: string,
 	): string {
 		const normalized = normalizeCustomMessagePayload<T>({ customType, content, display, details, attribution });
-		const fresh = this.#freshEntryFields();
+		const fresh = this.#freshEntryFields(reservedId);
 		const entry: CustomMessageEntry<T> = {
 			type: "custom_message",
 			customType: normalized.customType,
@@ -3310,7 +3346,7 @@ export class SessionManager {
 		this.#setLeaf(branchFromId);
 		const entry: BranchSummaryEntry = {
 			type: "branch_summary",
-			id: generateId(this.#index),
+			id: generateId(this.#takenEntryIds),
 			parentId: branchFromId,
 			timestamp: nowIso(),
 			fromId: branchFromId ?? "root",
@@ -3378,6 +3414,7 @@ export class SessionManager {
 		this.#titleUpdatedAt = timestamp;
 		this.#hasTitleSlot = true;
 		this.#index.rebuild(this.#entries);
+		this.#reservedEntryIds.clear();
 		this.#artifactManager = null;
 		this.#artifactManagerSessionFile = null;
 		this.#forceFileCreation = this.#persist;

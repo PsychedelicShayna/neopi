@@ -373,6 +373,14 @@ export interface PromptOptions {
 	attribution?: MessageAttribution;
 	/** Skip pre-send compaction checks for this prompt. */
 	skipCompactionCheck?: boolean;
+	/**
+	 * Id from `SessionManager.reserveEntryId()` to persist this prompt's user
+	 * message under, so a caller can report the entry id before the turn runs.
+	 * Only the user message (or the prompt's custom message) takes it.
+	 */
+	entryId?: string;
+	/** Pre-executed custom slash command result from RPC command classification. */
+	customCommandResult?: string;
 }
 
 /** Payload for {@link AgentSession.setPromptDropped}: a user prompt cancelled
@@ -393,12 +401,16 @@ export interface FollowUpOptions {
 	expandPromptTemplates?: boolean;
 	/** Explicit billing/initiator attribution. */
 	attribution?: MessageAttribution;
+	/** Reserved session entry id for the queued user message; see {@link PromptOptions.entryId}. */
+	entryId?: string;
 }
 
 /** Options for AgentSession.steer(). */
 export interface SteerOptions {
 	/** Explicit billing/initiator attribution. */
 	attribution?: MessageAttribution;
+	/** Reserved session entry id for the queued user message; see {@link PromptOptions.entryId}. */
+	entryId?: string;
 }
 
 /** Options for AgentSession.sendUserMessage(). */

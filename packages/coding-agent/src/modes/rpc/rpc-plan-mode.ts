@@ -1,7 +1,9 @@
 /**
  * RPC plan mode (issue #103): the `set_mode` command, the `mode`/`planMode`
  * fields of `get_state`, the `mode_changed` event, and the
- * `plan_proposal_request`/`plan_proposal_response` round trip.
+ * `plan_proposal_request`/`plan_proposal_response` round trip, whose pending
+ * proposals end in `plan_proposal_cancel` when they resolve without the host
+ * (issue #118).
  *
  * Entering plan mode mirrors ACP `session/set_mode` for the session state and
  * the interactive `/plan` for the tool/model adjustments; an `xd://propose`
@@ -35,8 +37,11 @@ import type {
 	RpcMode,
 	RpcModeChangedFrame,
 	RpcPlanModeInfo,
+	RpcPlanProposalCancel,
+	RpcPlanProposalCancelReason,
 	RpcPlanProposalRequest,
 	RpcPlanProposalResponse,
+	RpcResponse,
 	RpcSetModeResult,
 } from "./rpc-types";
 
@@ -63,6 +68,9 @@ type PlanDecision = { decision: "approve" } | { decision: "refine"; feedback?: s
 
 /** Cancel, EOF, abort, and unrecognized answers never approve. */
 const REFINE_WITHOUT_FEEDBACK: PlanDecision = { decision: "refine" };
+
+/** `code` of the error answering a `plan_proposal_response` for a cancelled proposal. */
+export const RPC_PLAN_PROPOSAL_CANCELLED_CODE = "proposal_cancelled";
 
 interface ModeSnapshot {
 	mode: RpcMode;
@@ -94,6 +102,8 @@ export class RpcPlanModeController {
 	readonly #output: (frame: object) => void;
 	/** Pending proposal settlers by request id. */
 	readonly #pending = new Map<string, (decision: PlanDecision) => void>();
+	/** Proposals resolved without a host answer, by request id; a late answer to one fails. */
+	readonly #cancelled = new Map<string, RpcPlanProposalCancelReason>();
 	readonly #unsubscribe: () => void;
 	readonly #unregisterSessionChange: () => void;
 	#owned: OwnedPlanMode | undefined;
@@ -149,10 +159,27 @@ export class RpcPlanModeController {
 		return this.#work;
 	}
 
-	/** Route a host decision to its pending proposal; unknown ids are ignored. */
+	/**
+	 * Route a host decision to its pending proposal. An answer to a cancelled
+	 * proposal gets an error response; other unknown ids are ignored.
+	 */
 	handleProposalResponse(frame: RpcPlanProposalResponse): void {
 		const settle = this.#pending.get(frame.id);
-		if (!settle) return;
+		if (!settle) {
+			const reason = this.#cancelled.get(frame.id);
+			if (reason) {
+				const response: RpcResponse = {
+					id: frame.id,
+					type: "response",
+					command: "plan_proposal_response",
+					success: false,
+					error: `Plan proposal ${frame.id} was cancelled (${reason})`,
+					code: RPC_PLAN_PROPOSAL_CANCELLED_CODE,
+				};
+				this.#output(response);
+			}
+			return;
+		}
 		if (frame.decision === "approve") {
 			settle({ decision: "approve" });
 			return;
@@ -160,19 +187,23 @@ export class RpcPlanModeController {
 		settle({ decision: "refine", feedback: typeof frame.feedback === "string" ? frame.feedback : undefined });
 	}
 
-	/** Flush a pre-plan model restore deferred by an approval mid-turn. */
+	/**
+	 * Cancel a proposal the finished run left pending, and flush a pre-plan
+	 * model restore deferred by an approval mid-turn.
+	 */
 	observe(event: AgentSessionEvent): void {
 		if (event.type !== "agent_end" || this.#session.isStreaming) return;
+		this.#cancelAllPending("agent_end");
 		const change = this.#deferredModelRestore;
 		if (!change) return;
 		this.#deferredModelRestore = undefined;
 		this.#track(() => this.#restorePrePlanModel(change));
 	}
 
-	/** The RPC client is gone: resolve pending proposals as refine and refuse new ones. */
+	/** The RPC client is gone: cancel pending proposals and refuse new ones. */
 	close(): void {
 		this.#closed = true;
-		this.#settleAllPending();
+		this.#cancelAllPending("shutdown");
 		this.#unsubscribe();
 		this.#unregisterSessionChange();
 	}
@@ -239,7 +270,7 @@ export class RpcPlanModeController {
 		if (this.#pending.size === 0 && (session.isStreaming || session.isCompacting)) {
 			throw new RpcSetModeError("Cannot change mode while a response or compaction is in progress", "session_busy");
 		}
-		this.#settleAllPending();
+		this.#cancelAllPending("mode_change");
 		await this.#work;
 		const state = session.getPlanModeState();
 		if (!state?.enabled) {
@@ -382,7 +413,7 @@ export class RpcPlanModeController {
 		this.#deferredModelRestore = undefined;
 		const session = this.#session;
 		if (owned) {
-			this.#settleAllPending();
+			this.#cancelAllPending("mode_change");
 			session.setPlanProposalHandler(null);
 			session.setPlanModeState(undefined);
 		}
@@ -464,7 +495,7 @@ export class RpcPlanModeController {
 		if (this.#closed || signal?.aborted) return Promise.resolve(REFINE_WITHOUT_FEEDBACK);
 		const id = Snowflake.next() as string;
 		const { promise, resolve } = Promise.withResolvers<PlanDecision>();
-		const onAbort = (): void => settle(REFINE_WITHOUT_FEEDBACK);
+		const onAbort = (): void => this.#cancel(id, "abort");
 		const settle = (decision: PlanDecision): void => {
 			if (!this.#pending.delete(id)) return;
 			signal?.removeEventListener("abort", onAbort);
@@ -483,8 +514,18 @@ export class RpcPlanModeController {
 		return promise;
 	}
 
-	#settleAllPending(): void {
-		for (const settle of this.#pending.values()) settle(REFINE_WITHOUT_FEEDBACK);
+	/** Resolve a pending proposal as `refine` without feedback and tell the host. */
+	#cancel(id: string, reason: RpcPlanProposalCancelReason): void {
+		const settle = this.#pending.get(id);
+		if (!settle) return;
+		this.#cancelled.set(id, reason);
+		const frame: RpcPlanProposalCancel = { type: "plan_proposal_cancel", id, reason };
+		this.#output(frame);
+		settle(REFINE_WITHOUT_FEEDBACK);
+	}
+
+	#cancelAllPending(reason: RpcPlanProposalCancelReason): void {
+		for (const id of this.#pending.keys()) this.#cancel(id, reason);
 	}
 
 	#emitModeIfChanged(): void {

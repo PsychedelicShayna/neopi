@@ -185,6 +185,20 @@ export interface RpcPlanProposalResponse {
 	feedback?: string;
 }
 
+/** Why a pending plan proposal resolved without a host answer. */
+export type RpcPlanProposalCancelReason = "abort" | "mode_change" | "agent_end" | "shutdown";
+
+/**
+ * Emitted when a pending {@link RpcPlanProposalRequest} resolves as `refine`
+ * without a host answer; `id` is the request's id. A later
+ * `plan_proposal_response` for that id fails with `code: "proposal_cancelled"`.
+ */
+export interface RpcPlanProposalCancel {
+	type: "plan_proposal_cancel";
+	id: string;
+	reason: RpcPlanProposalCancelReason;
+}
+
 /**
  * Switch chat mode live. `include` lists the re-enabled context categories,
  * comma-separated (`"date,cwd"`) or as an array; omitted keeps the current or
@@ -226,6 +240,24 @@ export interface RpcPromptError {
 	httpStatus?: number;
 	/** The failure is classified transient: resubmitting later may succeed. OMP's own retries are already exhausted. */
 	retryable: boolean;
+}
+
+/** `prompt` success-response data. */
+export interface RpcPromptResponseData {
+	/**
+	 * Set only by a slash command that was consumed on the spot. `false` is the
+	 * completion signal (no `prompt_result` follows); `true` means the command
+	 * scheduled an agent turn of its own (e.g. `/retry`).
+	 */
+	agentInvoked?: boolean;
+	/**
+	 * Id of the session entry the prompt's message is written as (a `message`
+	 * entry, or a `custom_message` entry for a `/skill:` prompt). Allocated when
+	 * the prompt is accepted, so it is known before the turn persists anything;
+	 * it matches `get_entries`/`get_messages_page` ids once the message reaches
+	 * the session. Absent when the prompt writes no entry of its own.
+	 */
+	userEntryId?: string;
 }
 
 /**
@@ -342,11 +374,11 @@ export type RpcResponse =
 	  }
 
 	// Prompting (async - events follow)
-	| { id?: string; type: "response"; command: "prompt"; success: true; data?: { agentInvoked: boolean } }
-	| { id?: string; type: "response"; command: "steer"; success: true }
-	| { id?: string; type: "response"; command: "follow_up"; success: true }
+	| { id?: string; type: "response"; command: "prompt"; success: true; data?: RpcPromptResponseData }
+	| { id?: string; type: "response"; command: "steer"; success: true; data: { userEntryId: string } }
+	| { id?: string; type: "response"; command: "follow_up"; success: true; data: { userEntryId: string } }
 	| { id?: string; type: "response"; command: "abort"; success: true }
-	| { id?: string; type: "response"; command: "abort_and_prompt"; success: true }
+	| { id?: string; type: "response"; command: "abort_and_prompt"; success: true; data?: { userEntryId: string } }
 	| { id?: string; type: "response"; command: "new_session"; success: true; data: { cancelled: boolean } }
 	| { id?: string; type: "response"; command: "open_session"; success: true; data: RpcOpenSessionResult }
 
