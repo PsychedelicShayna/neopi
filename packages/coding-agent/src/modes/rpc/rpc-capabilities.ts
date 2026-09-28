@@ -5,5 +5,10 @@
  * on NeoPi version numbers. Add a string only in the change that ships its
  * commands/frames, and never rename one: a renamed string silently turns the
  * feature off for every host that gates on the old name.
+ *
+ * One string per line (formatter-pinned) keeps concurrent additions merge-friendly.
  */
-export const RPC_CAPABILITIES: readonly string[] = [];
+// prettier-ignore
+export const RPC_CAPABILITIES: readonly string[] = [
+	"set_chat_mode",
+];

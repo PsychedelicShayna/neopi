@@ -10,6 +10,7 @@ import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
 import { isRecord, ptree, readJsonl } from "@oh-my-pi/pi-utils";
 import type { FileSink } from "bun";
+import type { ChatModeSetting, ChatModeState } from "../../chat/chat-mode";
 import type { BashResult } from "../../exec/bash-executor";
 import type { AgentSessionEvent, SessionStats } from "../../session/agent-session";
 import type { SessionEntry, SessionTreeNode } from "../../session/session-entries";
@@ -162,6 +163,7 @@ const sessionEventTypes = new Set<AgentSessionEvent["type"]>([
 	"thinking_level_changed",
 	"model_changed",
 	"goal_updated",
+	"chat_mode_changed",
 ]);
 
 function isRpcResponse(value: unknown): value is RpcResponse {
@@ -712,6 +714,15 @@ export class RpcClient {
 	 */
 	async setFastMode(enabled: boolean): Promise<{ enabled: boolean; active: boolean }> {
 		const response = await this.#send({ type: "set_fast_mode", enabled });
+		return this.#getData(response);
+	}
+
+	/**
+	 * Switch chat mode live (`off`, `chat`, `erp`, `raw`). `include` lists the
+	 * re-enabled context categories; omitted keeps the current or last-used set.
+	 */
+	async setChatMode(mode: ChatModeSetting, include?: string | string[]): Promise<ChatModeState> {
+		const response = await this.#send({ type: "set_chat_mode", mode, ...(include !== undefined ? { include } : {}) });
 		return this.#getData(response);
 	}
 

@@ -8,6 +8,7 @@ import type { AgentMessage, AgentToolResult, ThinkingLevel, ToolLoadMode } from 
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Effort, ImageContent, Model, ToolExample } from "@oh-my-pi/pi-ai";
 import type { BashResult } from "../../exec/bash-executor";
+import type { ChatModeSetting, ChatModeState } from "../../chat/chat-mode";
 import type { ContextUsage } from "../../extensibility/extensions/types";
 import type { AgentSessionEvent, SessionStats } from "../../session/agent-session";
 import type { FileEntry, SessionEntry, SessionTreeNode } from "../../session/session-entries";
@@ -37,6 +38,7 @@ export type RpcCommand =
 	// State
 	| { id?: string; type: "get_state" }
 	| { id?: string; type: "set_fast_mode"; enabled: boolean }
+	| RpcSetChatModeCommand
 	| { id?: string; type: "get_available_commands" }
 	| { id?: string; type: "get_entries"; since?: string }
 	| { id?: string; type: "get_tree" }
@@ -124,6 +126,20 @@ export interface RpcSessionState {
 	dumpTools?: Array<{ name: string; description: string; parameters: unknown; examples?: readonly ToolExample[] }>;
 	/** Current context window usage. */
 	contextUsage?: ContextUsage;
+	/** Live chat mode; `off` for an ordinary coding session. */
+	chatMode: ChatModeSetting;
+}
+
+/**
+ * Switch chat mode live. `include` lists the re-enabled context categories,
+ * comma-separated (`"date,cwd"`) or as an array; omitted keeps the current or
+ * last-used set. Responds with the resulting {@link ChatModeState}.
+ */
+export interface RpcSetChatModeCommand {
+	id?: string;
+	type: "set_chat_mode";
+	mode: ChatModeSetting;
+	include?: string | string[];
 }
 
 export interface RpcAvailableSlashCommand {
@@ -275,6 +291,7 @@ export type RpcResponse =
 			success: true;
 			data: { enabled: boolean; active: boolean };
 	  }
+	| { id?: string; type: "response"; command: "set_chat_mode"; success: true; data: ChatModeState }
 	| {
 			id?: string;
 			type: "response";
