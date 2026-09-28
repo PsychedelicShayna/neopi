@@ -67,10 +67,11 @@ commit:
    review of the head commit MUST have completed. Merging on a clean code
    review alone is how PR #113 shipped with a security thread that arrived
    four minutes after the merge.
-4. **Every bot thread has a factual reply from the owner's account** (see
-   below), and every resolved thread was resolved only after that reply was
-   posted. The audit covers resolved threads as well as open ones: a bot
-   thread resolved without that reply fails the gate until it is reopened,
+4. **Every bot finding and follow-up has a factual reply from the owner's
+   account** (see below), and every resolved thread was resolved only after
+   its latest required reply was posted. The audit covers resolved threads
+   as well as open ones: a bot thread resolved without that reply, or with a
+   later bot follow-up, fails the gate until it is reopened, re-triaged,
    answered, and resolved again. A contributor acknowledgment or another
    bot's comment does not satisfy this requirement.
 5. **The branch is mergeable**, with no conflicts against `neopi`.
@@ -97,9 +98,9 @@ re-read the head after the gate to fill that flag.
   otherwise report the missing round to the owner. Merging without that
   bot's round on the head commit is the owner's decision, and the merge note
   records it.
-- Act only on findings from rounds on the current head commit, plus older
-  threads that are still unresolved. A thread GitHub marks outdated still
-  needs a reply.
+- Act on findings from rounds on the current head commit, older threads that
+  are still unresolved, and later bot follow-ups in older threads whether
+  resolved or not. A thread GitHub marks outdated still needs a reply.
 
 ## Handling findings
 
@@ -116,11 +117,11 @@ re-read the head after the gate to fill that flag.
   fix and pass after it. Several threads with one root cause MAY share a
   commit. The reply to each thread names it. Where that test may run is
   governed by Running PR code below.
-- **Reply factually, then resolve.** Every bot thread gets one factual reply
-  from the owner's account, and the thread is resolved only after that reply
-  is posted. Comments from contributors or other bots do not count. NEVER
-  resolve a thread without the factual owner reply. If posting fails, leave
-  the thread open.
+- **Reply factually, then resolve.** Every bot finding and follow-up gets a
+  factual reply from the owner's account, and the thread is resolved only
+  after the latest required reply is posted. Comments from contributors or
+  other bots do not count. NEVER resolve a thread with a pending factual
+  owner reply. If posting fails, leave the thread open.
   - Fixed: `Fixed in <sha> (<commit subject>). Regression test: <file> › <test name>.`
   - Deferred `P2`: `Not fixed in this PR; <follow-up PR link or reason>. Listed in the merge note.`
   - Judged wrong: the evidence (file and line, a failing counter-example, or
@@ -129,6 +130,9 @@ re-read the head after the gate to fill that flag.
     silently. A disputed `P2`/`P3` thread MAY be resolved once the reply is
     posted. A disputed `P0`/`P1` thread stays open until the bot concedes or
     the owner accepts the dismissal.
+  A bot follow-up is a new response to triage even if the thread is already
+  resolved. Reopen it, triage the follow-up, post the next factual owner
+  reply, and only then resolve it again.
 - **Security findings are never deferred.** Fix them in this PR, whatever
   their severity, or disprove them in the thread and get the owner's
   acceptance. A security finding that arrives after merge gets a fix PR right
