@@ -599,6 +599,22 @@ export class AsyncJobManager {
 		return evicted;
 	}
 
+	/**
+	 * Evict the named jobs that are no longer running (completed, failed, or
+	 * cancelled), dropping their queued deliveries, so their ids can be reused.
+	 * Running jobs are left alone. Returns the number of jobs evicted.
+	 */
+	evictSettledJobs(jobIds: Iterable<string>): number {
+		let evicted = 0;
+		for (const jobId of jobIds) {
+			const job = this.#jobs.get(jobId);
+			if (!job || job.status === "running") continue;
+			this.acknowledgeDeliveries([jobId]);
+			if (this.#evictJob(jobId)) evicted += 1;
+		}
+		return evicted;
+	}
+
 	async waitForAll(): Promise<void> {
 		await Promise.all(Array.from(this.#jobs.values()).map(job => job.promise));
 	}

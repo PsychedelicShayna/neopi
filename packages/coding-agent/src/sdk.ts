@@ -47,7 +47,7 @@ import {
 	formatAdvisorContextPrompt,
 	formatAdvisorMemoryPrompt,
 } from "./advisor";
-import { AsyncJobManager } from "./async";
+import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, AsyncJobManager } from "./async";
 import { AutoLearnController, buildAutoLearnInstructions } from "./autolearn/controller";
 import { createAutoresearchExtension } from "./autoresearch";
 import { loadCapability, reset as resetCapabilities } from "./capability";
@@ -227,6 +227,7 @@ import { AgentOutputManager } from "./task/output-manager";
 import { wrapStreamFnWithProviderConcurrency } from "./task/provider-concurrency";
 import { sessionDelegationBias } from "./task/prompt-policy";
 import { isScoutSpawnable } from "./task/spawn-policy";
+import { WorkPoolRegistry } from "./task/workpool";
 import type { StructuredSubagentSchemaMode } from "@oh-my-pi/pi-tui/tools/task";
 import {
 	AUTO_THINKING,
@@ -285,6 +286,7 @@ import { USER_TODO_EDIT_CUSTOM_TYPE } from "./tools/todo";
 import { ttsTool } from "./tools/tts";
 import { resolveActiveRepoContext } from "./utils/active-repo-context";
 import { EventBus } from "./utils/event-bus";
+import { trackLateCleanup } from "./utils/late-cleanup";
 import { normalizeProviderContextImagesForModel } from "./utils/image-loading";
 import { formatLocalCalendarDate } from "@oh-my-pi/pi-tui/chrome/local-date";
 import { normalizePromptPath } from "./utils/prompt-path";
@@ -4514,14 +4516,56 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// `asyncJobManager` below and **MUST NOT** tear it down.
 			ownedAsyncJobManager: asyncJobManager,
 			asyncJobManager: scopedAsyncJobManager,
-			releaseRootDescendants: isSubagentSession
-				? undefined
-				: async deadlineAt => {
+			cancelRootWork: asyncJobManager
+				? async ({ timeoutMs }) => {
+						const deadlineAt = Date.now() + Math.max(0, timeoutMs ?? 5_000);
+						const root = registeredAgentRef;
 						const lifecycle = AgentLifecycleManager.global();
-						if (registeredAgentRef && lifecycle.manages(agentRegistry)) {
-							await lifecycle.releaseRootAgents(registeredAgentRef, deadlineAt);
+						const ownsLifecycle = root !== undefined && lifecycle.manages(agentRegistry);
+						// Tag the aborts as a release, like owning-root shutdown: interrupted
+						// subagents are disposed and unregistered with their transcripts
+						// kept, never left behind as terminal kill tombstones.
+						const reap = await asyncJobManager.cancelAndReapJobs(
+							undefined,
+							deadlineAt,
+							ASYNC_JOB_MANAGER_SHUTDOWN_REASON,
+						);
+						// Close workpools owned anywhere in this root's tree and drop their
+						// cancelled aggregate jobs so the names are free again; another
+						// root's pools are untouched.
+						const releasedPools = WorkPoolRegistry.global().releaseOwners(
+							ownerId =>
+								ownerId === resolvedAgentId || (root !== undefined && agentRegistry.rootOf(ownerId) === root),
+						);
+						asyncJobManager.evictSettledJobs(releasedPools);
+						if (!reap.settled && releasedPools.length > 0) {
+							trackLateCleanup(
+								reap.completion.then(() => {
+									asyncJobManager.evictSettledJobs(releasedPools);
+								}),
+								{ id: resolvedAgentId, resource: "root-cancel-workpool-jobs" },
+							);
 						}
-					},
+						if (ownsLifecycle) await lifecycle.releaseRootAgents(root, deadlineAt);
+						if (!reap.settled && ownsLifecycle) {
+							// A cancelled child still settling at the deadline may finalize
+							// gracefully and be adopted afterward. Release exactly those
+							// generations once their jobs settle; work launched after this
+							// call has different refs and is never swept.
+							const lateRefs = reap.pendingJobIds.flatMap(id => {
+								const ref = agentRegistry.get(id);
+								return ref && ref.kind !== "main" ? [ref] : [];
+							});
+							trackLateCleanup(
+								reap.completion.then(async () => {
+									await Promise.all(lateRefs.map(ref => lifecycle.release(ref.id, ref)));
+								}),
+								{ id: resolvedAgentId, resource: "root-cancel-late-release" },
+							);
+						}
+						return { settled: reap.settled, pendingJobIds: reap.pendingJobIds };
+					}
+				: undefined,
 			scopedModels: options.scopedModels,
 			promptTemplates,
 			slashCommands,

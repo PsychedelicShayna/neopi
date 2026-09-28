@@ -841,8 +841,8 @@ export class AgentSession implements SettingsScope {
 	 * manager for their own owner id; a top-level session uses the one it owns.
 	 */
 	readonly #asyncJobManager: AsyncJobManager | undefined;
-	/** Releases the kept-alive descendants of the root this session heads; top-level sessions only. */
-	readonly #releaseRootDescendants: ((deadlineAt: number) => Promise<void>) | undefined;
+	/** Root-wide cancellation wired by createAgentSession; top-level sessions only. */
+	readonly #cancelRootWork: ((options: { timeoutMs?: number }) => Promise<RootWorkCancelResult>) | undefined;
 	/** Clears this session's owner delivery sink registration; set when a manager + agent id exist. */
 	#unregisterAsyncDeliverySink: (() => void) | undefined;
 	/**
@@ -1569,7 +1569,7 @@ export class AgentSession implements SettingsScope {
 		});
 		this.#ownedAsyncJobManager = config.ownedAsyncJobManager;
 		this.#asyncJobManager = config.asyncJobManager ?? config.ownedAsyncJobManager;
-		this.#releaseRootDescendants = config.releaseRootDescendants;
+		this.#cancelRootWork = config.cancelRootWork;
 		const modelControlsHost: ModelControlsHost = {
 			agent: this.agent,
 			settings: this.settings,
@@ -2750,24 +2750,19 @@ export class AgentSession implements SettingsScope {
 	 * kept-alive descendant agents. Jobs and agents of any other root are never
 	 * touched, and this session stays usable: new async work may be launched
 	 * afterward. Interrupted descendants are released (transcripts kept, refs
-	 * unregistered), not tombstoned as kills. The root's own in-flight turn is not aborted; call
+	 * unregistered), not tombstoned as kills; one still settling at the
+	 * deadline is released once its job settles. Workpools owned in this root's
+	 * tree are closed, so their names can be reused. The root's own in-flight turn is not aborted; call
 	 * {@link abort} first to stop it. Idempotent.
 	 *
 	 * Only a top-level session owns a job domain; calling this on a subagent
 	 * session throws.
 	 */
 	async cancelRootWork(options: { timeoutMs?: number } = {}): Promise<RootWorkCancelResult> {
-		const manager = this.#ownedAsyncJobManager;
-		if (!manager) {
+		if (!this.#ownedAsyncJobManager || !this.#cancelRootWork) {
 			throw new Error("cancelRootWork() requires a top-level session that owns its async-job domain.");
 		}
-		const deadlineAt = Date.now() + Math.max(0, options.timeoutMs ?? 5_000);
-		// Tag the aborts as a release, like owning-root shutdown: interrupted
-		// subagents are disposed and unregistered with their transcripts kept,
-		// never left behind as terminal kill tombstones.
-		const reap = await manager.cancelAndReapJobs(undefined, deadlineAt, ASYNC_JOB_MANAGER_SHUTDOWN_REASON);
-		await this.#releaseRootDescendants?.(deadlineAt);
-		return { settled: reap.settled, pendingJobIds: reap.pendingJobIds };
+		return this.#cancelRootWork(options);
 	}
 
 	/**

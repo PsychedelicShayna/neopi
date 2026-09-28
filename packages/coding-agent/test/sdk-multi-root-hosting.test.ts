@@ -436,6 +436,57 @@ describe("two simultaneous top-level roots (issue #121)", () => {
 		expect(b.session.asyncJobManager!.getJob(childB)?.status).toBe("completed");
 	}, 60000);
 
+	it("cancelRootWork lets a same-name workpool be created again", async () => {
+		const a = await createRoot("DeckA");
+		const create = 'const pool = await workpool("task", { name: "pool" }); return await pool.push("HOLD:pool item");';
+		await a.session.getToolByName("eval")!.execute("eval-1", { language: "js", code: create });
+		expect(a.session.asyncJobManager!.getJob("pool")?.status).toBe("running");
+
+		await a.session.cancelRootWork({ timeoutMs: 5_000 });
+
+		const again = await a.session.getToolByName("eval")!.execute("eval-2", {
+			language: "js",
+			code: 'const pool = await workpool("task", { name: "pool" }); return pool.name;',
+		});
+		expect(JSON.stringify(again.content)).not.toContain("already exists");
+		expect(JSON.stringify(again.content)).toContain("pool");
+	}, 60000);
+
+	it("cancelRootWork releases a child whose job settles after the deadline", async () => {
+		const a = await createRoot("DeckA");
+		const registry = AgentRegistry.global();
+		const late = registry.register({
+			id: "DeckA.Late",
+			displayName: "task",
+			kind: "sub",
+			parentId: "DeckA",
+			session: { dispose: async () => {} } as unknown as AgentSession,
+		});
+		const finishing = Promise.withResolvers<void>();
+		// A child that already produced its result: it ignores the abort and
+		// finalizes gracefully (idle + adopted) once its teardown completes.
+		a.session.asyncJobManager!.register(
+			"task",
+			"late",
+			async () => {
+				await finishing.promise;
+				registry.setStatus("DeckA.Late", "idle", late);
+				AgentLifecycleManager.global().adopt("DeckA.Late", { idleTtlMs: 0 }, late);
+				return "done";
+			},
+			{ id: "DeckA.Late", ownerId: "DeckA" },
+		);
+
+		const result = await a.session.cancelRootWork({ timeoutMs: 20 });
+		expect(result.settled).toBe(false);
+		expect(result.pendingJobIds).toContain("DeckA.Late");
+		finishing.resolve();
+		await a.session.asyncJobManager!.waitForAll();
+		for (let i = 0; i < 200 && registry.get("DeckA.Late"); i++) await Bun.sleep(10);
+		expect(registry.get("DeckA.Late")).toBeUndefined();
+		expect(AgentLifecycleManager.global().has("DeckA.Late")).toBe(false);
+	}, 60000);
+
 	it("7: drains and disposes both roots without leaking processes, jobs, refs, or overwriting artifacts", async () => {
 		const a = await createRoot("DeckA");
 		const b = await createRoot("DeckB");

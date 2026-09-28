@@ -657,10 +657,21 @@ export class WorkPoolRegistry {
 
 	/** Close and forget every pool owned by an ending session. */
 	releaseOwner(ownerId: string): void {
+		this.releaseOwners(owner => owner === ownerId);
+	}
+
+	/**
+	 * Close and forget every pool whose owner matches, e.g. all owners in one
+	 * root's spawn tree. Returns the closed pools' names (their aggregate job ids).
+	 */
+	releaseOwners(matches: (ownerId: string) => boolean): string[] {
+		const released: string[] = [];
 		for (const [key, pool] of this.#pools) {
-			if (pool.ownerId !== ownerId) continue;
+			if (!matches(pool.ownerId)) continue;
 			pool.close();
 			this.#pools.delete(key);
+			released.push(pool.name);
 		}
+		return released;
 	}
 }

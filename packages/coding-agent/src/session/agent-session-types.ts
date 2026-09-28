@@ -294,11 +294,11 @@ export interface AgentSessionConfig {
 	/** Async job manager visible to this session (a subagent's is its root's). */
 	asyncJobManager?: AsyncJobManager;
 	/**
-	 * Release every kept-alive descendant agent this root owns (not the root
-	 * itself), waiting at most until `deadlineAt`. Wired by `createAgentSession`
-	 * for top-level sessions; drives {@link AgentSession.cancelRootWork}.
+	 * Root-wide cancellation of this root's async-job domain and descendants,
+	 * wired by `createAgentSession` for top-level sessions; backs
+	 * {@link AgentSession.cancelRootWork}.
 	 */
-	releaseRootDescendants?: (deadlineAt: number) => Promise<void>;
+	cancelRootWork?: (options: { timeoutMs?: number }) => Promise<RootWorkCancelResult>;
 	/** Registry identity used for IRC routing. */
 	agentId?: string;
 	/** Whether this is a top-level or subagent session. */
