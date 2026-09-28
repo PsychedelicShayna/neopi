@@ -9,7 +9,7 @@ import { expandAtImports } from "../discovery/at-imports";
 import { BUILTIN_TOOL_NAMES, normalizeToolNames } from "../tools/builtin-names";
 import { ADVISOR_DEFAULT_BUDGET_PER_UPDATE, ADVISOR_MAX_BUDGET_PER_UPDATE } from "./emission-guard";
 import { collectConfigCandidates } from "./watchdog";
-import { parseYamlMappingDocument, yamlDocumentRoot } from "../config/yaml-document";
+import { materializeYamlAlias, parseYamlMappingDocument, yamlDocumentRoot } from "../config/yaml-document";
 
 import type { AdvisorConfig, AdvisorConfigScope, WatchdogConfigDoc } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 
@@ -33,6 +33,7 @@ interface WatchdogAdvisorOrigin {
 interface WatchdogBaseline {
 	doc: WatchdogConfigDoc;
 	origins: WatchdogAdvisorOrigin[];
+	filePath: string;
 	sourceWasPresent: boolean;
 }
 
@@ -308,14 +309,14 @@ export async function resolveAdvisorConfigEditPath(
 	return yml;
 }
 
-function rememberWatchdogBaseline(doc: WatchdogConfigDoc, sourceWasPresent = true): void {
+function rememberWatchdogBaseline(doc: WatchdogConfigDoc, filePath: string, sourceWasPresent = true): void {
 	const occurrences = new Map<string, number>();
 	const origins = doc.advisors.map(advisor => {
 		const occurrence = occurrences.get(advisor.name) ?? 0;
 		occurrences.set(advisor.name, occurrence + 1);
 		return { advisor, base: structuredClone(advisor), name: advisor.name, occurrence };
 	});
-	watchdogBaselines.set(doc, { doc: structuredClone(doc), origins, sourceWasPresent });
+	watchdogBaselines.set(doc, { doc: structuredClone(doc), origins, filePath, sourceWasPresent });
 }
 
 /**
@@ -335,7 +336,7 @@ export async function loadWatchdogConfigFile(filePath: string): Promise<Watchdog
 			return { advisors: [] };
 		}
 		const doc: WatchdogConfigDoc = { advisors: [] };
-		rememberWatchdogBaseline(doc, false);
+		rememberWatchdogBaseline(doc, filePath, false);
 		return doc;
 	}
 	let parsed: unknown;
@@ -379,7 +380,7 @@ export async function loadWatchdogConfigFile(filePath: string): Promise<Watchdog
 	if (instructions?.trim()) doc.instructions = instructions;
 	if (sharedMaxNotesPerUpdate !== undefined) doc.maxNotesPerUpdate = sharedMaxNotesPerUpdate;
 	if (warnings.length > 0) doc.warnings = warnings;
-	rememberWatchdogBaseline(doc);
+	rememberWatchdogBaseline(doc, filePath);
 	return doc;
 }
 
@@ -568,6 +569,9 @@ function patchWatchdogDocument(source: string, doc: WatchdogConfigDoc, baseline?
 	}
 	if (!isSeq(advisorNode)) throw new Error("WATCHDOG.yml advisors must be a sequence");
 	const sequence = advisorNode as YAMLSeq<unknown>;
+	for (let index = 0; index < sequence.items.length; index++) {
+		materializeYamlAlias(document, ["advisors", index]);
+	}
 	removeMalformedWatchdogAdvisors(sequence);
 
 	const resolvedOrigins = baseline.origins.map(origin => ({
@@ -630,7 +634,8 @@ function patchWatchdogDocument(source: string, doc: WatchdogConfigDoc, baseline?
  * file is removed only when the resulting document is empty.
  */
 export async function saveWatchdogConfigFile(filePath: string, doc: WatchdogConfigDoc): Promise<void> {
-	const baseline = watchdogBaselines.get(doc);
+	const storedBaseline = watchdogBaselines.get(doc);
+	const baseline = storedBaseline?.filePath === filePath ? storedBaseline : undefined;
 	await withFileLock(filePath, async () => {
 		let source = "";
 		try {
@@ -653,6 +658,6 @@ export async function saveWatchdogConfigFile(filePath: string, doc: WatchdogConf
 			await fs.rm(filePath, { force: true });
 		}
 		watchdogRepairDocs.delete(doc);
-		if (baseline) rememberWatchdogBaseline(doc, wroteFile);
+		rememberWatchdogBaseline(doc, filePath, wroteFile);
 	});
 }

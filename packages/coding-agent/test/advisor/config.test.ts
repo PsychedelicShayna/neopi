@@ -439,6 +439,33 @@ describe("WATCHDOG.yml file round-trip", () => {
 		expect(saved).toContain("# cloned");
 	});
 
+	it("materializes an aliased advisor row before applying edits", async () => {
+		const file = path.join(tmp, "WATCHDOG.yml");
+		await Bun.write(
+			file,
+			[
+				"template: &reviewer",
+				"  name: Reviewer",
+				"  model: test/old",
+				"  futureId: keep # anchored template",
+				"advisors:",
+				"  - *reviewer # aliased row",
+				"",
+			].join("\n"),
+		);
+		const loaded = await loadWatchdogConfigFile(file);
+		loaded.advisors[0].model = "test/new";
+		await saveWatchdogConfigFile(file, loaded);
+
+		const saved = await Bun.file(file).text();
+		expect(saved).toContain("# anchored template");
+		expect(saved).toContain("# aliased row");
+		expect(YAML.parse(saved)).toEqual({
+			template: { name: "Reviewer", model: "test/old", futureId: "keep" },
+			advisors: [{ name: "Reviewer", model: "test/new", futureId: "keep" }],
+		});
+	});
+
 	it("removes malformed advisor rows while preserving valid row comments and unknown fields", async () => {
 		const file = path.join(tmp, "WATCHDOG.yml");
 		await Bun.write(
@@ -469,6 +496,27 @@ describe("WATCHDOG.yml file round-trip", () => {
 		loaded.advisors.splice(0);
 		await saveWatchdogConfigFile(file, loaded);
 		expect(await Bun.file(file).exists()).toBe(false);
+	});
+
+	it("merges later saves after repairing a malformed document", async () => {
+		const file = path.join(tmp, "WATCHDOG.yml");
+		await Bun.write(file, "advisors: [broken");
+		const repaired = await loadWatchdogConfigFile(file);
+		repaired.advisors.push({ name: "Repaired" });
+		await saveWatchdogConfigFile(file, repaired);
+
+		const concurrent = await loadWatchdogConfigFile(file);
+		concurrent.advisors.push({ name: "Concurrent", model: "test/external" });
+		await saveWatchdogConfigFile(file, concurrent);
+		repaired.advisors[0].enabled = false;
+		await saveWatchdogConfigFile(file, repaired);
+
+		expect(YAML.parse(await Bun.file(file).text())).toEqual({
+			advisors: [
+				{ name: "Repaired", enabled: false },
+				{ name: "Concurrent", model: "test/external" },
+			],
+		});
 	});
 
 	it("does not resurrect an advisor renamed or deleted by a newer editor", async () => {

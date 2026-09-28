@@ -29,14 +29,26 @@ function preserveDeletedComments(document: Document.Parsed<ParsedNode>, path: re
 	else appendComment(parent, comments);
 }
 
+/** Replace an alias at one path with an independent node containing its resolved value. */
+export function materializeYamlAlias(
+	document: Document.Parsed<ParsedNode>,
+	path: readonly (string | number)[],
+): unknown {
+	const node = document.getIn(path, true);
+	if (!isAlias(node)) return node;
+	const resolved = node.resolve(document);
+	if (!resolved) throw new Error(`YAML alias at ${path.join(".")} does not resolve`);
+	const materialized = document.createNode(resolved.toJS(document));
+	materialized.commentBefore = node.commentBefore;
+	materialized.comment = node.comment;
+	materialized.spaceBefore = node.spaceBefore;
+	document.setIn(path, materialized);
+	return materialized;
+}
+
 function materializeAliasParents(document: Document.Parsed<ParsedNode>, path: readonly (string | number)[]): void {
 	for (let length = 1; length < path.length; length++) {
-		const parentPath = path.slice(0, length);
-		const parent = document.getIn(parentPath, true);
-		if (!isAlias(parent)) continue;
-		const resolved = parent.resolve(document);
-		if (!resolved) throw new Error(`YAML alias at ${parentPath.join(".")} does not resolve`);
-		document.setIn(parentPath, document.createNode(resolved.toJS(document)));
+		materializeYamlAlias(document, path.slice(0, length));
 	}
 }
 
