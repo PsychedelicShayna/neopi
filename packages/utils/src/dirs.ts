@@ -201,13 +201,33 @@ export function relativePathWithinRoot(root: string, candidate: string): string 
 	return relativePathWithinNormalizedRoot(normalizedRoot, normalizedCandidate) || null;
 }
 
+function normalizePathThroughExistingAncestor(inputPath: string): string {
+	const resolvedPath = path.resolve(inputPath);
+	const missingSegments: string[] = [];
+	let ancestor = resolvedPath;
+	while (true) {
+		try {
+			const canonicalAncestor = fs.realpathSync(ancestor);
+			const canonicalPath = path.resolve(canonicalAncestor, ...missingSegments.reverse());
+			return process.platform === "win32" ? canonicalPath.toLowerCase() : canonicalPath;
+		} catch {
+			const parent = path.dirname(ancestor);
+			if (parent === ancestor) {
+				return process.platform === "win32" ? resolvedPath.toLowerCase() : resolvedPath;
+			}
+			missingSegments.push(path.basename(ancestor));
+			ancestor = parent;
+		}
+	}
+}
+
 const TEST_ALLOWED_STORAGE_ROOT_ENV = "NPI_TEST_ALLOWED_STORAGE_ROOT";
 
 function assertTestPathIsIsolated(candidate: string, kind: "agent" | "sessions"): void {
 	const allowedRoot = process.env[TEST_ALLOWED_STORAGE_ROOT_ENV];
 	if (!allowedRoot) return;
-	const normalizedAllowedRoot = normalizePathForComparison(allowedRoot);
-	const normalizedCandidate = normalizePathForComparison(candidate);
+	const normalizedAllowedRoot = normalizePathThroughExistingAncestor(allowedRoot);
+	const normalizedCandidate = normalizePathThroughExistingAncestor(candidate);
 	if (relativePathWithinNormalizedRoot(normalizedAllowedRoot, normalizedCandidate) !== null) return;
 	throw new Error(
 		`Test resolved ${kind} directory outside its isolated temporary storage: ${candidate}. ` +

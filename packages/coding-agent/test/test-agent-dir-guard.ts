@@ -1,4 +1,4 @@
-import { afterEach, beforeEach } from "bun:test";
+import { afterAll, afterEach, beforeEach } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -23,9 +23,12 @@ if (runsCodingAgentTests) {
 		"XDG_STATE_HOME",
 		"XDG_CACHE_HOME",
 	] as const;
+	const outerEnvironment = new Map(guardedEnvironmentKeys.map(key => [key, process.env[key]]));
 	let testRoot: string | undefined;
 	process.env.NPI_TEST_ALLOWED_STORAGE_ROOT = allowedStorageRoot;
 	process.env.PI_CODING_AGENT_DIR = suiteAgentDir;
+	delete process.env.OMP_PROFILE;
+	delete process.env.PI_PROFILE;
 	const suiteEnvironment = new Map(guardedEnvironmentKeys.map(key => [key, process.env[key]]));
 
 	function resetDirectoryResolver(): void {
@@ -36,13 +39,18 @@ if (runsCodingAgentTests) {
 		).__npiTestResetDirsFromEnv;
 		reset?.();
 	}
-	function restoreSuiteEnvironment(): void {
+	function restoreEnvironment(
+		environment: ReadonlyMap<(typeof guardedEnvironmentKeys)[number], string | undefined>,
+	): void {
 		for (const key of guardedEnvironmentKeys) {
-			const value = suiteEnvironment.get(key);
+			const value = environment.get(key);
 			if (value === undefined) delete process.env[key];
 			else process.env[key] = value;
 		}
 		resetDirectoryResolver();
+	}
+	function restoreSuiteEnvironment(): void {
+		restoreEnvironment(suiteEnvironment);
 	}
 
 	beforeEach(() => {
@@ -57,6 +65,11 @@ if (runsCodingAgentTests) {
 		testRoot = undefined;
 		restoreSuiteEnvironment();
 		if (completedRoot) removeSyncWithRetries(completedRoot);
+	});
+
+	afterAll(() => {
+		restoreEnvironment(outerEnvironment);
+		removeSyncWithRetries(suiteRoot);
 	});
 
 	process.once("exit", () => {
