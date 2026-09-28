@@ -12,6 +12,7 @@ import {
 	type ShellFilesystem,
 	type ShellRunResult,
 } from "@oh-my-pi/pi-natives";
+import { withTimeout } from "@oh-my-pi/pi-utils/async";
 import { $env } from "@oh-my-pi/pi-utils/env";
 import { isCmdShell, isExecutable, type ShellConfig } from "@oh-my-pi/pi-utils/procmgr";
 import { Settings } from "../config/settings";
@@ -37,6 +38,8 @@ export interface BashExecutorOptions {
 	onChunk?: (chunk: string) => void;
 	chunkThrottleMs?: number;
 	signal?: AbortSignal;
+	/** Managed jobs must await native cancellation before reporting their lifetime settled. */
+	awaitCancellation?: boolean;
 	/** Session key suffix to isolate shell sessions per agent */
 	sessionKey?: string;
 	/** Additional environment variables to inject */
@@ -703,6 +706,15 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 				quarantineShellSession(sessionKey, runPromise, cleanupPromise);
 			} else {
 				void Promise.allSettled([runPromise, cleanupPromise]);
+			}
+			if (options?.awaitCancellation) {
+				// A cancellation notice may return promptly to an interactive caller,
+				// but a managed job must retain ownership until native teardown ends.
+				await withTimeout(
+					Promise.allSettled([runPromise, cleanupPromise]),
+					NATIVE_TIMEOUT_FALLBACK_GRACE_MS,
+					"Shell cancellation did not settle before its cleanup deadline",
+				);
 			}
 			let notice = "Command cancelled";
 			if (winner.kind === "timeout" && deadlineTimeoutMs !== undefined) {
