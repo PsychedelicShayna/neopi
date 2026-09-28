@@ -48,7 +48,7 @@ describe("dictation during a live call", () => {
 			extractAssistantText: () => "",
 			createTransport: () => ({
 				connect: async () => {}, send: async () => {}, close: async () => {},
-				setMuted: async () => {}, pushAudio: samples => { liveAudio.push(samples); },
+				setMuted: async () => {}, pushAudio: samples => { liveAudio.push(samples); return true; },
 			}),
 			createRecorder: capture,
 		});
