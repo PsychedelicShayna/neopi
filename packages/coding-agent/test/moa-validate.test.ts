@@ -493,6 +493,35 @@ describe("definition size bounds", () => {
 		]);
 	});
 
+	const LONG = "x".repeat(MAX_TEXT_CHARS + 1);
+
+	it.each<[string, string, (definition: MixtureDefinition) => void]>([
+		["a model selector", "members[0].model", definition => Object.assign(definition.members[0]!, { model: LONG })],
+		[
+			"a role selector",
+			"members[0].role",
+			definition => Object.assign(definition.members[0]!, { systemPrompt: undefined, role: LONG }),
+		],
+		["a tool name", "members[0].tools[0]", definition => Object.assign(definition.members[0]!, { tools: [LONG] })],
+		[
+			"a choice-criteria label",
+			"members[2].question.criteria (key)",
+			definition =>
+				definition.members.push({
+					kind: "verdict",
+					id: "judge",
+					question: { type: "choice", instructions: "Which?", criteria: { [LONG]: "the long one" } },
+				}),
+		],
+		["an edge endpoint", "edges[0].to", definition => Object.assign(definition.edges[0]!, { to: LONG })],
+	])("refuses %s over the text cap at %s, before anything resolves it", (_label, path, mutate) => {
+		const definition = linear();
+		mutate(definition);
+		const result = check(definition);
+		expect(result.errors.map(issue => [issue.code, issue.path])).toEqual([["limits.text_size", path]]);
+		expect(result.resolved.members).toEqual({});
+	});
+
 	it("walks a 100 000-node chain for cycles without recursion, and still finds a back-edge", () => {
 		const successors = new Map<string, string[]>();
 		const count = 100_000;

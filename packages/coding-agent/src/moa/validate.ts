@@ -85,6 +85,45 @@ function sizeIssue(code: "limits.graph_size" | "limits.text_size", path: string,
 	return { code, path, message: `${path} has ${count} ${unit}; the cap is ${cap}` };
 }
 
+/** A TypeScript field name as the TOML key it was read from (`systemPrompt` → `system_prompt`). */
+function tomlKey(key: string): string {
+	return key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
+}
+
+/**
+ * Every string a definition and its document presets carry, with its TOML path: each
+ * string value, and each key of a keyed table (criteria labels, preset names), as
+ * `<table> (key)`. One walk over the data rather than a field list, so a field added
+ * later is bounded without anyone remembering to list it: selectors reach the model
+ * resolver, labels and prompts reach judgment and member requests, templates reach the
+ * compiler. Iterative, and linear in the definition's size.
+ */
+export function* definitionStrings(
+	definition: MixtureDefinition,
+	presets: { envelopes?: Record<string, string>; roles?: Record<string, string> } = {},
+): Generator<[path: string, text: string]> {
+	const stack: [path: string, value: unknown][] = [
+		["envelopes", presets.envelopes],
+		["roles", presets.roles],
+		["", definition],
+	];
+	while (stack.length > 0) {
+		const [path, value] = stack.pop()!;
+		if (typeof value === "string") {
+			yield [path, value];
+		} else if (Array.isArray(value)) {
+			for (let index = value.length - 1; index >= 0; index--) stack.push([`${path}[${index}]`, value[index]]);
+		} else if (value !== null && typeof value === "object") {
+			const entries = Object.entries(value);
+			for (const [key] of entries) yield [`${path || "definition"} (key)`, key];
+			for (let index = entries.length - 1; index >= 0; index--) {
+				const [key, child] = entries[index]!;
+				stack.push([path ? `${path}.${tomlKey(key)}` : tomlKey(key), child]);
+			}
+		}
+	}
+}
+
 /**
  * E23: the first size bound a definition breaks, checked before any other pass so an
  * oversized definition costs time linear in its size and gets exactly one error.
@@ -106,63 +145,25 @@ export function definitionSizeIssue(
 			return sizeIssue("limits.graph_size", `edges[${index}]`, targets, MAX_EDGE_TARGETS);
 		}
 	}
-	const texts: [path: string, text: string | null | undefined][] = [["description", definition.description]];
 	const parts: [path: string, parts: readonly unknown[] | undefined][] = [];
 	for (const [index, member] of definition.members.entries()) {
 		const path = `members[${index}]`;
-		texts.push([`${path}.description`, member.description]);
 		if (member.kind === "verdict") {
 			parts.push([`${path}.state`, member.state]);
-			texts.push([`${path}.render`, member.render], [`${path}.question.instructions`, member.question.instructions]);
-			const criteria = member.question.criteria;
-			if (Array.isArray(criteria)) {
-				criteria.forEach((rubric, rubricIndex) =>
-					texts.push([`${path}.question.criteria[${rubricIndex}]`, rubric]),
-				);
-			} else if (criteria) {
-				for (const [label, rubric] of Object.entries(criteria)) {
-					texts.push([`${path}.question.criteria.${label}`, rubric]);
-				}
-			}
 			continue;
 		}
-		texts.push([`${path}.system_prompt`, member.systemPrompt]);
-		if (member.route) {
-			parts.push([`${path}.route.state`, member.route.state]);
-			texts.push([`${path}.route.instructions`, member.route.instructions]);
-		}
-		if (member.terminate) {
-			parts.push([`${path}.terminate.state`, member.terminate.state]);
-			texts.push(
-				[`${path}.terminate.instructions`, member.terminate.instructions],
-				[`${path}.terminate.criteria.true`, member.terminate.criteria?.true],
-				[`${path}.terminate.criteria.false`, member.terminate.criteria?.false],
-			);
-		}
+		parts.push([`${path}.route.state`, member.route?.state], [`${path}.terminate.state`, member.terminate?.state]);
 	}
 	for (const [index, edge] of definition.edges.entries()) {
-		const path = `edges[${index}]`;
-		texts.push([`${path}.when`, edge.when], [`${path}.envelope`, edge.envelope]);
-		if (isFanoutEdge(edge)) {
-			if (Array.isArray(edge.slices)) parts.push([`${path}.slices`, edge.slices]);
-			texts.push([`${path}.join_envelope`, edge.joinEnvelope]);
-		}
-	}
-	for (const [table, entries] of [
-		["envelopes", definition.envelopes],
-		["roles", definition.roles],
-		["envelopes", presets.envelopes],
-		["roles", presets.roles],
-	] as const) {
-		for (const [name, text] of Object.entries(entries ?? {})) texts.push([`${table}.${name}`, text]);
+		if (isFanoutEdge(edge) && Array.isArray(edge.slices)) parts.push([`edges[${index}].slices`, edge.slices]);
 	}
 	for (const [path, list] of parts) {
 		if (list && list.length > MAX_STATE_PARTS) {
 			return sizeIssue("limits.graph_size", path, list.length, MAX_STATE_PARTS);
 		}
 	}
-	for (const [path, text] of texts) {
-		if (text && text.length > MAX_TEXT_CHARS) return sizeIssue("limits.text_size", path, text.length, MAX_TEXT_CHARS);
+	for (const [path, text] of definitionStrings(definition, presets)) {
+		if (text.length > MAX_TEXT_CHARS) return sizeIssue("limits.text_size", path, text.length, MAX_TEXT_CHARS);
 	}
 	return undefined;
 }
