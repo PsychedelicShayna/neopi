@@ -60,7 +60,9 @@ commit:
    review alone is how PR #113 shipped with a security thread that arrived
    four minutes after the merge.
 4. **Every bot thread has a reply** (see below), and every resolved thread
-   was resolved only after its reply was posted.
+   was resolved only after its reply was posted. The audit covers resolved
+   threads as well as open ones: a bot thread that was resolved without a
+   reply fails the gate until it is reopened, answered, and resolved again.
 5. **The branch is mergeable**, with no conflicts against `neopi`.
 
 `P2` findings that are not fixed MUST be listed in the merge note, each with

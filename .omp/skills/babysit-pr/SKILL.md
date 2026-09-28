@@ -20,6 +20,7 @@ applies. A push or a green snapshot is progress, not an end point.
 PR=<number>
 REPO=PsychedelicShayna/neopi
 OWNER=${REPO%/*} NAME=${REPO#*/}
+THREADS="${TMPDIR:-/tmp}/pr-$PR-threads.jsonl"   # step 1 thread output, outside the worktree
 ```
 
 - Confirm the authorization. Note which PR it names and whether it includes
@@ -53,7 +54,9 @@ gh api --paginate --slurp "repos/$REPO/issues/$PR/comments?per_page=100" | jq '
   | [scan("\\*\\*(Code|Security) Review\\*\\* \\| [^*]*\\*\\*([A-Za-z ]+)\\*\\*[^|]*\\| `([0-9a-f]+)`")]
   | map({pass: .[0], status: .[1], commit: .[2]})'
 
-# Unresolved review threads, with the fields used for triage. --paginate
+# Every review thread, resolved or not, with the fields used for triage and
+# for the gate audit in step 8. `replied` is true when someone other than
+# the thread's first author has answered in it. --paginate
 # follows the first pageInfo in the response, so reviewThreads' pageInfo
 # must come before its nodes. --jq runs once per page.
 gh api graphql --paginate -F owner=$OWNER -F name=$NAME -F pr=$PR -f query='
@@ -63,13 +66,14 @@ gh api graphql --paginate -F owner=$OWNER -F name=$NAME -F pr=$PR -f query='
         pageInfo{hasNextPage endCursor}
         nodes{id isResolved isOutdated path line
           comments(first:100){nodes{databaseId author{login} createdAt body}}}}}}}' --jq '
-  .data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved | not)
+  .data.repository.pullRequest.reviewThreads.nodes[]
   | .comments.nodes as $c
-  | {thread: .id, comment: $c[0].databaseId, author: $c[0].author.login,
+  | {thread: .id, resolved: .isResolved, comment: $c[0].databaseId, author: $c[0].author.login,
      outdated: .isOutdated, path, line,
      severity: ($c[0].body | capture("!\\[(?<s>P[0-3]) Badge\\]").s // "none"),
      security: ($c[0].body | contains("codex-security-review-finding")),
-     replies: ($c | length - 1)}'
+     replies: ($c | length - 1),
+     replied: any($c[1:][]; .author.login != $c[0].author.login)}' | tee "$THREADS"
 ```
 
 Read a thread in full (`gh api repos/$REPO/pulls/comments/<comment>`) before
@@ -97,7 +101,7 @@ because you enforce it.
 
 ## 3. Triage findings
 
-For every unresolved thread:
+For every thread with `resolved: false`:
 
 1. Classify the author: a configured bot, or a human. Human threads go to
    the owner as a draft reply. Do not post it (see the policy's
@@ -186,6 +190,24 @@ owner. When a round brings new findings, go back to step 3.
 Check every condition of the policy's merge gate against a fresh snapshot of
 the head commit. If the authorization does not include merging, stop here and
 report that the PR is ready to merge.
+
+Audit **every** bot thread first, including resolved ones. List the threads
+in the fresh step 1 output whose `author` is a configured bot and whose
+`replied` is false:
+
+```sh
+jq -c 'select(.author == "chatgpt-codex-connector" and (.replied | not))' "$THREADS"
+```
+
+Any hit fails the gate. For a thread that was resolved without a reply,
+reopen it, post the reply as in step 6, then resolve it again:
+
+```sh
+gh api graphql -f id=<thread> -f query='
+  mutation($id:ID!){unresolveReviewThread(input:{threadId:$id}){thread{isResolved}}}'
+```
+
+Then merge:
 
 ```sh
 HEAD=$(gh pr view $PR --json headRefOid --jq .headRefOid)
