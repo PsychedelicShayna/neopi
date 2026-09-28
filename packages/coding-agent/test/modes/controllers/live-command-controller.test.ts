@@ -9,6 +9,7 @@ import { LiveCommandController } from "@oh-my-pi/pi-coding-agent/modes/controlle
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { getEditorTheme } from "@oh-my-pi/pi-tui/theme";
+import { cfgLiveForceDelegateKeyword, cfgLiveSubmitKeyword, cfgLiveSubmitSilenceMs } from "@oh-my-pi/pi-coding-agent/live/settings";
 
 interface Harness {
 	ctx: InteractiveModeContext;
@@ -71,6 +72,7 @@ function createHarness(): Harness {
 		});
 		return session;
 	});
+	editor.onChange = () => controller.noteComposerActivity();
 	return {
 		ctx,
 		editor,
@@ -197,8 +199,10 @@ describe("LiveCommandController", () => {
 	});
 
 	for (const destination of ["primary", "voice", "both"] as const) {
-		it(`submits the trailing keyword to the selected ${destination} destination and recalls the sent text`, async () => {
+		it(`submits a composer keyword to the selected ${destination} destination and recalls the sent text`, async () => {
 			const h = createHarness();
+			cfgLiveSubmitKeyword.set(h.ctx.settings, "send off");
+			cfgLiveSubmitSilenceMs.set(h.ctx.settings, 20);
 			await h.controller.handleCommand();
 			if (destination !== "primary") h.controller.cycleDestination();
 			if (destination === "both") h.controller.cycleDestination();
@@ -211,8 +215,8 @@ describe("LiveCommandController", () => {
 				}
 				h.editor.addToHistory(text);
 			};
-			speak(h, 1, "ship the corrected code", true);
-			h.callbacks().onSubmitKeyword?.("ship the corrected code");
+			speak(h, 1, "ship the corrected code SEND OFF", false);
+			await Bun.sleep(50);
 			expect(h.editor.getText()).toBe("");
 			expect(sentToMain).toEqual(destination === "voice" ? [] : ["ship the corrected code"]);
 			expect(h.sentToVoice).toEqual(
@@ -223,6 +227,103 @@ describe("LiveCommandController", () => {
 			await h.controller.stop();
 		});
 	}
+
+	it("submits trailing speech after composer silence, not a provider-finalized turn", async () => {
+		const h = createHarness();
+		const sent: string[] = [];
+		h.editor.onSubmit = text => {
+			sent.push(text);
+			h.editor.addToHistory(text);
+		};
+		cfgLiveSubmitKeyword.set(h.ctx.settings, "send off");
+		cfgLiveSubmitSilenceMs.set(h.ctx.settings, 20);
+		await h.controller.handleCommand();
+		try {
+			speak(h, 1, "Ship this, SEND... OFF!", false);
+			await Bun.sleep(50);
+			expect(sent).toEqual(["Ship this,"]);
+			expect(h.editor.getText()).toBe("");
+			h.editor.handleInput("\x1b[A");
+			expect(h.editor.getText()).toBe("Ship this,");
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	it("restarts silence on new text and cancels a corrected or mid-text keyword", async () => {
+		const h = createHarness();
+		const sent: string[] = [];
+		h.editor.onSubmit = text => {
+			sent.push(text);
+		};
+		cfgLiveSubmitKeyword.set(h.ctx.settings, "send off");
+		cfgLiveSubmitSilenceMs.set(h.ctx.settings, 35);
+		await h.controller.handleCommand();
+		try {
+			speak(h, 1, "send off", false);
+			await Bun.sleep(20);
+			speak(h, 1, "send off tomorrow", false);
+			await Bun.sleep(45);
+			expect(sent).toEqual([]);
+			speak(h, 1, "fix it send off", false);
+			await Bun.sleep(15);
+			speak(h, 1, "fix it, not yet", true);
+			await Bun.sleep(45);
+			expect(sent).toEqual([]);
+			expect(h.editor.getText()).toBe("fix it, not yet");
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	it("uses the current keyword and timeout settings without restarting the call", async () => {
+		const h = createHarness();
+		const sent: string[] = [];
+		h.editor.onSubmit = text => {
+			sent.push(text);
+		};
+		await h.controller.handleCommand();
+		try {
+			cfgLiveSubmitKeyword.set(h.ctx.settings, "send off");
+			cfgLiveSubmitSilenceMs.set(h.ctx.settings, 20);
+			speak(h, 1, "review this sendoff", false);
+			await Bun.sleep(50);
+			expect(sent).toEqual(["review this"]);
+			cfgLiveSubmitKeyword.set(h.ctx.settings, "");
+			speak(h, 2, "review again SHIP IT", false);
+			await Bun.sleep(30);
+			expect(sent).toEqual(["review this"]);
+			cfgLiveSubmitKeyword.set(h.ctx.settings, "ship it");
+			await Bun.sleep(50);
+			expect(sent).toEqual(["review this", "review again"]);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	it("force-delegates only a trailing composer keyword after the same silence interval", async () => {
+		const h = createHarness();
+		const forced = vi.spyOn(LiveSessionController.prototype, "forceDelegateComposer").mockReturnValue(true);
+		cfgLiveForceDelegateKeyword.set(h.ctx.settings, "send it now");
+		cfgLiveSubmitSilenceMs.set(h.ctx.settings, 35);
+		await h.controller.handleCommand();
+		try {
+			speak(h, 1, "send it now is not the ending", false);
+			await Bun.sleep(45);
+			expect(forced).not.toHaveBeenCalled();
+			speak(h, 1, "fix the cache send it now", false);
+			await Bun.sleep(20);
+			speak(h, 1, "fix the cache send it now later", false);
+			await Bun.sleep(45);
+			expect(forced).not.toHaveBeenCalled();
+			speak(h, 1, "fix the cache SEND... IT, NOW!", false);
+			await Bun.sleep(50);
+			expect(forced).toHaveBeenCalledTimes(1);
+			expect(forced).toHaveBeenCalledWith("fix the cache");
+		} finally {
+			await h.controller.stop();
+		}
+	});
 
 	it("keeps an unfinished utterance as draft text when the call ends", async () => {
 		const h = createHarness();

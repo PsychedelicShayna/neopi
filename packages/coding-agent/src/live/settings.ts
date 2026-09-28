@@ -27,7 +27,7 @@ export const cfgLiveForceDelegateKeyword = register({
 		tab: "providers",
 		group: "Services",
 		label: "Live Force-Delegate Keyword",
-		description: "Finalized speech containing this phrase sends accumulated speech to the main agent (empty disables)",
+		description: "Phrase at the end of composer text that force-delegates after the configured silence (empty disables)",
 	},
 });
 
@@ -51,6 +51,18 @@ export const cfgLiveSubmitKeyword = register({
 		tab: "providers",
 		group: "Services",
 		label: "Live Submit Keyword",
-		description: "Phrase at the end of finalized speech that submits the composer to its selected destination",
+		description: "Phrase at the end of composer text that submits after the configured silence (empty disables)",
+	},
+});
+
+export const cfgLiveSubmitSilenceMs = register({
+	id: "live.submitSilenceMs",
+	type: "number",
+	default: 2000,
+	ui: {
+		tab: "providers",
+		group: "Services",
+		label: "Live Submit Silence (ms)",
+		description: "Silence after the last composer write before a trailing submit or force-delegate keyword runs",
 	},
 });
