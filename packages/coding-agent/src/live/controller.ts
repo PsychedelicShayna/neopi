@@ -9,6 +9,7 @@ import type { CustomMessageDelivery } from "../session/agent-session";
 import type { AgentSessionEvent } from "../session/agent-session-events";
 import { type CustomMessage, LIVE_DELEGATION_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../session/messages";
 import { sharedAudioCapture } from "../stt/shared-audio-capture";
+import { stripLiveKeyword } from "./keywords";
 import { resolveLiveInstructions } from "./personas";
 import agentFinalMessageTemplate from "./prompts/agent-final-message.md" with { type: "text" };
 import operatorSharedMessageTemplate from "./prompts/operator-shared-message.md" with { type: "text" };
@@ -41,6 +42,8 @@ interface UserLedgerTurn {
 	text: string;
 	final: boolean;
 	claim?: number;
+	blocked?: boolean;
+	reported?: boolean;
 }
 
 type HeldContextKind = "report" | "thinking" | "progress";
@@ -72,13 +75,14 @@ export interface LiveSessionCallbacks {
 	onTranscript(transcript: LiveTranscript | undefined): void;
 	/** Reports one terminal stop, optionally carrying its cause. */
 	onTerminal(error?: Error): void;
-	/** Reports the ledger turns (as numbered by {@link onUserSpeech}) the primary agent accepted
-	 *  through a voice handoff. */
-	onDelegated?(turns: readonly number[]): void;
 	/** Reports each update to an operator turn exactly as the handoff ledger records it: every
 	 *  turn, repeats included, with the final text authoritative. Composer input follows this,
 	 *  not the coalesced display transcript. */
 	onUserSpeech?(speech: LiveTranscript): void;
+	/** Final text delivered to the main agent or handled by the voice agent. */
+	onSpeechSent?(text: string): void;
+	/** Finalized trailing submit phrase: dispatch the current composer through Enter. */
+	onSubmitKeyword?(text: string): void;
 }
 
 /** Structural transport surface the controller needs (test seam). */
@@ -101,6 +105,9 @@ export interface LiveSessionControllerOptions {
 	extractAssistantText(message: AssistantMessage): string;
 	/** Realtime output voice, defaulting to sol. */
 	voice?: string;
+	forceDelegateKeyword?: string;
+	blockDelegateKeyword?: string;
+	submitKeyword?: string;
 	/** Test seam: quiet time after operator activity before held context sends; defaults to 10000 ms. */
 	speakableIdleMs?: number;
 	/** Test seam: minimum gap between reasoning narrations; defaults to 3000 ms. */
@@ -175,6 +182,9 @@ export class LiveSessionController {
 	readonly #extractAssistantText: (message: AssistantMessage) => string;
 	readonly #voice: string;
 	readonly #speakableIdleMs: number;
+	readonly #forceDelegateKeyword: string;
+	readonly #blockDelegateKeyword: string;
+	readonly #submitKeyword: string;
 
 	readonly #createTransport: (options: ConstructorParameters<typeof CodexLiveTransport>[0]) => LiveTransportLike;
 	readonly #createRecorder: (
@@ -213,6 +223,7 @@ export class LiveSessionController {
 	#userTurns = new Map<number, UserLedgerTurn>();
 	/** Insertion-order tail of {@link #userTurns}. Partial updates land here. */
 	#tailTurnNumber: number | undefined;
+	#lastTurnBlocked = false;
 	/** Ledger turns already final and unclaimed when the voice agent began its current response:
 	 *  the turns that response answers. Undefined while no response is under way. */
 	#answeredTurns: number[] | undefined;
@@ -232,7 +243,7 @@ export class LiveSessionController {
 	#userLedgerTurn = 0;
 	readonly #seenDelegationIds = new Set<string>();
 	#pendingDelegation:
-		| { id: string; generation: number; turns: number[]; dispatchEnabled: boolean; dispatching: boolean }
+		| { id: string; generation: number; turns: number[]; forced: boolean; dispatchEnabled: boolean; dispatching: boolean }
 		| undefined;
 	#pendingDelivery: CustomMessageDelivery | undefined;
 	/** Coalesced in-flight live abort, so rapid handoffs never overlap AgentSession.abort(). */
@@ -274,6 +285,9 @@ export class LiveSessionController {
 		this.#callbacks = options.callbacks;
 		this.#extractAssistantText = options.extractAssistantText;
 		this.#voice = options.voice?.trim() || DEFAULT_LIVE_VOICE;
+		this.#forceDelegateKeyword = options.forceDelegateKeyword ?? "";
+		this.#blockDelegateKeyword = options.blockDelegateKeyword ?? "";
+		this.#submitKeyword = options.submitKeyword ?? "";
 		const speakableIdleMs = options.speakableIdleMs;
 		this.#speakableIdleMs =
 			typeof speakableIdleMs === "number" && Number.isFinite(speakableIdleMs) && speakableIdleMs >= 0
@@ -403,8 +417,8 @@ export class LiveSessionController {
 		// that case retire its speech from the composer now, while the caller still listens.
 		const pending = this.#pendingDelegation;
 		if (pending?.dispatching && this.#pendingDelivery && !this.#pendingDelivery.cancel()) {
-			const turns = this.#turnsWhere(turn => turn.claim === pending.generation).map(turn => turn.turn);
-			if (turns.length > 0) this.#emitDelegated(turns);
+			const turns = this.#turnsWhere(turn => turn.claim === pending.generation);
+			this.#acceptSpeech(turns.map(turn => turn.text).join("\n\n").trim(), pending.forced);
 		} else {
 			this.#pendingDelivery?.cancel();
 		}
@@ -491,7 +505,10 @@ export class LiveSessionController {
 			case "turn.done":
 				this.#recordLiveTranscript(event.turn.role, event.turn.transcript, true);
 				if (event.turn.role === "user") this.#ingestUserTurn(event.turn.transcript, true);
-				else this.#retireAnsweredTurns();
+				else {
+					this.#noteResponseStart();
+					this.#retireAnsweredTurns();
+				}
 				this.#finishTranscript(event.turn.role, event.turn.transcript);
 				break;
 			case "delegation.created":
@@ -512,12 +529,14 @@ export class LiveSessionController {
 	 * unaccepted claims move to the newest routing id, while accepted turns are
 	 * retired and later speech barges into the active work as a new handoff.
 	 */
-	async #handleDelegation(event: Extract<LiveServerEvent, { type: "delegation.created" }>): Promise<void> {
+	async #handleDelegation(event: Extract<LiveServerEvent, { type: "delegation.created" }>, forced = false): Promise<void> {
 		if (this.#seenDelegationIds.has(event.item.id)) return;
 		this.#seenDelegationIds.add(event.item.id);
+		if (!forced && this.#lastTurnBlocked) return;
 
 		const generation = ++this.#delegationGeneration;
-		const previousGeneration = this.#pendingDelegation?.generation;
+		const previousPending = this.#pendingDelegation;
+		const previousGeneration = previousPending?.generation;
 		const previousDelivery = this.#pendingDelivery;
 		const cancelledPrevious = previousDelivery?.cancel() === true;
 		if (previousDelivery && !cancelledPrevious && previousGeneration !== undefined) {
@@ -526,7 +545,7 @@ export class LiveSessionController {
 			// continuation stops at the generation check, so retire their speech
 			// from the composer here.
 			const accepted = this.#deleteTurns(turn => turn.claim === previousGeneration);
-			if (accepted.length > 0) this.#emitDelegated(accepted.map(turn => turn.turn));
+			this.#acceptSpeech(accepted.map(turn => turn.text).join("\n\n").trim(), previousPending?.forced ?? false);
 		}
 		this.#pendingDelivery = undefined;
 		if (cancelledPrevious) {
@@ -534,7 +553,7 @@ export class LiveSessionController {
 		}
 		if (generation !== this.#delegationGeneration) return;
 		const claimed = this.#turnsWhere(
-			turn => turn.claim === undefined || turn.claim === this.#pendingDelegation?.generation,
+			turn => !turn.blocked && (turn.claim === undefined || turn.claim === this.#pendingDelegation?.generation),
 		);
 		if (claimed.length === 0) return;
 		// The voice agent is acting on the operator's words now; hold nothing back.
@@ -543,6 +562,7 @@ export class LiveSessionController {
 		this.#pendingDelegation = {
 			id: event.item.id,
 			generation,
+			forced,
 			turns: claimed.map(turn => turn.turn),
 			dispatchEnabled: false,
 			dispatching: false,
@@ -608,7 +628,7 @@ export class LiveSessionController {
 			this.#activeDelegationId = pending.id;
 			this.#lastRelayedResponse = undefined;
 			this.#thinkingRelayedLength = 0;
-			this.#emitDelegated(turns.map(turn => turn.turn));
+			this.#acceptSpeech(merged, pending.forced);
 			await delivery.completed;
 		} catch (cause) {
 			// A newer delegation barging in aborts this turn mid-await; that
@@ -628,6 +648,12 @@ export class LiveSessionController {
 			}
 			throw cause;
 		}
+	}
+
+	#acceptSpeech(text: string, forced: boolean): void {
+		if (!text) return;
+		this.#callbacks.onSpeechSent?.(text);
+		if (forced) this.#queueSend(buildSessionContextAppend("Operator Message Sent To Main Agent", "commentary"));
 	}
 
 	#handleSessionEvent(event: AgentSessionEvent): void {
@@ -815,7 +841,16 @@ export class LiveSessionController {
 		const answered = this.#answeredTurns;
 		this.#answeredTurns = undefined;
 		if (!answered?.length) return;
-		this.#deleteTurns(turn => turn.claim === undefined && answered.includes(turn.turn));
+		const turns = this.#turnsWhere(
+			turn => turn.claim === undefined && !turn.reported && answered.includes(turn.turn),
+		);
+		const text = turns.map(turn => turn.text).join("\n\n").trim();
+		if (text) this.#callbacks.onSpeechSent?.(text);
+		for (const turn of turns) turn.reported = true;
+		// Keep answered speech available until the operator uses the force keyword.
+		if (!this.#forceDelegateKeyword.trim()) {
+			this.#deleteTurns(turn => turn.claim === undefined && answered.includes(turn.turn));
+		}
 	}
 
 	/** Fleet feed: relay a crew IRC message onto the speakable channel for background awareness. */
@@ -1095,7 +1130,66 @@ export class LiveSessionController {
 			// one continues the previous word. Trimming it away glued words together.
 			current.text += /^\s/.test(text) ? ` ${normalized}` : normalized;
 		}
+		let forced = false;
+		let submitRequested = false;
+		if (final) {
+			const block = stripLiveKeyword(current.text, this.#blockDelegateKeyword);
+			this.#lastTurnBlocked = block.matched;
+			if (block.matched) {
+				current.text = block.text;
+				current.blocked = true;
+			} else {
+				const unsent = this.#turnsWhere(
+					turn => !turn.blocked && (turn.claim === undefined || turn.claim === this.#pendingDelegation?.generation),
+				);
+				const candidate = unsent.map(turn => turn.text).join("\n\n");
+				const match = stripLiveKeyword(candidate, this.#forceDelegateKeyword);
+				if (match.matched) {
+					// One canonical prompt: the final turn now owns all accumulated speech.
+					this.#deleteTurns(turn => turn !== current && unsent.includes(turn));
+					current.text = match.text;
+					forced = true;
+				}
+				if (!forced) {
+					const submit = stripLiveKeyword(current.text, this.#submitKeyword, true);
+					if (submit.matched) {
+						current.text = submit.text;
+						submitRequested = true;
+					}
+				}
+			}
+		}
 		this.#emitUserSpeech({ role: "user", turn: current.turn, text: current.text, final: current.final });
+		if (current.blocked) {
+			const pending = this.#pendingDelegation;
+			if (pending) {
+				this.#pendingDelivery?.cancel();
+				this.#delegationGeneration += 1;
+				this.#pendingDelegation = undefined;
+				this.#pendingDelivery = undefined;
+				for (const turn of this.#userTurns.values()) {
+					if (turn.claim === pending.generation) turn.claim = undefined;
+				}
+				this.#refreshAudioPhase();
+			}
+			this.#deleteTurns(turn => turn === current);
+			if (current.text) {
+				void this.sendOperatorText(current.text, "voice");
+				this.#callbacks.onSpeechSent?.(current.text);
+			}
+			return;
+		}
+		if (forced) {
+			void this.#handleDelegation({
+				type: "delegation.created",
+				item: { type: "delegation", target: "client", id: `forced-${crypto.randomUUID()}`, content: [] },
+			}, true).catch(cause => this.#reportFailure(errorFrom(cause)));
+			return;
+		}
+		if (submitRequested) {
+			this.#callbacks.onSubmitKeyword?.(current.text);
+			return;
+		}
 		const pendingGeneration = this.#pendingDelegation?.generation;
 		if (final && pendingGeneration !== undefined) {
 			void this.#dispatchPendingDelegation(pendingGeneration).catch(cause => this.#reportFailure(errorFrom(cause)));
@@ -1284,14 +1378,6 @@ export class LiveSessionController {
 	#emitUserSpeech(speech: LiveTranscript): void {
 		try {
 			this.#callbacks.onUserSpeech?.(speech);
-		} catch (cause) {
-			this.#reportFailure(errorFrom(cause));
-		}
-	}
-
-	#emitDelegated(turns: readonly number[]): void {
-		try {
-			this.#callbacks.onDelegated?.(turns);
 		} catch (cause) {
 			this.#reportFailure(errorFrom(cause));
 		}

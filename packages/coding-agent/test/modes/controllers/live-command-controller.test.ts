@@ -10,8 +10,6 @@ import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/typ
 import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { getEditorTheme } from "@oh-my-pi/pi-tui/theme";
 
-const UNDO = "\x1b[45;5u";
-
 interface Harness {
 	ctx: InteractiveModeContext;
 	editor: CustomEditor;
@@ -185,66 +183,46 @@ describe("LiveCommandController", () => {
 		await h.controller.stop();
 	});
 
-	it("removes delegated speech from the draft as one undoable edit", async () => {
+	it("clears the entire sent draft and recalls the final corrected speech with Up", async () => {
 		const h = createHarness();
-		h.editor.insertText("note:");
+		h.editor.insertText("first segment ");
 		await h.controller.handleCommand();
-		speak(h, 1, "repair the cache", true);
-		expect(h.editor.getText()).toBe("note: repair the cache");
-
-		h.callbacks().onDelegated?.([1]);
-		expect(h.editor.getText()).toBe("note:");
-		h.editor.handleInput(UNDO);
-		expect(h.editor.getText()).toBe("note: repair the cache");
-		await h.controller.stop();
-	});
-
-	it("does not count removing delegated speech as operator activity", async () => {
-		const h = createHarness();
-		await h.controller.handleCommand();
-		const activity = vi.spyOn(LiveSessionController.prototype, "noteComposerActivity");
-		h.editor.onChange = () => h.controller.noteComposerActivity();
-		speak(h, 1, "repair the cache", true);
-		activity.mockClear();
-		h.callbacks().onDelegated?.([1]);
+		speak(h, 1, "raw preview", true);
+		expect(h.editor.getText()).toBe("first segment raw preview");
+		h.callbacks().onSpeechSent?.("first segment corrected transcript");
 		expect(h.editor.getText()).toBe("");
-		expect(activity).not.toHaveBeenCalled();
+		h.editor.handleInput("\x1b[A");
+		expect(h.editor.getText()).toBe("first segment corrected transcript");
 		await h.controller.stop();
 	});
 
-	it("keeps the operator's own line break before delegated speech", async () => {
-		const h = createHarness();
-		h.editor.insertText("notes:");
-		h.editor.handleInput("\x1b[13;2u");
-		await h.controller.handleCommand();
-		speak(h, 1, "repair the cache", true);
-		h.callbacks().onDelegated?.([1]);
-		expect(h.editor.getText()).toBe("notes:\n");
-		await h.controller.stop();
-	});
-
-	it("removes the delegated turn's speech, not a later identical utterance", async () => {
-		const h = createHarness();
-		await h.controller.handleCommand();
-		speak(h, 1, "run it", true);
-		speak(h, 2, "run it", true);
-		expect(h.editor.getText()).toBe("run it run it");
-		h.callbacks().onDelegated?.([1]);
-		expect(h.editor.getText()).toBe("run it");
-		h.callbacks().onDelegated?.([2]);
-		expect(h.editor.getText()).toBe("");
-		await h.controller.stop();
-	});
-
-	it("removes only the spoken copy of delegated speech, never matching text the operator typed", async () => {
-		const h = createHarness();
-		await h.controller.handleCommand();
-		speak(h, 1, "fix it", true);
-		h.editor.insertText(" then fix it");
-		h.callbacks().onDelegated?.([1]);
-		expect(h.editor.getText()).toBe(" then fix it");
-		await h.controller.stop();
-	});
+	for (const destination of ["primary", "voice", "both"] as const) {
+		it(`submits the trailing keyword to the selected ${destination} destination and recalls the sent text`, async () => {
+			const h = createHarness();
+			await h.controller.handleCommand();
+			if (destination !== "primary") h.controller.cycleDestination();
+			if (destination === "both") h.controller.cycleDestination();
+			const sentToMain: string[] = [];
+			h.editor.onSubmit = text => {
+				const route = h.controller.routeSubmit(text, { hasImages: false });
+				if (route === "primary") {
+					sentToMain.push(text);
+					h.controller.shareSubmit(text);
+				}
+				h.editor.addToHistory(text);
+			};
+			speak(h, 1, "ship the corrected code", true);
+			h.callbacks().onSubmitKeyword?.("ship the corrected code");
+			expect(h.editor.getText()).toBe("");
+			expect(sentToMain).toEqual(destination === "voice" ? [] : ["ship the corrected code"]);
+			expect(h.sentToVoice).toEqual(
+				destination === "primary" ? [] : [["ship the corrected code", destination]],
+			);
+			h.editor.handleInput("\x1b[A");
+			expect(h.editor.getText()).toBe("ship the corrected code");
+			await h.controller.stop();
+		});
+	}
 
 	it("keeps an unfinished utterance as draft text when the call ends", async () => {
 		const h = createHarness();
