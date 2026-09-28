@@ -65,10 +65,20 @@ const SESSION_LEASE_SETTLE_MS = 250;
 const SESSION_LEASE_POLL_MS = 5;
 
 interface HeldLease {
-	gate: NativeFileLock;
+	/** Absent when the gate could not be created (unwritable directory); the lease then excludes nobody. */
+	gate: NativeFileLock | undefined;
 	recordPath: string;
 	since: number;
 	refs: number;
+}
+
+/**
+ * Filesystem refusals that must not turn a lease into a startup failure: a
+ * read-only or full session directory already surfaces through the session
+ * store's own persistence-failure path, and read-only sessions must still load.
+ */
+function isUnwritableFsError(err: unknown): boolean {
+	return ["EACCES", "EPERM", "EROFS", "ENOSPC", "EDQUOT"].some(code => hasFsCode(err, code));
 }
 
 /** Leases this process owns, keyed by {@link sessionLeaseKey}. */
@@ -145,14 +155,31 @@ function claimLease(key: string, sessionFile: string): HeldLease {
 	const recordPath = sessionLeasePath(key);
 	const deadline = Date.now() + SESSION_LEASE_SETTLE_MS;
 	for (;;) {
-		const gate = NativeFileLock.tryAcquire(leaseGatePath(recordPath));
+		let gate: NativeFileLock;
+		try {
+			gate = NativeFileLock.tryAcquire(leaseGatePath(recordPath));
+		} catch (err) {
+			if (!isUnwritableFsError(err)) throw err;
+			logger.warn("Session lease gate unavailable; continuing without a lease", {
+				sessionFile,
+				error: String(err),
+			});
+			return { gate: undefined, recordPath, since: Date.now(), refs: 1 };
+		}
 		if (gate.acquired) {
 			const since = Date.now();
 			try {
 				writeLeaseRecord(recordPath, { pid: process.pid, since });
 			} catch (err) {
-				gate.release();
-				throw err;
+				if (!isUnwritableFsError(err)) {
+					gate.release();
+					throw err;
+				}
+				// The gate alone still excludes other processes; openers just cannot name this pid.
+				logger.warn("Session lease record not written; holding the lease without a record", {
+					sessionFile,
+					error: String(err),
+				});
 			}
 			return { gate, recordPath, since, refs: 1 };
 		}
@@ -198,7 +225,7 @@ class ProcessSessionLease implements SessionLease {
 				});
 			}
 		} finally {
-			held.gate.release();
+			held.gate?.release();
 		}
 	}
 }
@@ -210,7 +237,11 @@ class ProcessSessionLease implements SessionLease {
  */
 export function acquireSessionLease(sessionFile: string): SessionLease {
 	const resolved = path.resolve(sessionFile);
-	fs.mkdirSync(path.dirname(resolved), { recursive: true });
+	try {
+		fs.mkdirSync(path.dirname(resolved), { recursive: true });
+	} catch (err) {
+		if (!isUnwritableFsError(err)) throw err;
+	}
 	const key = sessionLeaseKey(resolved);
 	let held = heldLeases.get(key);
 	if (held) {
