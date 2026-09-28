@@ -68,6 +68,7 @@ import { blobExtensionForImageMimeType } from "@oh-my-pi/pi-tui/prompt/image-for
 import { VideoError, buildVideoContactSheetPng, probeVideo } from "../../utils/video";
 import { isVideoPath } from "@oh-my-pi/pi-tui/prompt/video";
 import { resizeImage } from "../../utils/image-resize";
+import { findUnknownSlashCommand } from "../utils/unknown-slash-command";
 import { parseReplEvalInput } from "./repl-input";
 
 import { cfgCycleOrder } from "../../config/model-settings";
@@ -232,6 +233,8 @@ export class InputController {
 
 	#enhancedPaste?: EnhancedPasteController;
 	#draftText: string | undefined;
+	/** Unknown `/command` text already warned about; submitting it again sends it as a prompt. */
+	#unknownSlashWarned: string | undefined;
 	#focusedLeftTapListenerInstalled = false;
 	#focusedPasteListenerInstalled = false;
 	#btwBranchListenerInstalled = false;
@@ -1132,6 +1135,25 @@ export class InputController {
 				this.ctx.collabGuest.sendPrompt(text, images);
 				return;
 			}
+
+			// A mistyped `/command` would otherwise reach the model as prose. Warn and keep the draft;
+			// submitting the same text again sends it unchanged.
+			const unknownSlash =
+				text !== this.#unknownSlashWarned &&
+				!this.ctx.isKnownSlashCommand(text) &&
+				!isKnownSkillCommand(this.ctx, text)
+					? findUnknownSlashCommand(text, this.ctx.slashCommandNames)
+					: undefined;
+			if (unknownSlash) {
+				this.#unknownSlashWarned = text;
+				const hint = unknownSlash.suggestion ? ` Did you mean /${unknownSlash.suggestion}?` : "";
+				this.ctx.showWarning(
+					`Unknown command /${unknownSlash.name}.${hint} Press Enter again to send it as a message.`,
+				);
+				if (!this.ctx.editor.restoreSubmittedDraft()) this.ctx.editor.setCollapsedText(text);
+				return;
+			}
+			this.#unknownSlashWarned = undefined;
 
 			// Handle skill commands (/skill:name [args]). Enter ⇒ steer (matches the
 			// free-text Enter semantics below); Ctrl+Enter routes through `handleFollowUp`.
