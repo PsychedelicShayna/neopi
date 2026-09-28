@@ -33,7 +33,8 @@ RFC 2119 applies to MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL.
 | Codex connector | `chatgpt-codex-connector[bot]` / `chatgpt-codex-connector` | PR comment `@codex review`. `@codex security review` requests only the security pass. | The summary comment (`<!-- codex-pull-request-review-summary -->`) shows both **Code Review** and **Security Review** as completed on the head commit. A 👍 reaction means both finished with no findings, and a 👀 reaction means a pass is still running. | A `P<n>` badge opens each inline finding. Security findings start with `<!-- codex-security-review-finding:v1 -->` and a `Security:` title. |
 
 A Codex reply that begins `Codex Review: Something went wrong` is a failed
-round, not a clean one. Request the round again.
+round, not a clean one. The latest response controls: an older completed
+summary does not override a newer failure. Request the round again.
 
 ### Adding a bot
 

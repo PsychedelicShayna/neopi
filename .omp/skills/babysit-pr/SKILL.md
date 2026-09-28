@@ -104,13 +104,21 @@ SNAP_HEAD=$(jq -r .headRefOid <<<"$PRSTATE")
 # CI on the head commit
 gh pr checks $PR --json name,bucket,state,workflow,link
 
-# Codex rounds: one entry per pass, with its status and the commit it reviewed.
-# --slurp gathers every page into one array; gh cannot combine it with --jq.
+# Codex's latest response, including a failed response. An older completed
+# summary never overrides a newer failure. --slurp gathers every page into
+# one array; gh cannot combine it with --jq.
 gh api --paginate --slurp "repos/$REPO/issues/$PR/comments?per_page=100" | jq '
   [add[] | select(.user.login == "chatgpt-codex-connector[bot]"
-     and (.body | contains("codex-pull-request-review-summary")))] | last | .body
-  | [scan("\\*\\*(Code|Security) Review\\*\\* \\| [^*]*\\*\\*([A-Za-z ]+)\\*\\*[^|]*\\| `([0-9a-f]+)`")]
-  | map({pass: .[0], status: .[1], commit: .[2]})'
+     and (.body | contains("codex-pull-request-review-summary")
+          or startswith("Codex Review: Something went wrong")))]
+  | sort_by(.created_at, .id) | last // error("no Codex response found")
+  | if .body | startswith("Codex Review: Something went wrong")
+    then {failed: true, createdAt: .created_at, comment: .html_url,
+          message: (.body | split("\n")[0])}
+    else {failed: false, createdAt: .created_at, comment: .html_url,
+          passes: ([.body | scan("\\*\\*(Code|Security) Review\\*\\* \\| [^*]*\\*\\*([A-Za-z ]+)\\*\\*[^|]*\\| `([0-9a-f]+)`")]
+            | map({pass: .[0], status: .[1], commit: .[2]}))}
+    end'
 
 # Every review thread, resolved or not, with the fields used for triage and
 # for the gate audit in step 8. `maintainerReplied` is true only when the
@@ -272,10 +280,11 @@ REPLY_ID=$(gh api --method POST \
 ## 7. Wait for the round
 
 Poll step 1 about every 2 minutes. Stop waiting on a bot after about 20
-minutes. A Codex round is complete when both the `Code` and the `Security`
-entries read `Completed` on the head commit's short SHA. If a bot reports an
-error, request the round once more. If it stays silent, report that to the
-owner. When a round brings new findings, go back to step 3.
+minutes. A Codex round is complete when its latest response has
+`failed: false` and both `passes` entries read `Completed` on the head
+commit's short SHA. If the latest response has `failed: true`, request the
+round once more. If the bot stays silent, report that to the owner. When a
+round brings new findings, go back to step 3.
 
 ## 8. Merge at the gate
 
