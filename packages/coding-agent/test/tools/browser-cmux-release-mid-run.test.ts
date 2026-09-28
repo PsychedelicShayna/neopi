@@ -509,6 +509,18 @@ describe("browser tab-supervisor — cmux tab close mid-run (#4499)", () => {
 		await fs.rm(savedPath);
 	});
 
+	it("rejects invalid screenshot limits before the capture can bypass its image budget", () => {
+		expect(() => Settings.isolated({ "browser.screenshotMaxWidth": 0 })).toThrow(
+			"browser.screenshotMaxWidth must be a positive integer",
+		);
+		expect(() => Settings.isolated({ "browser.screenshotMaxHeight": -1 })).toThrow(
+			"browser.screenshotMaxHeight must be a positive integer",
+		);
+		expect(() => Settings.isolated({ "browser.screenshotMaxWidth": 1.5 })).toThrow(
+			"browser.screenshotMaxWidth must be a positive integer",
+		);
+	});
+
 	it("applies configurable screenshot dimensions to successive cmux captures", async () => {
 		const seed = Buffer.from(
 			"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC",

@@ -5,6 +5,12 @@
 import { APP_NAME, PRODUCT_NAME } from "@oh-my-pi/pi-utils";
 import { register } from "../../config/registry";
 
+function validateScreenshotDimension(value: unknown, setting: string): void {
+	if (value !== undefined && (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0)) {
+		throw new Error(`${setting} must be a positive integer`);
+	}
+}
+
 export const cfgBrowserEnabled = register({
 	id: "browser.enabled",
 	type: "boolean",
@@ -113,6 +119,7 @@ export const cfgBrowserScreenshotMaxWidth = register({
 	id: "browser.screenshotMaxWidth",
 	type: "number",
 	default: 1024,
+	validate: value => validateScreenshotDimension(value, "browser.screenshotMaxWidth"),
 	ui: {
 		tab: "tools",
 		group: "Grep & Browser",
@@ -125,6 +132,7 @@ export const cfgBrowserScreenshotMaxHeight = register({
 	id: "browser.screenshotMaxHeight",
 	type: "number",
 	default: 1024,
+	validate: value => validateScreenshotDimension(value, "browser.screenshotMaxHeight"),
 	ui: {
 		tab: "tools",
 		group: "Grep & Browser",
