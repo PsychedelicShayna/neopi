@@ -11,8 +11,14 @@ if (inheritedProfileProbe) {
 	test("clears inherited profiles before configuring temporary storage", () => {
 		expect(process.env.OMP_PROFILE).toBeUndefined();
 		expect(process.env.PI_PROFILE).toBeUndefined();
-		expect(() => getAgentDir()).not.toThrow();
-		expect(getAgentDir()).not.toContain(`${path.sep}profiles${path.sep}inherited${path.sep}`);
+		const agentDir = getAgentDir();
+		expect(agentDir.startsWith(`${os.tmpdir()}${path.sep}`)).toBe(true);
+		expect(getSessionsDir()).toBe(path.join(agentDir, "sessions"));
+		for (const key of ["XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"] as const) {
+			const value = process.env[key];
+			expect(value).toBeDefined();
+			expect(value?.startsWith(`${os.tmpdir()}${path.sep}`)).toBe(true);
+		}
 	});
 } else {
 	test("rejects named profiles that escape temporary test storage", () => {
@@ -72,6 +78,9 @@ if (inheritedProfileProbe) {
 				NPI_TEST_INHERITED_PROFILE_PROBE: "1",
 				OMP_PROFILE: "inherited",
 				PI_PROFILE: "inherited",
+				XDG_DATA_HOME: path.join(os.homedir(), ".local", "share"),
+				XDG_STATE_HOME: path.join(os.homedir(), ".local", "state"),
+				XDG_CACHE_HOME: path.join(os.homedir(), ".cache"),
 			},
 			stdout: "pipe",
 			stderr: "pipe",
