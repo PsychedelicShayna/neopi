@@ -32,16 +32,26 @@ THREADS="${TMPDIR:-/tmp}/pr-$PR-threads.jsonl"   # step 1 thread output, outside
   the code is always fine; executing it is not. `LOCAL_RUN` is `true` only
   when the owner opened the PR from a branch in the owner's repository and
   every commit on it has a signature GitHub verified for the owner's account
-  (the owner's key or the agent key registered to that account):
+  (the owner's key or the agent key registered to that account). The PR
+  commits endpoint stops at 250 commits, so the check walks the paginated
+  compare range from base to head instead, and fails closed unless the
+  number of commits it saw equals the PR's own commit count:
 
   ```sh
   LOCAL_RUN=$(
-    { gh pr view $PR --json author,headRepositoryOwner
-      gh api --paginate --slurp "repos/$REPO/pulls/$PR/commits?per_page=100"; } |
+    PRJ=$(gh api "repos/$REPO/pulls/$PR")
+    BASE_SHA=$(jq -r .base.sha <<<"$PRJ") HEAD_SHA=$(jq -r .head.sha <<<"$PRJ")
+    { printf '%s\n' "$PRJ"
+      gh api --paginate --slurp "repos/$REPO/compare/$BASE_SHA...$HEAD_SHA?per_page=100"; } |
     jq -s --arg o "$OWNER" '
-      (.[0].author.login == $o and .[0].headRepositoryOwner.login == $o)
-      and all(.[1] | add[]; .commit.verification.verified and .committer.login == $o)')
+      .[0] as $pr | [.[1][].commits[]] as $c
+      | ($pr.user.login == $o and $pr.head.repo.owner.login == $o)
+        and ($c | length) > 0 and ($c | length) == $pr.commits
+        and all($c[]; .commit.verification.verified and .committer.login == $o)')
   ```
+
+  Recompute it whenever the head changes; a later push can turn an owner
+  head into a contributor head.
 
   Anything else is a contributor head, and `LOCAL_RUN` is `false`. That
   includes a commit GitHub itself made (committer `web-flow`); the owner can

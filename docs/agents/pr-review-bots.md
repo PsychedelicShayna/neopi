@@ -143,7 +143,10 @@ maintainer's machine is not, unless the head is an **owner head**: the owner
 opened the PR from a branch in the owner's repository, and every commit on
 it carries a signature GitHub verified for the owner's account (the owner's
 key or the agent key registered to it). Commit author fields do not count,
-since anyone can set them.
+since anyone can set them. The check covers every commit from base to head;
+a commit list that may be truncated (the PR commits endpoint stops at 250)
+does not count, and a head whose full range cannot be confirmed is a
+contributor head.
 
 - On any other head, a **contributor head**, NEVER run PR-controlled code
   on the maintainer's machine. That covers `bun install`, `bun test`, any
