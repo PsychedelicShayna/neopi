@@ -65,20 +65,36 @@ gh api graphql --paginate -F owner=$OWNER -F name=$NAME -F pr=$PR -f query='
       reviewThreads(first:100,after:$endCursor){
         pageInfo{hasNextPage endCursor}
         nodes{id isResolved isOutdated path line
-          comments(first:100){nodes{databaseId author{login} createdAt body}}}}}}}' --jq '
+          comments(first:100){totalCount nodes{databaseId author{login} createdAt body}}}}}}}' --jq '
   .data.repository.pullRequest.reviewThreads.nodes[]
   | .comments.nodes as $c
   | {thread: .id, resolved: .isResolved, comment: $c[0].databaseId, author: $c[0].author.login,
      outdated: .isOutdated, path, line,
      severity: ($c[0].body | capture("!\\[(?<s>P[0-3]) Badge\\]").s // "none"),
      security: ($c[0].body | contains("codex-security-review-finding")),
-     replies: ($c | length - 1),
+     replies: (.comments.totalCount - 1),
+     truncated: (.comments.totalCount > ($c | length)),
      replied: any($c[1:][]; .author.login != $c[0].author.login)}' | tee "$THREADS"
 ```
 
-Read a thread in full (`gh api repos/$REPO/pulls/comments/<comment>`) before
-you triage it. For each configured bot other than Codex, use the request and
-completion signals from the policy's bot table.
+Before you triage a thread, fetch all of it through the thread's `comments`
+connection with the command below. The snapshot keeps only fields derived
+from the first comment, and later comments may hold the bot's follow-up, a
+concession, or an earlier reply. When a thread shows `truncated: true`, the
+snapshot's `replied` saw only its first 100 comments; recheck it from this
+output.
+
+```sh
+gh api graphql --paginate -f id=<thread> -f query='
+  query($id:ID!,$endCursor:String){node(id:$id){... on PullRequestReviewThread{
+    comments(first:100,after:$endCursor){
+      pageInfo{hasNextPage endCursor}
+      nodes{databaseId author{login} createdAt body}}}}}' --jq '
+  .data.node.comments.nodes[] | {id: .databaseId, author: .author.login, createdAt, body}'
+```
+
+For each configured bot other than Codex, use the request and completion
+signals from the policy's bot table.
 
 The fork's `neopi` branch has no branch protection. The gate holds only
 because you enforce it.
