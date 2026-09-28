@@ -14,7 +14,6 @@ import {
 	setProfile,
 	VERSION,
 } from "@oh-my-pi/pi-utils/dirs";
-import { Snowflake } from "@oh-my-pi/pi-utils/snowflake";
 import { runCli } from "../src/cli";
 import * as profileAliasCli from "../src/cli/profile-alias";
 
@@ -39,21 +38,26 @@ async function readStream(stream: ReadableStream<Uint8Array>): Promise<string> {
 
 describe("global --profile flag", () => {
 	let configDir = "";
+	let configRoot = "";
 	let originalProfile: string | undefined;
 	let originalAgentDir = "";
 	let originalAgentDirEnv: string | undefined;
 	let originalOmpProfileEnv: string | undefined;
 	let originalPiProfileEnv: string | undefined;
 	let originalConfigDir: string | undefined;
+	let originalAllowedStorageRoot: string | undefined;
 
-	beforeEach(() => {
+	beforeEach(async () => {
 		originalProfile = getActiveProfile();
 		originalAgentDir = getAgentDir();
 		originalAgentDirEnv = process.env.PI_CODING_AGENT_DIR;
 		originalOmpProfileEnv = process.env.OMP_PROFILE;
 		originalPiProfileEnv = process.env.PI_PROFILE;
 		originalConfigDir = process.env.PI_CONFIG_DIR;
-		configDir = path.relative(os.homedir(), path.join(os.tmpdir(), `.omp-profile-cli-test-${Snowflake.next()}`));
+		originalAllowedStorageRoot = process.env.NPI_TEST_ALLOWED_STORAGE_ROOT;
+		configRoot = await fs.mkdtemp(path.join(os.homedir(), ".omp-profile-cli-test-"));
+		configDir = path.relative(os.homedir(), configRoot);
+		process.env.NPI_TEST_ALLOWED_STORAGE_ROOT = configRoot;
 		process.env.PI_CONFIG_DIR = configDir;
 		process.exitCode = 0;
 	});
@@ -88,9 +92,14 @@ describe("global --profile flag", () => {
 		} else {
 			process.env.PI_CODING_AGENT_DIR = originalAgentDirEnv;
 		}
+		if (originalAllowedStorageRoot === undefined) {
+			delete process.env.NPI_TEST_ALLOWED_STORAGE_ROOT;
+		} else {
+			process.env.NPI_TEST_ALLOWED_STORAGE_ROOT = originalAllowedStorageRoot;
+		}
 		__resetProfileSnapshotForTests();
 		process.exitCode = 0;
-		await removeWithRetries(path.join(os.homedir(), configDir));
+		await removeWithRetries(configRoot);
 	});
 
 	it("activates a profile before dispatching root flags", async () => {
@@ -243,6 +252,7 @@ describe("global --profile flag", () => {
 			const childEnv: Record<string, string | undefined> = {
 				...process.env,
 				HOME: home,
+				NPI_TEST_ALLOWED_STORAGE_ROOT: root,
 				PI_CONFIG_DIR: configDir,
 				PI_NO_TITLE: "1",
 				NO_COLOR: "1",
@@ -296,6 +306,7 @@ describe("global --profile flag", () => {
 			const childEnv: Record<string, string | undefined> = {
 				...process.env,
 				HOME: home,
+				NPI_TEST_ALLOWED_STORAGE_ROOT: root,
 				PI_CONFIG_DIR: ".omp-profile-cli-env-bad",
 				OMP_PROFILE: "..",
 				NO_COLOR: "1",
