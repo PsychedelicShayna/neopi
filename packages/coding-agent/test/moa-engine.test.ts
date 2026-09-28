@@ -775,6 +775,36 @@ describe("provider context for members", () => {
 		expect(delivered).toHaveLength(7);
 	});
 
+	it("rejects an entry image that exceeds the member's remaining context without calling it", async () => {
+		const definition = DRAFT_THEN_EDIT_TOML.replace('model = "fake/writer"', 'model = "vision/tight"');
+		await ensureFixture(definition);
+		fixture.registry.registerProvider("vision", {
+			baseUrl: "http://127.0.0.1:1/v1",
+			apiKey: "k",
+			api: "moa-fake",
+			models: [
+				{
+					id: "tight",
+					name: "tight",
+					reasoning: true,
+					input: ["text", "image"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 1_300,
+					maxTokens: 100,
+				},
+			],
+		});
+		const session = await mixtureSession(definition);
+		const image: ImageContent = {
+			type: "image",
+			data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
+			mimeType: "image/png",
+		};
+		await session.prompt("describe", { images: [image] });
+		expect(lastAssistant(session).errorMessage).toContain("hop.context_exceeded");
+		expect(members.callsTo("tight")).toHaveLength(0);
+	});
+
 	it("gives every member call the session's per-request provider options, as a native model gets them", async () => {
 		const settings = Settings.isolated({
 			...SETTINGS,

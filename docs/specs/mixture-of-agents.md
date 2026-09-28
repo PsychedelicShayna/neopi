@@ -1350,9 +1350,11 @@ keeping head and tail with an `[… truncated N tokens]` marker:
    `min(providerFrameBudget(target.provider), floor(remaining / FRAME_TOKEN_ESTIMATE))`;
    zero frames degrades to the text summary.
 
-Tokens are counted with `Tokenizer` for the target model
-(`packages/agent/src/tokenizer.ts`, images at `IMAGE_TOKEN_ESTIMATE`, frames at
-`FRAME_TOKEN_ESTIMATE`).
+Tokens are counted with `Tokenizer` for the target model. The entry hop's
+operator images are irreducible even though they join the fitted text envelope
+only when the member request is assembled; charge them before fitting using
+the tokenizer's image estimate (`packages/agent/src/tokenizer.ts`,
+`IMAGE_TOKEN_ESTIMATE`). Frames use `FRAME_TOKEN_ESTIMATE`.
 
 ### 4.7 Limits, settlement, and the limit state machine
 

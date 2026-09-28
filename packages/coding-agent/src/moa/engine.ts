@@ -481,7 +481,12 @@ class MixtureCall {
 			systemPrompt,
 			assemble,
 			parts: { ...partsOf(envelopeContext.x), conversation: envelopeContext.conversation },
-			hopMessages: [],
+			// Entry images join the envelope after fitting. Count their irreducible
+			// tokens now, without counting the envelope's text twice.
+			hopMessages:
+				edgeInId === undefined && this.#entry.topicImages.length > 0
+					? [{ role: "user", content: this.#entry.topicImages, timestamp: 0 }]
+					: [],
 			partBudgetTokens: cfgMoaPartBudgetTokens.get(settings),
 		});
 		if (!fitted.ok) {
