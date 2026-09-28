@@ -675,6 +675,9 @@ export function powerAssertionOptions(mode: "off" | "idle" | "display" | "system
 	};
 }
 
+/** A session change either carries the live model or loads an existing session. */
+export type SessionChangeOrigin = "carried" | "loaded";
+
 export class AgentSession implements SettingsScope {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
@@ -752,7 +755,7 @@ export class AgentSession implements SettingsScope {
 	#activeToolExecutionUpdates = new Map<string, Extract<AgentSessionEvent, { type: "tool_execution_update" }>>();
 	#runStateListeners = new Set<(state: "running" | "idle") => void>();
 	#commandMetadataChangedListeners: CommandMetadataChangedListener[] = [];
-	#sessionChangeCallbacks = new Set<() => void>();
+	#sessionChangeCallbacks = new Set<(origin: SessionChangeOrigin) => void>();
 	#observedSessionId: string | undefined;
 
 	/** Messages queued to be included with the next user prompt as context ("asides"). */
@@ -4954,8 +4957,8 @@ export class AgentSession implements SettingsScope {
 		return this.#sessionTransitionScope;
 	}
 
-	/** Register cleanup that runs when this AgentSession adopts a different session ID. */
-	registerSessionChangeCallback(callback: () => void): () => void {
+	/** Register cleanup on session ID changes, including whether an existing session was loaded. */
+	registerSessionChangeCallback(callback: (origin: SessionChangeOrigin) => void): () => void {
 		this.#sessionChangeCallbacks.add(callback);
 		return () => this.#sessionChangeCallbacks.delete(callback);
 	}
@@ -5040,7 +5043,7 @@ export class AgentSession implements SettingsScope {
 			this.#observedSessionId = currentSessionId;
 		} else if (this.#observedSessionId !== currentSessionId) {
 			this.#observedSessionId = currentSessionId;
-			if (notifyChange) this.#notifySessionChangeCallbacks();
+			if (notifyChange) this.#notifySessionChangeCallbacks("carried");
 		}
 		const sid = this.#activeProviderSessionId(sessionId);
 		this.agent.sessionId = sid;
@@ -5063,10 +5066,10 @@ export class AgentSession implements SettingsScope {
 		if (this.#advisors) this.#advisors.refreshProviderIdentity();
 	}
 
-	#notifySessionChangeCallbacks(): void {
+	#notifySessionChangeCallbacks(origin: SessionChangeOrigin): void {
 		for (const callback of Array.from(this.#sessionChangeCallbacks)) {
 			try {
-				callback();
+				callback(origin);
 			} catch (error) {
 				logger.warn("Session change callback failed", { error: String(error) });
 			}
@@ -10837,7 +10840,7 @@ export class AgentSession implements SettingsScope {
 			this.#releaseTtsrReservations(previousSteeringMessages);
 			this.#releaseTtsrReservations(previousFollowUpMessages);
 			if (previousSessionState.sessionId !== this.sessionManager.getSessionId()) {
-				this.#notifySessionChangeCallbacks();
+				this.#notifySessionChangeCallbacks("loaded");
 			}
 			generationSettled.resolve();
 			this.#sessionGenerationSettled = previousSessionGenerationSettled;

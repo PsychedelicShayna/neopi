@@ -308,6 +308,28 @@ export function dispatchRpcControlFrame(parsed: unknown, deps: RpcInputFrameDeps
 	return false;
 }
 
+/** Answer `negotiate_protocol`. Transport-level: it needs no session, so it can run before startup completes. */
+export function answerRpcProtocolNegotiation(
+	command: Extract<RpcCommand, { type: "negotiate_protocol" }>,
+): RpcResponse {
+	if (command.protocolVersion !== 2) {
+		return {
+			id: command.id,
+			type: "response",
+			command: "negotiate_protocol",
+			success: false,
+			error: `Unsupported RPC protocol version: ${command.protocolVersion}`,
+		};
+	}
+	return {
+		id: command.id,
+		type: "response",
+		command: "negotiate_protocol",
+		success: true,
+		data: { protocolVersion: 2 },
+	};
+}
+
 /**
  * Commands dispatched in the background instead of on the serial queue:
  * `bash` so a later `abort_bash` can overtake it, and `get_usage` because
@@ -401,6 +423,12 @@ export class RpcInputDispatcher {
 			if (dispatchRpcControlFrame(parsed, this.#deps)) return;
 
 			const command = parsed as RpcCommand;
+			// Transport-level and session-free: answered while startup is still
+			// gated, so a startup dialog cannot stall version negotiation (#110).
+			if (command.type === "negotiate_protocol" && this.#gate) {
+				this.#deps.output(answerRpcProtocolNegotiation(command));
+				return;
+			}
 			if (CONCURRENT_RPC_COMMANDS.has(command.type)) {
 				const gate = this.#gate;
 				if (gate) {
@@ -1245,11 +1273,8 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		const id = command.id;
 
 		switch (command.type) {
-			case "negotiate_protocol": {
-				if (command.protocolVersion !== 2)
-					return error(id, "negotiate_protocol", `Unsupported RPC protocol version: ${command.protocolVersion}`);
-				return success(id, "negotiate_protocol", { protocolVersion: 2 });
-			}
+			case "negotiate_protocol":
+				return answerRpcProtocolNegotiation(command);
 
 			// =================================================================
 			// Prompting

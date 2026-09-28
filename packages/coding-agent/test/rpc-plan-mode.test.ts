@@ -348,6 +348,41 @@ describe("RPC plan mode", () => {
 		}
 	});
 
+	it("switch_session keeps a target's own plan-matching model and does not write a model change", async () => {
+		const dir = TempDir.createSync("@pi-rpc-plan-matching-switch-");
+		try {
+			const { session, planMode } = setup({ sessionDir: dir.path() });
+			cfgModelRoles.override(session.settings, { plan: "anthropic/claude-sonnet-4-6" });
+			session.setThinkingLevel(ThinkingLevel.High);
+			const target = SessionManager.create(dir.path(), dir.path());
+			target.appendModelChange("anthropic/claude-sonnet-4-6");
+			target.appendThinkingLevelChange(session.thinkingLevel, session.configuredThinkingLevel());
+			target.appendMessage({ role: "user", content: "target", timestamp: 1 });
+			target.appendMessage(createAssistantMessage("target reply"));
+			await target.flush();
+			const targetFile = target.getSessionFile();
+			await target.close();
+			if (!targetFile) throw new Error("target session was not persisted");
+
+			await planMode.setMode("plan", undefined);
+			const planThinkingLevel = session.configuredThinkingLevel();
+			expect(session.model?.id).toBe("claude-sonnet-4-6");
+
+			expect(await session.switchSession(targetFile)).toBe(true);
+			await planMode.settled();
+
+			expect(planMode.state).toEqual({ mode: "default" });
+			expect(session.model?.id).toBe("claude-sonnet-4-6");
+			expect(session.configuredThinkingLevel()).toBe(planThinkingLevel);
+			expect(session.sessionManager.getEntries().filter(entry => entry.type === "model_change")).toHaveLength(1);
+		} finally {
+			controller?.close();
+			await session?.dispose();
+			session = undefined;
+			await dir.remove();
+		}
+	});
+
 	it("keeps a model the host chose while planning when plan mode ends", async () => {
 		const { session, planMode } = setup();
 		cfgModelRoles.override(session.settings, { plan: "anthropic/claude-sonnet-4-6" });
