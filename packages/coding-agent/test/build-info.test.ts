@@ -11,6 +11,7 @@ import * as path from "node:path";
 import { resolveGitBuildInfo } from "@oh-my-pi/pi-coding-agent/build-info";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
+import { resolveBuildIdentity } from "../scripts/build-identity";
 
 const checkoutRoot = path.resolve(import.meta.dir, "..", "..", "..");
 const tempDirs: string[] = [];
@@ -106,5 +107,22 @@ describe("BUILD_INFO", () => {
 		const { before, after } = JSON.parse(result.text().trim()) as { before: string; after: string };
 		expect(after).toBe(before);
 		expect((JSON.parse(before) as { gitSha: string | null }).gitSha).toBe(expectedSha);
+	});
+});
+
+describe("resolveBuildIdentity (build scripts)", () => {
+	test("bakes the checkout's commit with tracked-only dirtiness", async () => {
+		const { dir, sha } = await gitRepo("build", "base\n");
+		await Bun.write(path.join(dir, "untracked.txt"), "new\n");
+		expect(await resolveBuildIdentity(dir)).toEqual({ gitSha: sha, dirty: false });
+		await Bun.write(path.join(dir, "tracked.txt"), "edited\n");
+		expect(await resolveBuildIdentity(dir)).toEqual({ gitSha: sha, dirty: true });
+	});
+
+	test("a source copy inside another repository bakes unknown, not the enclosing HEAD", async () => {
+		const { dir } = await gitRepo("enclosing", "app\n");
+		const copy = path.join(dir, "vendor", "neopi");
+		await fs.mkdir(copy, { recursive: true });
+		expect(await resolveBuildIdentity(copy)).toEqual({ gitSha: null, dirty: null });
 	});
 });
