@@ -7,12 +7,6 @@ import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { formatNumber } from "@oh-my-pi/pi-utils";
 import type { Theme } from "../theme";
 
-interface ContextSkill {
-	readonly name: string;
-	readonly description?: string;
-	readonly hide?: boolean;
-}
-
 type ContextTool = Pick<AiTool, "name" | "description" | "parameters" | "examples">;
 
 /** Savings computed by the host's inline-image planner, not by the renderer. */
@@ -61,7 +55,6 @@ export interface ContextUsageSession extends NonMessageTokenSource {
 export interface ContextUsageOptions {
 	compaction: CompactionSettings;
 	sourceRevision?: number;
-	skillful?: boolean;
 	snapcompact?: ContextSavingsEstimate;
 }
 
@@ -140,38 +133,11 @@ export interface NonMessageTokenSource {
 			readonly tools?: readonly ContextTool[];
 		};
 	};
-	readonly skills?: readonly ContextSkill[];
-	/** Provider-facing, session-frozen descriptions when available. */
-	readonly renderedSkills?: readonly ContextSkill[];
 }
 
 /** Shared empty system-prompt part list, avoiding an allocation per render. */
 export const EMPTY_STRING_PARTS: string[] = [];
 const EMPTY_TOOLS: readonly ContextTool[] = [];
-const EMPTY_SKILLS: readonly ContextSkill[] = [];
-
-/**
- * Skills actually rendered into the system prompt, mirroring the filter in
- * `buildSystemPrompt` (`system-prompt.ts`): the `read` tool must be present so
- * the model can fetch skill content, and skills with frontmatter `hide: true`
- * (or `disable-model-invocation`, normalized onto `hide`) are excluded.
- * Accounting must count only these so the Skills category and the System-prompt
- * subtraction stay aligned with the provider-facing prompt.
- */
-function renderedSkills(skills: readonly ContextSkill[], tools: readonly ContextTool[]): readonly ContextSkill[] {
-	if (!tools.some(tool => tool.name === "read")) return EMPTY_SKILLS;
-	return skills.filter(skill => skill.hide !== true);
-}
-
-export function estimateSkillsTokens(skills: readonly ContextSkill[], tokenizer: Tokenizer): number {
-	const fragments: string[] = [];
-	for (const skill of skills) {
-		// "- name: description\n" wire framing tokenizes ~identically to the
-		// concatenated form, so encode each piece separately and sum.
-		fragments.push(skill.name, skill.description ?? "");
-	}
-	return tokenizer.countTokens(fragments);
-}
 
 type ToolSchemaSource = readonly ContextTool[];
 
@@ -289,8 +255,6 @@ interface NonMessageTokenCache {
 	toolsRef: ToolSchemaSource;
 	toolsRevision: number;
 	sourceRevision: number;
-	skillful: boolean;
-	skillsRef: readonly ContextSkill[];
 	// The Agent swaps its Tokenizer instance when the model's encoding changes,
 	// so instance identity doubles as the encoding key.
 	tokenizerRef: Tokenizer;
@@ -320,7 +284,6 @@ function nonMessageTokenCacheEntry(
 	const systemPromptRef = session.systemPrompt ?? EMPTY_STRING_PARTS;
 	const toolsRef = session.agent?.state?.tools ?? EMPTY_TOOLS;
 	const toolsRevision = getToolSchemaMetadataRevision(toolsRef);
-	const skillsRef = session.renderedSkills ?? session.skills ?? EMPTY_SKILLS;
 	let entry = cachedSession[NON_MESSAGE_TOKEN_CACHE];
 	if (
 		entry &&
@@ -328,7 +291,6 @@ function nonMessageTokenCacheEntry(
 		entry.toolsRef === toolsRef &&
 		entry.toolsRevision === toolsRevision &&
 		entry.sourceRevision === sourceRevision &&
-		entry.skillsRef === skillsRef &&
 		entry.tokenizerRef === tokenizer
 	) {
 		return entry;
@@ -338,8 +300,6 @@ function nonMessageTokenCacheEntry(
 		toolsRef,
 		toolsRevision,
 		sourceRevision,
-		skillful: true,
-		skillsRef,
 		tokenizerRef: tokenizer,
 		tokens: undefined,
 		breakdown: undefined,
@@ -374,7 +334,6 @@ export function computeNonMessageBreakdown(
 	session: NonMessageTokenSource,
 	tokenizer: Tokenizer,
 	sourceRevision = 0,
-	skillful = true,
 ): {
 	skillsTokens: number;
 	toolsTokens: number;
@@ -382,21 +341,25 @@ export function computeNonMessageBreakdown(
 	systemPromptTokens: number;
 } {
 	const entry = nonMessageTokenCacheEntry(session, tokenizer, sourceRevision);
-	if (entry.breakdown && entry.skillful === skillful) return entry.breakdown;
+	if (entry.breakdown) return entry.breakdown;
 	const tools = session.agent?.state?.tools ?? EMPTY_TOOLS;
+	const systemPromptParts = session.systemPrompt ?? EMPTY_STRING_PARTS;
+	const systemPrompt = systemPromptParts[0] ?? "";
+	const skillsStart = systemPrompt.indexOf("<skills>");
+	const skillsEnd = skillsStart < 0 ? -1 : systemPrompt.indexOf("</skills>", skillsStart);
+	const promptTokens = tokenizer.countTokens(systemPrompt);
+	// The skill inventory is frozen in the provider-facing prompt, unlike the live session list.
 	const skillsTokens =
-		skillful === false
+		skillsEnd < 0
 			? 0
-			: estimateSkillsTokens(
-					renderedSkills(session.renderedSkills ?? session.skills ?? EMPTY_SKILLS, tools),
-					tokenizer,
+			: Math.min(
+					promptTokens,
+					tokenizer.countTokens(systemPrompt.slice(skillsStart, skillsEnd + "</skills>".length)),
 				);
 	const toolsTokens = estimateToolSchemaTokens(tools, tokenizer, sourceRevision);
-	const systemPromptParts = session.systemPrompt ?? EMPTY_STRING_PARTS;
 	const systemContextTokens = tokenizer.countTokens(Array.from(systemPromptParts.slice(1), part => part ?? ""));
-	const systemPromptTokens = Math.max(0, tokenizer.countTokens(systemPromptParts[0] ?? "") - skillsTokens);
+	const systemPromptTokens = promptTokens - skillsTokens;
 	const breakdown = { skillsTokens, toolsTokens, systemContextTokens, systemPromptTokens };
-	entry.skillful = skillful;
 	entry.breakdown = breakdown;
 	return breakdown;
 }
@@ -430,7 +393,7 @@ export function computeContextBreakdown(session: ContextUsageSession, options: C
 		// Category split needs a messages-only number, so this walk stays local:
 		// an anchored total folds the system prompt and tool schemas into it.
 		messagesTokens = tokenizer.countMessages(session.messages ?? []);
-		const nonMessage = computeNonMessageBreakdown(session, tokenizer, options.sourceRevision, options.skillful);
+		const nonMessage = computeNonMessageBreakdown(session, tokenizer, options.sourceRevision);
 		skillsTokens = nonMessage.skillsTokens;
 		toolsTokens = nonMessage.toolsTokens;
 		systemContextTokens = nonMessage.systemContextTokens;

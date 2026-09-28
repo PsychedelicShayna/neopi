@@ -139,6 +139,8 @@ System prompt construction (`src/system-prompt.ts`) uses discovered skills as fo
 
 Task tool subagents receive the session's discovered/provided skills list via normal session creation; there is no per-task skill pinning override.
 
+The Context Usage view counts the `<skills>...</skills>` inventory in the provider-facing system prompt as **Skills**, not the current discovery list. Enabling or disabling skills mid-session does not rewrite an existing prompt, so the Skills count remains tied to that prompt until it is rebuilt. A prompt without a skills block reports zero Skills tokens; the rest of its first part remains under **System prompt**.
+
 ### Interactive `/skill:<name>` commands
 
 If `skills.enableSkillCommands` is true, interactive mode registers one slash command per discovered skill.

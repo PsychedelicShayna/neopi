@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { Tokenizer } from "@oh-my-pi/pi-agent-core";
 import { computeNonMessageBreakdown, estimateToolSchemaTokens } from "@oh-my-pi/pi-tui/status-line/context-usage";
 import { applyToolProxy } from "../../src/extensibility/tool-proxy";
+import { buildSystemPrompt } from "../../src/system-prompt";
 
 const tokenizer = new Tokenizer();
 
@@ -34,5 +35,45 @@ describe("extension tool context accounting", () => {
 		const session = { systemPrompt: ["base"], agent: { state: { tools: [wrapper] } } };
 		const breakdown = computeNonMessageBreakdown(session as never, tokenizer);
 		expect(breakdown.toolsTokens).toBeGreaterThan(0);
+	});
+});
+
+describe("Skills context accounting", () => {
+	it("uses the frozen provider prompt when the session skill inventory changes", async () => {
+		const skill = {
+			name: "agent-vfb",
+			description: "Use the virtual framebuffer for interactive graphics",
+			filePath: "/tmp/skills/agent-vfb/SKILL.md",
+			baseDir: "/tmp/skills/agent-vfb",
+			source: "test",
+		};
+		const promptOptions = {
+			cwd: process.cwd(),
+			contextFiles: [],
+			rules: [],
+			toolNames: ["read"],
+			workspaceTree: { rootPath: process.cwd(), rendered: "", truncated: false, totalLines: 0, agentsMdFiles: [] },
+		};
+		const disabledPrompt = (await buildSystemPrompt({ ...promptOptions, skills: [] })).systemPrompt;
+		const session = {
+			systemPrompt: disabledPrompt,
+			agent: { state: { tools: [{ name: "read", description: "read files", parameters: {} }] } },
+			skills: [skill],
+		};
+
+		const afterEnable = computeNonMessageBreakdown(session as never, tokenizer);
+		expect(afterEnable.skillsTokens).toBe(0);
+		expect(afterEnable.systemPromptTokens).toBe(tokenizer.countTokens(disabledPrompt[0] ?? ""));
+
+		const enabledPrompt = (await buildSystemPrompt({ ...promptOptions, skills: [skill] })).systemPrompt;
+		session.systemPrompt = enabledPrompt;
+		const withSkills = computeNonMessageBreakdown(session as never, tokenizer);
+		expect(withSkills.skillsTokens).toBeGreaterThan(0);
+		expect(withSkills.systemPromptTokens + withSkills.skillsTokens).toBe(
+			tokenizer.countTokens(enabledPrompt[0] ?? ""),
+		);
+
+		session.skills = [];
+		expect(computeNonMessageBreakdown(session as never, tokenizer).skillsTokens).toBe(withSkills.skillsTokens);
 	});
 });

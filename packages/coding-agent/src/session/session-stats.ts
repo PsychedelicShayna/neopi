@@ -22,7 +22,6 @@ import type { ContextUsageBreakdown, SessionStats } from "./agent-session-types"
 import { getLatestCompactionEntry } from "./session-context";
 import type { SessionEntry } from "./session-entries";
 import type { SessionManager } from "./session-manager";
-import { cfgSkillful } from "./settings";
 
 interface PendingContextSnapshot {
 	promptTokens: number;
@@ -252,7 +251,6 @@ export class SessionStatsTracker {
 			this.#host.session,
 			this.#tokenizer,
 			settings?.revision,
-			settings ? cfgSkillful.get(settings) : undefined,
 		);
 		const categoryNonMessageTokens = skillsTokens + toolsTokens + systemContextTokens + systemPromptTokens;
 		const currentNonMessageTokens = computeNonMessageTokens(
