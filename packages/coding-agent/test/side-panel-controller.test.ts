@@ -194,6 +194,21 @@ describe("SidePanelController", () => {
 		}
 	});
 
+	it("decides wide versus narrow from the same whole-column widths the split docks with", async () => {
+		// SplitPane floors 60.9 to 60, so 123 columns fit 60 + divider + 60: the dock
+		// shows, and the toggle must dock rather than open the fullscreen form over it.
+		const h = await harness(123, { "sidebar.width.min": 60.9, "sidebar.width.max": 80, "sidebar.splitAt": 110 });
+		try {
+			h.controller.toggle();
+			await h.settle();
+			expect(h.controller.fullscreenOpen).toBe(false);
+			expect(cfgSidebarEnabled.get(h.settings)).toBe(true);
+			expect(h.controller.docked).toBe(true);
+		} finally {
+			h.stop();
+		}
+	});
+
 	for (const side of ["right", "left"] as const) {
 		it(`routes inline mouse by column on a ${side} dock`, async () => {
 			const h = await harness(120, { "sidebar.enabled": true, "sidebar.side": side });
