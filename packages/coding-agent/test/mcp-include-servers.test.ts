@@ -162,6 +162,61 @@ describe("mcp.includeServers allowlist", () => {
 		expect(unmatchedIncludes).toEqual([]);
 	});
 
+	test("a disabled project name cannot be rescued by a lower-priority user server", async () => {
+		await fs.writeFile(
+			path.join(projectDir, ".omp", "mcp.json"),
+			JSON.stringify({
+				mcpServers: {
+					github: { command: "echo", args: ["project"], enabled: false },
+					unrelated: { command: "echo", args: ["unrelated"] },
+				},
+			}),
+		);
+		await fs.writeFile(
+			path.join(userAgentDir, "mcp.json"),
+			JSON.stringify({ mcpServers: { github: { command: "echo", args: ["user"] } } }),
+		);
+		resetDiscoveryCache();
+		const { configs, unmatchedIncludes } = await loadAllMCPConfigs(projectDir, {
+			includeServers: ["github", "unrelated"],
+		});
+		expect(Object.keys(configs)).toEqual(["unrelated"]);
+		expect(unmatchedIncludes).toEqual(["github"]);
+	});
+
+	test("session rejects a disabled project name before either scope starts an MCP server", async () => {
+		await writeMarkerProject(projectDir);
+		const projectConfigPath = path.join(projectDir, ".omp", "mcp.json");
+		const projectConfig = JSON.parse(await fs.readFile(projectConfigPath, "utf8"));
+		projectConfig.mcpServers.github.enabled = false;
+		await fs.writeFile(projectConfigPath, JSON.stringify(projectConfig));
+		await fs.writeFile(
+			path.join(userAgentDir, "mcp.json"),
+			JSON.stringify({
+				mcpServers: {
+					github: {
+						command: process.execPath,
+						args: [MARKER_SERVER, "user-github", path.join(projectDir, "ran-user-github")],
+					},
+				},
+			}),
+		);
+		resetDiscoveryCache();
+		const outcome = await startSession(projectDir, ["github", "other"]).then(
+			session => ({ session }),
+			(error: unknown) => ({ error }),
+		);
+		try {
+			expect("error" in outcome && outcome.error).toBeInstanceOf(MCPUnknownServerError);
+			if ("error" in outcome && outcome.error instanceof MCPUnknownServerError) {
+				expect(outcome.error.serverNames).toEqual(["github"]);
+			}
+			expect(await spawnedServers(projectDir)).toEqual([]);
+		} finally {
+			if ("session" in outcome) await outcome.session.dispose();
+		}
+	}, 30_000);
+
 	test("createAgentSession rejects an unknown literal name before spawning any server", async () => {
 		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "npi-mcp-unknown-"));
 		try {

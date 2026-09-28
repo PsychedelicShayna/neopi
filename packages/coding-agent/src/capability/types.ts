@@ -162,7 +162,7 @@ export interface CapabilityResult<T> {
 	/** Deduplicated items in priority order */
 	items: Array<T & { _source: SourceMeta }>;
 	/** All items including shadowed duplicates (for diagnostics) */
-	all: Array<T & { _source: SourceMeta; _shadowed?: boolean }>;
+	all: Array<T & { _source: SourceMeta; _shadowed?: boolean; _shadowedByKey?: boolean }>;
 	/** Warnings from all providers */
 	warnings: string[];
 	/** Which providers contributed items (IDs) */

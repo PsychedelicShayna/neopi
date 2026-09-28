@@ -223,11 +223,14 @@ export async function loadAllMCPConfigs(cwd: string, options?: LoadMCPConfigsOpt
 	}
 
 	// Checked before the Exa/browser filters: those servers exist, NeoPi just
-	// replaces them natively, so naming one is not a typo. Existence is read
-	// from the admitted items before equivalence dedupe, so a literal that
-	// names an alias of another admitted server is still known.
+	// replaces them natively, so naming one is not a typo. Keep equivalence
+	// aliases (shadowed by connection identity) but not lower-priority servers
+	// shadowed by key: a disabled project owner must not make its user-level
+	// namesake appear available when neither can connect.
 	const availableNames = new Set(
-		result.all.filter(server => includeServer(server) && !suppressServer(server)).map(server => server.name),
+		result.all
+			.filter(server => includeServer(server) && !suppressServer(server) && !server._shadowedByKey)
+			.map(server => server.name),
 	);
 	const unmatchedIncludes: string[] = [...allowlist.invalid];
 	for (const pattern of allowlist.patterns) {
