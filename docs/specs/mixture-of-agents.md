@@ -408,8 +408,29 @@ a mixture as `@default` cannot make it see itself.
 
 Member and helper selectors are resolved with `resolveModelRoleValue`
 (`packages/coding-agent/src/config/model-resolver.ts:1393`) against
-`registry.getAvailable()`. **Recursion** is rejected on the resolved model,
-not the selector string, and in two grades:
+`registry.getAvailable()`, and the resolved model is then **required to be in
+the allowed pool**
+`filterAvailableModelsByEnabledPatterns(registry.getAvailable(), cfgEnabledModels.get(settings), settings)`
+(`model-resolver.ts:1896`), the same scope the session's own
+`getAvailableModels` applies (`packages/coding-agent/src/session/model-controls.ts:486-491`),
+which is the full available list when `enabledModels` is empty. A member
+whose resolved model is outside the pool is `member.model.excluded`
+(E2; "member X: provider/model is excluded by enabledModels"), never
+substituted: resolution is not performed against the allowed pool directly,
+because fuzzy and role matching could then land silently on a different
+allowed model. `getAvailable()` enforces credentials and `disabledProviders`
+but not the workspace's `enabledModels`, so without this check a project
+`MIXTURES.toml` (including one shadowing a user mixture) could send the
+topic, the draft, and, with `inherit`, the outer system prompt to a model
+the workspace excludes, and bill it. The check runs at both resolution
+points: registration (the registering session's settings; the roster is per
+registry) and `resolveRun` at every run start (the host session's own
+settings, authoritative for a session whose scope differs from the
+registrar's); the refusal is loud (logged at registration, the outer error
+`mixture/X no longer validates: member.model.excluded (…)` at run start)
+and has no fallback. The headless host applies the gateway process's
+settings the same way (§4.10). **Recursion** is rejected on the resolved
+model, not the selector string, and in two grades:
 
 - **Explicit configuration** is an error: a member selector, or a helper
   role that `uses` names (`moa.summary_model`, `moa.slicer_model`,
@@ -1752,10 +1773,15 @@ built-in `packages/coding-agent/src/priority.json` chain
 (`typesafe/jev-latest → openrouter/~typesafe/jev-latest → @tiny → @smol → @default`),
 where `pool` = `roleCandidatePool("judge", settings, registry)`
 (`packages/coding-agent/src/config/model-roles.ts:106-108`) minus every
-model whose `api === MIXTURE_API`. An **explicitly configured** judge role
-that resolves to a mixture is `helper.unresolved`; a mixture reached only
-through the implicit fallback (`@default` being a mixture) is filtered out
-silently. `JudgeDeps` gains `candidates?: RoleChainCandidate[]`; when
+model whose `api === MIXTURE_API` and minus every model outside the allowed
+pool of §1.4 (`enabledModels`; `roleCandidatePool` reads
+`getAvailable("all")` and is not scoped by itself). An **explicitly
+configured** judge role that resolves to a mixture, or to a model outside the
+allowed pool, is `helper.unresolved` (naming `enabledModels` in the latter
+case); a mixture or excluded model reached only through the implicit fallback
+(`@default` being a mixture, `@smol` being excluded) is filtered out silently.
+The summary and slicer roles follow the same rule when they arrive (M2, M4).
+`JudgeDeps` gains `candidates?: RoleChainCandidate[]`; when
 present, `ChainJudge` uses that list instead of `#buildCandidates()` and
 skips the `CANDIDATE_TTL_MS` refresh (`judgment/index.ts:226-243`), so a role
 change mid-run cannot swap the judge or introduce a mixture into the chain;
@@ -2406,7 +2432,7 @@ unregisterable and block save.
 | Code | Level | Rule |
 |---|---|---|
 | E1 `name.invalid` / `name.duplicate` | error | `name` matches `[a-z0-9][a-z0-9._-]*`, unique in the merged roster. Two declarations of one name **in the same file** are both kept by the loader and both refused (`name.duplicate` logged for each); a later file on the search path that declares the name once still shadows an earlier file's single declaration cleanly (§1.1) |
-| E2 `member.model.unresolved` / `member.model.recursive` | error | every model member's selector resolves; the resolved model's `api` is not `mixture` (§1.4) |
+| E2 `member.model.unresolved` / `member.model.recursive` / `member.model.excluded` | error | every model member's selector resolves; the resolved model's `api` is not `mixture`; the resolved model is in the `enabledModels` allowed pool (§1.4) |
 | E3 `members.empty` / `member.id` | error | at least one member; ids match `[a-z0-9][a-z0-9_-]*`, unique |
 | E4 `member.prompt.missing` / `member.role.unresolved` | error | a model member has `system_prompt` or a resolvable `role` |
 | E5 `entry.unresolved` / `entry.verdict` | error | `entry` names a **model** member |
@@ -2425,7 +2451,7 @@ unregisterable and block save.
 | E18 `verdict.question` | error | choice ≥ 2 options; score ≥ 2 levels |
 | E19 `member.tools.unsupported` / `edge.x.reasoning.empty` / `terminate.terminal` | warning | tools on a `supportsTools === false` model; `reasoning` from a `reasoning: false` model; `terminate` on a terminal member |
 | E20 `fanout.join` / `fanout.branches` / `fanout.branch.tools` / `fanout.slices` / `fanout.quorum` / `fanout.branch.verdict` | error | `join` present and names a member not in `to`; ≥ 2 branches; branch tools ⊆ read-only set; explicit `slices` length equals branch count; `1 ≤ quorum ≤ branches`; no verdict branches |
-| E21 `helper.unresolved` | error | `moa.summary_model` / `moa.slicer_model` / a judge candidate needed by the definition but unresolvable, or recursive |
+| E21 `helper.unresolved` | error | `moa.summary_model` / `moa.slicer_model` / an explicitly configured judge role needed by the definition but unresolvable, recursive, or outside the `enabledModels` allowed pool (§1.4, §5) |
 | E22 `fanout.branch.controls` | warning | a branch member has `route`, `terminate`, or outgoing edges; they are ignored in the branch role |
 
 ### 11.1 Capability gate
@@ -2781,6 +2807,31 @@ None open. Every question raised in rounds 1 to 3 is answered in §15.
 - No task board; the `task` tool and hub messaging are untouched.
 
 ## 19. Revision log
+
+### Amendment 6.8 (Codex security P2 on PR #113: `enabledModels` not enforced)
+
+- Members and helpers resolve against `registry.getAvailable()` and the
+  resolved model must then be in the allowed pool
+  `filterAvailableModelsByEnabledPatterns(getAvailable(), cfgEnabledModels, settings)`
+  (`model-resolver.ts:1896`; the session's own scope,
+  `model-controls.ts:486-491`). Outside it: `member.model.excluded` (E2) for
+  members, `helper.unresolved` naming `enabledModels` for an explicit judge
+  role; the implicit judge pool is filtered silently. Resolve-then-check,
+  never resolve-against-the-pool: fuzzy and role matching could otherwise
+  substitute a different allowed model without anyone noticing.
+- Enforced at registration (registrar's settings) and at every run start
+  (host session's settings, authoritative); loud refusal, no fallback; the
+  headless host uses the gateway's settings.
+- Closes the gap where a project `MIXTURES.toml` could route the topic,
+  draft, and inherited system prompt to a workspace-excluded model and bill
+  it, because `getAvailable()` checks credentials and `disabledProviders`
+  only.
+- Tests: an unrestricted registration followed by a second session whose
+  `enabledModels` excludes the editor ends its prompt with
+  `member.model.excluded` and zero member calls; the same settings at
+  discovery refuse the mixture at registration with a log line and it is
+  absent from the roster; a routed graph whose implicit judge fallback lands
+  on an excluded model resolves a plan without it.
 
 ### Amendment 6.7 (Codex P2s on PR #113: recovery continuations, in-file duplicates)
 
