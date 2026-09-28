@@ -78,31 +78,40 @@ export interface ExitWithParent {
  */
 export function exitWithParent(options: ExitWithParentOptions = {}): ExitWithParent {
 	const targets = new Set<ExitWithParentTarget>();
+	const targetCleanupCancels = new Map<ExitWithParentTarget, () => void>();
 	const exitCode = options.exitCode ?? EXIT_WITH_PARENT_EXIT_CODE;
 	const teardownMs = options.teardownMs ?? EXIT_WITH_PARENT_TEARDOWN_MS;
+	let parentExitStarted = false;
+	const armTargetCleanup = (target: ExitWithParentTarget): void => {
+		if (targetCleanupCancels.has(target)) return;
+		const cancel = postmortem.register("exit-with-parent-target", () => tearDownTarget(target, teardownMs));
+		targetCleanupCancels.set(target, cancel);
+	};
 	const watchdog = watchParentProcess({
 		parentPid: options.parentPid,
 		natives: { Process, ProcessStatus },
-		onParentExit: () => void tearDownAfterParentExit([...targets], watchdog.parentPid, exitCode, teardownMs),
+		onParentExit: () => {
+			parentExitStarted = true;
+			for (const target of targets) armTargetCleanup(target);
+			void tearDownAfterParentExit(watchdog.parentPid, exitCode, teardownMs);
+		},
 	});
 	return {
 		parentPid: watchdog.parentPid,
 		attach(target) {
 			targets.add(target);
+			if (parentExitStarted) armTargetCleanup(target);
 			return () => {
 				targets.delete(target);
+				targetCleanupCancels.get(target)?.();
+				targetCleanupCancels.delete(target);
 			};
 		},
 		stop: () => watchdog.stop(),
 	};
 }
 
-async function tearDownAfterParentExit(
-	targets: ExitWithParentTarget[],
-	parentPid: number,
-	exitCode: number,
-	teardownMs: number,
-): Promise<never> {
+async function tearDownAfterParentExit(parentPid: number, exitCode: number, teardownMs: number): Promise<never> {
 	logger.warn("Parent process exited; tearing down and exiting", { parentPid, exitCode, teardownMs });
 	const hardExit = (): never => {
 		// Groups whose cooperative SIGTERM grace outlived the budget, and servers
@@ -119,35 +128,35 @@ async function tearDownAfterParentExit(
 	);
 	process.stdout.on("error", ignoreStreamError);
 	process.stderr.on("error", ignoreStreamError);
-	// Run inside the postmortem pass rather than beside it, so a competing
-	// fatal or signal exit awaits these child-process kills instead of
-	// skipping them.
-	postmortem.register("exit-with-parent", () => tearDownOwnedProcesses(targets, teardownMs));
-	// The pass also runs every other cleanup registration: session dispose,
-	// LSP clients, Python kernels, browser tabs, SSH, daemon clients.
-	await postmortem.cleanup();
+	// Run a terminal SIGHUP pass so competing fatal/signal cleanup joins these
+	// child-process kills and exit-only registrations complete before hard exit.
+	// Registrations made while the pass is running join it as late callbacks.
+	postmortem.register("exit-with-parent", tearDownGlobalOwnedProcesses);
+	await postmortem.cleanupForExit(postmortem.Reason.SIGHUP);
 	clearTimeout(deadline);
 	return hardExit();
 }
 
-async function tearDownOwnedProcesses(targets: ExitWithParentTarget[], teardownMs: number): Promise<void> {
-	const work: Promise<unknown>[] = [shutdownAllLspClients(), disposeAllKernelSessions(), disposeAllVmContexts()];
-	for (const { session, mcpManager } of targets) {
-		// abort() kills the running tool (a foreground bash command) right away;
-		// dispose() reaches MCP and async jobs only after its drain windows, so
-		// those are torn down directly as well. dispose() still has to run: it
-		// alone releases browser tabs, computer sessions, provider state, session
-		// disposers and the persistence flush. The overall deadline bounds it.
-		work.push(session.abort({ reason: PARENT_EXIT_ABORT_REASON }));
-		work.push(
-			session.dispose({
-				drainTimeoutMs: teardownMs,
-				mnemopiConsolidateTimeoutMs: Math.min(teardownMs, SHUTDOWN_CONSOLIDATE_BUDGET_MS),
-			}),
-		);
-		if (session.asyncJobManager) work.push(session.asyncJobManager.dispose({ timeoutMs: teardownMs }));
-		if (mcpManager) work.push(mcpManager.disconnectAll());
-	}
+async function tearDownGlobalOwnedProcesses(): Promise<void> {
+	await Promise.allSettled([shutdownAllLspClients(), disposeAllKernelSessions(), disposeAllVmContexts()]);
+}
+
+async function tearDownTarget({ session, mcpManager }: ExitWithParentTarget, teardownMs: number): Promise<void> {
+	// abort() kills the running tool (a foreground bash command) right away;
+	// dispose() reaches MCP and async jobs only after its drain windows, so
+	// those are torn down directly as well. dispose() still has to run: it
+	// alone releases browser tabs, computer sessions, provider state, session
+	// disposers and the persistence flush. The overall deadline bounds it.
+	const work: Promise<unknown>[] = [
+		session.abort({ reason: PARENT_EXIT_ABORT_REASON }),
+		session.dispose({
+			reason: postmortem.Reason.SIGHUP,
+			drainTimeoutMs: teardownMs,
+			mnemopiConsolidateTimeoutMs: Math.min(teardownMs, SHUTDOWN_CONSOLIDATE_BUDGET_MS),
+		}),
+	];
+	if (session.asyncJobManager) work.push(session.asyncJobManager.dispose({ timeoutMs: teardownMs }));
+	if (mcpManager) work.push(mcpManager.disconnectAll());
 	await Promise.allSettled(work);
 }
 

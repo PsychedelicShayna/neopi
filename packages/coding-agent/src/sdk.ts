@@ -171,6 +171,7 @@ import {
 	type SecretObfuscator,
 } from "./secrets";
 import { AgentSession, type InitialRetryFallbackState, type PlanYolo, type Prewalk } from "./session/agent-session";
+import type { AgentSessionDisposeOptions } from "./session/agent-session-types";
 import {
 	createAuthStorageSettingsSync,
 	discoverAuthStorage as discoverAuthStorageFromConfig,
@@ -4965,7 +4966,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		{
 			const originalDispose = session.dispose.bind(session);
 			const rootRef = registeredAgentRef;
-			const disposeOnce = async (): Promise<void> => {
+			const disposeOnce = async (disposeOptions: AgentSessionDisposeOptions): Promise<void> => {
 				try {
 					// Reject new session work (eval starts) the moment disposal
 					// begins — the lifecycle await below opens an async gap before
@@ -4992,7 +4993,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						const lifecycle = AgentLifecycleManager.global();
 						if (lifecycle.manages(agentRegistry)) await lifecycle.disposeRoot(rootRef);
 					}
-					await originalDispose();
+					await originalDispose(disposeOptions);
 				} finally {
 					unregisterUnlessParked();
 					unsubscribeCredentialDisabled();
@@ -5012,8 +5013,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// embedder's late cleanup after the root id was recreated) must not
 			// re-run teardown against whatever now owns the id or the lifecycle.
 			let disposeCall: Promise<void> | undefined;
-			session.dispose = () => {
-				disposeCall ??= disposeOnce();
+			session.dispose = (disposeOptions = {}) => {
+				disposeCall ??= disposeOnce(disposeOptions);
 				return disposeCall;
 			};
 		}
