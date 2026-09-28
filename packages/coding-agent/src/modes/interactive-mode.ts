@@ -1155,6 +1155,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	lastStatusSpacer: Spacer | undefined = undefined;
 	lastStatusText: Text | undefined = undefined;
 	fileSlashCommands: Set<string> = new Set();
+	slashCommandNames: ReadonlySet<string> = new Set();
 	skillCommands: Map<string, Skill> = new Map();
 	oauthManualInput: OAuthManualInputManager = new OAuthManualInputManager();
 	/** Owns hosting: manual `/collab`, `collab.autoStart`, and room rotation on session switch. */
@@ -2240,10 +2241,9 @@ export class InteractiveMode implements InteractiveModeContext {
 				description: template.description,
 				icon: promptIcon,
 			}));
-		this.#baseAutocompleteProvider = this.#inputController.createAutocompleteProvider(
-			[...this.#pendingSlashCommands, ...fileSlashCommands, ...promptTemplateCommands],
-			basePath,
-		);
+		const allCommands = [...this.#pendingSlashCommands, ...fileSlashCommands, ...promptTemplateCommands];
+		this.slashCommandNames = new Set(allCommands.flatMap(command => [command.name, ...(command.aliases ?? [])]));
+		this.#baseAutocompleteProvider = this.#inputController.createAutocompleteProvider(allCommands, basePath);
 		this.#applyAutocompleteProvider();
 	}
 

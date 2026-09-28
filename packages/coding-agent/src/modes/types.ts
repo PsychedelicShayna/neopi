@@ -265,6 +265,8 @@ export interface InteractiveModeContext {
 	lastStatusSpacer: Spacer | undefined;
 	lastStatusText: Text | undefined;
 	fileSlashCommands: Set<string>;
+	/** Every name and alias in the slash-command picker, for unknown-command detection. */
+	slashCommandNames: ReadonlySet<string>;
 	skillCommands: Map<string, Skill>;
 	oauthManualInput: OAuthManualInputManager;
 	todoPhases: TodoPhase[];

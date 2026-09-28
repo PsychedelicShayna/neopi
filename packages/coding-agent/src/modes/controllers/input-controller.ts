@@ -68,6 +68,7 @@ import { blobExtensionForImageMimeType } from "@oh-my-pi/pi-tui/prompt/image-for
 import { VideoError, buildVideoContactSheetPng, probeVideo } from "../../utils/video";
 import { isVideoPath } from "@oh-my-pi/pi-tui/prompt/video";
 import { resizeImage } from "../../utils/image-resize";
+import { findUnknownSlashCommand } from "../utils/unknown-slash-command";
 import { parseReplEvalInput } from "./repl-input";
 
 import { cfgCycleOrder } from "../../config/model-settings";
@@ -232,6 +233,8 @@ export class InputController {
 
 	#enhancedPaste?: EnhancedPasteController;
 	#draftText: string | undefined;
+	/** Unknown `/command` text already warned about; submitting it again sends it as a prompt. */
+	#unknownSlashWarned: string | undefined;
 	#focusedLeftTapListenerInstalled = false;
 	#focusedPasteListenerInstalled = false;
 	#btwBranchListenerInstalled = false;
@@ -954,6 +957,8 @@ export class InputController {
 			text = this.#compactDraftImages(text.trim());
 			const hasPendingImages = this.ctx.editor.pendingImages.length > 0;
 			if ((!isSettingsInitialized() || cfgEmojiAutocomplete.get(settings)) && text) text = expandEmoticons(text);
+			const warnedSlashText = this.#unknownSlashWarned;
+			this.#unknownSlashWarned = undefined;
 
 			// Focused subagent session: the editor is a plain chat box for it.
 			// Everything below (continue shortcuts, slash/bash/python, loop,
@@ -1082,6 +1087,34 @@ export class InputController {
 				return;
 			}
 
+			// Check the submitted top-level command before a built-in can rewrite its prompt.
+			// Confirmation is valid for only the next submission, even when it returns early.
+			const unknownSlash =
+				text !== warnedSlashText &&
+				!this.ctx.collabGuest &&
+				text.startsWith("/") &&
+				!this.ctx.isKnownSlashCommand(text) &&
+				!isKnownSkillCommand(this.ctx, text)
+					? findUnknownSlashCommand(text, this.ctx.slashCommandNames)
+					: undefined;
+			if (unknownSlash) {
+				this.#unknownSlashWarned = text;
+				const hint = unknownSlash.suggestion ? ` Did you mean /${unknownSlash.suggestion}?` : "";
+				if (this.ctx.editor.getText()) {
+					// An input hook may have awaited while the operator started a new draft.
+					this.ctx.editor.addToHistory(text);
+					this.ctx.showWarning(
+						`Unknown command /${unknownSlash.name}.${hint} New draft kept; previous command saved to history (Up) for confirmation.`,
+					);
+				} else {
+					this.ctx.showWarning(
+						`Unknown command /${unknownSlash.name}.${hint} Press Enter again to send it as a message.`,
+					);
+					if (!this.ctx.editor.restoreSubmittedDraft()) this.ctx.editor.setCollapsedText(text);
+				}
+				if (forceChain) this.#chainNextSubmit = true;
+				return;
+			}
 			// Handle built-in slash commands
 			if (text) {
 				this.#recordSlashCommandUsage(text);

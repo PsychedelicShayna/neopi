@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "bun:test";
+import * as chainConfig from "../src/chains/config";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import { isQueuedMessageList, splitQueuedMessages } from "@oh-my-pi/pi-tui/prompt/queue-input";
@@ -27,6 +28,8 @@ function makeCtx(isStreaming = false) {
 		setCollapsedText: (t: string) => {
 			text = t;
 		},
+		restoreSubmittedDraft: () => false,
+		clearSubmittedDraft: vi.fn(),
 		composerChips: () => [],
 		addToHistory,
 		pendingImages: [] as ImageContent[],
@@ -42,6 +45,9 @@ function makeCtx(isStreaming = false) {
 	};
 	const ctx = {
 		editor,
+		slashCommandNames: new Set(["rename", "hotkeys", "mcp", "queue"]),
+		isKnownSlashCommand: (command: string) =>
+			Boolean(ctx.session.extensionRunner?.getCommand(command.slice(1).split(/\s+/, 1)[0]!)),
 		session: {
 			isStreaming,
 			isCompacting: false,
@@ -198,6 +204,101 @@ describe("input controller — slash command history (#3148)", () => {
 		]);
 		expect(addToHistory).toHaveBeenCalledWith(input);
 		expect(showStatus).toHaveBeenCalledWith("Queued 3 messages for when the agent yields");
+	});
+	it("warns on an unknown slash command before allowing an intentional second submit", async () => {
+		const { ctx, editor, prompt } = makeCtx(true);
+		controllerFor(ctx);
+		editor.setText("/reename session");
+
+		await editor.onSubmit?.("/reename session");
+
+		expect(ctx.showWarning).toHaveBeenCalledWith(expect.stringContaining("Did you mean /rename?"));
+		expect(editor.getText()).toBe("/reename session");
+		expect(prompt).not.toHaveBeenCalled();
+
+		await editor.onSubmit?.("/reename session");
+
+		expect(prompt).toHaveBeenCalledWith("/reename session", {
+			streamingBehavior: "steer",
+			images: undefined,
+		});
+	});
+	it("expires unknown-command confirmation after a handled built-in", async () => {
+		const { ctx, editor, prompt } = makeCtx(true);
+		controllerFor(ctx);
+
+		await editor.onSubmit?.("/typo");
+		expect(ctx.showWarning).toHaveBeenCalledTimes(1);
+		await editor.onSubmit?.("/hotkeys");
+		await editor.onSubmit?.("/typo");
+
+		expect(ctx.showWarning).toHaveBeenCalledTimes(2);
+		expect(prompt).not.toHaveBeenCalled();
+		expect(editor.getText()).toBe("/typo");
+	});
+	it("keeps a newer composer draft when an asynchronous input hook triggers the warning", async () => {
+		const { ctx, editor, addToHistory, prompt } = makeCtx();
+		const gate = Promise.withResolvers<{ handled: false }>();
+		Object.assign(ctx.session, {
+			extensionRunner: {
+				hasHandlers: () => true,
+				emitInput: () => gate.promise,
+				getCommand: () => undefined,
+			},
+		});
+		controllerFor(ctx);
+
+		const pending = editor.onSubmit?.("/typo");
+		editor.setText("new draft");
+		gate.resolve({ handled: false });
+		await pending;
+
+		expect(editor.getText()).toBe("new draft");
+		expect(addToHistory).toHaveBeenCalledWith("/typo");
+		expect(prompt).not.toHaveBeenCalled();
+	});
+	it("keeps the Alt+C chain request when an unknown command needs confirmation", async () => {
+		const discovery = vi.spyOn(chainConfig, "discoverChains").mockResolvedValue({ chains: [], warnings: [] });
+		try {
+			const { ctx, editor, prompt } = makeCtx();
+			let chainKey: (() => void) | undefined;
+			let submission: Promise<void> | undefined;
+			Object.assign(ctx, {
+				keybindings: { getKeys: (action: string) => (action === "app.message.chain" ? ["alt+c"] : []) },
+				dictationSpaceHold: () => vi.fn(),
+				sessionManager: { getCwd: () => process.cwd() },
+			});
+			Object.assign(ctx.ui, { addInputListener: vi.fn(), addStartListener: vi.fn() });
+			Object.assign(editor, {
+				setActionKeys: vi.fn(),
+				clearCustomKeyHandlers: vi.fn(),
+				setCustomKeyHandler: (key: string, handler: () => void) => {
+					if (key === "alt+c") chainKey = handler;
+				},
+				spaceHold: {},
+				submit: () => {
+					const text = editor.getText();
+					editor.setText("");
+					submission = editor.onSubmit?.(text);
+				},
+				setChainLock: vi.fn(),
+			});
+			const controller = controllerFor(ctx);
+			controller.setupKeyHandlers();
+			editor.setText("/typo");
+
+			chainKey?.();
+			await submission;
+			expect(ctx.showWarning).toHaveBeenCalledWith(expect.stringContaining("Unknown command /typo"));
+			expect(editor.getText()).toBe("/typo");
+
+			editor.setText("");
+			await editor.onSubmit?.("/typo");
+			expect(ctx.showWarning).toHaveBeenCalledWith(expect.stringContaining("No post-processing chains defined"));
+			expect(prompt).not.toHaveBeenCalled();
+		} finally {
+			discovery.mockRestore();
+		}
 	});
 });
 

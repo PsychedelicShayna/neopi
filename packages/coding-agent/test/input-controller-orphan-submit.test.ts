@@ -110,6 +110,7 @@ function createContext(sessionOverride?: InteractiveModeContext["session"]) {
 		compactionQueuedMessages: [] as InteractiveModeContext["compactionQueuedMessages"],
 		skillCommands: new Map(),
 		fileSlashCommands: new Set<string>(),
+		slashCommandNames: new Set(["widget-status", "custom-prompt"]),
 		locallySubmittedUserSignatures: new Set<string>(),
 		isKnownSlashCommand: () => false,
 		recordLocalSubmission(this: InteractiveModeContext, text: string, imageCount = 0) {
