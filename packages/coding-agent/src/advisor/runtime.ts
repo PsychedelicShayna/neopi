@@ -2,6 +2,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { raceWithSignal } from "@oh-my-pi/pi-ai/utils/abort";
+import { MIXTURE_TRACE_MESSAGE_TYPE } from "@oh-my-pi/pi-tui/overlays/mixture-types";
 import { logger } from "@oh-my-pi/pi-utils";
 import {
 	collectNativeReplayRegexSecretValues,
@@ -795,7 +796,13 @@ export class AdvisorRuntime {
 
 	#formatRawDelta(rawMessages: AgentMessage[], wip = false, updateSeenContext = true): string | null {
 		const delta = rawMessages
-			.filter(message => !(message.role === "custom" && message.customType === "advisor"))
+			.filter(
+				message =>
+					!(
+						message.role === "custom" &&
+						(message.customType === "advisor" || message.customType === MIXTURE_TRACE_MESSAGE_TYPE)
+					),
+			)
 			.map(message =>
 				updateSeenContext ? this.#dedupContextMessage(message) : this.#dedupContextMessageReadOnly(message),
 			);

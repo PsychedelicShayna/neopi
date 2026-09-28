@@ -20,6 +20,7 @@ import type { ModelRegistry } from "../config/model-registry";
 
 import { roleCandidatePool } from "../config/model-roles";
 import { formatModelStringWithRouting } from "../config/model-resolver";
+import { isMixtureModel } from "../moa/provider";
 import { collectOnlineTinyCandidates, expandOnlineTinyModelFallbacks } from "../tiny/online-candidates";
 import type { Settings } from "../config/settings";
 import titleMarkerInstruction from "../prompts/system/title-marker-instruction.md" with { type: "text" };
@@ -122,21 +123,23 @@ const LEADING_PROSE_THINKING_PREAMBLE_RE =
 	/^[ \t]*(?:(?:here(?:['’]s| is)[ \t]+(?:a|the|my)[ \t]+)|my[ \t]+)?(?:thinking|thought|reasoning)[ \t]+process[ \t]*:?[ \t]*(?:\r?\n|$)/i;
 
 function getTitleModels(registry: ModelRegistry, settings: Settings, currentModel?: Model<Api>): Model<Api>[] {
-	const availableModels = roleCandidatePool("tiny", settings, registry);
+	// A mixture never titles a session: it only runs as the primary agent's model.
+	const availableModels = roleCandidatePool("tiny", settings, registry).filter(model => !isMixtureModel(model));
+	const sessionModel = currentModel && !isMixtureModel(currentModel) ? currentModel : undefined;
 	if (availableModels.length === 0) return [];
 
 	const models = collectOnlineTinyCandidates(["tiny", "commit", "smol"], settings, availableModels).map(
 		candidate => candidate.model,
 	);
 	if (
-		currentModel &&
+		sessionModel &&
 		(models.length === 0 || cfgRetryModelFallback.get(settings) !== false) &&
-		!models.some(model => formatModelStringWithRouting(model) === formatModelStringWithRouting(currentModel))
+		!models.some(model => formatModelStringWithRouting(model) === formatModelStringWithRouting(sessionModel))
 	) {
-		// Append currentModel and expand its own chain separately — never merge it
+		// Append the session model and expand its own chain separately — never merge it
 		// into the tiny/commit/smol role collection (that would apply role defaults).
 		const seen = new Set(models.map(formatModelStringWithRouting));
-		for (const model of expandOnlineTinyModelFallbacks(currentModel, settings, availableModels)) {
+		for (const model of expandOnlineTinyModelFallbacks(sessionModel, settings, availableModels)) {
 			const key = formatModelStringWithRouting(model);
 			if (seen.has(key)) continue;
 			seen.add(key);

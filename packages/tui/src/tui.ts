@@ -470,6 +470,20 @@ export class Container implements Component {
 		this.#memoLines = undefined;
 	}
 
+	/** Insert `component` immediately before `before`; appends when `before` is not a child. */
+	insertBefore(component: Component, before: Component): void {
+		const index = this.children.indexOf(before);
+		if (index < 0) {
+			this.addChild(component);
+			return;
+		}
+		this.children.splice(index, 0, component);
+		if (this.#ignoreTight) {
+			component.setIgnoreTight?.(true);
+		}
+		this.#memoLines = undefined;
+	}
+
 	removeChild(component: Component): void {
 		const index = this.children.indexOf(component);
 		if (index !== -1) {

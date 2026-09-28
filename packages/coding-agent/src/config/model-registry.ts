@@ -261,6 +261,10 @@ export class ModelRegistry {
 	// re-materializes refreshed headers, not just the apiKey (#9760).
 	#commandConfigsByProvider: Map<string, Set<string>> = new Map();
 	#keylessProviders: Set<string> = new Set();
+	// Providers registered at runtime with `auth: "none"`. `#keylessProviders` is
+	// rebuilt on every static reload, so `#loadModels` re-adds these after the
+	// implicit local set; registration adds them immediately as well.
+	#runtimeKeylessProviders: Set<string> = new Set();
 	#discoverableProviders: DiscoveryProviderConfig[] = [];
 	#customModelOverlays: CustomModelOverlay[] = [];
 	#providerOverrides: Map<string, ProviderOverride> = new Map();
@@ -872,6 +876,7 @@ export class ModelRegistry {
 		this.#modelOverrides = modelOverrides;
 
 		this.#addImplicitDiscoverableProviders(configuredProviders);
+		for (const provider of this.#runtimeKeylessProviders) this.#keylessProviders.add(provider);
 		const configuredDiscoveryProviders = new Set(this.#discoverableProviders.map(provider => provider.provider));
 		this.#pendingStandardCacheProviders = new Set(
 			STARTUP_MODEL_CACHE_PROVIDER_IDS.filter(
@@ -2882,6 +2887,7 @@ export class ModelRegistry {
 	}
 
 	#clearRuntimeProviderState(providerName: string): void {
+		if (this.#runtimeKeylessProviders.delete(providerName)) this.#keylessProviders.delete(providerName);
 		this.#runtimeProviderApiKeys.delete(providerName);
 		this.#runtimeProviderOverrides.delete(providerName);
 		this.#runtimeCommandConfigsByProvider.delete(providerName);
@@ -2984,6 +2990,7 @@ export class ModelRegistry {
 				apiKey: config.apiKey,
 				api: config.api,
 				oauthConfigured: Boolean(config.oauth),
+				auth: config.auth,
 				models: (config.models ?? []) as ProviderValidationModel[],
 			},
 			"runtime-register",
@@ -3038,6 +3045,15 @@ export class ModelRegistry {
 			this.#runtimeProviderApiKeys.set(providerName, config.apiKey);
 		}
 		this.#recordRuntimeCommandConfigs(providerName, config);
+		// The keyless bit lands in the live set now, not at the next reload, so
+		// `getAvailable`/`hasConfiguredAuth` see the provider before any refresh
+		// and the `preserveRuntimeDiscovery` snapshot holds it on both sides.
+		if (config.auth === "none") {
+			this.#runtimeKeylessProviders.add(providerName);
+			this.#keylessProviders.add(providerName);
+		} else if (this.#runtimeKeylessProviders.delete(providerName)) {
+			this.#keylessProviders.delete(providerName);
+		}
 
 		if (config.models && config.models.length > 0) {
 			// Build model overlays that persist across refresh() cycles
@@ -3241,6 +3257,8 @@ export class ModelRegistry {
 export interface ProviderConfigInput {
 	baseUrl?: string;
 	apiKey?: string;
+	/** `"none"` registers a keyless provider: its models are available with no credential. */
+	auth?: "none";
 	api?: Api;
 	streamSimple?: (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream;
 	headers?: Record<string, string>;

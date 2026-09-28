@@ -7,6 +7,9 @@ import type { AdvisorMessageDetails } from "../../advisor";
 import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "../../collab/protocol";
 import { settings } from "../../config/settings";
 import { createAdvisorMessageCard } from "@oh-my-pi/pi-tui/chat/advisor-message";
+import { createMixtureTraceCard } from "@oh-my-pi/pi-tui/chat/mixture-trace";
+import { MIXTURE_TRACE_MESSAGE_TYPE, type MixtureTraceDetails } from "@oh-my-pi/pi-tui/overlays/mixture-types";
+import { cfgMoaShowTraceCards } from "../../moa/settings";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { createBackgroundTanDispatchBlock } from "@oh-my-pi/pi-tui/chat/background-tan-message";
 import { BashExecutionComponent } from "@oh-my-pi/pi-tui/chat/bash-execution";
@@ -248,6 +251,15 @@ export class UiHelpers {
 						this.ctx.chatContainer.addChild(
 							createAdvisorMessageCard(details, () => this.ctx.toolOutputExpanded, theme),
 						);
+						break;
+					}
+					if (message.customType === MIXTURE_TRACE_MESSAGE_TYPE) {
+						const details = (message as CustomMessage<MixtureTraceDetails>).details;
+						if (details && cfgMoaShowTraceCards.get(this.ctx.settings)) {
+							this.ctx.chatContainer.addChild(
+								createMixtureTraceCard(details, () => this.ctx.toolOutputExpanded, theme),
+							);
+						}
 						break;
 					}
 					if (message.customType === BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE) {
