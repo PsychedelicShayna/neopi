@@ -2,6 +2,8 @@
  * Interactive mode for the coding agent.
  * Handles TUI rendering and user interaction, delegating business logic to AgentSession.
  */
+import type { PersonaScope } from "../neopi/persona-config";
+import { REPL_STATUS_KEY, ReplMode, type ReplTarget, replTargetLabel } from "../neopi/repl";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
@@ -1059,6 +1061,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	pendingPythonComponents: EvalExecutionComponent[] = [];
 	pythonComponent: EvalExecutionComponent | undefined = undefined;
 	isPythonMode = false;
+	readonly replMode = new ReplMode();
 	streamingComponent: AssistantMessageComponent | undefined = undefined;
 	streamingMessage: AssistantMessage | undefined = undefined;
 	lastAssistantUsage: Usage | undefined = undefined;
@@ -7106,6 +7109,24 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	showAdvisorConfigure(): void {
 		this.#selectorController.showAdvisorConfigure();
+	}
+
+	showPersonaConfigure(scope: PersonaScope): void {
+		this.#selectorController.showPersonaConfigure(scope);
+	}
+
+	setReplTarget(target: ReplTarget): void {
+		this.replMode.set(target);
+		this.editor.enterInsertsNewline = this.replMode.active;
+		const run = this.keybindings.getKeys("app.repl.execute")[0];
+		const toggle = this.keybindings.getKeys("app.repl.toggle")[0];
+		this.setHookStatus(
+			REPL_STATUS_KEY,
+			this.replMode.active
+				? `REPL ${replTargetLabel(target)} · Enter newline · ${run ?? "app.repl.execute"} run · ${toggle ?? "/repl agent"} agent`
+				: undefined,
+		);
+		this.ui.requestRender();
 	}
 
 	showChainConfigure(): void {

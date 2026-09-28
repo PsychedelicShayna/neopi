@@ -173,6 +173,7 @@ import type {
 	TurnEndEvent,
 	TurnStartEvent,
 } from "../extensibility/extensions";
+import { type PersonaHost, personaFeature } from "../neopi/persona";
 import { emitSessionShutdownEvent, TOP_LEVEL_AGENT } from "../extensibility/extensions";
 import { ManagedTimers } from "../extensibility/extensions/managed-timers";
 import { createExtensionModelQuery } from "../extensibility/extensions/model-api";
@@ -7315,6 +7316,22 @@ export class AgentSession implements SettingsScope {
 	 * `origin` decides the disposal contract: a direct prompt admitted before {@link beginDispose}
 	 * still runs to a settled turn, while a queued turn never starts on a disposed session.
 	 */
+	/** Persona capabilities for this session; status/warnings reach the TUI through the extension UI. */
+	#personaHost(): PersonaHost {
+		// Resolved per call: the UI context is only needed when a persona is selected.
+		return {
+			sessionId: this.sessionManager.getSessionId(),
+			ui: {
+				setStatus: (key, text) => this.#extensionRunner?.getUIContext().setStatus(key, text),
+				setWidget: (key, lines) => this.#extensionRunner?.getUIContext().setWidget(key, lines),
+			},
+			invalidatePromptCache: () => this.invalidatePromptCache(),
+			appendEntry: (customType, data) => {
+				this.sessionManager.appendCustomEntry(customType, data);
+			},
+		};
+	}
+
 	async #prepareAgentStart(
 		message: AgentMessage,
 		prompt: string,
@@ -7337,12 +7354,20 @@ export class AgentSession implements SettingsScope {
 			const sourceBase = this.#tools.baseSystemPrompt;
 			const basePreparation = await this.#tools.buildSystemPromptForAgentStart(prompt, isCurrent, signal);
 			if (!isCurrent()) return cancelled;
-			const result = await this.#extensionRunner?.emitBeforeAgentStart(prompt, images, basePreparation.systemPrompt);
+			// The session persona (`/persona`) shapes the base prompt before extensions see it.
+			const personaSystemPrompt = await personaFeature().apply(basePreparation.systemPrompt, this.#personaHost());
 			if (!isCurrent()) return cancelled;
+			const result = await this.#extensionRunner?.emitBeforeAgentStart(
+				prompt,
+				images,
+				personaSystemPrompt ?? basePreparation.systemPrompt,
+			);
+			if (!isCurrent()) return cancelled;
+			const systemPromptOverride = result?.systemPrompt ?? personaSystemPrompt;
 			// Overrides are opaque replacements, not string patches. Re-run only policy preparation
 			// against the winning base; discard this attempt's returned context and staged memory.
 			const overrideIsCurrent = () => {
-				if (result?.systemPrompt === undefined) return true;
+				if (systemPromptOverride === undefined) return true;
 				const currentBase = this.#tools.baseSystemPrompt;
 				// Refreshing an unchanged tool set may replace the array without changing policy.
 				return (
@@ -7378,13 +7403,13 @@ export class AgentSession implements SettingsScope {
 			}
 			if (!overrideIsCurrent()) continue;
 			return {
-				baseXdevCatalogDelivered: result?.systemPrompt === undefined,
+				baseXdevCatalogDelivered: systemPromptOverride === undefined,
 				commit: () => {
 					// No await may separate ownership validation from publishing memory and policy.
 					if (!isCurrent() || !overrideIsCurrent()) return undefined;
 					if (basePreparation.commit?.() === false) return undefined;
-					if (result?.systemPrompt !== undefined) {
-						this.#tools.setTurnSystemPromptOverride(result.systemPrompt);
+					if (systemPromptOverride !== undefined) {
+						this.#tools.setTurnSystemPromptOverride(systemPromptOverride);
 					} else {
 						this.#tools.clearTurnSystemPromptOverride();
 						this.agent.setSystemPrompt(this.#tools.baseSystemPrompt);

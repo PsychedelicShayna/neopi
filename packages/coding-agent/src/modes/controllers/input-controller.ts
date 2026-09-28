@@ -69,6 +69,7 @@ import { VideoError, buildVideoContactSheetPng, probeVideo } from "../../utils/v
 import { isVideoPath } from "@oh-my-pi/pi-tui/prompt/video";
 import { resizeImage } from "../../utils/image-resize";
 import { findUnknownSlashCommand } from "../utils/unknown-slash-command";
+import { isReplBypass } from "../../neopi/repl";
 import { parseReplEvalInput } from "./repl-input";
 
 import { cfgCycleOrder } from "../../config/model-settings";
@@ -208,6 +209,8 @@ export class InputController {
 
 	/** Set by the chain keybinding: the next submit runs through the active chain. */
 	#chainNextSubmit = false;
+	/** Set by `app.repl.execute` so the next submit runs in the REPL kernel. */
+	#replNextSubmit = false;
 
 	/** Resolve the current tiny role at use time so project/session reloads cannot leave a stale model. */
 	#resolveTinyTitleLocalModelKey(): string | undefined {
@@ -689,8 +692,18 @@ export class InputController {
 		for (const key of this.ctx.keybindings.getKeys("app.session.resume")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.showSessionSelector());
 		}
-		for (const key of this.ctx.keybindings.getKeys("app.message.followUp")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => void this.handleFollowUp());
+		// REPL execute shares the follow-up chords by default: each key runs the
+		// buffer in REPL mode and sends a follow-up otherwise.
+		const followUpKeys = new Set(this.ctx.keybindings.getKeys("app.message.followUp"));
+		const replExecuteKeys = new Set(this.ctx.keybindings.getKeys("app.repl.execute"));
+		for (const key of new Set([...followUpKeys, ...replExecuteKeys])) {
+			this.ctx.editor.setCustomKeyHandler(key, () => {
+				if (replExecuteKeys.has(key) && this.ctx.replMode.active) this.#submitToRepl();
+				else if (followUpKeys.has(key)) void this.handleFollowUp();
+			});
+		}
+		for (const key of this.ctx.keybindings.getKeys("app.repl.toggle")) {
+			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.setReplTarget(this.ctx.replMode.toggle()));
 		}
 		for (const key of this.ctx.keybindings.getKeys("app.message.chain")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => this.#submitThroughChain());
@@ -954,6 +967,12 @@ export class InputController {
 		this.ctx.editor.onSubmit = async (text: string) => {
 			const forceChain = this.#chainNextSubmit;
 			this.#chainNextSubmit = false;
+			const toRepl = this.#replNextSubmit;
+			this.#replNextSubmit = false;
+			if (toRepl && this.ctx.replMode.active && !isReplBypass(text) && text.trim()) {
+				await this.#runReplCell(text);
+				return;
+			}
 			text = this.#compactDraftImages(text.trim());
 			const hasPendingImages = this.ctx.editor.pendingImages.length > 0;
 			if ((!isSettingsInitialized() || cfgEmojiAutocomplete.get(settings)) && text) text = expandEmoticons(text);
@@ -1441,6 +1460,50 @@ export class InputController {
 	}
 
 	/** Chain keybinding: submit the composer through the active chain once. */
+	/**
+	 * Run one REPL cell in the selected kernel. The code keeps its indentation;
+	 * local execution stays host-only in collab and consumes dictated speech.
+	 */
+	async #runReplCell(code: string): Promise<void> {
+		const target = this.ctx.replMode.target;
+		if (target === "agent") return;
+		const restore = () => this.ctx.editor.setText(code);
+		if (this.ctx.collabGuest) {
+			this.ctx.showStatus("Local execution is host-only during a collab session");
+			restore();
+			return;
+		}
+		if (this.ctx.liveCallActive && !this.ctx.discardLiveSpeech()) {
+			this.#holdForLiveHandoff(code);
+			return;
+		}
+		if (target === "bash") {
+			if (this.ctx.session.isBashRunning) {
+				this.ctx.showWarning("A bash command is already running. Press Esc to cancel it first.");
+				restore();
+				return;
+			}
+			this.ctx.editor.addToHistory(code);
+			this.ctx.editor.clearDraft();
+			await this.ctx.handleBashCommand(code);
+			return;
+		}
+		if (this.ctx.session.isEvalLanguageRunning(target)) {
+			this.ctx.showWarning(`The ${target} kernel is busy. Press Esc to cancel it first.`);
+			restore();
+			return;
+		}
+		this.ctx.editor.addToHistory(code);
+		this.ctx.editor.clearDraft();
+		await this.ctx.handleEvalCommand(target, code, false, this.ctx.replMode.takeReset(target), target);
+	}
+
+	#submitToRepl(): void {
+		if (!this.ctx.editor.getText().trim()) return;
+		this.#replNextSubmit = true;
+		this.ctx.editor.submit();
+	}
+
 	#submitThroughChain(): void {
 		if (!this.ctx.editor.getText().trim()) return;
 		this.#chainNextSubmit = true;
