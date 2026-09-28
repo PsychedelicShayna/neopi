@@ -117,8 +117,10 @@ interface Harness {
 function makeHarness(options?: {
 	artifactPath?: string | undefined;
 	speakableIdleMs?: number;
+	thinkingFlushMs?: number;
 	holdDelivery?: boolean;
 	dropAudio?: boolean;
+	playbackQueue?: { queuedMs: number; droppedMs: number };
 }): Harness {
 	const sent: LiveClientMessage[] = [];
 	const aborts: Array<Record<string, unknown>> = [];
@@ -224,6 +226,7 @@ function makeHarness(options?: {
 			onDelegated: texts => delegated.push([...texts]),
 		},
 		...(options?.speakableIdleMs !== undefined ? { speakableIdleMs: options.speakableIdleMs } : {}),
+		...(options?.thinkingFlushMs !== undefined ? { thinkingFlushMs: options.thinkingFlushMs } : {}),
 		extractAssistantText: message => (message as unknown as { testText?: string }).testText ?? "",
 		createTransport: transportOptions => {
 			liveCallbacks = transportOptions.callbacks;
@@ -238,6 +241,9 @@ function makeHarness(options?: {
 					if (options?.dropAudio) return false;
 					audioSent.push(samples);
 					return true;
+				},
+				playbackQueueStats() {
+					return options?.playbackQueue ?? { queuedMs: 0, droppedMs: 0 };
 				},
 			};
 		},
@@ -1018,5 +1024,88 @@ describe("live controller delegation ownership", () => {
 		h.fireSession(update);
 		await settle();
 		expect(speakableTexts(h.sent)).toHaveLength(1);
+	});
+});
+
+describe("live voice backlog bounds", () => {
+	it("does not retain answered turns across a long call", async () => {
+		const h = makeHarness();
+		await h.controller.start();
+		for (let i = 0; i < 200; i += 1) {
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: `request ${i}` } });
+			h.fireLive({ type: "output_transcript.added", item: { text: "ok" } });
+			h.fireLive({ type: "turn.done", turn: { role: "assistant", transcript: "ok" } });
+			expect(h.controller.pendingUserTurnCount()).toBe(0);
+		}
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "only the latest" } });
+		h.fireLive(delegation("dlg-after-many", "poison"));
+		await settle();
+		expect(h.prompts).toEqual(["only the latest"]);
+		expect(h.controller.pendingUserTurnCount()).toBe(0);
+	});
+
+	it("caps held context and keeps only the latest thinking and progress item", async () => {
+		const h = makeHarness({ speakableIdleMs: 60_000, thinkingFlushMs: 0 });
+		await h.controller.start();
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "work" } });
+		h.fireLive(delegation("dlg-hold", "work"));
+		await settle();
+		h.deliveries.at(-1)?.complete();
+		await settle();
+		h.controller.noteComposerActivity();
+
+		for (let i = 0; i < 20; i += 1) {
+			h.fireSession(crewMessage(`r-${i}`, "Helios", `report ${i}`));
+			h.fireSession({
+				type: "message_end",
+				message: { role: "assistant", stopReason: "toolUse", testText: `progress ${i}` },
+			} as unknown as AgentSessionEvent);
+			expect(h.controller.heldContextCount()).toBeLessThanOrEqual(8);
+		}
+		let thinking = "";
+		for (let i = 0; i < 20; i += 1) {
+			thinking += `Reasoning pass ${i} weighs the next step carefully. `.repeat(6);
+			h.fireSession({
+				type: "message_update",
+				message: { role: "assistant", content: [{ type: "thinking", thinking }] },
+			} as unknown as AgentSessionEvent);
+			expect(h.controller.heldContextCount()).toBeLessThanOrEqual(8);
+		}
+		expect(speakableTexts(h.sent)).toEqual([]);
+
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "next" } });
+		h.fireLive(delegation("dlg-release", "next"));
+		await settle(40);
+
+		const reports = speakableTexts(h.sent).filter(text => text.startsWith("Crew report from"));
+		const reasoning = speakableTexts(h.sent).filter(text => text.startsWith("Main agent reasoning"));
+		expect(reports.length).toBeLessThanOrEqual(8);
+		expect(reports.at(-1)).toBe("Crew report from Helios: report 19");
+		expect(reports.some(text => text.endsWith("report 0"))).toBe(false);
+		expect(reasoning).toHaveLength(1);
+		expect(reasoning[0]).toContain("Reasoning pass 19");
+		const progress = h.sent
+			.filter(message => message.channel === "commentary")
+			.map(message => message.content.map(item => item.text).join(""));
+		expect(progress).toEqual(["progress 19"]);
+		expect(h.controller.heldContextCount()).toBe(0);
+	});
+
+	it("records speaker queue depth and drops in the audio-frame summary", async () => {
+		const h = makeHarness({ playbackQueue: { queuedMs: 1800, droppedMs: 4000 } });
+		await h.controller.start();
+		await h.controller.stop();
+		const lines = (await readFile(h.artifactPath, "utf8")).trim().split("\n");
+		expect(lines.map(line => JSON.parse(line))).toEqual([
+			expect.objectContaining({
+				type: "audio-frame-summary",
+				captured: 0,
+				sent: 0,
+				droppedAtGate: 0,
+				droppedAtNativeQueue: 0,
+				playbackQueuedMs: 1800,
+				playbackDroppedMs: 4000,
+			}),
+		]);
 	});
 });
