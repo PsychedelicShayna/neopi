@@ -1,40 +1,24 @@
-import * as fs from "node:fs/promises";
-import * as path from "node:path";
-import { $ } from "bun";
+import {
+	type GitBuildIdentity,
+	resolveGitBuildIdentity,
+	UNKNOWN_GIT_BUILD_IDENTITY,
+} from "../src/utils/git-build-identity";
 
 /** Source identity a build bakes into `BUILD_INFO` (see src/build-info.ts). */
-export interface BuildIdentity {
-	readonly gitSha: string | null;
-	readonly dirty: boolean | null;
-}
-
-const UNKNOWN_IDENTITY: BuildIdentity = { gitSha: null, dirty: null };
-
-async function realpathOrResolved(p: string): Promise<string> {
-	try {
-		return await fs.realpath(p);
-	} catch {
-		return path.resolve(p);
-	}
-}
+export type BuildIdentity = GitBuildIdentity;
 
 /**
- * Resolve the identity of the git checkout rooted exactly at `repoRoot`, with
- * the git CLI. Build scripts cannot use the native vcs binding: cross-compiling
- * release runners lack the host addon, and the portable build moves it aside.
- * A source copy without its own `.git` inside another repository reports
- * unknown rather than the enclosing repository. `dirty` matches BUILD_INFO:
- * tracked changes only. Call this before any generator rewrites tracked
- * placeholders.
+ * Resolve the checkout's identity through the native vcs binding, with the
+ * same rules as the runtime `BUILD_INFO`. Call this before any generator
+ * rewrites tracked placeholders. Cross-compiling release runners lack the
+ * host addon; there a CI checkout's `GITHUB_SHA` (clean by construction) is
+ * used, and anywhere else the identity is baked as unknown.
  */
 export async function resolveBuildIdentity(repoRoot: string): Promise<BuildIdentity> {
-	const top = await $`git rev-parse --show-toplevel`.cwd(repoRoot).quiet().nothrow();
-	if (top.exitCode !== 0) return UNKNOWN_IDENTITY;
-	const [root, expected] = await Promise.all([realpathOrResolved(top.text().trim()), realpathOrResolved(repoRoot)]);
-	if (root !== expected) return UNKNOWN_IDENTITY;
-	const head = await $`git rev-parse --verify HEAD`.cwd(repoRoot).quiet().nothrow();
-	if (head.exitCode !== 0) return UNKNOWN_IDENTITY;
-	const gitSha = head.text().trim();
-	const status = await $`git status --porcelain --untracked-files=no`.cwd(repoRoot).quiet().nothrow();
-	return { gitSha, dirty: status.exitCode === 0 ? status.text().trim().length > 0 : null };
+	try {
+		return await resolveGitBuildIdentity(repoRoot);
+	} catch {
+		const ciSha = Bun.env.GITHUB_SHA;
+		return ciSha ? { gitSha: ciSha, dirty: false } : UNKNOWN_GIT_BUILD_IDENTITY;
+	}
 }

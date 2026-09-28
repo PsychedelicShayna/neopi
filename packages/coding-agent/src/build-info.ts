@@ -11,10 +11,9 @@
  * `BUILD_INFO` identifies source only. It does not certify API compatibility
  * or which native addon is loaded.
  */
-import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { VERSION } from "@oh-my-pi/pi-utils/dirs";
+import { resolveGitBuildIdentity } from "./utils/git-build-identity";
 
 export interface BuildInfo {
 	/** Package version, e.g. "18.3.2". */
@@ -31,34 +30,16 @@ export interface BuildInfo {
 
 const UNKNOWN_BUILD: BuildInfo = Object.freeze({ version: VERSION, gitSha: null, dirty: null });
 
-async function realpathOrResolved(p: string): Promise<string> {
-	try {
-		return await fs.realpath(p);
-	} catch {
-		return path.resolve(p);
-	}
-}
-
 /**
  * Resolve the build identity of the git checkout rooted exactly at
  * `checkoutRoot`. Linked worktrees (a `.git` file) resolve like any checkout;
  * an ancestor repository that merely contains the directory does not count.
  */
 export async function resolveGitBuildInfo(checkoutRoot: string): Promise<BuildInfo> {
-	const repo = vcs.git(checkoutRoot);
-	if (!repo) return UNKNOWN_BUILD;
-	const [root, expected] = await Promise.all([
-		realpathOrResolved(repo.info().repoRoot),
-		realpathOrResolved(checkoutRoot),
-	]);
-	if (root !== expected) return UNKNOWN_BUILD;
-	const gitSha = repo.headSync().commit ?? null;
-	if (gitSha === null) return UNKNOWN_BUILD;
 	try {
-		const { staged, unstaged } = await repo.statusSummary();
-		return Object.freeze({ version: VERSION, gitSha, dirty: staged + unstaged > 0 });
+		return Object.freeze({ version: VERSION, ...(await resolveGitBuildIdentity(checkoutRoot)) });
 	} catch {
-		return Object.freeze({ version: VERSION, gitSha, dirty: null });
+		return UNKNOWN_BUILD;
 	}
 }
 
