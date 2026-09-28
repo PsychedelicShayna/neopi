@@ -4525,10 +4525,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						const ownsLifecycle = root !== undefined && lifecycle.manages(agentRegistry);
 						const rootAgentGenerations =
 							ownsLifecycle && root
-								? new Set(
+								? new Map(
 										agentRegistry
 											.list()
-											.filter(ref => ref.kind !== "main" && agentRegistry.rootOf(ref.id) === root),
+											.filter(ref => ref.kind !== "main" && agentRegistry.rootOf(ref.id) === root)
+											.map(ref => [ref, agentRegistry.runGeneration(ref)]),
 									)
 								: undefined;
 						const workPoolRegistry = WorkPoolRegistry.global();
@@ -4570,7 +4571,12 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 							const lateRefs = reap.pendingJobIds.flatMap(jobId => {
 								const job = asyncJobManager.getJob(jobId);
 								const ref = agentRegistry.get(job?.agentId ?? jobId);
-								return ref && ref.kind !== "main" && rootAgentGenerations?.has(ref) ? [ref] : [];
+								return ref &&
+									ref.kind !== "main" &&
+									rootAgentGenerations?.has(ref) &&
+									rootAgentGenerations.get(ref) === agentRegistry.runGeneration(ref)
+									? [ref]
+									: [];
 							});
 							trackLateCleanup(
 								reap.completion.then(async () => {

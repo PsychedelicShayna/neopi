@@ -482,6 +482,15 @@ describe("two simultaneous top-level roots (issue #121)", () => {
 		});
 		registry.setStatus(oldAgent.id, "idle", oldAgent);
 		expect(lifecycle.adopt(oldAgent.id, { idleTtlMs: 0 }, oldAgent)).toBe(true);
+		const reusedAgent = registry.register({
+			id: "DeckA.Reused",
+			displayName: "task",
+			kind: "sub",
+			parentId: "DeckA",
+			session: { dispose: async () => {} } as unknown as AgentSession,
+		});
+		registry.setStatus(reusedAgent.id, "idle", reusedAgent);
+		expect(lifecycle.adopt(reusedAgent.id, { idleTtlMs: 0 }, reusedAgent)).toBe(true);
 
 		const abortObserved = Promise.withResolvers<void>();
 		const finishOldJob = Promise.withResolvers<void>();
@@ -498,6 +507,18 @@ describe("two simultaneous top-level roots (issue #121)", () => {
 
 		const cancellation = a.session.cancelRootWork({ timeoutMs: 5_000 });
 		await abortObserved.promise;
+		expect(registry.setStatus(reusedAgent.id, "running", reusedAgent)).toBe(true);
+		a.session.asyncJobManager!.register(
+			"task",
+			"reused agent turn",
+			async ({ signal }) => {
+				const aborted = Promise.withResolvers<void>();
+				signal.addEventListener("abort", () => aborted.resolve(), { once: true });
+				await Promise.race([gate("reused-agent").promise, aborted.promise]);
+				return signal.aborted ? "aborted" : "done";
+			},
+			{ id: "reused-agent-turn", agentId: reusedAgent.id, ownerId: "DeckA" },
+		);
 
 		await a.session.getToolByName("eval")!.execute("eval-new-pool", {
 			language: "js",
@@ -537,6 +558,10 @@ describe("two simultaneous top-level roots (issue #121)", () => {
 		expect(a.session.asyncJobManager!.getJob("reused-pool")?.status).toBe("running");
 		expect(registry.get(newAgent.id)).toBe(newAgent);
 		expect(lifecycle.has(newAgent.id)).toBe(true);
+		expect(registry.get(reusedAgent.id)).toBe(reusedAgent);
+		expect(reusedAgent.status).toBe("running");
+		expect(lifecycle.has(reusedAgent.id)).toBe(true);
+		expect(a.session.asyncJobManager!.getJob("reused-agent-turn")?.status).toBe("running");
 	}, 60000);
 
 	it("cancelRootWork releases a child whose job settles after the deadline", async () => {
