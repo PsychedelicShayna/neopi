@@ -78,6 +78,11 @@ function writeFrame(frame: Record<string, unknown>): void {
 	}
 }
 
+/** `MOCK_RPC_SESSION_EVENTS`: a JSON array of session event frames written before each command's response. */
+const sessionEvents: Record<string, unknown>[] = Bun.env.MOCK_RPC_SESSION_EVENTS
+	? JSON.parse(Bun.env.MOCK_RPC_SESSION_EVENTS)
+	: [];
+
 // Bun's `console` is an AsyncIterable over stdin lines.
 for await (const raw of console) {
 	if (!raw) continue;
@@ -94,6 +99,7 @@ for await (const raw of console) {
 			}
 			if (Bun.env.MOCK_RPC_IGNORE_COMMANDS === "1") continue;
 			const id = typeof frame.id === "string" ? frame.id : undefined;
+			if (frame.type !== "negotiate_protocol") for (const event of sessionEvents) writeFrame(event);
 			if (frame.type === "negotiate_protocol" && frame.protocolVersion === 2) {
 				writeFrame({
 					id,
