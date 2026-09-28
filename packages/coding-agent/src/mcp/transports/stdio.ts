@@ -537,6 +537,26 @@ export async function terminateStdioProcess(
 }
 
 /**
+ * Detached (POSIX `setsid`) stdio servers spawned by this process whose
+ * leader has not exited yet. Each leads its own process group, so nothing
+ * reaps the group if NeoPi exits before `close()` finishes escalating. An
+ * entry leaves the set once its leader is reaped: from then on the pid may
+ * name an unrelated process group.
+ */
+const liveDetachedProcesses = new Set<KillableSubprocess>();
+
+/**
+ * SIGKILL the process group of every detached stdio MCP server whose leader
+ * is still alive, without waiting for a cooperative exit. For last-moment
+ * teardown right before a hard process exit (host death), where `close()`'s
+ * SIGTERM grace may not finish; normal disconnects go through `close()`.
+ */
+export function killDetachedStdioProcessGroups(): void {
+	for (const proc of liveDetachedProcesses) signalStdioProcess(proc, true, "SIGKILL", process.platform);
+	liveDetachedProcesses.clear();
+}
+
+/**
  * Stdio transport for MCP servers.
  * Spawns a subprocess and communicates via stdin/stdout.
  */
@@ -609,6 +629,14 @@ export class StdioTransport implements MCPTransport {
 			windowsVerbatimArguments: spawnCommand.windowsVerbatimArguments,
 		});
 		this.#detached = spawnCommand.detached;
+		if (spawnCommand.detached) {
+			const leader = this.#process;
+			const untrack = (): void => {
+				liveDetachedProcesses.delete(leader);
+			};
+			liveDetachedProcesses.add(leader);
+			leader.exited.then(untrack, untrack);
+		}
 
 		this.#connected = true;
 

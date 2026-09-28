@@ -59,6 +59,7 @@ import {
 	resolveActiveProjectRegistryPath,
 } from "./discovery/helpers";
 import { injectOmpExtensionCliRoots } from "./discovery/omp-extension-roots";
+import { type ExitWithParent, exitWithParent } from "./exit-with-parent";
 import { formatExtensionLoadNotifications } from "./extensibility/extensions/load-errors";
 import { loadExtensions } from "./extensibility/extensions/loader";
 import { ExtensionRunner } from "./extensibility/extensions/runner";
@@ -125,6 +126,7 @@ import type { LspStartupServerInfo } from "./tools";
 import { sanitizeDisplayWarnings } from "@oh-my-pi/pi-tui/render/render-utils";
 import { getChangelogPath, resolveStartupChangelogForDisplay, type StartupChangelogSelection } from "./utils/changelog";
 import { EventBus } from "./utils/event-bus";
+import { LAUNCH_PARENT_PID } from "./utils/launch-parent";
 
 import { cfgAdvisorEnabled } from "./advisor/settings";
 import { cfgToolsApprovalMode } from "./tools/settings";
@@ -1844,6 +1846,7 @@ export async function runRootCommand(
 ): Promise<void> {
 	logger.startTiming();
 	startStartupWatchdog();
+	let parentExit: ExitWithParent | undefined;
 	try {
 		// Non-prepaint commands still need a default theme; an existing Composer
 		// already initialized its cached theme synchronously for the first frame.
@@ -1923,10 +1926,23 @@ export async function runRootCommand(
 		// session-critical database connection picks the right busy timeout.
 		// See getDbBusyTimeoutMs().
 		const isProtocolMode = mode === "rpc" || mode === "rpc-ui" || mode === "acp";
+		// Headless print/json runs die with the host that spawned them, even when
+		// it is SIGKILLed. Interactive and protocol modes own their own lifecycle
+		// (the terminal, or RPC/ACP stdin EOF). Watch before reading piped stdin:
+		// a writer that outlives the host would otherwise block the read forever.
+		const mayRunHeadless = parsedArgs.print === true || parsedArgs.mode !== undefined || !process.stdin.isTTY;
+		if (!isProtocolMode && mayRunHeadless && !parsedArgs.noExitWithParent) {
+			parentExit = exitWithParent({ parentPid: LAUNCH_PARENT_PID });
+		}
 		// Protocol modes own stdin; treating it as prompt text would consume JSON-RPC frames before their transports start.
 		const pipedInput = isProtocolMode ? undefined : await logger.time("readPipedInput", readPipedInput);
 		const autoPrint = pipedInput !== undefined && !parsedArgs.print && parsedArgs.mode === undefined;
 		const isInteractive = !parsedArgs.print && !autoPrint && parsedArgs.mode === undefined;
+		// An empty stdin pipe leaves the launch interactive after all.
+		if (isInteractive) {
+			parentExit?.stop();
+			parentExit = undefined;
+		}
 		// Only the interactive host renders a focusable Agent Hub / subagent session
 		// tree; declare it so headless subagent optimizations (e.g. skipping replan
 		// title refresh) can tell a focusable process from a print/RPC/eval one.
@@ -2471,6 +2487,7 @@ export async function runRootCommand(
 				await session.dispose();
 				throw error;
 			}
+			parentExit?.attach({ session, mcpManager });
 
 			// Cold-revive support: a `parked` subagent ref restored from disk (Agent Hub
 			// scan, collab mirror, resumed process) has a sessionFile but no in-memory
@@ -2630,6 +2647,10 @@ export async function runRootCommand(
 		stopPendingStartupComposer();
 		stopStartupWatchdog();
 		throw error;
+	} finally {
+		// Print mode normally hard-exits above; an in-process caller that sees
+		// the command return or throw must not inherit a live watchdog.
+		parentExit?.stop();
 	}
 }
 

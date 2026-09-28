@@ -43,6 +43,9 @@ describe("startup composer prepaint graph", () => {
 			/node:readline/,
 			/node:worker_threads/,
 			/omptype/,
+			// The native addon costs tens of ms to load; the parent watchdog the
+			// entry imports statically must not pull it in.
+			/pi-natives|natives\/native/,
 		]);
 	});
 });
