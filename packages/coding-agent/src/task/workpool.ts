@@ -176,7 +176,11 @@ export class WorkPool {
 			async ({ signal }) => {
 				const onAbort = (): void => {
 					this.close();
-					for (const batch of this.batches) manager.cancel(batch.jobId, { ownerId: this.ownerId });
+					// Forward the pool's abort reason: a root shutdown or cancellation
+					// must release the batch workers, not tombstone them as kills.
+					for (const batch of this.batches) {
+						manager.cancel(batch.jobId, { ownerId: this.ownerId }, signal.reason);
+					}
 				};
 				if (signal.aborted) onAbort();
 				else signal.addEventListener("abort", onAbort, { once: true });

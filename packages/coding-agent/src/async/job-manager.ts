@@ -403,15 +403,16 @@ export class AsyncJobManager {
 	/**
 	 * Cancel a single job by id. When a filter is given and its owner does not
 	 * match the job's owner, the call is treated as not-found (returns false)
-	 * so cross-agent cancellation is rejected at the manager level.
+	 * so cross-agent cancellation is rejected at the manager level. `reason` is
+	 * forwarded to the job's abort signal like {@link cancelAll}.
 	 */
-	cancel(id: string, filter?: AsyncJobFilter): boolean {
+	cancel(id: string, filter?: AsyncJobFilter, reason?: unknown): boolean {
 		const job = this.#jobs.get(id);
 		if (!job) return false;
 		if (filter && job.ownerId !== filter.ownerId) return false;
 		if (job.status !== "running") return false;
 		job.status = "cancelled";
-		job.abortController.abort();
+		job.abortController.abort(reason);
 		return true;
 	}
 

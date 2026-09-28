@@ -4552,8 +4552,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 							// gracefully and be adopted afterward. Release exactly those
 							// generations once their jobs settle; work launched after this
 							// call has different refs and is never swept.
-							const lateRefs = reap.pendingJobIds.flatMap(id => {
-								const ref = agentRegistry.get(id);
+							// Resolve the agent through the job's agentId: workpool batches and
+							// suffixed task ids use a job id that is not the agent id.
+							const lateRefs = reap.pendingJobIds.flatMap(jobId => {
+								const job = asyncJobManager.getJob(jobId);
+								const ref = agentRegistry.get(job?.agentId ?? jobId);
 								return ref && ref.kind !== "main" ? [ref] : [];
 							});
 							trackLateCleanup(
