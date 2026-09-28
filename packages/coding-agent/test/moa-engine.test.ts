@@ -16,7 +16,7 @@ import { fitHopRequest, type HopParts, truncateToTokens } from "@oh-my-pi/pi-cod
 import { streamMixture } from "@oh-my-pi/pi-coding-agent/moa/engine";
 import { createSessionMixtureHost, type SessionMixtureHost } from "@oh-my-pi/pi-coding-agent/moa/host";
 import { MIXTURE_API, MixtureCatalog, registerMixtureApi } from "@oh-my-pi/pi-coding-agent/moa/provider";
-import { discoverRegistrableMixtures, retainMixtureCatalog } from "@oh-my-pi/pi-coding-agent/moa/registration";
+import { discoverRegistrableMixtures, MixtureWorkspace } from "@oh-my-pi/pi-coding-agent/moa/registration";
 import { findAnchor } from "@oh-my-pi/pi-coding-agent/moa/request";
 import { MIXTURE_RUN_ENTRY_TYPE, type MixtureCheckpoint, type MixtureRun } from "@oh-my-pi/pi-coding-agent/moa/types";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -232,14 +232,16 @@ describe("linear mixture in a session", () => {
 		);
 		const overridden = await createMoaSession(fixture, { settings: Settings.isolated(SETTINGS) });
 		sessions.push(overridden);
-		MixtureCatalog.for(fixture.registry).setRoster(
-			await discoverRegistrableMixtures({
-				cwd: fixture.cwd,
-				agentDir: fixture.agentDir,
-				registry: fixture.registry,
-				settings: Settings.isolated(),
-			}),
-		);
+		MixtureCatalog.for(fixture.registry)
+			.scope(fixture.cwd, fixture.agentDir)
+			.setRoster(
+				await discoverRegistrableMixtures({
+					cwd: fixture.cwd,
+					agentDir: fixture.agentDir,
+					registry: fixture.registry,
+					settings: Settings.isolated(),
+				}),
+			);
 		await overridden.setModel(mixtureModel());
 		members.script("writer", { text: "shown draft" });
 		await overridden.sendUserMessage("go");
@@ -802,7 +804,7 @@ describe("engine contract through a session host", () => {
 	beforeEach(async () => {
 		await ensureFixture();
 		manager = SessionManager.inMemory(fixture.cwd);
-		await retainMixtureCatalog("engine", {
+		const workspace = await MixtureWorkspace.retain("engine", {
 			cwd: fixture.cwd,
 			agentDir: fixture.agentDir,
 			registry: fixture.registry,
@@ -811,6 +813,7 @@ describe("engine contract through a session host", () => {
 		host = createSessionMixtureHost({
 			sessionManager: manager,
 			modelRegistry: fixture.registry,
+			workspace,
 			settings: Settings.isolated(),
 			stream: streamSimple,
 			prepareContext: async context => context,

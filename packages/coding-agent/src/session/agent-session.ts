@@ -753,7 +753,9 @@ export class AgentSession implements SettingsScope {
 	/** Last (enable, providerId) tuple resolved by `#syncAppendOnlyContext` — used to skip no-op invalidations. */
 	#lastAppendOnlyResolution?: { enable: boolean; providerId: string | undefined };
 	#eventListeners: AgentSessionEventListener[] = [];
-	#mixtureHost: Pick<SessionMixtureHost, "commitPersisted" | "resetConversation"> | undefined;
+	#mixtureHost:
+		| Pick<SessionMixtureHost, "commitPersisted" | "resetConversation" | "rebindWorkspace" | "commitWorkspaceMove">
+		| undefined;
 	#activeToolExecutionUpdates = new Map<string, Extract<AgentSessionEvent, { type: "tool_execution_update" }>>();
 	#runStateListeners = new Set<(state: "running" | "idle") => void>();
 	#commandMetadataChangedListeners: CommandMetadataChangedListener[] = [];
@@ -2965,8 +2967,39 @@ export class AgentSession implements SettingsScope {
 	 * Bind the session's mixture host: it commits mixture responses once they are persisted,
 	 * and drops its runs whenever the conversation is replaced.
 	 */
-	attachMixtureHost(host: Pick<SessionMixtureHost, "commitPersisted" | "resetConversation">): void {
+	attachMixtureHost(
+		host: Pick<
+			SessionMixtureHost,
+			"commitPersisted" | "resetConversation" | "rebindWorkspace" | "commitWorkspaceMove"
+		>,
+	): void {
 		this.#mixtureHost = host;
+	}
+
+	/**
+	 * Rebind to `cwd`'s mixtures; move transactions defer dropping source runs
+	 * until all cwd-derived state has refreshed successfully.
+	 * Refresh the selected mixture's metadata from the destination roster.
+	 */
+	async rebindMixturesForCwd(cwd: string, deferReset = false): Promise<void> {
+		const host = this.#mixtureHost;
+		if (!host) return;
+		await host.rebindWorkspace(cwd, deferReset);
+		const current = this.model;
+		if (!current || !isMixtureModel(current)) return;
+		// Workspace rebinding replaces the registered synthetic model even when
+		// the selector stays the same. Its entry member can change modalities,
+		// output limits, and other metadata without changing the context window.
+		const refreshed = this.#modelRegistry.find(current.provider, current.id);
+		if (!refreshed || !isMixtureModel(refreshed) || refreshed === current) return;
+		this.agent.setModel(refreshed);
+		await this.#reconcileModelDependentState(current, refreshed);
+		if (!this.#isDisposed) this.#emit({ type: "model_changed" });
+	}
+
+	/** Commit the mixture workspace change once a move has succeeded. */
+	commitMixtureWorkspaceMove(): void {
+		this.#mixtureHost?.commitWorkspaceMove();
 	}
 
 	#recordToolExecutionStart(event: Extract<AgentEvent, { type: "tool_execution_start" }>): void {

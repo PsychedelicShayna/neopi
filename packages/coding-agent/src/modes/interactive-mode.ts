@@ -2312,6 +2312,8 @@ export class InteractiveMode implements InteractiveModeContext {
 				// retain against the source project's memory.
 				await rebindMemoryBackendForCwd(this.session);
 			}
+			// Mixtures follow the workspace, under the settings just reloaded for it.
+			await this.session.rebindMixturesForCwd(newCwd, true);
 			// Re-warm plugin roots, capabilities, slash commands, and the ssh tool so
 			// the next prompt sees everything scoped to the new project directory.
 			clearClaudePluginRootsCache();
@@ -2329,6 +2331,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					await settings.reloadForCwd(previousCwd);
 					await rebindMemoryBackendForCwd(this.session);
 				}
+				await this.session.rebindMixturesForCwd(previousCwd, true);
 				clearClaudePluginRootsCache();
 				await this.refreshTitleSystemPrompt(previousCwd);
 				await this.session.refreshSkillsAndCommands();
@@ -2340,6 +2343,7 @@ export class InteractiveMode implements InteractiveModeContext {
 						await settings.reloadForCwd(actual);
 						await rebindMemoryBackendForCwd(this.session);
 					}
+					await this.session.rebindMixturesForCwd(actual, true);
 					clearClaudePluginRootsCache();
 					await this.refreshTitleSystemPrompt(actual);
 					await this.session.refreshSkillsAndCommands();
@@ -2358,6 +2362,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
 		this.statusLine.applyCwdChange();
+		this.session.commitMixtureWorkspaceMove();
 		return true;
 	}
 

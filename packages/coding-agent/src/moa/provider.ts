@@ -12,7 +12,9 @@
 import type { Api, AssistantMessage, Context, Model, SimpleStreamOptions, Usage } from "@oh-my-pi/pi-ai";
 import { getCustomApi, registerCustomApi } from "@oh-my-pi/pi-ai/api-registry";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import { logger } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry, ProviderConfigInput } from "../config/model-registry";
+import { mixtureScopeKey } from "./config";
 import type { ResolvedMixture } from "./types";
 
 export const MIXTURE_PROVIDER = "mixture";
@@ -68,14 +70,43 @@ export function registerMixtureApi(): void {
 
 const catalogs = new WeakMap<ModelRegistry, MixtureCatalog>();
 
-/** One catalog per `ModelRegistry`: owners retain it, the roster decides what is registered. */
+/** One workspace scope's roster inside a catalog: what its sessions may run. */
+export interface MixtureScope {
+	/** The serialized `MIXTURES.toml` search path of the workspace ({@link mixtureScopeKey}). */
+	readonly key: string;
+	/** Whether this scope has a roster since its last owner released it; an empty roster counts. */
+	readonly hasRoster: boolean;
+	/** A session or gateway holds this scope. */
+	retain(owner: string): void;
+	/** The last owner drops this scope's roster and the provider re-registers the rest. */
+	release(owner: string): void;
+	/**
+	 * Set this scope's definitions. A name another live scope registered with a different
+	 * revision is refused here (`name.scope_conflict`, logged) and left out of the roster.
+	 */
+	setRoster(mixtures: readonly ResolvedMixture[]): void;
+	/** This scope's registered definitions only. */
+	roster(): readonly ResolvedMixture[];
+	/** This scope's definition of a name; the session host resolves only through it. */
+	find(name: string): ResolvedMixture | undefined;
+}
+
+interface ScopeState {
+	owners: Set<string>;
+	roster: ResolvedMixture[] | undefined;
+}
+
+/**
+ * One catalog per `ModelRegistry`, with one roster per workspace scope. The provider
+ * registers the union over live scopes, exactly one definition per name, so the
+ * registered model never describes a definition other than the one a session runs.
+ */
 export class MixtureCatalog {
 	readonly id: string;
 	readonly baseUrl: string;
 	readonly #registry: ModelRegistry;
-	readonly #owners = new Set<string>();
-	#roster: ResolvedMixture[] = [];
-	#hasRoster = false;
+	/** In registration order: the first scope to register a name holds it. */
+	readonly #scopes = new Map<string, ScopeState>();
 	#registered = false;
 
 	private constructor(registry: ModelRegistry) {
@@ -93,49 +124,101 @@ export class MixtureCatalog {
 		return catalog;
 	}
 
-	/** Whether a roster was ever set since the catalog was last released; an empty roster counts. */
-	get hasRoster(): boolean {
-		return this.#hasRoster;
+	/** The scope of a workspace: sessions whose `MIXTURES.toml` search path is the same share it. */
+	scope(cwd: string, agentDir?: string): MixtureScope {
+		const key = mixtureScopeKey(cwd, agentDir);
+		const scopes = this.#scopes;
+		const register = (): void => this.#register();
+		const setRoster = (mixtures: readonly ResolvedMixture[]): void => this.#setScopeRoster(key, mixtures);
+		return {
+			key,
+			get hasRoster() {
+				return scopes.get(key)?.roster !== undefined;
+			},
+			retain(owner) {
+				let state = scopes.get(key);
+				if (!state) {
+					state = { owners: new Set(), roster: undefined };
+					scopes.set(key, state);
+				}
+				state.owners.add(owner);
+			},
+			release(owner) {
+				const state = scopes.get(key);
+				if (!state?.owners.delete(owner) || state.owners.size > 0) return;
+				scopes.delete(key);
+				register();
+			},
+			setRoster,
+			roster() {
+				return scopes.get(key)?.roster ?? [];
+			},
+			find(name) {
+				return scopes.get(key)?.roster?.find(mixture => mixture.definition.name === name);
+			},
+		};
 	}
 
-	/** A session or gateway holds the catalog. */
-	retain(owner: string): void {
-		this.#owners.add(owner);
+	/** Every registered definition across live scopes, one per name. */
+	roster(): readonly ResolvedMixture[] {
+		const byName = new Map<string, ResolvedMixture>();
+		for (const state of this.#scopes.values()) {
+			for (const mixture of state.roster ?? []) {
+				if (!byName.has(mixture.definition.name)) byName.set(mixture.definition.name, mixture);
+			}
+		}
+		return [...byName.values()];
 	}
 
-	/** The last release unregisters the provider. Releasing twice is harmless. */
-	release(owner: string): void {
-		if (!this.#owners.delete(owner) || this.#owners.size > 0) return;
-		this.setRoster([]);
-		this.#hasRoster = false;
+	#setScopeRoster(key: string, mixtures: readonly ResolvedMixture[]): void {
+		let state = this.#scopes.get(key);
+		if (!state) {
+			state = { owners: new Set(), roster: undefined };
+			this.#scopes.set(key, state);
+		}
+		// What the other live scopes registered: a differing definition of one of those names conflicts.
+		const held = new Map<string, { scope: string; mixture: ResolvedMixture }>();
+		for (const [scope, other] of this.#scopes) {
+			if (scope === key) continue;
+			for (const mixture of other.roster ?? []) {
+				if (!held.has(mixture.definition.name)) held.set(mixture.definition.name, { scope, mixture });
+			}
+		}
+		state.roster = mixtures.filter(mixture => {
+			const holder = held.get(mixture.definition.name);
+			if (!holder || holder.mixture.revision === mixture.revision) return true;
+			logger.warn("Mixture refused at registration", {
+				mixture: mixture.definition.name,
+				code: "name.scope_conflict",
+				message: `another workspace on this registry already registered mixture/${mixture.definition.name} with a different definition`,
+				scope: key,
+				holder: holder.scope,
+			});
+			return false;
+		});
+		this.#register();
 	}
 
-	/** Replace the registered mixtures; an empty roster unregisters the provider. */
-	setRoster(mixtures: readonly ResolvedMixture[]): void {
-		this.#roster = [...mixtures];
-		this.#hasRoster = true;
-		if (this.#roster.length === 0) {
+	/** Register the union over live scopes; an empty union unregisters the provider. */
+	#register(): void {
+		const roster = this.roster();
+		if (roster.length === 0) {
 			// registerProvider only replaces models when the list is non-empty.
 			if (this.#registered) this.#registry.unregisterProvider(MIXTURE_PROVIDER);
 			this.#registered = false;
 			return;
 		}
+		// Treat an attempted registration as live before calling into the registry:
+		// it may mutate provider state and then throw. A failed scope retain will
+		// release its owner, and an empty catalog must then unregister that partial
+		// provider before a later retain retries discovery and registration.
+		this.#registered = true;
 		this.#registry.registerProvider(MIXTURE_PROVIDER, {
 			baseUrl: this.baseUrl,
 			api: MIXTURE_API,
 			auth: "none",
-			models: this.#roster.map(mixtureModelDefinition),
+			models: roster.map(mixtureModelDefinition),
 		});
-		this.#registered = true;
-	}
-
-	roster(): readonly ResolvedMixture[] {
-		return this.#roster;
-	}
-
-	/** The registered resolution for a mixture name. */
-	find(name: string): ResolvedMixture | undefined {
-		return this.#roster.find(mixture => mixture.definition.name === name);
 	}
 }
 

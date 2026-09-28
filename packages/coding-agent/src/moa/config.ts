@@ -25,8 +25,15 @@ import type {
 	TransitPartName,
 	TransitSpec,
 } from "@oh-my-pi/pi-tui/overlays/mixture-types";
-import { collectConfigCandidates } from "../advisor/watchdog";
+import {
+	type BoundedText,
+	collectConfigCandidates,
+	type ConfigRejection,
+	configCandidatePaths,
+	readBoundedText,
+} from "../advisor/watchdog";
 import { serializeMixturesConfig } from "./toml";
+import { MAX_FILE_BYTES, prepareDocumentPresets, type PreparedDocumentPresets } from "./validate";
 
 export const MIXTURES_FILE_NAME = "MIXTURES.toml";
 
@@ -406,6 +413,13 @@ export function parseMixturesDoc(raw: unknown, filePath: string): MixturesConfig
 	return doc;
 }
 
+/** A candidate skipped unread: over `MAX_FILE_BYTES`, or not a regular file at all. */
+function rejectionWarning(filePath: string, rejection: ConfigRejection): string {
+	return rejection.kind === "too_large"
+		? `${filePath}: file.too_large (${rejection.bytes} bytes; the cap is ${MAX_FILE_BYTES}) — file skipped`
+		: `${filePath}: file.not_regular (not a regular file) — file skipped`;
+}
+
 function parseMixturesText(text: string, filePath: string): MixturesConfigDoc {
 	let parsed: unknown;
 	try {
@@ -420,9 +434,11 @@ function parseMixturesText(text: string, filePath: string): MixturesConfigDoc {
 export interface DiscoveredMixture {
 	definition: MixtureDefinition;
 	/** Document-level envelope presets of the file that declared it. */
-	envelopes: Record<string, string>;
+	envelopes: Readonly<Record<string, string>>;
 	/** Document-level role presets of the file that declared it. */
-	roles: Record<string, string>;
+	roles: Readonly<Record<string, string>>;
+	/** Snapshot shared by all mixtures in this parsed document. */
+	preparedPresets: PreparedDocumentPresets;
 	/** The file that declared it. */
 	path: string;
 }
@@ -436,14 +452,32 @@ export interface DiscoveredMixtures {
 	warnings: string[];
 }
 
+/**
+ * The workspace scope a roster belongs to: every `MIXTURES.toml` path the search
+ * path probes for (cwd, agentDir), readable or not, in order. Two sessions share a
+ * roster only when they would discover from the same files.
+ */
+export function mixtureScopeKey(cwd: string, agentDir?: string): string {
+	return JSON.stringify(configCandidatePaths(cwd, agentDir, [MIXTURES_FILE_NAME]).candidates);
+}
+
 /** Discover mixtures from every `MIXTURES.toml` on the user + project search path. */
 export async function discoverMixtures(cwd: string, agentDir?: string): Promise<DiscoveredMixtures> {
-	const items = await collectConfigCandidates(cwd, agentDir, [MIXTURES_FILE_NAME]);
-	const mixtures = new Map<string, DiscoveredMixture[]>();
 	const warnings: string[] = [];
+	// Bounded before anything reads it: every session discovers these files at startup.
+	const items = await collectConfigCandidates(cwd, agentDir, [MIXTURES_FILE_NAME], {
+		maxBytes: MAX_FILE_BYTES,
+		onRejected: (filePath, rejection) => {
+			const message = rejectionWarning(filePath, rejection);
+			warnings.push(message);
+			logger.warn("Mixture config", { path: filePath, error: message });
+		},
+	});
+	const mixtures = new Map<string, DiscoveredMixture[]>();
 	// Candidates arrive user first, then project ancestor→leaf, so later files shadow earlier ones.
 	for (const item of items) {
 		const doc = parseMixturesText(item.content, item.path);
+		const preparedPresets = prepareDocumentPresets(doc.envelopes, doc.roles);
 		for (const message of doc.warnings ?? []) {
 			warnings.push(message);
 			logger.warn("Mixture config", { path: item.path, error: message });
@@ -451,8 +485,9 @@ export async function discoverMixtures(cwd: string, agentDir?: string): Promise<
 		for (const definition of doc.mixtures) {
 			const declared: DiscoveredMixture = {
 				definition,
-				envelopes: doc.envelopes ?? {},
-				roles: doc.roles ?? {},
+				envelopes: preparedPresets.envelopes,
+				roles: preparedPresets.roles,
+				preparedPresets,
 				path: item.path,
 			};
 			const same = mixtures.get(definition.name);
@@ -477,23 +512,26 @@ export function mixturesConfigFilePath(
 
 /** Load one `MIXTURES.toml` for editing, raw and un-merged. A missing file is an empty doc. */
 export async function loadMixturesConfigFile(filePath: string): Promise<MixturesConfigDoc> {
-	let text: string;
+	let read: BoundedText;
 	try {
-		text = await Bun.file(filePath).text();
+		read = await readBoundedText(filePath, MAX_FILE_BYTES);
 	} catch (err) {
 		if (!isEnoent(err))
 			logger.warn("Mixture config: failed to read for edit", { path: filePath, error: String(err) });
 		return { mixtures: [] };
 	}
-	return parseMixturesText(text, filePath);
+	if ("rejected" in read) return { mixtures: [], warnings: [rejectionWarning(filePath, read.rejected)] };
+	return parseMixturesText(read.content, filePath);
 }
 
-/** Write a doc to `MIXTURES.toml`; an empty doc removes the file. */
+/** Write a bounded doc; oversized output preserves the file, and an empty doc removes it. */
 export async function saveMixturesConfigFile(filePath: string, doc: MixturesConfigDoc): Promise<void> {
 	const content = serializeMixturesConfig(doc);
 	if (!content) {
 		await fs.rm(filePath, { force: true });
 		return;
 	}
+	const bytes = Buffer.byteLength(content, "utf8");
+	if (bytes > MAX_FILE_BYTES) throw new Error(rejectionWarning(filePath, { kind: "too_large", bytes }));
 	await Bun.write(filePath, content);
 }
