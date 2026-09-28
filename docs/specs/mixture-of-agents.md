@@ -2362,6 +2362,36 @@ export function isMixtureModel(model: Model<Api>): boolean;
   receive its conversation, or inherit its system prompt (Codex security P2
   r4117097073 on PR #113: with one roster per registry, the first session's
   cwd decided the roster for every later session on a shared registry).
+  **The binding follows the session's cwd.** A live session that relocates
+  (`/move`, or a cross-project resume through
+  `InteractiveMode.applyCwdChange`, `packages/coding-agent/src/modes/interactive-mode.ts:2286-2357`)
+  rebinds: `AgentSession.rebindMixturesForCwd(cwd)`, a sibling of
+  `rebindMemoryBackendForCwd`, is called by `applyCwdChange` after
+  `settings.reloadForCwd` on the forward path and on both rollback paths
+  (`previousCwd`, then `actual`). It computes the destination scope key
+  for `(cwd, agentDir)`; when the key equals the bound one it does nothing.
+  Otherwise it **releases** the source scope for this owner, then
+  **retains** the destination scope for the same owner (discovering it
+  under the reloaded settings when it has no roster yet); release before
+  retain, because while the source is still held a destination that
+  defines a shared name with a different revision would be refused by the
+  first-registrant rule above. An identical definition shared by both
+  scopes therefore leaves the registry only for the duration of that
+  awaited transition, during which no prompt can run. If retaining the
+  destination throws, the source is re-retained and the failure logged
+  before the error is rethrown, so the session is never bound to no scope.
+  When the key changed, the session host drops every held run
+  (`runs.clear()` and the per-member credential memory, exactly as
+  `resetConversation`), because a run cannot resume or retry across
+  workspaces; if any run was held it raises the warning notice
+  `<n> mixture run(s) from the previous workspace were reset; the next message starts a new run`
+  (`onEvent` persists nothing for a dropped run). The selected model is
+  left as it is: a destination that does not define it yields the
+  run-start error `mixture/X is not defined in this workspace` on the next
+  prompt; nothing is reselected silently (Codex P2 4119569942 on PR #126,
+  `sdk.ts:2538`: a relocated session kept the scope it retained at
+  startup, ran the source workspace's mixtures against the destination's
+  conversation, and never saw the destination's `MIXTURES.toml`).
 - **One name, one definition.** The registry's `mixture` provider registers
   the union of names across live scopes, and a name is registered from
   exactly one definition. Two scopes that define the same name with the
@@ -2917,6 +2947,30 @@ None open. Every question raised in rounds 1 to 3 is answered in §15.
   tool name, a choice-criteria label, and an edge endpoint over the cap
   each get exactly one `limits.text_size` error at their path with no
   member resolved.
+
+### Amendment 6.9.2 (Codex P2 4119569942 on PR #126: the scope binding follows the cwd)
+
+- A relocated live session (`/move`, cross-project resume through
+  `applyCwdChange`) kept its startup scope and ran the source workspace's
+  mixtures against the destination's conversation.
+- `AgentSession.rebindMixturesForCwd(cwd)` (sibling of
+  `rebindMemoryBackendForCwd`), called by `applyCwdChange` after
+  `settings.reloadForCwd` on the forward path and on both rollback paths:
+  no-op on an unchanged scope key; otherwise release the source scope,
+  then retain the destination (discovering it if new); on a failed retain,
+  re-retain the source, log, rethrow. Release-then-retain is required by
+  6.10's first-registrant rule; the shared-definition gap lasts one
+  awaited transition in which nothing can run.
+- On a key change the host drops every held run and its credential
+  memory, with a warning notice naming the count when any run was held.
+  The selected model is not reselected; an undefined name fails at run
+  start as before.
+- Test (`moa-provider.test.ts` or `moa-engine.test.ts`): one session moves
+  between two workspaces that each define `draft-then-edit` differently;
+  after the move only the destination's definition runs; after moving back
+  (the rollback path's call) the source's runs again; the reset notice
+  fires when a run was held; a move to a workspace with the same
+  `MIXTURES.toml` content changes nothing and raises no notice.
 
 ### Amendment 6.10 (Codex security P2 r4117097073, post-merge: roster scoped per workspace)
 
