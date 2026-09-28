@@ -17,4 +17,5 @@ export const RPC_CAPABILITIES: readonly string[] = [
 	"set_mode", // #103
 	"new_session", // #107
 	"session_lease", // #106
+	"prompt_entry_ids", // #117
 ];

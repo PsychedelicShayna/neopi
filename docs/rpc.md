@@ -42,6 +42,7 @@ Behavior notes:
 | `set_mode` | `set_mode` command, `get_state` `mode`/`planMode`, `mode_changed` event, and the `plan_proposal_request`/`plan_proposal_response` round trip. See [Plan Mode Sub-Protocol](#plan-mode-sub-protocol). |
 | `new_session` | `--new-session` is accepted, and a flagless protocol launch never auto-resumes: the process starts a fresh session in the default per-cwd session directory regardless of `autoResume` (see [Startup](#startup)). |
 | `session_lease` | A process holds an exclusive lifetime lease on every session file it writes, so two processes never append to one transcript. `--session <file>` onto a file another process holds fails at startup with a `startup_error` stderr line; `switch_session` and `branch` onto one fail with `code: "session_in_use"` (see [Session lease](#session-lease)). |
+| `prompt_entry_ids` | `prompt`, `steer`, `follow_up` and `abort_and_prompt` responses carry `data.userEntryId`, the id of the session entry their message is written as, and every `get_messages_page` message carries the `entryId` of its entry. See [Entry ids](#entry-ids). |
 
 ### Session lease
 
@@ -228,7 +229,7 @@ correlate it via `id`. Ordering across concurrent commands is not guaranteed
 - `{ id?, type: "get_usage", provider?: string, refresh?: boolean, redact?: boolean }`
 - `{ id?, type: "export_html", outputPath?: string }`
 - `{ id?, type: "switch_session", sessionPath: string }` — fails with `code: "session_in_use"` when another process holds the file (see [Session lease](#session-lease))
-- `{ id?, type: "branch", entryId: string }` — same `session_in_use` code if the branch file is held elsewhere
+- `{ id?, type: "branch", entryId: string }` — same `session_in_use` code if the branch file is held elsewhere. `entryId` must be a user request: a user message or a user-invoked `/skill:` prompt (a `custom_message` entry); `data.text` is the request as typed, `/skill:<name> <args>` for a skill prompt
 - `{ id?, type: "get_branch_messages" }`
 - `{ id?, type: "get_last_assistant_text" }`
 - `{ id?, type: "set_session_name", name: string }`
@@ -270,7 +271,7 @@ after `agent_end`.
 - `{ id?, type: "get_messages" }`
 - `{ id?, type: "get_messages_page", cursor?: string, limit?: number }`
 
-`get_messages_page` returns a stable chronological page with `messages`, `totalMessages`, and an opaque `nextCursor` when more messages remain. Cursors are bound to the session ID, durable leaf, and message count. The server rejects stale cursors if the session changes between requests, and refuses to start a paging walk while the session is streaming or compacting. Failed page requests carry a machine-readable `code` on the error response — `session_busy` (session is streaming or compacting) or `stale_cursor` (the snapshot behind the cursor changed, e.g. a background bash appended a message between pages) — so clients can react without matching error-message text. Pages contain at most 256 messages and normally stay below the v1 physical-frame ceiling. A v1 caller can page ordinary histories, but an individual message whose response exceeds that ceiling produces an overflow error; retrieving it losslessly requires negotiated v2 framing.
+`get_messages_page` returns a stable chronological page with `messages`, `totalMessages`, and an opaque `nextCursor` when more messages remain. Cursors are bound to the session ID, durable leaf, and message count. The server rejects stale cursors if the session changes between requests, and refuses to start a paging walk while the session is streaming or compacting. Failed page requests carry a machine-readable `code` on the error response — `session_busy` (session is streaming or compacting) or `stale_cursor` (the snapshot behind the cursor changed, e.g. a background bash appended a message between pages) — so clients can react without matching error-message text. Pages contain at most 256 messages and normally stay below the v1 physical-frame ceiling. A v1 caller can page ordinary histories, but an individual message whose response exceeds that ceiling produces an overflow error; retrieving it losslessly requires negotiated v2 framing. Every paged message carries `entryId`, the id of the session entry it came from (see [Entry ids](#entry-ids)).
 
 The bundled TypeScript `RpcClient.getMessages()` and Python `RpcClient.get_messages()` drain this paged endpoint automatically after negotiating v2. They retain the legacy monolithic command when connected to a v1 server, and on either `session_busy` or `stale_cursor` they discard partial pages and fall back to the legacy best-effort snapshot. Direct `getMessagesPage()` and `get_messages_page()` calls remain strict so incremental hosts never mix snapshots silently.
 
@@ -322,6 +323,21 @@ Data payloads are command-specific and defined in `rpc-types.ts`.
 A failed provider turn is not a failed command: the prompt response is still `success: true`, and the turn ends with a normal terminal `agent_end` whose last assistant message has `stopReason: "error"`. Use `prompt_result.status` rather than parsing that message.
 
 Local-only slash commands may emit `command_output` frames before completing. They do not emit `agent_end`.
+
+#### Entry ids
+
+`prompt` (with or without `streamingBehavior`), `abort_and_prompt`, `steer` and `follow_up` answer with the id of the session entry their message is written as:
+
+```json
+{ "id": "req_2", "type": "response", "command": "steer", "success": true, "data": { "userEntryId": "3f9a1c07" } }
+```
+
+- The id is allocated when the command is accepted, so the response still arrives before the turn runs. The entry is written under exactly that id once the message reaches the session: at the start of the turn for a prompt, when the queue delivers it for a steer, follow-up, or queued prompt. From then on it is the `id` in `get_entries` and the `entryId` of the message in `get_messages_page`.
+- The entry is a `message` entry with `role: "user"`, or a `custom_message` entry (`customType: "skill-prompt"`) for a `/skill:` prompt. `branch` accepts either kind and removes that turn together with everything after it. Hidden context the session writes just before the message in the same turn (magic-keyword notices, attachment notes) has its own entries and stays on the branch.
+- `userEntryId` is absent when the prompt writes no entry of its own: an extension command, or a builtin slash command consumed on the spot (`data.agentInvoked` is set; a builtin that schedules its own turn, like `/retry`, reports `agentInvoked: true` and still writes no new user entry).
+- A message that never reaches the session writes no entry, and its id stays unused: a prompt that fails or is dropped before the turn starts (its `prompt_result` reports `agentInvoked: false` or `status: "error"`), a custom TypeScript command that handles the input without returning a prompt, or a queued steer/follow-up that is dropped before the queue delivers it.
+
+Each `get_messages_page` message carries `entryId`, including custom messages (`custom_message` entries), the compaction summary (`compaction` entry) and branch summaries (`branch_summary` entry). Context the session injects per turn without persisting it (for example Vibe-mode context) has no entry and no `entryId`.
 
 ### Yield vs settled
 
@@ -837,7 +853,7 @@ This is the most important operational behavior.
 `prompt` and `abort_and_prompt` are **acknowledged immediately**:
 
 ```json
-{ "id": "req_1", "type": "response", "command": "prompt", "success": true }
+{ "id": "req_1", "type": "response", "command": "prompt", "success": true, "data": { "userEntryId": "3f9a1c07" } }
 ```
 
 That means:

@@ -185,6 +185,7 @@ describe("dispatchRpcSkillPrompt", () => {
 			},
 			message: "/skill:reviewer go",
 			streamingBehavior: undefined,
+			reserveEntryId: () => "entry-1",
 			onError: () => {},
 			extensionUserMessageTracker: new RpcExtensionUserMessageTracker(),
 		});
@@ -192,7 +193,7 @@ describe("dispatchRpcSkillPrompt", () => {
 		// The answer does not wait for the dispatch pipeline: with the gate
 		// closed, awaiting the pipeline (usage preflight, compaction, provider
 		// calls) would hang this call forever — it returns regardless.
-		expect(result).toEqual({ agentInvoked: true });
+		expect(result).toEqual({ agentInvoked: true, userEntryId: "entry-1" });
 
 		dispatchGate.resolve();
 		await settleUntil(() => promptCustomMessageCalls === 1);
@@ -213,6 +214,7 @@ describe("dispatchRpcSkillPrompt", () => {
 			},
 			message: "just a normal prompt",
 			streamingBehavior: undefined,
+			reserveEntryId: () => "entry-1",
 			onError: () => {},
 			extensionUserMessageTracker: new RpcExtensionUserMessageTracker(),
 		});
@@ -238,6 +240,7 @@ describe("dispatchRpcSkillPrompt", () => {
 			},
 			message: "/skill:reviewer go",
 			streamingBehavior: undefined,
+			reserveEntryId: () => "entry-1",
 			onError: error => errors.push(error),
 			extensionUserMessageTracker: new RpcExtensionUserMessageTracker(),
 		});
@@ -274,6 +277,7 @@ describe("dispatchRpcSkillPrompt", () => {
 				},
 				message: "/skill:reviewer go",
 				streamingBehavior: undefined,
+				reserveEntryId: () => "entry-1",
 				onError: () => {},
 				extensionUserMessageTracker: new RpcExtensionUserMessageTracker(),
 			}),
@@ -304,11 +308,12 @@ describe("dispatchRpcSkillPrompt", () => {
 			},
 			message: "/skill:reviewer go",
 			streamingBehavior: undefined,
+			reserveEntryId: () => "entry-1",
 			onError: () => {},
 			extensionUserMessageTracker: new RpcExtensionUserMessageTracker(),
 		});
 
-		expect(result).toEqual({ agentInvoked: true });
+		expect(result).toEqual({ agentInvoked: true, userEntryId: "entry-1" });
 		await settleUntil(() => frames.length === 1);
 		expect(frames).toEqual([
 			{ type: "prompt_result", id: "cmd-5", agentInvoked: false, status: "completed", sessionSettled: true },
