@@ -9,7 +9,7 @@
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { type } from "@oh-my-pi/omptype";
-import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentTool, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -17,6 +17,7 @@ import { cfgModelRoles } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { dispatchRpcControlFrame, type RpcInputFrameDeps } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-mode";
+import { setRpcChatMode } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-chat-mode";
 import { RpcPlanModeController, RpcSetModeError } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-plan-mode";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -24,6 +25,7 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { dispatchResolutionDevice } from "@oh-my-pi/pi-coding-agent/tools/resolve";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 type Frame = Record<string, unknown>;
 
@@ -72,7 +74,12 @@ describe("RPC plan mode", () => {
 		await session?.dispose();
 	});
 
-	function setup(options?: { settings?: Record<string, unknown>; responses?: MockResponse[] }) {
+	function setup(options?: {
+		settings?: Record<string, unknown>;
+		responses?: MockResponse[];
+		/** Persist sessions under this directory instead of in memory. */
+		sessionDir?: string;
+	}) {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Expected bundled anthropic model to exist");
 		const readTool = makeTool("read");
@@ -95,7 +102,9 @@ describe("RPC plan mode", () => {
 		});
 		const created = new AgentSession({
 			agent,
-			sessionManager: SessionManager.inMemory(),
+			sessionManager: options?.sessionDir
+				? SessionManager.create(options.sessionDir, options.sessionDir)
+				: SessionManager.inMemory(),
 			settings: Settings.isolated({ "compaction.enabled": false, "retry.enabled": false, ...options?.settings }),
 			modelRegistry,
 			toolRegistry: new Map<string, AgentTool>([
@@ -223,6 +232,117 @@ describe("RPC plan mode", () => {
 		expect(session.getActiveToolNames()).toEqual(["read"]);
 		expect(session.model?.id).toBe(originalModelId);
 		expect(modeEntries()).toEqual(["plan", "none"]);
+	});
+
+	it("chat mode cannot start while plan mode is on, so leaving plan mode never reactivates tools under chat", async () => {
+		const { session, planMode } = setup();
+		await planMode.setMode("plan", undefined);
+
+		expect(await setRpcChatMode(session, { mode: "chat" })).toEqual({ ok: false, message: "Exit plan mode first." });
+		expect(session.chatMode).toBeUndefined();
+
+		await planMode.setMode("default", undefined);
+		expect(session.chatMode).toBeUndefined();
+		expect(session.getActiveToolNames()).toEqual(["read"]);
+	});
+
+	it("plan mode cannot start while chat mode is on, and chat stays tool-free", async () => {
+		const { session, planMode, frames } = setup();
+		expect(await setRpcChatMode(session, { mode: "chat" })).toMatchObject({ ok: true });
+		expect(session.getActiveToolNames()).toEqual([]);
+
+		const blocked = await planMode.setMode("plan", undefined).catch(error => error);
+		expect(blocked).toBeInstanceOf(RpcSetModeError);
+		expect(blocked.code).toBe("mode_blocked");
+		expect(session.getActiveToolNames()).toEqual([]);
+		expect(planMode.state).toEqual({ mode: "default" });
+		expect(frames).toEqual([]);
+	});
+
+	it("new_session ends plan mode and restores the pre-plan tools and model in the new session", async () => {
+		const dir = TempDir.createSync("@pi-rpc-plan-new-");
+		try {
+			const { session, planMode, frames } = setup({ sessionDir: dir.path() });
+			cfgModelRoles.override(session.settings, { plan: "anthropic/claude-sonnet-4-6" });
+			await planMode.setMode("plan", undefined);
+			const planSessionId = session.sessionId;
+
+			expect(await session.newSession()).toBe(true);
+			await planMode.settled();
+
+			expect(session.sessionId).not.toBe(planSessionId);
+			expect(planMode.state).toEqual({ mode: "default" });
+			expect(frames.at(-1)).toEqual({ type: "mode_changed", mode: "default" });
+			expect(session.peekPlanProposalHandler()).toBeUndefined();
+			expect(session.getActiveToolNames()).toEqual(["read"]);
+			expect(session.model?.id).toBe("claude-sonnet-4-5");
+		} finally {
+			controller?.close();
+			await session?.dispose();
+			session = undefined;
+			await dir.remove();
+		}
+	});
+
+	it("switch_session ends plan mode without applying the plan snapshot's model to the target session", async () => {
+		const dir = TempDir.createSync("@pi-rpc-plan-switch-");
+		try {
+			const target = SessionManager.create(dir.path(), dir.path());
+			target.appendModelChange("anthropic/claude-haiku-4-5");
+			target.appendMessage({ role: "user", content: "target", timestamp: 1 });
+			target.appendMessage(createAssistantMessage("target reply"));
+			await target.flush();
+			const targetFile = target.getSessionFile();
+			await target.close();
+			if (!targetFile) throw new Error("target session was not persisted");
+
+			const { session, planMode, frames } = setup({ sessionDir: dir.path() });
+			cfgModelRoles.override(session.settings, { plan: "anthropic/claude-sonnet-4-6" });
+			await planMode.setMode("plan", undefined);
+
+			expect(await session.switchSession(targetFile)).toBe(true);
+			await planMode.settled();
+
+			expect(planMode.state).toEqual({ mode: "default" });
+			expect(frames.at(-1)).toEqual({ type: "mode_changed", mode: "default" });
+			expect(session.getActiveToolNames()).toEqual(["read"]);
+			expect(session.model?.id).toBe("claude-haiku-4-5");
+
+			expect(await planMode.setMode("default", undefined)).toEqual({ mode: "default" });
+			expect(session.model?.id).toBe("claude-haiku-4-5");
+			expect(session.getActiveToolNames()).toEqual(["read"]);
+		} finally {
+			controller?.close();
+			await session?.dispose();
+			session = undefined;
+			await dir.remove();
+		}
+	});
+
+	it("keeps a model the host chose while planning when plan mode ends", async () => {
+		const { session, planMode } = setup();
+		cfgModelRoles.override(session.settings, { plan: "anthropic/claude-sonnet-4-6" });
+		await planMode.setMode("plan", undefined);
+		const chosen = modelRegistry.find("anthropic", "claude-opus-4-1");
+		if (!chosen) throw new Error("Expected claude-opus-4-1 in the registry");
+		await session.setModel(chosen);
+
+		await planMode.setMode("default", undefined);
+
+		expect(session.model?.id).toBe("claude-opus-4-1");
+		expect(session.getActiveToolNames()).toEqual(["read"]);
+	});
+
+	it("keeps a thinking level the host chose while planning when plan mode ends", async () => {
+		const { session, planMode } = setup();
+		cfgModelRoles.override(session.settings, { plan: "anthropic/claude-sonnet-4-6" });
+		await planMode.setMode("plan", undefined);
+		session.setThinkingLevel(ThinkingLevel.High);
+
+		await planMode.setMode("default", undefined);
+
+		expect(session.model?.id).toBe("claude-sonnet-4-6");
+		expect(session.configuredThinkingLevel()).toBe(ThinkingLevel.High);
 	});
 
 	it("honors a host-supplied plan file path", async () => {

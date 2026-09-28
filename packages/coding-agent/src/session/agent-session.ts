@@ -12534,6 +12534,8 @@ export class AgentSession implements SettingsScope {
 		const last = this.#lastChatMode ?? readLastActiveChatMode(this.sessionManager.getBranch());
 		const next = resolveChatModeChange(request, current, last, cfgChatInclude.get(this.settings)) ?? undefined;
 		if (next && this.#chatModeBlockedReason) throw new Error(this.#chatModeBlockedReason);
+		// Chat mode runs without tools; leaving plan mode later would reactivate them under it.
+		if (next && this.#planModeState?.enabled) throw new Error("Exit plan mode first.");
 		if (sameChatMode(current, next)) return current;
 		const previousStash = this.#chatModeStashedTools;
 		const previousTools = { enabled: this.getEnabledToolNames(), mounted: this.getMountedXdevToolNames() };
