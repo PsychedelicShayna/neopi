@@ -714,6 +714,29 @@ describe("tool dialect under PI_DIALECT", () => {
 	});
 });
 
+describe("model allow-list", () => {
+	it("refuses a run whose member this session's enabledModels excludes, and never calls it", async () => {
+		// Registered by an unrestricted session; the restricted session shares the registry's roster.
+		await mixtureSession();
+		const restricted = await createMoaSession(fixture, {
+			settings: Settings.isolated({
+				...SETTINGS,
+				enabledModels: ["fake/writer", "fake/other", "mixture/draft-then-edit"],
+			}),
+		});
+		sessions.push(restricted);
+		await restricted.setModel(mixtureModel());
+		await restricted.sendUserMessage("question");
+		await restricted.waitForIdle();
+
+		expect(members.calls.map(call => call.model.id)).toEqual([]);
+		const outer = lastAssistant(restricted);
+		expect(outer.stopReason).toBe("error");
+		expect(outer.errorMessage).toContain("member.model.excluded");
+		expect(outer.errorMessage).toContain("fake/editor");
+	});
+});
+
 describe("provider context for members", () => {
 	it("delivers more than five operator images to an entry member whose provider allows them", async () => {
 		const vision = DRAFT_THEN_EDIT_TOML.replace('model = "fake/writer"', 'model = "openrouter/vision"');

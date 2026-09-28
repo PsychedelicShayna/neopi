@@ -316,7 +316,7 @@ model = "x/y"
 	});
 
 	/** The mixtures registration accepts, and the codes it refused them with. */
-	async function register(dir: TempDir, userToml: string, projectToml?: string) {
+	async function register(dir: TempDir, userToml: string, projectToml?: string, settings = Settings.isolated()) {
 		const fixture = await createMoaFixture(dir, userToml);
 		try {
 			if (projectToml !== undefined) await Bun.write(path.join(fixture.cwd, "MIXTURES.toml"), projectToml);
@@ -325,7 +325,7 @@ model = "x/y"
 				cwd: fixture.cwd,
 				agentDir: fixture.agentDir,
 				registry: fixture.registry,
-				settings: Settings.isolated(),
+				settings,
 			});
 			const refused = warn.mock.calls.flatMap(([message, context]) =>
 				message === "Mixture refused at registration" ? [[context?.mixture, context?.code]] : [],
@@ -356,5 +356,23 @@ model = "x/y"
 			["draft-then-edit", "project"],
 		]);
 		expect(refused).toEqual([]);
+	});
+
+	it("refuses a mixture whose member the session's enabledModels excludes, and keeps an allowed sibling", async () => {
+		using dir = TempDir.createSync("@moa-config-allowlist-");
+		const writerOnly = `
+[[mixtures]]
+name = "writer-only"
+entry = "writer"
+[[mixtures.members]]
+id = "writer"
+model = "fake/writer"
+system_prompt = "Answer."
+tools = false
+`;
+		const settings = Settings.isolated({ enabledModels: ["fake/writer", "fake/other"] });
+		const { registered, refused } = await register(dir, `${DRAFT_THEN_EDIT_TOML}${writerOnly}`, undefined, settings);
+		expect(registered.map(definition => definition.name)).toEqual(["writer-only"]);
+		expect(refused).toEqual([["draft-then-edit", "member.model.excluded"]]);
 	});
 });

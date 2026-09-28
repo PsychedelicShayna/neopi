@@ -404,3 +404,28 @@ describe("recursion", () => {
 		expect(plan).not.toContain("mixture/loop");
 	});
 });
+
+describe("model allow-list", () => {
+	const ALLOWED = ["fake/writer", "fake/editor"];
+
+	it("filters a model enabledModels excludes out of a routed graph's implicit judge fallback", () => {
+		const result = check(
+			routed(),
+			Settings.isolated({ enabledModels: ALLOWED, modelRoles: { default: "fake/plain", smol: "fake/editor" } }),
+		);
+		expect(codes(result.errors)).toEqual(["unsupported.feature"]);
+		const plan = result.resolved.judgePlan?.map(candidate => `${candidate.model.provider}/${candidate.model.id}`);
+		expect(plan).toContain("fake/editor");
+		expect(plan).not.toContain("fake/plain");
+	});
+
+	it("rejects an explicitly configured judge role that enabledModels excludes", () => {
+		const result = check(
+			routed(),
+			Settings.isolated({ enabledModels: ALLOWED, modelRoles: { judge: "fake/plain" } }),
+		);
+		const issue = result.errors.find(candidate => candidate.code === "helper.unresolved");
+		expect([issue?.path, issue?.message]).toEqual(["judge", expect.stringContaining("excluded by enabledModels")]);
+		expect(result.resolved.judgePlan).toBeUndefined();
+	});
+});

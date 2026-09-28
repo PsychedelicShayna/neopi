@@ -12,7 +12,14 @@ import { toReasoningEffort } from "@oh-my-pi/pi-tui/thinking";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { ADVISOR_DEFAULT_TOOL_NAMES } from "../advisor/advise-tool";
 import type { ModelRegistry } from "../config/model-registry";
-import { formatModelStringWithRouting, resolveModelRoleValue, resolveRoleChain } from "../config/model-resolver";
+import {
+	filterAvailableModelsByEnabledPatterns,
+	formatModelString,
+	formatModelStringWithRouting,
+	resolveModelRoleValue,
+	resolveRoleChain,
+} from "../config/model-resolver";
+import { cfgEnabledModels } from "../config/model-settings";
 import { roleCandidatePool } from "../config/model-roles";
 import type { Settings } from "../config/settings";
 import { judgeRoleChain } from "../judgment";
@@ -30,6 +37,20 @@ export interface ResolveMixtureContext {
 
 function isMixtureApi(model: Model<Api>): boolean {
 	return model.api === MIXTURE_API;
+}
+
+/**
+ * The session's model allow-list (§1.4): a dependency must resolve against
+ * `getAvailable()` and then be in this pool. Never resolve against the pool
+ * itself, so fuzzy or role matching cannot land on a different allowed model.
+ */
+function allowedModels(ctx: ResolveMixtureContext, available: Model<Api>[]): (model: Model<Api>) => boolean {
+	const patterns = cfgEnabledModels.get(ctx.settings);
+	if (patterns.length === 0) return () => true;
+	const allowed = new Set(
+		filterAvailableModelsByEnabledPatterns(available, patterns, ctx.settings).map(formatModelString),
+	);
+	return model => allowed.has(formatModelString(model));
 }
 
 /** Effective tool policy: explicit, else on for members whose output reaches the operator (no outgoing edges). */
@@ -51,11 +72,17 @@ function lookupPreset(
 	return local?.[name] ?? document?.[name] ?? bundled[name];
 }
 
-function resolveJudgePlan(ctx: ResolveMixtureContext, issues: MixtureIssue[]): ResolvedMixture["judgePlan"] {
+function resolveJudgePlan(
+	ctx: ResolveMixtureContext,
+	isAllowed: (model: Model<Api>) => boolean,
+	issues: MixtureIssue[],
+): ResolvedMixture["judgePlan"] {
 	const fullPool = roleCandidatePool("judge", ctx.settings, ctx.registry);
-	// Explicit configuration that lands on a mixture is an error; the implicit fallback pool is filtered instead.
+	// Explicit configuration that lands on a mixture or an excluded model is an error; the
+	// implicit fallback pool is filtered instead.
 	for (const candidate of resolveRoleChain("judge", ctx.settings, fullPool)) {
-		if (candidate.explicit && isMixtureApi(candidate.model)) {
+		if (!candidate.explicit) continue;
+		if (isMixtureApi(candidate.model)) {
 			issues.push({
 				code: "helper.unresolved",
 				path: "judge",
@@ -63,11 +90,19 @@ function resolveJudgePlan(ctx: ResolveMixtureContext, issues: MixtureIssue[]): R
 			});
 			return undefined;
 		}
+		if (!isAllowed(candidate.model)) {
+			issues.push({
+				code: "helper.unresolved",
+				path: "judge",
+				message: `the judge role resolves to ${formatModelStringWithRouting(candidate.model)}, which is excluded by enabledModels`,
+			});
+			return undefined;
+		}
 	}
 	const plan = judgeRoleChain(
 		ctx.settings,
 		ctx.registry,
-		fullPool.filter(model => !isMixtureApi(model)),
+		fullPool.filter(model => !isMixtureApi(model) && isAllowed(model)),
 	);
 	if (plan.length === 0) {
 		issues.push({
@@ -84,6 +119,7 @@ export function resolveMixture(input: MixtureDefinition, ctx: ResolveMixtureCont
 	const definition = structuredClone(input);
 	const issues: MixtureIssue[] = [];
 	const available = ctx.registry.getAvailable();
+	const isAllowed = allowedModels(ctx, available);
 	const members: Record<string, ResolvedMember> = {};
 
 	definition.members.forEach((member, index) => {
@@ -141,6 +177,14 @@ export function resolveMixture(input: MixtureDefinition, ctx: ResolveMixtureCont
 			});
 			return;
 		}
+		if (!isAllowed(resolved.model)) {
+			issues.push({
+				code: "member.model.excluded",
+				path: `${path}.model`,
+				message: `member ${member.id}: ${formatModelStringWithRouting(resolved.model)} is excluded by enabledModels`,
+			});
+			return;
+		}
 		const level = resolved.thinkingLevel;
 		const toolPolicy = effectiveToolPolicy(definition, member.id);
 		members[member.id] = {
@@ -191,7 +235,7 @@ export function resolveMixture(input: MixtureDefinition, ctx: ResolveMixtureCont
 	};
 	// The summary and slicer helpers ship with the milestones that can reach them (M2, M4);
 	// until then the capability gate rejects any definition whose `uses` names them.
-	const judgePlan = uses.judge ? resolveJudgePlan(ctx, issues) : undefined;
+	const judgePlan = uses.judge ? resolveJudgePlan(ctx, isAllowed, issues) : undefined;
 	const readOnlyTools = new Set(ADVISOR_DEFAULT_TOOL_NAMES);
 
 	const revision = Bun.hash(
