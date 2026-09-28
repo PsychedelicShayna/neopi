@@ -164,6 +164,23 @@ describe("session lifetime lease", () => {
 		await first.close();
 	}, 30_000);
 
+	it("a rejected strict open leaves the file acquirable by another process", async () => {
+		// Persisted-task revival opens with throwIfMissing; an empty (truncated)
+		// transcript is rejected and no manager is returned.
+		const empty = path.join(dir, "empty.jsonl");
+		fs.writeFileSync(empty, "");
+		await expect(SessionManager.open(empty, undefined, undefined, { throwIfMissing: true })).rejects.toThrow(
+			"holds no entries",
+		);
+		const other = await LeaseHolder.start(empty, agentDir);
+		await other.kill();
+
+		const missing = path.join(dir, "missing.jsonl");
+		await expect(SessionManager.open(missing, undefined, undefined, { throwIfMissing: true })).rejects.toThrow();
+		const second = await LeaseHolder.start(missing, agentDir);
+		await second.kill();
+	}, 30_000);
+
 	describe("--resume on a leased session", () => {
 		async function resumeWith(choice: SessionInUseChoice | undefined): Promise<SessionManager | undefined> {
 			const asked: number[] = [];
