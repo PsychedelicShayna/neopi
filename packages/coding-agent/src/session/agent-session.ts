@@ -1596,6 +1596,7 @@ export class AgentSession implements SettingsScope {
 		this.#extensionRunner = config.extensionRunner;
 		this.#chatMode = config.chatMode;
 		this.#chatModeBlockedReason = config.chatModeBlockedReason;
+		this.#chatModeStashedTools = config.chatMode ? config.chatModeCodingTools : undefined;
 		this.#getEvalPreludes = config.getEvalPreludes;
 		this.#reconcileBrowserMcpFilter = config.reconcileBrowserMcpFilter;
 		this.#customCommands = config.customCommands ?? [];

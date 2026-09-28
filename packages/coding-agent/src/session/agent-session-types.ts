@@ -326,6 +326,11 @@ export interface AgentSessionConfig {
 	advisorMcpResources?: CursorMcpResourceAdapter;
 	/** Chat mode the session runs in; undefined for an ordinary coding session. */
 	chatMode?: ChatModeConfig;
+	/**
+	 * Coding tool selection (enabled names and the `xd://`-mounted subset) for a
+	 * session constructed in chat mode; activated when chat mode is switched off.
+	 */
+	chatModeCodingTools?: { enabled: string[]; mounted: string[] };
 	/** Why the session cannot enter chat mode (an explicit system prompt template); undefined when it can. */
 	chatModeBlockedReason?: string;
 	/** Preloaded watchdog prompt content for the advisor. */
