@@ -10,7 +10,12 @@ import type { AgentEvent, AgentIdentity, AgentMessage, AgentTelemetryConfig } fr
 import { AgentBusyError, EventLoopKeepalive, recordHandoff, resolveTelemetry } from "@oh-my-pi/pi-agent-core";
 import type { Api, Model, ServiceTierByFamily, Usage } from "@oh-my-pi/pi-ai";
 import { logger, popLoopPhase, prompt, pushLoopPhase, untilAborted } from "@oh-my-pi/pi-utils";
-import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, AsyncJobError, AsyncJobManager, type AsyncJobRunResult } from "../async";
+import {
+	ASYNC_JOB_MANAGER_SHUTDOWN_REASON,
+	AsyncJobError,
+	type AsyncJobManager,
+	type AsyncJobRunResult,
+} from "../async";
 import type { Rule } from "../capability/rule";
 import type { EffectiveExtensionRoots } from "../capability/types";
 import { ModelRegistry } from "../config/model-registry";
@@ -598,6 +603,12 @@ export interface ExecutorOptions {
 	 * passes its own `getAgentId()`).
 	 */
 	parentAgentId?: string;
+	/**
+	 * Async-job domain of the spawning root. The child session inherits it so
+	 * its own background jobs, completion delivery, and teardown reaping stay in
+	 * the root that spawned it. Omitted: the child refuses async work.
+	 */
+	asyncJobManager?: AsyncJobManager;
 	/**
 	 * Keep the finished subagent addressable in the registry for IRC/revival.
 	 * Defaults to true. Eval bridge agents are programmatic one-shot helpers and
@@ -4044,6 +4055,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				parentHindsightSessionState: options.parentHindsightSessionState,
 				parentMnemopiSessionState: options.parentMnemopiSessionState,
 				parentTaskPrefix: id,
+				asyncJobManager: options.asyncJobManager,
 				parentAgentId: options.parentAgentId,
 				agentId: id,
 				agentDisplayName: agent.name,
@@ -4074,6 +4086,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					sessionManager.getSessionFile() ??
 						sessionFile ??
 						AgentRegistry.global().get(id)?.sessionFile ??
+						(options.parentAgentId
+							? AgentRegistry.global().rootOf(options.parentAgentId)?.sessionFile
+							: undefined) ??
 						AgentRegistry.global().get(MAIN_AGENT_ID)?.sessionFile,
 				);
 			}
@@ -4160,6 +4175,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 							reopened.getSessionFile() ??
 								sessionFile ??
 								AgentRegistry.global().get(id)?.sessionFile ??
+								(options.parentAgentId
+									? AgentRegistry.global().rootOf(options.parentAgentId)?.sessionFile
+									: undefined) ??
 								AgentRegistry.global().get(MAIN_AGENT_ID)?.sessionFile,
 						);
 					}
@@ -4413,7 +4431,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				}
 				unsubscribe = null;
 			}
-			const jobManager = AsyncJobManager.instance();
+			const jobManager = options.asyncJobManager;
 			if (jobManager) {
 				const reap = await jobManager.cancelAndReapOwnerJobs(id, cleanupDeadlineAt);
 				if (!reap.settled) {

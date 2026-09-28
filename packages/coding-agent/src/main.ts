@@ -88,6 +88,7 @@ import { ensureTheme, initTheme, stopThemeWatcher } from "@oh-my-pi/pi-tui/theme
 import type { SubmittedUserInput } from "./modes/types";
 import { createWarpEventBridgeExtension } from "./modes/warp-events";
 import { AgentLifecycleManager } from "./registry/agent-lifecycle";
+import { AgentRegistry, MAIN_AGENT_ID } from "./registry/agent-registry";
 import {
 	type CreateAgentSessionOptions,
 	type CreateAgentSessionResult,
@@ -2489,6 +2490,7 @@ export async function runRootCommand(
 					subagentEventBus,
 				}),
 				() => Math.trunc(Number(cfgTaskAgentIdleTtlMs.get(settingsInstance)) || 0),
+				AgentRegistry.global().get(session.getAgentId() ?? MAIN_AGENT_ID),
 			);
 			if (parsedArgs.apiKey && !sessionOptions.model && session.model) {
 				authStorage.keys.setRuntime(session.model.provider, parsedArgs.apiKey);

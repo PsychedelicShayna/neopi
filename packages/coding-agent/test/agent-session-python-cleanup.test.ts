@@ -125,6 +125,8 @@ const createSession = async (
 		await createAgentSession({
 			cwd,
 			agentDir: createAgentDir(),
+			// Several sessions share a kernel concurrently; each is its own root.
+			agentId: `PythonCleanup-${Snowflake.next()}`,
 			authStorage,
 			modelRegistry,
 			sessionManager: options.sessionManager ?? SessionManager.inMemory(cwd),

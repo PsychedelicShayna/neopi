@@ -96,6 +96,26 @@ export type RegistryEvent =
 
 type RegistryListener = (event: RegistryEvent) => void;
 
+/**
+ * Thrown by `createAgentSession` when the requested agent id already names a
+ * registered agent the caller does not own (a live session, one still under
+ * construction, or a retained terminal ref). The existing ref is left
+ * untouched and fully usable; the rejected construction releases everything
+ * it acquired before throwing.
+ */
+export class AgentIdConflictError extends Error {
+	readonly agentId: string;
+
+	constructor(agentId: string, message?: string) {
+		super(
+			message ??
+				`Agent id "${agentId}" is already registered by another session. Pass a distinct agentId for each concurrent top-level session.`,
+		);
+		this.name = "AgentIdConflictError";
+		this.agentId = agentId;
+	}
+}
+
 export interface RegisterInput {
 	id: string;
 	displayName: string;
@@ -336,6 +356,24 @@ export class AgentRegistry {
 		return this.list().filter(
 			ref => ref.id !== id && ref.kind !== "advisor" && (ref.status === "running" || ref.status === "idle"),
 		);
+	}
+
+	/**
+	 * Resolve the top-level (`kind: "main"`) ref whose spawn tree contains `id`,
+	 * following registered parent links. A root resolves to itself. Returns
+	 * undefined when the chain breaks (an ancestor was already unregistered) or
+	 * ends at a non-root ref, so callers can fall back to legacy flat behavior.
+	 */
+	rootOf(id: string): AgentRef | undefined {
+		const seen = new Set<string>();
+		let ref = this.#refs.get(id);
+		while (ref && !seen.has(ref.id)) {
+			if (ref.kind === "main") return ref;
+			if (!ref.parentId) return undefined;
+			seen.add(ref.id);
+			ref = this.#refs.get(ref.parentId);
+		}
+		return undefined;
 	}
 
 	/** Whether a ref's claimed running state is corroborated by its attached live session. */

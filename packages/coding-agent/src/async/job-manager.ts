@@ -230,23 +230,6 @@ export interface AsyncJobFilter {
 }
 
 export class AsyncJobManager {
-	static #instance: AsyncJobManager | undefined;
-
-	/** Process-global instance shared by internal URL protocol handlers and tools. */
-	static instance(): AsyncJobManager | undefined {
-		return AsyncJobManager.#instance;
-	}
-
-	/** Install or clear the process-global instance. */
-	static setInstance(value: AsyncJobManager | undefined): void {
-		AsyncJobManager.#instance = value;
-	}
-
-	/** Reset the process-global instance. Test-only. */
-	static resetForTests(): void {
-		AsyncJobManager.#instance = undefined;
-	}
-
 	readonly #jobs = new Map<string, AsyncJob>();
 	readonly #deliveries: AsyncJobDelivery[] = [];
 	readonly #inFlightDeliveries: AsyncJobDelivery[] = [];
@@ -652,11 +635,19 @@ export class AsyncJobManager {
 		ownerId: string,
 		options?: { timeoutMs?: number; excludeSuppressed?: boolean },
 	): Promise<boolean> {
+		return this.#waitForJobs({ ownerId }, options);
+	}
+
+	/** {@link waitForOwnerJobs} over any filter; no filter waits for every job in this manager. */
+	async #waitForJobs(
+		filter: AsyncJobFilter | undefined,
+		options?: { timeoutMs?: number; excludeSuppressed?: boolean },
+	): Promise<boolean> {
 		const deadline =
 			options?.timeoutMs === undefined ? Number.POSITIVE_INFINITY : Date.now() + Math.max(0, options.timeoutMs);
 		const awaited = new Set<string>();
 		for (;;) {
-			const pending = this.#filterJobs(this.#jobs.values(), { ownerId }).filter(
+			const pending = this.#filterJobs(this.#jobs.values(), filter).filter(
 				job => !awaited.has(job.id) && (options?.excludeSuppressed !== true || !this.isDeliverySuppressed(job.id)),
 			);
 			if (pending.length === 0) return true;
@@ -676,16 +667,25 @@ export class AsyncJobManager {
 	 * user-visible Task wait without losing ownership of the live work.
 	 */
 	async cancelAndReapOwnerJobs(ownerId: string, deadlineAt: number): Promise<AsyncJobReapResult> {
-		this.cancelAll({ ownerId });
+		return this.cancelAndReapJobs({ ownerId }, deadlineAt);
+	}
+
+	/**
+	 * {@link cancelAndReapOwnerJobs} over any filter. With no filter it cancels
+	 * and reaps every job in this manager — the whole async-job domain of the
+	 * root that owns it — while the manager stays usable for new jobs.
+	 */
+	async cancelAndReapJobs(filter: AsyncJobFilter | undefined, deadlineAt: number): Promise<AsyncJobReapResult> {
+		this.cancelAll(filter);
 		const timeoutMs = Math.max(0, deadlineAt - Date.now());
-		const settled = await this.waitForOwnerJobs(ownerId, { timeoutMs });
+		const settled = await this.#waitForJobs(filter, { timeoutMs });
 		if (settled) {
 			return { settled: true, pendingJobIds: [], completion: Promise.resolve() };
 		}
-		const pendingJobIds = this.#filterJobs(this.#jobs.values(), { ownerId })
+		const pendingJobIds = this.#filterJobs(this.#jobs.values(), filter)
 			.filter(job => job.status === "running" || job.status === "cancelled")
 			.map(job => job.id);
-		const completion = this.waitForOwnerJobs(ownerId).then(() => {});
+		const completion = this.#waitForJobs(filter).then(() => {});
 		return { settled: false, pendingJobIds, completion };
 	}
 

@@ -7,14 +7,16 @@ import type { InteractiveModeContext } from "../types";
 
 /**
  * Pick the most recently active focusable subagent. Advisors are read-only
- * transcripts and aborted agents are terminal, so neither is focusable; the
- * main session is the view itself, not a focus target. A focused caller passes
- * its id to cycle to the next-most-recent agent (wrapping), so repeated
- * presses walk the roster instead of sticking on the newest row.
+ * transcripts and aborted agents are terminal, so neither is focusable; root
+ * sessions (the main session is the view itself; any other top-level session
+ * hosted in-process is a separate root, not part of this view's tree) are not
+ * focus targets. A focused caller passes its id to cycle to the
+ * next-most-recent agent (wrapping), so repeated presses walk the roster
+ * instead of sticking on the newest row.
  */
 export function pickRecentFocusableAgentId(refs: readonly AgentRef[], currentId?: string): string | undefined {
 	const ordered = refs
-		.filter(ref => ref.id !== MAIN_AGENT_ID && ref.kind !== "advisor" && ref.status !== "aborted")
+		.filter(ref => ref.id !== MAIN_AGENT_ID && ref.kind === "sub" && ref.status !== "aborted")
 		.filter(ref => ref.status === "running" || ref.status === "idle" || ref.status === "parked")
 		.toSorted(
 			(a, b) =>
@@ -64,7 +66,7 @@ export class SessionFocusController {
 	/** Focus the main view on an agent's live session. Throws an Error with a user-displayable message. */
 	async focusAgent(id: string): Promise<void> {
 		if (this.ctx.collabGuest) throw new Error("Viewing agents is unavailable in a collab session.");
-		if (id === MAIN_AGENT_ID) return this.unfocus();
+		if (id === MAIN_AGENT_ID || this.registry.get(id)?.kind === "main") return this.unfocus();
 		const request = ++this.#focusRequestSeq;
 		let session: AgentSession;
 		try {
@@ -111,7 +113,8 @@ export class SessionFocusController {
 	async focusParent(): Promise<void> {
 		if (!this.#focusedAgentId) return;
 		const parentId = this.registry.get(this.#focusedAgentId)?.parentId;
-		if (parentId && parentId !== MAIN_AGENT_ID && this.registry.get(parentId)) {
+		const parent = parentId ? this.registry.get(parentId) : undefined;
+		if (parentId && parentId !== MAIN_AGENT_ID && parent && parent.kind !== "main") {
 			return this.focusAgent(parentId);
 		}
 		return this.unfocus();

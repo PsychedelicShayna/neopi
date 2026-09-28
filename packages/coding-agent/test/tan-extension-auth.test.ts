@@ -18,7 +18,7 @@ import type { ExtensionFactory } from "@oh-my-pi/pi-coding-agent/extensibility/e
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { Snowflake, TempDir } from "@oh-my-pi/pi-utils";
 
 const PROVIDER = "tan-fixture-gw";
 const MODEL_ID = "tan-fixture-model";
@@ -113,6 +113,7 @@ describe("/tan extension auth over a shared registry", () => {
 			// Tan child: forwards the parent's prepared extensions + root policy, so
 			// bindPreparedExtensions re-registers the provider before the prune.
 			const { session: tanChild } = await createAgentSession({
+				agentId: `TanChild-${Snowflake.next()}`,
 				...base,
 				sessionManager: SessionManager.inMemory(cwd),
 				authStorage,
@@ -163,6 +164,7 @@ describe("/tan extension auth over a shared registry", () => {
 			// the child rebinds from source paths (SDK branch: preloadedExtensionPaths)
 			// and must still re-register the provider before the prune.
 			const { session: tanChild } = await createAgentSession({
+				agentId: `TanChild-${Snowflake.next()}`,
 				...base,
 				sessionManager: SessionManager.inMemory(cwd),
 				authStorage,

@@ -18,6 +18,7 @@ import {
 import type { Settings } from "../config/settings";
 import agentCreationArchitectPrompt from "../prompts/system/agent-creation-architect.md" with { type: "text" };
 import agentCreationUserPrompt from "../prompts/system/agent-creation-user.md" with { type: "text" };
+import { AgentRegistry } from "../registry/agent-registry";
 import { createAgentSession } from "../sdk";
 import { refreshAgentDiscovery } from "../task";
 import { discoverAgents } from "../task/discovery";
@@ -150,6 +151,9 @@ export function createAgentsHubDeps(
 				slashCommands: [],
 				// A helper for the host session: the host keeps the process-wide effects and provider toggles.
 				bindProcessState: false,
+				// Its own registry: the tool-less architect is never an addressable peer,
+				// and the host's default "Main" id stays owned by the host session.
+				agentRegistry: new AgentRegistry(),
 			});
 			const unsubscribe = session.subscribe(event => {
 				if (event.type === "message_update" && "assistantMessageEvent" in event) {

@@ -13,7 +13,7 @@ import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import type { SingleResult } from "@oh-my-pi/pi-tui/tools/task";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { Snowflake, TempDir } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
 const taskAgent: AgentDefinition = {
@@ -143,6 +143,7 @@ describe("task subagent OAuth pin inheritance", () => {
 			for (const [index, childOptions] of dispatched.entries()) {
 				const providerSessionId = `child-provider-session-${index + 1}`;
 				const { session: child } = await createAgentSession({
+					agentId: `AuthChild-${Snowflake.next()}`,
 					cwd: tempDir.path(),
 					agentDir: tempDir.path(),
 					sessionManager: SessionManager.inMemory(tempDir.path()),
@@ -185,6 +186,7 @@ describe("task subagent OAuth pin inheritance", () => {
 			expect(nestedOptions.getApiKey).toBeUndefined();
 			expect(nestedOptions.credentialSourceSessionId).toBe("child-provider-session-1");
 			const { session: grandchild } = await createAgentSession({
+				agentId: `AuthChild-${Snowflake.next()}`,
 				cwd: tempDir.path(),
 				agentDir: tempDir.path(),
 				sessionManager: SessionManager.inMemory(tempDir.path()),

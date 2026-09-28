@@ -425,18 +425,16 @@ export interface ToolSession {
 	/** Agent output manager for unique agent:// IDs across task invocations */
 	agentOutputManager?: AgentOutputManager;
 	/**
-	 * Async job manager scoped to this session.
+	 * Async job manager scoped to this session: the async-job domain of the
+	 * root that owns it.
 	 *
-	 * - Top-level session that constructed one: its own manager.
-	 * - Subagent (`parentTaskPrefix` set): the parent's manager, so background
-	 *   bash/task work and `onJobComplete` deliveries flow into the conversation
-	 *   that spawned it.
-	 * - Secondary in-process top-level session that found a singleton already
-	 *   installed (issue #1923): `undefined`. Tools refuse async work rather
-	 *   than silently route completions into the owning session's `yieldQueue`.
+	 * - Top-level session: the manager it owns (one per root).
+	 * - Subagent (`parentTaskPrefix` set): its spawning root's manager, handed
+	 *   down explicitly, so background bash/task work and deliveries flow into
+	 *   the conversation that spawned it.
+	 * - Hand-built sessions without one: `undefined`; tools refuse async work.
 	 *
-	 * Tools MUST use this instead of `AsyncJobManager.instance()` so a secondary
-	 * session never borrows the owning session's manager by accident.
+	 * There is no process-global manager: tools MUST use this field.
 	 */
 	asyncJobManager?: AsyncJobManager;
 	/** MCP manager visible to subagents without relying on the process-global singleton. */

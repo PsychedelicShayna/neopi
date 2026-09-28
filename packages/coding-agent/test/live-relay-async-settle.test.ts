@@ -56,7 +56,6 @@ describe("AgentSession agent_end final-response tagging", () => {
 	afterEach(async () => {
 		if (session) await session.dispose();
 		for (const authStorage of authStorages.splice(0)) authStorage.close();
-		AsyncJobManager.resetForTests();
 	});
 
 	it("tags a pause-for-background-job settle as carrying the turn's answer", async () => {
@@ -72,7 +71,6 @@ describe("AgentSession agent_end final-response tagging", () => {
 		authStorages.push(authStorage);
 		authStorage.keys.setRuntime("anthropic", "test-key");
 		const manager = new AsyncJobManager({});
-		AsyncJobManager.setInstance(manager);
 
 		session = new AgentSession({
 			agent,

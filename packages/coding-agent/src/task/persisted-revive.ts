@@ -191,6 +191,8 @@ export function createPersistedSubagentReviverFactory(
 						? init.agent
 						: ref.displayName,
 				parentTaskPrefix: ref.id,
+				// Revived agents rejoin the root that owns the persisted tree.
+				asyncJobManager: ctx.session.asyncJobManager,
 				parentAgentId: ref.parentId,
 				expectedAgentRef: expectedRef,
 				taskDepth,

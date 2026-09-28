@@ -18,6 +18,11 @@
  * Every adoption, park, and revival is bound to the exact {@link AgentRef} it
  * started from, so stale async work (a late finalizer, a cancelled initializer,
  * a superseded revive) can never clobber a newer same-id ref.
+ *
+ * One manager serves every top-level root in the process. Each adoption records
+ * the root generation (the `kind: "main"` ref) that owns it, so
+ * {@link AgentLifecycleManager.disposeRoot} tears down one root's descendants
+ * without touching another root's agents.
  */
 
 import * as fs from "node:fs/promises";
@@ -65,6 +70,8 @@ export interface AdoptOptions {
 
 interface AdoptedAgent {
 	ref: AgentRef;
+	/** Root generation that owns this agent; undefined when its parent chain was already broken. */
+	root: AgentRef | undefined;
 	idleTtlMs: number;
 	revive?: AgentReviver;
 	onRelease?: () => Promise<void>;
@@ -129,6 +136,7 @@ export class AgentLifecycleManager {
 		this.#revivals.clear();
 		this.#parks.clear();
 		this.#persistedReviverFactory = undefined;
+		this.#persistedReviverOwner = undefined;
 	}
 
 	readonly #registry: AgentRegistry;
@@ -143,10 +151,14 @@ export class AgentLifecycleManager {
 	readonly #revivals = new Map<string, RevivingAgent>();
 	#unsubscribe: (() => void) | undefined;
 	#persistedReviverFactory: PersistedSubagentReviverFactory | undefined;
+	/** Root generation that installed {@link #persistedReviverFactory}; its {@link disposeRoot} clears the factory. */
+	#persistedReviverOwner: AgentRef | undefined;
 	/** Resolves the TTL applied when a cold-revived ref is adopted on demand (read per revive). */
 	#persistedReviveTtlMs: () => number = () => 0;
 	/** Set once {@link dispose} runs; blocks late revivals from adopting into a torn-down manager. */
 	#disposed = false;
+	/** Root generations torn down by {@link disposeRoot}; their late revivals are rejected like {@link #disposed}. */
+	readonly #disposedRoots = new WeakSet<AgentRef>();
 
 	constructor(registry: AgentRegistry = AgentRegistry.global()) {
 		this.#registry = registry;
@@ -159,10 +171,20 @@ export class AgentLifecycleManager {
 	 * but no adoption. Set by the top-level session, which owns the ambient deps
 	 * (auth, models, MCP, artifacts) the factory needs at revive time. `idleTtlMs`
 	 * is resolved per revive so a live `task.agentIdleTtlMs` change applies.
+	 *
+	 * The slot is process-global: only the CLI bootstrap root installs it (ACP
+	 * and SDK embedders hosting several roots must not). `owner` is the
+	 * installing root's registry ref; disposing that root clears the factory so
+	 * it can never revive into a torn-down session's context.
 	 */
-	setPersistedSubagentReviverFactory(factory: PersistedSubagentReviverFactory, idleTtlMs: () => number): void {
+	setPersistedSubagentReviverFactory(
+		factory: PersistedSubagentReviverFactory,
+		idleTtlMs: () => number,
+		owner?: AgentRef,
+	): void {
 		this.#persistedReviverFactory = factory;
 		this.#persistedReviveTtlMs = idleTtlMs;
+		this.#persistedReviverOwner = owner;
 	}
 
 	/**
@@ -174,6 +196,8 @@ export class AgentLifecycleManager {
 	adopt(id: string, opts: AdoptOptions, expected?: AgentRefExpectation): void {
 		if (id === MAIN_AGENT_ID) return;
 		const ref = this.#registry.get(id);
+		// Top-level roots own their own teardown; only descendants are adopted.
+		if (ref?.kind === "main") return;
 		if (!ref || (expected !== undefined && ref !== expected && ref.session !== expected)) {
 			logger.warn("AgentLifecycleManager.adopt: unknown or replaced agent id", { id });
 			return;
@@ -182,6 +206,7 @@ export class AgentLifecycleManager {
 		clearTimeout(existing?.timer);
 		const adopted: AdoptedAgent = {
 			ref,
+			root: this.#registry.rootOf(id),
 			idleTtlMs: opts.idleTtlMs,
 			revive: opts.revive,
 			onRelease: opts.onRelease,
@@ -395,13 +420,14 @@ export class AgentLifecycleManager {
 			// Teardown can complete during the factory await. A late cold revive must
 			// not cold-adopt (and later attach a live session + TTL) into a disposed
 			// manager — reject deterministically before creating any session.
-			if (this.#disposed) {
+			const root = this.#registry.rootOf(id);
+			if (this.#disposed || (root && this.#disposedRoots.has(root))) {
 				throw new Error(
 					`Agent "${id}" revival aborted: its lifecycle was disposed while its persisted session was being prepared.`,
 				);
 			}
 			if (revive) {
-				adoption = { ref, idleTtlMs: this.#persistedReviveTtlMs(), revive };
+				adoption = { ref, root, idleTtlMs: this.#persistedReviveTtlMs(), revive };
 				this.#adopted.set(id, adoption);
 				coldAdopted = true;
 			}
@@ -509,9 +535,57 @@ export class AgentLifecycleManager {
 		this.#disposed = true;
 		this.#unsubscribe = undefined;
 		const ids = [...new Set([...this.#adopted.keys(), ...this.#parks.keys()])];
+		await this.#releaseBefore(
+			ids.map(id => ({ id })),
+			deadlineAt,
+		);
+		this.#revivals.clear();
+		this.#parks.clear();
+		this.#persistedReviverFactory = undefined;
+		this.#persistedReviverOwner = undefined;
+		if (AgentLifecycleManager.#global === this) AgentLifecycleManager.#global = undefined;
+	}
+
+	/**
+	 * Tear down the descendants owned by one root generation (`root` is the
+	 * top-level session's registry ref): release every adopted agent in its
+	 * spawn tree and reject that root's late revivals. Agents owned by any
+	 * other root keep running. When no other live root remains in this
+	 * registry, this is exactly {@link dispose}, so single-root teardown is
+	 * unchanged. Idempotent; a stale root generation owns nothing and is a no-op.
+	 */
+	async disposeRoot(root: AgentRef, deadlineAt: number = Date.now() + AGENT_RELEASE_GRACE_MS): Promise<void> {
+		const otherRootLive = this.#registry
+			.list()
+			.some(ref => ref !== root && ref.kind === "main" && ref.status !== "parked" && ref.status !== "aborted");
+		if (!otherRootLive) return this.dispose(deadlineAt);
+		this.#disposedRoots.add(root);
+		if (this.#persistedReviverOwner === root) {
+			this.#persistedReviverFactory = undefined;
+			this.#persistedReviverOwner = undefined;
+		}
+		await this.releaseRootAgents(root, deadlineAt);
+	}
+
+	/**
+	 * Release every adopted agent owned by `root` (kept-alive idle or parked
+	 * descendants), waiting at most until `deadlineAt`. The root itself and every
+	 * other root's agents are untouched, and the root may adopt new agents
+	 * afterward. Each release is bound to the adopted generation, so a same-id
+	 * replacement is never released.
+	 */
+	async releaseRootAgents(root: AgentRef, deadlineAt: number = Date.now() + AGENT_RELEASE_GRACE_MS): Promise<void> {
+		const owned = [...this.#adopted]
+			.filter(([id, adopted]) => (adopted.root ?? this.#registry.rootOf(id)) === root)
+			.map(([id, adopted]) => ({ id, expected: adopted.ref }));
+		await this.#releaseBefore(owned, deadlineAt);
+	}
+
+	/** Release each id, waiting at most until `deadlineAt`; overrunning releases continue as tracked late cleanup. */
+	async #releaseBefore(targets: readonly { id: string; expected?: AgentRef }[], deadlineAt: number): Promise<void> {
 		await Promise.all(
-			ids.map(async id => {
-				const release = this.release(id).then(() => {});
+			targets.map(async ({ id, expected }) => {
+				const release = this.release(id, expected).then(() => {});
 				try {
 					await untilAborted(AbortSignal.timeout(Math.max(0, deadlineAt - Date.now())), () => release);
 				} catch (error) {
@@ -525,15 +599,11 @@ export class AgentLifecycleManager {
 				}
 			}),
 		);
-		this.#revivals.clear();
-		this.#parks.clear();
-		this.#persistedReviverFactory = undefined;
-		if (AgentLifecycleManager.#global === this) AgentLifecycleManager.#global = undefined;
 	}
 
 	async #revive(id: string, revive: AgentReviver, ref: AgentRef, adopted: AdoptedAgent): Promise<AgentSession> {
 		const session = await revive(ref);
-		if (this.#disposed) {
+		if (this.#disposed || (adopted.root && this.#disposedRoots.has(adopted.root))) {
 			// The owning lifecycle tore down while the reviver was in flight; dispose
 			// the freshly built session instead of attaching it, and fail the waiter.
 			await session.dispose();

@@ -178,7 +178,6 @@ function mockCreateAgentSession(session: AgentSession) {
 describe("runSubprocess async quiescence fresh-yield contract", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
-		AsyncJobManager.resetForTests();
 	});
 
 	it("parks a pending yield, injects the result, and completes on the fresh yield", async () => {
@@ -310,7 +309,6 @@ describe("runSubprocess async quiescence fresh-yield contract", () => {
 		const disposeGate = Promise.withResolvers<void>();
 		const lateJobGate = Promise.withResolvers<void>();
 		const manager = new AsyncJobManager({});
-		AsyncJobManager.setInstance(manager);
 		const cleanupGraceMs = 0;
 		let lateJobId: string | undefined;
 		let deferredCleanup: Promise<void> | undefined;
@@ -348,6 +346,7 @@ describe("runSubprocess async quiescence fresh-yield contract", () => {
 			task: "do the work",
 			index: 0,
 			id: "cleanup-timeout",
+			asyncJobManager: manager,
 			keepAlive: false,
 			cleanupGraceMs,
 			onCleanupDeferred: completion => {

@@ -165,6 +165,7 @@ export class TanCommandController {
 							agentId: cloneId,
 							agentDisplayName: "tan",
 							parentTaskPrefix: cloneId,
+							asyncJobManager: manager,
 							parentAgentId: ownerId,
 							agentRegistry,
 							disableExtensionDiscovery: true,

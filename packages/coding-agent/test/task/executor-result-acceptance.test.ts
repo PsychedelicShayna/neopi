@@ -170,7 +170,6 @@ describe("runSubprocess result acceptance", () => {
 
 	afterEach(() => {
 		vi.restoreAllMocks();
-		AsyncJobManager.resetForTests();
 		AgentLifecycleManager.resetGlobalForTests();
 		AgentRegistry.resetGlobalForTests();
 	});

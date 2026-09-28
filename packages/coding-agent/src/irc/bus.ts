@@ -12,7 +12,7 @@
 import { type IrcDeliveryReceipt, type IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import { logger, Snowflake } from "@oh-my-pi/pi-utils";
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
-import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
+import { type AgentRef, AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import type { CustomMessage } from "../session/messages";
 
 interface IrcWaiter {
@@ -348,15 +348,18 @@ export class IrcBus {
 	}
 
 	/**
-	 * Surface agent↔agent traffic as a display-only card on the main session
-	 * UI. Skipped when the main agent is either endpoint: as recipient its
+	 * Surface agent↔agent traffic as a display-only card on the UI of the
+	 * sender's root session (the top-level session whose spawn tree it
+	 * belongs to; the default "Main" session when that tree cannot be
+	 * resolved). Skipped when that root is either endpoint: as recipient its
 	 * own `deliverIrcMessage` (or `wait` tool result) already shows the
 	 * message, and as sender the irc send tool call already rendered the
 	 * outbound body — relaying it again would duplicate it in the transcript.
 	 */
 	#relayToMainUi(message: IrcMessage): void {
-		if (message.to === MAIN_AGENT_ID || message.from === MAIN_AGENT_ID) return;
-		const mainSession = this.#registry.get(MAIN_AGENT_ID)?.session;
+		const root = ircRelayRoot(this.#registry, message.from);
+		if (!root || message.to === root.id || message.from === root.id) return;
+		const mainSession = root.session;
 		if (!mainSession) return;
 		const record: CustomMessage = {
 			role: "custom",
@@ -374,4 +377,13 @@ export class IrcBus {
 			logger.debug("IrcBus: main UI relay failed", { to: message.to, error: String(error) });
 		}
 	}
+}
+
+/**
+ * The root whose UI observes `senderId`'s IRC traffic: the top-level ref of
+ * its spawn tree, falling back to the default "Main" root when the parent
+ * chain is broken.
+ */
+export function ircRelayRoot(registry: AgentRegistry, senderId: string): AgentRef | undefined {
+	return registry.rootOf(senderId) ?? registry.get(MAIN_AGENT_ID);
 }
