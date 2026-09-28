@@ -2970,10 +2970,17 @@ export class AgentSession implements SettingsScope {
 	attachMixtureHost(
 		host: Pick<
 			SessionMixtureHost,
-			"commitPersisted" | "resetConversation" | "rebindWorkspace" | "commitWorkspaceMove"
+			"commitPersisted" | "resetConversation" | "rebindWorkspace" | "commitWorkspaceMove" | "observeCatalog"
 		>,
 	): void {
 		this.#mixtureHost = host;
+		host.observeCatalog(() => {
+			// Set the newly conservative model synchronously, before another
+			// session can submit a prompt using stale context/image limits.
+			void this.#refreshSelectedMixture().catch(error => {
+				logger.warn("Failed to reconcile mixture metadata after catalog change", { error: String(error) });
+			});
+		});
 	}
 
 	/**
@@ -2985,16 +2992,18 @@ export class AgentSession implements SettingsScope {
 		const host = this.#mixtureHost;
 		if (!host) return;
 		await host.rebindWorkspace(cwd, deferReset);
+		await this.#refreshSelectedMixture();
+	}
+
+	/** Registry metadata may narrow when a different holder joins the workspace. */
+	async #refreshSelectedMixture(): Promise<void> {
 		const current = this.model;
 		if (!current || !isMixtureModel(current)) return;
-		// Workspace rebinding replaces the registered synthetic model even when
-		// the selector stays the same. Its entry member can change modalities,
-		// output limits, and other metadata without changing the context window.
 		const refreshed = this.#modelRegistry.find(current.provider, current.id);
 		if (!refreshed || !isMixtureModel(refreshed) || refreshed === current) return;
 		this.agent.setModel(refreshed);
 		await this.#reconcileModelDependentState(current, refreshed);
-		if (!this.#isDisposed) this.#emit({ type: "model_changed" });
+		if (!this.#isDisposed && this.model === refreshed) this.#emit({ type: "model_changed" });
 	}
 
 	/** Commit the mixture workspace change once a move has succeeded. */

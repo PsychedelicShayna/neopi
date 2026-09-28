@@ -2308,11 +2308,13 @@ export class MixtureCatalog {
 export interface MixtureScope {
   readonly key: string;                        // the serialized candidate-path list
   retain(owner: string): void;                 // a session or gateway holds this scope
-  initializeRoster(owner: string, load: () => Promise<readonly ResolvedMixture[]>): Promise<void>; // serialize discovery and retain this owner's resolution
+  initializeRoster(owner: string, load: () => Promise<readonly ResolvedMixture[]>, restoredRoster?: readonly ResolvedMixture[]): Promise<void>;
   release(owner: string): void;                // the last owner of a scope drops its roster and re-registers the union
   setRoster(mixtures: ResolvedMixture[]): void;   // this scope's definitions; the provider registers the union over live scopes
   roster(): readonly ResolvedMixture[];        // this scope's registered definitions only
   find(name: string): ResolvedMixture | undefined;   // this scope only; the host resolves through it
+  resolution(owner: string): readonly ResolvedMixture[] | undefined; // this owner's resolved members, not the canonical shared roster
+  observe(owner: string, listener: () => void): void; // notify a retained owner after shared metadata changes
   hasRoster: boolean;
 }
 
@@ -2352,10 +2354,11 @@ export function isMixtureModel(model: Model<Api>): boolean;
   provider registrations and runtime-provider hydration. Every new holder
   discovers under its own settings; discovery is serialized and adds newly
   permitted names without removing the first holder's roster. The catalog
-  retains each live owner's resolution to bound shared-model metadata (§9.2).
-  An explicit `setRoster` replaces that discovered roster and supersedes
-  pending file discovery. A scope retired while discovery is in flight cannot
-  install a stale result into a later scope
+  retains each live owner's resolution to bound shared-model metadata (§9.2);
+  observers refresh the selected model of every live session after a shared
+  provider registration changes it. An explicit `setRoster` replaces that
+  discovered roster and supersedes pending file discovery. A scope retired
+  while discovery is in flight cannot install a stale result into a later scope
   with the same key. Run start re-resolves and validates members under the
   session's settings, so a more permissive holder cannot bypass another
   holder's enabled-model restrictions.
@@ -2385,9 +2388,10 @@ export function isMixtureModel(model: Model<Api>): boolean;
   first-registrant rule above. An identical definition shared by both
   scopes therefore leaves the registry only for the duration of that
   awaited transition, during which no prompt can run. Before release,
-  retain the source's resolved roster; if destination retention fails,
-  restore that roster without rediscovering against destination Settings,
-  then propagate the error. A direct `/move` defers destructive host state
+  retain the source's canonical roster and this owner's resolved variant;
+  if destination retention fails, restore both without rediscovering against
+  destination Settings, then propagate the error. A direct `/move` defers
+  destructive host state
   changes until every fallible cwd rescope has succeeded. A cross-project
   `/resume` also defers its mixture move commit and conversation reset until
   `AgentSession.switchSession` succeeds: target context/model restoration
@@ -2397,10 +2401,11 @@ export function isMixtureModel(model: Model<Api>): boolean;
   held runs and credential memory (`runs.clear()` as in `resetConversation`)
   and, when runs were held, warns
   `<n> mixture run(s) from the previous workspace were reset; the next message starts a new run`
-  (`onEvent` persists nothing for a dropped run). The selected model is
-  left as it is: a destination that does not define it yields the
-  run-start error `mixture/X is not defined in this workspace` on the next
-  prompt; nothing is reselected silently (Codex P2 4119569942 on PR #126,
+  (`onEvent` persists nothing for a dropped run). The selected model id is
+  unchanged, but a refreshed registered model supplies its destination
+  metadata. A destination that does not define the name yields the run-start
+  error `mixture/X is not defined in this workspace` on the next prompt;
+  nothing is reselected silently (Codex P2 4119569942 on PR #126,
   `sdk.ts:2538`: a relocated session kept the scope it retained at
   startup, ran the source workspace's mixtures against the destination's
   conversation, and never saw the destination's `MIXTURES.toml`).
@@ -3070,6 +3075,24 @@ None open. Every question raised in rounds 1 to 3 is answered in §15.
   an explicit `setRoster` supersedes discovered variants. Re-registration
   skips unchanged metadata, but a provider registration that mutates state and
   then throws invalidates its cached metadata so cleanup retries correctly.
+
+### Amendment 6.14 (Codex P2 r4127557851: refresh active sessions)
+
+- Catalog registration notifies each live scope owner after publishing a new
+  provider model. If that session has a mixture selected, it replaces its
+  retained `Model` object synchronously before another prompt or compaction
+  can read stale context, modality, or tool metadata; model-dependent state
+  and subscribers are reconciled afterward. Listeners are dropped with the
+  owner, including on a workspace move.
+
+### Amendment 6.15 (Codex P2 r4127557854: retain owner variant during rollback)
+
+- A workspace move snapshots both the scope's canonical roster and the
+  moving owner's resolved mixture variants before releasing ownership. On
+  failure the original roster seeds a newly recreated scope, while the
+  owner's own resolution restores its metadata contribution without reading
+  a file under the wrong project's settings. A subsequent retry uses the
+  same snapshots if immediate restoration also fails.
 
 ### Amendment 6.9 (Codex security P2 r4118194866, post-merge: unbounded validation work)
 

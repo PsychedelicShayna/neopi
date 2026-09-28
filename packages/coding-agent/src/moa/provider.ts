@@ -77,7 +77,11 @@ export interface MixtureScope {
 	/** Whether this scope has a roster since its last owner released it; an empty roster counts. */
 	readonly hasRoster: boolean;
 	/** Serialize discovery and retain this owner's resolved metadata until it releases. */
-	initializeRoster(owner: string, load: () => Promise<readonly ResolvedMixture[]>): Promise<void>;
+	initializeRoster(
+		owner: string,
+		load: () => Promise<readonly ResolvedMixture[]>,
+		restoredRoster?: readonly ResolvedMixture[],
+	): Promise<void>;
 	/** A session or gateway holds this scope. */
 	retain(owner: string): void;
 	/** The last owner drops this scope's roster and the provider re-registers the rest. */
@@ -91,6 +95,10 @@ export interface MixtureScope {
 	roster(): readonly ResolvedMixture[];
 	/** This scope's definition of a name; the session host resolves only through it. */
 	find(name: string): ResolvedMixture | undefined;
+	/** The owner's resolved definitions, kept separately from the scope's first-writer roster. */
+	resolution(owner: string): readonly ResolvedMixture[] | undefined;
+	/** Notify a live owner when a provider registration changes the shared model metadata. */
+	observe(owner: string, listener: () => void): void;
 }
 
 interface ScopeState {
@@ -98,6 +106,7 @@ interface ScopeState {
 	roster: ResolvedMixture[] | undefined;
 	/** Resolution variants supplied by live owners, including shared names with different model roles. */
 	resolutions: Map<string, readonly ResolvedMixture[]>;
+	listeners: Map<string, () => void>;
 	initialization?: Promise<void>;
 	/** An explicit edit supersedes file discovery until the last owner releases the scope. */
 	saved?: boolean;
@@ -144,7 +153,7 @@ export class MixtureCatalog {
 			get hasRoster() {
 				return scopes.get(key)?.roster !== undefined;
 			},
-			async initializeRoster(owner, load) {
+			async initializeRoster(owner, load, restoredRoster) {
 				const state = scopes.get(key);
 				if (!state?.owners.has(owner)) throw new Error(`Mixture scope ${key} must be retained before discovery`);
 				if (state.saved) return;
@@ -157,7 +166,7 @@ export class MixtureCatalog {
 					// A retired scope or explicit save must not be overwritten by stale discovery.
 					if (scopes.get(key) !== state || !state.owners.has(owner) || state.roster !== before || state.saved)
 						return;
-					const merged = [...(before ?? [])];
+					const merged = [...(before ?? restoredRoster ?? [])];
 					const names = new Set(merged.map(mixture => mixture.definition.name));
 					for (const mixture of discovered) {
 						if (names.has(mixture.definition.name)) continue;
@@ -176,7 +185,7 @@ export class MixtureCatalog {
 			retain(owner) {
 				let state = scopes.get(key);
 				if (!state) {
-					state = { owners: new Set(), roster: undefined, resolutions: new Map() };
+					state = { owners: new Set(), roster: undefined, resolutions: new Map(), listeners: new Map() };
 					scopes.set(key, state);
 				}
 				state.owners.add(owner);
@@ -184,6 +193,7 @@ export class MixtureCatalog {
 			release(owner) {
 				const state = scopes.get(key);
 				if (!state?.owners.delete(owner)) return;
+				state.listeners.delete(owner);
 				if (state.resolutions.delete(owner) && state.owners.size > 0 && !state.saved) register();
 				if (state.owners.size > 0) return;
 				scopes.delete(key);
@@ -195,6 +205,14 @@ export class MixtureCatalog {
 			},
 			find(name) {
 				return scopes.get(key)?.roster?.find(mixture => mixture.definition.name === name);
+			},
+			resolution(owner) {
+				return scopes.get(key)?.resolutions.get(owner);
+			},
+			observe(owner, listener) {
+				const state = scopes.get(key);
+				if (!state?.owners.has(owner)) throw new Error(`Mixture scope ${key} must be retained before observing`);
+				state.listeners.set(owner, listener);
 			},
 		};
 	}
@@ -213,7 +231,7 @@ export class MixtureCatalog {
 	#setScopeRoster(key: string, mixtures: readonly ResolvedMixture[], saved = false): void {
 		let state = this.#scopes.get(key);
 		if (!state) {
-			state = { owners: new Set(), roster: undefined, resolutions: new Map() };
+			state = { owners: new Set(), roster: undefined, resolutions: new Map(), listeners: new Map() };
 			this.#scopes.set(key, state);
 		}
 		if (saved) {
@@ -308,6 +326,17 @@ export class MixtureCatalog {
 			models: roster,
 		});
 		this.#registeredModels = roster;
+		for (const state of this.#scopes.values()) {
+			for (const listener of state.listeners.values()) {
+				try {
+					listener();
+				} catch (error) {
+					logger.warn("Mixture catalog listener failed after registration", {
+						error: error instanceof Error ? error.message : String(error),
+					});
+				}
+			}
+		}
 	}
 }
 

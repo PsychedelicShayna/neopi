@@ -66,6 +66,8 @@ export interface SessionMixtureHost extends MixtureHost {
 	rebindWorkspace(cwd: string, deferReset?: boolean): Promise<void>;
 	/** Drop source runs only after a workspace move has committed. */
 	commitWorkspaceMove(): void;
+	/** Observe registry metadata updates for this session's current workspace. */
+	observeCatalog(listener: () => void): void;
 }
 
 function traceSummary(details: MixtureTraceDetails): string {
@@ -163,6 +165,9 @@ export function createSessionMixtureHost(deps: SessionMixtureHostDeps): SessionM
 		},
 		runs,
 		settings,
+		observeCatalog(listener) {
+			deps.workspace.observeCatalog(listener);
+		},
 		stream: deps.stream,
 		resolveRun(name: string): ResolvedMixture | string {
 			// Only this workspace's definitions: a same-named mixture another workspace

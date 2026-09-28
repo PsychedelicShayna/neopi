@@ -200,6 +200,25 @@ describe("workspace-scoped rosters on a shared registry", () => {
 		return toml.replace('name = "draft-then-edit"', `name = "${name}"`);
 	}
 
+	function registerNarrowMember(): void {
+		fixture.registry.registerProvider("narrow", {
+			baseUrl: "http://127.0.0.1:1/v1",
+			apiKey: "fake-key",
+			api: "moa-fake",
+			models: [
+				{
+					id: "compact",
+					name: "Compact",
+					reasoning: true,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 4096,
+					maxTokens: 512,
+				},
+			],
+		});
+	}
+
 	async function run(session: AgentSession, name: string) {
 		await session.setModel(fixture.registry.find("mixture", name)!);
 		const before = members.calls.length;
@@ -289,24 +308,11 @@ describe("workspace-scoped rosters on a shared registry", () => {
 	it("keeps shared mixture metadata safe when owners resolve the same role to different member models", async () => {
 		const toml = DRAFT_THEN_EDIT_TOML.replaceAll(/fake\/(writer|editor)/g, "@default");
 		const cwd = await workspace("different-role-metadata-ws", toml);
-		fixture.registry.registerProvider("narrow", {
-			baseUrl: "http://127.0.0.1:1/v1",
-			apiKey: "fake-key",
-			api: "moa-fake",
-			models: [
-				{
-					id: "compact",
-					name: "Compact",
-					reasoning: true,
-					input: ["text"],
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-					contextWindow: 4096,
-					maxTokens: 512,
-				},
-			],
-		});
+		registerNarrowMember();
 		const first = await sessionIn(cwd, Settings.isolated({ ...SETTINGS, modelRoles: { default: "fake/writer" } }));
 		expect(fixture.registry.find("mixture", "draft-then-edit")?.contextWindow).toBe(64_000);
+		await first.setModel(fixture.registry.find("mixture", "draft-then-edit")!);
+		expect(first.model?.contextWindow).toBe(64_000);
 
 		const second = await sessionIn(
 			cwd,
@@ -316,10 +322,44 @@ describe("workspace-scoped rosters on a shared registry", () => {
 		expect(shared?.contextWindow).toBe(4096);
 		expect(shared?.maxTokens).toBe(512);
 		expect(shared?.input).toEqual(["text"]);
+		expect(first.model?.contextWindow).toBe(4096);
+		expect(first.model?.input).toEqual(["text"]);
 		expect(await run(first, "draft-then-edit")).toEqual({ calls: ["writer", "writer"], error: undefined });
 		expect(await run(second, "draft-then-edit")).toEqual({ calls: ["compact", "compact"], error: undefined });
 		await second.dispose();
 		expect(fixture.registry.find("mixture", "draft-then-edit")?.contextWindow).toBe(64_000);
+		expect(first.model?.contextWindow).toBe(64_000);
+	});
+
+	it("restores a moving owner's role resolution when destination registration fails", async () => {
+		const toml = DRAFT_THEN_EDIT_TOML.replaceAll(/fake\/(writer|editor)/g, "@default");
+		const sourceDir = await workspace("role-rollback-source-ws", toml);
+		const destinationDir = await workspace("role-rollback-destination-ws", renamed("destination"));
+		registerNarrowMember();
+		const first = await sessionIn(
+			sourceDir,
+			Settings.isolated({ ...SETTINGS, modelRoles: { default: "fake/writer" } }),
+		);
+		const moved = await sessionIn(
+			sourceDir,
+			Settings.isolated({ ...SETTINGS, modelRoles: { default: "narrow/compact" } }),
+		);
+		expect(fixture.registry.find("mixture", "draft-then-edit")?.contextWindow).toBe(4096);
+		const registerProvider = fixture.registry.registerProvider.bind(fixture.registry);
+		const failure = new Error("destination registration failed after mutation");
+		let failed = false;
+		vi.spyOn(fixture.registry, "registerProvider").mockImplementation((...args) => {
+			registerProvider(...args);
+			if (!failed && args[0] === "mixture" && args[1].models?.some(model => model.id === "destination")) {
+				failed = true;
+				throw failure;
+			}
+		});
+		await expect(moved.rebindMixturesForCwd(destinationDir)).rejects.toBe(failure);
+		expect(moved.sessionManager.getCwd()).toBe(sourceDir);
+		expect(fixture.registry.find("mixture", "draft-then-edit")?.contextWindow).toBe(4096);
+		expect(await run(first, "draft-then-edit")).toEqual({ calls: ["writer", "writer"], error: undefined });
+		expect(await run(moved, "draft-then-edit")).toEqual({ calls: ["compact", "compact"], error: undefined });
 	});
 	it("preserves a source mixture run when a cross-project resume fails after cwd adoption", async () => {
 		const sourceDir = await workspace("resume-rollback-source", DRAFT_THEN_EDIT_TOML);
