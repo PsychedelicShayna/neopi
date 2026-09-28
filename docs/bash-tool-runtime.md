@@ -166,7 +166,7 @@ Cancellation:
 - timeout from native result is mapped to `cancelled: true` + annotation text,
 - explicit cancellation similarly returns `cancelled: true` + annotation.
 
-No exception is thrown inside executor for timeout/cancel; it returns structured `BashResult` and lets caller map error semantics.
+Ordinary timeout/cancel returns structured `BashResult` and lets the caller map error semantics. Managed bash jobs opt into `awaitCancellation`: when the JavaScript cancellation or timeout path wins, the executor waits for native execution and abort cleanup to settle before the job can finish. This wait is bounded by the native cleanup grace; an unresponsive backend raises a cleanup-deadline error instead of reporting a confirmed cancellation. Direct interactive callers retain the prompt-return quarantine behavior.
 
 ## Interactive PTY path (`runInteractiveBashPty`)
 
@@ -225,6 +225,8 @@ For non-PTY foreground execution, `BashTool` uses a separate `TailBuffer` for pa
 For PTY execution, live rendering is handled by custom UI overlay, not by `onUpdate` text chunks.
 
 When `async.enabled` is true and the call passes `async: true`, `BashTool` starts a managed bash job immediately, returns a running result with a job id, and stores completion through the session job manager. Auto-backgrounding can also use this path after `bash.autoBackground.thresholdMs`; it is skipped for PTY and client-bridge terminal routes and falls back to foreground execution when the job manager is at capacity. A queued steering message can background a still-running auto-background candidate early.
+
+A managed job remains running while its native cancellation is settling. Root cancellation and disposal therefore wait for process teardown through the existing job lifetime, rather than treating a cancellation notice as evidence that its processes have exited. The existing root-drain deadline still applies; callers must check whether a bounded drain actually settled.
 
 ## Result shaping, metadata, and error mapping
 
