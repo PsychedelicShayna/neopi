@@ -523,7 +523,9 @@ the state changes, a `chat_mode_changed` event with the same `{ mode, include }`
 fields follows; setting the current state again responds without an event.
 
 - Entering chat mode deactivates every tool, as a `--chat` launch without
-  `--tools` does; leaving restores the tool selection saved on entry. Chat mode
+  `--tools` does; leaving restores the tool selection saved on entry, or, for a
+  session launched or resumed in chat mode, the selection a coding launch with
+  the same flags would have. A failed switch changes nothing. Chat mode
   also drops discovered `SYSTEM.md` / `APPEND_SYSTEM.md`, memory instructions,
   the date/cwd reminder, and non-chat extension prompt injection, exactly as
   `--chat` does. Only explicit `--system-prompt` / `--append-system-prompt`
@@ -534,9 +536,10 @@ fields follows; setting the current state again responds without an event.
   `--system-prompt-template` rejects every chat mode (same rule as the launch
   flag); unknown modes or include categories fail with a message.
 - A session launched in chat mode never loaded what chat mode skips at launch
-  (coding tools, MCP, LSP, discovered skills, rules, and `SYSTEM.md`). Switching
-  it `off` restores the coding system prompt but not those resources; relaunch
-  without `--chat` for a full coding session.
+  (MCP, LSP, memory, discovered skills, rules, and `SYSTEM.md`). Switching it
+  `off` restores the coding tools and system prompt but not those resources;
+  relaunch without `--chat` for a full coding session.
+
 `mode` is `"plan"` while plan mode is active, whichever path entered it, and `"default"` otherwise. `planMode` is present only in plan mode: `planFilePath` is the plan file the agent drafts, and `workflow` is `"parallel"` or `"iterative"`. See [Plan Mode Sub-Protocol](#plan-mode-sub-protocol).
 
 ### `set_fast_mode` payload

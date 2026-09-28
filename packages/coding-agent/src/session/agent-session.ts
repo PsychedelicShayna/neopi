@@ -12518,9 +12518,12 @@ export class AgentSession implements SettingsScope {
 	 * Switch chat mode on the live session (`/chat`, RPC `set_chat_mode`).
 	 * The system prompt is rebuilt now, so the next turn uses it; the prompt
 	 * cache break is intended. Entering chat mode deactivates every tool, as a
-	 * launch without `--tools` does; leaving restores the selection it saved.
-	 * The new state is journaled so a resume restores it, and a
-	 * `chat_mode_changed` event is emitted when the state changes.
+	 * launch without `--tools` does; leaving restores the coding selection saved
+	 * on entry (or computed at construction for a session launched in chat mode).
+	 * The switch is all-or-nothing: if the tool change or prompt rebuild fails,
+	 * the previous mode, tools, and prompt are restored and the error rethrown.
+	 * On success the new state is journaled so a resume restores it, and a
+	 * `chat_mode_changed` event is emitted.
 	 */
 	async setChatMode(request: ChatModeChangeRequest): Promise<ChatModeConfig | undefined> {
 		if (this.isStreaming) throw new Error("Change chat mode after the current turn finishes.");
@@ -12529,26 +12532,39 @@ export class AgentSession implements SettingsScope {
 		const next = resolveChatModeChange(request, current, last, cfgChatInclude.get(this.settings)) ?? undefined;
 		if (next && this.#chatModeBlockedReason) throw new Error(this.#chatModeBlockedReason);
 		if (sameChatMode(current, next)) return current;
+		const previousStash = this.#chatModeStashedTools;
+		const previousTools = { enabled: this.getEnabledToolNames(), mounted: this.getMountedXdevToolNames() };
+		// The prompt rebuild reads the live mode, so it changes before the rebuild.
 		this.#chatMode = next;
+		try {
+			if (!current) {
+				this.#chatModeStashedTools = previousTools;
+				await this.setActiveToolsByName([]);
+			} else if (!next && previousStash) {
+				this.#chatModeStashedTools = undefined;
+				await this.setActiveToolPresentation(previousStash.enabled, previousStash.mounted);
+			}
+			await this.refreshBaseSystemPrompt();
+		} catch (err) {
+			this.#chatMode = current;
+			this.#chatModeStashedTools = previousStash;
+			try {
+				await this.setActiveToolPresentation(previousTools.enabled, previousTools.mounted);
+				await this.refreshBaseSystemPrompt();
+			} catch (rollbackErr) {
+				logger.warn("Failed to restore tools and system prompt after a failed chat mode switch", {
+					error: rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr),
+				});
+			}
+			throw err;
+		}
 		this.#lastChatMode = next ?? current;
 		this.#extensionRunner?.setChatMode(next !== undefined);
 		this.#advisors.setChatMode(next?.mode);
-		if (!current) {
-			this.#chatModeStashedTools = {
-				enabled: this.getEnabledToolNames(),
-				mounted: this.getMountedXdevToolNames(),
-			};
-			await this.setActiveToolsByName([]);
-		} else if (!next && this.#chatModeStashedTools) {
-			const { enabled, mounted } = this.#chatModeStashedTools;
-			this.#chatModeStashedTools = undefined;
-			await this.setActiveToolPresentation(enabled, mounted);
-		}
 		if (this.#agentKind === "main") {
 			this.#recordChatMode();
 			this.#chatModeJournaledSessionId = this.sessionManager.getSessionId();
 		}
-		await this.refreshBaseSystemPrompt();
 		this.#emit({ type: "chat_mode_changed", ...chatModeState(next) });
 		return next;
 	}
