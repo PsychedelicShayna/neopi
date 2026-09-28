@@ -60,11 +60,12 @@ export interface SessionMixtureHost extends MixtureHost {
 	 */
 	resetConversation(): void;
 	/**
-	 * The session moved to `cwd` (`/move`, a cross-project resume, or the rollback of
-	 * one). Rebinds to that workspace's mixtures; runs held from the previous workspace
-	 * are dropped, with a warning when there were any.
+	 * Rebind to `cwd`'s mixtures. A move can defer dropping source runs until
+	 * its other cwd-derived state commits; a rollback to the source keeps them.
 	 */
-	rebindWorkspace(cwd: string): Promise<void>;
+	rebindWorkspace(cwd: string, deferReset?: boolean): Promise<void>;
+	/** Drop source runs only after a workspace move has committed. */
+	commitWorkspaceMove(): void;
 }
 
 function traceSummary(details: MixtureTraceDetails): string {
@@ -111,6 +112,7 @@ export function createSessionMixtureHost(deps: SessionMixtureHostDeps): SessionM
 	const runs = new MixtureRunStore();
 	/** Last credential row per member provider session; forgotten with the conversation. */
 	const credentials = new Map<string, number>();
+	let runsWorkspaceKey = deps.workspace.scope.key;
 
 	const persistCard = (details: MixtureTraceDetails): void => {
 		sessionManager.appendCustomMessageEntry(
@@ -170,8 +172,7 @@ export function createSessionMixtureHost(deps: SessionMixtureHostDeps): SessionM
 			const fresh = resolveMixture(registered.definition, {
 				registry: modelRegistry,
 				settings,
-				documentEnvelopes: registered.presets.envelopes,
-				documentRoles: registered.presets.roles,
+				preparedPresets: registered.presets,
 			});
 			const { errors } = validateMixture(fresh, {
 				settings,
@@ -227,12 +228,18 @@ export function createSessionMixtureHost(deps: SessionMixtureHostDeps): SessionM
 			runs.clear();
 			credentials.clear();
 		},
-		async rebindWorkspace(cwd: string): Promise<void> {
+		async rebindWorkspace(cwd: string, deferReset = false): Promise<void> {
 			if (!(await deps.workspace.rebind(cwd))) return;
-			// A run belongs to the workspace whose definition it pinned: none crosses a move.
+			if (!deferReset) this.commitWorkspaceMove();
+		},
+		commitWorkspaceMove(): void {
+			const currentKey = deps.workspace.scope.key;
+			if (currentKey === runsWorkspaceKey) return;
+			// A run belongs to the workspace whose definition it pinned: none crosses a committed move.
 			const held = runs.runs().length;
 			runs.clear();
 			credentials.clear();
+			runsWorkspaceKey = currentKey;
 			if (held > 0) {
 				deps.notice(
 					"warning",

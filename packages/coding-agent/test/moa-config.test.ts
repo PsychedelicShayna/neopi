@@ -337,6 +337,20 @@ model = "x/y"
 		}
 	}
 
+	it("refuses every mixture in a document with an unused oversized preset, not a sibling document", async () => {
+		using dir = TempDir.createSync("@moa-config-preset-bound-");
+		const bad = `[roles]\nunused = "${"x".repeat(65_537)}"\n${
+			DRAFT_THEN_EDIT_TOML
+		}${DRAFT_THEN_EDIT_TOML.replace('name = "draft-then-edit"', 'name = "second"')}`;
+		const good = DRAFT_THEN_EDIT_TOML.replace('name = "draft-then-edit"', 'name = "independent"');
+		const { registered, refused } = await register(dir, bad, good);
+		expect(registered.map(definition => definition.name)).toEqual(["independent"]);
+		expect(refused).toEqual([
+			["draft-then-edit", "limits.text_size"],
+			["second", "limits.text_size"],
+		]);
+	});
+
 	it("refuses a name declared twice in one file, logging name.duplicate for each declaration", async () => {
 		using dir = TempDir.createSync("@moa-config-duplicate-");
 		const solo = DRAFT_THEN_EDIT_TOML.replace('name = "draft-then-edit"', 'name = "solo"');

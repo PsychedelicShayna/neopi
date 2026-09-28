@@ -85,6 +85,46 @@ function sizeIssue(code: "limits.graph_size" | "limits.text_size", path: string,
 	return { code, path, message: `${path} has ${count} ${unit}; the cap is ${cap}` };
 }
 
+const preparedBundles = new WeakSet<object>();
+
+/** Immutable snapshot of a document's presets, checked once before its mixtures are resolved. */
+export interface PreparedDocumentPresets {
+	readonly envelopes: Readonly<Record<string, string>>;
+	readonly roles: Readonly<Record<string, string>>;
+	readonly sizeIssue: MixtureIssue | undefined;
+}
+
+export function prepareDocumentPresets(
+	envelopes?: Readonly<Record<string, string>>,
+	roles?: Readonly<Record<string, string>>,
+): PreparedDocumentPresets {
+	const envelopeSnapshot = Object.freeze({ ...envelopes });
+	const roleSnapshot = Object.freeze({ ...roles });
+	const issue = firstTextSizeIssue({ envelopes: envelopeSnapshot, roles: roleSnapshot });
+	const snapshot = Object.freeze({
+		envelopes: envelopeSnapshot,
+		roles: roleSnapshot,
+		sizeIssue: issue ? Object.freeze(issue) : undefined,
+	});
+	preparedBundles.add(snapshot);
+	return snapshot;
+}
+
+/** Raw API inputs are snapshotted anew; only module-created immutable bundles skip the scan. */
+export function documentPresets(
+	value?: PreparedDocumentPresets,
+	envelopes?: Readonly<Record<string, string>>,
+	roles?: Readonly<Record<string, string>>,
+): PreparedDocumentPresets {
+	if (
+		value &&
+		preparedBundles.has(value) &&
+		(envelopes === undefined || envelopes === value.envelopes) &&
+		(roles === undefined || roles === value.roles)
+	) return value;
+	return prepareDocumentPresets(envelopes, roles);
+}
+
 /** A TypeScript field name as the TOML key it was read from (`systemPrompt` → `system_prompt`). */
 function tomlKey(key: string): string {
 	return key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
@@ -100,7 +140,7 @@ function tomlKey(key: string): string {
  */
 export function* definitionStrings(
 	definition: MixtureDefinition,
-	presets: { envelopes?: Record<string, string>; roles?: Record<string, string> } = {},
+	presets: { envelopes?: Readonly<Record<string, string>>; roles?: Readonly<Record<string, string>> } = {},
 ): Generator<[path: string, text: string]> {
 	const stack: [path: string, value: unknown][] = [
 		["envelopes", presets.envelopes],
@@ -124,13 +164,30 @@ export function* definitionStrings(
 	}
 }
 
+function firstTextSizeIssue(presets: {
+	envelopes?: Readonly<Record<string, string>>;
+	roles?: Readonly<Record<string, string>>;
+}): MixtureIssue | undefined {
+	for (const [table, entries] of [["roles", presets.roles], ["envelopes", presets.envelopes]] as const) {
+		if (!entries) continue;
+		for (const key of Object.keys(entries)) {
+			if (key.length > MAX_TEXT_CHARS) return sizeIssue("limits.text_size", `${table} (key)`, key.length, MAX_TEXT_CHARS);
+		}
+		for (const [key, text] of Object.entries(entries)) {
+			if (text.length > MAX_TEXT_CHARS) return sizeIssue("limits.text_size", `${table}.${tomlKey(key)}`, text.length, MAX_TEXT_CHARS);
+		}
+	}
+	return undefined;
+}
+
 /**
  * E23: the first size bound a definition breaks, checked before any other pass so an
  * oversized definition costs time linear in its size and gets exactly one error.
  */
 export function definitionSizeIssue(
 	definition: MixtureDefinition,
-	presets: { envelopes?: Record<string, string>; roles?: Record<string, string> } = {},
+	presets: { envelopes?: Readonly<Record<string, string>>; roles?: Readonly<Record<string, string>> } = {},
+	prepared?: PreparedDocumentPresets,
 ): MixtureIssue | undefined {
 	if (definition.members.length > MAX_MEMBERS) {
 		return sizeIssue("limits.graph_size", "members", definition.members.length, MAX_MEMBERS);
@@ -162,10 +219,10 @@ export function definitionSizeIssue(
 			return sizeIssue("limits.graph_size", path, list.length, MAX_STATE_PARTS);
 		}
 	}
-	for (const [path, text] of definitionStrings(definition, presets)) {
+	for (const [path, text] of definitionStrings(definition)) {
 		if (text.length > MAX_TEXT_CHARS) return sizeIssue("limits.text_size", path, text.length, MAX_TEXT_CHARS);
 	}
-	return undefined;
+	return documentPresets(prepared, presets.envelopes, presets.roles).sizeIssue;
 }
 
 /** Adjacency built once per validation; every graph pass reads these maps. */
@@ -297,7 +354,7 @@ function templateIssues(template: string, path: string, errors: MixtureIssue[]):
 export function validateMixture(resolved: ResolvedMixture, ctx: ValidateMixtureContext): MixtureValidation {
 	const definition = resolved.definition;
 	// E23 first and alone: nothing else runs over an oversized definition.
-	const oversized = definitionSizeIssue(definition, resolved.presets);
+	const oversized = definitionSizeIssue(definition, resolved.presets, resolved.presets);
 	if (oversized) return { errors: [oversized], warnings: [] };
 	const errors: MixtureIssue[] = [...resolved.issues];
 	const warnings: MixtureIssue[] = [];

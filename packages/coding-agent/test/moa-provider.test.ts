@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { clearCustomApis } from "@oh-my-pi/pi-ai";
 import { streamSimple } from "@oh-my-pi/pi-ai/stream";
+import { cfgEnabledModels } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { MixtureCatalog, registerMixtureApi } from "@oh-my-pi/pi-coding-agent/moa/provider";
 import { discoverRegistrableMixtures } from "@oh-my-pi/pi-coding-agent/moa/registration";
@@ -277,6 +278,30 @@ describe("workspace-scoped rosters on a shared registry", () => {
 		await moved.rebindMixturesForCwd(destinationDir);
 		expect(await run(moved, "draft-then-edit")).toEqual({ calls: ["writer", "editor"], error: undefined });
 		expect(editorPrompt()).toContain("DESTINATION.");
+	});
+
+	it("keeps the source roster when a failed move used destination-scoped enabledModels", async () => {
+		const sourceDir = await workspace("scoped-failure-source-ws", DRAFT_THEN_EDIT_TOML);
+		const destinationDir = await workspace(
+			"scoped-failure-destination-ws",
+			DRAFT_THEN_EDIT_TOML.replaceAll("fake/writer", "fake/other").replaceAll("fake/editor", "fake/other"),
+		);
+		const moved = await sessionIn(sourceDir);
+		cfgEnabledModels.override(moved.settings, ["fake/writer", "fake/editor", "mixture/draft-then-edit"]);
+		expect(await run(moved, "draft-then-edit")).toEqual({ calls: ["writer", "editor"], error: undefined });
+
+		// Like a workspace move, settings change before the destination is registered.
+		cfgEnabledModels.override(moved.settings, ["fake/other", "mixture/draft-then-edit"]);
+		const failure = new Error("destination registration failed after mutation");
+		failNextRegistration(failure);
+		await expect(moved.rebindMixturesForCwd(destinationDir)).rejects.toBe(failure);
+
+		// The outer workspace rollback restores settings first; rebind to the
+		// already-held source is then a no-op, so its roster must be intact.
+		cfgEnabledModels.override(moved.settings, ["fake/writer", "fake/editor", "mixture/draft-then-edit"]);
+		await moved.rebindMixturesForCwd(sourceDir);
+		expect(await run(moved, "draft-then-edit")).toEqual({ calls: ["writer", "editor"], error: undefined });
+		expect(fixture.registry.find("mixture", "draft-then-edit")).toBeDefined();
 	});
 
 	it("runs only each workspace's own definitions, and unregisters with the last live scope", async () => {

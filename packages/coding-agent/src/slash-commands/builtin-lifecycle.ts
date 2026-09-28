@@ -127,6 +127,7 @@ async function relocateHeadlessSession(
 					runtime,
 				);
 			}
+			runtime.session.commitMixtureWorkspaceMove();
 			return usage(
 				`Move failed and rollback failed: ${errorMessage(rollbackError)} (workspace remains at ${actual})`,
 				runtime,
@@ -153,6 +154,7 @@ async function relocateHeadlessSession(
 					runtime,
 				);
 			}
+			runtime.session.commitMixtureWorkspaceMove();
 			return usage(
 				`Move failed and rollback failed: ${errorMessage(rollbackError)} (workspace remains at ${actual})`,
 				runtime,
@@ -160,6 +162,7 @@ async function relocateHeadlessSession(
 		}
 		return usage(`Move failed: ${errorMessage(err)}`, runtime);
 	}
+	runtime.session.commitMixtureWorkspaceMove();
 	await runtime.notifyConfigChanged?.();
 	await runtime.notifyTitleChanged?.();
 	return undefined;
@@ -877,7 +880,7 @@ async function rescopeHeadlessToCwd(runtime: SlashCommandRuntime, cwd: string): 
 	setProjectDir(cwd);
 	await runtime.settings.reloadForCwd(cwd);
 	await rebindMemoryBackendForCwd(runtime.session);
-	await runtime.session.rebindMixturesForCwd(cwd);
+	await runtime.session.rebindMixturesForCwd(cwd, true);
 	clearClaudePluginRootsCache();
 	const src = discoverTitleSystemPromptFile(cwd);
 	const p = await resolvePromptInput(src, "title system prompt");

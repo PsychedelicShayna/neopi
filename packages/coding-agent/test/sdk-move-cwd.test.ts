@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import { clearCustomApis } from "@oh-my-pi/pi-ai";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -8,11 +9,21 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { rebindMemoryBackendForCwd } from "@oh-my-pi/pi-coding-agent/hindsight/backend";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
+import { registerMixtureApi } from "@oh-my-pi/pi-coding-agent/moa/provider";
+import { MIXTURE_RUN_ENTRY_TYPE } from "@oh-my-pi/pi-coding-agent/moa/types";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { executeAcpBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins";
-import { getProjectAgentDir, getProjectDir, setProjectDir, removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
+import {
+	getProjectAgentDir,
+	getProjectDir,
+	setProjectDir,
+	removeSyncWithRetries,
+	Snowflake,
+	TempDir,
+} from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
+import { createMoaFixture, createMoaSession, FakeMembers } from "./helpers/moa-setup";
 
 function textContent(result: { content?: Array<{ type: string; text?: string }> }): string {
 	return (
@@ -267,6 +278,82 @@ describe("createAgentSession cwd after /move", () => {
 			} finally {
 				authStorage.close();
 			}
+		}
+	});
+});
+
+describe("headless /move mixture run continuity", () => {
+	it("keeps the source run on late refresh failure and warns only when the move commits", async () => {
+		const root = TempDir.createSync("@moa-move-");
+		const originalProjectDir = getProjectDir();
+		const members = new FakeMembers();
+		registerMixtureApi();
+		const fixture = await createMoaFixture(root);
+		const destination = root.join("destination");
+		fs.mkdirSync(destination);
+		const manager = SessionManager.create(fixture.cwd, root.join("sessions"));
+		const settings = Settings.isolated({ "compaction.enabled": false });
+		const session = await createMoaSession(fixture, { sessionManager: manager, settings });
+		const checkpointIds = () =>
+			manager
+				.getBranch()
+				.flatMap(entry =>
+					entry.type === "custom" &&
+					entry.customType === MIXTURE_RUN_ENTRY_TYPE &&
+					"reason" in (entry.data as object)
+						? [(entry.data as { run: { id: string } }).run.id]
+						: [],
+				);
+		const output: string[] = [];
+		const runtime = {
+			session,
+			sessionManager: manager,
+			settings,
+			cwd: fixture.cwd,
+			output: (text: string) => {
+				output.push(text);
+			},
+			refreshCommands: () => {},
+			reloadPlugins: async () => {},
+		};
+		const notices: string[] = [];
+		session.subscribe(event => {
+			if (event.type === "notice" && event.source === "mixture") notices.push(event.message);
+		});
+		try {
+			await session.setModel(fixture.registry.find("mixture", "draft-then-edit")!);
+			await session.sendUserMessage("first");
+			const sourceRun = checkpointIds().at(-1);
+			expect(sourceRun).toBeDefined();
+
+			let failRefresh = true;
+			runtime.reloadPlugins = async () => {
+				if (failRefresh) {
+					failRefresh = false;
+					throw new Error("destination plugin refresh failed");
+				}
+			};
+			await executeAcpBuiltinSlashCommand(`/move ${destination}`, runtime);
+			expect(manager.getCwd()).toBe(fixture.cwd);
+			expect(output.join("\n")).toContain("Move failed: destination plugin refresh failed");
+
+			expect(notices).toEqual([]);
+
+			runtime.reloadPlugins = async () => {};
+			await executeAcpBuiltinSlashCommand(`/move ${destination}`, runtime);
+			expect(manager.getCwd()).toBe(destination);
+			expect(notices).toEqual([
+				"1 mixture run from the previous workspace was reset; the next message starts a new run",
+			]);
+			await session.sendUserMessage("second");
+			expect(checkpointIds().at(-1)).not.toBe(sourceRun);
+			expect(members.callsTo("writer")).toHaveLength(2);
+		} finally {
+			await session.dispose();
+			fixture.authStorage.close();
+			clearCustomApis();
+			setProjectDir(originalProjectDir);
+			root.removeSync();
 		}
 	});
 });

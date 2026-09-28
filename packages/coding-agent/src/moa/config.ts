@@ -33,7 +33,7 @@ import {
 	readBoundedText,
 } from "../advisor/watchdog";
 import { serializeMixturesConfig } from "./toml";
-import { MAX_FILE_BYTES } from "./validate";
+import { MAX_FILE_BYTES, prepareDocumentPresets, type PreparedDocumentPresets } from "./validate";
 
 export const MIXTURES_FILE_NAME = "MIXTURES.toml";
 
@@ -434,9 +434,11 @@ function parseMixturesText(text: string, filePath: string): MixturesConfigDoc {
 export interface DiscoveredMixture {
 	definition: MixtureDefinition;
 	/** Document-level envelope presets of the file that declared it. */
-	envelopes: Record<string, string>;
+	envelopes: Readonly<Record<string, string>>;
 	/** Document-level role presets of the file that declared it. */
-	roles: Record<string, string>;
+	roles: Readonly<Record<string, string>>;
+	/** Snapshot shared by all mixtures in this parsed document. */
+	preparedPresets: PreparedDocumentPresets;
 	/** The file that declared it. */
 	path: string;
 }
@@ -475,6 +477,7 @@ export async function discoverMixtures(cwd: string, agentDir?: string): Promise<
 	// Candidates arrive user first, then project ancestor→leaf, so later files shadow earlier ones.
 	for (const item of items) {
 		const doc = parseMixturesText(item.content, item.path);
+		const preparedPresets = prepareDocumentPresets(doc.envelopes, doc.roles);
 		for (const message of doc.warnings ?? []) {
 			warnings.push(message);
 			logger.warn("Mixture config", { path: item.path, error: message });
@@ -482,8 +485,9 @@ export async function discoverMixtures(cwd: string, agentDir?: string): Promise<
 		for (const definition of doc.mixtures) {
 			const declared: DiscoveredMixture = {
 				definition,
-				envelopes: doc.envelopes ?? {},
-				roles: doc.roles ?? {},
+				envelopes: preparedPresets.envelopes,
+				roles: preparedPresets.roles,
+				preparedPresets,
 				path: item.path,
 			};
 			const same = mixtures.get(definition.name);

@@ -28,8 +28,7 @@ export async function discoverRegistrableMixtures(ctx: MixtureRegistrationContex
 		const resolved = resolveMixture(entry.definition, {
 			registry: ctx.registry,
 			settings: ctx.settings,
-			documentEnvelopes: entry.envelopes,
-			documentRoles: entry.roles,
+			preparedPresets: entry.preparedPresets,
 		});
 		const { errors, warnings } = validateMixture(resolved, { settings: ctx.settings, names });
 		const mixture = entry.definition.name;
@@ -53,11 +52,15 @@ export async function discoverRegistrableMixtures(ctx: MixtureRegistrationContex
  * validation, or registration throws, the hold is dropped before the error propagates,
  * so a failed retain leaves no owner behind.
  */
-async function retainScope(owner: string, ctx: MixtureRegistrationContext): Promise<MixtureScope> {
+async function retainScope(
+	owner: string,
+	ctx: MixtureRegistrationContext,
+	restoredRoster?: readonly ResolvedMixture[],
+): Promise<MixtureScope> {
 	const scope = MixtureCatalog.for(ctx.registry).scope(ctx.cwd, ctx.agentDir);
 	scope.retain(owner);
 	try {
-		if (!scope.hasRoster) scope.setRoster(await discoverRegistrableMixtures(ctx));
+		if (!scope.hasRoster) scope.setRoster(restoredRoster ?? (await discoverRegistrableMixtures(ctx)));
 	} catch (error) {
 		try {
 			scope.release(owner);
@@ -97,25 +100,33 @@ export class MixtureWorkspace {
 	get scope(): MixtureScope {
 		return this.#scope;
 	}
-
 	/**
 	 * Move the hold to `cwd`'s scope, discovering it under the current settings if no one
-	 * holds it yet. The source is released first: while this session still held it, a
-	 * destination defining the same name differently would be refused as a scope conflict.
-	 * If the destination cannot be retained, the source is retained again before the error
-	 * propagates. Returns whether the scope changed.
+	 * holds it yet. Release the source first to avoid a false name.scope_conflict.
+	 * On failure restore the source's resolved roster without rediscovery under
+	 * destination settings. Returns whether the scope changed.
 	 */
 	async rebind(cwd: string): Promise<boolean> {
 		const next = MixtureCatalog.for(this.#ctx.registry).scope(cwd, this.#ctx.agentDir);
 		if (next.key === this.#scope.key) return false;
 		const source = this.#ctx;
+		// Keep the resolved source roster before its last holder releases it.
+		const sourceRoster = this.#scope.roster();
 		this.#scope.release(this.#owner);
 		try {
 			this.#scope = await retainScope(this.#owner, { ...source, cwd });
 			this.#ctx = { ...source, cwd };
 		} catch (error) {
-			this.#scope = await retainScope(this.#owner, source);
-			logger.warn("Mixture workspace rebind failed; kept the previous workspace", {
+			try {
+				this.#scope = await retainScope(this.#owner, source, sourceRoster);
+			} catch (restoreError) {
+				logger.warn("Mixture source scope restoration failed after rebind error", {
+					from: source.cwd,
+					to: cwd,
+					restoreError: restoreError instanceof Error ? restoreError.message : String(restoreError),
+				});
+			}
+			logger.warn("Mixture workspace rebind failed; attempted to keep the previous workspace", {
 				from: source.cwd,
 				to: cwd,
 				error: error instanceof Error ? error.message : String(error),

@@ -11,6 +11,7 @@ import {
 	MAX_EDGES,
 	MAX_MEMBERS,
 	MAX_TEXT_CHARS,
+	prepareDocumentPresets,
 	validateMixture,
 } from "@oh-my-pi/pi-coding-agent/moa/validate";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -520,6 +521,65 @@ describe("definition size bounds", () => {
 		const result = check(definition);
 		expect(result.errors.map(issue => [issue.code, issue.path])).toEqual([["limits.text_size", path]]);
 		expect(result.resolved.members).toEqual({});
+	});
+
+	it("shares a validated immutable document snapshot without revisiting presets per mixture", () => {
+		const long = "x".repeat(MAX_TEXT_CHARS + 1);
+		const input = { unused: long };
+		let visits = 0;
+		const roles = new Proxy(input, {
+			ownKeys(target) {
+				visits++;
+				return Reflect.ownKeys(target);
+			},
+		});
+		const presets = prepareDocumentPresets(undefined, roles);
+		expect(visits).toBe(1);
+		input.unused = "now short";
+		const settings = Settings.isolated();
+		for (let index = 0; index < 12; index++) {
+			const resolved = resolveMixture({ ...linear(), name: `sibling-${index}` }, {
+				registry, settings, preparedPresets: presets,
+			});
+			expect(validateMixture(resolved, { settings }).errors.map(issue => [issue.code, issue.path])).toEqual([
+				["limits.text_size", "roles.unused"],
+			]);
+			expect(resolved.members).toEqual({});
+		}
+		expect(visits).toBe(1);
+		expect(Object.isFrozen(presets.roles)).toBe(true);
+		expect(check(linear()).errors.filter(issue => issue.code === "limits.text_size")).toEqual([]);
+	});
+
+	it("prefers definition-local bounds and revalidates mutated raw direct-call presets", () => {
+		const roles = { unused: "short" };
+		const settings = Settings.isolated();
+		const direct = () => resolveMixture(linear(), { registry, settings, documentRoles: roles });
+		expect(validateMixture(direct(), { settings }).errors.some(issue => issue.code === "limits.text_size")).toBe(false);
+		roles.unused = "x".repeat(MAX_TEXT_CHARS + 1);
+		const oversized = direct();
+		expect(validateMixture(oversized, { settings }).errors.map(issue => [issue.code, issue.path])).toEqual([
+			["limits.text_size", "roles.unused"],
+		]);
+		const local = linear();
+		Object.assign(local.members[0]!, { systemPrompt: roles.unused });
+		const localIssue = resolveMixture(local, { registry, settings, documentRoles: roles });
+		expect(validateMixture(localIssue, { settings }).errors.map(issue => [issue.code, issue.path])).toEqual([
+			["limits.text_size", "members[0].system_prompt"],
+		]);
+	});
+
+	it("hashes effective role text but not unrelated document presets", () => {
+		const definition = linear();
+		Object.assign(definition.members[0]!, { systemPrompt: undefined, role: "writer-role" });
+		const settings = Settings.isolated();
+		const revision = (role: string, unused: string) =>
+			resolveMixture(definition, {
+				registry, settings,
+				preparedPresets: prepareDocumentPresets(undefined, { "writer-role": role, unused }),
+			}).revision;
+		expect(revision("Write clearly.", "first")).toBe(revision("Write clearly.", "second"));
+		expect(revision("Write clearly.", "first")).not.toBe(revision("Write tersely.", "first"));
 	});
 
 	it("walks a 100 000-node chain for cycles without recursion, and still finds a back-edge", () => {

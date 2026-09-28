@@ -2377,13 +2377,15 @@ export function isMixtureModel(model: Model<Api>): boolean;
   defines a shared name with a different revision would be refused by the
   first-registrant rule above. An identical definition shared by both
   scopes therefore leaves the registry only for the duration of that
-  awaited transition, during which no prompt can run. If retaining the
-  destination throws, the source is re-retained and the failure logged
-  before the error is rethrown, so the session is never bound to no scope.
-  When the key changed, the session host drops every held run
-  (`runs.clear()` and the per-member credential memory, exactly as
-  `resetConversation`), because a run cannot resume or retry across
-  workspaces; if any run was held it raises the warning notice
+  awaited transition, during which no prompt can run. Before release,
+  retain the source's resolved roster; if destination retention fails,
+  restore that roster without rediscovering against destination Settings,
+  then propagate the error. A move defers destructive host state changes
+  until every fallible cwd rescope has succeeded. Rollback to the source
+  leaves held runs and per-member credential memory untouched, without a
+  reset notice. When relocation commits to a different scope, the host
+  drops held runs and credential memory (`runs.clear()` as in
+  `resetConversation`) and, when runs were held, warns
   `<n> mixture run(s) from the previous workspace were reset; the next message starts a new run`
   (`onEvent` persists nothing for a dropped run). The selected model is
   left as it is: a destination that does not define it yields the
@@ -2510,29 +2512,30 @@ run on the `ResolvedMixture` (so model and preset resolution has already
 happened) at registration and at save. Errors make the mixture
 unregisterable and block save.
 
-**Size bounds come first.** Registration validates every discovered
-definition at startup, so the work a definition can cause must be bounded
-before any pass that scales with it. `resolveMixture` and `validateMixture`
-both begin with the E23 check against the code constants of `moa/validate.ts`
-(`MAX_MEMBERS = 32`, `MAX_EDGES = 128`, `MAX_EDGE_TARGETS = 256` for the sum
-over edges of the target count plus one per `join`, `MAX_STATE_PARTS = 8`
-for every `state` and `slices` array, `MAX_TEXT_CHARS = 65 536` for **every
-string in the definition and its document presets**, found by one
-iterative walk (`definitionStrings`, `moa/validate.ts`): every string
-value and every key of a keyed table (choice-criteria labels, preset
-names), each reported at its TOML path, so selectors, role and preset
-names, tool names, endpoints, and rubrics are bounded before any of them
-reaches the model resolver, a judgment prompt, or the compiler, and a
-field added later is bounded without being listed; the loader's
-`MAX_FILE_BYTES = 4 MiB` is §1.1). Constants, not settings: a project file
-must not be able to raise them. An oversized definition yields exactly one
-error, `limits.graph_size` (arrays) or `limits.text_size` (strings), at the
-offending path with the count and the cap in the message; resolution and
-every graph pass are skipped (`resolveMixture` returns no members, no
-envelopes, `uses` all false, and that one issue; `validateMixture` returns
-that one error and no warnings, ignoring `resolved.issues`), and
-registration refuses the mixture and logs the error. Every graph pass is
-then bounded by the caps and is iterative, never recursive: adjacency is
+**Size bounds come first.** Registration bounds each discovered definition
+before model resolution or graph passes. `resolveMixture` and
+`validateMixture` enforce E23 with code constants in `moa/validate.ts`:
+`MAX_MEMBERS = 32`, `MAX_EDGES = 128`, `MAX_EDGE_TARGETS = 256` (sum of
+edge targets plus one per `join`), `MAX_STATE_PARTS = 8` for every `state`
+and `slices` array, and `MAX_TEXT_CHARS = 65 536` for every definition
+string and document preset name/value. The iterative `definitionStrings`
+walk visits all definition string values and keyed-table keys (including
+criteria labels, selectors, tool names and rubrics). Each parsed document
+prepares one immutable snapshot of its shared envelope and role maps and
+records its first preset size issue once; all its mixtures reuse it without
+copying or rescanning the maps. A direct API call with raw preset maps
+prepares a fresh validated snapshot rather than trusting mutable inputs.
+Definition-local graph and text issues take precedence over the prepared
+document issue. An oversized document preset refuses **every** mixture in
+that document even when unused; sibling documents retain their own bounds.
+The loader's `MAX_FILE_BYTES = 4 MiB` is §1.1. Constants, not settings:
+a project file cannot raise them. A refused mixture yields exactly one
+`limits.graph_size` or `limits.text_size` error at the offending TOML path
+with count and cap; resolution (including model lookup) and graph passes
+are skipped. `resolveMixture` returns no members or envelopes, `uses` all
+false and that one issue; `validateMixture` returns only that error, no
+warnings, regardless of `resolved.issues`. Every later graph pass is
+bounded by the caps and iterative: adjacency is
 built once per validation as `Map<memberId, MixtureEdge[]>` beside a
 `Map<memberId, MixtureMember>`, cycle detection is a three-colour walk on an
 explicit stack, reachability is an index-pointer breadth-first walk, and
@@ -2627,6 +2630,15 @@ the judge with a scripted candidate plan; no `mock.module`.
 | `packages/ai/test/auth-gateway-keyless.test.ts` | a `resolveModel` returning an `allowsMissingApiKey` custom-API model is served with no credential on `/v1/chat/completions` **and** `/v1/pi/stream`; `prepareStreamOptions` sees the resolved model and the explicit client key on both paths, and a derived key is not reported as explicit; `/v1/models` lists it; the encoder's `onComplete` fires after the terminal SSE frame is enqueued and does not fire when the request is cancelled before it |
 | `packages/coding-agent/test/moa-gateway.test.ts` | with `gateway.serve = []` the catalog is empty and a credentialed physical model is 404; `gateway.serve = ["mixture/draft-then-edit"]` serves the mixture while its members stay unlisted; `serve = false` keeps a mixture out even when listed; a tool round continues with the same explicit key; a request retransmitted with the same explicit key after its tool-call response was lost receives the same outer tool-call ids again (zero results applied), and after a partial result batch receives the remaining ids; a request with no key and a diverging history starts a new run; two concurrent requests on one running key get the busy error; cancelling a streamed response before its terminal frame is consumed (no `onComplete`, no commit), then repeating with the same explicit key on each route, replays the same response and reporting range, records every member attempt exactly once in the broker ledger, and once the replay completes its commit advances the watermark; an errored non-streaming response commits, and the client's retry reports only later settlements |
 | `packages/tui/test/mixture-config.test.ts` | save with a validation error keeps the overlay dirty and shows the error; save with warnings writes the doc; the `x` editor cannot produce an empty `x`; a branch member's tool editor refuses a non-read-only tool |
+
+Bounded-document tests cover an unused oversized preset across multiple
+mixtures (one `limits.text_size` at the same TOML path each), an unaffected
+sibling document, and definition-local error precedence. An input-visitation
+seam proves that a prepared preset table is copied/read once rather than
+per mixture; mutation of a raw direct-call map between resolutions must
+trigger a fresh bound check. Relocation tests cover source roster preservation
+under differing Settings and failed destination registration, and an actual
+move that fails after binding with no run/credential reset or notice.
 
 Run the whole `packages/tui` suite after touching the hub or the overlay.
 
@@ -2953,24 +2965,38 @@ None open. Every question raised in rounds 1 to 3 is answered in §15.
 - A relocated live session (`/move`, cross-project resume through
   `applyCwdChange`) kept its startup scope and ran the source workspace's
   mixtures against the destination's conversation.
-- `AgentSession.rebindMixturesForCwd(cwd)` (sibling of
-  `rebindMemoryBackendForCwd`), called by `applyCwdChange` after
-  `settings.reloadForCwd` on the forward path and on both rollback paths:
-  no-op on an unchanged scope key; otherwise release the source scope,
-  then retain the destination (discovering it if new); on a failed retain,
-  re-retain the source, log, rethrow. Release-then-retain is required by
-  6.10's first-registrant rule; the shared-definition gap lasts one
-  awaited transition in which nothing can run.
-- On a key change the host drops every held run and its credential
-  memory, with a warning notice naming the count when any run was held.
-  The selected model is not reselected; an undefined name fails at run
-  start as before.
-- Test (`moa-provider.test.ts` or `moa-engine.test.ts`): one session moves
-  between two workspaces that each define `draft-then-edit` differently;
-  after the move only the destination's definition runs; after moving back
-  (the rollback path's call) the source's runs again; the reset notice
-  fires when a run was held; a move to a workspace with the same
-  `MIXTURES.toml` content changes nothing and raises no notice.
+- `AgentSession.rebindMixturesForCwd(cwd)` follows the session cwd after
+  Settings reload. It releases the source scope before retaining the
+  destination to honor §6.10's first-registrant rule, but on a failed
+  destination bind restores the **saved resolved source roster**, not a
+  fresh resolution under destination-scoped Settings. An outer rollback
+  restores Settings; the source remains selectable and runnable.
+- A relocation transaction defers run and credential resets until all
+  fallible cwd rescope work completes. `applyCwdChange` and headless
+  relocation rebind without reset, restore on failure, and commit the reset
+  only once relocation succeeds (or an irrecoverable rollback leaves the
+  session at the destination). A failed move that restores the source
+  preserves held runs and credential memory and emits no reset notice.
+  No request runs during a partial workspace transition.
+- The selected model is not reselected; an undefined name fails at run
+  start as before. Provider tests cover differing source/destination
+  enabledModels and failed registration; actual headless relocation
+  exercises a failure *after* binding, restoring the source run with
+  no notice, then a committed move resetting it with one notice.
+
+### Amendment 6.9.3 (Codex P2 4119737136: bounded document preset preparation)
+
+- A document with many mixtures must not copy and walk its complete
+  preset tables per mixture. Preparation snapshots and freezes the maps
+  once per parsed document, recording its first oversized preset name or
+  value. Resolution and validation still check each definition's local
+  graph/text caps first, then reuse the shared preset issue. Raw API
+  inputs cannot bypass this check: they receive their own fresh validated
+  snapshot. An unused oversized preset refuses every mixture in its
+  document at the same `limits.text_size` path, without resolving models;
+  unrelated documents are unaffected. Revision hashes still include
+  effective role prompts, rendered verdicts and referenced envelopes,
+  not unrelated unused presets.
 
 ### Amendment 6.10 (Codex security P2 r4117097073, post-merge: roster scoped per workspace)
 

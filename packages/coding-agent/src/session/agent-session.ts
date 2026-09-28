@@ -745,7 +745,9 @@ export class AgentSession implements SettingsScope {
 	/** Last (enable, providerId) tuple resolved by `#syncAppendOnlyContext` — used to skip no-op invalidations. */
 	#lastAppendOnlyResolution?: { enable: boolean; providerId: string | undefined };
 	#eventListeners: AgentSessionEventListener[] = [];
-	#mixtureHost: Pick<SessionMixtureHost, "commitPersisted" | "resetConversation" | "rebindWorkspace"> | undefined;
+	#mixtureHost:
+		| Pick<SessionMixtureHost, "commitPersisted" | "resetConversation" | "rebindWorkspace" | "commitWorkspaceMove">
+		| undefined;
 	#activeToolExecutionUpdates = new Map<string, Extract<AgentSessionEvent, { type: "tool_execution_update" }>>();
 	#runStateListeners = new Set<(state: "running" | "idle") => void>();
 	#commandMetadataChangedListeners: CommandMetadataChangedListener[] = [];
@@ -2923,17 +2925,25 @@ export class AgentSession implements SettingsScope {
 	 * and drops its runs whenever the conversation is replaced.
 	 */
 	attachMixtureHost(
-		host: Pick<SessionMixtureHost, "commitPersisted" | "resetConversation" | "rebindWorkspace">,
+		host: Pick<
+			SessionMixtureHost,
+			"commitPersisted" | "resetConversation" | "rebindWorkspace" | "commitWorkspaceMove"
+		>,
 	): void {
 		this.#mixtureHost = host;
 	}
 
 	/**
-	 * The session's working directory changed to `cwd` (a move, a cross-project resume, or
-	 * the rollback of one): run only that workspace's mixtures from here on.
+	 * Rebind to `cwd`'s mixtures; move transactions defer dropping source runs
+	 * until all cwd-derived state has refreshed successfully.
 	 */
-	async rebindMixturesForCwd(cwd: string): Promise<void> {
-		await this.#mixtureHost?.rebindWorkspace(cwd);
+	async rebindMixturesForCwd(cwd: string, deferReset = false): Promise<void> {
+		await this.#mixtureHost?.rebindWorkspace(cwd, deferReset);
+	}
+
+	/** Commit the mixture workspace change once a move has succeeded. */
+	commitMixtureWorkspaceMove(): void {
+		this.#mixtureHost?.commitWorkspaceMove();
 	}
 
 	#recordToolExecutionStart(event: Extract<AgentEvent, { type: "tool_execution_start" }>): void {

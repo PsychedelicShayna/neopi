@@ -31,14 +31,15 @@ import { judgeRoleChain } from "../judgment";
 import { BUNDLED_ENVELOPES, DEFAULT_EDGE_ENVELOPE, ENTRY_ENVELOPE, isInlineTemplate } from "./envelopes";
 import { MIXTURE_API } from "./provider";
 import type { MixtureIssue, ResolvedMember, ResolvedMixture, ToolPolicy } from "./types";
-import { definitionSizeIssue } from "./validate";
+import { definitionSizeIssue, documentPresets, type PreparedDocumentPresets } from "./validate";
 
 export interface ResolveMixtureContext {
 	registry: ModelRegistry;
 	settings: Settings;
 	/** Document-level presets of the file that declared the mixture. */
-	documentEnvelopes?: Record<string, string>;
-	documentRoles?: Record<string, string>;
+	documentEnvelopes?: Readonly<Record<string, string>>;
+	documentRoles?: Readonly<Record<string, string>>;
+	preparedPresets?: PreparedDocumentPresets;
 }
 
 function isMixtureApi(model: Model<Api>): boolean {
@@ -82,7 +83,7 @@ function effectiveToolPolicy(member: ModelMember, shape: GraphShape): ToolPolicy
 function lookupPreset(
 	name: string,
 	local: Record<string, string> | undefined,
-	document: Record<string, string> | undefined,
+	document: Readonly<Record<string, string>> | undefined,
 	bundled: Readonly<Record<string, string>>,
 ): string | undefined {
 	return local?.[name] ?? document?.[name] ?? bundled[name];
@@ -132,9 +133,9 @@ function resolveJudgePlan(
 }
 
 export function resolveMixture(input: MixtureDefinition, ctx: ResolveMixtureContext): ResolvedMixture {
-	const presets = { envelopes: { ...ctx.documentEnvelopes }, roles: { ...ctx.documentRoles } };
+	const presets = documentPresets(ctx.preparedPresets, ctx.documentEnvelopes, ctx.documentRoles);
 	// E23 first: an oversized definition is resolved no further, so nothing below scales with it.
-	const oversized = definitionSizeIssue(input, presets);
+	const oversized = definitionSizeIssue(input, presets, presets);
 	if (oversized) {
 		return {
 			definition: structuredClone(input),
@@ -167,7 +168,7 @@ export function resolveMixture(input: MixtureDefinition, ctx: ResolveMixtureCont
 					lookupPreset(
 						member.render ?? "verdict",
 						definition.envelopes,
-						ctx.documentEnvelopes,
+						presets.envelopes,
 						BUNDLED_ENVELOPES,
 					) ?? "",
 				show,
@@ -178,7 +179,7 @@ export function resolveMixture(input: MixtureDefinition, ctx: ResolveMixtureCont
 		const resolved = resolveModelRoleValue(member.model, available, { settings: ctx.settings });
 		let rolePrompt = member.systemPrompt;
 		if (rolePrompt === undefined && member.role !== undefined) {
-			rolePrompt = lookupPreset(member.role, definition.roles, ctx.documentRoles, {});
+			rolePrompt = lookupPreset(member.role, definition.roles, presets.roles, {});
 			if (rolePrompt === undefined) {
 				issues.push({
 					code: "member.role.unresolved",
@@ -235,12 +236,12 @@ export function resolveMixture(input: MixtureDefinition, ctx: ResolveMixtureCont
 	});
 
 	const envelopes: Record<string, string> = {};
-	const entryEnvelope = lookupPreset(ENTRY_ENVELOPE, definition.envelopes, ctx.documentEnvelopes, BUNDLED_ENVELOPES);
+	const entryEnvelope = lookupPreset(ENTRY_ENVELOPE, definition.envelopes, presets.envelopes, BUNDLED_ENVELOPES);
 	if (entryEnvelope !== undefined) envelopes[ENTRY_ENVELOPE] = entryEnvelope;
 	definition.edges.forEach((edge, index) => {
 		const reference = edge.envelope ?? DEFAULT_EDGE_ENVELOPE;
 		if (isInlineTemplate(reference) || envelopes[reference] !== undefined) return;
-		const preset = lookupPreset(reference, definition.envelopes, ctx.documentEnvelopes, BUNDLED_ENVELOPES);
+		const preset = lookupPreset(reference, definition.envelopes, presets.envelopes, BUNDLED_ENVELOPES);
 		if (preset === undefined) {
 			issues.push({
 				code: "edge.envelope.unresolved",
