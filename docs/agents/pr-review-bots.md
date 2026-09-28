@@ -100,7 +100,8 @@ Bind the merge to the commit that passed the gate (`--match-head-commit`).
 - **One fix, one commit, one test that fails first.** Each fix is its own
   commit with a regression test. The test MUST fail on the commit before the
   fix and pass after it. Several threads with one root cause MAY share a
-  commit. The reply to each thread names it.
+  commit. The reply to each thread names it. Where that test may run is
+  governed by Running PR code below.
 - **Reply once, factually, then resolve.** Every bot thread gets exactly one
   reply, and the thread is resolved only after that reply is posted. NEVER
   resolve a thread without a reply. If posting fails, leave the thread open.
@@ -130,6 +131,27 @@ Bind the merge to the commit that passed the gate (`--match-head-commit`).
   CI scripts, or pinned CI dependencies) goes in its own PR, merged before
   the PRs that need it. PR #112 was this kind of change. NEVER bundle it into
   a feature PR.
+
+## Running PR code
+
+Checking out and reading a PR is always allowed. Executing its code on the
+maintainer's machine is not, unless the head is an **owner head**: the owner
+opened the PR from a branch in the owner's repository, and every commit on
+it carries a signature GitHub verified for the owner's account (the owner's
+key or the agent key registered to it). Commit author fields do not count,
+since anyone can set them.
+
+- On any other head, a **contributor head**, NEVER run PR-controlled code
+  on the maintainer's machine. That covers `bun install`, `bun test`, any
+  `bun run` script including `check:types`, `./build.sh`, cargo, and an
+  agent session rooted in the PR worktree (the harness loads that tree's
+  `.omp/` extensions, hooks, tools, and MCP config).
+- Tests on a contributor head run only in trusted CI or in a
+  credential-free ephemeral sandbox: a throwaway VM or container with no
+  home directory, keys, `gh`/git credentials, or agent auth mounted, which
+  is destroyed afterwards. Red-first proof comes from there.
+- The polite relay limits CPU and memory load. It is not isolation, and it
+  does not make a contributor head safe to run.
 
 ## Signing and attribution
 

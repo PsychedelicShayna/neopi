@@ -28,11 +28,38 @@ THREADS="${TMPDIR:-/tmp}/pr-$PR-threads.jsonl"   # step 1 thread output, outside
 - Work in a worktree on the PR head branch: the `github` tool's
   `pr_checkout`, or an existing worktree for that branch. Stop if the tree has
   unrelated uncommitted changes.
-- Wrap heavy local commands (test files, `tsgo`, builds, anything cargo) in
-  the polite relay when it exists:
-  `"$HOME/.local/share/polite-relay/polite" -- <cmd>`. Without it, follow the
-  `AGENTS.md` bounds, for example `cargo -j 6`. NEVER run project-wide suites
-  locally. CI runs them.
+- Decide whether PR code may run on this machine. Checking out and reading
+  the code is always fine; executing it is not. `LOCAL_RUN` is `true` only
+  when the owner opened the PR from a branch in the owner's repository and
+  every commit on it has a signature GitHub verified for the owner's account
+  (the owner's key or the agent key registered to that account):
+
+  ```sh
+  LOCAL_RUN=$(
+    { gh pr view $PR --json author,headRepositoryOwner
+      gh api --paginate --slurp "repos/$REPO/pulls/$PR/commits?per_page=100"; } |
+    jq -s --arg o "$OWNER" '
+      (.[0].author.login == $o and .[0].headRepositoryOwner.login == $o)
+      and all(.[1] | add[]; .commit.verification.verified and .committer.login == $o)')
+  ```
+
+  Anything else is a contributor head, and `LOCAL_RUN` is `false`. That
+  includes a commit GitHub itself made (committer `web-flow`); the owner can
+  decide otherwise. On a contributor head, NEVER run PR-controlled code on
+  this host: no `bun install` (lifecycle scripts), `bun test` (bunfig
+  preloads, test files), `bun run` scripts including `check:types`,
+  `./build.sh`, or cargo (`build.rs`). Do not start an agent session whose
+  project root is that worktree either, because the harness loads its
+  `.omp/` extensions, hooks, tools, and `mcp.json`. Its tests run only in
+  trusted CI or in a credential-free ephemeral sandbox: a throwaway VM or
+  container with no home directory, SSH or signing keys, `gh`/git
+  credentials, or agent auth mounted, destroyed afterwards.
+- On an owner head, wrap heavy local commands (test files, `tsgo`, builds,
+  anything cargo) in the polite relay when it exists:
+  `"$HOME/.local/share/polite-relay/polite" -- <cmd>`. The relay limits CPU
+  and memory load; it is not isolation and gives no protection from the code
+  it runs. Without the relay, follow the `AGENTS.md` bounds, for example
+  `cargo -j 6`. NEVER run project-wide suites locally. CI runs them.
 
 ## 1. Take a snapshot
 
@@ -138,13 +165,16 @@ For each real finding (or root cause):
 
 1. Write the regression test for the contract the finding describes. Follow
    `AGENTS.md` › Testing Guidance.
-2. Run it and watch it fail:
-   `"$HOME/.local/share/polite-relay/polite" -- bun test <test-file>`, run
-   from the package directory. If it passes, the test does not capture the
-   finding. Rewrite it.
-3. Make the smallest fix. Run the test again and watch it pass. Then run the
-   package's other tests for the touched area and
-   `bun run check:types` in each touched package, all through the relay.
+2. Watch it fail. With `LOCAL_RUN=true`, run
+   `"$HOME/.local/share/polite-relay/polite" -- bun test <test-file>` from
+   the package directory. With `LOCAL_RUN=false`, run it in the sandbox
+   from step 0, or push the test as its own commit and read its failure in
+   CI; in that case the test and the fix land as two commits.
+   If it passes, the test does not capture the finding. Rewrite it.
+3. Make the smallest fix and watch the test pass the same way. With
+   `LOCAL_RUN=true`, also run the package's other tests for the touched area
+   and `bun run check:types` in each touched package, all through the relay.
+   With `LOCAL_RUN=false`, CI runs them.
 4. Commit the test and the fix together as one signed commit with the
    model-attribution trailer (see the policy's Signing and attribution
    section). Put the red→green evidence in the commit body.
