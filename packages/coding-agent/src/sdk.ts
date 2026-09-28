@@ -60,7 +60,7 @@ import {
 } from "./capability/rule";
 import { bucketRules } from "./capability/rule-buckets";
 import type { EffectiveExtensionRoots } from "./capability/types";
-import { type ChatModeConfig, chatModeIncludes } from "./chat/chat-mode";
+import { type ChatModeConfig, chatActiveToolNames, chatModeIncludes } from "./chat/chat-mode";
 import { buildChatSystemPrompt } from "./chat/chat-system-prompt";
 import { shouldEnableAppendOnlyContext } from "./config/append-only-context-mode";
 import { shouldInlineToolDescriptors } from "./config/inline-tool-descriptors-mode";
@@ -2087,9 +2087,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					(cfgSkillful.get(settings) === true && (session?.skills ?? skills).length > 0)
 				);
 			},
-			// Chat mode owns its tool list exactly (`--tools` or none): no automatic
-			// auto-learn, memory, goal, or AST widening.
-			restrictToolNames: restrictToolNames || chatMode !== undefined,
+			// The registry follows the coding rules even in chat mode, so switching chat
+			// mode off can restore the normal tool selection; chat mode only narrows the
+			// active set (see `chatActiveToolNames` below).
+			restrictToolNames,
 			get hasEditTool() {
 				const requestedToolNames = options.toolNames ? normalizeToolNames(options.toolNames) : undefined;
 				return restrictToolNames
@@ -3823,7 +3824,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// Session-managed builtins may be force-included by createTools. Keep the
 		// active set consistent with that registry decision, using built-in
 		// provenance so same-named extension tools are never force-activated.
-		if (!restrictToolNames && !chatMode && explicitlyRequestedToolNames) {
+		if (!restrictToolNames && explicitlyRequestedToolNames) {
 			for (const name of SESSION_MANAGED_BUILTIN_TOOL_NAMES) {
 				if (builtInToolNames.includes(name) && !explicitlyRequestedToolNames.includes(name)) {
 					explicitlyRequestedToolNames.push(name);
@@ -3947,6 +3948,27 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			if (deviceTransportNeeded && xdevWriteAvailable && !initialToolNames.includes("write")) {
 				initialToolNames.push("write");
 			}
+		}
+
+		// Chat mode activates only the tools it was granted (`toolNames`, with the
+		// checkpoint/rewind pairing and a required `yield`) plus extension and SDK
+		// custom tools. The coding selection computed above is handed to the session,
+		// which restores it when chat mode is switched off.
+		let chatModeCodingTools: { enabled: string[]; mounted: string[] } | undefined;
+		if (chatMode) {
+			const mounted = toolSession.xdev ? [...toolSession.xdev.mountedNames] : [];
+			chatModeCodingTools = { enabled: [...new Set([...initialToolNames, ...mounted])], mounted };
+			toolSession.xdev?.mountedNames.clear();
+			initialToolNames = chatActiveToolNames({
+				granted: options.toolNames ? normalizeToolNames(options.toolNames) : [],
+				requireYield: options.requireYieldTool === true,
+				alwaysInclude: restrictToolNames
+					? []
+					: [...sdkCustomTools.map(t => t.name), ...registeredTools.map(t => t.definition.name)].filter(
+							name => !defaultInactiveToolNames.has(name),
+						),
+				isRegistered: name => toolRegistry.has(name),
+			});
 		}
 
 		setSessionActiveToolNames(initialToolNames);
@@ -4386,6 +4408,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// streamed and parsed on the main thread.
 		session = new AgentSession({
 			chatMode,
+			chatModeCodingTools,
 			// Launch validation (main.ts) rejects chat mode with an explicit template; live switches match it.
 			chatModeBlockedReason:
 				options.systemPromptTemplate !== undefined && !options.systemPromptDiscovered

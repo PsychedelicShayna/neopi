@@ -256,6 +256,30 @@ export function chatModeIncludes(
 	return false;
 }
 
+export interface ChatActiveToolsInput {
+	/** Normalized tool names the chat session was granted (`--tools`). */
+	granted: readonly string[];
+	/** A subagent contract that needs `yield` to terminate. */
+	requireYield: boolean;
+	/** Extension and SDK custom tools, which stay active in chat mode. */
+	alwaysInclude: readonly string[];
+	isRegistered: (name: string) => boolean;
+}
+
+/**
+ * Tools active in a chat session launched in chat mode: exactly the granted
+ * names (checkpoint and rewind travel as a pair) plus extension and SDK custom
+ * tools, limited to registered tools.
+ */
+export function chatActiveToolNames(input: ChatActiveToolsInput): string[] {
+	const names = [...input.granted];
+	if (input.requireYield) names.push("yield");
+	if (names.includes("checkpoint")) names.push("rewind");
+	else if (names.includes("rewind")) names.push("checkpoint");
+	names.push(...input.alwaysInclude);
+	return [...new Set(names)].filter(input.isRegistered);
+}
+
 /** Short status-line label: `chat`, `chat:erp`, `chat:raw`. */
 export function chatModeLabel(mode: ChatMode): string {
 	return mode === "chat" ? "chat" : `chat:${mode}`;

@@ -1738,22 +1738,23 @@ export async function buildSessionOptions(
 		options.titleSystemPrompt = titleSystemPrompt;
 	}
 
+	// Tools. The registry follows these coding rules in chat mode too, so switching
+	// chat mode off restores the normal selection; a chat session activates only
+	// the `--tools` it was granted (see createAgentSession).
+	if (parsed.noTools) {
+		options.toolNames = parsed.tools && parsed.tools.length > 0 ? parsed.tools : [];
+	} else if (parsed.tools) {
+		options.toolNames = parsed.tools;
+	}
+
 	if (chatMode) {
-		// Chat mode: no tools unless explicitly granted, no discovered skills or
-		// rules unless re-included, and no MCP/LSP startup work.
-		options.toolNames = parsed.tools ?? [];
+		// Chat mode: no discovered skills or rules unless re-included, and no
+		// MCP/LSP startup work.
 		if (!chatMode.include.includes("skills")) options.skills = [];
 		if (!chatMode.include.includes("rules")) options.rules = [];
 		options.enableMCP = false;
 		options.enableLsp = false;
 	} else {
-		// Tools
-		if (parsed.noTools) {
-			options.toolNames = parsed.tools && parsed.tools.length > 0 ? parsed.tools : [];
-		} else if (parsed.tools) {
-			options.toolNames = parsed.tools;
-		}
-
 		if (parsed.noLsp) {
 			options.enableLsp = false;
 		}
