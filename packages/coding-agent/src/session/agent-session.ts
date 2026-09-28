@@ -10547,6 +10547,9 @@ export class AgentSession implements SettingsScope {
 		// Flush pending writes before switching so restore snapshots reflect committed state.
 		await this.sessionManager.flush();
 		const previousSessionState = this.sessionManager.captureState();
+		// Keep owning the current file until this switch settles: a rollback
+		// restores it, and another process must not take it in the gap.
+		using _previousSessionLease = this.sessionManager.retainLease();
 		const bashTransition = this.#bash.beginSessionTransition();
 		// Only same-session reloads compare against the prior context to detect
 		// rollback edits (`#didSessionMessagesChange` below). Building it for a

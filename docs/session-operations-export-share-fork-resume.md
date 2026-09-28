@@ -326,12 +326,13 @@ This is startup-only behavior; there is no interactive `/continue` slash command
 
 ## Session ownership lease
 
-A process that writes a session file holds an exclusive lifetime lease on it from open to close, so two processes never append to one transcript and silently fork it. The lease is a kernel-owned gate beside the file (`.{basename}.lease` records the holder's `pid` and start time); the kernel releases it when the holder exits, including SIGKILL, so there is nothing to clean up after a crash. Managers inside one process share the lease. The per-append publish lock is unchanged. Leases are local: a session directory on a network filesystem shared between machines is unsupported.
+A process that writes a session file holds an exclusive lifetime lease on it from open to close, so two processes never append to one transcript and silently fork it. The lease is a kernel-owned gate beside the file (`.{basename}.lease` records the holder's `pid` and start time); the kernel releases it when the holder exits, including SIGKILL, so there is nothing to clean up after a crash. The lease belongs to the file's real path, so a symlinked alias of a session file (or of its directory) shares the same lease. Managers inside one process share the lease. The per-append publish lock is unchanged. Leases are local: a session directory on a network filesystem shared between machines is unsupported.
 
 - `SessionManager.open`, `continueRecent`, `setSessionFile`/`switchSession`, and every newly created or forked file take the lease. A second process fails closed with `SessionInUseError { pid, since }`.
 - `npi --resume <id|path>` and the startup `--resume` picker offer **Fork** (a new session with `parentSession` set), **Open read-only** (the transcript in memory, nothing saved), or **Cancel**. Without a terminal the error is reported and the process exits non-zero.
 - The in-session `/resume` picker offers **Fork** or **Cancel**; read-only viewing is startup-only because the running session cannot swap to an unsaved transcript.
-- `--continue` and `autoResume` skip leased sessions. Session listings set `SessionInfo.inUse = { pid }` for files another process holds.
+- `--continue` and `autoResume` skip leased sessions. Session listings set `SessionInfo.inUse = { pid }` for files another process holds; `pid` is `0` when the holder could not write its record (read-only or full directory) but still holds the gate.
+- A switch that rolls back (for example a rejected project change) keeps the original file leased until it settles. If a restored file cannot be leased again, the manager stops writing and reports a persistence failure instead of writing without ownership.
 - Read-only consumers never take the lease: `loadSessionMessagesReadOnly`, `SessionManager.openReadOnly`, `--export`, `npi share`, `npi render` (which works on a copy), and `--fork` of a leased source.
 - RPC hosts see `code: "session_in_use"` and a `startup_error` stderr line; see [RPC session lease](./rpc.md#session-lease).
 
