@@ -14,6 +14,7 @@ import type { BashResult } from "../../exec/bash-executor";
 import type { AgentSessionEvent, SessionStats } from "../../session/agent-session";
 import type { SessionEntry, SessionTreeNode } from "../../session/session-entries";
 import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameDecoder, type RpcProtocolVersion } from "./rpc-frame";
+import type { RpcRolesResult, RpcSetRoleResult } from "./rpc-roles";
 import {
 	RPC_MESSAGES_PAGE_BUSY_ERROR,
 	RPC_MESSAGES_PAGE_STALE_ERROR,
@@ -775,6 +776,22 @@ export class RpcClient {
 	async getAvailableModels(): Promise<ModelInfo[]> {
 		const response = await this.#send({ type: "get_available_models" });
 		return this.#getData<{ models: ModelInfo[] }>(response).models;
+	}
+
+	/**
+	 * List model roles with their pattern chains and resolution.
+	 */
+	async getRoles(): Promise<RpcRolesResult> {
+		const response = await this.#send({ type: "get_roles" });
+		return this.#getData<RpcRolesResult>(response);
+	}
+
+	/**
+	 * Select a model role for the session, as `--model @<role>` does at launch.
+	 */
+	async setRole(role: string): Promise<RpcSetRoleResult> {
+		const response = await this.#send({ type: "set_role", role });
+		return this.#getData<RpcSetRoleResult>(response);
 	}
 
 	/**
