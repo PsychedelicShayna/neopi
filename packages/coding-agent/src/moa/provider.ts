@@ -76,7 +76,7 @@ export interface MixtureScope {
 	readonly key: string;
 	/** Whether this scope has a roster since its last owner released it; an empty roster counts. */
 	readonly hasRoster: boolean;
-	/** Share first-owner discovery so concurrent sessions cannot overwrite its roster. */
+	/** Serialize per-owner discovery, then add mixtures permitted by that owner's settings. */
 	initializeRoster(load: () => Promise<readonly ResolvedMixture[]>): Promise<void>;
 	/** A session or gateway holds this scope. */
 	retain(owner: string): void;
@@ -97,6 +97,8 @@ interface ScopeState {
 	owners: Set<string>;
 	roster: ResolvedMixture[] | undefined;
 	initialization?: Promise<void>;
+	/** An explicit edit supersedes file discovery until the last owner releases the scope. */
+	saved?: boolean;
 }
 
 /**
@@ -132,7 +134,8 @@ export class MixtureCatalog {
 		const key = mixtureScopeKey(cwd, agentDir);
 		const scopes = this.#scopes;
 		const register = (): void => this.#register();
-		const setRoster = (mixtures: readonly ResolvedMixture[]): void => this.#setScopeRoster(key, mixtures);
+		const setRoster = (mixtures: readonly ResolvedMixture[]): void => this.#setScopeRoster(key, mixtures, true);
+		const installDiscovered = (mixtures: readonly ResolvedMixture[]): void => this.#setScopeRoster(key, mixtures);
 		return {
 			key,
 			get hasRoster() {
@@ -141,15 +144,28 @@ export class MixtureCatalog {
 			async initializeRoster(load) {
 				const state = scopes.get(key);
 				if (!state) throw new Error(`Mixture scope ${key} must be retained before discovery`);
-				if (state.roster !== undefined) return;
-				state.initialization ??= (async () => {
-					const roster = await load();
-					// Neither a retired scope nor an explicit save may be overwritten by stale discovery.
-					if (scopes.get(key) === state && state.roster === undefined) setRoster(roster);
+				if (state.saved) return;
+				const previous = state.initialization;
+				const initialization = (async () => {
+					if (previous) await previous;
+					if (scopes.get(key) !== state || state.saved) return;
+					const before = state.roster;
+					const discovered = await load();
+					// A retired scope or explicit save must not be overwritten by stale discovery.
+					if (scopes.get(key) !== state || state.roster !== before || state.saved) return;
+					const merged = [...(before ?? [])];
+					const names = new Set(merged.map(mixture => mixture.definition.name));
+					for (const mixture of discovered) {
+						if (names.has(mixture.definition.name)) continue;
+						names.add(mixture.definition.name);
+						merged.push(mixture);
+					}
+					if (before === undefined || merged.length !== before.length) installDiscovered(merged);
 				})().finally(() => {
-					state.initialization = undefined;
+					if (state.initialization === initialization) state.initialization = undefined;
 				});
-				await state.initialization;
+				state.initialization = initialization;
+				await initialization;
 			},
 			retain(owner) {
 				let state = scopes.get(key);
@@ -186,12 +202,13 @@ export class MixtureCatalog {
 		return [...byName.values()];
 	}
 
-	#setScopeRoster(key: string, mixtures: readonly ResolvedMixture[]): void {
+	#setScopeRoster(key: string, mixtures: readonly ResolvedMixture[], saved = false): void {
 		let state = this.#scopes.get(key);
 		if (!state) {
 			state = { owners: new Set(), roster: undefined };
 			this.#scopes.set(key, state);
 		}
+		if (saved) state.saved = true;
 		// What the other live scopes registered: a differing definition of one of those names conflicts.
 		const held = new Map<string, { scope: string; mixture: ResolvedMixture }>();
 		for (const [scope, other] of this.#scopes) {

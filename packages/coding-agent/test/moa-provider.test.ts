@@ -188,8 +188,8 @@ describe("workspace-scoped rosters on a shared registry", () => {
 		return cwd;
 	}
 
-	async function sessionIn(cwd: string): Promise<AgentSession> {
-		const created = await createMoaSession(fixture, { cwd, settings: Settings.isolated(SETTINGS) });
+	async function sessionIn(cwd: string, settings = Settings.isolated(SETTINGS)): Promise<AgentSession> {
+		const created = await createMoaSession(fixture, { cwd, settings });
 		sessions.push(created);
 		return created;
 	}
@@ -250,6 +250,39 @@ describe("workspace-scoped rosters on a shared registry", () => {
 			scope.release("first");
 			scope.release("second");
 		}
+	});
+	it("discovers a mixture for a permissive session while the first restrictive session remains active", async () => {
+		const cwd = await workspace("excluded-first-ws", DRAFT_THEN_EDIT_TOML);
+		const excluded = Settings.isolated(SETTINGS);
+		cfgEnabledModels.override(excluded, ["fake/other", "mixture/draft-then-edit"]);
+		await sessionIn(cwd, excluded);
+		expect(fixture.registry.find("mixture", "draft-then-edit")).toBeUndefined();
+
+		const permitted = await sessionIn(cwd);
+		expect(await run(permitted, "draft-then-edit")).toEqual({
+			calls: ["writer", "editor"],
+			error: undefined,
+		});
+	});
+
+	it("adds newly permitted mixtures without removing the first session's available mixture", async () => {
+		const writerOnly = renamed("writer-only").replaceAll("fake/editor", "fake/writer");
+		const cwd = await workspace("partially-excluded-ws", `${writerOnly}\n${DRAFT_THEN_EDIT_TOML}`);
+		const restricted = Settings.isolated(SETTINGS);
+		cfgEnabledModels.override(restricted, ["fake/writer", "mixture/writer-only"]);
+		const first = await sessionIn(cwd, restricted);
+		expect(fixture.registry.find("mixture", "writer-only")).toBeDefined();
+		expect(fixture.registry.find("mixture", "draft-then-edit")).toBeUndefined();
+
+		const permitted = await sessionIn(cwd);
+		expect(await run(permitted, "draft-then-edit")).toEqual({
+			calls: ["writer", "editor"],
+			error: undefined,
+		});
+		expect(await run(first, "writer-only")).toEqual({
+			calls: ["writer", "writer"],
+			error: undefined,
+		});
 	});
 
 	function failNextRegistration(error: Error): void {

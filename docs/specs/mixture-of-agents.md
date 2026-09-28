@@ -2307,8 +2307,8 @@ export class MixtureCatalog {
 
 export interface MixtureScope {
   readonly key: string;                        // the serialized candidate-path list
-  retain(owner: string): void;                 // a session or gateway holds this scope; the first owner triggers discovery for it
-  initializeRoster(load: () => Promise<readonly ResolvedMixture[]>): Promise<void>; // concurrent holders share first-owner discovery
+  retain(owner: string): void;                 // a session or gateway holds this scope
+  initializeRoster(load: () => Promise<readonly ResolvedMixture[]>): Promise<void>; // serialize discovery, merging newly permitted names
   release(owner: string): void;                // the last owner of a scope drops its roster and re-registers the union
   setRoster(mixtures: ResolvedMixture[]): void;   // this scope's definitions; the provider registers the union over live scopes
   roster(): readonly ResolvedMixture[];        // this scope's registered definitions only
@@ -2336,7 +2336,7 @@ export function isMixtureModel(model: Model<Api>): boolean;
   headless host yields an error stream
   (`"mixture/<name> can only run inside a session or a gateway"`), which is
   the loud failure §4.9 relies on for stray side calls.
-- **Catalog per registry.** `MixtureCatalog.for(registry).setRoster(resolved)`
+- **Catalog per registry.** `MixtureCatalog.for(registry).scope(cwd, agentDir).setRoster(resolved)`
   calls `registry.registerProvider(MIXTURE_PROVIDER, { baseUrl, api: MIXTURE_API, auth: "none", models })`
   with **no `sourceId`** (never enrolled in extension ownership) and no
   `streamSimple`. An empty roster calls `registry.unregisterProvider(MIXTURE_PROVIDER)`
@@ -2349,13 +2349,15 @@ export function isMixtureModel(model: Model<Api>): boolean;
   `MixtureWorkspace.retain` holds
   `MixtureCatalog.for(registry).scope(cwd, agentDir)` and starts roster
   discovery through `scope.initializeRoster(load)` after extension provider
-  registrations and runtime-provider hydration. Concurrent holders of one
-  scope await the same first-owner discovery; a slower session with different
-  enabled-model settings cannot overwrite that roster. A scope retired while
-  discovery is in flight cannot install a stale result into a later scope
-  with the same key. A child that borrows the
-  registry and the cwd finds its scope's roster and only retains. Session
-  teardown calls `scope.release(sessionId)`; the last owner of a scope drops
+  registrations and runtime-provider hydration. Every new holder discovers
+  under its own settings; discovery is serialized and adds newly permitted names
+  without removing the first holder's roster. An explicit `setRoster` replaces
+  that discovered roster and supersedes pending file discovery. A scope retired
+  while discovery is in flight cannot install a stale result into a later scope
+  with the same key. Run start re-resolves and validates members under the
+  session's settings, so a more permissive holder cannot bypass another
+  holder's enabled-model restrictions.
+  Session teardown calls `scope.release(sessionId)`; the last owner of a scope drops
   that scope's roster, and the provider is unregistered when no live scope
   has a roster. The configurator's `apply` calls `setRoster` on the
   session's own scope. The session host resolves **only through its own
@@ -3026,6 +3028,18 @@ None open. Every question raised in rounds 1 to 3 is answered in §15.
   scope's definition keeps running, and after the first scope's last
   release the name is gone until the second scope is rediscovered; the
   provider unregisters only when the last live scope releases.
+
+### Amendment 6.11 (Codex P2 r4126653591: holders with different model filters)
+
+- An empty first-holder roster is not authoritative for later holders of the
+  same workspace. Each new holder discovers under its settings; serialized
+  discovery merges newly permitted names without replacing existing names or
+  re-registering an unchanged provider. Both empty-first and partially allowed
+  rosters permit later sessions to select and run their additional mixtures.
+- Explicit scope saves supersede pending discovery. The existing workspace
+  conflict check still applies when a newly permitted name belongs to another
+  scope. The picker lists the shared registry union (§6.10); run start validates
+  member permissions using the current session's settings.
 
 ### Amendment 6.9 (Codex security P2 r4118194866, post-merge: unbounded validation work)
 
