@@ -1012,3 +1012,54 @@ describe("late subagent finalization after its root was disposed", () => {
 		});
 	}
 });
+
+describe("a new root created while the last root's lifecycle is disposing", () => {
+	beforeEach(() => {
+		AgentRegistry.resetGlobalForTests();
+		AgentLifecycleManager.resetGlobalForTests();
+	});
+	afterEach(() => {
+		AgentLifecycleManager.resetGlobalForTests();
+		AgentRegistry.resetGlobalForTests();
+	});
+
+	it("adopts the new root's child into a live lifecycle that keeps owning it", async () => {
+		const registry = AgentRegistry.global();
+		const rootA = registry.register({ id: "DeckA", displayName: "main", kind: "main", session: null });
+		const gate = deferred();
+		const slow = makeSessionStub(() => gate.promise);
+		const childA = registry.register({
+			id: "DeckA.Research",
+			displayName: "task",
+			kind: "sub",
+			parentId: "DeckA",
+			session: slow.session,
+			status: "idle",
+		});
+		const disposing = AgentLifecycleManager.global();
+		expect(disposing.adopt("DeckA.Research", { idleTtlMs: 0 }, childA)).toBe(true);
+
+		// DeckA is the last root: this tears the whole lifecycle down, and the
+		// child's slow dispose keeps that teardown pending.
+		const teardown = disposing.disposeRoot(rootA);
+		registry.unregister("DeckA", rootA);
+
+		registry.register({ id: "DeckB", displayName: "main", kind: "main", session: null });
+		const fresh = makeSessionStub();
+		const childB = registry.register({
+			id: "DeckB.Research",
+			displayName: "task",
+			kind: "sub",
+			parentId: "DeckB",
+			session: fresh.session,
+			status: "idle",
+		});
+		expect(AgentLifecycleManager.global().adopt("DeckB.Research", { idleTtlMs: 0 }, childB)).toBe(true);
+
+		gate.resolve();
+		await teardown;
+		expect(AgentLifecycleManager.global().has("DeckB.Research", childB)).toBe(true);
+		expect(registry.get("DeckB.Research")?.session).toBe(fresh.session);
+		expect(fresh.disposeCalls()).toBe(0);
+	});
+});

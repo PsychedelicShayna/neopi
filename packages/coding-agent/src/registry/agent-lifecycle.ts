@@ -121,8 +121,11 @@ export class AgentLifecycleManager {
 			// Rebind by retiring the stale manager and reconstructing against the
 			// current global registry. In production the registry is never reset, so
 			// this always short-circuits and the singleton is stable.
-			if (current.#registry === AgentRegistry.global()) return current;
-			current.#retire();
+			// A manager whose disposal has begun (the last root is tearing down)
+			// is never handed out again: a root created meanwhile gets a fresh
+			// manager, so its children are not adopted into one about to be dropped.
+			if (current.#registry === AgentRegistry.global() && !current.#disposed) return current;
+			if (!current.#disposed) current.#retire();
 		}
 		AgentLifecycleManager.#global = new AgentLifecycleManager();
 		return AgentLifecycleManager.#global;
@@ -215,6 +218,12 @@ export class AgentLifecycleManager {
 		if (ref?.kind === "main") return false;
 		if (!ref || (expected !== undefined && ref !== expected && ref.session !== expected)) {
 			logger.warn("AgentLifecycleManager.adopt: unknown or replaced agent id", { id });
+			return false;
+		}
+		// Disposal already captured its release list; an adoption now would
+		// leave the agent live with nothing left to park or release it.
+		if (this.#disposed) {
+			logger.debug("AgentLifecycleManager.adopt: lifecycle is disposing", { id });
 			return false;
 		}
 		const root = opts.root ?? this.#registry.rootOf(id);
