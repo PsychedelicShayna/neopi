@@ -38,8 +38,10 @@ BOTS=$(gh api "repos/$REPO/contents/docs/agents/pr-review-bots.md?ref=$BASE" \
 [ "$BOTS" != "[]" ] || echo "no configured bots read from $BASE: the bot audit cannot pass"
 ```
 
-- Confirm the authorization. Note which PR it names and whether it includes
-  merging. See the policy's Authorization section.
+- Confirm the authorization. Standing authorization to babysit covers only
+  bot-review requests, factual bot-thread replies, and thread resolution.
+  Record separately whether the owner explicitly authorized pushing fixes,
+  rerunning CI, or merging. See the policy's Authorization section.
 - Work in a worktree on the PR head branch: the `github` tool's
   `pr_checkout`, or an existing worktree for that branch. Stop if the tree has
   unrelated uncommitted changes.
@@ -170,9 +172,10 @@ because you enforce it.
   `gh api repos/$REPO/actions/jobs/<job-id>/logs` for a job that failed while
   the rest of the run is still going.
   - Caused by the branch: fix it as in step 4.
-  - Known-flaky under the policy's definition:
-    `gh run rerun <run-id> --failed`. If it fails the same way again, it is
-    not a flake. Diagnose it.
+  - Known-flaky under the policy's definition: if rerunning CI was explicitly
+    authorized, use `gh run rerun <run-id> --failed`. If it fails the same way
+    again, it is not a flake. Diagnose it. Without that authorization, report
+    the rerun the owner needs to make.
   - Fixing it needs a CI change that affects every PR: stop and propose a
     separate PR.
 - If there are review fixes to push, push them first. The push restarts CI,
@@ -225,6 +228,10 @@ For each real finding (or root cause):
 Batch every fix you know about before pushing.
 
 ## 5. Push, then request a round
+
+If pushing fixes was not explicitly authorized, stop and give the owner the
+commits to push. After an authorized push, standing babysit authorization
+covers requesting the bot rounds:
 
 ```sh
 git push                  # or the github tool's pr_push after pr_checkout

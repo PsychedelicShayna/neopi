@@ -185,26 +185,25 @@ contributor head.
 
 ## Authorization
 
-The `AGENTS.md` › GitHub rules still apply: posting a comment normally needs
-the owner's confirmation of the target and the text. This policy adds one
-exception.
+The `AGENTS.md` › GitHub rules still apply. This policy carries out their
+narrow standing-authorization exception.
 
-**An owner's standing authorization to babysit a PR** (for example "babysit
-#115" or "drive #115 to merge") covers the following on that PR only:
+**An owner's standing authorization to babysit a PR** (for example,
+`babysit #115`) covers only these actions on that PR:
 
 - posting trigger comments that request bot rounds;
-- replying in bot threads and resolving them under the rules above;
-- pushing fix commits to the PR branch;
-- rerunning failed CI jobs;
-- merging when the gate passes, if the authorization includes merging.
-  Otherwise the agent stops at merge-ready and reports.
+- posting factual replies in bot threads and resolving them under the rules
+  above.
 
 It does not cover:
 
+- pushing fix commits, rerunning CI, or merging. Each requires the owner's
+  explicit authorization under the ordinary repository rules. Authorization
+  for one does not imply authorization for the others;
 - **Threads from human reviewers.** Draft the reply, show the owner the
   target and the text, and post only after confirmation, as `AGENTS.md`
-  requires.
-- New issues, comments on other PRs, closing or reopening PRs, draft-state
+  requires;
+- new issues, comments on other PRs, closing or reopening PRs, draft-state
   changes, or force-pushes.
 
 Contributor PRs follow `AGENTS.md` › Pull requests. RoboOMP-managed PRs
