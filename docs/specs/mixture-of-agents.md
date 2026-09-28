@@ -2286,14 +2286,24 @@ export const MIXTURE_API = "mixture";
 /** Process-wide, once, beside registerLocalInferenceApi(): main.ts:2486, sdk.ts:1498. */
 export function registerMixtureApi(): void;
 
-/** One catalog per ModelRegistry (WeakMap<ModelRegistry, MixtureCatalog>). */
+/** One catalog per ModelRegistry (WeakMap<ModelRegistry, MixtureCatalog>); rosters inside it are per workspace scope. */
 export class MixtureCatalog {
   static for(registry: ModelRegistry): MixtureCatalog;
   readonly id: string;                         // baseUrl = `mixture://catalog/${id}`
-  retain(owner: string): void;                 // a session or gateway holds the catalog
-  release(owner: string): void;                // last release unregisters the provider
-  setRoster(mixtures: ResolvedMixture[]): void;   // empty roster → unregisterProvider; otherwise registerProvider(replace)
+  /** A scope is the ordered list of resolved candidate paths `collectConfigCandidates` returns for (cwd, agentDir): the user file, then project ancestors root→leaf. */
+  scope(cwd: string, agentDir: string): MixtureScope;
+  /** Every registered definition across live scopes, one per name (§9.2 "one name, one definition"). */
   roster(): readonly ResolvedMixture[];
+}
+
+export interface MixtureScope {
+  readonly key: string;                        // the serialized candidate-path list
+  retain(owner: string): void;                 // a session or gateway holds this scope; the first owner triggers discovery for it
+  release(owner: string): void;                // the last owner of a scope drops its roster and re-registers the union
+  setRoster(mixtures: ResolvedMixture[]): void;   // this scope's definitions; the provider registers the union over live scopes
+  roster(): readonly ResolvedMixture[];        // this scope's registered definitions only
+  find(name: string): ResolvedMixture | undefined;   // this scope only; the host resolves through it
+  hasRoster: boolean;
 }
 
 /** Headless dispatch only. Sessions never install one. */
@@ -2324,16 +2334,41 @@ export function isMixtureModel(model: Model<Api>): boolean;
   non-empty (`:3042`); `one → zero → one` is a tested transition. Overlays
   survive `refresh()` (`#runtimeModelOverlays`, `:3063-3065`, plus the
   keyless bit of §9.1).
-- **Session identity is not in the registry.** A session's `MixtureHost`
-  lives in the primary wrapper's closure (§4.9). `createAgentSession` calls
-  `MixtureCatalog.for(registry).retain(sessionId)` and, when the catalog has
-  no roster yet, `setRoster(resolveMixtures(discoverMixtures(cwd, agentDir)))`
-  after extension provider registrations and runtime-provider hydration
+- **Session identity is not in the registry; workspace identity is.** A
+  session's `MixtureHost` lives in the primary wrapper's closure (§4.9).
+  `createAgentSession` calls
+  `MixtureCatalog.for(registry).scope(cwd, agentDir).retain(sessionId)` and,
+  when that scope has no roster yet,
+  `scope.setRoster(resolveMixtures(discoverMixtures(cwd, agentDir)))` after
+  extension provider registrations and runtime-provider hydration
   (`sdk.ts:2497-2512` and the following block). A child that borrows the
-  registry finds a roster and only retains. Session teardown calls
-  `release(sessionId)`; the provider is unregistered when the last owner
-  releases. The configurator's `apply` calls `setRoster` on the session's
-  registry catalog, which every session sharing that registry sees.
+  registry and the cwd finds its scope's roster and only retains. Session
+  teardown calls `scope.release(sessionId)`; the last owner of a scope drops
+  that scope's roster, and the provider is unregistered when no live scope
+  has a roster. The configurator's `apply` calls `setRoster` on the
+  session's own scope. The session host resolves **only through its own
+  scope**: `resolveRun(name)` uses `scope.find(name)`, and a name absent
+  there is the run-start error `mixture/X is not defined in this workspace`,
+  so a definition from another workspace can never execute in a session,
+  receive its conversation, or inherit its system prompt (Codex security P2
+  r4117097073 on PR #113: with one roster per registry, the first session's
+  cwd decided the roster for every later session on a shared registry).
+- **One name, one definition.** The registry's `mixture` provider registers
+  the union of names across live scopes, and a name is registered from
+  exactly one definition. Two scopes that define the same name with the
+  same `revision` (§1.4: the hash of the definition, presets, and resolved
+  models) share it. Two scopes whose definitions of a name differ in
+  revision conflict: the scope that registered the name first holds it, and
+  the later scope's definition is refused at that scope's registration with
+  `name.scope_conflict` (logged with both scope keys; absent from that
+  scope's roster, so that session's host does not have it). A refused
+  definition stays refused until its scope is discovered again (the scope's
+  last owner releases and a new owner retains, or save→apply on that
+  scope); the holding scope's release re-registers the union of the
+  remaining rosters and promotes nothing. Because the registry is shared,
+  `getAvailable()` lists the union: a session can select a mixture its own
+  scope does not define and gets the run-start error above; filtering the
+  picker per scope is M7 polish, not part of this rule.
 - **What is registered.** One model per definition that passes
   `resolveMixture` and `validateMixture` with no errors and no capability-gate
   rejection (§11.1):
@@ -2839,6 +2874,32 @@ None open. Every question raised in rounds 1 to 3 is answered in §15.
 - No task board; the `task` tool and hub messaging are untouched.
 
 ## 19. Revision log
+
+### Amendment 6.10 (Codex security P2 r4117097073, post-merge: roster scoped per workspace)
+
+- `MixtureCatalog` keeps one roster per **scope** (the ordered candidate
+  path list of `collectConfigCandidates(cwd, agentDir)`), each with its own
+  owner set; `scope(cwd, agentDir)` returns the handle sessions retain,
+  release, `setRoster`, and `find` through. The session host resolves only
+  through its own scope; a foreign name is `mixture/X is not defined in this
+  workspace` at run start.
+- The provider registers the union of names over live scopes, one
+  definition per name: equal revisions share, differing revisions conflict,
+  the first registrant holds the name and the later scope's definition is
+  refused with `name.scope_conflict` until its scope is rediscovered.
+  Releasing the last owner of a scope drops its roster and re-registers the
+  union; the provider unregisters when no live scope has a roster.
+- The picker still lists the union (shared registry); per-scope filtering is
+  M7 polish.
+- Tests (`moa-provider.test.ts`): two sessions on different cwds over one
+  registry each run only their own workspace's definition and neither can
+  run the other's (the foreign name yields the run-start error and zero
+  member calls); the same name defined identically in both scopes is shared
+  and survives either session's release; the same name defined differently
+  is refused for the second scope with `name.scope_conflict`, the first
+  scope's definition keeps running, and after the first scope's last
+  release the name is gone until the second scope is rediscovered; the
+  provider unregisters only when the last live scope releases.
 
 ### Amendment 6.9 (Codex security P2 r4118194866, post-merge: unbounded validation work)
 
