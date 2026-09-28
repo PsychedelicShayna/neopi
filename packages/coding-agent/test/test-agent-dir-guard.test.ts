@@ -19,6 +19,8 @@ if (inheritedProfileProbe) {
 			expect(value).toBeDefined();
 			expect(value?.startsWith(`${os.tmpdir()}${path.sep}`)).toBe(true);
 		}
+		setAgentDir(path.join(os.homedir(), ".omp", "agent"));
+		expect(() => getAgentDir()).toThrow("outside its isolated temporary storage");
 	});
 } else {
 	test("rejects named profiles that escape temporary test storage", () => {
@@ -81,9 +83,9 @@ if (inheritedProfileProbe) {
 		expect(result.exitCode, new TextDecoder().decode(result.stderr)).toBe(0);
 	});
 
-	test("clears profiles inherited by the test process", () => {
+	test("scopes the guard across utility and coding-agent files in one root runner", () => {
 		const result = Bun.spawnSync({
-			cmd: [process.execPath, "test", import.meta.path],
+			cmd: [process.execPath, "test", "packages/utils/test/profiles.test.ts", import.meta.path],
 			cwd: path.resolve(import.meta.dir, "..", "..", ".."),
 			env: {
 				...process.env,
