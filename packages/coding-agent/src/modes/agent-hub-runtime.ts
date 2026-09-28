@@ -62,7 +62,11 @@ export function createAgentHubRuntime(
 		activity: options.activity ?? new AgentActivityIndex({ remote: options.remote }),
 		manageActivityLive: !options.activity,
 		transcript: agentTranscriptSource,
-		loadPersisted: shouldContinue => registerPersistedSubagents(registry, options.sessionFile, { shouldContinue }),
+		loadPersisted: shouldContinue =>
+			registerPersistedSubagents(registry, options.sessionFile, {
+				shouldContinue,
+				rootAgentId: options.root?.()?.id,
+			}),
 		getRoleInfo: options.settings ? role => getRoleInfo(role, options.settings!) : undefined,
 	};
 }

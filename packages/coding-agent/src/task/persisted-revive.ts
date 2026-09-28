@@ -96,7 +96,8 @@ export function createPersistedSubagentReviverFactory(
 		let taskDepth = 1;
 		let parentId = ref.parentId;
 		const seen = new Set<string>();
-		while (parentId && parentId !== MAIN_AGENT_ID && !seen.has(parentId)) {
+		// The chain ends at a root: the default "Main" or any other top-level ref.
+		while (parentId && parentId !== MAIN_AGENT_ID && registry.get(parentId)?.kind !== "main" && !seen.has(parentId)) {
 			seen.add(parentId);
 			taskDepth++;
 			parentId = registry.get(parentId)?.parentId;
