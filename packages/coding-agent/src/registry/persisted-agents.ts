@@ -623,6 +623,13 @@ export async function registerPersistedSubagents(
 		 * against, bounded by this root's own transcript tree.
 		 */
 		owned?: Map<string, string>;
+		/**
+		 * Registry id of the top-level root that owns this transcript tree; its
+		 * restored top-level children are parented to it. Defaults to the live
+		 * root registered with exactly this session file, else the default
+		 * "Main" root (the single-root behavior).
+		 */
+		rootAgentId?: string;
 	} = {},
 ): Promise<void> {
 	if (!sessionFile?.endsWith(".jsonl")) return;
@@ -633,10 +640,14 @@ export async function registerPersistedSubagents(
 	if (!shouldContinue()) return;
 	const root = sessionFile.slice(0, -6);
 	const transcripts: PersistedTranscript[] = [];
+	const rootAgentId =
+		options.rootAgentId ??
+		registry.list().find(ref => ref.kind === "main" && ref.sessionFile === sessionFile)?.id ??
+		MAIN_AGENT_ID;
 	await registerPersistedSubagentsFromDir(
 		registry,
 		root,
-		undefined,
+		rootAgentId,
 		vibeOwnedIds,
 		transcripts,
 		shouldContinue,

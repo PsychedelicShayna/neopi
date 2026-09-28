@@ -40,6 +40,7 @@ describe("AgentSession eval preludes", () => {
 	it("updates enabled preludes without registering browser or computer tools", async () => {
 		const settings = Settings.isolated({ "browser.enabled": false });
 		const { session } = await createAgentSession({
+			agentId: `PreludeToggle-${Snowflake.next()}`,
 			cwd: registryDir,
 			agentDir: registryDir,
 			modelRegistry,
@@ -95,6 +96,7 @@ describe("AgentSession eval preludes", () => {
 			"computer.enabled": true,
 		});
 		const { session } = await createAgentSession({
+			agentId: `PreludeToggle-${Snowflake.next()}`,
 			cwd: registryDir,
 			agentDir: registryDir,
 			modelRegistry,
@@ -126,6 +128,7 @@ describe("AgentSession eval preludes", () => {
 		const reconcile = vi.spyOn(manager, "reconcileBrowserFilter");
 		const settings = Settings.isolated({ "browser.enabled": false });
 		const { session } = await createAgentSession({
+			agentId: `PreludeToggle-${Snowflake.next()}`,
 			cwd: registryDir,
 			agentDir: registryDir,
 			modelRegistry,
@@ -168,6 +171,7 @@ describe("AgentSession eval preludes", () => {
 			"computer.enabled": true,
 		});
 		const { session } = await createAgentSession({
+			agentId: `PreludeToggle-${Snowflake.next()}`,
 			cwd: registryDir,
 			agentDir: registryDir,
 			modelRegistry,

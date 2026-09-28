@@ -14,6 +14,7 @@ import { sanitizeText, untilAborted } from "@oh-my-pi/pi-utils";
 import type { Theme } from "@oh-my-pi/pi-tui/theme";
 import {
 	denyError,
+	formatApprovalDetailLines,
 	formatApprovalPrompt,
 	resolveApproval,
 	resolveApprovalFromContext,
@@ -25,6 +26,7 @@ import { normalizeToolEventInput, resolveToolEventInput } from "../tool-event-in
 import { applyToolProxy } from "../tool-proxy";
 import type { ExtensionRunner } from "./runner";
 import type { RegisteredTool, ToolCallEventResult } from "./types";
+import type { ToolApprovalVerdict } from "./tool-approval-requester";
 
 /**
  * Adapts a RegisteredTool into an AgentTool.
@@ -312,9 +314,13 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 				});
 			};
 
+			// A host-rendered approver (RPC `set_approval_handler: host`) replaces the
+			// select dialog and does not need an interactive UI.
+			const hostApprover = this.runner.getToolApprovalRequester();
+
 			// Provider safety checks fail closed without an interactive prompt. Unlike
 			// ordinary tier approval, no setting or yolo mode may bypass this gate.
-			if (!this.runner.hasUI()) {
+			if (!hostApprover && !this.runner.hasUI()) {
 				const reason = "no interactive UI available";
 				await emitApprovalResolved(false, reason);
 				if (pendingSafetyChecks.length > 0) {
@@ -331,23 +337,52 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 				);
 			}
 
-			const uiContext = this.runner.getUIContext();
-			const basePrompt = formatApprovalPrompt(this.tool, resolvedArgs, approvalCheck.reason);
-			const safetyPrompt =
-				pendingSafetyChecks.length > 0
-					? `${basePrompt}\nProvider safety checks:\n${safetyCheckLines(pendingSafetyChecks).join("\n")}`
-					: basePrompt;
-			let choice: string | undefined;
-			try {
-				choice = await uiContext.select(safetyPrompt, ["Approve", "Deny"]);
-			} catch (err) {
-				await emitApprovalResolved(false, err instanceof Error ? err.message : "approval aborted");
-				throw err;
-			}
-			const approved = choice === "Approve";
-			await emitApprovalResolved(approved, approved ? undefined : "denied by user");
-			if (!approved) {
-				throw new Error(`Tool call denied by user: ${this.tool.name}`);
+			if (hostApprover) {
+				let verdict: ToolApprovalVerdict;
+				try {
+					verdict = await hostApprover({
+						toolCallId,
+						toolName: this.tool.name,
+						args: resolvedArgs,
+						tier: resolved.tier,
+						approvalMode,
+						...(approvalCheck.reason ? { reason: approvalCheck.reason } : {}),
+						details: formatApprovalDetailLines(this.tool, resolvedArgs),
+						safetyChecks: pendingSafetyChecks,
+						signal,
+					});
+				} catch (err) {
+					await emitApprovalResolved(false, err instanceof Error ? err.message : "approval aborted");
+					throw err;
+				}
+				if (!verdict.approved) {
+					await emitApprovalResolved(false, verdict.reason || "denied by user");
+					throw new Error(
+						verdict.reason
+							? `Tool call denied by user: ${this.tool.name}\nReason: ${verdict.reason}`
+							: `Tool call denied by user: ${this.tool.name}`,
+					);
+				}
+				await emitApprovalResolved(true);
+			} else {
+				const uiContext = this.runner.getUIContext();
+				const basePrompt = formatApprovalPrompt(this.tool, resolvedArgs, approvalCheck.reason);
+				const safetyPrompt =
+					pendingSafetyChecks.length > 0
+						? `${basePrompt}\nProvider safety checks:\n${safetyCheckLines(pendingSafetyChecks).join("\n")}`
+						: basePrompt;
+				let choice: string | undefined;
+				try {
+					choice = await uiContext.select(safetyPrompt, ["Approve", "Deny"]);
+				} catch (err) {
+					await emitApprovalResolved(false, err instanceof Error ? err.message : "approval aborted");
+					throw err;
+				}
+				const approved = choice === "Approve";
+				await emitApprovalResolved(approved, approved ? undefined : "denied by user");
+				if (!approved) {
+					throw new Error(`Tool call denied by user: ${this.tool.name}`);
+				}
 			}
 			if (pendingSafetyChecks.length > 0) {
 				if (!context) throw new Error("Provider safety approval context is unavailable");

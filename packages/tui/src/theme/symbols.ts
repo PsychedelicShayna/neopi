@@ -819,11 +819,10 @@ const NERD_SYMBOLS: SymbolMap = {
 	"icon.advisorClosed": "\ueae7",
 	// pick:  | alt: ◷ ◴
 	"icon.time": "\uf017",
-	// pick: 󰵗 (nf-md-pi) | alt:  π ∏ ∑
-	// INTENTIONAL: U+F0D57 is the chosen glyph here. It has been "fixed" to
-	// U+F03FF before (2ec52b8bdd) and reverted because it renders the wrong glyph;
-	// do not swap it again.
-	"icon.omp": "\u{f0d57}",
+	// pick: 󰏿 (nf-md-pi) | alt:  (fae-pi) π ∏ ∑
+	// Fork (#32): Nerd Fonts v3 maps U+F03FF to md-pi; U+F0D57 is
+	// md-axis_z_rotate_clockwise. F0D57 remains a symbolBrandGlyph option.
+	"icon.omp": "\u{f03ff}",
 	// pick: 󱊷 (nf-md-keyboard_esc) | alt: ⎋
 	"icon.esc": "\u{f12b7}",
 	// pick: 󰊠 (nf-md-ghost) | alt: 👻
@@ -1435,4 +1434,52 @@ export function getAvailableSymbolPresets(): SymbolPreset[] {
  */
 export function isValidSymbolPreset(preset: string): preset is SymbolPreset {
 	return preset === "unicode" || preset === "nerd" || preset === "ascii";
+}
+
+/**
+ * Temporary glyph cyclers layered over the active theme's symbols (fork, #32).
+ * Superseded by named glyph sets (#37); remove both once glyph sets ship.
+ */
+export type BrandGlyphChoice = "theme" | "pi" | "fae-pi" | "md-axis-z" | "diamond";
+export type EffortGlyphChoice = "theme" | "poimandres" | "nerd";
+
+export interface SymbolCyclers {
+	brand: BrandGlyphChoice;
+	effort: EffortGlyphChoice;
+}
+
+const BRAND_GLYPHS: Record<Exclude<BrandGlyphChoice, "theme">, string> = {
+	pi: "π",
+	"fae-pi": "\ue22c",
+	"md-axis-z": "\u{f0d57}",
+	diamond: "◇",
+};
+
+const THINKING_KEYS = [
+	"thinking.minimal",
+	"thinking.low",
+	"thinking.medium",
+	"thinking.high",
+	"thinking.xhigh",
+	"thinking.max",
+] as const satisfies readonly SymbolKey[];
+
+const POIMANDRES_THINKING: Record<(typeof THINKING_KEYS)[number], string> = {
+	"thinking.minimal": "∘",
+	"thinking.low": "◌",
+	"thinking.medium": "◍",
+	"thinking.high": "◎",
+	"thinking.xhigh": "◉",
+	"thinking.max": "●",
+};
+
+/** Symbol overrides the cyclers impose; empty when both are "theme". */
+export function symbolCyclerOverrides(cyclers: SymbolCyclers): Partial<SymbolMap> {
+	const overrides: Partial<SymbolMap> = {};
+	if (cyclers.brand !== "theme") overrides["icon.omp"] = BRAND_GLYPHS[cyclers.brand];
+	if (cyclers.effort === "poimandres") Object.assign(overrides, POIMANDRES_THINKING);
+	if (cyclers.effort === "nerd") {
+		for (const key of THINKING_KEYS) overrides[key] = NERD_SYMBOLS[key];
+	}
+	return overrides;
 }

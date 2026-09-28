@@ -85,6 +85,8 @@ export interface ModelHubSource extends ModelBrowserSource {
 	getProjectModelRole(role: string): string | undefined;
 	getGlobalModelRole(role: string): string | undefined;
 	getModelRoleSource(role: string): "global" | "project" | "default";
+	/** Serialize a resolved role model, retaining any host-specific upstream route. */
+	formatModelSelector(model: Model): string;
 }
 
 /** Catalog capabilities required by the model hub. */
@@ -246,6 +248,8 @@ export class ModelHubComponent implements Component {
 
 	#rolesRows: RolesRow[] = [];
 	#roleIndex = 0;
+	/** In-hub yank register: selectors are snapshots, not references to mutable chains. */
+	#yankedFallback: readonly string[] | null = null;
 	#roleHover: number | null = null;
 	/** First roles row drawn in the scroll window; follows the cursor and clamps to the list. */
 	#roleScrollStart = 0;
@@ -1421,6 +1425,19 @@ export class ModelHubComponent implements Component {
 		this.#setFallbackChain(role, chain);
 	}
 
+	/** Paste appends missing entries in yank order; it never reorders the target's existing entries. */
+	#pasteFallback(role: string): void {
+		if (!this.#yankedFallback) return;
+		const chain = [...(this.#fallbackChains()[role] ?? [])];
+		let changed = false;
+		for (const selector of this.#yankedFallback) {
+			if (chain.includes(selector)) continue;
+			chain.push(selector);
+			changed = true;
+		}
+		if (changed) this.#setFallbackChain(role, chain);
+	}
+
 	/** Remove one chain entry; the cursor stays on the nearest surviving row. */
 	#removeFallback(row: { role: string; chainIndex: number }): void {
 		const chain = [...(this.#fallbackChains()[row.role] ?? [])];
@@ -1788,6 +1805,25 @@ export class ModelHubComponent implements Component {
 			return;
 		}
 		const printable = extractPrintableText(data);
+		if (printable === "y") {
+			if (row?.kind === "role") {
+				const model = this.#roles[row.role]?.model;
+				if (model) this.#yankedFallback = [this.#settings.formatModelSelector(model)];
+			} else if (row?.kind === "fallback") {
+				this.#yankedFallback = [row.selector];
+			}
+			return;
+		}
+		if (printable === "Y") {
+			if (row?.kind === "fallback") this.#yankedFallback = [...(this.#fallbackChains()[row.role] ?? [])];
+			return;
+		}
+		if (printable === "p") {
+			if (row?.kind === "role" || row?.kind === "fallback" || row?.kind === "chainKey") {
+				this.#pasteFallback(row.role);
+			}
+			return;
+		}
 		if (printable === "x") {
 			if (role) this.#unassignRole(role);
 			else if (row?.kind === "fallback") this.#removeFallback(row);
@@ -2305,15 +2341,15 @@ export class ModelHubComponent implements Component {
 				// action would be inert there.
 				const editable = this.#resolveFallbackEntry(row.role, row.chainIndex) !== undefined;
 				const thinking = editable ? " · t thinking" : "";
-				return `↑/↓ rows · Enter replace · f add another · x remove${thinking} · [/] reorder · ← providers`;
+				return `↑/↓ rows · Enter replace · f add · y/Y yank · p append · x remove${thinking} · [/] reorder · ← providers`;
 			}
 			if (row?.kind === "chainKey") {
-				return "↑/↓ rows · Enter/f add fallback · x clear chain · ← providers";
+				return "↑/↓ rows · Enter/f add fallback · p append · x clear chain · ← providers";
 			}
 			if (row?.kind === "newFallback") {
 				return "↑/↓ rows · Enter new model/provider fallback chain · ← providers";
 			}
-			return "↑/↓ rows · Enter pick · f fallback · x clear · t thinking · c cycle · [/] reorder · n new";
+			return "↑/↓ rows · Enter pick · f fallback · y yank · p append · x clear · t thinking · c cycle · [/] reorder · n new";
 		}
 		if (entry.kind === "provider" && entry.locked) {
 			return entry.oauth ? "Enter log in · ↑/↓ providers · Esc close" : "↑/↓ providers · Esc close";

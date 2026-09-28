@@ -50,6 +50,12 @@ export interface SessionInfo {
 	 * synthesized {@link SessionInfo}s (cross-project stubs, tests) leave it unset.
 	 */
 	status?: SessionStatus;
+	/**
+	 * Set when another live process holds the session's lifetime lease (see
+	 * `session-lease.ts`); opening it for writing would fail. Absent for free
+	 * sessions and for sessions this process holds.
+	 */
+	inUse?: { pid: number };
 }
 
 export interface ResolvedSessionMatch {
@@ -515,7 +521,11 @@ async function collectSessionsFromFileStride(
 
 	for (let i = startIndex; i < files.length; i += stride) {
 		const session = await scanSessionFile(files[i], storage, withStatus);
-		if (session) sessions.push(session);
+		if (!session) continue;
+		// Lease state is live, so it is read per listing and never cached with the scan.
+		const holder = storage.inspectSessionLease?.(session.path);
+		if (holder) session.inUse = { pid: holder.pid };
+		sessions.push(session);
 	}
 
 	return sessions;
@@ -686,16 +696,23 @@ export function filterSessionsForPicker(sessions: SessionInfo[], pinnedIds: Read
 	return sessions.filter(session => pinnedIds.has(session.id) || !isEmptySession(session));
 }
 
-/** Most recent session with resumable content, skipping 0-turn empties. Exported for testing. */
+/**
+ * Most recent session with resumable content, skipping 0-turn empties, sessions
+ * another process holds, and `exclude` (resolved paths). Exported for testing.
+ */
 export async function findMostRecentNonEmptySession(
 	sessionDir: string,
 	storage: SessionStorage = new FileSessionStorage(),
+	exclude?: ReadonlySet<string>,
 ): Promise<string | null> {
 	// Status on: answered-ness comes from the tail lifecycle, not the 4 KB
 	// prefix, so a transcript whose first assistant record starts past the
 	// prefix is never skipped.
 	const sessions = await scanSessionDir(sessionDir, storage, true);
-	return sessions.find(session => !isEmptySession(session))?.path ?? null;
+	return (
+		sessions.find(session => !isEmptySession(session) && !session.inUse && !exclude?.has(path.resolve(session.path)))
+			?.path ?? null
+	);
 }
 
 /** Exported for testing */

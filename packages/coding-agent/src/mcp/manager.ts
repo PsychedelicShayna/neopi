@@ -28,6 +28,7 @@ import {
 	unsubscribeFromResources,
 } from "./client";
 import {
+	compileMCPAllowlist,
 	isBrowserMCPServer,
 	type LoadMCPConfigsOptions,
 	type LoadMCPConfigsResult,
@@ -228,6 +229,8 @@ export interface MCPDiscoverOptions {
 	filterBrowser?: boolean;
 	/** Session-local extension roots for post-startup rediscovery (explicit + mode + configured). */
 	extensionRoots?: EffectiveExtensionRoots;
+	/** Server name globs to admit; empty or absent admits every server. */
+	includeServers?: readonly string[];
 	/** Called when MCP server connection state changes. */
 	onStatus?: (event: McpConnectionStatusEvent) => void;
 	/** Non-blocking discovery window in milliseconds; environment override wins. */
@@ -545,6 +548,7 @@ export class MCPManager {
 				filterExa: options?.filterExa,
 				filterBrowser: options?.filterBrowser,
 				extensionRoots: options?.extensionRoots,
+				includeServers: options?.includeServers,
 			});
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
@@ -556,6 +560,11 @@ export class MCPManager {
 		const { configs, exaApiKeys, sources } = loadedConfigs;
 		const result = await this.connectServers(configs, sources, options?.onStatus, options?.startupTimeoutMs);
 		result.exaApiKeys = exaApiKeys;
+		// Startup rejects these up front (MCPUnknownServerError); a later
+		// `/mcp reload` after a config edit reports them instead.
+		for (const name of loadedConfigs.unmatchedIncludes ?? []) {
+			result.errors.set(name, "listed in the MCP allowlist but not configured, disabled, or denylisted");
+		}
 		return result;
 	}
 
@@ -592,6 +601,7 @@ export class MCPManager {
 			filterExa: options.filterExa,
 			filterBrowser: options.filterBrowser,
 			extensionRoots: options.extensionRoots,
+			includeServers: options.includeServers,
 		});
 		// Every server whose resolution depends on the flag: project-level ones
 		// known now, plus project-level ones the enabled load resolves.
@@ -626,6 +636,7 @@ export class MCPManager {
 			filterExa: options?.filterExa,
 			filterBrowser: false,
 			extensionRoots: options?.extensionRoots,
+			includeServers: options?.includeServers,
 		});
 		const browserConfigs: Record<string, MCPServerConfig> = {};
 		const browserSources: Record<string, SourceMeta> = {};
@@ -688,7 +699,14 @@ export class MCPManager {
 		// Prepare connection tasks
 		const connectionTasks: ConnectionTask[] = [];
 
+		// Direct connects (`/mcp enable`, `/mcp add`, the extensions dashboard)
+		// bypass config loading, so the session allowlist is enforced here too.
+		const allowlist = compileMCPAllowlist(this.#discoverOptions?.includeServers);
 		for (const [name, config] of Object.entries(configs)) {
+			if (!allowlist.admits(name)) {
+				errors.set(name, "excluded by the session MCP allowlist (--mcp / mcp.includeServers)");
+				continue;
+			}
 			this.#startupServers.add(name);
 			if (sources[name]) {
 				this.#sources.set(name, sources[name]);

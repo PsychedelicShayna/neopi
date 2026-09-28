@@ -5,6 +5,7 @@ import parentIrcSteerTemplate from "../prompts/steering/parent-irc.md" with { ty
 import ircIncomingTemplate from "../prompts/system/irc-incoming.md" with { type: "text" };
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import type { AgentSessionEvent } from "./agent-session-events";
+import { setMessageEntryId } from "./message-entry-ids";
 import type { CustomMessage } from "./messages";
 import type { SessionManager } from "./session-manager";
 
@@ -177,9 +178,11 @@ export class IrcBridge {
 		const streaming = this.#host.isStreaming();
 		const planModeIdle = !streaming && this.#host.planModeEnabled();
 		// An idle subagent runs a monitored wake turn whose output is relayed
-		// back to the sender (task executor `relayWakeTurnOutput`); the main
-		// agent and mid-turn asides have no such relay.
-		const relayOnStop = !streaming && !planModeIdle && msg.to !== MAIN_AGENT_ID && msg.wakeRelay !== true;
+		// back to the sender (task executor `relayWakeTurnOutput`); a root agent
+		// (the default "Main" or any other top-level session) and mid-turn
+		// asides have no such relay.
+		const recipientIsRoot = msg.to === MAIN_AGENT_ID || AgentRegistry.global().get(msg.to)?.kind === "main";
+		const relayOnStop = !streaming && !planModeIdle && !recipientIsRoot && msg.wakeRelay !== true;
 		const record: CustomMessage = {
 			role: "custom",
 			customType: "irc:incoming",
@@ -219,12 +222,15 @@ export class IrcBridge {
 		}
 		if (this.#host.planModeEnabled()) {
 			this.#host.agent.appendMessage(record);
-			this.#host.sessionManager.appendCustomMessageEntry(
-				record.customType,
-				record.content,
-				record.display,
-				record.details,
-				record.attribution ?? "agent",
+			setMessageEntryId(
+				record,
+				this.#host.sessionManager.appendCustomMessageEntry(
+					record.customType,
+					record.content,
+					record.display,
+					record.details,
+					record.attribution ?? "agent",
+				),
 			);
 			return "injected";
 		}

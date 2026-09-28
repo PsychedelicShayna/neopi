@@ -10,7 +10,12 @@ import type { AgentEvent, AgentIdentity, AgentMessage, AgentTelemetryConfig } fr
 import { AgentBusyError, EventLoopKeepalive, recordHandoff, resolveTelemetry } from "@oh-my-pi/pi-agent-core";
 import type { Api, Model, ServiceTierByFamily, Usage } from "@oh-my-pi/pi-ai";
 import { logger, popLoopPhase, prompt, pushLoopPhase, untilAborted } from "@oh-my-pi/pi-utils";
-import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, AsyncJobError, AsyncJobManager, type AsyncJobRunResult } from "../async";
+import {
+	ASYNC_JOB_MANAGER_SHUTDOWN_REASON,
+	AsyncJobError,
+	type AsyncJobManager,
+	type AsyncJobRunResult,
+} from "../async";
 import type { Rule } from "../capability/rule";
 import type { EffectiveExtensionRoots } from "../capability/types";
 import { ModelRegistry } from "../config/model-registry";
@@ -51,7 +56,7 @@ import subagentAsyncPendingTemplate from "../prompts/system/subagent-async-pendi
 import subagentSystemPromptTemplate from "../prompts/system/subagent-system-prompt.md" with { type: "text" };
 import submitReminderTemplate from "../prompts/system/subagent-yield-reminder.md" with { type: "text" };
 import { AgentLifecycleManager, type AgentReviver } from "../registry/agent-lifecycle";
-import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
+import { type AgentRef, AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import { ensurePersistedRoster, isCurrentSessionRosterRef } from "../registry/persisted-agents";
 import { type CreateAgentSessionOptions, createAgentSession, discoverAuthStorage } from "../sdk";
 import type { AgentSession, AgentSessionEvent, Prewalk } from "../session/agent-session";
@@ -59,7 +64,7 @@ import { type ArtifactManager, writeArtifact } from "../session/artifacts";
 import { ASYNC_RESULT_MESSAGE_TYPE } from "../session/async-job-delivery";
 import type { AuthStorage } from "../session/auth-storage";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../session/messages";
-import { hasConversationalHistory, SessionManager } from "../session/session-manager";
+import { hasConversationalHistory, PendingSessionManager, SessionManager } from "../session/session-manager";
 import { truncateTail } from "@oh-my-pi/pi-tui/tools/streaming-output";
 import {
 	type ConfiguredThinkingLevel,
@@ -598,6 +603,12 @@ export interface ExecutorOptions {
 	 * passes its own `getAgentId()`).
 	 */
 	parentAgentId?: string;
+	/**
+	 * Async-job domain of the spawning root. The child session inherits it so
+	 * its own background jobs, completion delivery, and teardown reaping stay in
+	 * the root that spawned it. Omitted: the child refuses async work.
+	 */
+	asyncJobManager?: AsyncJobManager;
 	/**
 	 * Keep the finished subagent addressable in the registry for IRC/revival.
 	 * Defaults to true. Eval bridge agents are programmatic one-shot helpers and
@@ -3084,6 +3095,8 @@ export async function finalizeSubagentLifecycle(args: {
 	cleanupDeadlineAt?: number;
 	onCleanupDeferred?: (completion: Promise<void>) => void;
 	onRelease?: () => Promise<void>;
+	/** Root generation that spawned this agent, captured at spawn; refuses adoption once it is disposed. */
+	root?: AgentRef;
 }): Promise<void> {
 	const registry = AgentRegistry.global();
 	const ref = registry.get(args.id);
@@ -3175,15 +3188,24 @@ export async function finalizeSubagentLifecycle(args: {
 		await releaseOwnedResources();
 		return;
 	}
-	AgentLifecycleManager.global().adopt(
+	const adopted = AgentLifecycleManager.global().adopt(
 		args.id,
 		{
 			idleTtlMs: args.agentIdleTtlMs,
 			revive: args.reviveSession ?? undefined,
 			onRelease: args.onRelease,
+			root: args.root,
 		},
 		ref,
 	);
+	if (!adopted) {
+		// Refused (typically: the owning root was disposed while this run was
+		// finalizing). Nobody will park or release it, so end it here rather
+		// than leave a live idle agent registered under a torn-down root.
+		await disposeSession();
+		registry.unregister(args.id, ref);
+		await releaseOwnedResources();
+	}
 }
 
 /** Options for {@link runSubagentFollowUpTurn}. */
@@ -3402,6 +3424,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		signal,
 		onProgress,
 	} = options;
+	// The root generation that owns this spawn, captured now: by the time the
+	// run finalizes, a disposed root may already be unregistered.
+	const ownerRoot = options.parentAgentId ? AgentRegistry.global().rootOf(options.parentAgentId) : undefined;
 	const providedSettings = options.settings;
 	const modelOverride =
 		explicitModelOverride ??
@@ -3737,6 +3762,11 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		let sessionOpenedAt: number | undefined;
 		let sessionCreatedAt: number | undefined;
 		let readyAt: number | undefined;
+		/**
+		 * Closes the opened session manager (releasing its session lease) while no
+		 * AgentSession has adopted it; cleared once createAgentSession takes over.
+		 */
+		let closeUnadoptedSessionManager: (() => void) | undefined;
 
 		try {
 			checkAbort();
@@ -3866,6 +3896,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			// Setup below can fail before this promise's consumption boundary.
 			// Observe rejection immediately while preserving it for the later await.
 			sessionManagerPromise.catch(() => {});
+			closeUnadoptedSessionManager = () => {
+				void sessionManagerPromise.then(manager => manager.close()).catch(() => {});
+			};
 			// Per-agent prewalk: the agent definition's `prewalk` frontmatter or the
 			// `task.agentPrewalk` settings override hands the subagent off to a
 			// fast/cheap target at its first edit/write — the same mechanism as the
@@ -4036,6 +4069,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				parentHindsightSessionState: options.parentHindsightSessionState,
 				parentMnemopiSessionState: options.parentMnemopiSessionState,
 				parentTaskPrefix: id,
+				asyncJobManager: options.asyncJobManager,
 				parentAgentId: options.parentAgentId,
 				agentId: id,
 				agentDisplayName: agent.name,
@@ -4066,20 +4100,30 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					sessionManager.getSessionFile() ??
 						sessionFile ??
 						AgentRegistry.global().get(id)?.sessionFile ??
+						(options.parentAgentId
+							? AgentRegistry.global().rootOf(options.parentAgentId)?.sessionFile
+							: undefined) ??
 						AgentRegistry.global().get(MAIN_AGENT_ID)?.sessionFile,
 				);
 			}
 
 			const hasExistingModelRole = sessionManager.getLastModelChangeRole() !== undefined;
 			const sessionPromise = createAgentSession(buildSubagentSessionOptions(sessionManager, null));
+			closeUnadoptedSessionManager = undefined;
 			let session: AgentSession;
 			try {
 				({ session } = await awaitAbortable(sessionPromise));
 			} catch (err) {
 				// Abort raced session startup. The session may still resolve later
 				// holding live LSP/MCP child processes — dispose it when it does so
-				// a cancelled subagent cannot leak them.
-				void sessionPromise.then(created => created.session.dispose()).catch(() => {});
+				// a cancelled subagent cannot leak them. If creation failed, no
+				// session adopted the manager: close it to release its lease.
+				void sessionPromise
+					.then(
+						created => created.session.dispose(),
+						() => sessionManager.close(),
+					)
+					.catch(() => {});
 				throw err;
 			}
 			// The SDK records a new session's initial model as the default role.
@@ -4133,6 +4177,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 								`(truncated to header/session_init). The agent was not revived.`,
 						);
 					}
+					// Until createAgentSession adopts it, a setup failure must close the
+					// manager so its session lease does not outlive the failed revive.
+					using pendingManager = new PendingSessionManager(reopened);
 					if (options.parentArtifactManager) {
 						reopened.adoptArtifactManager(options.parentArtifactManager);
 					}
@@ -4142,12 +4189,16 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 							reopened.getSessionFile() ??
 								sessionFile ??
 								AgentRegistry.global().get(id)?.sessionFile ??
+								(options.parentAgentId
+									? AgentRegistry.global().rootOf(options.parentAgentId)?.sessionFile
+									: undefined) ??
 								AgentRegistry.global().get(MAIN_AGENT_ID)?.sessionFile,
 						);
 					}
 					const { session: revived } = await createAgentSession(
 						buildSubagentSessionOptions(reopened, expectedAgentRef, true),
 					);
+					pendingManager.handOff();
 					// Re-run the executor's extension wiring on the rebuilt session.
 					// Skipping it leaves the runner pre-init, so a `tool_call` handler
 					// touching a runtime action trips the fail-closed gate and blocks
@@ -4335,6 +4386,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				error = err instanceof Error ? err.stack || err.message : String(err);
 			}
 		} finally {
+			closeUnadoptedSessionManager?.();
 			const cleanupDeadlineAt = Date.now() + cleanupGraceMs;
 			const cleanupChangeStatus =
 				worktree === undefined
@@ -4393,7 +4445,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				}
 				unsubscribe = null;
 			}
-			const jobManager = AsyncJobManager.instance();
+			const jobManager = options.asyncJobManager;
 			if (jobManager) {
 				const reap = await jobManager.cancelAndReapOwnerJobs(id, cleanupDeadlineAt);
 				if (!reap.settled) {
@@ -4421,6 +4473,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					reviveSession,
 					cleanupDeadlineAt,
 					onRelease: options.onRelease,
+					root: ownerRoot,
 					onCleanupDeferred: completion => {
 						deferredSessionShutdown = completion;
 						deferCleanup(completion);

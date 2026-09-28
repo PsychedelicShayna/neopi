@@ -12,7 +12,12 @@ import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import { createAgentSession } from "../sdk";
 import type { AgentSession } from "../session/agent-session";
 import type { AuthStorage } from "../session/auth-storage";
-import { extractSessionInit, hasConversationalHistory, SessionManager } from "../session/session-manager";
+import {
+	extractSessionInit,
+	hasConversationalHistory,
+	PendingSessionManager,
+	SessionManager,
+} from "../session/session-manager";
 import type { EventBus } from "../utils/event-bus";
 import {
 	attachIrcWakeTurnMonitor,
@@ -91,7 +96,8 @@ export function createPersistedSubagentReviverFactory(
 		let taskDepth = 1;
 		let parentId = ref.parentId;
 		const seen = new Set<string>();
-		while (parentId && parentId !== MAIN_AGENT_ID && !seen.has(parentId)) {
+		// The chain ends at a root: the default "Main" or any other top-level ref.
+		while (parentId && parentId !== MAIN_AGENT_ID && registry.get(parentId)?.kind !== "main" && !seen.has(parentId)) {
 			seen.add(parentId);
 			taskDepth++;
 			parentId = registry.get(parentId)?.parentId;
@@ -117,6 +123,9 @@ export function createPersistedSubagentReviverFactory(
 					`Cannot revive subagent "${ref.id}": session file "${sessionFile}" has no message history (truncated to header/session_init). The agent was not revived.`,
 				);
 			}
+			// Until createAgentSession adopts it, a setup failure must close the
+			// manager so its session lease does not outlive the failed revive.
+			using pendingManager = new PendingSessionManager(reopened);
 			// Rebuild the same advisor opt-in the original spawn resolved: `"on"` =
 			// advisor-role model, anything else = the explicit pattern stamped onto
 			// this session's `modelRoles.advisor`. Absent = unadvised (the
@@ -183,6 +192,8 @@ export function createPersistedSubagentReviverFactory(
 						? init.agent
 						: ref.displayName,
 				parentTaskPrefix: ref.id,
+				// Revived agents rejoin the root that owns the persisted tree.
+				asyncJobManager: ctx.session.asyncJobManager,
 				parentAgentId: ref.parentId,
 				expectedAgentRef: expectedRef,
 				taskDepth,
@@ -213,47 +224,64 @@ export function createPersistedSubagentReviverFactory(
 							customTools: mcpProxyTools.length > 0 ? mcpProxyTools : undefined,
 						}),
 			});
-			// Clamp the active set to the persisted list: createAgentSession's
-			// `alwaysInclude` can re-add non-defaultInactive extension/custom tools
-			// the original run didn't carry. Unknown/missing names are ignored.
-			await session.setActiveToolsByName([...revivedToolNames, ...session.getMountedXdevToolNames()]);
-			// Wire the extension runtime exactly as the live executor does. Without
-			// this the runner stays pre-init, every action method throws
-			// `ExtensionRuntimeNotInitializedError`, and a `tool_call` handler that
-			// touches a runtime action trips the fail-closed gate in `emitToolCall`,
-			// blocking every tool — including the hidden `yield` — in the revived
-			// agent. `session_start` also re-runs so extensions restore per-session
-			// state (issue #8824).
-			await initializeExtensions(session, {
-				reportSendError: (action, err) => logger.error("Extension send failed", { action, error: err.message }),
-				reportRuntimeError: err => logger.error("Extension error", { path: err.extensionPath, error: err.error }),
-			});
-			// Cold revives must drive registry status themselves — createAgentSession
-			// doesn't wire this generically (the live path does it in the executor).
-			// The internal run-state signal precedes deferrable public `agent_end`,
-			// keeping idle-TTL ownership synchronized even while prompts unwind.
-			registry.syncSessionStatus(ref.id, session);
-			// Persisted files predate an agent-source field, so cold-revived frames
-			// report the runtime-neutral `user` source; name comes from the ref.
-			const wakeAgent: AgentDefinition = {
-				name: ref.displayName,
-				description: "",
-				systemPrompt: init.systemPrompt,
-				source: "user",
-			};
-			attachIrcWakeTurnMonitor(session, {
-				id: ref.id,
-				agent: wakeAgent,
-				eventBus: ctx.eventBus,
-				subagentEventBus: ctx.subagentEventBus,
-				sessionFile,
-				outputSchema: init.outputSchema,
-				outputSchemaMode: init.outputSchemaMode,
-				// Anchor artifacts to the revived ref's own dir (its parent's children
-				// dir), not the live root session's, matching the spawn callers (#11563).
-				artifactsDir: path.dirname(sessionFile),
-			});
-			return session;
+			try {
+				// Clamp the active set to the persisted list: createAgentSession's
+				// `alwaysInclude` can re-add non-defaultInactive extension/custom tools
+				// the original run didn't carry. Unknown/missing names are ignored.
+				await session.setActiveToolsByName([...revivedToolNames, ...session.getMountedXdevToolNames()]);
+				// Wire the extension runtime exactly as the live executor does. Without
+				// this the runner stays pre-init, every action method throws
+				// `ExtensionRuntimeNotInitializedError`, and a `tool_call` handler that
+				// touches a runtime action trips the fail-closed gate in `emitToolCall`,
+				// blocking every tool — including the hidden `yield` — in the revived
+				// agent. `session_start` also re-runs so extensions restore per-session
+				// state (issue #8824).
+				await initializeExtensions(session, {
+					reportSendError: (action, err) => logger.error("Extension send failed", { action, error: err.message }),
+					reportRuntimeError: err =>
+						logger.error("Extension error", { path: err.extensionPath, error: err.error }),
+				});
+				// Cold revives must drive registry status themselves — createAgentSession
+				// doesn't wire this generically (the live path does it in the executor).
+				// The internal run-state signal precedes deferrable public `agent_end`,
+				// keeping idle-TTL ownership synchronized even while prompts unwind.
+				registry.syncSessionStatus(ref.id, session);
+				// Persisted files predate an agent-source field, so cold-revived frames
+				// report the runtime-neutral `user` source; name comes from the ref.
+				const wakeAgent: AgentDefinition = {
+					name: ref.displayName,
+					description: "",
+					systemPrompt: init.systemPrompt,
+					source: "user",
+				};
+				attachIrcWakeTurnMonitor(session, {
+					id: ref.id,
+					agent: wakeAgent,
+					eventBus: ctx.eventBus,
+					subagentEventBus: ctx.subagentEventBus,
+					sessionFile,
+					outputSchema: init.outputSchema,
+					outputSchemaMode: init.outputSchemaMode,
+					// Anchor artifacts to the revived ref's own dir (its parent's children
+					// dir), not the live root session's, matching the spawn callers (#11563).
+					artifactsDir: path.dirname(sessionFile),
+				});
+				pendingManager.handOff();
+				return session;
+			} catch (error) {
+				// A failed cold revive must keep its parked ref retriable, not leave
+				// createAgentSession's attached half-initialized session addressable.
+				if (registry.get(ref.id) === expectedRef && expectedRef.session === session) {
+					registry.detachSession(ref.id, session);
+					registry.setStatus(ref.id, "parked", expectedRef);
+				}
+				try {
+					await session.dispose();
+				} catch (disposeError) {
+					logger.warn("Failed to dispose a partially revived subagent", { error: String(disposeError) });
+				}
+				throw error;
+			}
 		};
 	};
 }

@@ -11,6 +11,7 @@ import type { Settings } from "../config/settings";
 import { EditTool } from "../edit";
 import { checkPythonKernelAvailability } from "../eval/py/kernel";
 import type { ToolPathWithSource } from "../extensibility/custom-tools";
+import type { ToolApprovalRequester } from "../extensibility/extensions/tool-approval-requester";
 import type {
 	BeforeSubagentSpawnEvent,
 	BeforeSubagentSpawnEventResult,
@@ -354,6 +355,12 @@ export interface ToolSession {
 	getToolForEvalBridge?: (name: string) => AgentTool | undefined;
 	/** Current session context for eval-bridged tool execution. */
 	getToolContext?: () => AgentToolContext | undefined;
+	/**
+	 * Host approver registered on the session's extension runner (RPC
+	 * `set_approval_handler: host`). Approvals raised outside the tool wrapper,
+	 * such as eval prelude host calls, route through it instead of the select dialog.
+	 */
+	getToolApprovalRequester?: () => ToolApprovalRequester | undefined;
 	/** Names currently authorized for invocation through the eval bridge. */
 	getEvalBridgeToolNames?: () => readonly string[];
 	/** Direct partition of the active Code Mode surface; undefined when Code Mode is inactive. */
@@ -418,18 +425,16 @@ export interface ToolSession {
 	/** Agent output manager for unique agent:// IDs across task invocations */
 	agentOutputManager?: AgentOutputManager;
 	/**
-	 * Async job manager scoped to this session.
+	 * Async job manager scoped to this session: the async-job domain of the
+	 * root that owns it.
 	 *
-	 * - Top-level session that constructed one: its own manager.
-	 * - Subagent (`parentTaskPrefix` set): the parent's manager, so background
-	 *   bash/task work and `onJobComplete` deliveries flow into the conversation
-	 *   that spawned it.
-	 * - Secondary in-process top-level session that found a singleton already
-	 *   installed (issue #1923): `undefined`. Tools refuse async work rather
-	 *   than silently route completions into the owning session's `yieldQueue`.
+	 * - Top-level session: the manager it owns (one per root).
+	 * - Subagent (`parentTaskPrefix` set): its spawning root's manager, handed
+	 *   down explicitly, so background bash/task work and deliveries flow into
+	 *   the conversation that spawned it.
+	 * - Hand-built sessions without one: `undefined`; tools refuse async work.
 	 *
-	 * Tools MUST use this instead of `AsyncJobManager.instance()` so a secondary
-	 * session never borrows the owning session's manager by accident.
+	 * There is no process-global manager: tools MUST use this field.
 	 */
 	asyncJobManager?: AsyncJobManager;
 	/** MCP manager visible to subagents without relying on the process-global singleton. */

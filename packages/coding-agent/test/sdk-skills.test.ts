@@ -10,7 +10,7 @@ import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
+import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 import { getAgentDir, setAgentDir } from "@oh-my-pi/pi-utils/dirs";
 import { cleanupTempHome } from "./helpers/temp-home-cleanup";
 
@@ -113,6 +113,7 @@ Loaded via symbolic link.
 
 	it("should discover skills by default and expose them on session.skills", async () => {
 		const { session } = await createAgentSession({
+			agentId: `Skills-${Snowflake.next()}`,
 			cwd: tempDir,
 			agentDir: tempDir,
 			sessionManager: SessionManager.inMemory(),
@@ -155,6 +156,7 @@ Loaded via symbolic link.
 		let session: AgentSession | undefined;
 		try {
 			({ session } = await createAgentSession({
+				agentId: `Skills-${Snowflake.next()}`,
 				...baseSessionOptions,
 				sessionManager: SessionManager.inMemory(),
 				settings: createIsolatedSkillsSettings([settingsPackage]),
@@ -168,6 +170,7 @@ Loaded via symbolic link.
 			await session.dispose();
 			session = undefined;
 			({ session } = await createAgentSession({
+				agentId: `Skills-${Snowflake.next()}`,
 				...baseSessionOptions,
 				sessionManager: SessionManager.inMemory(),
 				settings: createIsolatedSkillsSettings([settingsPackage]),
@@ -183,6 +186,7 @@ Loaded via symbolic link.
 
 	it("should discover skills when skill directory is a symlink", async () => {
 		const { session } = await createAgentSession({
+			agentId: `Skills-${Snowflake.next()}`,
 			cwd: tempDir,
 			agentDir: tempDir,
 			sessionManager: SessionManager.inMemory(),
@@ -199,6 +203,7 @@ Loaded via symbolic link.
 		fs.writeFileSync(path.join(userAgentDir, "placeholder.txt"), "placeholder");
 
 		const { session } = await createAgentSession({
+			agentId: `Skills-${Snowflake.next()}`,
 			cwd: tempDir,
 			agentDir: tempDir,
 			sessionManager: SessionManager.inMemory(),
@@ -211,6 +216,7 @@ Loaded via symbolic link.
 
 	it("refreshSkills reloads project skills on an existing session", async () => {
 		const { session } = await createAgentSession({
+			agentId: `Skills-${Snowflake.next()}`,
 			cwd: tempDir,
 			agentDir: tempDir,
 			sessionManager: SessionManager.inMemory(tempDir),
@@ -249,6 +255,7 @@ This skill is added after session creation.
 	it("a live skills.customDirectories edit exposes the directory's skills without restart", async () => {
 		const settings = createIsolatedSkillsSettings();
 		const { session } = await createAgentSession({
+			agentId: `Skills-${Snowflake.next()}`,
 			cwd: tempDir,
 			agentDir: tempDir,
 			sessionManager: SessionManager.inMemory(tempDir),
@@ -282,6 +289,7 @@ This skill is added after session creation.
 		const settings = createIsolatedSkillsSettings();
 		cfgAutolearnEnabled.set(settings, true);
 		const { session } = await createAgentSession({
+			agentId: `Skills-${Snowflake.next()}`,
 			cwd: tempDir,
 			agentDir: managedAgentDir,
 			sessionManager: SessionManager.inMemory(tempDir),
@@ -334,6 +342,7 @@ This skill is added after session creation.
 
 	it("should have empty skills when options.skills is empty array (--no-skills)", async () => {
 		const { session } = await createAgentSession({
+			agentId: `Skills-${Snowflake.next()}`,
 			cwd: tempDir,
 			agentDir: tempDir,
 			sessionManager: SessionManager.inMemory(),
@@ -358,6 +367,7 @@ This skill is added after session creation.
 		};
 
 		const { session } = await createAgentSession({
+			agentId: `Skills-${Snowflake.next()}`,
 			cwd: tempDir,
 			agentDir: tempDir,
 			sessionManager: SessionManager.inMemory(),

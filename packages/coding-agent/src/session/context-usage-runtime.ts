@@ -13,7 +13,6 @@ import { resolveSpeculationMethod } from "./compaction-methods";
 import { estimateInlineSavings } from "./snapcompact-inline";
 import { resolveSpeculationLeadTokens } from "./speculation-lead";
 
-import { cfgSkillful } from "./settings";
 import {
 	cfgCompaction,
 	cfgSnapcompactShape,
@@ -62,7 +61,6 @@ export function computeSessionContextBreakdown(
 	return computeContextBreakdown(session, {
 		compaction: cfgCompaction.get(session.settings),
 		sourceRevision: session.settings.revision,
-		skillful: cfgSkillful.get(session.settings),
 		snapcompact,
 	});
 }

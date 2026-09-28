@@ -2187,6 +2187,8 @@ describe("createAgentSession defaultInactive tool activation", () => {
 			settings: Settings.isolated({ "dev.autoqa": true }),
 			toolNames: ["read"],
 			restrictToolNames: true,
+			// Both sessions are live at once, so the second is its own root.
+			agentId: "RestrictedRoot",
 		});
 
 		try {

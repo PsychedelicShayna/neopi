@@ -101,7 +101,12 @@ import {
 	type JudgmentBatchProgress,
 } from "../eval/judgment-batch-events";
 import { autosaveApprovedPlan, planSaveFileName } from "../plan-mode/plan-autosave";
-import { resolvePlanModelTransition } from "../plan-mode/model-transition";
+import {
+	type PlanPreviousModel,
+	resolvePlanModelRestore,
+	resolvePlanModelTransition,
+} from "../plan-mode/model-transition";
+import { planModeToolSet } from "../plan-mode/session-plan-mode";
 import guidedGoalInterviewPrompt from "../prompts/goals/guided-goal-interview.md" with { type: "text" };
 import planFilenamePrompt from "../prompts/system/plan-filename.md" with { type: "text" };
 import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
@@ -1150,6 +1155,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	lastStatusSpacer: Spacer | undefined = undefined;
 	lastStatusText: Text | undefined = undefined;
 	fileSlashCommands: Set<string> = new Set();
+	slashCommandNames: ReadonlySet<string> = new Set();
 	skillCommands: Map<string, Skill> = new Map();
 	oauthManualInput: OAuthManualInputManager = new OAuthManualInputManager();
 	/** Owns hosting: manual `/collab`, `collab.autoStart`, and room rotation on session switch. */
@@ -2235,10 +2241,9 @@ export class InteractiveMode implements InteractiveModeContext {
 				description: template.description,
 				icon: promptIcon,
 			}));
-		this.#baseAutocompleteProvider = this.#inputController.createAutocompleteProvider(
-			[...this.#pendingSlashCommands, ...fileSlashCommands, ...promptTemplateCommands],
-			basePath,
-		);
+		const allCommands = [...this.#pendingSlashCommands, ...fileSlashCommands, ...promptTemplateCommands];
+		this.slashCommandNames = new Set(allCommands.flatMap(command => [command.name, ...(command.aliases ?? [])]));
+		this.#baseAutocompleteProvider = this.#inputController.createAutocompleteProvider(allCommands, basePath);
 		this.#applyAutocompleteProvider();
 	}
 
@@ -4151,28 +4156,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.planModePaused = false;
 
 		const planFilePath = options?.planFilePath ?? (await this.#getPlanFilePath());
-		const previousTools = this.session.getEnabledToolNames();
-		const previousMountedTools = this.session.getMountedXdevToolNames();
-		// `plan-mode-active.md` instructs the agent to draft the plan file with
-		// `write` and refine it with `edit`, and plan approval itself is a `write`
-		// to `xd://propose`. Both must be in the active set or the agent falls
-		// back to `edit` on a non-existent file and stalls — and cannot submit the plan.
-		// `edit` is an essential built-in and always ships top-level; re-activate
-		// `write` here only when the current registry entry is the built-in write
-		// tool (issue #3165). A shadowing extension tool named `write` must stay
-		// inactive because plan mode's read-only guarantee relies on the built-in
-		// write/edit guard. The standing handler below consumes plan-approval
-		// dispatches.
-		const planAugmentations: string[] = [];
-		if (this.session.hasBuiltInTool("write")) {
-			planAugmentations.push("write");
-		}
-		const uniquePlanTools = [...new Set([...previousTools, ...planAugmentations])];
-
-		this.#planModePreviousToolPresentation = {
-			enabled: previousTools.filter(name => !isMCPToolName(name)),
-			mounted: previousMountedTools.filter(name => !isMCPToolName(name)),
-		};
+		// Plan tools add the built-in `write` (plan drafting and `xd://propose`
+		// approval); the standing handler below consumes plan-approval dispatches.
+		const { previous: previousPresentation, planTools: uniquePlanTools } = planModeToolSet(this.session);
+		this.#planModePreviousToolPresentation = previousPresentation;
 		this.planModePlanFilePath = planFilePath;
 		this.planModeEnabled = true;
 		// Suppress cache-miss marker on the next turn: plan mode changes the system
@@ -4212,19 +4199,20 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.showStatus(`Plan mode enabled. Plan file: ${planFilePath}`);
 	}
 
-	async #restorePlanPreviousModel(prev: { model: Model; thinkingLevel?: ConfiguredThinkingLevel }): Promise<void> {
-		if (modelsAreEqual(this.session.model, prev.model)) {
+	async #restorePlanPreviousModel(prev: PlanPreviousModel): Promise<void> {
+		const restore = resolvePlanModelRestore(this.session.model, prev, this.session.isStreaming);
+		if (restore.kind === "thinking") {
 			// Same model — only thinking level may differ. Avoid setModelTemporary()
 			// which would reset provider-side sessions and break continuity.
-			this.session.setThinkingLevel(prev.thinkingLevel);
-		} else if (this.session.isStreaming) {
+			this.session.setThinkingLevel(restore.thinkingLevel);
+		} else if (restore.deferred) {
 			this.#pendingModelSwitch = {
-				model: prev.model,
-				thinkingLevel: prev.thinkingLevel,
+				model: restore.model,
+				thinkingLevel: restore.thinkingLevel,
 			};
 			this.#pendingPlanModelSwitch = false;
 		} else {
-			await this.session.setModelTemporary(prev.model, prev.thinkingLevel);
+			await this.session.setModelTemporary(restore.model, restore.thinkingLevel);
 		}
 	}
 

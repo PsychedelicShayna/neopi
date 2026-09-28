@@ -49,7 +49,8 @@ import type {
 	UsageFallbackConfirmation,
 	UsageFallbackConfirmer,
 } from "./agent-session-types";
-import { assistantTurnProducedOutput, isEmptyAssistantStop, isEmptyErrorTurn } from "./messages";
+import { setMessageEntryId } from "./message-entry-ids";
+import { assistantTurnProducedOutput, type CustomMessage, isEmptyAssistantStop, isEmptyErrorTurn } from "./messages";
 import {
 	type ActiveRetryFallbackState,
 	calculateRetryBackoffDelayMs,
@@ -2737,20 +2738,24 @@ export class TurnRecovery {
 	#maybeInjectThinkingLoopRedirect(id: number): void {
 		if (!AIError.is(id, AIError.Flag.ThinkingLoop)) return;
 		if (cfgModelLoopGuardEnabled.get(this.#host.settings) !== true) return;
-		this.#host.agent.appendMessage({
+		const redirect: CustomMessage = {
 			role: "custom",
 			customType: THINKING_LOOP_REDIRECT_TYPE,
 			content: thinkingLoopRedirectTemplate,
 			display: false,
 			attribution: "agent",
 			timestamp: Date.now(),
-		});
-		this.#host.sessionManager.appendCustomMessageEntry(
-			THINKING_LOOP_REDIRECT_TYPE,
-			thinkingLoopRedirectTemplate,
-			false,
-			undefined,
-			"agent",
+		};
+		this.#host.agent.appendMessage(redirect);
+		setMessageEntryId(
+			redirect,
+			this.#host.sessionManager.appendCustomMessageEntry(
+				THINKING_LOOP_REDIRECT_TYPE,
+				thinkingLoopRedirectTemplate,
+				false,
+				undefined,
+				"agent",
+			),
 		);
 	}
 

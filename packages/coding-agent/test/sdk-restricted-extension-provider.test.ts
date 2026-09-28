@@ -168,6 +168,7 @@ describe("restricted sessions sharing extension providers", () => {
 				...createOptions(),
 				model: parent.model,
 				restrictToolNames: true,
+				agentId: "RestrictedChild",
 				preloadedPreparedExtensions: parent.preparedExtensions,
 				extensions: [
 					() => {
@@ -210,6 +211,7 @@ describe("restricted sessions sharing extension providers", () => {
 				...createOptions(),
 				model: child.model,
 				restrictToolNames: true,
+				agentId: "RestrictedGrandchild",
 				preloadedPreparedExtensions: child.preparedExtensions,
 			});
 			try {
@@ -309,6 +311,7 @@ describe("restricted sessions sharing extension providers", () => {
 				...createOptions(),
 				model: parent.model,
 				restrictToolNames: true,
+				agentId: "RestrictedChild",
 				preloadedPreparedExtensions: parent.preparedExtensions,
 				toolNames: ["read"],
 			});

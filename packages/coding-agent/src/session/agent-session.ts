@@ -109,18 +109,23 @@ import { formatUsageResetWindow } from "@oh-my-pi/pi-tui/overlays/usage-display"
 import type { MixtureSessionEvent, SessionMixtureHost } from "../moa/host";
 import { isMixtureModel } from "../moa/provider";
 import { loadAdvisorTranscriptCosts } from "../advisor";
-import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, type AsyncJob, AsyncJobManager } from "../async";
+import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, type AsyncJob, type AsyncJobManager } from "../async";
 import { reset as resetCapabilities } from "../capability";
 import type { EffectiveExtensionRoots } from "../capability/types";
 import {
 	CHAT_MODE_ENTRY_TYPE,
+	type ChatModeChangeRequest,
 	type ChatModeConfig,
 	chatModeEntryData,
 	chatModeIncludes,
+	chatModeState,
 	readChatModeEntry,
+	readLastActiveChatMode,
+	resolveChatModeChange,
 	sameChatMode,
 } from "../chat/chat-mode";
 import { renderChatCompactionPrompt } from "../chat/chat-system-prompt";
+import { cfgChatInclude } from "../chat/settings";
 import { SessionChronicler } from "../chronicler/session-chronicler";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
 import type { ModelRegistry } from "../config/model-registry";
@@ -256,6 +261,7 @@ import { PROPOSE_DEVICE_NAME } from "@oh-my-pi/pi-tui/tools/resolve";
 import { supportsExternalThinking } from "../tools/think";
 import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
+import { isMountableUnderXdev } from "../tools/xdev";
 import type { WorkPoolYieldItem } from "../task/workpool-yield";
 import type { AgentDefinition } from "../task/types";
 import type { ModelMention } from "@oh-my-pi/pi-tui/prompt/model-mention-syntax";
@@ -288,6 +294,7 @@ import type {
 	Prewalk,
 	PromptOptions,
 	ResetSessionContextResult,
+	RootWorkCancelResult,
 	ResolvedRoleModel,
 	RestoredQueuedMessage,
 	RoleModelCycle,
@@ -403,6 +410,7 @@ import {
 	type SessionAdvisorsHost,
 } from "./session-advisors";
 import type { BuildSessionContextOptions, SessionContext } from "./session-context";
+import { getMessageEntryId, setMessageEntryId } from "./message-entry-ids";
 import { getRestorableSessionModels, isTranscriptEntry } from "./session-context";
 import { isUserRequestEntry, transcriptEntryMessage, userTurnDraft } from "@oh-my-pi/pi-tui/chat/transcript-entry";
 import { formatSessionDumpText } from "./session-dump-format";
@@ -612,9 +620,6 @@ type SetSessionNameWithTrigger = (
 	trigger?: SessionNameTrigger,
 ) => Promise<boolean>;
 
-const kPersistedSessionEntryId = Symbol("persistedSessionEntryId");
-type PersistedAssistantMessage = AssistantMessage & { [kPersistedSessionEntryId]?: string };
-
 /**
  * Clone one top-level notification field without ever returning an object owned
  * by the live session. Most values take the lossless structured-clone path. If
@@ -671,6 +676,9 @@ export function powerAssertionOptions(mode: "off" | "idle" | "display" | "system
 		user: mode === "system",
 	};
 }
+
+/** A session change either carries the live model or loads an existing session. */
+export type SessionChangeOrigin = "carried" | "loaded";
 
 export class AgentSession implements SettingsScope {
 	readonly agent: Agent;
@@ -751,7 +759,7 @@ export class AgentSession implements SettingsScope {
 	#activeToolExecutionUpdates = new Map<string, Extract<AgentSessionEvent, { type: "tool_execution_update" }>>();
 	#runStateListeners = new Set<(state: "running" | "idle") => void>();
 	#commandMetadataChangedListeners: CommandMetadataChangedListener[] = [];
-	#sessionChangeCallbacks = new Set<() => void>();
+	#sessionChangeCallbacks = new Set<(origin: SessionChangeOrigin) => void>();
 	#observedSessionId: string | undefined;
 
 	/** Messages queued to be included with the next user prompt as context ("asides"). */
@@ -824,18 +832,20 @@ export class AgentSession implements SettingsScope {
 	readonly #eval: EvalRunner;
 	readonly #evalToolSession: ToolSession | undefined;
 	/**
-	 * AsyncJobManager owned by this session (top-level only). Subagents leave
-	 * this undefined and **MUST NOT** dispose the global instance on teardown.
+	 * AsyncJobManager owned by this session: the async-job domain of the root
+	 * this top-level session heads. Subagents leave this undefined and **MUST
+	 * NOT** dispose their root's manager on teardown.
 	 */
 	readonly #ownedAsyncJobManager: AsyncJobManager | undefined;
 	/**
 	 * AsyncJobManager scoped to this session for introspection/cancellation.
 	 *
-	 * This differs from `#ownedAsyncJobManager`: subagents can inherit a parent
-	 * manager for their own owner id, while secondary top-level sessions are left
-	 * undefined to avoid reading the primary's jobs.
+	 * This differs from `#ownedAsyncJobManager`: subagents use their root's
+	 * manager for their own owner id; a top-level session uses the one it owns.
 	 */
 	readonly #asyncJobManager: AsyncJobManager | undefined;
+	/** Root-wide cancellation wired by createAgentSession; top-level sessions only. */
+	readonly #cancelRootWork: ((options: { timeoutMs?: number }) => Promise<RootWorkCancelResult>) | undefined;
 	/** Clears this session's owner delivery sink registration; set when a manager + agent id exist. */
 	#unregisterAsyncDeliverySink: (() => void) | undefined;
 	/**
@@ -867,11 +877,14 @@ export class AgentSession implements SettingsScope {
 	#extensionRunner: ExtensionRunner | undefined = undefined;
 	#chatMode: ChatModeConfig | undefined;
 	#chatModeJournaledSessionId: string | undefined;
+	#chatModeBlockedReason: string | undefined;
+	/** Chat mode left most recently this process; a bare `/chat` re-enters it. */
+	#lastChatMode: ChatModeConfig | undefined;
+	/** Tool selection saved when chat mode was entered live; restored when it is left. */
+	#chatModeStashedTools: { enabled: string[]; mounted: string[] } | undefined;
 	#getEvalPreludes: (() => readonly EvalPreludeDefinition[]) | undefined;
 	#reconcileBrowserMcpFilter: AgentSessionConfig["reconcileBrowserMcpFilter"];
 	#skillDescriptions: SkillDescriptionCatalog;
-	#promptSkillsSource: readonly Skill[] | undefined;
-	#promptSkills: readonly Skill[] = [];
 	/**
 	 * Backs `ctx.setInterval`/`setTimeout`/`clearTimer` for the runner-less
 	 * command-context fallback (SDK embeddings with no extension runner). Lazily
@@ -1557,6 +1570,7 @@ export class AgentSession implements SettingsScope {
 		});
 		this.#ownedAsyncJobManager = config.ownedAsyncJobManager;
 		this.#asyncJobManager = config.asyncJobManager ?? config.ownedAsyncJobManager;
+		this.#cancelRootWork = config.cancelRootWork;
 		const modelControlsHost: ModelControlsHost = {
 			agent: this.agent,
 			settings: this.settings,
@@ -1587,6 +1601,8 @@ export class AgentSession implements SettingsScope {
 		this.#slashCommands = config.slashCommands ?? [];
 		this.#extensionRunner = config.extensionRunner;
 		this.#chatMode = config.chatMode;
+		this.#chatModeBlockedReason = config.chatModeBlockedReason;
+		this.#chatModeStashedTools = config.chatMode ? config.chatModeCodingTools : undefined;
 		this.#getEvalPreludes = config.getEvalPreludes;
 		this.#reconcileBrowserMcpFilter = config.reconcileBrowserMcpFilter;
 		this.#customCommands = config.customCommands ?? [];
@@ -1615,7 +1631,7 @@ export class AgentSession implements SettingsScope {
 			scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
 			waitForSessionMessagePersistence: message => this.#waitForSessionMessagePersistence(message),
 			appendSessionMessage: message => this.#appendSessionMessage(message),
-			persistedAssistantEntryId: message => (message as PersistedAssistantMessage)[kPersistedSessionEntryId],
+			persistedAssistantEntryId: message => getMessageEntryId(message),
 			sessionMessageAlreadyPersisted: message => this.#sessionMessageAlreadyPersisted(message),
 			setModelWithProviderSessionReset: model => this.#setModelWithProviderSessionReset(model),
 			resolveActiveEditMode: () => this.#tools.resolveActiveEditMode(),
@@ -1989,9 +2005,15 @@ export class AgentSession implements SettingsScope {
 				);
 			},
 		});
-		this.#cancelExitRecorder = postmortem.register(`agent-session:${this.sessionManager.getSessionId()}`, reason => {
-			this.#recordSessionExit(reason);
-		});
+		// A keep-alive postmortem.cleanup() pass does not end the session and
+		// must not consume the once-only diagnostic before the eventual exit.
+		this.#cancelExitRecorder = postmortem.register(
+			`agent-session:${this.sessionManager.getSessionId()}`,
+			reason => {
+				this.#recordSessionExit(reason);
+			},
+			{ exitOnly: true },
+		);
 		this.#cancelFatalRecoveryHint = postmortem.registerFatalRecoveryHint(() => {
 			const sessionId = this.sessionManager.getSessionId();
 			if (!sessionId || !this.sessionManager.getSessionFile()) return undefined;
@@ -2627,11 +2649,9 @@ export class AgentSession implements SettingsScope {
 	 * Cleanup runs against this session's scoped manager: running jobs are
 	 * cancelled, finished rows are evicted with their pending deliveries, and any
 	 * async-result follow-up already queued for injection is dropped. Subagents have
-	 * unique agent ids and inherit the parent's manager to clean up their own
-	 * jobs. A secondary in-process top-level session gets no scoped manager,
-	 * because it defaults to `MAIN_AGENT_ID`; reaching through the global
-	 * singleton would tear down the owning primary session's bash/task jobs at
-	 * dispose time (issue #1923).
+	 * unique agent ids and use their root's manager, so this never reaches a
+	 * parent's or sibling's jobs; a top-level session only ever sees its own
+	 * root's manager, so it never reaches another root's jobs either.
 	 *
 	 * No-op when no manager is reachable or this session has no agent id.
 	 */
@@ -2727,6 +2747,29 @@ export class AgentSession implements SettingsScope {
 		await manager.waitForOwnerJobs(this.#agentId, { excludeSuppressed: true });
 		await manager.drainDeliveries({ filter: { ownerId: this.#agentId } });
 		await this.waitForIdle();
+	}
+
+	/**
+	 * Root-wide cancellation for embedders hosting several top-level sessions in
+	 * one process. Cancels every running job in the async-job domain this root
+	 * owns — its own and every descendant's bash, task, and eval work — waits
+	 * until `timeoutMs` (default 5s) for them to settle, then releases the root's
+	 * kept-alive descendant agents. Jobs and agents of any other root are never
+	 * touched, and this session stays usable: new async work may be launched
+	 * afterward. Interrupted descendants are released (transcripts kept, refs
+	 * unregistered), not tombstoned as kills; one still settling at the
+	 * deadline is released once its job settles. Workpools owned in this root's
+	 * tree are closed, so their names can be reused. The root's own in-flight turn is not aborted; call
+	 * {@link abort} first to stop it. Idempotent.
+	 *
+	 * Only a top-level session owns a job domain; calling this on a subagent
+	 * session throws.
+	 */
+	async cancelRootWork(options: { timeoutMs?: number } = {}): Promise<RootWorkCancelResult> {
+		if (!this.#ownedAsyncJobManager || !this.#cancelRootWork) {
+			throw new Error("cancelRootWork() requires a top-level session that owns its async-job domain.");
+		}
+		return this.#cancelRootWork(options);
 	}
 
 	/**
@@ -3262,6 +3305,10 @@ export class AgentSession implements SettingsScope {
 			const entry = branch[index];
 			if (entry.type !== "message") continue;
 			if (sessionMessagePersistenceKey(entry.message) !== key) continue;
+			// Distinct reserved submissions can have identical text and timestamps;
+			// a prior entry must not consume the later submission's id.
+			const reservedId = getMessageEntryId(message);
+			if (reservedId !== undefined && entry.id !== reservedId) continue;
 			if (!sameMessageContent(entry.message, message)) continue;
 			if (
 				entry.message.role === "assistant" &&
@@ -3287,10 +3334,9 @@ export class AgentSession implements SettingsScope {
 	): string {
 		const cache = this.#persistedMessageKeys;
 		const wasFresh = cache !== undefined && cache.anchor === this.#persistedMessageKeysAnchor();
-		const entryId = this.sessionManager.appendMessage(message);
-		if (message.role === "assistant") {
-			(message as PersistedAssistantMessage)[kPersistedSessionEntryId] = entryId;
-		}
+		// A prompt that reserved its entry id carries it here; any other id is
+		// ignored by the session manager, which records the id it wrote.
+		const entryId = this.sessionManager.appendMessage(message, getMessageEntryId(message));
 		const key = sessionMessagePersistenceKey(message);
 		if (wasFresh && cache && key) {
 			cache.keys.add(key);
@@ -3378,16 +3424,20 @@ export class AgentSession implements SettingsScope {
 			// One-run instructions must not return from persisted history: prewalk
 			// nudges are consumed once, and Vibe context is rebuilt only while active.
 			if (!isPrewalkPlanNudge(message) && message.customType !== VIBE_MODE_CONTEXT_MESSAGE_TYPE) {
-				this.sessionManager.appendCustomMessageEntry(
-					message.customType,
-					message.content,
-					message.display,
-					message.details,
-					message.attribution ?? "agent",
-					// Preserve the initiating message's own timestamp: the entry
-					// otherwise records emission time, which on rebuild excludes
-					// provider preparation / hook time from the prompt→yield anchor.
-					message.timestamp,
+				setMessageEntryId(
+					message,
+					this.sessionManager.appendCustomMessageEntry(
+						message.customType,
+						message.content,
+						message.display,
+						message.details,
+						message.attribution ?? "agent",
+						// Preserve the initiating message's own timestamp: the entry
+						// otherwise records emission time, which on rebuild excludes
+						// provider preparation / hook time from the prompt→yield anchor.
+						message.timestamp,
+						getMessageEntryId(message),
+					),
 				);
 			}
 			if (message.role === "custom" && message.customType === "ttsr-injection") {
@@ -3739,12 +3789,15 @@ export class AgentSession implements SettingsScope {
 			await messageEndPersistence;
 			if (this.#promptGeneration !== eventPromptGeneration) return;
 			if (interruptedThinkingMessage) {
-				this.sessionManager.appendCustomMessageEntry(
-					interruptedThinkingMessage.customType,
-					interruptedThinkingMessage.content,
-					interruptedThinkingMessage.display,
-					interruptedThinkingMessage.details,
-					interruptedThinkingMessage.attribution,
+				setMessageEntryId(
+					interruptedThinkingMessage,
+					this.sessionManager.appendCustomMessageEntry(
+						interruptedThinkingMessage.customType,
+						interruptedThinkingMessage.content,
+						interruptedThinkingMessage.display,
+						interruptedThinkingMessage.details,
+						interruptedThinkingMessage.attribution,
+					),
 				);
 			}
 			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
@@ -4971,8 +5024,8 @@ export class AgentSession implements SettingsScope {
 		return this.#sessionTransitionScope;
 	}
 
-	/** Register cleanup that runs when this AgentSession adopts a different session ID. */
-	registerSessionChangeCallback(callback: () => void): () => void {
+	/** Register cleanup on session ID changes, including whether an existing session was loaded. */
+	registerSessionChangeCallback(callback: (origin: SessionChangeOrigin) => void): () => void {
 		this.#sessionChangeCallbacks.add(callback);
 		return () => this.#sessionChangeCallbacks.delete(callback);
 	}
@@ -5057,7 +5110,7 @@ export class AgentSession implements SettingsScope {
 			this.#observedSessionId = currentSessionId;
 		} else if (this.#observedSessionId !== currentSessionId) {
 			this.#observedSessionId = currentSessionId;
-			if (notifyChange) this.#notifySessionChangeCallbacks();
+			if (notifyChange) this.#notifySessionChangeCallbacks("carried");
 		}
 		const sid = this.#activeProviderSessionId(sessionId);
 		this.agent.sessionId = sid;
@@ -5080,10 +5133,10 @@ export class AgentSession implements SettingsScope {
 		if (this.#advisors) this.#advisors.refreshProviderIdentity();
 	}
 
-	#notifySessionChangeCallbacks(): void {
+	#notifySessionChangeCallbacks(origin: SessionChangeOrigin): void {
 		for (const callback of Array.from(this.#sessionChangeCallbacks)) {
 			try {
-				callback();
+				callback(origin);
 			} catch (error) {
 				logger.warn("Session change callback failed", { error: String(error) });
 			}
@@ -5206,16 +5259,10 @@ export class AgentSession implements SettingsScope {
 		this.#cancelOwnAsyncJobs(manager ? ASYNC_JOB_MANAGER_SHUTDOWN_REASON : undefined);
 		if (!manager) return;
 
-		try {
-			const drained = await manager.dispose({ timeoutMs: 3_000 });
-			const deliveryState = manager.getDeliveryState();
-			if (drained === false && deliveryState) {
-				logger.warn("Async job completion deliveries still pending during dispose", { ...deliveryState });
-			}
-		} finally {
-			if (AsyncJobManager.instance() === manager) {
-				AsyncJobManager.setInstance(undefined);
-			}
+		const drained = await manager.dispose({ timeoutMs: 3_000 });
+		const deliveryState = manager.getDeliveryState();
+		if (drained === false && deliveryState) {
+			logger.warn("Async job completion deliveries still pending during dispose", { ...deliveryState });
 		}
 	}
 
@@ -6096,8 +6143,41 @@ export class AgentSession implements SettingsScope {
 	}
 
 	/** Replaces host-owned RPC tools before the next model call. */
-	refreshRpcHostTools(rpcTools: AgentTool[]): Promise<void> {
-		return this.#tools.refreshRpcHostTools(rpcTools);
+	async refreshRpcHostTools(rpcTools: AgentTool[]): Promise<void> {
+		const stash = this.#chatModeStashedTools;
+		const previousHostNames = new Set(stash?.enabled.filter(name => this.#tools.hasRpcHostTool(name)));
+		const previouslyMountable = stash
+			? new Set(
+					[...previousHostNames].filter(name => {
+						const tool = this.#tools.getToolByName(name);
+						return tool !== undefined && isMountableUnderXdev(tool);
+					}),
+				)
+			: undefined;
+		const previouslyMounted = stash ? new Set(stash.mounted) : undefined;
+		await this.#tools.refreshRpcHostTools(rpcTools, !this.#chatMode);
+		if (this.#chatMode && stash && this.#chatModeStashedTools === stash) {
+			const registered = new Set(rpcTools.map(tool => tool.name));
+			const mountable = new Set(rpcTools.filter(isMountableUnderXdev).map(tool => tool.name));
+			const retained = [...previousHostNames].filter(name => registered.has(name));
+			this.#chatModeStashedTools = {
+				enabled: [
+					...stash.enabled.filter(name => !previousHostNames.has(name)),
+					...new Set([...retained, ...rpcTools.filter(tool => !tool.hidden).map(tool => tool.name)]),
+				],
+				mounted: [
+					...stash.mounted.filter(name => !previousHostNames.has(name)),
+					...rpcTools
+						.filter(
+							tool =>
+								(!tool.hidden || previousHostNames.has(tool.name)) &&
+								mountable.has(tool.name) &&
+								(!previouslyMountable?.has(tool.name) || previouslyMounted?.has(tool.name)),
+						)
+						.map(tool => tool.name),
+				],
+			};
+		}
 	}
 
 	/** Whether auto-compaction is currently running */
@@ -6314,6 +6394,19 @@ export class AgentSession implements SettingsScope {
 		return this.#prewalk.state;
 	}
 
+	/** Plan-mode state listeners; see {@link subscribePlanModeChanged}. */
+	#planModeListeners = new Set<(state: PlanModeState | undefined) => void>();
+
+	/**
+	 * Observe every {@link setPlanModeState} call, whichever path makes it (host
+	 * mode switches, plan approval, PlanYolo). Listeners run synchronously after
+	 * the state lands; returns an unsubscribe function.
+	 */
+	subscribePlanModeChanged(listener: (state: PlanModeState | undefined) => void): () => void {
+		this.#planModeListeners.add(listener);
+		return () => this.#planModeListeners.delete(listener);
+	}
+
 	setPlanModeState(state: PlanModeState | undefined): void {
 		this.#planModeState = state;
 		if (state?.enabled) {
@@ -6325,6 +6418,13 @@ export class AgentSession implements SettingsScope {
 			// Drop any unconsumed forced decision so a post-plan execution turn
 			// does not inherit a stale `required` tool choice.
 			this.#toolChoiceQueue.removeByLabel("plan-mode-decision");
+		}
+		for (const listener of this.#planModeListeners) {
+			try {
+				listener(state);
+			} catch (err) {
+				logger.error("Plan mode listener threw", { err });
+			}
 		}
 	}
 
@@ -6780,6 +6880,11 @@ export class AgentSession implements SettingsScope {
 		const sessionId = this.sessionManager.getSessionId();
 		if (this.#chatModeJournaledSessionId === sessionId) return;
 		this.#chatModeJournaledSessionId = sessionId;
+		this.#recordChatMode();
+	}
+
+	/** Append a chat-mode entry when the branch's recorded state differs from the live one. */
+	#recordChatMode(): void {
 		const recorded = readChatModeEntry(this.sessionManager.getBranch());
 		const current = this.#chatMode ?? null;
 		if (sameChatMode(recorded, current) || (current === null && recorded === undefined)) return;
@@ -6885,7 +6990,7 @@ export class AgentSession implements SettingsScope {
 			}
 
 			// Try custom commands (TypeScript slash commands)
-			const customResult = await this.#tryExecuteCustomCommand(text);
+			const customResult = options?.customCommandResult ?? (await this.executeCustomCommand(text));
 			if (customResult !== null) {
 				if (customResult === "") {
 					return false;
@@ -6942,6 +7047,7 @@ export class AgentSession implements SettingsScope {
 			await this.#queueUserMessage(expandedText, options?.images, streamingBehavior, {
 				timestamp: submittedAt,
 				attribution: promptAttribution,
+				entryId: options?.entryId,
 			});
 			outcome.sessionClaimed = true;
 			return true;
@@ -6998,6 +7104,7 @@ export class AgentSession implements SettingsScope {
 			await this.#queueUserMessage(expandedText, options?.images, streamingBehavior, {
 				timestamp: submittedAt,
 				attribution: promptAttribution,
+				entryId: options?.entryId,
 				preprocessed: {
 					images: normalizedImages,
 					descriptionNotice: imageDescriptionNotice,
@@ -7023,6 +7130,7 @@ export class AgentSession implements SettingsScope {
 					userInitiated: options?.userInitiated === true ? true : undefined,
 				}
 			: { role: "user" as const, content: userContent, attribution: promptAttribution, timestamp: submittedAt };
+		if (options?.entryId !== undefined) setMessageEntryId(message, options.entryId);
 
 		const preludeMessages: AgentMessage[] = [];
 		if (eagerTodoPrelude) {
@@ -7086,7 +7194,7 @@ export class AgentSession implements SettingsScope {
 	 */
 	async promptCustomMessage<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
-		options?: Pick<PromptOptions, "streamingBehavior" | "toolChoice"> & {
+		options?: Pick<PromptOptions, "streamingBehavior" | "toolChoice" | "entryId"> & {
 			queueChipText?: string;
 			queueOnly?: boolean;
 		},
@@ -7096,7 +7204,7 @@ export class AgentSession implements SettingsScope {
 
 	async #promptCustomMessage<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
-		options?: Pick<PromptOptions, "streamingBehavior" | "toolChoice"> & {
+		options?: Pick<PromptOptions, "streamingBehavior" | "toolChoice" | "entryId"> & {
 			queueChipText?: string;
 			queueOnly?: boolean;
 		},
@@ -7118,7 +7226,7 @@ export class AgentSession implements SettingsScope {
 	async #dispatchCustomPrompt<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
 		options:
-			| (Pick<PromptOptions, "streamingBehavior" | "toolChoice"> & {
+			| (Pick<PromptOptions, "streamingBehavior" | "toolChoice" | "entryId"> & {
 					queueChipText?: string;
 					queueOnly?: boolean;
 			  })
@@ -7159,7 +7267,7 @@ export class AgentSession implements SettingsScope {
 			for (const notice of keywordNotices) {
 				await this.#queueCustomMessage(notice, streamingBehavior);
 			}
-			await this.#queueCustomMessage(message, streamingBehavior, options.queueChipText);
+			await this.#queueCustomMessage(message, streamingBehavior, options.queueChipText, options.entryId);
 			outcome.sessionClaimed = true;
 			return true;
 		}
@@ -7175,7 +7283,7 @@ export class AgentSession implements SettingsScope {
 			for (const notice of keywordNotices) {
 				await this.#queueCustomMessage(notice, streamingBehavior);
 			}
-			await this.#queueCustomMessage(message, streamingBehavior, options?.queueChipText);
+			await this.#queueCustomMessage(message, streamingBehavior, options?.queueChipText, options?.entryId);
 			outcome.sessionClaimed = true;
 			return true;
 		}
@@ -7189,6 +7297,7 @@ export class AgentSession implements SettingsScope {
 			attribution: message.attribution ?? "agent",
 			timestamp: Date.now(),
 		};
+		if (options?.entryId !== undefined) setMessageEntryId(customMessage, options.entryId);
 
 		outcome.sessionClaimed = await this.#promptWithMessage(customMessage, textContent, {
 			...options,
@@ -7675,7 +7784,7 @@ export class AgentSession implements SettingsScope {
 	 * Try to execute a custom command. Returns the prompt string if found, null otherwise.
 	 * If the command returns void, returns empty string to indicate it was handled.
 	 */
-	async #tryExecuteCustomCommand(text: string): Promise<string | null> {
+	async executeCustomCommand(text: string): Promise<string | null> {
 		if (this.#customCommands.length === 0 && this.#mcpPromptCommands.length === 0) return null;
 
 		// Parse command name and args
@@ -7733,6 +7842,7 @@ export class AgentSession implements SettingsScope {
 		await this.#queueUserMessage(expandedText, images, "steer", {
 			timestamp: submittedAt,
 			attribution: options?.attribution,
+			entryId: options?.entryId,
 		});
 	}
 
@@ -7757,6 +7867,7 @@ export class AgentSession implements SettingsScope {
 			await this.#queueUserMessage(expandedText, images, "followUp", {
 				timestamp: submittedAt,
 				attribution: options?.attribution,
+				entryId: options?.entryId,
 			});
 			return;
 		}
@@ -7821,6 +7932,8 @@ export class AgentSession implements SettingsScope {
 		options?: {
 			timestamp?: number;
 			attribution?: MessageAttribution;
+			/** Reserved session entry id the queued user message is persisted under. */
+			entryId?: string;
 			preprocessed?: { images: ImageContent[] | undefined; descriptionNotice: CustomMessage | undefined };
 		},
 	): Promise<void> {
@@ -7856,11 +7969,15 @@ export class AgentSession implements SettingsScope {
 			: normalizedImages?.length
 				? await this.#buildImageDescriptionNotice(normalizedImages)
 				: undefined;
+		const reserved = <M extends AgentMessage>(message: M): M => {
+			if (options?.entryId !== undefined) setMessageEntryId(message, options.entryId);
+			return message;
+		};
 		if (mode === "aside") {
 			if (await this.#sessionGenerationChanged(sessionGeneration)) return;
 			const records: AgentMessage[] = [];
 			if (imageDescriptionNotice) records.push(imageDescriptionNotice);
-			records.push({ role: "user", content, attribution, timestamp: timestamp ?? Date.now() });
+			records.push(reserved({ role: "user", content, attribution, timestamp: timestamp ?? Date.now() }));
 			this.#irc.queueAside(records);
 			// The awaits above (image normalization / vision description) can span the run's
 			// settle, so the run may already be idle by the time the record lands in the aside
@@ -7873,22 +7990,26 @@ export class AgentSession implements SettingsScope {
 		if (mode === "followUp") {
 			for (const notice of attachmentSourceNotices) this.agent.followUp(notice);
 			if (imageDescriptionNotice) this.agent.followUp(imageDescriptionNotice);
-			this.agent.followUp({
-				role: "user",
-				content,
-				attribution,
-				timestamp: timestamp ?? Date.now(),
-			});
+			this.agent.followUp(
+				reserved({
+					role: "user",
+					content,
+					attribution,
+					timestamp: timestamp ?? Date.now(),
+				}),
+			);
 		} else {
 			for (const notice of attachmentSourceNotices) this.agent.steer(notice);
 			if (imageDescriptionNotice) this.agent.steer(imageDescriptionNotice);
-			this.agent.steer({
-				role: "user",
-				content,
-				steering: true,
-				attribution,
-				timestamp: timestamp ?? Date.now(),
-			});
+			this.agent.steer(
+				reserved({
+					role: "user",
+					content,
+					steering: true,
+					attribution,
+					timestamp: timestamp ?? Date.now(),
+				}),
+			);
 		}
 		this.#scheduleIdleQueueDrain();
 	}
@@ -8038,16 +8159,27 @@ export class AgentSession implements SettingsScope {
 	}
 
 	/**
+	 * Name of the extension command (`pi.registerCommand`) `text` invokes, if any.
+	 * `prompt()` runs such a command locally and writes no user entry for it.
+	 */
+	#extensionCommandName(text: string): string | undefined {
+		if (!this.#extensionRunner || !text.startsWith("/")) return undefined;
+		const spaceIndex = text.indexOf(" ");
+		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
+		return this.#extensionRunner.getCommand(commandName) ? commandName : undefined;
+	}
+
+	/** True when `prompt(text)` would run an extension command instead of sending a user message. */
+	isExtensionCommand(text: string): boolean {
+		return this.#extensionCommandName(text) !== undefined;
+	}
+
+	/**
 	 * Throw an error if the text is an extension command.
 	 */
 	#throwIfExtensionCommand(text: string): void {
-		if (!this.#extensionRunner) return;
-
-		const spaceIndex = text.indexOf(" ");
-		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
-		const command = this.#extensionRunner.getCommand(commandName);
-
-		if (command) {
+		const commandName = this.#extensionCommandName(text);
+		if (commandName !== undefined) {
 			throw new Error(
 				`Extension command "/${commandName}" cannot be queued. Use prompt() or execute the command when not streaming.`,
 			);
@@ -8176,6 +8308,7 @@ export class AgentSession implements SettingsScope {
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
 		deliverAs: "steer" | "followUp" | "aside",
 		queueChipText?: string,
+		entryId?: string,
 	): Promise<void> {
 		const sessionGeneration = this.#sessionGeneration;
 		const details =
@@ -8198,6 +8331,7 @@ export class AgentSession implements SettingsScope {
 			timestamp: Date.now(),
 		};
 		const normalizedAppMessage = await this.#normalizeAgentMessageImages(appMessage);
+		if (entryId !== undefined) setMessageEntryId(normalizedAppMessage, entryId);
 		if (deliverAs === "aside") {
 			if (await this.#sessionGenerationChanged(sessionGeneration)) return;
 			this.#irc.queueAside([normalizedAppMessage]);
@@ -8359,12 +8493,15 @@ export class AgentSession implements SettingsScope {
 				return outcome.sessionClaimed;
 			}
 			this.agent.appendMessage(normalizedAppMessage);
-			this.sessionManager.appendCustomMessageEntry(
-				normalizedAppMessage.customType,
-				normalizedAppMessage.content,
-				normalizedAppMessage.display,
-				normalizedAppMessage.details,
-				normalizedAppMessage.attribution,
+			setMessageEntryId(
+				normalizedAppMessage,
+				this.sessionManager.appendCustomMessageEntry(
+					normalizedAppMessage.customType,
+					normalizedAppMessage.content,
+					normalizedAppMessage.display,
+					normalizedAppMessage.details,
+					normalizedAppMessage.attribution,
+				),
 			);
 			onAccepted?.();
 			return false;
@@ -8405,12 +8542,15 @@ export class AgentSession implements SettingsScope {
 		}
 
 		this.agent.appendMessage(normalizedAppMessage);
-		this.sessionManager.appendCustomMessageEntry(
-			normalizedAppMessage.customType,
-			normalizedAppMessage.content,
-			normalizedAppMessage.display,
-			normalizedAppMessage.details,
-			normalizedAppMessage.attribution,
+		setMessageEntryId(
+			normalizedAppMessage,
+			this.sessionManager.appendCustomMessageEntry(
+				normalizedAppMessage.customType,
+				normalizedAppMessage.content,
+				normalizedAppMessage.display,
+				normalizedAppMessage.details,
+				normalizedAppMessage.attribution,
+			),
 		);
 		onAccepted?.();
 		return false;
@@ -8502,6 +8642,7 @@ export class AgentSession implements SettingsScope {
 			if (!keep(message) && message.role === "custom" && message.customType === "ttsr-injection") {
 				this.#ttsr.releaseDeferredReservationFromDetails(message.details);
 			}
+			if (!keep(message)) this.sessionManager.releaseEntryId(getMessageEntryId(message));
 		}
 		this.agent.replaceQueues(steeringAll.filter(keep), followUpAll.filter(keep));
 		this.#reconcileQueuedMessageDrain();
@@ -8553,6 +8694,7 @@ export class AgentSession implements SettingsScope {
 		const fromSteer = lastUserIndex(steering);
 		if (fromSteer >= 0) {
 			const removed = steering[fromSteer];
+			this.sessionManager.releaseEntryId(getMessageEntryId(removed));
 			this.agent.replaceQueues(removeWithCompanions(steering, fromSteer), followUp.slice());
 			this.#reconcileQueuedMessageDrain();
 			return toRestoredQueuedMessage(removed);
@@ -8560,6 +8702,7 @@ export class AgentSession implements SettingsScope {
 		const fromFollowUp = lastUserIndex(followUp);
 		if (fromFollowUp >= 0) {
 			const removed = followUp[fromFollowUp];
+			this.sessionManager.releaseEntryId(getMessageEntryId(removed));
 			this.agent.replaceQueues(steering.slice(), removeWithCompanions(followUp, fromFollowUp));
 			this.#reconcileQueuedMessageDrain();
 			return toRestoredQueuedMessage(removed);
@@ -8574,16 +8717,6 @@ export class AgentSession implements SettingsScope {
 	/** Skills loaded by SDK (empty if --no-skills or skills: [] was passed) */
 	get skills(): readonly Skill[] {
 		return this.#tools.skills;
-	}
-
-	/** Descriptions frozen when this session's system prompt was built. */
-	get renderedSkills(): readonly Skill[] {
-		const skills = this.skills;
-		if (skills !== this.#promptSkillsSource) {
-			this.#promptSkillsSource = skills;
-			this.#promptSkills = this.#skillDescriptions.snapshot(skills);
-		}
-		return this.#promptSkills;
 	}
 
 	/** Frozen skill-URI hint visibility snapshot (see {@link SessionTools.skillHintVisible}). */
@@ -10520,6 +10653,9 @@ export class AgentSession implements SettingsScope {
 		const switchingToDifferentSession = previousSessionFile
 			? path.resolve(previousSessionFile) !== path.resolve(sessionPath)
 			: true;
+		// A file another process owns fails before anything is torn down, so the
+		// current session (and any running turn) stays exactly as it was.
+		if (switchingToDifferentSession) this.sessionManager.assertSessionNotInUse(sessionPath);
 		// Emit session_before_switch event (can be cancelled)
 		if (this.#extensionRunner?.hasHandlers("session_before_switch")) {
 			const result = (await this.#extensionRunner.emit({
@@ -10541,6 +10677,9 @@ export class AgentSession implements SettingsScope {
 		// Flush pending writes before switching so restore snapshots reflect committed state.
 		await this.sessionManager.flush();
 		const previousSessionState = this.sessionManager.captureState();
+		// Keep owning the current file until this switch settles: a rollback
+		// restores it, and another process must not take it in the gap.
+		using _previousSessionLease = this.sessionManager.retainLease();
 		const bashTransition = this.#bash.beginSessionTransition();
 		// Only same-session reloads compare against the prior context to detect
 		// rollback edits (`#didSessionMessagesChange` below). Building it for a
@@ -10788,7 +10927,7 @@ export class AgentSession implements SettingsScope {
 			this.#releaseTtsrReservations(previousSteeringMessages);
 			this.#releaseTtsrReservations(previousFollowUpMessages);
 			if (previousSessionState.sessionId !== this.sessionManager.getSessionId()) {
-				this.#notifySessionChangeCallbacks();
+				this.#notifySessionChangeCallbacks("loaded");
 			}
 			generationSettled.resolve();
 			this.#sessionGenerationSettled = previousSessionGenerationSettled;
@@ -10896,12 +11035,18 @@ export class AgentSession implements SettingsScope {
 		const previousSessionFile = this.sessionFile;
 		const selectedEntry = this.sessionManager.getEntry(entryId);
 
-		if (selectedEntry?.type !== "message" || selectedEntry.message.role !== "user") {
+		// A user request starts a turn: a plain user message, or a user-invoked
+		// skill/collab prompt, which is persisted as a custom message.
+		if (!selectedEntry || !isTranscriptEntry(selectedEntry) || !isUserRequestEntry(selectedEntry)) {
+			throw new Error("Invalid entry ID for branching");
+		}
+		const request = transcriptEntryMessage(selectedEntry);
+		if (request?.role !== "user" && request?.role !== "custom") {
 			throw new Error("Invalid entry ID for branching");
 		}
 
-		const selectedText = this.#extractUserMessageText(selectedEntry.message.content);
-		const selectedImages = this.#extractUserMessageImages(selectedEntry.message.content);
+		const selectedText = userTurnDraft(selectedEntry) ?? "";
+		const selectedImages = this.#extractUserMessageImages(request.content);
 
 		let skipConversationRestore = false;
 
@@ -11056,6 +11201,9 @@ export class AgentSession implements SettingsScope {
 		this.#pendingNextTurnMessages = [];
 		this.#scheduledHiddenNextTurnGeneration = undefined;
 		this.#releaseQueuedTtsrReservations();
+		for (const message of [...this.agent.peekSteeringQueue(), ...this.agent.peekFollowUpQueue()]) {
+			this.sessionManager.releaseEntryId(getMessageEntryId(message));
+		}
 		this.agent.replaceQueues([], []);
 		this.#queuedMessageDrainBlocked = false;
 		this.#usagePreflightReadyForNextModelCall = false;
@@ -12505,6 +12653,63 @@ export class AgentSession implements SettingsScope {
 	/** Chat mode this session runs in; undefined for an ordinary coding session. */
 	get chatMode(): ChatModeConfig | undefined {
 		return this.#chatMode;
+	}
+
+	/**
+	 * Switch chat mode on the live session (`/chat`, RPC `set_chat_mode`).
+	 * The system prompt is rebuilt now, so the next turn uses it; the prompt
+	 * cache break is intended. Entering chat mode deactivates every tool, as a
+	 * launch without `--tools` does; leaving restores the coding selection saved
+	 * on entry (or computed at construction for a session launched in chat mode).
+	 * The switch is all-or-nothing: if the tool change or prompt rebuild fails,
+	 * the previous mode, tools, and prompt are restored and the error rethrown.
+	 * On success the new state is journaled so a resume restores it, and a
+	 * `chat_mode_changed` event is emitted.
+	 */
+	async setChatMode(request: ChatModeChangeRequest): Promise<ChatModeConfig | undefined> {
+		if (this.isStreaming) throw new Error("Change chat mode after the current turn finishes.");
+		const current = this.#chatMode;
+		const last = this.#lastChatMode ?? readLastActiveChatMode(this.sessionManager.getBranch());
+		const next = resolveChatModeChange(request, current, last, cfgChatInclude.get(this.settings)) ?? undefined;
+		if (next && this.#chatModeBlockedReason) throw new Error(this.#chatModeBlockedReason);
+		// Chat mode runs without tools; leaving plan mode later would reactivate them under it.
+		if (next && this.#planModeState?.enabled) throw new Error("Exit plan mode first.");
+		if (sameChatMode(current, next)) return current;
+		const previousStash = this.#chatModeStashedTools;
+		const previousTools = { enabled: this.getEnabledToolNames(), mounted: this.getMountedXdevToolNames() };
+		// The prompt rebuild reads the live mode, so it changes before the rebuild.
+		this.#chatMode = next;
+		try {
+			if (!current) {
+				this.#chatModeStashedTools = previousTools;
+				await this.setActiveToolsByName([]);
+			} else if (!next && previousStash) {
+				this.#chatModeStashedTools = undefined;
+				await this.setActiveToolPresentation(previousStash.enabled, previousStash.mounted);
+			}
+			await this.refreshBaseSystemPrompt();
+		} catch (err) {
+			this.#chatMode = current;
+			this.#chatModeStashedTools = previousStash;
+			try {
+				await this.setActiveToolPresentation(previousTools.enabled, previousTools.mounted);
+				await this.refreshBaseSystemPrompt();
+			} catch (rollbackErr) {
+				logger.warn("Failed to restore tools and system prompt after a failed chat mode switch", {
+					error: rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr),
+				});
+			}
+			throw err;
+		}
+		this.#lastChatMode = next ?? current;
+		this.#extensionRunner?.setChatMode(next !== undefined);
+		this.#advisors.setChatMode(next?.mode);
+		if (this.#agentKind === "main") {
+			this.#recordChatMode();
+			this.#chatModeJournaledSessionId = this.sessionManager.getSessionId();
+		}
+		this.#emit({ type: "chat_mode_changed", ...chatModeState(next) });
+		return next;
 	}
 
 	/**

@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import advisorSystemPrompt from "../../prompts/advisor/system.md" with { type: "text" };
 import { renderChatAdvisorPrompt } from "../../chat/chat-system-prompt";
 import { type AgentMessage, type AgentToolResult, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
@@ -61,6 +62,7 @@ import type { ForeignSessionInfo, ForeignSessionSource } from "../../session/for
 import { isTranscriptEntry, type TranscriptEntry } from "../../session/session-context";
 import { isUserRequestEntry } from "@oh-my-pi/pi-tui/chat/transcript-entry";
 import type { SessionEntry, SessionTreeNode } from "../../session/session-entries";
+import { inspectSessionLease, SessionInUseError } from "../../session/session-lease";
 import type { SessionInfo } from "../../session/session-listing";
 import { SessionManager } from "../../session/session-manager";
 import { loadPinnedSessionIds } from "../../session/session-pins";
@@ -93,6 +95,7 @@ import { collapseSharedUsageReports } from "@oh-my-pi/pi-tui/overlays/usage-disp
 import { limitMatchesActiveAccount } from "../../slash-commands/helpers/active-oauth-account";
 import { AgentHubOverlayComponent } from "@oh-my-pi/pi-tui/overlays/agent-hub";
 import { createAgentHubRuntime } from "../agent-hub-runtime";
+import { AgentRegistry } from "../../registry/agent-registry";
 import { AgentsHubComponent } from "@oh-my-pi/pi-tui/overlays/agents-hub";
 import { CopySelectorComponent } from "@oh-my-pi/pi-tui/overlays/copy-selector";
 import { ExtensionDashboard } from "@oh-my-pi/pi-tui/overlays/extensions/extension-dashboard";
@@ -1789,6 +1792,14 @@ export class SelectorController {
 	}
 
 	async handleResumeSession(sessionPath: string, options?: { settingsFlushed?: boolean }): Promise<boolean> {
+		const holder = inspectSessionLease(sessionPath);
+		if (holder) {
+			return this.#resumeInUseSession(
+				sessionPath,
+				new SessionInUseError(sessionPath, holder.pid, holder.since),
+				options,
+			);
+		}
 		const previousCwd = this.ctx.sessionManager.getCwd();
 		// Flush pending settings writes before switching sessions so a save
 		// failure leaves the session, process project dir, and Settings in the
@@ -1833,6 +1844,42 @@ export class SelectorController {
 			this.ctx.showStatus(movedProject ? `Resumed session in ${shortenPath(newCwd)}` : "Resumed session");
 		}
 		return true;
+	}
+
+	/**
+	 * Another NeoPi process owns `sessionPath`, so switching to it would fail.
+	 * Offer to fork it (a new file with `parentSession` set) and resume the fork.
+	 * Opening it read-only is a startup-only choice: the running session cannot
+	 * swap to an unsaved in-memory transcript.
+	 */
+	async #resumeInUseSession(
+		sessionPath: string,
+		error: SessionInUseError,
+		options: { settingsFlushed?: boolean } | undefined,
+	): Promise<boolean> {
+		const holder = error.pid > 0 ? `another NeoPi process (pid ${error.pid})` : "another NeoPi process";
+		const forkLabel = "Fork into a new session";
+		const choice = await this.ctx.showHookSelector(`Session is in use by ${holder}`, [forkLabel, "Cancel"]);
+		if (choice !== forkLabel) {
+			this.ctx.showStatus("Resume cancelled");
+			return false;
+		}
+		const recordedCwd = (await SessionManager.peekSessionInit(sessionPath))?.cwd;
+		const forkCwd = recordedCwd && fs.existsSync(recordedCwd) ? recordedCwd : this.ctx.sessionManager.getCwd();
+		let forkFile: string | undefined;
+		try {
+			const forked = await SessionManager.forkFrom(sessionPath, forkCwd);
+			forkFile = forked.getSessionFile();
+			// Release the fork's lease so this session can take it over.
+			await forked.close();
+		} catch (forkError) {
+			this.ctx.showError(
+				`Failed to fork session: ${forkError instanceof Error ? forkError.message : String(forkError)}`,
+			);
+			return false;
+		}
+		if (!forkFile) return false;
+		return this.handleResumeSession(forkFile, options);
 	}
 
 	async handleSessionDeleteCommand(): Promise<void> {
@@ -2274,6 +2321,9 @@ export class SelectorController {
 				registry: this.ctx.collabGuest?.agentRegistry,
 				remote: this.ctx.collabGuest?.hubRemote,
 				sessionFile: this.ctx.sessionManager.getSessionFile() ?? null,
+				// A collab guest mirrors the host's own registry; locally, the hub
+				// only shows the root this UI belongs to.
+				root: this.ctx.collabGuest ? undefined : () => AgentRegistry.global().rootForSession(this.ctx.session),
 			}),
 			observers,
 			hubKeys,

@@ -18,6 +18,7 @@ import {
 	VIBE_MODE_CONTEXT_MESSAGE_TYPE,
 } from "./messages";
 import { CONTEXT_NOTES_ENTRY_TYPE, getContextNotes, renderContextNotes } from "./context-notes";
+import { getMessageEntryId, setMessageEntryId } from "./message-entry-ids";
 import {
 	type CompactionEntry,
 	type CustomMessageEntry,
@@ -371,7 +372,8 @@ export function buildSessionContext(
 		return cacheMissExplained;
 	};
 
-	const pushMessage = (msg: AgentMessage) => {
+	const pushMessage = (msg: AgentMessage, entryId: string) => {
+		setMessageEntryId(msg, entryId);
 		messages.push(msg);
 		if (!options?.transcript) return;
 		cacheMissExplainedAt.push(trackMessageCacheState(msg));
@@ -387,7 +389,7 @@ export function buildSessionContext(
 			) {
 				return;
 			}
-			pushMessage(entry.message);
+			pushMessage(entry.message, entry.id);
 		} else if (entry.type === "custom_message") {
 			if (
 				!options?.transcript &&
@@ -396,9 +398,9 @@ export function buildSessionContext(
 				return;
 			}
 			const message = customMessageEntryMessage(entry);
-			if (message) pushMessage(message);
+			if (message) pushMessage(message, entry.id);
 		} else if (entry.type === "branch_summary" && entry.summary) {
-			pushMessage(createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp));
+			pushMessage(createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp), entry.id);
 		}
 	};
 
@@ -438,6 +440,7 @@ export function buildSessionContext(
 							tokensAfter: entry.tokensAfter,
 						},
 					),
+					entry.id,
 				);
 			} else {
 				appendMessage(entry);
@@ -515,7 +518,7 @@ export function buildSessionContext(
 		// Agent context (non-transcript): summary first so the LLM sees the
 		// compacted context before recent messages.
 		if (!options?.transcript) {
-			pushMessage(compactionSummaryMsg);
+			pushMessage(compactionSummaryMsg, compaction.id);
 		}
 
 		// Notes-backed windows do not summarize a discarded turn prefix. Recover
@@ -596,7 +599,7 @@ export function buildSessionContext(
 		// pre-compaction one — is marked as a cache miss.
 		if (options?.transcript) handleEntryResetTracking(compaction);
 		if (options?.transcript) {
-			pushMessage(compactionSummaryMsg);
+			pushMessage(compactionSummaryMsg, compaction.id);
 		}
 
 		// Emit messages after compaction
@@ -617,9 +620,15 @@ export function buildSessionContext(
 		if (notes && renderedNotes.length > 0) {
 			const sourceEntry = path.find(entry => entry.id === notes.entryId);
 			if (sourceEntry) {
-				messages.unshift(
-					createCustomMessage(CONTEXT_NOTES_ENTRY_TYPE, renderedNotes, false, undefined, sourceEntry.timestamp),
+				const notesMessage = createCustomMessage(
+					CONTEXT_NOTES_ENTRY_TYPE,
+					renderedNotes,
+					false,
+					undefined,
+					sourceEntry.timestamp,
 				);
+				setMessageEntryId(notesMessage, sourceEntry.id);
+				messages.unshift(notesMessage);
 			}
 		}
 	}
@@ -676,6 +685,8 @@ export function buildSessionContext(
 				messages.splice(i, 1);
 			} else {
 				const rewritten = { ...message, content: normalized };
+				const rewrittenEntryId = getMessageEntryId(message);
+				if (rewrittenEntryId !== undefined) setMessageEntryId(rewritten, rewrittenEntryId);
 				if (options?.transcript) {
 					// Display transcript: keep the turn (even content-less) and mark
 					// how many calls were dropped so the TUI renders a placeholder

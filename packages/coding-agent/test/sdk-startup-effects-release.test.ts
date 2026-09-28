@@ -7,7 +7,7 @@ import { initializeWithSettings } from "@oh-my-pi/pi-coding-agent/discovery";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { Snowflake, TempDir } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
 // A top-level SDK session holds process-wide state on its settings until disposed: setting
@@ -34,6 +34,7 @@ describe("createAgentSession process-state holds", () => {
 
 		await expect(
 			createAgentSession({
+				agentId: `ProcessState-${Snowflake.next()}`,
 				settings: Settings.isolated(),
 				authStorage,
 				modelRegistry: new ModelRegistry(registryAuthStorage),
@@ -53,6 +54,7 @@ describe("createAgentSession process-state holds", () => {
 		const modelRegistry = new ModelRegistry(authStorage);
 		const start = async (settings: Settings): Promise<AgentSession> => {
 			const { session } = await createAgentSession({
+				agentId: `ProcessState-${Snowflake.next()}`,
 				cwd: tempDir.path(),
 				agentDir: tempDir.path(),
 				sessionManager: SessionManager.inMemory(tempDir.path()),

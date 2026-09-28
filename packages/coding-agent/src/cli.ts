@@ -16,9 +16,12 @@ try {
  */
 import type * as WorkerThreads from "node:worker_threads";
 import type { MessagePort } from "node:worker_threads";
-import type { Process, ProcessStatus } from "@oh-my-pi/pi-natives";
 import type { CliConfig, CommandMetadata } from "@oh-my-pi/pi-utils/cli";
 import type * as Postmortem from "@oh-my-pi/pi-utils/postmortem";
+// First evaluated import: records the launching parent's pid before startup
+// work, so a host that dies mid-startup is still recognized (print/json modes
+// exit with it).
+import "./utils/launch-parent";
 import {
 	APP_NAME,
 	getActiveProfile,
@@ -29,6 +32,7 @@ import {
 } from "@oh-my-pi/pi-utils/dirs";
 
 import { declareWorkerHostEntry, installWorkerInbox, isWorkerHostSelector } from "@oh-my-pi/pi-utils/worker-host";
+import { resolveNpiIdeaArgv } from "./cli/npi-idea";
 import { resolveNpiUpdateArgv } from "./cli/npi-update";
 import { extractProfileFlags } from "./cli/profile-bootstrap";
 import {
@@ -42,6 +46,7 @@ import {
 } from "./cli/worker-selectors";
 import type * as JsProcessEntry from "./eval/js/process-entry";
 import type { WorkerInbound as JsWorkerInbound, WorkerOutbound as JsWorkerOutbound } from "./eval/js/worker-protocol";
+import { watchParentProcess } from "./utils/parent-watchdog";
 
 if (Bun.semver.order(Bun.version, MIN_BUN_VERSION) < 0) {
 	process.stderr.write(
@@ -79,6 +84,7 @@ function getWorkerParentPort(): MessagePort | null {
  */
 const PREPAINT_SAFE_FLAGS: Record<string, true> = {
 	"--no-session": true,
+	"--new-session": true,
 	"--no-extensions": true,
 	"--no-skills": true,
 	"--no-rules": true,
@@ -383,66 +389,11 @@ async function runIpcSubprocessWorker<In, Out>(
 			};
 		},
 	});
-	let parentWatchdog: NodeJS.Timeout | undefined;
-	const initialParentPid = process.ppid;
-	if (process.platform === "win32" && initialParentPid <= 0) {
-		shutdown();
-	} else if (initialParentPid > 0) {
-		let parentProcess: Process | null = null;
-		let runningStatus: ProcessStatus | undefined;
-		try {
-			if (!process.env.PI_TEST_NO_NATIVES) {
-				const natives = await import("@oh-my-pi/pi-natives");
-				parentProcess = natives.Process.fromPid(initialParentPid);
-				runningStatus = natives.ProcessStatus.Running;
-			}
-		} catch {}
-
-		// Note on container environments (Docker/Kubernetes): NeoPi often runs as
-		// PID 1, so workers start with process.ppid === 1. Treating ppid <= 1 as
-		// an orphan at boot would break containerized workers. Instead, we allow
-		// PID 1 to boot normally and detect post-spawn reparenting dynamically via
-		// `process.ppid !== initialParentPid`.
-		//
-		// Note on Linux seccomp/kernels: On hosts where pidfd_open is blocked or
-		// unavailable (e.g. pre-5.3 kernels, restrictive seccomp), Process.fromPid
-		// returns null even when the parent is alive. We treat null as the native
-		// handle being unavailable and fall through to the isParentAlive() check
-		// rather than assuming null means dead at boot.
-		const isParentAlive = (): boolean => {
-			if (process.ppid !== initialParentPid) {
-				return false;
-			}
-			if (parentProcess && runningStatus !== undefined) {
-				try {
-					return parentProcess.status() === runningStatus;
-				} catch {}
-			}
-			try {
-				process.kill(initialParentPid, 0);
-				return true;
-			} catch (err: unknown) {
-				return (err as NodeJS.ErrnoException)?.code === "EPERM";
-			}
-		};
-
-		if (!isParentAlive()) {
-			shutdown();
-		} else {
-			if (parentProcess) {
-				void parentProcess.waitForExit().then(
-					() => shutdown(),
-					() => shutdown(),
-				);
-			}
-			parentWatchdog = setInterval(() => {
-				if (!isParentAlive()) {
-					shutdown();
-				}
-			}, 1000);
-			parentWatchdog.unref();
-		}
-	}
+	// The IPC `disconnect` below is the immediate parent-death signal. The poll
+	// watchdog backs it up (reparenting, or a parent that died while another
+	// process still holds the channel) without loading the native addon into
+	// the CLI bootstrap graph.
+	const parentWatchdog = watchParentProcess({ onParentExit: () => shutdown() });
 	const keepalive = setInterval(() => {}, 2 ** 30);
 	// Parent went away (crashed, SIGKILL, etc.) — commit suicide so we don't
 	// linger as an orphan. SIGKILL via `process.kill` keeps us symmetrical with
@@ -452,7 +403,7 @@ async function runIpcSubprocessWorker<In, Out>(
 		await shuttingDown;
 	} finally {
 		clearInterval(keepalive);
-		if (parentWatchdog) clearInterval(parentWatchdog);
+		parentWatchdog.stop();
 	}
 	process.kill(process.pid, "SIGKILL");
 }
@@ -587,7 +538,9 @@ export async function runCli(argv: string[]): Promise<void> {
 		]);
 		// --help and --version are handled by run() directly; --license returned above.
 		// Everything else that isn't a known subcommand routes to "launch".
-		const resolved = resolveCliArgv(resolveNpiUpdateArgv(resolvedArgv, process.execPath));
+		const resolved = resolveCliArgv(
+			resolveNpiIdeaArgv(resolveNpiUpdateArgv(resolvedArgv, process.execPath), process.execPath),
+		);
 		if ("error" in resolved) {
 			process.stderr.write(`error: ${resolved.error}\n`);
 			process.exitCode = 1;

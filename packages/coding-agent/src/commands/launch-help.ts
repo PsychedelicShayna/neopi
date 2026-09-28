@@ -68,10 +68,16 @@ export const launchHelp = {
 		"from-codex": Flags.boolean({ description: "Import a Codex session into NeoPi" }),
 		"session-dir": Flags.string({ description: "Directory for session storage and lookup" }),
 		"no-session": Flags.boolean({ description: "Don't save session (ephemeral)" }),
+		"new-session": Flags.boolean({
+			description: "Start a new session in the default session directory, ignoring autoResume",
+		}),
 		models: Flags.string({ description: "Comma-separated model patterns for Ctrl+P cycling" }),
 		"no-tools": Flags.boolean({ description: "Disable all built-in tools" }),
 		"no-lsp": Flags.boolean({ description: "Disable LSP tools, formatting, and diagnostics" }),
 		"no-pty": Flags.boolean({ description: "Disable PTY-based interactive bash execution" }),
+		"no-exit-with-parent": Flags.boolean({
+			description: "Print/json modes: keep running after the parent process dies (for nohup/setsid use)",
+		}),
 		tools: Flags.string({ description: "Comma-separated list of tools to enable (default: all)" }),
 		thinking: Flags.string({
 			description: `Set thinking level: ${CLI_THINKING_LEVELS.join(", ")}`,
@@ -102,6 +108,10 @@ export const launchHelp = {
 		}),
 		"no-skills": Flags.boolean({ description: "Disable skills discovery and loading" }),
 		skills: Flags.string({ description: "Comma-separated glob patterns to filter skills (e.g., git-*,docker)" }),
+		"no-mcp": Flags.boolean({ description: "Disable MCP server discovery and connection" }),
+		mcp: Flags.string({
+			description: "Comma-separated glob patterns of MCP server names to connect (e.g., github,linear-*)",
+		}),
 		"no-rules": Flags.boolean({ description: "Disable rules discovery and loading" }),
 		export: Flags.string({ description: "Export session file to HTML and exit" }),
 		"no-title": Flags.boolean({ description: "Disable title auto-generation" }),

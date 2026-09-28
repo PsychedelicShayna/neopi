@@ -82,7 +82,7 @@ function createHarness(initialStreaming: boolean) {
 			});
 		},
 	});
-	AsyncJobManager.setInstance(manager);
+	managers.push(manager);
 	return {
 		manager,
 		queue,
@@ -95,12 +95,12 @@ function createHarness(initialStreaming: boolean) {
 	};
 }
 
+const managers: AsyncJobManager[] = [];
+
 afterEach(async () => {
-	const manager = AsyncJobManager.instance();
-	if (manager) {
+	for (const manager of managers.splice(0)) {
 		await manager.dispose({ timeoutMs: 200 });
 	}
-	AsyncJobManager.resetForTests();
 });
 
 describe("async result yield queue delivery", () => {

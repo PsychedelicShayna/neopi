@@ -45,6 +45,8 @@ function createHarness(
 		goalModePaused: false,
 		skillCommands: new Map(),
 		fileSlashCommands: new Set(),
+		slashCommandNames: new Set(["plan", "vibe", "goal", "guided-goal"]),
+		isKnownSlashCommand: () => false,
 		session: {
 			isStreaming: false,
 			isCompacting: false,

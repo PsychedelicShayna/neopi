@@ -19,7 +19,7 @@ import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import type { TempDir } from "@oh-my-pi/pi-utils";
+import { Snowflake, type TempDir } from "@oh-my-pi/pi-utils";
 
 export const FAKE_API = "moa-fake";
 export const FAKE_PROVIDER = "fake";
@@ -230,7 +230,8 @@ export async function createMoaSession(fixture: MoaFixture, options: MoaSessionO
 		enableLsp: false,
 		skipPythonPreflight: true,
 		taskDepth: 1,
-		agentId: "MoaTest",
+		// Several MoA sessions share one registry at once; each needs its own id.
+		agentId: `MoaTest-${Snowflake.next()}`,
 	});
 	return session;
 }

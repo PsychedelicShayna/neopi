@@ -537,6 +537,8 @@ providers:
 | `providers.openai-codex.codeMode`           | enum    | `off`             | Codex Code Mode for `code_mode_only` models (GPT-5.6 Sol/Terra/Luna), mirroring codex-rs: the direct tool surface collapses to `eval`/`ask`/`todo` and every other session tool is invoked from `eval` cells via its `tool.<name>()` bridge, collapsing multi-step tool work into one model round trip. `auto` follows the model catalog's `tool_mode` flag; `on` forces it for any Codex model; `off` (default) leaves the full direct surface. The turn metadata carries codex-rs's `tool_namespaces_info` exposure snapshot while active. |
 | `providers.openai-codex.codeModeDirectTools` | array   | `[]`              | Extra tool names to keep directly callable alongside `eval`/`ask`/`todo` when Codex Code Mode is active; entries that are not enabled in the session are ignored. |
 
+In `/models` → Roles, press `y` on a role's displayed primary model or a fallback entry to copy that model into the hub's yank register; `Y` (Shift+Y) on any fallback entry copies its entire chain. A primary model's resolved upstream route (`@upstream`) and a fallback entry's configured suffix are retained. Move to another role, fallback entry, or model/provider chain header and press `p` to append the copied selectors to that target chain. Whole-chain paste appends in source order, skipping selectors already in the target; it never replaces or reorders existing entries. The source and other chains remain unchanged. The register stays in this hub instance, not the system clipboard.
+
 When the active chat model keeps failing (429s, quota walls, provider outages) and `retry.modelFallback` is on, the session picks the chain that owns the failing model, by specificity: an exact `provider/model-id` key, then a `provider/*` wildcard, then the current role's chain, then `default` — which also owns a live model that belongs to no role (`/model` switch, ephemeral hop). The effective chain is the owning role's primary followed by its configured entries, and a live selector that appears nowhere in it is offered the whole chain. If several roles assign the same model, yaml key order does not decide: the live session role wins, and `default` wins over other matching chat roles when the session is not on those roles. It skips chat candidates whose selectors are still cooling down and switches for the rest of the turn. Model-kind runners resolve their named role chain separately and never consume `default`. Subagents get their own per-spawn chains when their agent definition lists multiple model patterns — the first resolvable pattern is primary and the rest become its fallbacks; there is no `agent:<name>` key in `fallbackChains`.
 
 ### Tools and approvals
@@ -619,6 +621,8 @@ lsp:
 | `bash.enabled`                    | boolean | `true`    | Enable the bash tool.                                                                                                                                       |
 | `bash.allowCompoundCommands`      | boolean | `false`   | Evaluate flat, literal `&&` chains per segment; unmatched segments inherit normal bash approval policy and mode.                                            |
 | `launch.enabled`                  | boolean | `true`    | Enable the launch tool for shared long-running project processes.                                                                                           |
+| `launch.brokerScope`              | boolean | `true`    | On Linux with a reachable systemd user manager, start the shared daemon broker (project or machine-global, with the daemons it supervises) in its own transient scope (`systemd-run --user --scope --collect`), so killing the client that spawned it cannot take it down. `false`, no `systemd-run`, or an unreachable manager keeps the broker in the spawning client's cgroup (new session via `setsid`). A scope launch that fails, or has not produced a reachable broker within 4 s, is killed and falls back to the same. Processes that never load settings (e.g. `omp ps`) read the persisted global and project config. The placement is logged. |
+| `launch.brokerSlice`              | string  | `neopi-broker.slice` | Slice for the broker scope; dash-separated names nest, so the default runs under `neopi.slice`. Blank selects the default.                                   |
 | `bash.autoBackground.enabled`     | boolean | `true`   | Auto-background long-running commands.                                                                                                                      |
 | `bash.autoBackground.thresholdMs` | number  | `60000`   | Threshold before auto-backgrounding.                                                                                                                        |
 | `eval.py`                         | boolean | `true`    | Python eval backend. `PI_PY=0` disables for the process.                                                                                                    |
@@ -745,6 +749,8 @@ theme:
   light: light
 symbolPreset: unicode # unicode, nerd, ascii
 colorBlindMode: false
+symbolBrandGlyph: theme # temporary; theme, pi, fae-pi, md-axis-z, diamond
+symbolEffortGlyphs: theme # temporary; theme, poimandres, nerd
 
 statusLine:
   preset: default # default, minimal, compact, full, nerd, ascii, custom
@@ -767,6 +773,8 @@ tui:
 | `theme.light`               | string  | `light`          | Theme used on a light terminal background.                                |
 | `symbolPreset`              | enum    | `unicode`        | `unicode`, `nerd`, `ascii`.                                               |
 | `colorBlindMode`            | boolean | `false`          | Use blue instead of green for diff additions.                             |
+| `symbolBrandGlyph`          | enum    | `theme`          | Temporary: `theme`, `pi`, `fae-pi`, `md-axis-z`, `diamond`.               |
+| `symbolEffortGlyphs`        | enum    | `theme`          | Temporary: `theme`, `poimandres`, `nerd` thinking-level glyphs.           |
 | `showHardwareCursor`        | boolean | `true`           | Show the terminal hardware cursor.                                        |
 | `statusLine.preset`         | enum    | `default`        | `default`, `minimal`, `compact`, `full`, `nerd`, `ascii`, `custom`.       |
 | `statusLine.separator`      | enum    | `powerline-thin` | `powerline`, `powerline-thin`, `slash`, `pipe`, `block`, `none`, `ascii`. |
@@ -793,7 +801,7 @@ The `cost` segment shows recorded session costs. For an active provider/model wi
 | `followUpMode`         | enum    | `one-at-a-time` | `all`, `one-at-a-time`.                                                                                 |
 | `interruptMode`        | enum    | `immediate`     | `immediate`, `wait`.                                                                                    |
 | `doubleEscapeAction`   | enum    | `rewind`          | `rewind`, `none`.                                                                               |
-| `autoResume`           | boolean | `false`         | Auto-resume the most recent session in the cwd.                                                         |
+| `autoResume`           | boolean | `false`         | Auto-resume the most recent session in the cwd. Ignored by `--new-session` and rpc/acp modes.           |
 | `plan.enabled`         | boolean | `true`          | Enable plan mode.                                                                                       |
 | `plan.defaultOnStartup` | boolean | `false`         | Start each fresh interactive session in plan mode when plan mode is enabled. Print/JSON (`--print`) mode ignores this and prints a note; use `--plan-yolo` for a headless plan flow. |
 | `ask.timeout`          | number  | `0`             | Seconds before an `ask` prompt times out; `0` = no timeout. |

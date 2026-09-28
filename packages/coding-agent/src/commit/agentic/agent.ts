@@ -1,7 +1,7 @@
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, Model } from "@oh-my-pi/pi-ai";
 import { Markdown } from "@oh-my-pi/pi-tui";
-import { prompt } from "@oh-my-pi/pi-utils";
+import { prompt, Snowflake } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import typesDescriptionPrompt from "../../commit/prompts/types-description.md" with { type: "text" };
@@ -79,6 +79,9 @@ export async function runCommitAgentSession(input: CommitAgentInput): Promise<Co
 		skills: [],
 		promptTemplates: [],
 		slashCommands: [],
+		// A distinct root id: when embedded under a host whose default "Main"
+		// root is live, the commit agent must not collide with it.
+		agentId: `Commit-${Snowflake.next()}`,
 	});
 	let toolCalls = 0;
 	let messageCount = 0;

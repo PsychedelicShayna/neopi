@@ -768,6 +768,44 @@ exit 64
 		expect(runCalls).toBe(2);
 	});
 
+	it("keeps managed cancellation pending until both native execution and cleanup settle", async () => {
+		const dispatched = Promise.withResolvers<void>();
+		const nativeResult = Promise.withResolvers<{ exitCode: undefined; cancelled: true; timedOut: false }>();
+		const cleanup = Promise.withResolvers<void>();
+		vi.spyOn(piNatives.Shell.prototype, "run").mockImplementation(() => {
+			dispatched.resolve();
+			return nativeResult.promise;
+		});
+		vi.spyOn(piNatives.Shell.prototype, "abort").mockImplementation(() => cleanup.promise);
+		const controller = new AbortController();
+		let completed = false;
+		const execution = executeBash("sleep 10", {
+			cwd: tempDir,
+			timeout: 0,
+			signal: controller.signal,
+			sessionKey: "managed-cancellation-settlement",
+			awaitCancellation: true,
+		}).then(result => {
+			completed = true;
+			return result;
+		});
+		try {
+			await dispatched.promise;
+			controller.abort();
+			await Bun.sleep(0);
+			expect(completed).toBe(false);
+			nativeResult.resolve({ exitCode: undefined, cancelled: true, timedOut: false });
+			await Bun.sleep(0);
+			expect(completed).toBe(false);
+			cleanup.resolve();
+			expect((await execution).cancelled).toBe(true);
+		} finally {
+			nativeResult.resolve({ exitCode: undefined, cancelled: true, timedOut: false });
+			cleanup.resolve();
+			await execution;
+		}
+	});
+
 	it("restores persistent sessions after native abort cleanup settles", async () => {
 		if (process.platform === "win32") {
 			return;

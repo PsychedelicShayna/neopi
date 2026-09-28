@@ -28,6 +28,11 @@ export interface CodingAgentCompileOptions {
 	readonly minifyIdentifiers?: boolean;
 	/** Disable Bun's built-in Darwin signing before the caller re-signs. */
 	readonly skipBuiltinCodesign?: boolean;
+	/**
+	 * Source identity baked into `BUILD_INFO`. Resolve it before any generator
+	 * rewrites tracked placeholders; pass nulls only when it is truly unknown.
+	 */
+	readonly buildInfo: { readonly gitSha: string | null; readonly dirty: boolean | null };
 }
 
 /**
@@ -39,6 +44,7 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 	if (options.skipBuiltinCodesign) {
 		Bun.env.BUN_NO_CODESIGN_MACHO_BINARY = "1";
 	}
+	const { buildInfo } = options;
 	try {
 		const output = await Bun.build({
 			entrypoints: [options.entrypoint],
@@ -49,6 +55,8 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 				"process.env.PI_COMPILE_TARGET": JSON.stringify(options.compileTarget ?? options.target ?? "host"),
 				"process.env.PI_TINY_TRANSFORMERS_VERSION": JSON.stringify(options.transformersVersion),
 				"process.env.PI_DOCS_EMBED": JSON.stringify((await buildDocsIndexPayload()).payload),
+				"process.env.PI_BUILD_GIT_SHA": JSON.stringify(buildInfo.gitSha ?? ""),
+				"process.env.PI_BUILD_GIT_DIRTY": JSON.stringify(buildInfo.dirty === null ? "" : String(buildInfo.dirty)),
 			},
 			// Precompiled bytecode skips parsing the ~20 MB bundle at boot:
 			// `omp --version` 256 ms -> 30 ms on M4 Max (+52 MB binary).

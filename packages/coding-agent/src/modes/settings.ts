@@ -16,7 +16,13 @@ import { setEmojiAutocompleteEnabled } from "@oh-my-pi/pi-tui/prompt/prompt-acti
 import { applyHyperlinkSetting } from "@oh-my-pi/pi-tui/render/hyperlink";
 import { setInlineImageMaxColumns, setInlineImageMaxRows } from "@oh-my-pi/pi-tui/render/render-utils";
 import { setShimmerMode } from "@oh-my-pi/pi-tui/theme/shimmer";
-import { setAutoThemeMapping, setColorBlindMode, setSymbolPreset } from "@oh-my-pi/pi-tui/theme/theme";
+import {
+	setAutoThemeMapping,
+	setBrandGlyph,
+	setColorBlindMode,
+	setEffortGlyphs,
+	setSymbolPreset,
+} from "@oh-my-pi/pi-tui/theme/theme";
 
 const EMPTY_UNKNOWN_RECORD: Record<string, unknown> = {};
 
@@ -104,6 +110,47 @@ export const cfgSymbolPreset = register({
 	},
 });
 effect(cfgSymbolPreset, setSymbolPreset);
+
+// Temporary glyph cyclers (#32), superseded by named glyph sets (#37).
+export const cfgSymbolBrandGlyph = register({
+	id: "symbolBrandGlyph",
+	type: "enum",
+	values: ["theme", "pi", "fae-pi", "md-axis-z", "diamond"] as const,
+	default: "theme",
+	ui: {
+		tab: "appearance",
+		group: "Theme",
+		label: "Brand Glyph",
+		description: "Temporary override for the status-line brand icon; superseded by glyph sets",
+		options: [
+			{ value: "theme", label: "Theme", description: "Use the theme and symbol preset (default)" },
+			{ value: "pi", label: "π", description: "Plain Unicode pi" },
+			{ value: "fae-pi", label: "fae-pi", description: "Nerd Font U+E22C" },
+			{ value: "md-axis-z", label: "U+F0D57", description: "Nerd Font glyph the brand used before #32" },
+			{ value: "diamond", label: "◇", description: "Diamond" },
+		],
+	},
+});
+effect(cfgSymbolBrandGlyph, setBrandGlyph);
+
+export const cfgSymbolEffortGlyphs = register({
+	id: "symbolEffortGlyphs",
+	type: "enum",
+	values: ["theme", "poimandres", "nerd"] as const,
+	default: "theme",
+	ui: {
+		tab: "appearance",
+		group: "Theme",
+		label: "Effort Glyphs",
+		description: "Temporary override for thinking-level glyphs; superseded by glyph sets",
+		options: [
+			{ value: "theme", label: "Theme", description: "Use the theme and symbol preset (default)" },
+			{ value: "poimandres", label: "Poimandres", description: "∘ ◌ ◍ ◎ ◉ ●" },
+			{ value: "nerd", label: "Nerd circle slices", description: "Nerd Font circle slices, fire for max" },
+		],
+	},
+});
+effect(cfgSymbolEffortGlyphs, setEffortGlyphs);
 
 export const cfgColorBlindMode = register({
 	id: "colorBlindMode",

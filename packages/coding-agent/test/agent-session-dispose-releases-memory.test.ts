@@ -41,7 +41,6 @@ describe("AgentSession dispose releases retained memory", () => {
 		session = undefined;
 		if (current) await current.dispose();
 		authStorage.close();
-		AsyncJobManager.resetForTests();
 		vi.restoreAllMocks();
 		tempDir.removeSync();
 	});

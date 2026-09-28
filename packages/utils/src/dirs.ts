@@ -201,6 +201,47 @@ export function relativePathWithinRoot(root: string, candidate: string): string 
 	return relativePathWithinNormalizedRoot(normalizedRoot, normalizedCandidate) || null;
 }
 
+function normalizePathThroughExistingAncestor(inputPath: string): string {
+	const resolvedPath = path.resolve(inputPath);
+	const missingSegments: string[] = [];
+	let ancestor = resolvedPath;
+	while (true) {
+		try {
+			const canonicalAncestor = fs.realpathSync(ancestor);
+			const canonicalPath = path.resolve(canonicalAncestor, ...missingSegments.reverse());
+			return process.platform === "win32" ? canonicalPath.toLowerCase() : canonicalPath;
+		} catch {
+			const parent = path.dirname(ancestor);
+			if (parent === ancestor) {
+				return process.platform === "win32" ? resolvedPath.toLowerCase() : resolvedPath;
+			}
+			missingSegments.push(path.basename(ancestor));
+			ancestor = parent;
+		}
+	}
+}
+
+const TEST_ALLOWED_STORAGE_ROOT_ENV = "NPI_TEST_ALLOWED_STORAGE_ROOT";
+const TEST_STORAGE_GUARD_ACTIVE_ENV = "NPI_TEST_STORAGE_GUARD_ACTIVE";
+
+function assertTestPathIsIsolated(candidate: string, kind: "agent" | "sessions"): void {
+	const scopedGuard = (
+		globalThis as typeof globalThis & {
+			__npiTestStorageGuardActive?: () => boolean;
+		}
+	).__npiTestStorageGuardActive;
+	if (!(scopedGuard?.() ?? process.env[TEST_STORAGE_GUARD_ACTIVE_ENV] === "1")) return;
+	const allowedRoot = process.env[TEST_ALLOWED_STORAGE_ROOT_ENV];
+	if (!allowedRoot) return;
+	const normalizedAllowedRoot = normalizePathThroughExistingAncestor(allowedRoot);
+	const normalizedCandidate = normalizePathThroughExistingAncestor(candidate);
+	if (relativePathWithinNormalizedRoot(normalizedAllowedRoot, normalizedCandidate) !== null) return;
+	throw new Error(
+		`Test resolved ${kind} directory outside its isolated temporary storage: ${candidate}. ` +
+			"Isolate the test with PI_CODING_AGENT_DIR, setAgentDir(), or an explicit agent/session directory.",
+	);
+}
+
 let projectDir: string | undefined;
 
 /** Get the project directory. */
@@ -543,6 +584,14 @@ export function __resetDirsFromEnvForTests(): void {
 	refreshDirsFromEnv();
 }
 
+const testGlobal = globalThis as typeof globalThis & {
+	__npiTestDirectoryGuardEnabled?: boolean;
+	__npiTestResetDirsFromEnv?: () => void;
+};
+if (testGlobal.__npiTestDirectoryGuardEnabled) {
+	testGlobal.__npiTestResetDirsFromEnv = __resetDirsFromEnvForTests;
+}
+
 /** Activate a named profile. Passing undefined or "default" returns to the default profile. */
 export function setProfile(profile: string | undefined): void {
 	const next = normalizeProfileName(profile);
@@ -588,6 +637,7 @@ export function getProfileRootDir(profile: string | undefined): string {
 }
 /** Get the agent config directory (~/.omp/agent). */
 export function getAgentDir(): string {
+	assertTestPathIsIsolated(dirs.agentDir, "agent");
 	return dirs.agentDir;
 }
 
@@ -906,7 +956,9 @@ export function getComposerCacheDir(agentDir?: string): string {
 
 /** Get the sessions directory (~/.omp/agent/sessions). */
 export function getSessionsDir(agentDir?: string): string {
-	return dirs.agentSubdir(agentDir, "sessions", "data");
+	const sessionsDir = dirs.agentSubdir(agentDir, "sessions", "data");
+	assertTestPathIsIsolated(sessionsDir, "sessions");
+	return sessionsDir;
 }
 
 /** Get the content-addressed blob store directory (~/.omp/agent/blobs). */

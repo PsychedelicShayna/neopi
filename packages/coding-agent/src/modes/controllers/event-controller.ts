@@ -4,6 +4,7 @@ import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { type Component, Loader, TERMINAL } from "@oh-my-pi/pi-tui";
 import { formatDuration, isRecord, logger, PRODUCT_NAME, prompt, sanitizeText } from "@oh-my-pi/pi-utils";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
+import { chatModeLabel } from "../../chat/chat-mode";
 import { extractTextContent } from "../../commit/utils";
 import { settings } from "../../config/settings";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
@@ -359,6 +360,9 @@ export class EventController {
 				this.ctx.ui.requestRender(true);
 			},
 			goal_updated: async () => {},
+			chat_mode_changed: async event => {
+				this.ctx.setHookStatus("chat-mode", event.mode === "off" ? undefined : chatModeLabel(event.mode));
+			},
 		} satisfies AgentSessionEventHandlers;
 	}
 

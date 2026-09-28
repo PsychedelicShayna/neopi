@@ -191,6 +191,7 @@ Choose the setting by the desired outcome:
   - PTY uses native `PtySession.start()`.
   - Client-terminal mode delegates process execution to the connected client terminal capability.
   - Named services run in the project-scoped launch broker and retain logs/status for `proc://`.
+  - The broker is spawned by the first client that needs it. On Linux with a reachable systemd user manager it starts in its own transient scope under `launch.brokerSlice` (default `neopi-broker.slice`), so its supervised daemons outlive a client whose unit is killed; with `launch.brokerScope: false` or without systemd it stays in the spawning client's cgroup. Either way it exits 3 s after its last client disconnects and no persistent daemon is live.
 - Session state
   - Reads session settings for async, auto-background, interceptor, direnv, global timeout cap, tool availability, and shell configuration.
   - Registers jobs with `session.asyncJobManager` for explicit/auto background runs.

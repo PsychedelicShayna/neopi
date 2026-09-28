@@ -230,6 +230,12 @@ export const STRING_SETTERS: Record<string, StringSetter> = {
 	"--skills": (result, value) => {
 		result.skills = value.split(",").map(s => s.trim());
 	},
+	"--mcp": (result, value) => {
+		result.mcp = value
+			.split(",")
+			.map(s => s.trim())
+			.filter(Boolean);
+	},
 	"--chat-include": (result, value) => {
 		result.chatInclude = value
 			.split(",")
@@ -312,9 +318,11 @@ export const VALUELESS_FLAGS: ReadonlySet<string> = new Set([
 	"--from-claude",
 	"--from-codex",
 	"--no-session",
+	"--new-session",
 	"--no-tools",
 	"--no-lsp",
 	"--no-pty",
+	"--no-exit-with-parent",
 	"--hide-thinking",
 	"--advisor",
 	"--external-thinking",
@@ -325,6 +333,7 @@ export const VALUELESS_FLAGS: ReadonlySet<string> = new Set([
 	"--print-thoughts",
 	"--no-extensions",
 	"--no-skills",
+	"--no-mcp",
 	"--no-rules",
 	"--no-title",
 	"--no-ui",
@@ -386,6 +395,7 @@ const SESSION_SOURCE_FLAGS: ReadonlySet<string> = new Set([
 	"--continue",
 	"-c",
 	"--fork",
+	"--new-session",
 	"--from-claude",
 	"--from-codex",
 ]);

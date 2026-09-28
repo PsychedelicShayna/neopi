@@ -57,7 +57,6 @@ describe("AgentSession owner-routed async delivery", () => {
 		for (const authStorage of authStorages.splice(0)) {
 			authStorage.close();
 		}
-		AsyncJobManager.resetForTests();
 	});
 
 	it("delivers background text and images to the owning model and reaches quiescence", async () => {
@@ -73,7 +72,6 @@ describe("AgentSession owner-routed async delivery", () => {
 		authStorages.push(authStorage);
 		authStorage.keys.setRuntime("anthropic", "test-key");
 		const manager = new AsyncJobManager({});
-		AsyncJobManager.setInstance(manager);
 
 		session = new AgentSession({
 			agent,
@@ -145,7 +143,6 @@ describe("AgentSession owner-routed async delivery", () => {
 		const manager = new AsyncJobManager({});
 		const sessionManager = SessionManager.inMemory();
 		const allocate = vi.spyOn(sessionManager, "allocateArtifactPath");
-		AsyncJobManager.setInstance(manager);
 		session = new AgentSession({
 			agent,
 			sessionManager,
@@ -210,7 +207,6 @@ describe("AgentSession owner-routed async delivery", () => {
 		authStorages.push(authStorage);
 		authStorage.keys.setRuntime("anthropic", "test-key");
 		const manager = new AsyncJobManager({});
-		AsyncJobManager.setInstance(manager);
 		const store = SessionManager.inMemory(temp.path());
 		store.adoptArtifactManager(new ArtifactManager(path.join(temp.path(), "artifacts")));
 		const settings = Settings.isolated();
@@ -294,7 +290,6 @@ describe("AgentSession owner-routed async delivery", () => {
 		authStorages.push(authStorage);
 		authStorage.keys.setRuntime("anthropic", "test-key");
 		const manager = new AsyncJobManager({});
-		AsyncJobManager.setInstance(manager);
 		const store = SessionManager.inMemory(temp.path());
 		store.adoptArtifactManager(new ArtifactManager(path.join(temp.path(), "artifacts")));
 		const settings = Settings.isolated({
@@ -627,7 +622,6 @@ describe("AgentSession owner-routed async delivery", () => {
 		authStorages.push(authStorage);
 		authStorage.keys.setRuntime("anthropic", "test-key");
 		const manager = new AsyncJobManager({ retentionMs: 60_000 });
-		AsyncJobManager.setInstance(manager);
 
 		session = new AgentSession({
 			agent,
@@ -681,7 +675,6 @@ describe("AgentSession owner-routed async delivery", () => {
 		authStorages.push(authStorage);
 		authStorage.keys.setRuntime("anthropic", "test-key");
 		const manager = new AsyncJobManager({ retentionMs: 60_000 });
-		AsyncJobManager.setInstance(manager);
 
 		session = new AgentSession({
 			agent,
@@ -736,7 +729,6 @@ describe("AgentSession owner-routed async delivery", () => {
 		authStorages.push(authStorage);
 		authStorage.keys.setRuntime("anthropic", "test-key");
 		const manager = new AsyncJobManager({ retentionMs: 60_000 });
-		AsyncJobManager.setInstance(manager);
 
 		session = new AgentSession({
 			agent,
@@ -793,7 +785,6 @@ describe("AgentSession owner-routed async delivery", () => {
 		authStorages.push(authStorage);
 		authStorage.keys.setRuntime("anthropic", "test-key");
 		const manager = new AsyncJobManager({});
-		AsyncJobManager.setInstance(manager);
 
 		session = new AgentSession({
 			agent,
@@ -834,7 +825,6 @@ describe("AgentSession owner-routed async delivery", () => {
 		authStorages.push(authStorage);
 		authStorage.keys.setRuntime("anthropic", "test-key");
 		const manager = new AsyncJobManager({});
-		AsyncJobManager.setInstance(manager);
 
 		session = new AgentSession({
 			agent,

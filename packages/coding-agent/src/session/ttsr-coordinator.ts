@@ -17,6 +17,8 @@ import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { t
 import ttsrToolReminderTemplate from "../prompts/system/ttsr-tool-reminder.md" with { type: "text" };
 import ttsrWarningTemplate from "../prompts/system/ttsr-warning.md" with { type: "text" };
 import type { AgentSessionEvent } from "./agent-session-events";
+import { setMessageEntryId } from "./message-entry-ids";
+import type { CustomMessage } from "./messages";
 import type { SessionManager } from "./session-manager";
 import { TtsrToolInspector } from "./ttsr-outputs";
 
@@ -594,7 +596,7 @@ export class TtsrCoordinator {
 				const injection = this.#getInjectionContent();
 				if (injection) {
 					const details = { rules: injection.rules.map(rule => rule.name) };
-					this.#host.agent.appendMessage({
+					const injectionMessage: CustomMessage = {
 						role: "custom",
 						customType: "ttsr-injection",
 						content: injection.content,
@@ -602,13 +604,17 @@ export class TtsrCoordinator {
 						details,
 						attribution: "agent",
 						timestamp: Date.now(),
-					});
-					this.#host.sessionManager.appendCustomMessageEntry(
-						"ttsr-injection",
-						injection.content,
-						false,
-						details,
-						"agent",
+					};
+					this.#host.agent.appendMessage(injectionMessage);
+					setMessageEntryId(
+						injectionMessage,
+						this.#host.sessionManager.appendCustomMessageEntry(
+							"ttsr-injection",
+							injection.content,
+							false,
+							details,
+							"agent",
+						),
 					);
 					this.#markInjected(details.rules);
 				}

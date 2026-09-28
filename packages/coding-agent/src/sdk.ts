@@ -47,7 +47,7 @@ import {
 	formatAdvisorContextPrompt,
 	formatAdvisorMemoryPrompt,
 } from "./advisor";
-import { AsyncJobManager } from "./async";
+import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, AsyncJobManager } from "./async";
 import { AutoLearnController, buildAutoLearnInstructions } from "./autolearn/controller";
 import { createAutoresearchExtension } from "./autoresearch";
 import { loadCapability, reset as resetCapabilities } from "./capability";
@@ -60,7 +60,7 @@ import {
 } from "./capability/rule";
 import { bucketRules } from "./capability/rule-buckets";
 import type { EffectiveExtensionRoots } from "./capability/types";
-import { type ChatModeConfig, chatModeIncludes } from "./chat/chat-mode";
+import { type ChatModeConfig, chatActiveToolNames, chatModeIncludes } from "./chat/chat-mode";
 import { buildChatSystemPrompt } from "./chat/chat-system-prompt";
 import { shouldEnableAppendOnlyContext } from "./config/append-only-context-mode";
 import { shouldInlineToolDescriptors } from "./config/inline-tool-descriptors-mode";
@@ -138,8 +138,10 @@ import {
 	deduplicateMCPToolsByName,
 	discoverAndLoadMCPTools,
 	getMCPToolOriginKey,
+	loadAllMCPConfigs,
 	type MCPLoadResult,
 	MCPManager,
+	MCPUnknownServerError,
 	MCPToolCache,
 	type MCPToolsLoadResult,
 	shouldFilterBrowserMCPForPrelude,
@@ -153,7 +155,13 @@ import type { MnemopiSessionState } from "./mnemopi/state";
 import mcpXdevGuidanceTemplate from "./prompts/system/mcp-xdev-guidance.md" with { type: "text" };
 import lateDiagnosticTemplate from "./prompts/tools/lsp-late-diagnostic.md" with { type: "text" };
 import { AgentLifecycleManager } from "./registry/agent-lifecycle";
-import { type AgentKind, type AgentRef, AgentRegistry, MAIN_AGENT_ID } from "./registry/agent-registry";
+import {
+	type AgentKind,
+	type AgentRef,
+	AgentIdConflictError,
+	AgentRegistry,
+	MAIN_AGENT_ID,
+} from "./registry/agent-registry";
 import {
 	buildSecretObfuscator,
 	deobfuscateSessionContext,
@@ -163,6 +171,7 @@ import {
 	type SecretObfuscator,
 } from "./secrets";
 import { AgentSession, type InitialRetryFallbackState, type PlanYolo, type Prewalk } from "./session/agent-session";
+import type { AgentSessionDisposeOptions } from "./session/agent-session-types";
 import {
 	createAuthStorageSettingsSync,
 	discoverAuthStorage as discoverAuthStorageFromConfig,
@@ -219,6 +228,7 @@ import { AgentOutputManager } from "./task/output-manager";
 import { wrapStreamFnWithProviderConcurrency } from "./task/provider-concurrency";
 import { sessionDelegationBias } from "./task/prompt-policy";
 import { isScoutSpawnable } from "./task/spawn-policy";
+import { WorkPoolRegistry } from "./task/workpool";
 import type { StructuredSubagentSchemaMode } from "@oh-my-pi/pi-tui/tools/task";
 import {
 	AUTO_THINKING,
@@ -277,6 +287,7 @@ import { USER_TODO_EDIT_CUSTOM_TYPE } from "./tools/todo";
 import { ttsTool } from "./tools/tts";
 import { resolveActiveRepoContext } from "./utils/active-repo-context";
 import { EventBus } from "./utils/event-bus";
+import { trackLateCleanup } from "./utils/late-cleanup";
 import { normalizeProviderContextImagesForModel } from "./utils/image-loading";
 import { formatLocalCalendarDate } from "@oh-my-pi/pi-tui/chrome/local-date";
 import { normalizePromptPath } from "./utils/prompt-path";
@@ -348,6 +359,7 @@ import { cfgImagesBlockImages, cfgStartupQuiet, cfgTuiReactions, cfgTuiRenderMer
 import { cfgLspLazy, cfgLspShared } from "./lsp/settings";
 import {
 	cfgMcpEnableProjectConfig,
+	cfgMcpIncludeServers,
 	cfgMcpNotificationDebounceMs,
 	cfgMcpNotifications,
 	cfgMcpStartupTimeoutMs,
@@ -577,8 +589,17 @@ export interface CreateAgentSessionOptions {
 	/** Already-loaded text appended through the bundled system prompt templates. */
 	appendSystemPrompt?: string;
 	/**
+	 * `customSystemPrompt` or `systemPromptTemplate` came from a discovered
+	 * SYSTEM.md / SYSTEM_TEMPLATE.md rather than an explicit flag. Chat mode
+	 * ignores discovered prompts and honors only explicit ones.
+	 */
+	systemPromptDiscovered?: boolean;
+	/** `appendSystemPrompt` came from a discovered APPEND_SYSTEM.md; chat mode ignores it. */
+	appendSystemPromptDiscovered?: boolean;
+	/**
 	 * Chat mode (`--chat`): strips coding-agent context from the system prompt,
-	 * per-turn reminders, memory, and extension prompt injection.
+	 * per-turn reminders, memory, and extension prompt injection. This is the
+	 * initial mode; `AgentSession.setChatMode` switches it live.
 	 */
 	chatMode?: ChatModeConfig;
 	/**
@@ -731,7 +752,19 @@ export interface CreateAgentSessionOptions {
 	parentHindsightSessionState?: HindsightSessionState;
 	/** Parent Mnemopi state to alias for subagent memory tools. */
 	parentMnemopiSessionState?: MnemopiSessionState;
-	/** Pre-allocated agent identity for IRC routing. Default: "Main" for top-level, parentTaskPrefix-derived for sub. */
+	/**
+	 * Pre-allocated agent identity for IRC routing, registry ownership, and
+	 * child-id scoping. Default: "Main" for top-level, parentTaskPrefix-derived
+	 * for sub.
+	 *
+	 * Hosting several top-level sessions in one process: give each live root
+	 * (and each generation of it) a distinct id. A creation whose id is already
+	 * registered rejects with {@link AgentIdConflictError} and leaves the
+	 * existing session untouched, so only one default-id ("Main") root can be
+	 * live per registry. Every top-level root owns an independent async-job
+	 * domain; children of a root other than "Main" get ids scoped under the
+	 * root id (`<root>.<label>`), so equal labels never collide across roots.
+	 */
 	agentId?: string;
 	/** Display name for the agent in IRC. Default: "main" or "sub". */
 	agentDisplayName?: string;
@@ -745,10 +778,21 @@ export interface CreateAgentSessionOptions {
 	/**
 	 * Registry generation authorized for this creation. `null` requires the id
 	 * to be absent; an AgentRef allows a parked revival to reuse only that ref.
-	 * Undefined preserves legacy unconditional registration for external SDK callers.
+	 * Undefined behaves like `null` for callers that do not manage generations:
+	 * a registered id is never replaced and the creation rejects with
+	 * {@link AgentIdConflictError}.
 	 * @internal
 	 */
 	expectedAgentRef?: AgentRef | null;
+	/**
+	 * Async-job domain of the spawning root, inherited by subagent sessions
+	 * (`parentTaskPrefix`/`taskDepth`) so their bash/task/eval jobs, completion
+	 * delivery, and job snapshots stay owned by the root that spawned them.
+	 * Ignored for top-level sessions, which always own a fresh manager.
+	 * Without it a subagent refuses async work.
+	 * @internal
+	 */
+	asyncJobManager?: AsyncJobManager;
 	/** Parent task ID prefix for nested artifact naming (e.g., "Extensions") */
 	parentTaskPrefix?: string;
 	/**
@@ -870,10 +914,15 @@ export type * from "./extensibility/extensions";
 export type { Skill } from "./extensibility/skills";
 export type { FileSlashCommand } from "./extensibility/slash-commands";
 export type { MCPManager, MCPServerConfig, MCPServerConnection, MCPToolsLoadResult } from "./mcp";
-// Agent registry: pass a private instance per `createAgentSession` when
-// embedding several concurrent top-level sessions in one process (the default
-// global registry admits only one "Main" per process generation).
-export { type AgentRef, AgentRegistry, MAIN_AGENT_ID } from "./registry/agent-registry";
+export { MCPUnknownServerError } from "./mcp";
+// Per-session MCP allowlist: `cfgMcpIncludeServers.override(settings, ["github", "linear-*"])`
+// on the Settings passed to createAgentSession. Its presence is the capability marker.
+export { cfgMcpIncludeServers } from "./mcp/settings";
+// Agent registry: several concurrent top-level sessions share the global
+// registry when each has a distinct `agentId`; a duplicate id rejects with
+// `AgentIdConflictError`. A private instance per `createAgentSession` fully
+// isolates the registry view instead.
+export { type AgentRef, AgentIdConflictError, AgentRegistry, MAIN_AGENT_ID } from "./registry/agent-registry";
 export type { Tool } from "./tools";
 export { buildDirectoryTree, buildWorkspaceTree, type DirectoryTree, type WorkspaceTree } from "./workspace-tree";
 
@@ -1518,6 +1567,18 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	if (options.systemPromptTemplate !== undefined && options.customSystemPrompt !== undefined) {
 		throw new Error("systemPromptTemplate cannot be combined with a literal custom system prompt");
 	}
+	const agentRegistry = options.agentRegistry ?? AgentRegistry.global();
+	const resolvedAgentId = options.agentId ?? options.parentTaskPrefix ?? MAIN_AGENT_ID;
+	// Fail fast, before taking any process-wide hold, when this creation could
+	// only succeed by replacing a registered agent it does not own. The
+	// compare-and-set registration below stays authoritative for concurrent
+	// constructions racing past this check.
+	if (options.expectedAgentRef === undefined) {
+		const existing = agentRegistry.get(resolvedAgentId);
+		if (existing && !(existing.status === "parked" && !existing.session)) {
+			throw new AgentIdConflictError(resolvedAgentId);
+		}
+	}
 	const cwd = options.cwd ?? getProjectDir();
 	const agentDir = options.agentDir ?? getAgentDir();
 	const eventBus = options.eventBus ?? new EventBus();
@@ -1982,29 +2043,24 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	const memoryEnabled = !restrictToolNames && (!chatMode || chatModeIncludes(chatMode, "memory"));
 	const enableLsp = options.enableLsp ?? !restrictToolNames;
 	const lspReadOnly = options.lspReadOnly ?? restrictToolNames;
-	// Only the first top-level session in a process owns an AsyncJobManager.
-	// Subagents inherit the parent's manager via `AsyncJobManager.instance()`
-	// (set below), and any additional top-level session spun up in-process
-	// (e.g. the agent-creation architect in `agents-hub-deps.ts`) must share
-	// the live singleton — otherwise its dispose path would clobber the
-	// owning session's manager and break the `task`/`bash` async paths
-	// (issue #1923). The `instance()` guard means later sessions also skip
-	// constructing an orphaned manager that nothing would ever route to.
-	// Delivery is owner-routed: every AgentSession registers its own sink
-	// (see session/async-job-delivery.ts), so the manager takes no default
+	// Every top-level root owns an independent AsyncJobManager: its bash/task/
+	// eval jobs, completion delivery, and job snapshots never mix with another
+	// root hosted in the same process, and disposing one root cannot disable
+	// another's async paths. Subagents inherit their spawning root's manager
+	// explicitly through `options.asyncJobManager`; without one they refuse
+	// async work rather than route it into an unrelated root. Delivery is
+	// owner-routed: every AgentSession registers its own sink (see
+	// session/async-job-delivery.ts), so the manager takes no default
 	// onJobComplete here.
-	const asyncJobManager =
-		!options.parentTaskPrefix && !AsyncJobManager.instance()
-			? new AsyncJobManager({
-					// Re-read per capacity check so `async.maxJobs` resizes the cap live.
-					maxRunningJobs: () => Math.min(100, cfgAsyncMaxJobs.get(settings)),
-				})
-			: undefined;
+	const asyncJobManager = isSubagentSession
+		? undefined
+		: new AsyncJobManager({
+				// Re-read per capacity check so `async.maxJobs` resizes the cap live.
+				maxRunningJobs: () => Math.min(100, cfgAsyncMaxJobs.get(settings)),
+			});
 
-	const scopedAsyncJobManager = asyncJobManager ?? (options.parentTaskPrefix ? AsyncJobManager.instance() : undefined);
+	const scopedAsyncJobManager = asyncJobManager ?? options.asyncJobManager;
 
-	const agentRegistry = options.agentRegistry ?? AgentRegistry.global();
-	const resolvedAgentId = options.agentId ?? options.parentTaskPrefix ?? MAIN_AGENT_ID;
 	const resolvedAgentDisplayName = options.agentDisplayName ?? agentKind;
 	let registeredAgentRef: AgentRef | undefined;
 	/**
@@ -2027,6 +2083,49 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	const evalKernelOwnerId = `agent-session:${Snowflake.next()}`;
 
 	try {
+		// Claim the id first, before any process-wide singleton is installed or
+		// any resource is created, so a rejected creation leaves every existing
+		// registration and process-global view exactly as it was. Registering this
+		// early also lets subagents launched in the same parallel batch see each
+		// other in their initial `# IRC Peers` block (rendered inside
+		// `rebuildSystemPrompt`). The session reference is attached after
+		// construction below.
+		const registrationInput = {
+			id: resolvedAgentId,
+			displayName: resolvedAgentDisplayName,
+			kind: agentKind,
+			parentId: options.parentAgentId,
+			session: null,
+			sessionFile: sessionManager.getSessionFile() ?? null,
+			status: "running" as const,
+		};
+		// Only an explicitly expected parked generation may be reused; any other
+		// registered id (live, under construction, or terminal) is never replaced.
+		registeredAgentRef = agentRegistry.registerIfAvailable(registrationInput, options.expectedAgentRef ?? null);
+		if (!registeredAgentRef && !options.expectedAgentRef) {
+			// A fresh creation collided with an existing id. If that id is held by a
+			// provably-dead parked corpse — no live session, no reviver — reclaim it
+			// so this new generation can take the id instead of failing forever at
+			// construction. Without this, one such corpse (isolated-run park,
+			// interrupted construction) poisons the id for the whole process (#8490).
+			// The reclaim is gated by the lifecycle owner and only touches the
+			// registry it manages; the corpse's transcript stays at history://.
+			const stale = agentRegistry.get(resolvedAgentId);
+			const lifecycle = AgentLifecycleManager.global();
+			if (stale && lifecycle.manages(agentRegistry) && (await lifecycle.reclaimDeadCorpse(resolvedAgentId, stale))) {
+				registeredAgentRef = agentRegistry.registerIfAvailable(registrationInput, null);
+			}
+		}
+		if (!registeredAgentRef) {
+			throw new AgentIdConflictError(
+				resolvedAgentId,
+				`Agent "${resolvedAgentId}" is already owned by another session generation.`,
+			);
+		}
+		// A reused parked ref remains parked until the new AgentSession is fully
+		// constructed and attached. Startup failure therefore leaves it revivable.
+		hasRegistered = !options.expectedAgentRef;
+
 		const getActiveModelString = (): string | undefined => {
 			const activeModel = agent?.state.model;
 			if (activeModel) return formatModelString(activeModel);
@@ -2078,9 +2177,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					(cfgSkillful.get(settings) === true && (session?.skills ?? skills).length > 0)
 				);
 			},
-			// Chat mode owns its tool list exactly (`--tools` or none): no automatic
-			// auto-learn, memory, goal, or AST widening.
-			restrictToolNames: restrictToolNames || chatMode !== undefined,
+			// The registry follows the coding rules even in chat mode, so switching chat
+			// mode off can restore the normal tool selection; chat mode only narrows the
+			// active set (see `chatActiveToolNames` below).
+			restrictToolNames,
 			get hasEditTool() {
 				const requestedToolNames = options.toolNames ? normalizeToolNames(options.toolNames) : undefined;
 				return restrictToolNames
@@ -2201,12 +2301,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			authStorage,
 			modelRegistry,
 			getTelemetry: () => agent?.telemetry,
-			// Subagents inherit the singleton (the parent's manager) so their bash/task
-			// completions still flow into the spawning conversation's yieldQueue.
-			// Secondary in-process top-level sessions (no parentTaskPrefix, no
-			// constructed manager because the singleton was already installed) leave
-			// this undefined so tools and session job snapshots refuse async work
-			// instead of silently routing into the owning session (issue #1923).
+			// A root's own manager, or the spawning root's manager handed down to a
+			// subagent, so bash/task/eval completions flow into the conversation
+			// that owns them and never into another root hosted in-process.
 			asyncJobManager: scopedAsyncJobManager,
 		};
 		let browserPrelude: EvalPreludeDefinition | undefined;
@@ -2228,10 +2325,14 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 
 		// Wire process-wide internal URL singletons owned by their real classes.
 		// Top-level sessions install the active snapshots; subagents inherit them.
-		// Artifact and agent-output URLs resolve via `AgentRegistry.global()` —
-		// the protocol handlers walk each ref's `sessionManager.getArtifactsDir()`,
-		// which collapses to the parent's dir for subagents (they adopt the
-		// parent's ArtifactManager) so one lookup hits everything.
+		// These are compatibility fallbacks with last-root-wins ownership: tool
+		// calls resolve `skill://`/`rule://`/`local://` through their own
+		// session's context first, so a newer root never retargets an older
+		// root's tools. Artifact and agent-output URLs resolve via
+		// `AgentRegistry.global()` — the protocol handlers walk each ref's
+		// `sessionManager.getArtifactsDir()`, which collapses to the parent's dir
+		// for subagents (they adopt the parent's ArtifactManager) so one lookup
+		// hits everything.
 		const getArtifactsDir = () => sessionManager.getArtifactsDir();
 		if (!options.parentTaskPrefix) {
 			setActiveSkills(skills);
@@ -2240,7 +2341,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// so without this a TTSR-only rule (e.g. a triggered builtin) is not
 			// addressable and `rule://` reports "Available: none".
 			setActiveRules([...rulebookRules, ...alwaysApplyRules, ...ttsrManager.getRules()]);
-			if (asyncJobManager) AsyncJobManager.setInstance(asyncJobManager);
 		}
 		const localProtocolOptions = options.localProtocolOptions ?? {
 			getArtifactsDir,
@@ -2251,10 +2351,18 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		}
 		toolSession.getArtifactsDir = getArtifactsDir;
 		toolSession.localProtocolOptions = localProtocolOptions;
-		toolSession.agentOutputManager = new AgentOutputManager(
-			getArtifactsDir,
-			options.parentTaskPrefix ? { parentPrefix: options.parentTaskPrefix } : undefined,
-		);
+		// Child ids are scoped by their spawner: a subagent nests children under
+		// its own id, and a top-level root other than the default "Main" nests
+		// them under the root id, so two roots that both spawn `Research` get
+		// distinct global identities (and artifact files) while the default
+		// single-root CLI keeps unprefixed ids. A candidate that would equal a
+		// registered root id is skipped like a repeated name.
+		const childIdPrefix =
+			options.parentTaskPrefix ?? (resolvedAgentId === MAIN_AGENT_ID ? undefined : resolvedAgentId);
+		toolSession.agentOutputManager = new AgentOutputManager(getArtifactsDir, {
+			parentPrefix: childIdPrefix,
+			isReserved: id => agentRegistry.get(id)?.kind === "main",
+		});
 
 		// Create built-in tools (already wrapped with meta notice formatting)
 		await logger.time("createAllTools", createTools, toolSession, options.toolNames);
@@ -2299,7 +2407,18 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// Filter browser MCP only when Eval can expose the built-in browser prelude.
 			filterBrowser: initialBrowserPreludeAvailable,
 			extensionRoots: buildSessionExtensionRoots(),
+			includeServers: cfgMcpIncludeServers.get(settings),
 		};
+		if (enableMCP && !mcpManager && mcpDiscoverOptions.includeServers.length > 0) {
+			// Fail before anything starts: an allowlist whose literal names match
+			// nothing would otherwise run the session with no MCP servers at all.
+			const { unmatchedIncludes } = await loadAllMCPConfigs(cwd, {
+				enableProjectConfig: mcpDiscoverOptions.enableProjectConfig,
+				extensionRoots: mcpDiscoverOptions.extensionRoots,
+				includeServers: mcpDiscoverOptions.includeServers,
+			});
+			if (unmatchedIncludes && unmatchedIncludes.length > 0) throw new MCPUnknownServerError(unmatchedIncludes);
+		}
 		if (enableMCP && !mcpManager) {
 			if (deferMCPDiscoveryForUI) {
 				const cacheStorage = settings.getStorage();
@@ -3156,6 +3275,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		});
 		const toolContextStore = new ToolContextStore(getSessionContext);
 		toolSession.getToolContext = () => toolContextStore.getContext();
+		toolSession.getToolApprovalRequester = () => extensionRunner.getToolApprovalRequester();
 		const setSessionActiveToolNames = (names: Iterable<string>): void => {
 			const snapshot = Array.from(names);
 			setActiveToolNames(snapshot);
@@ -3559,15 +3679,20 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			const activeRepoContext = hasSession
 				? await logger.time("resolveActiveRepoContext", resolveRepoContext, promptCwd)
 				: initialActiveRepoContext;
-			if (hasSession && options.contextFiles === undefined && chatKeepsContextFiles) {
-				contextFiles = await logger.time(
-					"discoverContextFiles",
-					discoverContextFiles,
-					promptCwd,
-					agentDir,
-					[...cfgDisabledExtensions.get(settings)],
-					chatMode !== undefined,
-				);
+			// Chat mode can change live (`AgentSession.setChatMode`); read it per rebuild.
+			const liveChatMode = hasSession ? session.chatMode : chatMode;
+			if (hasSession && options.contextFiles === undefined) {
+				contextFiles =
+					liveChatMode && !chatModeIncludes(liveChatMode, "contextFiles")
+						? []
+						: await logger.time(
+								"discoverContextFiles",
+								discoverContextFiles,
+								promptCwd,
+								agentDir,
+								[...cfgDisabledExtensions.get(settings)],
+								liveChatMode !== undefined,
+							);
 				toolSession.contextFiles = contextFiles;
 				session.setAdvisorContextPrompt(formatAdvisorContextPrompt(contextFiles));
 			}
@@ -3605,7 +3730,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					setActiveRules(nextActiveRules);
 				}
 			}
-			const memoryBackend = memoryEnabled ? await resolveMemoryBackend(settings) : undefined;
+			const memoryBackend =
+				memoryEnabled && (!liveChatMode || chatModeIncludes(liveChatMode, "memory"))
+					? await resolveMemoryBackend(settings)
+					: undefined;
 			const memoryInstructions = memoryBackend
 				? await memoryBackend.buildDeveloperInstructions(agentDir, settings, session)
 				: undefined;
@@ -3622,14 +3750,15 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					systemPrompt: typeof options.systemPrompt === "string" ? [options.systemPrompt] : options.systemPrompt,
 				};
 			}
-			if (chatMode) {
+			if (liveChatMode) {
+				// Chat mode honors only explicit prompt flags, never discovered SYSTEM.md / APPEND_SYSTEM.md.
 				return {
 					systemPrompt: buildChatSystemPrompt({
-						config: chatMode,
-						customPrompt: options.customSystemPrompt,
+						config: liveChatMode,
+						customPrompt: options.systemPromptDiscovered ? undefined : options.customSystemPrompt,
 						appendPrompt: composeAppendPrompt(
 							memoryInstructions ? [memoryInstructions] : [],
-							options.appendSystemPrompt,
+							options.appendSystemPromptDiscovered ? undefined : options.appendSystemPrompt,
 						),
 						contextFiles,
 						cwd: promptCwd,
@@ -3806,7 +3935,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// Session-managed builtins may be force-included by createTools. Keep the
 		// active set consistent with that registry decision, using built-in
 		// provenance so same-named extension tools are never force-activated.
-		if (!restrictToolNames && !chatMode && explicitlyRequestedToolNames) {
+		if (!restrictToolNames && explicitlyRequestedToolNames) {
 			for (const name of SESSION_MANAGED_BUILTIN_TOOL_NAMES) {
 				if (builtInToolNames.includes(name) && !explicitlyRequestedToolNames.includes(name)) {
 					explicitlyRequestedToolNames.push(name);
@@ -3866,44 +3995,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			}
 		}
 
-		// Pre-register in the global agent registry BEFORE building the system prompt,
-		// so that subagents launched in the same parallel batch can see each other in
-		// their initial `# IRC Peers` block (rendered inside `rebuildSystemPrompt`).
-		// The session reference is attached after construction below.
-		const registrationInput = {
-			id: resolvedAgentId,
-			displayName: resolvedAgentDisplayName,
-			kind: agentKind,
-			parentId: options.parentAgentId,
-			session: null,
-			sessionFile: sessionManager.getSessionFile() ?? null,
-			status: "running" as const,
-		};
-		registeredAgentRef =
-			options.expectedAgentRef === undefined
-				? agentRegistry.register(registrationInput)
-				: agentRegistry.registerIfAvailable(registrationInput, options.expectedAgentRef);
-		if (!registeredAgentRef && options.expectedAgentRef === null) {
-			// A fresh spawn collided with an existing id. If that id is held by a
-			// provably-dead parked corpse — no live session, no reviver — reclaim it
-			// so this new generation can take the id instead of failing forever at
-			// construction. Without this, one such corpse (isolated-run park,
-			// interrupted construction) poisons the id for the whole process (#8490).
-			// The reclaim is gated by the lifecycle owner and only touches the
-			// registry it manages; the corpse's transcript stays at history://.
-			const stale = agentRegistry.get(resolvedAgentId);
-			const lifecycle = AgentLifecycleManager.global();
-			if (stale && lifecycle.manages(agentRegistry) && (await lifecycle.reclaimDeadCorpse(resolvedAgentId, stale))) {
-				registeredAgentRef = agentRegistry.registerIfAvailable(registrationInput, null);
-			}
-		}
-		if (!registeredAgentRef) {
-			throw new Error(`Agent "${resolvedAgentId}" is already owned by another session generation.`);
-		}
-		// A reused parked ref remains parked until the new AgentSession is fully
-		// constructed and attached. Startup failure therefore leaves it revivable.
-		hasRegistered = options.expectedAgentRef === undefined || options.expectedAgentRef === null;
-
 		// Partition the initial enabled set for the xd:// transport. Tool instances
 		// remain in the canonical map; only presentation names move between layers.
 		// Mounting requires both transport halves in the granted set (`read xd://`
@@ -3930,6 +4021,27 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			if (deviceTransportNeeded && xdevWriteAvailable && !initialToolNames.includes("write")) {
 				initialToolNames.push("write");
 			}
+		}
+
+		// Chat mode activates only the tools it was granted (`toolNames`, with the
+		// checkpoint/rewind pairing and a required `yield`) plus extension and SDK
+		// custom tools. The coding selection computed above is handed to the session,
+		// which restores it when chat mode is switched off.
+		let chatModeCodingTools: { enabled: string[]; mounted: string[] } | undefined;
+		if (chatMode) {
+			const mounted = toolSession.xdev ? [...toolSession.xdev.mountedNames] : [];
+			chatModeCodingTools = { enabled: [...new Set([...initialToolNames, ...mounted])], mounted };
+			toolSession.xdev?.mountedNames.clear();
+			initialToolNames = chatActiveToolNames({
+				granted: options.toolNames ? normalizeToolNames(options.toolNames) : [],
+				requireYield: options.requireYieldTool === true,
+				alwaysInclude: restrictToolNames
+					? []
+					: [...sdkCustomTools.map(t => t.name), ...registeredTools.map(t => t.definition.name)].filter(
+							name => !defaultInactiveToolNames.has(name),
+						),
+				isRegistered: name => toolRegistry.has(name),
+			});
 		}
 
 		setSessionActiveToolNames(initialToolNames);
@@ -4032,12 +4144,13 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// reminder rides on the first user turn so open-weight providers keep
 			// their tool-schema prefix cache (#7404). Chat mode sends it only when
 			// `date` is re-included, without the cwd (the chat prompt carries that).
-			if (chatMode && !chatModeIncludes(chatMode, "date")) return transformed;
+			const liveChatMode = hasSession ? session.chatMode : chatMode;
+			if (liveChatMode && !chatModeIncludes(liveChatMode, "date")) return transformed;
 			return reminder.transform(
 				transformed,
 				formatLocalCalendarDate(),
-				chatMode ? "" : normalizePromptPath(sessionManager.getCwd()),
-				chatMode !== undefined,
+				liveChatMode ? "" : normalizePromptPath(sessionManager.getCwd()),
+				liveChatMode !== undefined,
 			);
 		};
 		// A mixture is a synthetic model with no provider: its images, snapcompact frames,
@@ -4369,6 +4482,12 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// streamed and parsed on the main thread.
 		session = new AgentSession({
 			chatMode,
+			chatModeCodingTools,
+			// Launch validation (main.ts) rejects chat mode with an explicit template; live switches match it.
+			chatModeBlockedReason:
+				options.systemPromptTemplate !== undefined && !options.systemPromptDiscovered
+					? "--system-prompt-template cannot be combined with chat mode"
+					: undefined,
 			codeModeState,
 			advisorWatchdogPrompt,
 			advisorContextPrompt,
@@ -4395,12 +4514,85 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			autoApprove: options.autoApprove,
 			scoutAllowedBySpawnPolicy: isScoutSpawnable(undefined, options.spawns ?? "*"),
 			evalKernelOwnerId,
-			// Defined only for top-level sessions (creation is gated above).
-			// AgentSession uses this to decide whether it may dispose the global
-			// AsyncJobManager on teardown; subagents inherit the parent's and
-			// **MUST NOT** tear it down.
+			// Defined only for top-level sessions: each root owns (and tears down)
+			// its own job domain. Subagents receive their root's manager through
+			// `asyncJobManager` below and **MUST NOT** tear it down.
 			ownedAsyncJobManager: asyncJobManager,
 			asyncJobManager: scopedAsyncJobManager,
+			cancelRootWork: asyncJobManager
+				? async ({ timeoutMs }) => {
+						const deadlineAt = Date.now() + Math.max(0, timeoutMs ?? 5_000);
+						const root = registeredAgentRef;
+						const lifecycle = AgentLifecycleManager.global();
+						const ownsLifecycle = root !== undefined && lifecycle.manages(agentRegistry);
+						const rootAgentGenerations =
+							ownsLifecycle && root ? lifecycle.snapshotRootAgentGenerations(root) : undefined;
+						const workPoolRegistry = WorkPoolRegistry.global();
+						const poolGenerations = workPoolRegistry.snapshotOwners(
+							ownerId =>
+								ownerId === resolvedAgentId || (root !== undefined && agentRegistry.rootOf(ownerId) === root),
+						);
+						// Tag the aborts as a release, like owning-root shutdown: interrupted
+						// subagents are disposed and unregistered with their transcripts
+						// kept, never left behind as terminal kill tombstones.
+						const reap = await asyncJobManager.cancelAndReapJobs(
+							undefined,
+							deadlineAt,
+							ASYNC_JOB_MANAGER_SHUTDOWN_REASON,
+						);
+						// Close only workpool generations that existed when cancellation
+						// began. The active root may launch replacement work while older
+						// jobs settle, and that new work is outside this cancellation.
+						const releasedPools = workPoolRegistry.releasePools(poolGenerations);
+						asyncJobManager.evictSettledJobs(releasedPools);
+						if (!reap.settled && releasedPools.length > 0) {
+							trackLateCleanup(
+								reap.completion.then(() => {
+									asyncJobManager.evictSettledJobs(releasedPools);
+								}),
+								{ id: resolvedAgentId, resource: "root-cancel-workpool-jobs" },
+							);
+						}
+						if (ownsLifecycle) {
+							await lifecycle.releaseRootAgents(root, deadlineAt, rootAgentGenerations);
+						}
+						if (!reap.settled && ownsLifecycle) {
+							// A cancelled child still settling at the deadline may finalize
+							// gracefully and be adopted afterward. Release exactly those
+							// generations once their jobs settle; work launched after this
+							// call has different refs and is never swept.
+							// Resolve the agent through the job's agentId: workpool batches and
+							// suffixed task ids use a job id that is not the agent id.
+							const lateRefs = reap.pendingJobIds.flatMap(jobId => {
+								const job = asyncJobManager.getJob(jobId);
+								const ref = agentRegistry.get(job?.agentId ?? jobId);
+								const generation = ref ? rootAgentGenerations?.get(ref) : undefined;
+								if (
+									!ref ||
+									ref.kind === "main" ||
+									generation === undefined ||
+									generation !== agentRegistry.runGeneration(ref)
+								) {
+									return [];
+								}
+								return [{ ref, generation }];
+							});
+							trackLateCleanup(
+								reap.completion.then(async () => {
+									await Promise.all(
+										lateRefs.map(({ ref, generation }) =>
+											agentRegistry.runGeneration(ref) === generation
+												? lifecycle.release(ref.id, ref, { expectedRunGeneration: generation })
+												: Promise.resolve(false),
+										),
+									);
+								}),
+								{ id: resolvedAgentId, resource: "root-cancel-late-release" },
+							);
+						}
+						return { settled: reap.settled, pendingJobIds: reap.pendingJobIds };
+					}
+				: undefined,
 			scopedModels: options.scopedModels,
 			promptTemplates,
 			slashCommands,
@@ -4796,17 +4988,20 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 
 		{
 			const originalDispose = session.dispose.bind(session);
-			session.dispose = async () => {
+			const rootRef = registeredAgentRef;
+			const disposeOnce = async (disposeOptions: AgentSessionDisposeOptions): Promise<void> => {
 				try {
 					// Reject new session work (eval starts) the moment disposal
 					// begins — the lifecycle await below opens an async gap before
 					// AgentSession.dispose() would otherwise set its guards.
 					session.beginDispose();
 					if (agentKind === "main") {
-						// Top-level teardown owns the global agent lifecycle: park timers,
-						// adopted subagent sessions, revivers. Tear it down while shared
-						// resources (kernels, MCP, LSP) are still live. Subagent disposal
-						// must NOT touch the global lifecycle.
+						// Top-level teardown owns this root's share of the agent
+						// lifecycle: park timers, adopted descendant sessions, revivers.
+						// Tear it down while shared resources (kernels, MCP, LSP) are
+						// still live. Other roots' agents are untouched; the last live
+						// root tears the whole lifecycle down. Subagent disposal must
+						// NOT touch the lifecycle.
 						const vibeRegistry = VibeSessionRegistry.global();
 						const vibeParentSession = {
 							getAgentId: () => resolvedAgentId,
@@ -4818,9 +5013,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 							getActiveModelString,
 						};
 						await vibeRegistry.suspendScope(vibeRegistry.ownerScope(vibeParentSession), scopedAsyncJobManager);
-						await AgentLifecycleManager.global().dispose();
+						const lifecycle = AgentLifecycleManager.global();
+						if (lifecycle.manages(agentRegistry)) await lifecycle.disposeRoot(rootRef);
 					}
-					await originalDispose();
+					await originalDispose(disposeOptions);
 				} finally {
 					unregisterUnlessParked();
 					unsubscribeCredentialDisabled();
@@ -4835,6 +5031,14 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					unsubscribeMcpNotifications = undefined;
 					unregisterMcpPostmortem = undefined;
 				}
+			};
+			// Idempotent: a stale holder disposing this generation again (e.g. an
+			// embedder's late cleanup after the root id was recreated) must not
+			// re-run teardown against whatever now owns the id or the lifecycle.
+			let disposeCall: Promise<void> | undefined;
+			session.dispose = (disposeOptions = {}) => {
+				disposeCall ??= disposeOnce(disposeOptions);
+				return disposeCall;
 			};
 		}
 
@@ -5174,12 +5378,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				if (hasRegistered) unregisterUnlessParked();
 			} else {
 				if (hasRegistered) unregisterUnlessParked();
-				if (asyncJobManager) {
-					if (AsyncJobManager.instance() === asyncJobManager) {
-						AsyncJobManager.setInstance(undefined);
-					}
-					await asyncJobManager.dispose({ timeoutMs: 3_000 });
-				}
+				await asyncJobManager?.dispose({ timeoutMs: 3_000 });
 				await releaseComputerSessionsForOwner(evalKernelOwnerId);
 				await disposeKernelSessionsByOwner(evalKernelOwnerId);
 				await disposeVmContextsByOwner(evalKernelOwnerId);

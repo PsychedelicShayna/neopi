@@ -59,6 +59,7 @@ import {
 	resolveActiveProjectRegistryPath,
 } from "./discovery/helpers";
 import { injectOmpExtensionCliRoots } from "./discovery/omp-extension-roots";
+import { type ExitWithParent, exitWithParent } from "./exit-with-parent";
 import { formatExtensionLoadNotifications } from "./extensibility/extensions/load-errors";
 import { loadExtensions } from "./extensibility/extensions/loader";
 import { ExtensionRunner } from "./extensibility/extensions/runner";
@@ -67,10 +68,12 @@ import { scheduleMarketplaceAutoUpdate } from "./extensibility/plugins/marketpla
 import { registerDaemonProjectPresence } from "./launch/presence";
 import { discoverStartupLspServers } from "./lsp/servers";
 import type { MCPManager } from "./mcp";
+import { MCPUnknownServerError } from "./mcp/config";
 import type { InteractiveMode } from "./modes/interactive-mode";
 import type { PrintModeOptions } from "./modes/print-mode";
 import type { RpcModeOptions } from "./modes/rpc/rpc-mode";
 import { claimRpcInput } from "./modes/rpc/rpc-input";
+import { sessionInUseStartupError } from "./modes/rpc/rpc-session-lease";
 import { CURRENT_SETUP_VERSION } from "@oh-my-pi/pi-tui/setup/setup-version";
 import type * as SetupWizardModule from "./modes/setup";
 import type { SetupScene } from "@oh-my-pi/pi-tui/setup/scenes/types";
@@ -86,6 +89,7 @@ import { ensureTheme, initTheme, stopThemeWatcher } from "@oh-my-pi/pi-tui/theme
 import type { SubmittedUserInput } from "./modes/types";
 import { createWarpEventBridgeExtension } from "./modes/warp-events";
 import { AgentLifecycleManager } from "./registry/agent-lifecycle";
+import { AgentRegistry } from "./registry/agent-registry";
 import {
 	type CreateAgentSessionOptions,
 	type CreateAgentSessionResult,
@@ -106,6 +110,7 @@ import {
 import type { ForeignSessionInfo, ForeignSessionSource, ForeignSessionStore } from "./session/foreign-session-store";
 import { resolveResumableSession, type SessionInfo } from "./session/session-listing";
 import { ForkSourceNotFoundError, SessionManager } from "./session/session-manager";
+import { SessionInUseError } from "./session/session-lease";
 import { shouldShowStartupSplash } from "./startup-splash";
 import {
 	discoverSystemPromptOverride,
@@ -121,6 +126,7 @@ import type { LspStartupServerInfo } from "./tools";
 import { sanitizeDisplayWarnings } from "@oh-my-pi/pi-tui/render/render-utils";
 import { getChangelogPath, resolveStartupChangelogForDisplay, type StartupChangelogSelection } from "./utils/changelog";
 import { EventBus } from "./utils/event-bus";
+import { LAUNCH_PARENT_PID } from "./utils/launch-parent";
 
 import { cfgAdvisorEnabled } from "./advisor/settings";
 import { cfgToolsApprovalMode } from "./tools/settings";
@@ -159,6 +165,7 @@ import {
 import { cfgDisabledProviders, cfgEnabledModels } from "./config/model-settings";
 import { cfgTaskAgentIdleTtlMs } from "./task/settings";
 import { cfgSkillsIncludeSkills } from "./extensibility/settings";
+import { cfgMcpIncludeServers } from "./mcp/settings";
 import { cfgChatInclude, cfgChatMode } from "./chat/settings";
 import { cfgWorkspaceAdditionalDirectories } from "./session/context-settings";
 
@@ -764,6 +771,89 @@ async function promptMoveSession(session: SessionInfo): Promise<SessionPromptRes
 	}
 }
 
+/** How to proceed with a session another live process holds. */
+export type SessionInUseChoice = "fork" | "read-only" | "cancel";
+
+type SessionInUsePrompt = (error: SessionInUseError) => Promise<SessionInUseChoice | "unavailable">;
+
+async function promptSessionInUse(error: SessionInUseError): Promise<SessionInUseChoice | "unavailable"> {
+	if (!process.stdin.isTTY) {
+		return "unavailable";
+	}
+	const holder = error.pid > 0 ? `another NeoPi process (pid ${error.pid})` : "another NeoPi process";
+	const message =
+		`Session is in use by ${holder}.\n` +
+		"  [f] Fork it into a new session\n" +
+		"  [r] Open it read-only (nothing is saved)\n" +
+		"  [c] Cancel\n" +
+		"Choice [f/r/C]: ";
+	pauseStartupWatchdog();
+	const createInterface = await loadReadlineInterface();
+	const rl = createInterface({ input: process.stdin, output: process.stdout });
+	try {
+		const answer = (await rl.question(message)).trim().toLowerCase();
+		if (answer === "f" || answer === "fork") return "fork";
+		if (answer === "r" || answer === "read-only" || answer === "readonly") return "read-only";
+		return "cancel";
+	} finally {
+		rl.close();
+		resumeStartupWatchdog();
+	}
+}
+
+/**
+ * Open `sessionPath` for resume. When another process holds its lifetime
+ * lease, `onSessionInUse` picks fork / read-only / cancel; without it (or when
+ * it cannot ask) the {@link SessionInUseError} propagates. Returns `undefined`
+ * when the user cancels.
+ */
+async function openSessionForResume(
+	parsed: Pick<Args, "mode">,
+	sessionPath: string,
+	cwd: string,
+	sessionDir: string | undefined,
+	onSessionInUse: SessionInUsePrompt | undefined,
+): Promise<SessionManager | undefined> {
+	try {
+		return await SessionManager.open(sessionPath, sessionDir);
+	} catch (error) {
+		if (!(error instanceof SessionInUseError) || !onSessionInUse) throw error;
+		const choice = await onSessionInUse(error);
+		switch (choice) {
+			case "fork": {
+				// Fork into the session's own project when it still exists, so the
+				// resumed-project switch lands where the fork's header points.
+				const recordedCwd = (await SessionManager.peekSessionInit(sessionPath))?.cwd;
+				const forkCwd = recordedCwd && fsSync.existsSync(recordedCwd) ? recordedCwd : cwd;
+				const forked = await SessionManager.forkFrom(sessionPath, forkCwd, sessionDir);
+				writeStartupNotice(parsed, `${chalk.dim(`Forked in-use session into ${forked.getSessionFile()}`)}\n`);
+				return forked;
+			}
+			case "read-only":
+				writeStartupNotice(parsed, `${chalk.dim("Opened in-use session read-only: nothing will be saved.")}\n`);
+				return await SessionManager.openReadOnly(sessionPath);
+			case "cancel":
+				return undefined;
+			case "unavailable":
+				throw error;
+		}
+	}
+}
+
+/** Report a startup open of a leased session and exit non-zero. */
+function exitForSessionInUse(error: SessionInUseError, mode: Args["mode"]): never {
+	if (mode === "rpc" || mode === "rpc-ui") {
+		// Machine-readable for RPC hosts: one stderr line, no `ready` frame.
+		process.stderr.write(`${JSON.stringify(sessionInUseStartupError(error))}\n`);
+	} else {
+		process.stderr.write(`${chalk.red(`Error: ${error.message}`)}\n`);
+		process.stderr.write(
+			`${chalk.dim(`Run \`${APP_NAME} --fork ${error.sessionFile}\` to continue it in a new session.`)}\n`,
+		);
+	}
+	process.exit(1);
+}
+
 /**
  * Friendly CLI failure raised by {@link createSessionManager} when the user's
  * session-resolution flags (`--resume`/`--fork`/missing-directory move prompts)
@@ -841,7 +931,15 @@ async function moveMissingCwdSessionIfNeeded(
 	// move target equals the current project dir. moveTo never chdirs, so the
 	// stale cwd is only a relocation source, not a directory we enter.
 	const manager = await SessionManager.open(session.path, sessionDir, undefined, { initialCwd: sourceCwd });
-	await manager.moveTo(cwd, sessionDir);
+	try {
+		await manager.moveTo(cwd, sessionDir);
+	} catch (error) {
+		// The manager is dropped: release its session lease before reporting.
+		await manager.close().catch(closeError => {
+			logger.warn("Failed to close session after a failed move", { error: String(closeError) });
+		});
+		throw error;
+	}
 	return { status: "moved", manager };
 }
 
@@ -1111,7 +1209,11 @@ export async function createSessionManager(
 	cwd: string,
 	activeSettings: Settings = settings,
 	askToMoveSession: SessionPrompt = promptMoveSession,
-	options: { nativeFlagOwnership?: "preliminary" | "resolved" } = {},
+	options: {
+		nativeFlagOwnership?: "preliminary" | "resolved";
+		/** Asks how to proceed when `--resume` targets a session another process holds. */
+		onSessionInUse?: SessionInUsePrompt;
+	} = {},
 ): Promise<SessionManager | undefined> {
 	if (parsed.fork) {
 		if (parsed.noSession) {
@@ -1154,7 +1256,7 @@ export async function createSessionManager(
 	if (typeof parsed.resume === "string") {
 		const sessionArg = parsed.resume;
 		if (sessionArg.includes("/") || sessionArg.includes("\\") || sessionArg.endsWith(".jsonl")) {
-			return await SessionManager.open(sessionArg, parsed.sessionDir);
+			return await openSessionForResume(parsed, sessionArg, cwd, parsed.sessionDir, options.onSessionInUse);
 		}
 		const match = await resolveResumableSession(sessionArg, cwd, parsed.sessionDir);
 		if (!match) {
@@ -1190,7 +1292,7 @@ export async function createSessionManager(
 				return undefined;
 			}
 		}
-		return await SessionManager.open(match.session.path, parsed.sessionDir);
+		return await openSessionForResume(parsed, match.session.path, cwd, parsed.sessionDir, options.onSessionInUse);
 	}
 	if (parsed.continue) {
 		return await SessionManager.continueRecent(cwd, parsed.sessionDir);
@@ -1203,8 +1305,11 @@ export async function createSessionManager(
 	// Auto-resume: behave like --continue if the setting is enabled and a prior
 	// session exists. When a prior session is resumed, mark parsed.continue so
 	// buildSessionOptions restores the session's model/thinking instead of
-	// overriding them with CLI defaults.
-	if (cfgAutoResume.get(activeSettings)) {
+	// overriding them with CLI defaults. `--new-session` opts out, and protocol
+	// hosts (rpc, rpc-ui, acp) never inherit the user's interactive preference:
+	// a flagless protocol launch is always a new session.
+	const protocolMode = parsed.mode === "rpc" || parsed.mode === "rpc-ui" || parsed.mode === "acp";
+	if (!parsed.newSession && !protocolMode && cfgAutoResume.get(activeSettings)) {
 		const manager = await SessionManager.continueRecent(cwd, parsed.sessionDir);
 		if (manager.getEntries().length > 0) {
 			parsed.continue = true;
@@ -1313,6 +1418,11 @@ export async function buildSessionOptions(
 					? Promise.resolve(undefined)
 					: loadSystemPromptTemplateFile(templatePath),
 		]);
+	// Chat mode switched on live must ignore discovered prompt files, as a chat launch does.
+	if (discoveredOverride) options.systemPromptDiscovered = true;
+	if (parsed.appendSystemPrompt === undefined && appendPromptSource !== undefined) {
+		options.appendSystemPromptDiscovered = true;
+	}
 
 	if (sessionManager) {
 		options.sessionManager = sessionManager;
@@ -1633,22 +1743,23 @@ export async function buildSessionOptions(
 		options.titleSystemPrompt = titleSystemPrompt;
 	}
 
+	// Tools. The registry follows these coding rules in chat mode too, so switching
+	// chat mode off restores the normal selection; a chat session activates only
+	// the `--tools` it was granted (see createAgentSession).
+	if (parsed.noTools) {
+		options.toolNames = parsed.tools && parsed.tools.length > 0 ? parsed.tools : [];
+	} else if (parsed.tools) {
+		options.toolNames = parsed.tools;
+	}
+
 	if (chatMode) {
-		// Chat mode: no tools unless explicitly granted, no discovered skills or
-		// rules unless re-included, and no MCP/LSP startup work.
-		options.toolNames = parsed.tools ?? [];
+		// Chat mode: no discovered skills or rules unless re-included, and no
+		// MCP/LSP startup work.
 		if (!chatMode.include.includes("skills")) options.skills = [];
 		if (!chatMode.include.includes("rules")) options.rules = [];
 		options.enableMCP = false;
 		options.enableLsp = false;
 	} else {
-		// Tools
-		if (parsed.noTools) {
-			options.toolNames = parsed.tools && parsed.tools.length > 0 ? parsed.tools : [];
-		} else if (parsed.tools) {
-			options.toolNames = parsed.tools;
-		}
-
 		if (parsed.noLsp) {
 			options.enableLsp = false;
 		}
@@ -1659,6 +1770,13 @@ export async function buildSessionOptions(
 		} else if (parsed.skills && parsed.skills.length > 0) {
 			// Override includeSkills for this session
 			cfgSkillsIncludeSkills.override(activeSettings, parsed.skills as string[]);
+		}
+
+		// MCP servers
+		if (parsed.noMcp) {
+			options.enableMCP = false;
+		} else if (parsed.mcp && parsed.mcp.length > 0) {
+			cfgMcpIncludeServers.override(activeSettings, parsed.mcp);
 		}
 
 		// Rules
@@ -1728,6 +1846,7 @@ export async function runRootCommand(
 ): Promise<void> {
 	logger.startTiming();
 	startStartupWatchdog();
+	let parentExit: ExitWithParent | undefined;
 	try {
 		// Non-prepaint commands still need a default theme; an existing Composer
 		// already initialized its cached theme synchronously for the first frame.
@@ -1807,10 +1926,23 @@ export async function runRootCommand(
 		// session-critical database connection picks the right busy timeout.
 		// See getDbBusyTimeoutMs().
 		const isProtocolMode = mode === "rpc" || mode === "rpc-ui" || mode === "acp";
+		// Headless print/json runs die with the host that spawned them, even when
+		// it is SIGKILLed. Interactive and protocol modes own their own lifecycle
+		// (the terminal, or RPC/ACP stdin EOF). Watch before reading piped stdin:
+		// a writer that outlives the host would otherwise block the read forever.
+		const mayRunHeadless = parsedArgs.print === true || parsedArgs.mode !== undefined || !process.stdin.isTTY;
+		if (!isProtocolMode && mayRunHeadless && !parsedArgs.noExitWithParent) {
+			parentExit = exitWithParent({ parentPid: LAUNCH_PARENT_PID });
+		}
 		// Protocol modes own stdin; treating it as prompt text would consume JSON-RPC frames before their transports start.
 		const pipedInput = isProtocolMode ? undefined : await logger.time("readPipedInput", readPipedInput);
 		const autoPrint = pipedInput !== undefined && !parsedArgs.print && parsedArgs.mode === undefined;
 		const isInteractive = !parsedArgs.print && !autoPrint && parsedArgs.mode === undefined;
+		// An empty stdin pipe leaves the launch interactive after all.
+		if (isInteractive) {
+			parentExit?.stop();
+			parentExit = undefined;
+		}
 		// Only the interactive host renders a focusable Agent Hub / subagent session
 		// tree; declare it so headless subagent optimizations (e.g. skipping replan
 		// title refresh) can tell a focusable process from a print/RPC/eval one.
@@ -2024,12 +2156,18 @@ export async function runRootCommand(
 					cwd,
 					settingsInstance,
 					promptMoveSession,
-					{ nativeFlagOwnership: "preliminary" },
+					{
+						nativeFlagOwnership: "preliminary",
+						onSessionInUse: isInteractive ? promptSessionInUse : undefined,
+					},
 				);
 			}
 		} catch (error: unknown) {
 			if (error instanceof SessionResolutionError) {
 				exitForSessionResolutionError(error);
+			}
+			if (error instanceof SessionInUseError) {
+				exitForSessionInUse(error, parsedArgs.mode);
 			}
 			throw error;
 		}
@@ -2056,10 +2194,11 @@ export async function runRootCommand(
 			}
 		}
 
-		// User declined the missing-directory move prompt — exit cleanly instead of
-		// letting the cancellation fall through to a new session.
+		// User declined the missing-directory move prompt or cancelled resuming an
+		// in-use session — exit cleanly instead of letting the cancellation fall
+		// through to a new session.
 		if (typeof parsedArgs.resume === "string" && !sessionManager) {
-			writeStartupNotice(parsedArgs, `${chalk.dim("Resume cancelled: session was not moved.")}\n`);
+			writeStartupNotice(parsedArgs, `${chalk.dim("Resume cancelled.")}\n`);
 			stopStartupWatchdog();
 			process.exit(0);
 		}
@@ -2110,7 +2249,19 @@ export async function runRootCommand(
 				stopStartupWatchdog();
 				process.exit(0);
 			}
-			sessionManager = await SessionManager.open(selected.path);
+			let opened: SessionManager | undefined;
+			try {
+				opened = await openSessionForResume(parsedArgs, selected.path, cwd, undefined, promptSessionInUse);
+			} catch (error) {
+				if (error instanceof SessionInUseError) exitForSessionInUse(error, parsedArgs.mode);
+				throw error;
+			}
+			if (!opened) {
+				writeStartupNotice(parsedArgs, `${chalk.dim("Resume cancelled.")}\n`);
+				stopStartupWatchdog();
+				process.exit(0);
+			}
+			sessionManager = opened;
 			const previousCwd = cwd;
 			const recordedCwd = selected.cwd || sessionManager.getRecordedCwd() || sessionManager.getCwd();
 			const resumedProject = await switchToResumedProject(
@@ -2305,6 +2456,22 @@ export async function runRootCommand(
 					)
 				: undefined;
 
+			let created: CreateAgentSessionResult;
+			try {
+				created = await createSession({
+					...sessionOptions,
+					eventBus,
+					subagentEventBus,
+					preloadedExtensions: extensionsResult,
+				});
+			} catch (error) {
+				// A `--mcp` name matching no server is a usage error, like an unknown flag.
+				if (error instanceof MCPUnknownServerError) {
+					process.stderr.write(`${chalk.red(`Error: ${error.message}`)}\n`);
+					process.exit(2);
+				}
+				throw error;
+			}
 			const {
 				session,
 				setToolUIContext,
@@ -2312,12 +2479,7 @@ export async function runRootCommand(
 				lspServers,
 				mcpManager,
 				startBackgroundModelDiscovery,
-			} = await createSession({
-				...sessionOptions,
-				eventBus,
-				subagentEventBus,
-				preloadedExtensions: extensionsResult,
-			});
+			} = created;
 
 			try {
 				validateToolNames(initialArgs.tools, session.getAllToolNames());
@@ -2325,6 +2487,7 @@ export async function runRootCommand(
 				await session.dispose();
 				throw error;
 			}
+			parentExit?.attach({ session, mcpManager });
 
 			// Cold-revive support: a `parked` subagent ref restored from disk (Agent Hub
 			// scan, collab mirror, resumed process) has a sessionFile but no in-memory
@@ -2344,6 +2507,10 @@ export async function runRootCommand(
 					subagentEventBus,
 				}),
 				() => Math.trunc(Number(cfgTaskAgentIdleTtlMs.get(settingsInstance)) || 0),
+				// The exact registry generation holding this session owns the factory.
+				AgentRegistry.global()
+					.list()
+					.find(ref => ref.session === session),
 			);
 			if (parsedArgs.apiKey && !sessionOptions.model && session.model) {
 				authStorage.keys.setRuntime(session.model.provider, parsedArgs.apiKey);
@@ -2404,6 +2571,7 @@ export async function runRootCommand(
 					headless: parsedArgs.noUi === true,
 					subagentEventBus,
 					input: rpcInput,
+					launchModel: parsedArgs.provider ? undefined : parsedArgs.model,
 				});
 			} else if (isInteractive) {
 				const versionCheckPromise = checkForNewVersion(VERSION).catch(() => undefined);
@@ -2479,6 +2647,10 @@ export async function runRootCommand(
 		stopPendingStartupComposer();
 		stopStartupWatchdog();
 		throw error;
+	} finally {
+		// Print mode normally hard-exits above; an in-process caller that sees
+		// the command return or throw must not inherit a live watchdog.
+		parentExit?.stop();
 	}
 }
 

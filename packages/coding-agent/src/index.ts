@@ -10,6 +10,7 @@ export { Container, Markdown, Spacer, Text } from "@oh-my-pi/pi-tui";
 export { getAgentDir, logger, VERSION } from "@oh-my-pi/pi-utils";
 export * from "@oh-my-pi/pi-tui/app-keybindings";
 export * from "./config/model-registry";
+export * from "./build-info";
 // Prompt templates
 export type * from "./config/prompt-templates";
 export * from "./config/prompt-templates";
@@ -22,6 +23,8 @@ export { Settings, settings } from "./config/settings";
 export { resolveEvalUrlRoots } from "./eval/backend";
 export type { PyToolBridgeEntry, PyToolBridgeInfo } from "./eval/py/tool-bridge";
 export { ensurePyToolBridge, registerPyToolBridge } from "./eval/py/tool-bridge";
+// Host-lifetime binding: exit (and tear down owned child processes) when the parent dies
+export * from "./exit-with-parent";
 // Custom commands
 export type * from "./extensibility/custom-commands/types";
 // Custom tools
@@ -80,6 +83,7 @@ export type {
 // Tools (detail types and utilities)
 export * from "./tools";
 export * from "./utils/github";
+export * from "./utils/parent-watchdog";
 // UI components for extensions
 export {
 	HookEditorComponent as ExtensionEditorComponent,

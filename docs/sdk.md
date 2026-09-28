@@ -27,7 +27,7 @@ Import these core embedding APIs from the package root:
 - `Settings`
 - `AuthStorage`
 - `ModelRegistry`
-- `AgentRegistry`
+- `AgentRegistry`, `AgentIdConflictError`
 - `discoverAuthStorage`
 - Discovery helpers (`discoverExtensions`, `discoverSkills`, `discoverContextFiles`, `discoverPromptTemplates`, `discoverSlashCommands`, `discoverCustomTSCommands`, `discoverMCPServers`)
 - Tool factory surface (`createTools`, `BUILTIN_TOOLS`, tool classes)
@@ -94,9 +94,8 @@ function createAgentSession(
   - `model` or `modelPattern` (if deterministic model selection matters)
   - `settings` (if you need isolated/test config)
 
-For multiple concurrent top-level sessions in one process, pass a private
-`AgentRegistry` to each session. The default process-global registry admits
-only one `"Main"` identity per generation.
+For multiple concurrent top-level sessions in one process, give each one a
+distinct `agentId`; see [Hosting several top-level sessions](#hosting-several-top-level-sessions).
 
 ## Session manager behavior (persistent vs in-memory)
 
@@ -290,6 +289,60 @@ During asynchronous disposal, the session records and synchronously flushes its 
 
 Only after work capable of appending session entries has settled does disposal clean up an empty moved session, close the `SessionManager`, close provider session state, disconnect the agent, and remove listeners. A failure from the final persistence cleanup or `SessionManager.close()` rejects the shared disposal promise; individual provider-session close failures are logged.
 
+### Exiting with the parent process
+
+A worker process that embeds the SDK should not outlive the host that spawned it. The CLI's print and json modes install this binding by default; embedders opt in with `exitWithParent()`:
+
+```ts
+import { createAgentSession, exitWithParent } from "@oh-my-pi/pi-coding-agent";
+
+// Record the parent as early as possible: after the host dies, process.ppid
+// names the process this one was reparented to instead.
+const parentExit = exitWithParent();
+const { session, mcpManager } = await createAgentSession({ /* ... */ });
+parentExit.attach({ session, mcpManager });
+```
+
+When the parent dies, including by SIGKILL, the helper aborts every attached session and disposes it with a `SIGHUP` reason and bounded drain windows. That abnormal reason is persisted so a model-only turn can be recovered as interrupted on resume. Disposal covers what only `dispose()` releases: `session_shutdown`, browser tabs, computer sessions, provider state and the persistence flush. The helper also tears down owned child processes: MCP servers (stdio servers' `setsid` process groups get SIGTERM, then SIGKILL), each attached session's async jobs, LSP servers, eval kernels, and every `postmortem` cleanup registration, including `exitOnly` registrations. A target attached while parent-death cleanup is already running joins that cleanup pass. After at most `teardownMs` (default `EXIT_WITH_PARENT_TEARDOWN_MS`, 2 s) the helper SIGKILLs any detached MCP process group still alive and hard-exits with `exitCode` (default `EXIT_WITH_PARENT_EXIT_CODE`, 129). Child processes are torn down even if the parent dies before any session is attached. `attach()` returns a detach function; `stop()` ends the watch.
+
+`watchParentProcess({ parentPid?, pollIntervalMs?, natives?, onParentExit })` is the underlying watchdog, for workers that need their own shutdown path. It polls `process.ppid` and the parent pid (every `PARENT_WATCHDOG_POLL_MS`, 1 s, by default). Pass `natives: { Process, ProcessStatus }` from `@oh-my-pi/pi-natives` to also watch through a native process handle (`pidfd` on Linux), which notices the parent's death immediately; `exitWithParent()` always does this. The native API is injected, not imported, so a module can import the watchdog without paying the native addon's load cost. The watchdog calls `onParentExit` once, asynchronously, and also when the parent was already gone at install time. The poll timer is unref'd, and `stop()` cancels the native wait, so a stopped watchdog never keeps the event loop alive.
+
+## Hosting several top-level sessions
+
+One process can host several live top-level sessions ("roots"), for example one per workspace in a multi-session UI. Each root is a fully capable session: its own subagents, async jobs, artifacts, and event streams.
+
+- **One id per live root.** Pass a distinct `agentId` for every concurrently live top-level session, and a fresh one per generation if you recreate a root while its old generation may still be disposing. `createAgentSession()` never replaces a registered agent it does not own: a duplicate id, including a second session that omits `agentId` and so defaults to `"Main"`, rejects with `AgentIdConflictError` (its `agentId` field names the conflict). The existing session stays registered and fully usable, and the rejected construction releases what it acquired. Omitting `agentId` is fine for a single-session embedder or the CLI.
+- **Per-root async job domains.** Every top-level session owns its own async job manager (`session.asyncJobManager`). Background bash, task subagents, eval workpools and completions, `wait` delivery, and `getAsyncJobSnapshot()` stay inside the root that started them. Subagents inherit their root's manager explicitly, so creating or disposing another root never disables or retargets a root's async work.
+- **Root-wide cancellation.** `await session.cancelRootWork({ timeoutMs })` cancels every job in the root's domain (its own and every descendant's), waits up to `timeoutMs` (default 5 s) for them to settle, then releases the root's kept-alive subagents. It resolves `{ settled, pendingJobIds }`. Other roots are untouched and the session stays usable, so it can launch new work afterward. It does not abort the root's own in-flight turn; call `session.abort()` first if you want that. Only top-level sessions have a domain; calling it on a subagent session throws. `dispose()` performs the same teardown for that root only. When the last live root is disposed, the shared agent lifecycle is torn down as before.
+- **Scoped child ids.** Subagents of a root whose id is not `"Main"` get ids nested under the root id, such as `DeckA.Research` and `DeckA.Research.Research`, so two roots can both spawn `Research` without colliding in the registry, `agent://`/`history://` routing, or artifact file names. The default `"Main"` root keeps unprefixed ids. Repeated labels inside one root still become `Research-2`, `Research-3`, and so on, and a resumed session reserves ids already on disk.
+- **Global compatibility views.** A few process-wide fallbacks follow the most recently created root: the active skill and rule lists behind `skill://` and `rule://`, and the `local://` override. Tool calls resolve these through their own session's context first, so a newer root never retargets an older root's tools. Only code that reads the process-wide fallbacks directly sees last-root-wins behavior.
+
+```ts
+import { AgentIdConflictError, createAgentSession, SessionManager } from "@oh-my-pi/pi-coding-agent";
+
+const { session: deckA } = await createAgentSession({
+  agentId: "DeckA",
+  cwd: "/work/a",
+  sessionManager: SessionManager.create("/work/a"),
+});
+const { session: deckB } = await createAgentSession({
+  agentId: "DeckB",
+  cwd: "/work/b",
+  sessionManager: SessionManager.create("/work/b"),
+});
+
+try {
+  await createAgentSession({ agentId: "DeckA" });
+} catch (error) {
+  if (!(error instanceof AgentIdConflictError)) throw error;
+  // deckA is still registered and running.
+}
+
+await deckA.cancelRootWork({ timeoutMs: 3_000 }); // drains DeckA only
+await deckA.dispose(); // deckB keeps running
+await deckB.dispose();
+```
+
 ## Tools and extension integration
 
 ### Built-ins and filtering
@@ -356,6 +409,22 @@ Use these when you want partial control without recreating internal discovery lo
 - `discoverCustomTSCommands(cwd?, agentDir?)`
 - `discoverMCPServers(cwd?)`
 - `buildSystemPrompt(options?)`
+
+## Build identity (`BUILD_INFO`)
+
+The package version stays the same across many NeoPi commits, so embedders that need to know which source tree they loaded read `BUILD_INFO`:
+
+```ts
+import { BUILD_INFO } from "@oh-my-pi/pi-coding-agent";
+// { version: "18.3.2", gitSha: "955b7b385f986e01906f1fb178e01583f147543f", dirty: false }
+```
+
+- `gitSha` is the full commit. A source tree resolves it when the module first loads, from the checkout that contains `packages/coding-agent/src/build-info.ts`, never from `process.cwd()`. Later cwd or HEAD changes do not alter it. Linked worktrees (a `.git` file) work like any checkout. A copy that is not the root of its own checkout, for example one under an application's `node_modules`, reports `null` instead of the enclosing repository.
+- `dirty` is `true` when tracked files have staged or unstaged changes. Untracked and ignored files (generated bundles, native addons, dependencies) never count.
+- Unknown state, such as a non-git source or a failed status query, reports `gitSha: null` and `dirty: null`. Unknown is never reported as clean.
+- Compiled binaries report the source identity they were built from, baked in at build time and resolved before any generator touches tracked files. They never look at the runtime directory's checkout.
+
+`BUILD_INFO` identifies source only. It does not certify API compatibility with a given host, or which native addon build is loaded.
 
 ## Subagent-oriented options
 

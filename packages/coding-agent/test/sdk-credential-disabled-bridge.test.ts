@@ -92,6 +92,7 @@ describe("createAgentSession credential_disabled subscription", () => {
 	};
 
 	const baseOptions = (dirs: SessionDirs, authStorage: AuthStorage, extensions: ExtensionFactory[] = []) => ({
+		agentId: `CredentialBridge-${Snowflake.next()}`,
 		cwd: dirs.cwd,
 		agentDir: dirs.agentDir,
 		authStorage,
@@ -440,6 +441,7 @@ describe("createAgentSession credential_disabled subscription", () => {
 		const ext = makeRecordingExtension();
 
 		const { session } = await createAgentSession({
+			agentId: `CredentialBridge-${Snowflake.next()}`,
 			cwd: dirs.cwd,
 			agentDir: dirs.agentDir,
 			modelRegistry, // registry-only — no separate options.authStorage
@@ -486,6 +488,7 @@ describe("createAgentSession credential_disabled subscription", () => {
 
 		await expect(
 			createAgentSession({
+				agentId: `CredentialBridge-${Snowflake.next()}`,
 				cwd: dirs.cwd,
 				agentDir: dirs.agentDir,
 				authStorage: otherStorage,

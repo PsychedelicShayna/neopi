@@ -3,7 +3,12 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { resolveStdioSpawnCommand, StdioTransport, terminateStdioProcess } from "../../../src/mcp/transports/stdio";
+import {
+	killDetachedStdioProcessGroups,
+	resolveStdioSpawnCommand,
+	StdioTransport,
+	terminateStdioProcess,
+} from "../../../src/mcp/transports/stdio";
 
 describe("resolveStdioSpawnCommand", () => {
 	it("hides Windows executable MCP servers when the host has no console", async () => {
@@ -425,6 +430,56 @@ describe.skipIf(process.platform === "win32")("StdioTransport.close teardown", (
 			await transport.close();
 		}
 	}, 5000);
+});
+
+describe.skipIf(process.platform !== "linux")("killDetachedStdioProcessGroups", () => {
+	/** Whether any non-zombie process still belongs to process group `pgid`. */
+	async function groupAlive(pgid: number): Promise<boolean> {
+		for (const entry of await fs.readdir("/proc")) {
+			if (!/^\d+$/.test(entry)) continue;
+			const stat = await fs.readFile(`/proc/${entry}/stat`, "utf8").catch(() => "");
+			const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+			if (fields[0] !== undefined && fields[0] !== "Z" && Number(fields[2]) === pgid) return true;
+		}
+		return false;
+	}
+
+	it("SIGKILLs a stubborn server's whole process group without the SIGTERM grace", async () => {
+		// Host death leaves no time for close()'s 1s SIGTERM grace; the sweep must
+		// take the leader and the grandchild it forked in one shot.
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-stdio-sweep-"));
+		const pidFile = path.join(dir, "leader.pid");
+		const transport = new StdioTransport({
+			command: "bun",
+			args: [
+				"-e",
+				`process.on("SIGTERM", () => {});
+				Bun.spawn(["sleep", "60"], { stdio: ["ignore", "ignore", "ignore"] });
+				await Bun.write(${JSON.stringify(pidFile)}, String(process.pid));
+				await Bun.sleep(60_000);`,
+			],
+		});
+		try {
+			await transport.connect();
+			let pgid = 0;
+			for (let i = 0; i < 100 && pgid === 0; i++) {
+				pgid = Number(await fs.readFile(pidFile, "utf8").catch(() => "0"));
+				if (pgid === 0) await Bun.sleep(50);
+			}
+			expect(await groupAlive(pgid)).toBe(true);
+
+			killDetachedStdioProcessGroups();
+			let alive = true;
+			for (let i = 0; i < 20 && alive; i++) {
+				await Bun.sleep(25);
+				alive = await groupAlive(pgid);
+			}
+			expect(alive).toBe(false);
+		} finally {
+			await transport.close();
+			await fs.rm(dir, { recursive: true, force: true });
+		}
+	}, 10000);
 });
 
 describe.skipIf(process.platform === "win32")("StdioTransport request ids", () => {

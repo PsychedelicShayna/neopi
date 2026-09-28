@@ -198,6 +198,8 @@ function createContext(): {
 		mcpTestEscapeHandlers: new Set(),
 		skillCommands: new Map(),
 		fileSlashCommands: new Set<string>(),
+		slashCommandNames: new Set(["btw"]),
+		isKnownSlashCommand: () => false,
 		isBashMode: false,
 		isPythonMode: false,
 		optimisticUserMessageSignature: undefined,

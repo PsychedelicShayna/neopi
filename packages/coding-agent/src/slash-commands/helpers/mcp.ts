@@ -9,7 +9,9 @@ import {
 	setServerDisabled,
 	updateMCPServer,
 } from "../../mcp/config-writer";
+import { compileMCPAllowlist } from "../../mcp/config";
 import { MCPManager } from "../../mcp/manager";
+import { cfgMcpIncludeServers } from "../../mcp/settings";
 import { getSmitheryApiKey } from "../../mcp/smithery-auth";
 import { searchSmitheryRegistry } from "../../mcp/smithery-registry";
 import type { MCPServerConfig, MCPServerConnection } from "../../mcp/types";
@@ -202,6 +204,9 @@ async function withPreparedMcpConnection<T>(
 	config: MCPServerConfig,
 	fn: (connection: MCPServerConnection) => Promise<T>,
 ): Promise<T> {
+	if (!compileMCPAllowlist(cfgMcpIncludeServers.get(runtime.settings)).admits(name)) {
+		throw new Error(`Server "${name}" is excluded by this session's MCP allowlist (--mcp).`);
+	}
 	let connection: MCPServerConnection | undefined;
 	try {
 		const manager = new MCPManager(runtime.cwd);

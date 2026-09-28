@@ -5,6 +5,7 @@ import { createReadStream } from "node:fs";
 import * as fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import * as path from "node:path";
+import { resolveBuildIdentity } from "../packages/coding-agent/scripts/build-identity";
 
 const repoRoot = path.join(import.meta.dir, "..");
 const packageDir = path.join(repoRoot, "packages/coding-agent");
@@ -125,6 +126,10 @@ export async function buildPortable(): Promise<PortableManifest> {
 		if (!(await Bun.file(nativePath).exists()))
 			throw new Error(`Baseline native build did not produce ${nativePath}`);
 
+		// After the native build (so a fresh checkout has a loadable vcs binding)
+		// and before any bundle generator touches tracked placeholders.
+		const buildInfo = await resolveBuildIdentity(repoRoot);
+
 		await run([process.execPath, "--cwd=packages/stats", "run", "gen:stats"]);
 		generatedStats = true;
 		await run([process.execPath, "--cwd=packages/collab-web", "run", "gen:tool-views"]);
@@ -143,6 +148,7 @@ export async function buildPortable(): Promise<PortableManifest> {
 			transformersVersion: transformersManifest.version,
 			target: compileTarget,
 			compileTarget,
+			buildInfo,
 		});
 		await fs.chmod(binaryPath, 0o755);
 		await fs.copyFile(nativePath, path.join(stagingDir, baselineNativeName));

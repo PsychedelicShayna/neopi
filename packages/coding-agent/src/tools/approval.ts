@@ -361,6 +361,17 @@ export function truncateForPrompt(value: string, maxChars = DEFAULT_PROMPT_TRUNC
 }
 
 /**
+ * The tool's own approval detail lines (`formatApprovalDetails`), without the
+ * prompt header. Empty lines are dropped.
+ */
+export function formatApprovalDetailLines(tool: ApprovalSubject, args: unknown): string[] {
+	const details = tool.formatApprovalDetails?.(args);
+	if (typeof details === "string") return details.length > 0 ? [details] : [];
+	if (Array.isArray(details)) return details.filter(detail => detail.length > 0);
+	return [];
+}
+
+/**
  * Format the approval prompt body shown to the user.
  */
 export function formatApprovalPrompt(tool: ApprovalSubject, args: unknown, reason?: string): string {
@@ -374,14 +385,7 @@ export function formatApprovalPrompt(tool: ApprovalSubject, args: unknown, reaso
 		lines.push(`Reason: ${reason}`);
 	}
 
-	const details = tool.formatApprovalDetails?.(args);
-	if (typeof details === "string") {
-		if (details.length > 0) lines.push(details);
-	} else if (Array.isArray(details)) {
-		for (const detail of details) {
-			if (detail.length > 0) lines.push(detail);
-		}
-	}
+	lines.push(...formatApprovalDetailLines(tool, args));
 
 	return lines.join("\n");
 }

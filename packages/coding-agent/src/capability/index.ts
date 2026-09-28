@@ -141,7 +141,7 @@ async function loadImpl<T>(
 	ctx: LoadContext,
 	options: LoadOptions<T>,
 ): Promise<CapabilityResult<T>> {
-	const allItems: Array<T & { _source: SourceMeta; _shadowed?: boolean }> = [];
+	const allItems: Array<T & { _source: SourceMeta; _shadowed?: boolean; _shadowedByKey?: boolean }> = [];
 	const suppressedItems = new Set<T & { _source: SourceMeta; _shadowed?: boolean }>();
 	const disabledItems = new Set<T & { _source: SourceMeta; _shadowed?: boolean }>();
 	const allWarnings: string[] = [];
@@ -245,6 +245,7 @@ async function loadImpl<T>(
 				equivalent !== undefined &&
 				deduped.some(existing => !disabledItems.has(existing) && equivalent(existing, item));
 			if (keySeen || aliasSeen) item._shadowed = true;
+			if (keySeen) item._shadowedByKey = true;
 			if (!suppressedItems.has(item)) deduped.push(item);
 			continue;
 		}
@@ -269,6 +270,7 @@ async function loadImpl<T>(
 			deduped.some(existing => !disabledItems.has(existing) && equivalent(existing, item));
 		if (keySeen || aliasSeen) {
 			item._shadowed = true;
+			if (keySeen) item._shadowedByKey = true;
 		} else {
 			deduped.push(item);
 		}

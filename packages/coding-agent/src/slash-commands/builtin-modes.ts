@@ -21,6 +21,12 @@ import { formatSlowModeResetClock } from "../session/anthropic-slow-mode";
 import { cfgExtendedContext } from "../session/context-settings";
 import { cfgGoalEnabled } from "../goals/settings";
 import { cfgPlanEnabled } from "../plan-mode/settings";
+import { type ChatModeConfig, parseChatCommandArgs } from "../chat/chat-mode";
+
+function formatChatModeStatus(config: ChatModeConfig | undefined): string {
+	if (!config) return "off";
+	return config.include.length > 0 ? `${config.mode} (include: ${config.include.join(", ")})` : config.mode;
+}
 
 export function refreshStatusLine(ctx: InteractiveModeContext): void {
 	ctx.statusLine.invalidate();
@@ -606,6 +612,30 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			}
 			runtime.ctx.showStatus("Usage: /skillful [on|off|status]");
 			runtime.ctx.editor.setText("");
+		},
+	},
+	{
+		name: "chat",
+		icon: "prompt",
+		description: "Switch chat mode for this session; bare /chat toggles between off and the last-used mode",
+		acpDescription: "Switch chat mode",
+		acpInputHint: "[chat|erp|raw|off] [--include <categories>]",
+		subcommands: [
+			{ name: "chat", description: "Conversation-first system prompt", usage: "[--include <categories>]" },
+			{ name: "erp", description: "Explicit erotic roleplay system prompt", usage: "[--include <categories>]" },
+			{ name: "raw", description: "No system prompt; only the conversation", usage: "[--include <categories>]" },
+			{ name: "off", description: "Return to the ordinary coding session" },
+		],
+		allowArgs: true,
+		getTuiAutocompleteDescription: runtime => `Chat mode: ${formatChatModeStatus(runtime.ctx.session.chatMode)}`,
+		handle: async (command, runtime) => {
+			try {
+				const next = await runtime.session.setChatMode(parseChatCommandArgs(command.args));
+				await runtime.output(`Chat mode: ${formatChatModeStatus(next)}.`);
+			} catch (err) {
+				await runtime.output(errorMessage(err));
+			}
+			return commandConsumed();
 		},
 	},
 	{

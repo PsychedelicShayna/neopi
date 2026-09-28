@@ -22,6 +22,8 @@ export interface LoadMCPConfigsOptions {
 	filterBrowser?: boolean;
 	/** Session-local extension roots for post-startup rediscovery (explicit + mode + configured). */
 	extensionRoots?: EffectiveExtensionRoots;
+	/** Server name globs to admit; empty or absent admits every server. */
+	includeServers?: readonly string[];
 }
 
 /** Result of loading MCP configs */
@@ -32,6 +34,63 @@ export interface LoadMCPConfigsResult {
 	exaApiKeys: string[];
 	/** Source metadata for each server */
 	sources: Record<string, SourceMeta>;
+	/**
+	 * `includeServers` entries without glob metacharacters that name no
+	 * available server (unconfigured, disabled, or denylisted).
+	 */
+	unmatchedIncludes?: string[];
+}
+
+const MCP_GLOB_METACHARACTERS = /[*?[\]{}\\]/;
+
+/** Whether an `includeServers` entry is a glob pattern rather than a literal server name. */
+export function isMCPGlobPattern(entry: string): boolean {
+	return MCP_GLOB_METACHARACTERS.test(entry);
+}
+
+/** A compiled `mcp.includeServers` allowlist. */
+export interface MCPAllowlist {
+	/** String entries, in order. */
+	readonly patterns: readonly string[];
+	/** Non-string entries (malformed settings), rendered for error messages. */
+	readonly invalid: readonly string[];
+	/** Whether a server with this name may be spawned. */
+	admits(serverName: string): boolean;
+}
+
+/**
+ * Compile allowlist entries. Settings files are not type-checked per entry,
+ * so non-string entries are reported as invalid and fail closed: a non-empty
+ * list never degrades to unrestricted.
+ */
+export function compileMCPAllowlist(entries: readonly unknown[] | undefined): MCPAllowlist {
+	const list = entries ?? [];
+	const patterns = list.filter((entry): entry is string => typeof entry === "string");
+	const invalid = list.filter(entry => typeof entry !== "string").map(entry => JSON.stringify(entry) ?? String(entry));
+	const globs = patterns.map(pattern => new Bun.Glob(pattern));
+	return {
+		patterns,
+		invalid,
+		admits: serverName => list.length === 0 || globs.some(glob => glob.match(serverName)),
+	};
+}
+
+/**
+ * A literal `--mcp` / `mcp.includeServers` entry names no available server.
+ * Thrown before any server starts, so a typo cannot leave a run with an
+ * allowlist that silently matches nothing.
+ */
+export class MCPUnknownServerError extends Error {
+	readonly serverNames: readonly string[];
+
+	constructor(serverNames: readonly string[]) {
+		super(
+			`MCP allowlist (--mcp / mcp.includeServers) names no available server: ${serverNames.join(", ")}. ` +
+				"The server is not configured, is disabled, or is in disabledServers.",
+		);
+		this.name = "MCPUnknownServerError";
+		this.serverNames = serverNames;
+	}
 }
 
 /**
@@ -138,9 +197,13 @@ export async function loadAllMCPConfigs(cwd: string, options?: LoadMCPConfigsOpt
 	// lower-priority user `foo` disabled), but never equivalence-shadow a
 	// differently-named enabled server — otherwise the disabled alias would be
 	// removed downstream and starve the surviving connection.
+	// Allowlist misses are suppressed like disabled servers, for the same
+	// dedupe reason: they keep their name but never shadow an admitted server.
+	const allowlist = compileMCPAllowlist(options?.includeServers);
 	const suppressServer = (server: MCPServer & { _source: SourceMeta }): boolean => {
 		if (disabledServers.has(server.name)) return true;
 		if (server.enabled === false && !forcedEnabled.has(server.name)) return true;
+		if (!allowlist.admits(server.name)) return true;
 		return false;
 	};
 
@@ -159,6 +222,26 @@ export async function loadAllMCPConfigs(cwd: string, options?: LoadMCPConfigsOpt
 		sources[server.name] = server._source;
 	}
 
+	// Checked before the Exa/browser filters: those servers exist, NeoPi just
+	// replaces them natively, so naming one is not a typo. Keep equivalence
+	// aliases (shadowed by connection identity) but not lower-priority servers
+	// shadowed by key: a disabled project owner must not make its user-level
+	// namesake appear available when neither can connect.
+	const availableNames = new Set(
+		result.all
+			.filter(server => includeServer(server) && !suppressServer(server) && !server._shadowedByKey)
+			.map(server => server.name),
+	);
+	const unmatchedIncludes: string[] = [...allowlist.invalid];
+	for (const pattern of allowlist.patterns) {
+		if (availableNames.has(pattern)) continue;
+		if (!isMCPGlobPattern(pattern)) {
+			unmatchedIncludes.push(pattern);
+		} else if (![...availableNames].some(name => new Bun.Glob(pattern).match(name))) {
+			logger.warn("MCP allowlist pattern matches no available server", { pattern });
+		}
+	}
+
 	let exaApiKeys: string[] = [];
 
 	if (filterExa) {
@@ -174,7 +257,7 @@ export async function loadAllMCPConfigs(cwd: string, options?: LoadMCPConfigsOpt
 		sources = browserResult.sources;
 	}
 
-	return { configs, exaApiKeys, sources };
+	return { configs, exaApiKeys, sources, unmatchedIncludes };
 }
 
 /** Pattern to match Exa MCP servers */

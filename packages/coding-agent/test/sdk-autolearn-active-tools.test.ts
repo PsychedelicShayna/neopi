@@ -23,8 +23,10 @@ describe("createAgentSession auto-learn tool activation", () => {
 	let authStorage: AuthStorage;
 	let modelRegistry: ModelRegistry;
 	const sessions: AgentSession[] = [];
+	// Sessions stay live until afterAll, so each is its own root.
 	function noDiscoveryOptions() {
 		return {
+			agentId: `AutoLearn-${Snowflake.next()}`,
 			disableExtensionDiscovery: true,
 			skills: [],
 			contextFiles: [],

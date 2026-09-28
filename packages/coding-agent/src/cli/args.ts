@@ -64,6 +64,8 @@ export interface Args {
 	mode?: Mode;
 	noSession?: boolean;
 	sessionDir?: string;
+	/** `--new-session`: always start a fresh session, ignoring `autoResume`. */
+	newSession?: boolean;
 	providerSessionId?: string;
 	providerPromptCacheKey?: string;
 	fork?: string;
@@ -74,6 +76,8 @@ export interface Args {
 	noTools?: boolean;
 	noLsp?: boolean;
 	noPty?: boolean;
+	/** Print/json modes: keep running after the parent process dies (`--no-exit-with-parent`). */
+	noExitWithParent?: boolean;
 	hooks?: string[];
 	extensions?: string[];
 	trustedExtensions?: string[];
@@ -84,6 +88,9 @@ export interface Args {
 	export?: string;
 	noSkills?: boolean;
 	skills?: string[];
+	noMcp?: boolean;
+	/** MCP server name globs admitted for this run (`--mcp`). */
+	mcp?: string[];
 	noRules?: boolean;
 	noTitle?: boolean;
 	/** `--mode rpc` only: run extensions without a UI so no `extension_ui_request` dialogs reach the host. */
@@ -254,12 +261,16 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			result.fromCodex = true;
 		} else if (arg === "--no-session") {
 			result.noSession = true;
+		} else if (arg === "--new-session") {
+			result.newSession = true;
 		} else if (arg === "--no-tools") {
 			result.noTools = true;
 		} else if (arg === "--no-lsp") {
 			result.noLsp = true;
 		} else if (arg === "--no-pty") {
 			result.noPty = true;
+		} else if (arg === "--no-exit-with-parent") {
+			result.noExitWithParent = true;
 		} else if (arg === "--hide-thinking") {
 			result.hideThinking = true;
 		} else if (arg === "--advisor") {
@@ -280,6 +291,8 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			result.noExtensions = true;
 		} else if (arg === "--no-skills") {
 			result.noSkills = true;
+		} else if (arg === "--no-mcp") {
+			result.noMcp = true;
 		} else if (arg === "--no-rules") {
 			result.noRules = true;
 		} else if (arg === "--no-title") {
@@ -341,6 +354,16 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 
 	if (result.systemPrompt !== undefined && result.systemPromptTemplate !== undefined) {
 		throw new CliUsageError("--system-prompt and --system-prompt-template cannot be combined");
+	}
+	if (result.newSession) {
+		const conflicts = [
+			result.continue ? "--continue" : undefined,
+			result.resume !== undefined ? "--resume/--session" : undefined,
+			result.fork !== undefined ? "--fork" : undefined,
+		].filter(flag => flag !== undefined);
+		if (conflicts.length > 0) {
+			throw new CliUsageError(`--new-session cannot be combined with ${conflicts.join(", ")}`);
+		}
 	}
 	if (result.chat !== undefined) {
 		const chatMode = parseChatModeArg(result.chat);

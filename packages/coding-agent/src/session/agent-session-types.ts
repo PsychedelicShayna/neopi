@@ -83,6 +83,14 @@ export interface AsyncJobSnapshot {
 	delivery: AsyncJobDeliveryState;
 }
 
+/** Outcome of {@link AgentSession.cancelRootWork}. */
+export interface RootWorkCancelResult {
+	/** True when every cancelled job of the root's domain settled before the deadline. */
+	settled: boolean;
+	/** Jobs still winding down at the deadline; they keep settling in the background. */
+	pendingJobIds: string[];
+}
+
 export type { ShakeMode, ShakeResult } from "./shake-types";
 
 /**
@@ -281,10 +289,16 @@ export interface AgentSessionConfig {
 	parentEvalSessionId?: string;
 	/** Logical owner for retained eval kernels created by this session. */
 	evalKernelOwnerId?: string;
-	/** Async job manager owned and disposed by this session. */
+	/** Async job manager owned and disposed by this session: the root's async-job domain. Top-level sessions only. */
 	ownedAsyncJobManager?: AsyncJobManager;
-	/** Async job manager visible to this session. */
+	/** Async job manager visible to this session (a subagent's is its root's). */
 	asyncJobManager?: AsyncJobManager;
+	/**
+	 * Root-wide cancellation of this root's async-job domain and descendants,
+	 * wired by `createAgentSession` for top-level sessions; backs
+	 * {@link AgentSession.cancelRootWork}.
+	 */
+	cancelRootWork?: (options: { timeoutMs?: number }) => Promise<RootWorkCancelResult>;
 	/** Registry identity used for IRC routing. */
 	agentId?: string;
 	/** Whether this is a top-level or subagent session. */
@@ -326,6 +340,13 @@ export interface AgentSessionConfig {
 	advisorMcpResources?: CursorMcpResourceAdapter;
 	/** Chat mode the session runs in; undefined for an ordinary coding session. */
 	chatMode?: ChatModeConfig;
+	/**
+	 * Coding tool selection (enabled names and the `xd://`-mounted subset) for a
+	 * session constructed in chat mode; activated when chat mode is switched off.
+	 */
+	chatModeCodingTools?: { enabled: string[]; mounted: string[] };
+	/** Why the session cannot enter chat mode (an explicit system prompt template); undefined when it can. */
+	chatModeBlockedReason?: string;
 	/** Preloaded watchdog prompt content for the advisor. */
 	advisorWatchdogPrompt?: string;
 	/** Shared advisor instructions loaded from WATCHDOG.yml. */
@@ -366,6 +387,14 @@ export interface PromptOptions {
 	attribution?: MessageAttribution;
 	/** Skip pre-send compaction checks for this prompt. */
 	skipCompactionCheck?: boolean;
+	/**
+	 * Id from `SessionManager.reserveEntryId()` to persist this prompt's user
+	 * message under, so a caller can report the entry id before the turn runs.
+	 * Only the user message (or the prompt's custom message) takes it.
+	 */
+	entryId?: string;
+	/** Pre-executed custom slash command result from RPC command classification. */
+	customCommandResult?: string;
 }
 
 /** Payload for {@link AgentSession.setPromptDropped}: a user prompt cancelled
@@ -386,12 +415,16 @@ export interface FollowUpOptions {
 	expandPromptTemplates?: boolean;
 	/** Explicit billing/initiator attribution. */
 	attribution?: MessageAttribution;
+	/** Reserved session entry id for the queued user message; see {@link PromptOptions.entryId}. */
+	entryId?: string;
 }
 
 /** Options for AgentSession.steer(). */
 export interface SteerOptions {
 	/** Explicit billing/initiator attribution. */
 	attribution?: MessageAttribution;
+	/** Reserved session entry id for the queued user message; see {@link PromptOptions.entryId}. */
+	entryId?: string;
 }
 
 /** Options for AgentSession.sendUserMessage(). */

@@ -65,6 +65,7 @@ Argument handling:
 | `--config <file>` | Load an extra `config.yml`-style overlay for this run (repeatable). |
 | `--session-dir <dir>` | Directory for session storage and lookup. |
 | `--no-session` | Don't save the session (ephemeral). |
+| `--new-session` | Start a new session in the default per-cwd session directory (or `--session-dir`), ignoring `autoResume`. Cannot be combined with `--continue`, `--resume`/`--session`, or `--fork`. |
 
 #### Session history
 
@@ -126,6 +127,7 @@ See [providers](./providers.md) and [models](./models.md) for model resolution.
 | `--auto-approve`, `--yolo` | Auto-approve all tool calls (skip approval prompts). |
 | `--advisor` | Enable the advisor runtime (passively reviews each turn and injects notes). See [advisor / watchdog](./advisor-watchdog.md). |
 | `--max-time <duration>` | Stop the session after this duration (e.g. `600`, `10m`, `1h`). |
+| `--no-exit-with-parent` | Print/json modes: keep running after the parent process dies. See [parent lifetime](#parent-lifetime). |
 
 #### Extensions, hooks, skills, and rules
 
@@ -138,6 +140,8 @@ See [providers](./providers.md) and [models](./models.md) for model resolution.
 | `--no-extensions` | Disable extension discovery (explicit `-e` paths still work). |
 | `--skills <globs>` | Comma-separated glob patterns to filter [skills](./skills.md) (e.g. `git-*,docker`). |
 | `--no-skills` | Disable skills discovery and loading. |
+| `--mcp <globs>` | Comma-separated glob patterns of MCP server names to connect for this run (e.g. `github,linear-*`). Sets the `mcp.includeServers` session setting; the user `disabledServers` list still wins. A literal name that matches no available server exits with status 2. See [MCP configuration](./mcp-config.md#per-run-allowlist---mcp-mcpincludeservers). |
+| `--no-mcp` | Disable MCP server discovery and connection. An empty `--mcp` / `mcp.includeServers` list means unrestricted, not none. |
 | `--no-rules` | Disable rules discovery and loading. See [context files](./context-files.md). |
 
 #### System prompt
@@ -147,7 +151,7 @@ See [providers](./providers.md) and [models](./models.md) for model resolution.
 | `--system-prompt <text\|file>` | Plain-text system prompt override (default: coding assistant prompt). See [system prompt customization](./system-prompt-customization.md). |
 | `--system-prompt-template <path>` | Strictly read `<path>` as a Handlebars system-prompt template; mutually exclusive with `--system-prompt`. See [system prompt customization](./system-prompt-customization.md). |
 | `--append-system-prompt <text\|file>` | Append plain text or file contents to the system prompt. |
-| `--chat[=chat\|erp\|raw\|off]` | Chat mode: drop coding-agent context (tools, skills, rules, memory, reminders, delegation). `chat` (bare flag) and `erp` use built-in conversation or erotic-roleplay prompts and keep the project `AGENTS.md` hierarchy as lore; `raw` sends no system prompt. `--system-prompt` replaces the mode prompt; `--tools` grants tools. The mode is saved with the session and restored on resume; `off` switches it off. Default: `chat.mode` setting. Use `--chat=<mode>`, since a bare `--chat` would take a following message as its value. |
+| `--chat[=chat\|erp\|raw\|off]` | Chat mode: drop coding-agent context (tools, skills, rules, memory, reminders, delegation). `chat` (bare flag) and `erp` use built-in conversation or erotic-roleplay prompts and keep the project `AGENTS.md` hierarchy as lore; `raw` sends no system prompt. `--system-prompt` replaces the mode prompt; `--tools` grants tools. The mode is saved with the session and restored on resume; `off` switches it off. Switch it mid-session with `/chat [chat\|erp\|raw\|off] [--include <list>]` (bare `/chat` toggles) or RPC `set_chat_mode`. Default: `chat.mode` setting. Use `--chat=<mode>`, since a bare `--chat` would take a following message as its value. |
 | `--chat-include <list>` | Comma-separated context to keep in chat mode: `date`, `cwd`, `contextFiles`, `skills`, `rules`, `memory`. Default: `chat.include` setting. |
 
 #### Output mode
@@ -189,9 +193,34 @@ Related flags for headless runs:
 - `--mode json` — emit structured events instead of rendered text.
 - `--no-title` — skip title auto-generation (also `PI_NO_TITLE`).
 - `--max-time <duration>` — bound the run.
+- `--no-exit-with-parent` — keep running after the parent process dies (see below).
 
 The [advisor / watchdog](./advisor-watchdog.md#headless-runs) doc describes
 print-mode disposal semantics when the advisor runtime is enabled.
+
+#### Parent lifetime
+
+A print or json run (`-p`, `--mode json`, `--mode text`, or piped stdin) exits
+when the process that started it dies, including when that process is
+SIGKILLed and never signals its children. The run records its parent pid at
+startup and watches it through a native process handle (`pidfd` on Linux),
+with a once-per-second `ppid` poll as a fallback. When the parent dies, the run:
+
+1. aborts the session, which kills the running tool (for example a foreground
+   bash command);
+2. disposes the session with a SIGHUP reason, preserving an interrupted model
+   turn for resume, and tears down the child processes it owns within about
+   2 seconds: MCP servers (stdio servers run in their own `setsid` process group
+   on POSIX systems other than macOS; the whole group gets SIGTERM, then
+   SIGKILL), async jobs, LSP servers, eval kernels, and every other
+   process-cleanup registration, including exit-only registrations;
+3. exits with status 129, the same as SIGHUP.
+
+Pass `--no-exit-with-parent` when the run should outlive its launcher on
+purpose, for example under `nohup` or `setsid`. Interactive sessions are
+unaffected. RPC and ACP modes are bound to their host by stdin EOF instead.
+SDK embedders can install the same behaviour with `exitWithParent()`; see the
+[SDK docs](./sdk.md#exiting-with-the-parent-process).
 
 ### Output modes (`--mode`)
 
