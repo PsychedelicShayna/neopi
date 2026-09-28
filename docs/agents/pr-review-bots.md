@@ -43,6 +43,13 @@ PR. Do not guess a trigger phrase. If the bot has no severity scale, map its
 findings onto `P0`–`P3` during triage and state the mapping in the reply. The
 gate below applies to the new bot without other edits.
 
+This table is the single list of configured bots. The `babysit-pr` skill
+reads every backticked login in its second column, from the PR's base branch,
+and audits threads from those authors. Keep each login in backticks, list
+both the REST and GraphQL forms, and keep the table directly under this
+section's heading. A bot added only in a PR's own copy of this file is not
+configured for that PR.
+
 ## Merge gate
 
 A PR MAY merge only when all of the following hold on its current head
