@@ -4,7 +4,7 @@ import { type } from "@oh-my-pi/omptype";
 import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import { YAML } from "bun";
-import { isMap, isSeq, type YAMLMap, type YAMLSeq } from "yaml";
+import { isMap, isNode, isSeq, type YAMLMap, type YAMLSeq } from "yaml";
 import { expandAtImports } from "../discovery/at-imports";
 import { BUILTIN_TOOL_NAMES, normalizeToolNames } from "../tools/builtin-names";
 import { ADVISOR_DEFAULT_BUDGET_PER_UPDATE, ADVISOR_MAX_BUDGET_PER_UPDATE } from "./emission-guard";
@@ -488,6 +488,15 @@ function findWatchdogAdvisor(
 	return undefined;
 }
 
+function removeMalformedWatchdogAdvisors(sequence: YAMLSeq<unknown>): void {
+	for (let index = sequence.items.length - 1; index >= 0; index--) {
+		const item = sequence.items[index];
+		const value: unknown = isNode(item) ? item.toJSON() : item;
+		if (!(advisorEntrySchema(value) instanceof type.errors)) continue;
+		sequence.delete(index);
+	}
+}
+
 function patchWatchdogAdvisor(map: YAMLMap<unknown, unknown>, advisor: AdvisorConfig, base?: AdvisorConfig): void {
 	const values = watchdogAdvisorValues(advisor);
 	const baseValues = base ? watchdogAdvisorValues(base) : undefined;
@@ -559,6 +568,7 @@ function patchWatchdogDocument(source: string, doc: WatchdogConfigDoc, baseline?
 	}
 	if (!isSeq(advisorNode)) throw new Error("WATCHDOG.yml advisors must be a sequence");
 	const sequence = advisorNode as YAMLSeq<unknown>;
+	removeMalformedWatchdogAdvisors(sequence);
 
 	const resolvedOrigins = baseline.origins.map(origin => ({
 		origin,

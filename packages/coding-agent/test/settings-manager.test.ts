@@ -314,6 +314,31 @@ describe("Settings", () => {
 			expect(await Bun.file(getConfigPath()).text()).toContain("# Captain comment");
 		});
 
+		it("materializes an aliased mapping before saving a nested role", async () => {
+			await Bun.write(
+				getConfigPath(),
+				[
+					"sharedRoles: &sharedRoles",
+					"  smol: openrouter/openai/gpt-4o-mini # shared role",
+					"modelRoles: *sharedRoles",
+					"",
+				].join("\n"),
+			);
+			const settings = await Settings.loadIsolated({ cwd: projectDir, agentDir });
+			settings.setModelRole("advisor", "openrouter/openai/gpt-4o-mini");
+			await settings.flush();
+
+			const saved = await Bun.file(getConfigPath()).text();
+			expect(saved).toContain("# shared role");
+			expect(YAML.parse(saved)).toEqual({
+				sharedRoles: { smol: "openrouter/openai/gpt-4o-mini" },
+				modelRoles: {
+					smol: "openrouter/openai/gpt-4o-mini",
+					advisor: "openrouter/openai/gpt-4o-mini",
+				},
+			});
+		});
+
 		it("preserves comments while persisting legacy-key migrations", async () => {
 			await Bun.write(
 				getConfigPath(),

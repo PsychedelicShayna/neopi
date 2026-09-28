@@ -439,6 +439,38 @@ describe("WATCHDOG.yml file round-trip", () => {
 		expect(saved).toContain("# cloned");
 	});
 
+	it("removes malformed advisor rows while preserving valid row comments and unknown fields", async () => {
+		const file = path.join(tmp, "WATCHDOG.yml");
+		await Bun.write(
+			file,
+			[
+				"advisors:",
+				"  - name: Valid",
+				"    futureId: keep # valid future field",
+				"  - name: Broken",
+				'    enabled: "sometimes" # malformed row',
+				"",
+			].join("\n"),
+		);
+		const loaded = await loadWatchdogConfigFile(file);
+		expect(loaded.advisors).toEqual([{ name: "Valid" }]);
+		expect(loaded.warnings).toHaveLength(1);
+		loaded.advisors[0].enabled = false;
+		await saveWatchdogConfigFile(file, loaded);
+
+		const normalized = await Bun.file(file).text();
+		expect(normalized).toContain("# valid future field");
+		expect(normalized).not.toContain("Broken");
+		expect(YAML.parse(normalized)).toEqual({
+			advisors: [{ name: "Valid", futureId: "keep", enabled: false }],
+		});
+		expect((await loadWatchdogConfigFile(file)).warnings).toBeUndefined();
+
+		loaded.advisors.splice(0);
+		await saveWatchdogConfigFile(file, loaded);
+		expect(await Bun.file(file).exists()).toBe(false);
+	});
+
 	it("does not resurrect an advisor renamed or deleted by a newer editor", async () => {
 		const file = path.join(tmp, "WATCHDOG.yml");
 		await Bun.write(file, "advisors:\n  - name: Original\n    futureId: keep\n");
