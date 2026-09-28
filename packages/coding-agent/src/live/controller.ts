@@ -43,7 +43,6 @@ interface UserLedgerTurn {
 	final: boolean;
 	claim?: number;
 	blocked?: boolean;
-	reported?: boolean;
 }
 
 type HeldContextKind = "report" | "thinking" | "progress";
@@ -81,8 +80,6 @@ export interface LiveSessionCallbacks {
 	onUserSpeech?(speech: LiveTranscript): void;
 	/** Final text delivered to the main agent or handled by the voice agent. */
 	onSpeechSent?(text: string): void;
-	/** Finalized trailing submit phrase: dispatch the current composer through Enter. */
-	onSubmitKeyword?(text: string): void;
 }
 
 /** Structural transport surface the controller needs (test seam). */
@@ -105,9 +102,7 @@ export interface LiveSessionControllerOptions {
 	extractAssistantText(message: AssistantMessage): string;
 	/** Realtime output voice, defaulting to sol. */
 	voice?: string;
-	forceDelegateKeyword?: string;
 	blockDelegateKeyword?: string;
-	submitKeyword?: string;
 	/** Test seam: quiet time after operator activity before held context sends; defaults to 10000 ms. */
 	speakableIdleMs?: number;
 	/** Test seam: minimum gap between reasoning narrations; defaults to 3000 ms. */
@@ -182,9 +177,7 @@ export class LiveSessionController {
 	readonly #extractAssistantText: (message: AssistantMessage) => string;
 	readonly #voice: string;
 	readonly #speakableIdleMs: number;
-	readonly #forceDelegateKeyword: string;
 	readonly #blockDelegateKeyword: string;
-	readonly #submitKeyword: string;
 
 	readonly #createTransport: (options: ConstructorParameters<typeof CodexLiveTransport>[0]) => LiveTransportLike;
 	readonly #createRecorder: (
@@ -285,9 +278,7 @@ export class LiveSessionController {
 		this.#callbacks = options.callbacks;
 		this.#extractAssistantText = options.extractAssistantText;
 		this.#voice = options.voice?.trim() || DEFAULT_LIVE_VOICE;
-		this.#forceDelegateKeyword = options.forceDelegateKeyword ?? "";
 		this.#blockDelegateKeyword = options.blockDelegateKeyword ?? "";
-		this.#submitKeyword = options.submitKeyword ?? "";
 		const speakableIdleMs = options.speakableIdleMs;
 		this.#speakableIdleMs =
 			typeof speakableIdleMs === "number" && Number.isFinite(speakableIdleMs) && speakableIdleMs >= 0
@@ -835,6 +826,20 @@ export class LiveSessionController {
 		return settled;
 	}
 
+	/** Force a silent composer draft through the ordinary main-agent handoff, independent
+	 * of the provider's turn boundaries. The composer is authoritative, including typed edits. */
+	forceDelegateComposer(text: string): boolean {
+		const message = text.trim();
+		if (!message || this.#stopped || !this.retireComposerSpeech()) return false;
+		const turn: UserLedgerTurn = { turn: ++this.#userLedgerTurn, text: message, final: true };
+		this.#putTurn(turn);
+		void this.#handleDelegation({
+			type: "delegation.created",
+			item: { type: "delegation", target: "client", id: `forced-${crypto.randomUUID()}`, content: [] },
+		}, true).catch(cause => this.#reportFailure(errorFrom(cause)));
+		return true;
+	}
+
 	/** The voice agent finished answering: the turns it answered are its own and must not ride a
 	 *  later handoff. Speech that arrived during the answer stays for a later delegation. */
 	#retireAnsweredTurns(): void {
@@ -842,16 +847,10 @@ export class LiveSessionController {
 		const answered = this.#answeredTurns;
 		this.#answeredTurns = undefined;
 		if (!answered?.length) return;
-		const turns = this.#turnsWhere(
-			turn => turn.claim === undefined && !turn.reported && answered.includes(turn.turn),
-		);
+		const turns = this.#turnsWhere(turn => turn.claim === undefined && answered.includes(turn.turn));
 		const text = turns.map(turn => turn.text).join("\n\n").trim();
 		if (text) this.#callbacks.onSpeechSent?.(text);
-		for (const turn of turns) turn.reported = true;
-		// Keep answered speech available until the operator uses the force keyword.
-		if (!this.#forceDelegateKeyword.trim()) {
-			this.#deleteTurns(turn => turn.claim === undefined && answered.includes(turn.turn));
-		}
+		this.#deleteTurns(turn => turn.claim === undefined && answered.includes(turn.turn));
 	}
 
 	/** Fleet feed: relay a crew IRC message onto the speakable channel for background awareness. */
@@ -1131,33 +1130,12 @@ export class LiveSessionController {
 			// one continues the previous word. Trimming it away glued words together.
 			current.text += /^\s/.test(text) ? ` ${normalized}` : normalized;
 		}
-		let forced = false;
-		let submitRequested = false;
 		if (final) {
 			const block = stripLiveKeyword(current.text, this.#blockDelegateKeyword);
 			this.#lastTurnBlocked = block.matched;
 			if (block.matched) {
 				current.text = block.text;
 				current.blocked = true;
-			} else {
-				const unsent = this.#turnsWhere(
-					turn => !turn.blocked && (turn.claim === undefined || turn.claim === this.#pendingDelegation?.generation),
-				);
-				const candidate = unsent.map(turn => turn.text).join("\n\n");
-				const match = stripLiveKeyword(candidate, this.#forceDelegateKeyword);
-				if (match.matched) {
-					// One canonical prompt: the final turn now owns all accumulated speech.
-					this.#deleteTurns(turn => turn !== current && unsent.includes(turn));
-					current.text = match.text;
-					forced = true;
-				}
-				if (!forced) {
-					const submit = stripLiveKeyword(current.text, this.#submitKeyword, true);
-					if (submit.matched) {
-						current.text = submit.text;
-						submitRequested = true;
-					}
-				}
 			}
 		}
 		this.#emitUserSpeech({ role: "user", turn: current.turn, text: current.text, final: current.final });
@@ -1178,17 +1156,6 @@ export class LiveSessionController {
 				void this.sendOperatorText(current.text, "voice");
 				this.#callbacks.onSpeechSent?.(current.text);
 			}
-			return;
-		}
-		if (forced) {
-			void this.#handleDelegation({
-				type: "delegation.created",
-				item: { type: "delegation", target: "client", id: `forced-${crypto.randomUUID()}`, content: [] },
-			}, true).catch(cause => this.#reportFailure(errorFrom(cause)));
-			return;
-		}
-		if (submitRequested) {
-			this.#callbacks.onSubmitKeyword?.(current.text);
 			return;
 		}
 		const pendingGeneration = this.#pendingDelegation?.generation;

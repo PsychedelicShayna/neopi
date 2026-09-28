@@ -104,7 +104,6 @@ interface Harness {
 	deliveries: DeliveryControl[];
 	speech: Array<{ turn: number; text: string; final: boolean }>;
 	sentSpeech: string[];
-	submitted: string[];
 	audioSent: Float32Array[];
 	fireOutputLevel(level: number): void;
 	fireMicrophone(samples: Float32Array): void;
@@ -122,9 +121,7 @@ function makeHarness(options?: {
 	holdDelivery?: boolean;
 	dropAudio?: boolean;
 	playbackQueue?: { queuedMs: number; droppedMs: number };
-	forceDelegateKeyword?: string;
 	blockDelegateKeyword?: string;
-	submitKeyword?: string;
 }): Harness {
 	const sent: LiveClientMessage[] = [];
 	const aborts: Array<Record<string, unknown>> = [];
@@ -133,7 +130,6 @@ function makeHarness(options?: {
 	const audioSent: Float32Array[] = [];
 	let microphoneCallback: ((error: Error | null, samples: Float32Array) => void) | undefined;
 	const sentSpeech: string[] = [];
-	const submitted: string[] = [];
 	const abortGates: Array<{ promise: Promise<void>; resolve: () => void }> = [];
 	const deliveries: Harness["deliveries"] = [];
 	let streaming = false;
@@ -229,13 +225,10 @@ function makeHarness(options?: {
 			onTerminal() {},
 			onUserSpeech: ({ turn, text, final }) => speech.push({ turn, text, final }),
 			onSpeechSent: text => sentSpeech.push(text),
-			onSubmitKeyword: text => submitted.push(text),
 		},
 		...(options?.speakableIdleMs !== undefined ? { speakableIdleMs: options.speakableIdleMs } : {}),
 		...(options?.thinkingFlushMs !== undefined ? { thinkingFlushMs: options.thinkingFlushMs } : {}),
-		forceDelegateKeyword: options?.forceDelegateKeyword,
 		blockDelegateKeyword: options?.blockDelegateKeyword,
-		submitKeyword: options?.submitKeyword,
 		extractAssistantText: message => (message as unknown as { testText?: string }).testText ?? "",
 		createTransport: transportOptions => {
 			liveCallbacks = transportOptions.callbacks;
@@ -270,7 +263,6 @@ function makeHarness(options?: {
 		deliveries,
 		speech,
 		sentSpeech,
-		submitted,
 		audioSent,
 		fireOutputLevel: level => liveCallbacks?.onOutputLevel(level),
 		fireMicrophone: samples => microphoneCallback?.(null, samples),
@@ -369,31 +361,30 @@ describe("live microphone forwarding", () => {
 });
 
 describe("live controller delegation ownership", () => {
-	it("forces accumulated finalized speech without a model delegation and only notifies Iris", async () => {
-		const h = makeHarness({ forceDelegateKeyword: "send it now" });
+	it("forces the current composer draft independently of provider-finalized turns", async () => {
+		const h = makeHarness();
 		await h.controller.start();
-		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "Fix the cache." } });
-		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "Send... it, now" } });
+		h.fireLive({ type: "input_transcript.added", item: { text: "Fix the ca" } });
+		expect(h.controller.forceDelegateComposer("typed context Fix the cache.")).toBe(true);
 		await settle();
-		expect(h.prompts).toEqual(["Fix the cache."]);
-		expect(h.sentSpeech).toEqual(["Fix the cache."]);
+		expect(h.prompts).toEqual(["typed context Fix the cache."]);
+		expect(h.sentSpeech).toEqual(["typed context Fix the cache."]);
 		expect(h.sent.filter(item => item.type === "session.context.append").map(item => item.content[0]?.text)).toEqual([
 			"Operator Message Sent To Main Agent",
 		]);
 		await h.controller.stop();
 	});
 
-	it("retains answered speech for a later force send without repeating its history entry", async () => {
-		const h = makeHarness({ forceDelegateKeyword: "send it now" });
+	it("does not retain answered turns when a later composer draft is force-delegated", async () => {
+		const h = makeHarness();
 		await h.controller.start();
 		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "fix the cache" } });
 		h.fireLive({ type: "turn.done", turn: { role: "assistant", transcript: "I can help." } });
-		h.fireLive({ type: "turn.done", turn: { role: "assistant", transcript: "Anything else?" } });
 		expect(h.sentSpeech).toEqual(["fix the cache"]);
-		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "send it now" } });
+		expect(h.controller.forceDelegateComposer("new draft")).toBe(true);
 		await settle();
-		expect(h.prompts).toEqual(["fix the cache"]);
-		expect(h.sentSpeech).toEqual(["fix the cache", "fix the cache"]);
+		expect(h.prompts).toEqual(["new draft"]);
+		expect(h.sentSpeech).toEqual(["fix the cache", "new draft"]);
 		await h.controller.stop();
 	});
 
@@ -407,16 +398,14 @@ describe("live controller delegation ownership", () => {
 		expect(h.sentSpeech).toEqual(["tell me a joke"]);
 		await h.controller.stop();
 	});
-	it("matches a force phrase across finalized VAD turns and overrides a pending Iris claim", async () => {
-		const h = makeHarness({ forceDelegateKeyword: "send it now" });
+	it("force-delegates a composer correction instead of an earlier Iris claim", async () => {
+		const h = makeHarness();
 		await h.controller.start();
-		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "fix the cache" } });
-		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "send it" } });
-		h.fireLive({ type: "input_transcript.added", item: { text: "now" } });
+		h.fireLive({ type: "input_transcript.added", item: { text: "fix the cache" } });
 		h.fireLive(delegation("dlg-early", "wrong"));
-		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "now" } });
+		expect(h.controller.forceDelegateComposer("fix the cache, with the corrected timeout")).toBe(true);
 		await settle();
-		expect(h.prompts).toEqual(["fix the cache"]);
+		expect(h.prompts).toEqual(["fix the cache, with the corrected timeout"]);
 		await h.controller.stop();
 	});
 
@@ -432,8 +421,8 @@ describe("live controller delegation ownership", () => {
 		await h.controller.stop();
 	});
 
-	it("routes only authoritative finals, never a keyword in a withdrawn partial", async () => {
-		const h = makeHarness({ forceDelegateKeyword: "send it now" });
+	it("does not interpret withdrawn partial speech as a force keyword", async () => {
+		const h = makeHarness();
 		await h.controller.start();
 		h.fireLive({ type: "input_transcript.added", item: { text: "send it now" } });
 		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "not yet" } });
@@ -454,18 +443,6 @@ describe("live controller delegation ownership", () => {
 		await h.controller.stop();
 	});
 
-	it("submits only a finalized trailing phrase, never an earlier or partial mention", async () => {
-		const h = makeHarness({ submitKeyword: "send off" });
-		await h.controller.start();
-		h.fireLive({ type: "input_transcript.added", item: { text: "send off" } });
-		expect(h.submitted).toEqual([]);
-		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "say send off later" } });
-		expect(h.submitted).toEqual([]);
-		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "real request send... off!" } });
-		expect(h.submitted).toEqual(["real request"]);
-		expect(h.prompts).toEqual([]);
-		await h.controller.stop();
-	});
 
 	it("builds the prompt from the controller transcript, not delegation content", async () => {
 		const h = makeHarness();
