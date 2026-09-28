@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
@@ -10,8 +11,12 @@ const cjsProbePath = path.resolve(import.meta.dir, "fixtures", "legacy-pi-extens
 const tempDirs: TempDir[] = [];
 
 async function runProbe(cacheRoot: string, script: string = probePath, args: string[] = []): Promise<string> {
-	const env: Record<string, string | undefined> = { ...process.env, XDG_CACHE_HOME: cacheRoot };
-	for (const key of ["PI_CODING_AGENT_DIR", "OMP_PROFILE", "PI_PROFILE", "PI_CONFIG_DIR"]) {
+	const env: Record<string, string | undefined> = {
+		...process.env,
+		PI_CONFIG_DIR: path.relative(os.homedir(), path.join(cacheRoot, "config")),
+		XDG_CACHE_HOME: cacheRoot,
+	};
+	for (const key of ["PI_CODING_AGENT_DIR", "OMP_PROFILE", "PI_PROFILE"]) {
 		delete env[key];
 	}
 	const proc = Bun.spawn([process.execPath, script, ...args], {

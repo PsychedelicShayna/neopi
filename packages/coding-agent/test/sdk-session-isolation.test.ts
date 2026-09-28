@@ -58,8 +58,8 @@ async function withTempConfigRoot<T>(run: () => Promise<T>): Promise<T> {
 	const originalProfile = getActiveProfile();
 	const originalConfigDir = process.env.PI_CONFIG_DIR;
 	const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
-	const configDirName = `.omp-sdk-session-${Snowflake.next()}`;
-	const configRoot = path.join(os.homedir(), configDirName);
+	const configRoot = path.join(os.tmpdir(), `.omp-sdk-session-${Snowflake.next()}`);
+	const configDirName = path.relative(os.homedir(), configRoot);
 	try {
 		process.env.PI_CONFIG_DIR = configDirName;
 		setProfile(undefined);

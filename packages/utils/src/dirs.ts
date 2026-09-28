@@ -201,16 +201,16 @@ export function relativePathWithinRoot(root: string, candidate: string): string 
 	return relativePathWithinNormalizedRoot(normalizedRoot, normalizedCandidate) || null;
 }
 
-const TEST_FORBIDDEN_AGENT_DIR_ENV = "NPI_TEST_FORBIDDEN_AGENT_DIR";
+const TEST_ALLOWED_STORAGE_ROOT_ENV = "NPI_TEST_ALLOWED_STORAGE_ROOT";
 
-function assertTestPathIsNotRealAgentDir(candidate: string, kind: "agent" | "sessions"): void {
-	const forbidden = process.env[TEST_FORBIDDEN_AGENT_DIR_ENV];
-	if (!forbidden) return;
-	const resolvedForbidden = normalizePathForComparison(forbidden);
-	const resolvedCandidate = normalizePathForComparison(candidate);
-	if (relativePathWithinNormalizedRoot(resolvedForbidden, resolvedCandidate) === null) return;
+function assertTestPathIsIsolated(candidate: string, kind: "agent" | "sessions"): void {
+	const allowedRoot = process.env[TEST_ALLOWED_STORAGE_ROOT_ENV];
+	if (!allowedRoot) return;
+	const normalizedAllowedRoot = normalizePathForComparison(allowedRoot);
+	const normalizedCandidate = normalizePathForComparison(candidate);
+	if (relativePathWithinNormalizedRoot(normalizedAllowedRoot, normalizedCandidate) !== null) return;
 	throw new Error(
-		`Test resolved ${kind} directory to the real user agent directory: ${candidate}. ` +
+		`Test resolved ${kind} directory outside its isolated temporary storage: ${candidate}. ` +
 			"Isolate the test with PI_CODING_AGENT_DIR, setAgentDir(), or an explicit agent/session directory.",
 	);
 }
@@ -602,7 +602,7 @@ export function getProfileRootDir(profile: string | undefined): string {
 }
 /** Get the agent config directory (~/.omp/agent). */
 export function getAgentDir(): string {
-	assertTestPathIsNotRealAgentDir(dirs.agentDir, "agent");
+	assertTestPathIsIsolated(dirs.agentDir, "agent");
 	return dirs.agentDir;
 }
 
@@ -922,7 +922,7 @@ export function getComposerCacheDir(agentDir?: string): string {
 /** Get the sessions directory (~/.omp/agent/sessions). */
 export function getSessionsDir(agentDir?: string): string {
 	const sessionsDir = dirs.agentSubdir(agentDir, "sessions", "data");
-	assertTestPathIsNotRealAgentDir(sessionsDir, "sessions");
+	assertTestPathIsIsolated(sessionsDir, "sessions");
 	return sessionsDir;
 }
 

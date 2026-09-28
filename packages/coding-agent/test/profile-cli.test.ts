@@ -53,7 +53,7 @@ describe("global --profile flag", () => {
 		originalOmpProfileEnv = process.env.OMP_PROFILE;
 		originalPiProfileEnv = process.env.PI_PROFILE;
 		originalConfigDir = process.env.PI_CONFIG_DIR;
-		configDir = `.omp-profile-cli-test-${Snowflake.next()}`;
+		configDir = path.relative(os.homedir(), path.join(os.tmpdir(), `.omp-profile-cli-test-${Snowflake.next()}`));
 		process.env.PI_CONFIG_DIR = configDir;
 		process.exitCode = 0;
 	});
