@@ -494,6 +494,30 @@ describe("live controller delegation ownership", () => {
 		expect(h.sent.filter(message => message.type === "session.context.append")).toHaveLength(1);
 	});
 
+	it("delivers a requested final answer at once even while operator activity holds speakables", async () => {
+		const h = makeHarness({ speakableIdleMs: 60_000 });
+		await h.controller.start();
+		h.controller.expectOperatorTurn();
+		h.controller.noteComposerActivity();
+		h.fireSession(agentEnd([assistant("The build is fixed.", "stop")]));
+		await settle();
+		const finals = h.sent.flatMap(message =>
+			message.type === "session.context.append" ? [message.content.map(item => item.text).join("")] : [],
+		);
+		expect(finals).toHaveLength(1);
+		expect(finals[0]).toContain("The build is fixed.");
+	});
+
+	it("keeps the recognizer's word spacing when incremental transcript chunks stream in", async () => {
+		const h = makeHarness();
+		await h.controller.start();
+		for (const text of [" That's", " a", " bug", " right", " now"]) {
+			h.fireLive({ type: "input_transcript.added", item: { text } });
+		}
+		await settle();
+		expect(h.speech.at(-1)?.text).toBe("That's a bug right now");
+	});
+
 	it("keeps a spoken request when the voice agent is answering a typed prompt", async () => {
 		const h = makeHarness();
 		await h.controller.start();

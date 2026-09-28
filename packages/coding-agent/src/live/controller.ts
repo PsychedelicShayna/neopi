@@ -668,12 +668,12 @@ export class LiveSessionController {
 			if (!text) continue;
 			this.#lastRelayedResponse = message;
 			const finalContext = prompt.render(agentFinalMessageTemplate, { message: text });
-			this.#deliverOrHold(() => {
-				this.#contextSinceResponse = true;
-				for (const chunk of chunkLiveContext(finalContext)) {
-					this.#queueSend(buildDelegationContextAppend(delegationId, chunk));
-				}
-			});
+			// The operator asked for this answer: deliver it now. The speakable hold is for
+			// unsolicited context only; holding a final answer delays it until the next handoff.
+			this.#contextSinceResponse = true;
+			for (const chunk of chunkLiveContext(finalContext)) {
+				this.#queueSend(buildDelegationContextAppend(delegationId, chunk));
+			}
 			break;
 		}
 		if (options.closeDelegation) {
@@ -690,12 +690,10 @@ export class LiveSessionController {
 		if (text && message) {
 			this.#lastRelayedResponse = message;
 			const labelBytes = Buffer.byteLength(prompt.render(agentFinalMessageTemplate, { message: "" }), "utf8");
-			this.#deliverOrHold(() => {
-				this.#contextSinceResponse = true;
-				for (const part of chunkLiveContext(text, CONTEXT_CHUNK_BYTES - labelBytes)) {
-					this.#queueSend(buildSessionContextAppend(prompt.render(agentFinalMessageTemplate, { message: part })));
-				}
-			});
+			this.#contextSinceResponse = true;
+			for (const part of chunkLiveContext(text, CONTEXT_CHUNK_BYTES - labelBytes)) {
+				this.#queueSend(buildSessionContextAppend(prompt.render(agentFinalMessageTemplate, { message: part })));
+			}
 		}
 		if (options.closeDelegation) {
 			this.#operatorTurnPending = false;
@@ -1008,7 +1006,9 @@ export class LiveSessionController {
 		} else if (normalized.startsWith(current.text)) {
 			current.text = normalized;
 		} else if (!current.text.startsWith(normalized)) {
-			current.text += normalized;
+			// Incremental chunks carry their own leading space (" a", " bug"); a chunk without
+			// one continues the previous word. Trimming it away glued words together.
+			current.text += /^\s/.test(text) ? ` ${normalized}` : normalized;
 		}
 		this.#emitUserSpeech({ role: "user", turn: current.turn, text: current.text, final: current.final });
 		const pendingGeneration = this.#pendingDelegation?.generation;
