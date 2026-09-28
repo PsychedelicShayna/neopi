@@ -4,7 +4,7 @@ import { streamSimple } from "@oh-my-pi/pi-ai/stream";
 import { cfgEnabledModels } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { MixtureCatalog, registerMixtureApi } from "@oh-my-pi/pi-coding-agent/moa/provider";
-import { discoverRegistrableMixtures } from "@oh-my-pi/pi-coding-agent/moa/registration";
+import { discoverRegistrableMixtures, MixtureWorkspace } from "@oh-my-pi/pi-coding-agent/moa/registration";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -302,6 +302,78 @@ describe("workspace-scoped rosters on a shared registry", () => {
 		await moved.rebindMixturesForCwd(sourceDir);
 		expect(await run(moved, "draft-then-edit")).toEqual({ calls: ["writer", "editor"], error: undefined });
 		expect(fixture.registry.find("mixture", "draft-then-edit")).toBeDefined();
+	});
+
+	it("reacquires the saved source after destination and immediate source restoration both fail", async () => {
+		const sourceDir = await workspace(
+			"double-failure-source-ws",
+			DRAFT_THEN_EDIT_TOML.replace("Tighten the draft.", "SOURCE."),
+		);
+		const destinationDir = await workspace("double-failure-destination-ws", renamed("destination"));
+		const other = await sessionIn(await workspace("double-failure-other-ws", renamed("other")));
+		const moved = await sessionIn(sourceDir);
+		const editorPrompt = () => (members.callsTo("editor").at(-1)?.context.systemPrompt ?? []).join("\n");
+		expect(await run(moved, "draft-then-edit")).toEqual({ calls: ["writer", "editor"], error: undefined });
+
+		const registerProvider = fixture.registry.registerProvider.bind(fixture.registry);
+		const destinationFailure = new Error("destination registration failed after mutation");
+		let registrations = 0;
+		vi.spyOn(fixture.registry, "registerProvider").mockImplementation((...args) => {
+			registerProvider(...args);
+			registrations++;
+			if (registrations === 2) throw destinationFailure;
+			if (registrations === 4) throw new Error("source restoration failed after mutation");
+		});
+		await expect(moved.rebindMixturesForCwd(destinationDir)).rejects.toBe(destinationFailure);
+		expect(fixture.registry.find("mixture", "destination")).toBeUndefined();
+		expect(fixture.registry.find("mixture", "draft-then-edit")).toBeUndefined();
+		expect(await run(other, "other")).toEqual({ calls: ["writer", "editor"], error: undefined });
+
+		// Outer rollback restores settings before retrying the old cwd. Its roster
+		// must be the original resolved definition, not a fresh read of this file.
+		await Bun.write(path.join(sourceDir, "MIXTURES.toml"), "");
+		await moved.rebindMixturesForCwd(sourceDir);
+		expect(fixture.registry.find("mixture", "destination")).toBeUndefined();
+		await other.dispose();
+		expect(fixture.registry.find("mixture", "other")).toBeUndefined();
+		expect(await run(moved, "draft-then-edit")).toEqual({ calls: ["writer", "editor"], error: undefined });
+		expect(editorPrompt()).toContain("SOURCE.");
+	});
+
+	it("restores the source after its last-owner release throws after mutation", async () => {
+		const sourceDir = await workspace("release-failure-source-ws", DRAFT_THEN_EDIT_TOML);
+		const destinationDir = await workspace("release-failure-destination-ws", renamed("destination"));
+		const other = await sessionIn(await workspace("release-failure-other-ws", renamed("other")));
+		const moved = await sessionIn(sourceDir);
+		const releaseFailure = new Error("source release registration failed after mutation");
+		const registerProvider = fixture.registry.registerProvider.bind(fixture.registry);
+		let registrations = 0;
+		vi.spyOn(fixture.registry, "registerProvider").mockImplementation((...args) => {
+			registerProvider(...args);
+			if (++registrations === 1) throw releaseFailure;
+			if (registrations === 2) throw new Error("source restoration failed after mutation");
+		});
+
+		await expect(moved.rebindMixturesForCwd(destinationDir)).rejects.toBe(releaseFailure);
+		expect(fixture.registry.find("mixture", "destination")).toBeUndefined();
+		await moved.rebindMixturesForCwd(sourceDir);
+		await other.dispose();
+		expect(await run(moved, "draft-then-edit")).toEqual({ calls: ["writer", "editor"], error: undefined });
+		expect(fixture.registry.find("mixture", "destination")).toBeUndefined();
+	});
+
+	it("does not resurrect a released workspace on a later rebind", async () => {
+		const cwd = await workspace("released-ws", DRAFT_THEN_EDIT_TOML);
+		const held = await MixtureWorkspace.retain("released-owner", {
+			cwd,
+			agentDir: fixture.agentDir,
+			registry: fixture.registry,
+			settings: Settings.isolated(SETTINGS),
+		});
+		held.release();
+		held.release();
+		await expect(held.rebind(cwd)).rejects.toThrow("Cannot rebind a released mixture workspace");
+		expect(fixture.registry.find("mixture", "draft-then-edit")).toBeUndefined();
 	});
 
 	it("runs only each workspace's own definitions, and unregisters with the last live scope", async () => {

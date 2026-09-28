@@ -85,6 +85,10 @@ export class MixtureWorkspace {
 	/** `cwd` is the workspace currently held. */
 	#ctx: MixtureRegistrationContext;
 	#scope: MixtureScope;
+	/** A failed rollback can leave this workspace without its source owner. */
+	#held = true;
+	#released = false;
+	#sourceRoster: readonly ResolvedMixture[] | undefined;
 
 	private constructor(owner: string, ctx: MixtureRegistrationContext, scope: MixtureScope) {
 		this.#owner = owner;
@@ -107,18 +111,34 @@ export class MixtureWorkspace {
 	 * destination settings. Returns whether the scope changed.
 	 */
 	async rebind(cwd: string): Promise<boolean> {
-		const next = MixtureCatalog.for(this.#ctx.registry).scope(cwd, this.#ctx.agentDir);
-		if (next.key === this.#scope.key) return false;
+		if (this.#released) throw new Error("Cannot rebind a released mixture workspace");
 		const source = this.#ctx;
-		// Keep the resolved source roster before its last holder releases it.
-		const sourceRoster = this.#scope.roster();
-		this.#scope.release(this.#owner);
+		const next = MixtureCatalog.for(source.registry).scope(cwd, source.agentDir);
+		if (next.key === this.#scope.key) {
+			if (!this.#held) {
+				this.#scope = await retainScope(this.#owner, source, this.#sourceRoster);
+				this.#held = true;
+				this.#sourceRoster = undefined;
+			}
+			return false;
+		}
+		// Keep the resolved roster even if both the move and immediate restoration fail:
+		// the caller retries the source after restoring its settings.
+		this.#sourceRoster ??= this.#scope.roster();
 		try {
-			this.#scope = await retainScope(this.#owner, { ...source, cwd });
+			// release may remove the owner and then throw while registering the remaining scopes.
+			this.#held = false;
+			this.#scope.release(this.#owner);
+			const destination = await retainScope(this.#owner, { ...source, cwd });
+			this.#scope = destination;
 			this.#ctx = { ...source, cwd };
+			this.#held = true;
+			this.#sourceRoster = undefined;
 		} catch (error) {
 			try {
-				this.#scope = await retainScope(this.#owner, source, sourceRoster);
+				this.#scope = await retainScope(this.#owner, source, this.#sourceRoster);
+				this.#held = true;
+				this.#sourceRoster = undefined;
 			} catch (restoreError) {
 				logger.warn("Mixture source scope restoration failed after rebind error", {
 					from: source.cwd,
@@ -136,8 +156,13 @@ export class MixtureWorkspace {
 		return true;
 	}
 
-	/** Drop the hold; releasing twice is harmless. */
+	/** Drop the hold; releasing twice is harmless and never restores a failed move. */
 	release(): void {
+		if (this.#released) return;
+		this.#released = true;
+		this.#sourceRoster = undefined;
+		if (!this.#held) return;
+		this.#held = false;
 		this.#scope.release(this.#owner);
 	}
 }
