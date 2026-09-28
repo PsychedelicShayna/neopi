@@ -121,7 +121,8 @@ export function documentPresets(
 		preparedBundles.has(value) &&
 		(envelopes === undefined || envelopes === value.envelopes) &&
 		(roles === undefined || roles === value.roles)
-	) return value;
+	)
+		return value;
 	return prepareDocumentPresets(envelopes, roles);
 }
 
@@ -168,13 +169,18 @@ function firstTextSizeIssue(presets: {
 	envelopes?: Readonly<Record<string, string>>;
 	roles?: Readonly<Record<string, string>>;
 }): MixtureIssue | undefined {
-	for (const [table, entries] of [["roles", presets.roles], ["envelopes", presets.envelopes]] as const) {
+	for (const [table, entries] of [
+		["roles", presets.roles],
+		["envelopes", presets.envelopes],
+	] as const) {
 		if (!entries) continue;
 		for (const key of Object.keys(entries)) {
-			if (key.length > MAX_TEXT_CHARS) return sizeIssue("limits.text_size", `${table} (key)`, key.length, MAX_TEXT_CHARS);
+			if (key.length > MAX_TEXT_CHARS)
+				return sizeIssue("limits.text_size", `${table} (key)`, key.length, MAX_TEXT_CHARS);
 		}
 		for (const [key, text] of Object.entries(entries)) {
-			if (text.length > MAX_TEXT_CHARS) return sizeIssue("limits.text_size", `${table}.${tomlKey(key)}`, text.length, MAX_TEXT_CHARS);
+			if (text.length > MAX_TEXT_CHARS)
+				return sizeIssue("limits.text_size", `${table}.${tomlKey(key)}`, text.length, MAX_TEXT_CHARS);
 		}
 	}
 	return undefined;

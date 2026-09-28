@@ -63,6 +63,7 @@ interface FakeAcpBuiltinSession {
 	getHindsightSessionState(): undefined;
 	applyMemoryBackend(): Promise<void>;
 	rebindMixturesForCwd(cwd: string): Promise<void>;
+	commitMixtureWorkspaceMove(): void;
 	getToolByName(name: string): unknown;
 	compact(args?: string): Promise<void>;
 	getContextUsage(): { tokens?: number; contextWindow: number } | undefined;
@@ -156,6 +157,7 @@ function createRuntime() {
 		async applyMemoryBackend() {},
 		// ...and the destination's mixtures.
 		async rebindMixturesForCwd() {},
+		commitMixtureWorkspaceMove() {},
 		getAsyncJobSnapshot: () => null,
 		formatSessionAsText: () => "",
 		dumpLlmRequestToTmpDir: async () => undefined,

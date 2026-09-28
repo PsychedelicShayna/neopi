@@ -538,9 +538,14 @@ describe("definition size bounds", () => {
 		input.unused = "now short";
 		const settings = Settings.isolated();
 		for (let index = 0; index < 12; index++) {
-			const resolved = resolveMixture({ ...linear(), name: `sibling-${index}` }, {
-				registry, settings, preparedPresets: presets,
-			});
+			const resolved = resolveMixture(
+				{ ...linear(), name: `sibling-${index}` },
+				{
+					registry,
+					settings,
+					preparedPresets: presets,
+				},
+			);
 			expect(validateMixture(resolved, { settings }).errors.map(issue => [issue.code, issue.path])).toEqual([
 				["limits.text_size", "roles.unused"],
 			]);
@@ -555,7 +560,9 @@ describe("definition size bounds", () => {
 		const roles = { unused: "short" };
 		const settings = Settings.isolated();
 		const direct = () => resolveMixture(linear(), { registry, settings, documentRoles: roles });
-		expect(validateMixture(direct(), { settings }).errors.some(issue => issue.code === "limits.text_size")).toBe(false);
+		expect(validateMixture(direct(), { settings }).errors.some(issue => issue.code === "limits.text_size")).toBe(
+			false,
+		);
 		roles.unused = "x".repeat(MAX_TEXT_CHARS + 1);
 		const oversized = direct();
 		expect(validateMixture(oversized, { settings }).errors.map(issue => [issue.code, issue.path])).toEqual([
@@ -575,7 +582,8 @@ describe("definition size bounds", () => {
 		const settings = Settings.isolated();
 		const revision = (role: string, unused: string) =>
 			resolveMixture(definition, {
-				registry, settings,
+				registry,
+				settings,
 				preparedPresets: prepareDocumentPresets(undefined, { "writer-role": role, unused }),
 			}).revision;
 		expect(revision("Write clearly.", "first")).toBe(revision("Write clearly.", "second"));

@@ -165,12 +165,8 @@ export function resolveMixture(input: MixtureDefinition, ctx: ResolveMixtureCont
 				question: member.question,
 				state: member.state,
 				render:
-					lookupPreset(
-						member.render ?? "verdict",
-						definition.envelopes,
-						presets.envelopes,
-						BUNDLED_ENVELOPES,
-					) ?? "",
+					lookupPreset(member.render ?? "verdict", definition.envelopes, presets.envelopes, BUNDLED_ENVELOPES) ??
+					"",
 				show,
 			};
 			return;
