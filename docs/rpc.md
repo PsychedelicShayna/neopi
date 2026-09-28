@@ -26,14 +26,15 @@ Behavior notes:
 - RPC mode disables automatic session title generation by default to avoid an extra model call.
 - RPC/ACP host defaults cover task isolation/execution, memory, advisor, tier, async-job, and bash auto-background settings. They are applied only when a path is not explicitly configured; project/global config, `--config`, and isolated settings remain authoritative. Todo settings are not host-defaulted.
 - The process claims stdin before extension discovery, then parses it one non-empty JSONL line at a time. Malformed JSON emits a recoverable `command: "parse"` failure and does not terminate the loop.
-- At startup it writes a `ready` frame, then starts reading stdin while extensions initialize. Control frames (`extension_ui_response`, `host_tool_result`, `host_tool_update`, `host_uri_result`) are dispatched on arrival, so an extension that asks a dialog question during `session_start` receives the host's answer. Commands, `bash` included, are queued and processed in arrival order once initialization completes. Hosts that send no startup dialog answers observe no change in frame order.
-- When stdin closes, pending extension UI, host-tool, and host-URI requests are rejected; accepted commands are drained, the session is disposed, pending stdout is delivered, and the process exits with code `0`.
+- At startup it writes a `ready` frame, then starts reading stdin while extensions initialize. Control frames (`extension_ui_response`, `tool_approval_response`, `host_tool_result`, `host_tool_update`, `host_uri_result`) are dispatched on arrival, so an extension that asks a dialog question during `session_start` receives the host's answer. Commands, `bash` included, are queued and processed in arrival order once initialization completes. Hosts that send no startup dialog answers observe no change in frame order.
+- When stdin closes, pending extension UI, tool approval, host-tool, and host-URI requests are rejected; accepted commands are drained, the session is disposed, pending stdout is delivered, and the process exits with code `0`.
 - Responses/events are written as one JSON object per line.
 
 ### Capabilities
 
 | String | Feature |
 | --- | --- |
+| `tool_approval_request` | `set_approval_handler` and the typed `tool_approval_request` / `tool_approval_response` / `tool_approval_cancel` frames; see [Tool Approval Sub-Protocol](#tool-approval-sub-protocol) |
 
 ## Transport and Framing
 
@@ -95,6 +96,7 @@ Clients MUST continue reading stdout after closing stdin. Normal EOF and extensi
 10. Session quiescence (`{ type: "session_settled" }`); see [Yield vs settled](#yield-vs-settled)
 11. Subagent frames (`subagent_lifecycle`, `subagent_progress`, `subagent_event`), gated by `set_subagent_subscription`
 12. Builtin slash-command side channels (`command_output`, `session_info_update`, `config_update`)
+13. Tool approval requests/cancellations (`tool_approval_request`, `tool_approval_cancel`), only after `set_approval_handler` with `handler: "host"`
 
 ### Inbound frame categories (stdin)
 
@@ -102,6 +104,7 @@ Clients MUST continue reading stdout after closing stdin. Normal EOF and extensi
 2. `RpcExtensionUIResponse` (`{ type: "extension_ui_response", ... }`)
 3. Host tool updates/results (`host_tool_update`, `host_tool_result`)
 4. Host URI results (`host_uri_result`)
+5. Tool approval answers (`tool_approval_response`)
 
 ## Request/Response Correlation
 
@@ -147,6 +150,7 @@ Important edge behavior from runtime:
 - `{ id?, type: "set_host_uri_schemes", schemes: RpcHostUriSchemeDefinition[] }`
 - `{ id?, type: "set_subagent_subscription", level: "off" | "progress" | "events" }`
 - `{ id?, type: "set_event_filter", events: string[] | null }`
+- `{ id?, type: "set_approval_handler", handler: "host" | "ui" }`; see [Tool Approval Sub-Protocol](#tool-approval-sub-protocol)
 - `{ id?, type: "get_subagents" }`
 - `{ id?, type: "get_subagent_messages", subagentId?: string, sessionFile?: string, fromByte?: number }`
 
@@ -719,6 +723,61 @@ Example:
 - `{ type: "extension_ui_response", id: string, cancelled: true, timedOut?: boolean }`
 
 If a dialog has a timeout, RPC mode resolves to a default value when timeout/abort fires.
+
+## Tool Approval Sub-Protocol
+
+A tool call that needs approval (its policy resolves to `prompt`, or it carries provider safety checks) asks the host. By default (`handler: "ui"`) it asks through the [Extension UI Sub-Protocol](#extension-ui-sub-protocol): a `select` request whose `title` starts with `Allow tool: <name>` and whose `options` are `["Approve", "Deny"]`. Hosts that render their own approval UI opt in to typed frames instead, once per process:
+
+```json
+{ "id": "req_1", "type": "set_approval_handler", "handler": "host" }
+```
+
+The response payload is `{ "handler": "host" }`. `handler: "ui"` switches back; any other value fails with `success: false`. The setting works in `--mode rpc`, `--mode rpc-ui`, and with `--no-ui`. Hosts that never send the command see the `select` dialog exactly as before. Which calls require approval does not change: a configured `tools.approval.<name>: deny` still denies without a request, and only calls that would have shown the dialog emit one.
+
+### Outbound request
+
+```json
+{
+  "type": "tool_approval_request",
+  "id": "appr_1",
+  "toolCallId": "toolu_123",
+  "toolName": "bash",
+  "args": { "command": "rm -rf build" },
+  "tier": "exec",
+  "approvalMode": "always-ask",
+  "reason": "Critical pattern detected",
+  "details": ["Command: rm -rf build"],
+  "timeout": 600000
+}
+```
+
+- `toolCallId` matches the `tool_execution_start` event of the same call. Approval runs inside tool execution, so the request is always written after that `tool_execution_start` frame; hosts can attach it to the in-flight tool item.
+- `args` is the exact input that runs when approved, including any revision a `tool_call` extension handler made.
+- `tier` is the resolved tool tier (`read | write | exec`); `approvalMode` is the session approval mode (`always-ask | write | yolo`).
+- `reason` is present only when the policy gave one. `details` are the tool's own approval detail lines, without the `Allow tool:` header.
+- `safetyChecks` (`Array<{ id, code?, message? }>`) is present only when provider safety checks are pending (computer-use calls).
+- `timeout` is in milliseconds. A request still unanswered after it resolves as `deny`.
+
+If the turn is aborted while a request is pending, RPC mode emits a cancellation and the call is denied:
+
+```json
+{ "type": "tool_approval_cancel", "id": "appr_cancel_1", "targetId": "appr_1" }
+```
+
+### Inbound response
+
+```json
+{ "type": "tool_approval_response", "id": "appr_1", "decision": "allow_once" }
+```
+
+- `decision: "allow_once"` runs this call.
+- `decision: "allow_session"` runs this call and records an in-memory `tools.approval.<toolName>: allow` for the rest of the process, so later calls of that tool that this policy would allow run without a request. It is never written to `config.yml` or project config. Calls that prompt regardless of a user `allow` (for example critical `bash` patterns outside `yolo`) still ask.
+- `decision: "deny"` fails the call with `isError: true`. An optional `reason` string is included in the tool error text the model sees.
+- `{ "type": "tool_approval_response", "id": "appr_1", "cancelled": true }` resolves as `deny`, like a cancelled dialog.
+
+A missing or unknown `decision` resolves as `deny`. Responses to an unknown, timed-out, or cancelled `id` are ignored. When stdin closes, pending requests are rejected and their calls fail as denied.
+
+The extension events `tool_approval_requested` and `tool_approval_resolved` fire for these requests exactly as they do for the dialog.
 
 ## Host Tool Sub-Protocol
 

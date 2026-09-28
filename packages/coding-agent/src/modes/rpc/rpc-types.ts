@@ -4,7 +4,7 @@
  * Commands are sent as JSON lines on stdin.
  * Responses and events are emitted as JSON lines on stdout.
  */
-import type { AgentMessage, AgentToolResult, ThinkingLevel, ToolLoadMode } from "@oh-my-pi/pi-agent-core";
+import type { AgentMessage, AgentToolResult, ThinkingLevel, ToolLoadMode, ToolTier } from "@oh-my-pi/pi-agent-core";
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Effort, ImageContent, Model, ToolExample } from "@oh-my-pi/pi-ai";
 import type { BashResult } from "../../exec/bash-executor";
@@ -15,6 +15,7 @@ import type { AvailableSlashCommandSource } from "../../slash-commands/available
 import type { AgentProgress } from "@oh-my-pi/pi-tui/tools/task";
 import type { SubagentEventPayload, SubagentLifecyclePayload, SubagentProgressPayload } from "../../task";
 import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import type { ApprovalMode } from "../../tools/approval";
 import type { RpcMessagesPage } from "./rpc-messages";
 
 // ============================================================================
@@ -45,6 +46,7 @@ export type RpcCommand =
 	| { id?: string; type: "set_host_uri_schemes"; schemes: RpcHostUriSchemeDefinition[] }
 	| { id?: string; type: "set_subagent_subscription"; level: RpcSubagentSubscriptionLevel }
 	| { id?: string; type: "set_event_filter"; events: string[] | null }
+	| { id?: string; type: "set_approval_handler"; handler: RpcApprovalHandler }
 	| { id?: string; type: "get_subagents" }
 	| { id?: string; type: "get_subagent_messages"; subagentId?: string; sessionFile?: string; fromByte?: number }
 
@@ -300,6 +302,13 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "set_host_tools"; success: true; data: { toolNames: string[] } }
 	| { id?: string; type: "response"; command: "set_host_uri_schemes"; success: true; data: { schemes: string[] } }
 	| { id?: string; type: "response"; command: "set_event_filter"; success: true; data: { events: string[] | null } }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_approval_handler";
+			success: true;
+			data: { handler: RpcApprovalHandler };
+	  }
 	| {
 			id?: string;
 			type: "response";
@@ -632,6 +641,53 @@ export interface RpcHostUriResult {
 	/** Optional error message; preferred over `content` for error surfacing. */
 	error?: string;
 }
+
+// ============================================================================
+// Tool Approval Frames (bidirectional)
+// ============================================================================
+
+/** Who answers tool approvals: the `extension_ui_request` select dialog (`ui`) or typed frames (`host`). */
+export type RpcApprovalHandler = "host" | "ui";
+
+/** A host's answer to one {@link RpcToolApprovalRequest}. */
+export type RpcToolApprovalDecision = "allow_once" | "allow_session" | "deny";
+
+/** A pending provider safety check attached to a computer-use tool call. */
+export interface RpcToolApprovalSafetyCheck {
+	id: string;
+	code?: string;
+	message?: string;
+}
+
+/** Emitted (with `set_approval_handler: host`) when a tool call needs approval. */
+export interface RpcToolApprovalRequest {
+	type: "tool_approval_request";
+	id: string;
+	toolCallId: string;
+	toolName: string;
+	/** The exact input that runs when approved (after any `tool_call` handler revision). */
+	args: unknown;
+	tier: ToolTier;
+	approvalMode: ApprovalMode;
+	reason?: string;
+	details: string[];
+	/** Present only when provider safety checks are pending. */
+	safetyChecks?: RpcToolApprovalSafetyCheck[];
+	/** Milliseconds until the request resolves as `deny`. */
+	timeout: number;
+}
+
+/** Emitted when a pending approval request is abandoned because the tool call was aborted. */
+export interface RpcToolApprovalCancel {
+	type: "tool_approval_cancel";
+	id: string;
+	targetId: string;
+}
+
+/** Sent by the host to answer a pending {@link RpcToolApprovalRequest}. */
+export type RpcToolApprovalResponse =
+	| { type: "tool_approval_response"; id: string; decision: RpcToolApprovalDecision; reason?: string }
+	| { type: "tool_approval_response"; id: string; cancelled: true };
 
 // ============================================================================
 // Extension UI Commands (stdin)

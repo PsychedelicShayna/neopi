@@ -6,4 +6,7 @@
  * commands/frames, and never rename one: a renamed string silently turns the
  * feature off for every host that gates on the old name.
  */
-export const RPC_CAPABILITIES: readonly string[] = [];
+// oxfmt-ignore
+export const RPC_CAPABILITIES: readonly string[] = [
+	"tool_approval_request",
+];
