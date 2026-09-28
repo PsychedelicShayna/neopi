@@ -9,12 +9,13 @@
  * The propose write needs a model turn, so these tests dispatch the device
  * directly against a real session in plan mode and capture the RPC output.
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { type } from "@oh-my-pi/omptype";
 import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { cfgModelRoles } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { dispatchRpcControlFrame, type RpcInputFrameDeps } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-mode";
@@ -200,6 +201,56 @@ describe("RPC plan mode", () => {
 			{ type: "mode_changed", mode: "plan", planFilePath: "local://PLAN.md" },
 			{ type: "mode_changed", mode: "default" },
 		]);
+		expect(modeEntries()).toEqual(["plan", "none"]);
+	});
+
+	it("a failed pre-plan model restore leaves plan mode fully intact, and a retry completes the exit", async () => {
+		const { session, planMode, frames, modeEntries } = setup();
+		cfgModelRoles.override(session.settings, { plan: "anthropic/claude-sonnet-4-6" });
+		const originalModelId = session.model?.id;
+		await planMode.setMode("plan", undefined);
+		expect(session.model?.id).toBe("claude-sonnet-4-6");
+
+		const setModel = spyOn(session, "setModelTemporary").mockRejectedValueOnce(new Error("credential removed"));
+		const failure = await planMode.setMode("default", undefined).catch(error => error);
+		setModel.mockRestore();
+
+		expect(failure).toBeInstanceOf(Error);
+		expect(failure.message).toBe("credential removed");
+		expect(planMode.state.mode).toBe("plan");
+		expect(session.getActiveToolNames()).toEqual(["read", "write"]);
+		expect(session.model?.id).toBe("claude-sonnet-4-6");
+		expect(session.peekPlanProposalHandler()).toBeDefined();
+		expect(frames.filter(frame => frame.mode === "default")).toEqual([]);
+
+		expect(await planMode.setMode("default", undefined)).toEqual({ mode: "default" });
+		expect(planMode.state).toEqual({ mode: "default" });
+		expect(session.getActiveToolNames()).toEqual(["read"]);
+		expect(session.model?.id).toBe(originalModelId);
+		expect(modeEntries()).toEqual(["plan", "none"]);
+	});
+
+	it("a failed pre-plan tool restore returns to the plan model and tools, and a retry completes the exit", async () => {
+		const { session, planMode, modeEntries } = setup();
+		cfgModelRoles.override(session.settings, { plan: "anthropic/claude-sonnet-4-6" });
+		const originalModelId = session.model?.id;
+		await planMode.setMode("plan", undefined);
+
+		const restoreTools = spyOn(session, "restoreNonMCPToolPresentation").mockRejectedValueOnce(
+			new Error("rebuild failed"),
+		);
+		const failure = await planMode.setMode("default", undefined).catch(error => error);
+		restoreTools.mockRestore();
+
+		expect(failure.message).toBe("rebuild failed");
+		expect(planMode.state.mode).toBe("plan");
+		expect(session.getActiveToolNames()).toEqual(["read", "write"]);
+		expect(session.model?.id).toBe("claude-sonnet-4-6");
+		expect(session.peekPlanProposalHandler()).toBeDefined();
+
+		expect(await planMode.setMode("default", undefined)).toEqual({ mode: "default" });
+		expect(session.getActiveToolNames()).toEqual(["read"]);
+		expect(session.model?.id).toBe(originalModelId);
 		expect(modeEntries()).toEqual(["plan", "none"]);
 	});
 

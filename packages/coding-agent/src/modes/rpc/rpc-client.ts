@@ -34,7 +34,9 @@ import type {
 	RpcHostToolDefinition,
 	RpcHostToolResult,
 	RpcHostToolUpdate,
+	RpcModeChangedFrame,
 	RpcOpenSessionResult,
+	RpcPlanProposalRequest,
 	RpcPlanProposalResponse,
 	RpcPromptResultFrame,
 	RpcResponse,
@@ -109,6 +111,8 @@ export type RpcSubagentEventListener = (payload: RpcSubagentEventFrame["payload"
 export type RpcAvailableCommandsUpdateListener = (commands: RpcAvailableSlashCommand[]) => void;
 export type RpcPromptResultListener = (result: RpcPromptResultFrame) => void;
 export type RpcSessionSettledListener = () => void;
+export type RpcPlanProposalRequestListener = (request: RpcPlanProposalRequest) => void;
+export type RpcModeChangedListener = (frame: RpcModeChangedFrame) => void;
 
 export interface RpcClientToolContext<TDetails = unknown> {
 	toolCallId: string;
@@ -255,6 +259,22 @@ function isRpcExtensionUiRequest(value: unknown): value is RpcExtensionUIRequest
 	return value.type === "extension_ui_request" && typeof value.id === "string" && typeof value.method === "string";
 }
 
+function isRpcPlanProposalRequest(value: unknown): value is RpcPlanProposalRequest {
+	if (!isRecord(value)) return false;
+	return (
+		value.type === "plan_proposal_request" &&
+		typeof value.id === "string" &&
+		typeof value.title === "string" &&
+		typeof value.planFilePath === "string" &&
+		typeof value.planMarkdown === "string"
+	);
+}
+
+function isRpcModeChangedFrame(value: unknown): value is RpcModeChangedFrame {
+	if (!isRecord(value)) return false;
+	return value.type === "mode_changed" && (value.mode === "default" || value.mode === "plan");
+}
+
 function normalizeToolResult<TDetails>(result: RpcClientToolResult<TDetails>): AgentToolResult<TDetails> {
 	if (typeof result === "string") {
 		return {
@@ -299,6 +319,8 @@ export class RpcClient {
 	#availableCommandsUpdateListeners = new Set<RpcAvailableCommandsUpdateListener>();
 	#promptResultListeners = new Set<RpcPromptResultListener>();
 	#sessionSettledListeners = new Set<RpcSessionSettledListener>();
+	#planProposalRequestListeners = new Set<RpcPlanProposalRequestListener>();
+	#modeChangedListeners = new Set<RpcModeChangedListener>();
 	/** `promptAndWait` completions keyed by request id; registered before the prompt is sent. */
 	#promptResultWaiters = new Map<string, (result: RpcPromptResultFrame) => void>();
 	#pendingRequests: Map<string, { resolve: (response: RpcResponse) => void; reject: (error: Error) => void }> =
@@ -608,6 +630,27 @@ export class RpcClient {
 		this.#sessionSettledListeners.add(listener);
 		return () => {
 			this.#sessionSettledListeners.delete(listener);
+		};
+	}
+
+	/**
+	 * Subscribe to `plan_proposal_request` frames, emitted when the agent submits
+	 * a plan after {@link setMode}("plan"). Answer each with
+	 * {@link respondToPlanProposal} using `request.id`; the proposing tool call
+	 * waits for that answer.
+	 */
+	onPlanProposalRequest(listener: RpcPlanProposalRequestListener): () => void {
+		this.#planProposalRequestListeners.add(listener);
+		return () => {
+			this.#planProposalRequestListeners.delete(listener);
+		};
+	}
+
+	/** Subscribe to `mode_changed`: every change of the session mode or the active plan file. */
+	onModeChanged(listener: RpcModeChangedListener): () => void {
+		this.#modeChangedListeners.add(listener);
+		return () => {
+			this.#modeChangedListeners.delete(listener);
 		};
 	}
 
@@ -1292,6 +1335,20 @@ export class RpcClient {
 		if (isRpcAvailableCommandsUpdateFrame(data)) {
 			for (const listener of this.#availableCommandsUpdateListeners) {
 				listener(data.commands);
+			}
+			return;
+		}
+
+		if (isRpcPlanProposalRequest(data)) {
+			for (const listener of this.#planProposalRequestListeners) {
+				listener(data);
+			}
+			return;
+		}
+
+		if (isRpcModeChangedFrame(data)) {
+			for (const listener of this.#modeChangedListeners) {
+				listener(data);
 			}
 			return;
 		}

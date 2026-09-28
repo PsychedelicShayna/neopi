@@ -926,7 +926,15 @@ async function moveMissingCwdSessionIfNeeded(
 	// move target equals the current project dir. moveTo never chdirs, so the
 	// stale cwd is only a relocation source, not a directory we enter.
 	const manager = await SessionManager.open(session.path, sessionDir, undefined, { initialCwd: sourceCwd });
-	await manager.moveTo(cwd, sessionDir);
+	try {
+		await manager.moveTo(cwd, sessionDir);
+	} catch (error) {
+		// The manager is dropped: release its session lease before reporting.
+		await manager.close().catch(closeError => {
+			logger.warn("Failed to close session after a failed move", { error: String(closeError) });
+		});
+		throw error;
+	}
 	return { status: "moved", manager };
 }
 

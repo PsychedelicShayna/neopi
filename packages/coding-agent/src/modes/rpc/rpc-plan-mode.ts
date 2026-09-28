@@ -245,18 +245,78 @@ export class RpcPlanModeController {
 		}
 		this.#cancelAllPending("mode_change");
 		const state = session.getPlanModeState();
+		if (!state?.enabled) {
+			session.setPlanProposalHandler(null);
+			return { mode: "default" };
+		}
+		await this.#leavePlanMode(state);
+		session.sessionManager.appendModeChange("none");
+		return { mode: "default" };
+	}
+
+	/**
+	 * Leave plan mode all-or-nothing. The pre-plan model is restored first,
+	 * while plan mode still holds; then plan state clears and the pre-plan
+	 * tools return. A failure at either step leaves the session in plan mode
+	 * with the plan tools, the plan model, the proposal handler, and both
+	 * snapshots, so the state `get_state` reports matches the session and a
+	 * retry can still restore the original model and tools.
+	 */
+	async #leavePlanMode(state: PlanModeState): Promise<void> {
+		const session = this.#session;
+		const planModel = session.model
+			? { model: session.model, thinkingLevel: session.configuredThinkingLevel() }
+			: undefined;
+		const planTools = session.getEnabledToolNames();
+		const planMounted = session.getMountedXdevToolNames();
+		const previousModel = this.#previousModel;
+		if (previousModel) await this.#restoreModel(previousModel);
+
+		const previousTools = this.#previousTools;
 		session.setPlanProposalHandler(null);
-		if (!state?.enabled) return { mode: "default" };
+		// Plan state clears before the tool partition, mirroring entry: under
+		// Code Mode the direct surface keeps `write` only while plan mode needs it.
 		session.setPlanModeState(undefined);
 		try {
-			await this.#restorePrePlanSession();
+			if (previousTools) {
+				await session.restoreNonMCPToolPresentation(previousTools.enabled, previousTools.mounted);
+			}
 		} catch (error) {
 			session.setPlanModeState(state);
 			session.setPlanProposalHandler(this.#proposalHandler);
+			await this.#rollBackToPlan(planModel, planTools, planMounted);
 			throw error;
 		}
-		session.sessionManager.appendModeChange("none");
-		return { mode: "default" };
+		this.#previousTools = undefined;
+		this.#previousModel = undefined;
+	}
+
+	/** Best-effort return to the plan model and tools after a failed exit. */
+	async #rollBackToPlan(planModel: PlanPreviousModel | undefined, tools: string[], mounted: string[]): Promise<void> {
+		const session = this.#session;
+		this.#deferredModelRestore = undefined;
+		if (planModel) {
+			try {
+				await this.#restoreModel(planModel);
+			} catch (error) {
+				logger.warn("Failed to restore the plan model after a failed plan exit", { error: String(error) });
+			}
+		}
+		const enabled = session.getEnabledToolNames();
+		const current = session.getMountedXdevToolNames();
+		if (
+			enabled.length === tools.length &&
+			enabled.every((name, index) => name === tools[index]) &&
+			current.length === mounted.length &&
+			current.every((name, index) => name === mounted[index])
+		) {
+			return;
+		}
+		try {
+			await session.setActiveToolPresentation(tools, mounted);
+		} catch (error) {
+			logger.warn("Failed to restore the plan tools after a failed plan exit", { error: String(error) });
+		}
 	}
 
 	/** Switch to the `plan` role model, remembering the model to restore on exit. */
@@ -283,16 +343,26 @@ export class RpcPlanModeController {
 		}
 	}
 
-	/** Undo the tool and model adjustments `set_mode` applied on entry. */
-	async #restorePrePlanSession(): Promise<void> {
+	/**
+	 * Best-effort undo of the `set_mode` tool and model adjustments after an
+	 * approval, which has already left plan mode. Failures are logged; the
+	 * approval stands.
+	 */
+	async #restoreAfterApproval(): Promise<void> {
 		const tools = this.#previousTools;
-		if (tools) {
-			await this.#session.restoreNonMCPToolPresentation(tools.enabled, tools.mounted);
-			this.#previousTools = undefined;
-		}
+		this.#previousTools = undefined;
 		const model = this.#previousModel;
 		this.#previousModel = undefined;
-		if (model) await this.#restoreModel(model);
+		try {
+			if (tools) await this.#session.restoreNonMCPToolPresentation(tools.enabled, tools.mounted);
+		} catch (error) {
+			logger.warn("Failed to restore pre-plan tools after plan approval", { error: String(error) });
+		}
+		try {
+			if (model) await this.#restoreModel(model);
+		} catch (error) {
+			logger.warn("Failed to restore the pre-plan model after plan approval", { error: String(error) });
+		}
 	}
 
 	async #restoreModel(previous: PlanPreviousModel): Promise<void> {
@@ -321,11 +391,7 @@ export class RpcPlanModeController {
 			return refinedPlanProposalResult(proposal, decision.feedback);
 		}
 		const { autosaveFailed } = await approvePlanProposal(session, proposal);
-		try {
-			await this.#restorePrePlanSession();
-		} catch (error) {
-			logger.warn("Failed to restore pre-plan tools after plan approval", { error: String(error) });
-		}
+		await this.#restoreAfterApproval();
 		session.sessionManager.appendModeChange("none");
 		return approvedPlanProposalResult(proposal, autosaveFailed);
 	}
