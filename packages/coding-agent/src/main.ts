@@ -59,6 +59,7 @@ import {
 	resolveActiveProjectRegistryPath,
 } from "./discovery/helpers";
 import { injectOmpExtensionCliRoots } from "./discovery/omp-extension-roots";
+import { type ExitWithParent, exitWithParent } from "./exit-with-parent";
 import { formatExtensionLoadNotifications } from "./extensibility/extensions/load-errors";
 import { loadExtensions } from "./extensibility/extensions/loader";
 import { ExtensionRunner } from "./extensibility/extensions/runner";
@@ -125,6 +126,7 @@ import type { LspStartupServerInfo } from "./tools";
 import { sanitizeDisplayWarnings } from "@oh-my-pi/pi-tui/render/render-utils";
 import { getChangelogPath, resolveStartupChangelogForDisplay, type StartupChangelogSelection } from "./utils/changelog";
 import { EventBus } from "./utils/event-bus";
+import { LAUNCH_PARENT_PID } from "./utils/launch-parent";
 
 import { cfgAdvisorEnabled } from "./advisor/settings";
 import { cfgToolsApprovalMode } from "./tools/settings";
@@ -1844,6 +1846,7 @@ export async function runRootCommand(
 ): Promise<void> {
 	logger.startTiming();
 	startStartupWatchdog();
+	let parentExit: ExitWithParent | undefined;
 	try {
 		// Non-prepaint commands still need a default theme; an existing Composer
 		// already initialized its cached theme synchronously for the first frame.
@@ -1933,6 +1936,12 @@ export async function runRootCommand(
 		setInteractiveHost(isInteractive);
 		if (!isInteractive) {
 			stopPendingStartupComposer();
+		}
+		// Headless print/json runs die with the host that spawned them, even when
+		// it is SIGKILLed. Interactive and protocol modes own their own lifecycle
+		// (the terminal, or RPC/ACP stdin EOF).
+		if (!isInteractive && !isProtocolMode && !parsedArgs.noExitWithParent) {
+			parentExit = exitWithParent({ parentPid: LAUNCH_PARENT_PID });
 		}
 		// Account routing must use the effective settings, including `--config` and
 		// `PI_CONFIG_FILES` overlays, rather than independently re-reading only the
@@ -2471,6 +2480,7 @@ export async function runRootCommand(
 				await session.dispose();
 				throw error;
 			}
+			parentExit?.attach({ session, mcpManager });
 
 			// Cold-revive support: a `parked` subagent ref restored from disk (Agent Hub
 			// scan, collab mirror, resumed process) has a sessionFile but no in-memory
@@ -2630,6 +2640,10 @@ export async function runRootCommand(
 		stopPendingStartupComposer();
 		stopStartupWatchdog();
 		throw error;
+	} finally {
+		// Print mode normally hard-exits above; an in-process caller that sees
+		// the command return or throw must not inherit a live watchdog.
+		parentExit?.stop();
 	}
 }
 

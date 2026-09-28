@@ -18,6 +18,10 @@ import type * as WorkerThreads from "node:worker_threads";
 import type { MessagePort } from "node:worker_threads";
 import type { CliConfig, CommandMetadata } from "@oh-my-pi/pi-utils/cli";
 import type * as Postmortem from "@oh-my-pi/pi-utils/postmortem";
+// First evaluated import: records the launching parent's pid before startup
+// work, so a host that dies mid-startup is still recognized (print/json modes
+// exit with it).
+import "./utils/launch-parent";
 import {
 	APP_NAME,
 	getActiveProfile,

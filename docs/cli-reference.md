@@ -127,6 +127,7 @@ See [providers](./providers.md) and [models](./models.md) for model resolution.
 | `--auto-approve`, `--yolo` | Auto-approve all tool calls (skip approval prompts). |
 | `--advisor` | Enable the advisor runtime (passively reviews each turn and injects notes). See [advisor / watchdog](./advisor-watchdog.md). |
 | `--max-time <duration>` | Stop the session after this duration (e.g. `600`, `10m`, `1h`). |
+| `--no-exit-with-parent` | Print/json modes: keep running after the parent process dies. See [parent lifetime](#parent-lifetime). |
 
 #### Extensions, hooks, skills, and rules
 
@@ -192,9 +193,32 @@ Related flags for headless runs:
 - `--mode json` — emit structured events instead of rendered text.
 - `--no-title` — skip title auto-generation (also `PI_NO_TITLE`).
 - `--max-time <duration>` — bound the run.
+- `--no-exit-with-parent` — keep running after the parent process dies (see below).
 
 The [advisor / watchdog](./advisor-watchdog.md#headless-runs) doc describes
 print-mode disposal semantics when the advisor runtime is enabled.
+
+#### Parent lifetime
+
+A print or json run (`-p`, `--mode json`, `--mode text`, or piped stdin) exits
+when the process that started it dies, including when that process is
+SIGKILLed and never signals its children. The run records its parent pid at
+startup and watches it through a native process handle (`pidfd` on Linux),
+with a once-per-second `ppid` poll as a fallback. When the parent dies, the run:
+
+1. aborts the session, which kills the running tool (for example a foreground
+   bash command);
+2. tears down the child processes it owns within about 2 seconds: MCP servers
+   (stdio servers run in their own `setsid` process group on POSIX systems other
+   than macOS; the whole group gets SIGTERM, then SIGKILL), async jobs, LSP
+   servers, eval kernels, and every other process-cleanup registration;
+3. exits with status 129, the same as SIGHUP.
+
+Pass `--no-exit-with-parent` when the run should outlive its launcher on
+purpose, for example under `nohup` or `setsid`. Interactive sessions are
+unaffected. RPC and ACP modes are bound to their host by stdin EOF instead.
+SDK embedders can install the same behaviour with `exitWithParent()`; see the
+[SDK docs](./sdk.md#exiting-with-the-parent-process).
 
 ### Output modes (`--mode`)
 

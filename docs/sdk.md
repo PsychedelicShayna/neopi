@@ -289,6 +289,24 @@ During asynchronous disposal, the session records and synchronously flushes its 
 
 Only after work capable of appending session entries has settled does disposal clean up an empty moved session, close the `SessionManager`, close provider session state, disconnect the agent, and remove listeners. A failure from the final persistence cleanup or `SessionManager.close()` rejects the shared disposal promise; individual provider-session close failures are logged.
 
+### Exiting with the parent process
+
+A worker process that embeds the SDK should not outlive the host that spawned it. The CLI's print and json modes install this binding by default; embedders opt in with `exitWithParent()`:
+
+```ts
+import { createAgentSession, exitWithParent } from "@oh-my-pi/pi-coding-agent";
+
+// Record the parent as early as possible: after the host dies, process.ppid
+// names the process this one was reparented to instead.
+const parentExit = exitWithParent();
+const { session, mcpManager } = await createAgentSession({ /* ... */ });
+parentExit.attach({ session, mcpManager });
+```
+
+When the parent dies, including by SIGKILL, the helper aborts every attached session, then tears down owned child processes: MCP servers (stdio servers' `setsid` process groups get SIGTERM, then SIGKILL), each attached session's async jobs, LSP servers, eval kernels, and every `postmortem` cleanup registration, including session disposal. After at most `teardownMs` (default `EXIT_WITH_PARENT_TEARDOWN_MS`, 2 s) it SIGKILLs any detached MCP process group still alive and hard-exits with `exitCode` (default `EXIT_WITH_PARENT_EXIT_CODE`, 129). Child processes are torn down even if the parent dies before any session is attached. `attach()` returns a detach function; `stop()` ends the watch.
+
+`watchParentProcess({ parentPid?, pollIntervalMs?, onParentExit })` is the underlying watchdog, for workers that need their own shutdown path. It watches through a native process handle (`pidfd` on Linux), with a `process.ppid` poll as a fallback. It calls `onParentExit` once, asynchronously, and also when the parent was already gone at install time. The poll timer is unref'd, and `stop()` cancels the native wait, so a stopped watchdog never keeps the event loop alive.
+
 ## Hosting several top-level sessions
 
 One process can host several live top-level sessions ("roots"), for example one per workspace in a multi-session UI. Each root is a fully capable session: its own subagents, async jobs, artifacts, and event streams.
