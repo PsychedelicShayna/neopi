@@ -33,6 +33,7 @@ import {
 import { cfgPlanEnabled } from "../../plan-mode/settings";
 import type { PlanModeState } from "../../plan-mode/state";
 import type { AgentSession, AgentSessionEvent, SessionChangeOrigin } from "../../session/agent-session";
+import { isMountableUnderXdev } from "../../tools/xdev";
 import type {
 	RpcMode,
 	RpcModeChangedFrame,
@@ -318,9 +319,10 @@ export class RpcPlanModeController {
 		const session = this.#session;
 		const capturedHostTools = new Set(owned.hostTools);
 		const retainedHostTools = owned.hostTools.filter(name => session.hasRpcHostTool(name));
-		const retainedMountedHostTools = owned.tools.mounted.filter(
-			name => capturedHostTools.has(name) && session.hasRpcHostTool(name),
-		);
+		const retainedMountedHostTools = retainedHostTools.filter(name => {
+			const tool = session.getToolByName(name);
+			return tool !== undefined && isMountableUnderXdev(tool);
+		});
 		const currentHostTools = session.getEnabledToolNames().filter(name => session.hasRpcHostTool(name));
 		const currentMountedHostTools = session.getMountedXdevToolNames().filter(name => session.hasRpcHostTool(name));
 		return session.restoreNonMCPToolPresentation(

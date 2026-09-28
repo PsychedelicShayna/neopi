@@ -6120,11 +6120,9 @@ export class AgentSession implements SettingsScope {
 					...new Set([...retained, ...rpcTools.filter(tool => !tool.hidden).map(tool => tool.name)]),
 				],
 				mounted: [
-					...stash.mounted.filter(
-						name => !previousHostNames.has(name) || (registered.has(name) && mountable.has(name)),
-					),
+					...stash.mounted.filter(name => !previousHostNames.has(name)),
 					...rpcTools
-						.filter(tool => !previousHostNames.has(tool.name) && !tool.hidden && mountable.has(tool.name))
+						.filter(tool => (!tool.hidden || previousHostNames.has(tool.name)) && mountable.has(tool.name))
 						.map(tool => tool.name),
 				],
 			};

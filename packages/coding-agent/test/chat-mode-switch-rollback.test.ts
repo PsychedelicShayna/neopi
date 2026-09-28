@@ -144,4 +144,26 @@ describe("AgentSession.setChatMode rollback", () => {
 		expect(target.getMountedXdevToolNames()).toContain(tool.name);
 		expect(target.getActiveToolNames()).not.toContain(tool.name);
 	}, 60_000);
+
+	it("remounts an enabled host tool refreshed as discoverable during chat", async () => {
+		const { session: target } = await createSession();
+		const tool: AgentTool = {
+			name: "host_lookup",
+			label: "Host Lookup",
+			description: "Looks up records",
+			parameters: type({}),
+			async execute() {
+				return { content: [{ type: "text", text: "record" }] };
+			},
+		};
+		await target.refreshRpcHostTools([tool]);
+		expect(target.getActiveToolNames()).toContain(tool.name);
+		await target.setChatMode({ mode: "chat" });
+		await target.refreshRpcHostTools([{ ...tool, loadMode: "discoverable" }]);
+		await target.setChatMode({ mode: "off" });
+
+		expect(target.getEnabledToolNames()).toContain(tool.name);
+		expect(target.getMountedXdevToolNames()).toContain(tool.name);
+		expect(target.getActiveToolNames()).not.toContain(tool.name);
+	}, 60_000);
 });

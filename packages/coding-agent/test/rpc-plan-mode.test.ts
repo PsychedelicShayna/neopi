@@ -26,6 +26,7 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { dispatchResolutionDevice } from "@oh-my-pi/pi-coding-agent/tools/resolve";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import type { XdevState } from "@oh-my-pi/pi-coding-agent/tools/xdev";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
@@ -81,6 +82,7 @@ describe("RPC plan mode", () => {
 		responses?: MockResponse[];
 		/** Persist sessions under this directory instead of in memory. */
 		sessionDir?: string;
+		xdev?: boolean;
 	}) {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Expected bundled anthropic model to exist");
@@ -102,6 +104,18 @@ describe("RPC plan mode", () => {
 			initialState: { model, systemPrompt: ["Test"], tools: [readTool], messages: [] },
 			streamFn: createMockModel({ responses: options?.responses ?? [] }).stream,
 		});
+		const registry = new Map<string, AgentTool>([
+			["read", readTool],
+			["write", writeTool],
+		]);
+		const xdev: XdevState | undefined = options?.xdev
+			? {
+					tools: registry,
+					mountedNames: new Set<string>(),
+					builtInNames: new Set(["read", "write"]),
+					isActive: name => agent.state.tools.some(tool => tool.name === name),
+				}
+			: undefined;
 		const created = new AgentSession({
 			agent,
 			sessionManager: options?.sessionDir
@@ -109,12 +123,10 @@ describe("RPC plan mode", () => {
 				: SessionManager.inMemory(),
 			settings: Settings.isolated({ "compaction.enabled": false, "retry.enabled": false, ...options?.settings }),
 			modelRegistry,
-			toolRegistry: new Map<string, AgentTool>([
-				["read", readTool],
-				["write", writeTool],
-			]),
+			toolRegistry: registry,
 			builtInToolNames: ["read", "write"],
 			advisorTools: [],
+			xdev,
 		});
 		const frames: Frame[] = [];
 		const planMode = new RpcPlanModeController(created, frame => frames.push(frame as Frame));
@@ -540,11 +552,14 @@ describe("RPC plan mode", () => {
 	});
 
 	it("restores a same-name host tool refresh when the plan is approved", async () => {
-		const { session, planMode, deps, writePlan, propose, waitForRequest } = setup();
+		const { session, planMode, deps, writePlan, propose, waitForRequest } = setup({ xdev: true });
 		await session.refreshRpcHostTools([makeTool("host_lookup")]);
+		await session.setActiveToolsByName(["read", "write", "host_lookup"]);
 		await planMode.setMode("plan", undefined);
 		await session.setActiveToolsByName(["read", "write"]);
-		await session.refreshRpcHostTools([{ ...makeTool("host_lookup"), description: "Updated lookup" }]);
+		await session.refreshRpcHostTools([
+			{ ...makeTool("host_lookup"), description: "Updated lookup", loadMode: "discoverable" },
+		]);
 		await writePlan("refreshed-host-tool", "# Refreshed host tool\n");
 		const submission = propose("refreshed-host-tool");
 		const request = await waitForRequest();
@@ -554,6 +569,22 @@ describe("RPC plan mode", () => {
 		await submission;
 		expect(session.getEnabledToolNames()).toContain("host_lookup");
 		expect(session.getToolByName("host_lookup")?.description).toBe("Updated lookup");
+		expect(session.getMountedXdevToolNames()).toContain("host_lookup");
+		expect(session.getActiveToolNames()).not.toContain("host_lookup");
+	});
+
+	it("remounts a top-level host tool refreshed as discoverable while planning", async () => {
+		const { session, planMode } = setup({ xdev: true });
+		await session.refreshRpcHostTools([makeTool("host_lookup")]);
+		await session.setActiveToolsByName(["read", "write", "host_lookup"]);
+		await planMode.setMode("plan", undefined);
+		await session.setActiveToolsByName(["read", "write"]);
+		await session.refreshRpcHostTools([{ ...makeTool("host_lookup"), loadMode: "discoverable" }]);
+		await planMode.setMode("default", undefined);
+
+		expect(session.getEnabledToolNames()).toContain("host_lookup");
+		expect(session.getMountedXdevToolNames()).toContain("host_lookup");
+		expect(session.getActiveToolNames()).not.toContain("host_lookup");
 	});
 
 	it("refine: feedback reaches the tool result and plan mode stays on", async () => {
