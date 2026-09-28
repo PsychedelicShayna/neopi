@@ -18,6 +18,7 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { SKILL_PROMPT_MESSAGE_TYPE } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
@@ -301,6 +302,31 @@ describe("AgentSession historical image prompts", () => {
 
 			expect(result).toMatchObject({ editorText: "aborted prompt", cancelled: false });
 			expect(ctx.sessionManager.getLeafId()).toBe(parentId);
+		} finally {
+			await ctx.cleanup();
+		}
+	});
+});
+
+describe("AgentSession branch at a user-invoked skill prompt", () => {
+	it("branches before the skill prompt and returns its /skill: draft", async () => {
+		const ctx = await createTestSession({ inMemory: true });
+		try {
+			ctx.sessionManager.appendMessage({ role: "user", content: "first", timestamp: Date.now() });
+			ctx.sessionManager.appendMessage(assistantMsg("reply"));
+			const skillEntryId = ctx.sessionManager.appendCustomMessageEntry(
+				SKILL_PROMPT_MESSAGE_TYPE,
+				"Review the supplied code carefully.",
+				true,
+				{ name: "reviewer", args: "src/main.ts" },
+				"user",
+			);
+			ctx.sessionManager.appendMessage(assistantMsg("reviewed"));
+
+			const result = await ctx.session.branch(skillEntryId);
+
+			expect(result).toEqual({ selectedText: "/skill:reviewer src/main.ts", selectedImages: [], cancelled: false });
+			expect(ctx.session.messages.map(message => message.role)).toEqual(["user", "assistant"]);
 		} finally {
 			await ctx.cleanup();
 		}

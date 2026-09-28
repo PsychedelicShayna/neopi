@@ -406,6 +406,7 @@ import {
 	type SessionAdvisorsHost,
 } from "./session-advisors";
 import type { BuildSessionContextOptions, SessionContext } from "./session-context";
+import { getMessageEntryId, setMessageEntryId } from "./message-entry-ids";
 import { getRestorableSessionModels, isTranscriptEntry } from "./session-context";
 import { isUserRequestEntry, transcriptEntryMessage, userTurnDraft } from "@oh-my-pi/pi-tui/chat/transcript-entry";
 import { formatSessionDumpText } from "./session-dump-format";
@@ -614,9 +615,6 @@ type SetSessionNameWithTrigger = (
 	source?: SessionTitleSource,
 	trigger?: SessionNameTrigger,
 ) => Promise<boolean>;
-
-const kPersistedSessionEntryId = Symbol("persistedSessionEntryId");
-type PersistedAssistantMessage = AssistantMessage & { [kPersistedSessionEntryId]?: string };
 
 /**
  * Clone one top-level notification field without ever returning an object owned
@@ -1621,7 +1619,7 @@ export class AgentSession implements SettingsScope {
 			scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
 			waitForSessionMessagePersistence: message => this.#waitForSessionMessagePersistence(message),
 			appendSessionMessage: message => this.#appendSessionMessage(message),
-			persistedAssistantEntryId: message => (message as PersistedAssistantMessage)[kPersistedSessionEntryId],
+			persistedAssistantEntryId: message => getMessageEntryId(message),
 			sessionMessageAlreadyPersisted: message => this.#sessionMessageAlreadyPersisted(message),
 			setModelWithProviderSessionReset: model => this.#setModelWithProviderSessionReset(model),
 			resolveActiveEditMode: () => this.#tools.resolveActiveEditMode(),
@@ -3249,10 +3247,9 @@ export class AgentSession implements SettingsScope {
 	): string {
 		const cache = this.#persistedMessageKeys;
 		const wasFresh = cache !== undefined && cache.anchor === this.#persistedMessageKeysAnchor();
-		const entryId = this.sessionManager.appendMessage(message);
-		if (message.role === "assistant") {
-			(message as PersistedAssistantMessage)[kPersistedSessionEntryId] = entryId;
-		}
+		// A prompt that reserved its entry id carries it here; any other id is
+		// ignored by the session manager, which records the id it wrote.
+		const entryId = this.sessionManager.appendMessage(message, getMessageEntryId(message));
 		const key = sessionMessagePersistenceKey(message);
 		if (wasFresh && cache && key) {
 			cache.keys.add(key);
@@ -3338,16 +3335,20 @@ export class AgentSession implements SettingsScope {
 			// One-run instructions must not return from persisted history: prewalk
 			// nudges are consumed once, and Vibe context is rebuilt only while active.
 			if (!isPrewalkPlanNudge(message) && message.customType !== VIBE_MODE_CONTEXT_MESSAGE_TYPE) {
-				this.sessionManager.appendCustomMessageEntry(
-					message.customType,
-					message.content,
-					message.display,
-					message.details,
-					message.attribution ?? "agent",
-					// Preserve the initiating message's own timestamp: the entry
-					// otherwise records emission time, which on rebuild excludes
-					// provider preparation / hook time from the prompt→yield anchor.
-					message.timestamp,
+				setMessageEntryId(
+					message,
+					this.sessionManager.appendCustomMessageEntry(
+						message.customType,
+						message.content,
+						message.display,
+						message.details,
+						message.attribution ?? "agent",
+						// Preserve the initiating message's own timestamp: the entry
+						// otherwise records emission time, which on rebuild excludes
+						// provider preparation / hook time from the prompt→yield anchor.
+						message.timestamp,
+						getMessageEntryId(message),
+					),
 				);
 			}
 			if (message.role === "custom" && message.customType === "ttsr-injection") {
@@ -3696,12 +3697,15 @@ export class AgentSession implements SettingsScope {
 			await messageEndPersistence;
 			if (this.#promptGeneration !== eventPromptGeneration) return;
 			if (interruptedThinkingMessage) {
-				this.sessionManager.appendCustomMessageEntry(
-					interruptedThinkingMessage.customType,
-					interruptedThinkingMessage.content,
-					interruptedThinkingMessage.display,
-					interruptedThinkingMessage.details,
-					interruptedThinkingMessage.attribution,
+				setMessageEntryId(
+					interruptedThinkingMessage,
+					this.sessionManager.appendCustomMessageEntry(
+						interruptedThinkingMessage.customType,
+						interruptedThinkingMessage.content,
+						interruptedThinkingMessage.display,
+						interruptedThinkingMessage.details,
+						interruptedThinkingMessage.attribution,
+					),
 				);
 			}
 			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
@@ -6919,6 +6923,7 @@ export class AgentSession implements SettingsScope {
 			await this.#queueUserMessage(expandedText, options?.images, streamingBehavior, {
 				timestamp: submittedAt,
 				attribution: promptAttribution,
+				entryId: options?.entryId,
 			});
 			outcome.sessionClaimed = true;
 			return true;
@@ -6975,6 +6980,7 @@ export class AgentSession implements SettingsScope {
 			await this.#queueUserMessage(expandedText, options?.images, streamingBehavior, {
 				timestamp: submittedAt,
 				attribution: promptAttribution,
+				entryId: options?.entryId,
 				preprocessed: {
 					images: normalizedImages,
 					descriptionNotice: imageDescriptionNotice,
@@ -7000,6 +7006,7 @@ export class AgentSession implements SettingsScope {
 					userInitiated: options?.userInitiated === true ? true : undefined,
 				}
 			: { role: "user" as const, content: userContent, attribution: promptAttribution, timestamp: submittedAt };
+		if (options?.entryId !== undefined) setMessageEntryId(message, options.entryId);
 
 		const preludeMessages: AgentMessage[] = [];
 		if (eagerTodoPrelude) {
@@ -7063,7 +7070,7 @@ export class AgentSession implements SettingsScope {
 	 */
 	async promptCustomMessage<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
-		options?: Pick<PromptOptions, "streamingBehavior" | "toolChoice"> & {
+		options?: Pick<PromptOptions, "streamingBehavior" | "toolChoice" | "entryId"> & {
 			queueChipText?: string;
 			queueOnly?: boolean;
 		},
@@ -7073,7 +7080,7 @@ export class AgentSession implements SettingsScope {
 
 	async #promptCustomMessage<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
-		options?: Pick<PromptOptions, "streamingBehavior" | "toolChoice"> & {
+		options?: Pick<PromptOptions, "streamingBehavior" | "toolChoice" | "entryId"> & {
 			queueChipText?: string;
 			queueOnly?: boolean;
 		},
@@ -7095,7 +7102,7 @@ export class AgentSession implements SettingsScope {
 	async #dispatchCustomPrompt<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
 		options:
-			| (Pick<PromptOptions, "streamingBehavior" | "toolChoice"> & {
+			| (Pick<PromptOptions, "streamingBehavior" | "toolChoice" | "entryId"> & {
 					queueChipText?: string;
 					queueOnly?: boolean;
 			  })
@@ -7136,7 +7143,7 @@ export class AgentSession implements SettingsScope {
 			for (const notice of keywordNotices) {
 				await this.#queueCustomMessage(notice, streamingBehavior);
 			}
-			await this.#queueCustomMessage(message, streamingBehavior, options.queueChipText);
+			await this.#queueCustomMessage(message, streamingBehavior, options.queueChipText, options.entryId);
 			outcome.sessionClaimed = true;
 			return true;
 		}
@@ -7152,7 +7159,7 @@ export class AgentSession implements SettingsScope {
 			for (const notice of keywordNotices) {
 				await this.#queueCustomMessage(notice, streamingBehavior);
 			}
-			await this.#queueCustomMessage(message, streamingBehavior, options?.queueChipText);
+			await this.#queueCustomMessage(message, streamingBehavior, options?.queueChipText, options?.entryId);
 			outcome.sessionClaimed = true;
 			return true;
 		}
@@ -7166,6 +7173,7 @@ export class AgentSession implements SettingsScope {
 			attribution: message.attribution ?? "agent",
 			timestamp: Date.now(),
 		};
+		if (options?.entryId !== undefined) setMessageEntryId(customMessage, options.entryId);
 
 		outcome.sessionClaimed = await this.#promptWithMessage(customMessage, textContent, {
 			...options,
@@ -7710,6 +7718,7 @@ export class AgentSession implements SettingsScope {
 		await this.#queueUserMessage(expandedText, images, "steer", {
 			timestamp: submittedAt,
 			attribution: options?.attribution,
+			entryId: options?.entryId,
 		});
 	}
 
@@ -7734,6 +7743,7 @@ export class AgentSession implements SettingsScope {
 			await this.#queueUserMessage(expandedText, images, "followUp", {
 				timestamp: submittedAt,
 				attribution: options?.attribution,
+				entryId: options?.entryId,
 			});
 			return;
 		}
@@ -7798,6 +7808,8 @@ export class AgentSession implements SettingsScope {
 		options?: {
 			timestamp?: number;
 			attribution?: MessageAttribution;
+			/** Reserved session entry id the queued user message is persisted under. */
+			entryId?: string;
 			preprocessed?: { images: ImageContent[] | undefined; descriptionNotice: CustomMessage | undefined };
 		},
 	): Promise<void> {
@@ -7833,11 +7845,15 @@ export class AgentSession implements SettingsScope {
 			: normalizedImages?.length
 				? await this.#buildImageDescriptionNotice(normalizedImages)
 				: undefined;
+		const reserved = <M extends AgentMessage>(message: M): M => {
+			if (options?.entryId !== undefined) setMessageEntryId(message, options.entryId);
+			return message;
+		};
 		if (mode === "aside") {
 			if (await this.#sessionGenerationChanged(sessionGeneration)) return;
 			const records: AgentMessage[] = [];
 			if (imageDescriptionNotice) records.push(imageDescriptionNotice);
-			records.push({ role: "user", content, attribution, timestamp: timestamp ?? Date.now() });
+			records.push(reserved({ role: "user", content, attribution, timestamp: timestamp ?? Date.now() }));
 			this.#irc.queueAside(records);
 			// The awaits above (image normalization / vision description) can span the run's
 			// settle, so the run may already be idle by the time the record lands in the aside
@@ -7850,22 +7866,26 @@ export class AgentSession implements SettingsScope {
 		if (mode === "followUp") {
 			for (const notice of attachmentSourceNotices) this.agent.followUp(notice);
 			if (imageDescriptionNotice) this.agent.followUp(imageDescriptionNotice);
-			this.agent.followUp({
-				role: "user",
-				content,
-				attribution,
-				timestamp: timestamp ?? Date.now(),
-			});
+			this.agent.followUp(
+				reserved({
+					role: "user",
+					content,
+					attribution,
+					timestamp: timestamp ?? Date.now(),
+				}),
+			);
 		} else {
 			for (const notice of attachmentSourceNotices) this.agent.steer(notice);
 			if (imageDescriptionNotice) this.agent.steer(imageDescriptionNotice);
-			this.agent.steer({
-				role: "user",
-				content,
-				steering: true,
-				attribution,
-				timestamp: timestamp ?? Date.now(),
-			});
+			this.agent.steer(
+				reserved({
+					role: "user",
+					content,
+					steering: true,
+					attribution,
+					timestamp: timestamp ?? Date.now(),
+				}),
+			);
 		}
 		this.#scheduleIdleQueueDrain();
 	}
@@ -8015,16 +8035,27 @@ export class AgentSession implements SettingsScope {
 	}
 
 	/**
+	 * Name of the extension command (`pi.registerCommand`) `text` invokes, if any.
+	 * `prompt()` runs such a command locally and writes no user entry for it.
+	 */
+	#extensionCommandName(text: string): string | undefined {
+		if (!this.#extensionRunner || !text.startsWith("/")) return undefined;
+		const spaceIndex = text.indexOf(" ");
+		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
+		return this.#extensionRunner.getCommand(commandName) ? commandName : undefined;
+	}
+
+	/** True when `prompt(text)` would run an extension command instead of sending a user message. */
+	isExtensionCommand(text: string): boolean {
+		return this.#extensionCommandName(text) !== undefined;
+	}
+
+	/**
 	 * Throw an error if the text is an extension command.
 	 */
 	#throwIfExtensionCommand(text: string): void {
-		if (!this.#extensionRunner) return;
-
-		const spaceIndex = text.indexOf(" ");
-		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
-		const command = this.#extensionRunner.getCommand(commandName);
-
-		if (command) {
+		const commandName = this.#extensionCommandName(text);
+		if (commandName !== undefined) {
 			throw new Error(
 				`Extension command "/${commandName}" cannot be queued. Use prompt() or execute the command when not streaming.`,
 			);
@@ -8153,6 +8184,7 @@ export class AgentSession implements SettingsScope {
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
 		deliverAs: "steer" | "followUp" | "aside",
 		queueChipText?: string,
+		entryId?: string,
 	): Promise<void> {
 		const sessionGeneration = this.#sessionGeneration;
 		const details =
@@ -8175,6 +8207,7 @@ export class AgentSession implements SettingsScope {
 			timestamp: Date.now(),
 		};
 		const normalizedAppMessage = await this.#normalizeAgentMessageImages(appMessage);
+		if (entryId !== undefined) setMessageEntryId(normalizedAppMessage, entryId);
 		if (deliverAs === "aside") {
 			if (await this.#sessionGenerationChanged(sessionGeneration)) return;
 			this.#irc.queueAside([normalizedAppMessage]);
@@ -8336,12 +8369,15 @@ export class AgentSession implements SettingsScope {
 				return outcome.sessionClaimed;
 			}
 			this.agent.appendMessage(normalizedAppMessage);
-			this.sessionManager.appendCustomMessageEntry(
-				normalizedAppMessage.customType,
-				normalizedAppMessage.content,
-				normalizedAppMessage.display,
-				normalizedAppMessage.details,
-				normalizedAppMessage.attribution,
+			setMessageEntryId(
+				normalizedAppMessage,
+				this.sessionManager.appendCustomMessageEntry(
+					normalizedAppMessage.customType,
+					normalizedAppMessage.content,
+					normalizedAppMessage.display,
+					normalizedAppMessage.details,
+					normalizedAppMessage.attribution,
+				),
 			);
 			onAccepted?.();
 			return false;
@@ -8382,12 +8418,15 @@ export class AgentSession implements SettingsScope {
 		}
 
 		this.agent.appendMessage(normalizedAppMessage);
-		this.sessionManager.appendCustomMessageEntry(
-			normalizedAppMessage.customType,
-			normalizedAppMessage.content,
-			normalizedAppMessage.display,
-			normalizedAppMessage.details,
-			normalizedAppMessage.attribution,
+		setMessageEntryId(
+			normalizedAppMessage,
+			this.sessionManager.appendCustomMessageEntry(
+				normalizedAppMessage.customType,
+				normalizedAppMessage.content,
+				normalizedAppMessage.display,
+				normalizedAppMessage.details,
+				normalizedAppMessage.attribution,
+			),
 		);
 		onAccepted?.();
 		return false;
@@ -10874,12 +10913,18 @@ export class AgentSession implements SettingsScope {
 		const previousSessionFile = this.sessionFile;
 		const selectedEntry = this.sessionManager.getEntry(entryId);
 
-		if (selectedEntry?.type !== "message" || selectedEntry.message.role !== "user") {
+		// A user request starts a turn: a plain user message, or a user-invoked
+		// skill/collab prompt, which is persisted as a custom message.
+		if (!selectedEntry || !isTranscriptEntry(selectedEntry) || !isUserRequestEntry(selectedEntry)) {
+			throw new Error("Invalid entry ID for branching");
+		}
+		const request = transcriptEntryMessage(selectedEntry);
+		if (request?.role !== "user" && request?.role !== "custom") {
 			throw new Error("Invalid entry ID for branching");
 		}
 
-		const selectedText = this.#extractUserMessageText(selectedEntry.message.content);
-		const selectedImages = this.#extractUserMessageImages(selectedEntry.message.content);
+		const selectedText = userTurnDraft(selectedEntry) ?? "";
+		const selectedImages = this.#extractUserMessageImages(request.content);
 
 		let skipConversationRestore = false;
 
