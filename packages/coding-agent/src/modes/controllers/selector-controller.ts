@@ -1,3 +1,4 @@
+import { trackMountedDialog } from "../../control/dialogs";
 import * as fs from "node:fs";
 import advisorSystemPrompt from "../../prompts/advisor/system.md" with { type: "text" };
 import { renderChatAdvisorPrompt } from "../../chat/chat-system-prompt";
@@ -838,6 +839,16 @@ export class SelectorController {
 			maxHeight: "100%",
 			margin: 0,
 		});
+		const closePicker = trackMountedDialog({
+			family: "selector",
+			kind: "model_picker",
+			title: "Model",
+			cancel: () => overlayHandle.hide(),
+		});
+		overlayHandle.hide = ((hide => () => {
+			closePicker();
+			hide();
+		})(overlayHandle.hide.bind(overlayHandle)));
 		this.ctx.ui.setFocus(picker);
 		this.ctx.ui.requestRender();
 	}
@@ -1753,6 +1764,17 @@ export class SelectorController {
 			margin: 0,
 			fullscreen: true,
 		});
+		const closeSessions = trackMountedDialog({
+			family: "selector",
+			kind: "session",
+			title: "Sessions",
+			cancel: () => overlayHandle.hide(),
+		});
+		const hideSessions = overlayHandle.hide.bind(overlayHandle);
+		overlayHandle.hide = () => {
+			closeSessions();
+			hideSessions();
+		};
 		this.ctx.ui.setFocus(selector);
 		this.ctx.ui.requestRender();
 	}
@@ -1932,9 +1954,11 @@ export class SelectorController {
 		const { LoginDialogComponent, PASTE_CODE_LOGIN_PROVIDERS } = loadProviderAuthUi();
 		const useManualInput = PASTE_CODE_LOGIN_PROVIDERS.has(providerId);
 		let restored = false;
+		let closeLogin: (() => void) | undefined;
 		const restoreEditor = () => {
 			if (restored) return;
 			restored = true;
+			closeLogin?.();
 			this.ctx.editorContainer.clear();
 			this.ctx.editorContainer.addChild(this.ctx.editor);
 			this.ctx.ui.setFocus(this.ctx.editor);
@@ -1955,6 +1979,18 @@ export class SelectorController {
 		this.ctx.editorContainer.addChild(dialog);
 		this.ctx.ui.setFocus(dialog);
 		this.ctx.ui.requestRender();
+		closeLogin = trackMountedDialog({
+			family: "login",
+			kind: "login",
+			title: providerId,
+			answer: value => {
+				const code = typeof value === "string" ? value : typeof value === "object" && value && "code" in value ? String((value as { code: unknown }).code) : undefined;
+				if (code === undefined) return false;
+				return dialog.submitValue(code);
+			},
+			cancel: () => dialog.handleInput("\x1b"),
+		});
+		void closeLogin;
 		try {
 			const identity = await this.ctx.session.modelRegistry.authStorage.oauth.login(providerId as OAuthProvider, {
 				signal: dialog.signal,

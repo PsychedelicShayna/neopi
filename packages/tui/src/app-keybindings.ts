@@ -503,7 +503,7 @@ function loadRawConfig(filePath: string): unknown {
 	}
 }
 
-function writeKeybindingsConfig(filePath: string, config: KeybindingsConfig): boolean {
+export function writeKeybindingsConfig(filePath: string, config: KeybindingsConfig): boolean {
 	try {
 		fs.writeFileSync(filePath, stringifyYamlConfig(config), "utf-8");
 		logger.debug("Migrated keybindings config", { path: filePath });
@@ -694,6 +694,16 @@ export class KeybindingsManager extends TuiKeybindingsManager {
 			: { config: {} };
 		const { config: profileConfig } = KeybindingsManager.#loadFromFile(this.#configPath);
 		this.setUserBindings(mergeKeybindingsConfig(inheritedConfig, profileConfig));
+	}
+
+
+	/** Write one action's chords into the profile file and reload. */
+	setPersisted(actionId: string, keys: string[]): boolean {
+		if (!this.#configPath) return false;
+		const next = { ...this.#userBindings, [actionId]: keys } as KeybindingsConfig;
+		if (!writeKeybindingsConfig(this.#configPath, next)) return false;
+		this.reload();
+		return true;
 	}
 
 	override setUserBindings(userBindings: KeybindingsConfig): void {

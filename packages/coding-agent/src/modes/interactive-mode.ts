@@ -15,6 +15,7 @@ import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, ImageContent, Model, Usage, UsageReport } from "@oh-my-pi/pi-ai";
 import { controlHostFor } from "../control/host";
 import { attachTuiPresenter } from "../control/tui-presenter";
+import { trackMountedDialog } from "../control/dialogs";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { execReplace } from "@oh-my-pi/pi-natives";
 import type {
@@ -1215,6 +1216,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#planReviewOverlay: PlanReviewOverlay | undefined;
 	#planReviewOverlayHandle: OverlayHandle | undefined;
 	#sessionInfoOverlayHandle: OverlayHandle | undefined;
+	#closePlanDialog: (() => void) | undefined;
 	#planReviewCancel: (() => void) | undefined;
 	/** Serializable review annotations keyed by the resolved plan file path. */
 	#planReviewAnnotationState = new Map<string, PlanReviewAnnotationState>();
@@ -2129,6 +2131,15 @@ export class InteractiveMode implements InteractiveModeContext {
 				runAction: id => this.#inputController.runAppAction(id),
 				notify: text => this.showStatus(text),
 			});
+			if (controlHost.presenter) {
+				const bindings = this.keybindings;
+				controlHost.presenter.keybindings = {
+					get: id => bindings.getKeys(id as never).map(String),
+					all: () => bindings.getResolvedBindings() as Record<string, string[]>,
+					set: (id, keys) => "setPersisted" in bindings && bindings.setPersisted(id, keys),
+					reload: () => bindings.reload(),
+				};
+			}
 		}
 	}
 
@@ -4537,12 +4548,30 @@ export class InteractiveMode implements InteractiveModeContext {
 			margin: 0,
 			fullscreen: true,
 		});
+		this.#closePlanDialog = trackMountedDialog({
+			family: "plan_review",
+			kind: "plan_review",
+			title,
+			schema: { options },
+			answer: value => {
+				if (typeof value !== "string" || !options.includes(value)) return false;
+				finish(value);
+				this.#hidePlanReview();
+				return true;
+			},
+			cancel: () => {
+				finish(undefined);
+				this.#hidePlanReview();
+			},
+		});
 		this.ui.setFocus(overlay);
 		this.ui.requestRender();
 		return promise;
 	}
 
 	#hidePlanReview(): void {
+		this.#closePlanDialog?.();
+		this.#closePlanDialog = undefined;
 		this.#planReviewCancel = undefined;
 		this.#planReviewOverlayHandle?.hide();
 		this.#planReviewOverlayHandle = undefined;

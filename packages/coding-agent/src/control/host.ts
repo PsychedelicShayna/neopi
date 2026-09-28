@@ -9,6 +9,7 @@ import { randomBytes } from "node:crypto";
 import { logger } from "@oh-my-pi/pi-utils";
 import { BUILD_INFO } from "../build-info";
 import { lookup } from "../config/registry";
+import { readSetting, unsetSetting, writeSetting } from "./settings-adapter";
 import { RpcPromptResults } from "../modes/rpc/rpc-prompt-results";
 import { RpcRoles } from "../modes/rpc/rpc-roles";
 import { RPC_CAPABILITIES } from "../modes/rpc/rpc-capabilities";
@@ -542,9 +543,43 @@ export class ControlHost {
 			case "wait":
 				this.#reply(connection, frame, { success: true, data: { waited: frame.for } });
 				return;
+			case "keybindings_get":
+			case "keybindings_set":
+			case "keybindings_reload":
+				this.#keybindings(connection, frame);
+				return;
 			default:
 				this.#reply(connection, frame, { success: false, error: `Unknown command: ${type}` });
 		}
+	}
+
+
+	#keybindings(connection: ControlConnection, frame: Record<string, unknown>): void {
+		const bindings = this.presenter?.keybindings;
+		if (!bindings) {
+			this.#reply(connection, frame, { success: false, error: "this session has no keybindings store", code: "no_tui" });
+			return;
+		}
+		const type = String(frame.type);
+		if (type === "keybindings_reload") {
+			bindings.reload();
+			this.#reply(connection, frame, { success: true });
+			return;
+		}
+		if (type === "keybindings_get") {
+			const actionId = typeof frame.actionId === "string" ? frame.actionId : undefined;
+			this.#reply(connection, frame, {
+				success: true,
+				data: actionId ? { actionId, keys: bindings.get(actionId) } : { bindings: bindings.all() },
+			});
+			return;
+		}
+		const actionId = String(frame.actionId ?? "");
+		const keys = Array.isArray(frame.keys) ? frame.keys.filter((key): key is string => typeof key === "string") : [];
+		const saved = bindings.set(actionId, keys);
+		this.#reply(connection, frame, saved
+			? { success: true, data: { actionId, keys } }
+			: { success: false, error: "keybindings file is not writable", code: "invalid_value" });
 	}
 
 	#settings(connection: ControlConnection, frame: Record<string, unknown>): void {
@@ -561,7 +596,8 @@ export class ControlHost {
 			return;
 		}
 		if (type === "settings_get") {
-			this.#reply(connection, frame, { success: true, data: { path, value: setting.get(session.settings) } });
+			const member = typeof frame.member === "string" ? frame.member : undefined;
+			this.#reply(connection, frame, { success: true, data: { path, member, value: readSetting(session.settings, path, member) } });
 			return;
 		}
 		if (APPROVAL_GATED_SETTINGS.some(id => path === id || path.startsWith(`${id}.`)) && !cfgControlApprovals.get(session.settings)) {
@@ -572,12 +608,12 @@ export class ControlHost {
 			});
 			return;
 		}
+		const member = typeof frame.member === "string" ? frame.member : undefined;
 		try {
-			if (type === "settings_unset") setting.unset(session.settings);
-			else if (frame.scope === "runtime") setting.override(session.settings, frame.value as never);
-			else setting.set(session.settings, frame.value as never);
+			if (type === "settings_unset") unsetSetting(session.settings, path, member);
+			else writeSetting(session.settings, { path, member, value: frame.value, runtime: frame.scope === "runtime" });
 			this.#notify(connection, `settings ${path}`);
-			this.#reply(connection, frame, { success: true, data: { path, value: setting.get(session.settings) } });
+			this.#reply(connection, frame, { success: true, data: { path, member, value: readSetting(session.settings, path, member) } });
 		} catch (error) {
 			this.#reply(connection, frame, { success: false, error: error instanceof Error ? error.message : String(error), code: "invalid_value" });
 		}

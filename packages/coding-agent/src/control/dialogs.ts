@@ -93,3 +93,26 @@ export function dialogRegistry(): DialogRegistry | undefined {
 export function setDialogRegistry(registry: DialogRegistry | undefined): void {
 	current = registry;
 }
+
+/** Register a surface that is already on screen. Returns a closer. No-op before the TUI attaches. */
+export function trackMountedDialog(input: {
+	family: OpenDialog["family"];
+	kind: string;
+	title: string;
+	schema?: unknown;
+	answer?: (value: unknown) => boolean;
+	cancel?: () => void;
+}): () => void {
+	const registry = dialogRegistry();
+	if (!registry) return () => {};
+	const opened = registry.open({
+		family: input.family,
+		kind: input.kind,
+		title: input.title,
+		schema: input.schema,
+		openedBy: "keyboard",
+		answer: input.answer ?? (() => false),
+		cancel: input.cancel ?? (() => {}),
+	});
+	return () => registry.close(opened.dialogId);
+}

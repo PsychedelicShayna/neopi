@@ -18,13 +18,18 @@ export interface ControlPresenter {
 	answerDialog(dialogId: string, answer: unknown): Promise<{ settled: boolean; error?: string }>;
 	draft(): { text: string; images: ImageContent[] };
 	setDraft(text: string): void;
+	notify(text: string): void;
+	keybindings?: {
+		get(actionId: string): string[];
+		all(): Record<string, string[]>;
+		set(actionId: string, keys: string[]): boolean;
+		reload(): void;
+	};
 	/** Human-editor revision, bumped on every composer change. */
 	draftRevision(): number;
 	/** Overlay/focus revision. */
 	focusRevision(): number;
 	dialogRevision(): number;
-	/** Attribute a line in the pane. */
-	notify(text: string): void;
 	/** Whether control.approvals may settle the open approval, and settle it. */
 	settleApproval?(id: string, approved: boolean, reason?: string): boolean;
 }
