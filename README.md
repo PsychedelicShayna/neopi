@@ -74,6 +74,10 @@ This repository does not prescribe a remote installer or a global package-manage
 
 Run `npi update` for the fork-aware interactive update path. Maintainers integrating upstream releases must use the origin-based worktree and PR procedure in [docs/agents/upstream-sync.md](docs/agents/upstream-sync.md); the remote default branch is the source of truth.
 
+## Capture an idea
+
+`npi idea "describe the change"` starts an interactive issue funnel. It reads the tracker conventions, checks for duplicates, asks for missing boundaries and acceptance, and shows the proposed issue for approval before publishing to `PsychedelicShayna/neopi`. To shorten the command in a POSIX shell, optionally add `alias ni='npi idea'` to your shell configuration, then run `ni "describe the change"`.
+
 ## Working on NeoPi
 
 - Read [AGENTS.md](AGENTS.md) before changing code or installing a build.
