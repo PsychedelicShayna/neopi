@@ -122,7 +122,9 @@ export async function loadSwitchConfig(configDir: string, validation: Omit<Valid
 			}
 			if (JSON.stringify(providerPaths) !== JSON.stringify(await providerSources(root))) throw new SourceChanged();
 			for (const [pathname, captured] of files) {
-				const current = await fs.stat(pathname);
+				let current: Awaited<ReturnType<typeof fs.stat>>;
+				try { current = await fs.stat(pathname); }
+				catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new SourceChanged(); throw error; }
 				if (fingerprint(current) !== fingerprint(captured.stat)) throw new SourceChanged();
 			}
 			const sources = [...files].map(([pathname, captured]) => ({ path: pathname, sha256: captured.digest })).sort((a, b) => a.path.localeCompare(b.path));
