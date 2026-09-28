@@ -1,4 +1,4 @@
-import { constants as fsConstants } from "node:fs";
+import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -109,7 +109,7 @@ export type BoundedText = { content: string } | { rejected: ConfigRejection };
 
 const utf8 = new TextDecoder();
 /** Opening a FIFO must not wait for a writer before the handle's stat can refuse it. */
-const OPEN_FLAGS = fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0);
+const OPEN_FLAGS = nodeFs.constants.O_RDONLY | (nodeFs.constants.O_NONBLOCK ?? 0);
 
 /**
  * Read a config file through one handle. Anything but a regular file (a device such as
