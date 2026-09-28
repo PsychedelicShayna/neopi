@@ -326,6 +326,8 @@ export interface AgentSessionConfig {
 	advisorMcpResources?: CursorMcpResourceAdapter;
 	/** Chat mode the session runs in; undefined for an ordinary coding session. */
 	chatMode?: ChatModeConfig;
+	/** Why the session cannot enter chat mode (an explicit system prompt template); undefined when it can. */
+	chatModeBlockedReason?: string;
 	/** Preloaded watchdog prompt content for the advisor. */
 	advisorWatchdogPrompt?: string;
 	/** Shared advisor instructions loaded from WATCHDOG.yml. */

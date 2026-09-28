@@ -330,6 +330,7 @@ describe("RpcInputDispatcher", () => {
 						hasPendingAsyncWork: false,
 						isSettled: true,
 						todoPhases: [],
+						chatMode: "off",
 					},
 				};
 			}

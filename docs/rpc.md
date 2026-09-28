@@ -36,6 +36,7 @@ Behavior notes:
 | --- | --- |
 | `get_usage` | The `get_usage` command returns account-level provider usage reports. See [Session](#session). |
 | `get_roles` | `get_roles` / `set_role` commands and `get_state.activeRole` ([payloads](#get_roles-and-set_role-payloads)) |
+| `set_chat_mode` | Live chat-mode switching: the `set_chat_mode` command, `get_state.chatMode`, the `chat_mode_changed` event, and the `/chat` builtin in `get_available_commands`. |
 
 ## Transport and Framing
 
@@ -141,6 +142,7 @@ Important edge behavior from runtime:
 
 - `{ id?, type: "get_state" }`
 - `{ id?, type: "set_fast_mode", enabled: boolean }`
+- `{ id?, type: "set_chat_mode", mode: "off" | "chat" | "erp" | "raw", include?: string | string[] }`
 - `{ id?, type: "get_available_commands" }`
 - `{ id?, type: "get_entries", since?: string }`
 - `{ id?, type: "get_tree" }`
@@ -374,7 +376,8 @@ is re-armed.
     "contextWindow": 200000,
     "percent": 0.55
   },
-  "activeRole": "smol"
+  "activeRole": "smol",
+  "chatMode": "off|chat|erp|raw"
 }
 ```
 
@@ -457,6 +460,52 @@ Failures carry a `code`, and none of them change the model:
 | `role_unresolved` | No pattern in the role's chain matches an available model. |
 ```
 
+`chatMode` is the session's live chat mode; `off` is an ordinary coding session.
+
+### `set_chat_mode` payload
+
+`set_chat_mode` switches chat mode on the live session, the same switch the
+`/chat [chat|erp|raw|off] [--include <categories>]` builtin performs (bare
+`/chat` toggles between `off` and the last-used mode). The system prompt is
+rebuilt immediately, so the next turn uses it; the prompt-cache break is
+intended. `include` names the context categories kept in chat mode (`date`,
+`cwd`, `contextFiles`, `skills`, `rules`, `memory`), comma-separated or as an
+array; omitted keeps the current or last-used set, falling back to the
+`chat.include` setting. `include` with `mode: "off"` is rejected.
+
+```json
+{ "id": "chat1", "type": "set_chat_mode", "mode": "erp", "include": "date,cwd" }
+```
+
+```json
+{
+  "id": "chat1",
+  "type": "response",
+  "command": "set_chat_mode",
+  "success": true,
+  "data": { "mode": "erp", "include": "date,cwd" }
+}
+```
+
+`data.include` is always the comma-joined include list (`""` when none). When
+the state changes, a `chat_mode_changed` event with the same `{ mode, include }`
+fields follows; setting the current state again responds without an event.
+
+- Entering chat mode deactivates every tool, as a `--chat` launch without
+  `--tools` does; leaving restores the tool selection saved on entry. Chat mode
+  also drops discovered `SYSTEM.md` / `APPEND_SYSTEM.md`, memory instructions,
+  the date/cwd reminder, and non-chat extension prompt injection, exactly as
+  `--chat` does. Only explicit `--system-prompt` / `--append-system-prompt`
+  text carries into chat mode.
+- The change is journaled on the session, so `--resume` / `--session` restores
+  the last mode. `--chat` flags still set the initial mode at launch.
+- Failures: `session_busy` while a turn is streaming; a session launched with
+  `--system-prompt-template` rejects every chat mode (same rule as the launch
+  flag); unknown modes or include categories fail with a message.
+- A session launched in chat mode never loaded what chat mode skips at launch
+  (coding tools, MCP, LSP, discovered skills, rules, and `SYSTEM.md`). Switching
+  it `off` restores the coding system prompt but not those resources; relaunch
+  without `--chat` for a full coding session.
 ### `set_fast_mode` payload
 
 `set_fast_mode` changes whether fast mode is enabled for the session. The
@@ -651,6 +700,7 @@ Common event types:
 - `ttsr_triggered`
 - `todo_reminder`, `todo_auto_clear`
 - `irc_message`, `notice`, `goal_updated`
+- `chat_mode_changed` (`{ type, mode: "off" | "chat" | "erp" | "raw", include: string }`, see `set_chat_mode`)
 
 Extension runner errors are emitted separately as:
 

@@ -571,8 +571,17 @@ export interface CreateAgentSessionOptions {
 	/** Already-loaded text appended through the bundled system prompt templates. */
 	appendSystemPrompt?: string;
 	/**
+	 * `customSystemPrompt` or `systemPromptTemplate` came from a discovered
+	 * SYSTEM.md / SYSTEM_TEMPLATE.md rather than an explicit flag. Chat mode
+	 * ignores discovered prompts and honors only explicit ones.
+	 */
+	systemPromptDiscovered?: boolean;
+	/** `appendSystemPrompt` came from a discovered APPEND_SYSTEM.md; chat mode ignores it. */
+	appendSystemPromptDiscovered?: boolean;
+	/**
 	 * Chat mode (`--chat`): strips coding-agent context from the system prompt,
-	 * per-turn reminders, memory, and extension prompt injection.
+	 * per-turn reminders, memory, and extension prompt injection. This is the
+	 * initial mode; `AgentSession.setChatMode` switches it live.
 	 */
 	chatMode?: ChatModeConfig;
 	/**
@@ -3535,15 +3544,20 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			const activeRepoContext = hasSession
 				? await logger.time("resolveActiveRepoContext", resolveRepoContext, promptCwd)
 				: initialActiveRepoContext;
-			if (hasSession && options.contextFiles === undefined && chatKeepsContextFiles) {
-				contextFiles = await logger.time(
-					"discoverContextFiles",
-					discoverContextFiles,
-					promptCwd,
-					agentDir,
-					[...cfgDisabledExtensions.get(settings)],
-					chatMode !== undefined,
-				);
+			// Chat mode can change live (`AgentSession.setChatMode`); read it per rebuild.
+			const liveChatMode = hasSession ? session.chatMode : chatMode;
+			if (hasSession && options.contextFiles === undefined) {
+				contextFiles =
+					liveChatMode && !chatModeIncludes(liveChatMode, "contextFiles")
+						? []
+						: await logger.time(
+								"discoverContextFiles",
+								discoverContextFiles,
+								promptCwd,
+								agentDir,
+								[...cfgDisabledExtensions.get(settings)],
+								liveChatMode !== undefined,
+							);
 				toolSession.contextFiles = contextFiles;
 				session.setAdvisorContextPrompt(formatAdvisorContextPrompt(contextFiles));
 			}
@@ -3581,7 +3595,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					setActiveRules(nextActiveRules);
 				}
 			}
-			const memoryBackend = memoryEnabled ? await resolveMemoryBackend(settings) : undefined;
+			const memoryBackend =
+				memoryEnabled && (!liveChatMode || chatModeIncludes(liveChatMode, "memory"))
+					? await resolveMemoryBackend(settings)
+					: undefined;
 			const memoryInstructions = memoryBackend
 				? await memoryBackend.buildDeveloperInstructions(agentDir, settings, session)
 				: undefined;
@@ -3598,14 +3615,15 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					systemPrompt: typeof options.systemPrompt === "string" ? [options.systemPrompt] : options.systemPrompt,
 				};
 			}
-			if (chatMode) {
+			if (liveChatMode) {
+				// Chat mode honors only explicit prompt flags, never discovered SYSTEM.md / APPEND_SYSTEM.md.
 				return {
 					systemPrompt: buildChatSystemPrompt({
-						config: chatMode,
-						customPrompt: options.customSystemPrompt,
+						config: liveChatMode,
+						customPrompt: options.systemPromptDiscovered ? undefined : options.customSystemPrompt,
 						appendPrompt: composeAppendPrompt(
 							memoryInstructions ? [memoryInstructions] : [],
-							options.appendSystemPrompt,
+							options.appendSystemPromptDiscovered ? undefined : options.appendSystemPrompt,
 						),
 						contextFiles,
 						cwd: promptCwd,
@@ -4004,12 +4022,13 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// reminder rides on the first user turn so open-weight providers keep
 			// their tool-schema prefix cache (#7404). Chat mode sends it only when
 			// `date` is re-included, without the cwd (the chat prompt carries that).
-			if (chatMode && !chatModeIncludes(chatMode, "date")) return transformed;
+			const liveChatMode = hasSession ? session.chatMode : chatMode;
+			if (liveChatMode && !chatModeIncludes(liveChatMode, "date")) return transformed;
 			return dateCwdReminder.transform(
 				transformed,
 				formatLocalCalendarDate(),
-				chatMode ? "" : normalizePromptPath(sessionManager.getCwd()),
-				chatMode !== undefined,
+				liveChatMode ? "" : normalizePromptPath(sessionManager.getCwd()),
+				liveChatMode !== undefined,
 			);
 		};
 		const onPayload = async (payload: unknown, model?: Model, signal?: AbortSignal) => {
@@ -4295,6 +4314,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// streamed and parsed on the main thread.
 		session = new AgentSession({
 			chatMode,
+			// Launch validation (main.ts) rejects chat mode with an explicit template; live switches match it.
+			chatModeBlockedReason:
+				options.systemPromptTemplate !== undefined && !options.systemPromptDiscovered
+					? "--system-prompt-template cannot be combined with chat mode"
+					: undefined,
 			codeModeState,
 			advisorWatchdogPrompt,
 			advisorContextPrompt,

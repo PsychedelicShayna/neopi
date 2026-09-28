@@ -112,13 +112,18 @@ import { reset as resetCapabilities } from "../capability";
 import type { EffectiveExtensionRoots } from "../capability/types";
 import {
 	CHAT_MODE_ENTRY_TYPE,
+	type ChatModeChangeRequest,
 	type ChatModeConfig,
 	chatModeEntryData,
 	chatModeIncludes,
+	chatModeState,
 	readChatModeEntry,
+	readLastActiveChatMode,
+	resolveChatModeChange,
 	sameChatMode,
 } from "../chat/chat-mode";
 import { renderChatCompactionPrompt } from "../chat/chat-system-prompt";
+import { cfgChatInclude } from "../chat/settings";
 import { SessionChronicler } from "../chronicler/session-chronicler";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
 import type { ModelRegistry } from "../config/model-registry";
@@ -862,6 +867,11 @@ export class AgentSession implements SettingsScope {
 	#extensionRunner: ExtensionRunner | undefined = undefined;
 	#chatMode: ChatModeConfig | undefined;
 	#chatModeJournaledSessionId: string | undefined;
+	#chatModeBlockedReason: string | undefined;
+	/** Chat mode left most recently this process; a bare `/chat` re-enters it. */
+	#lastChatMode: ChatModeConfig | undefined;
+	/** Tool selection saved when chat mode was entered live; restored when it is left. */
+	#chatModeStashedTools: { enabled: string[]; mounted: string[] } | undefined;
 	#getEvalPreludes: (() => readonly EvalPreludeDefinition[]) | undefined;
 	#reconcileBrowserMcpFilter: AgentSessionConfig["reconcileBrowserMcpFilter"];
 	#skillDescriptions: SkillDescriptionCatalog;
@@ -1582,6 +1592,7 @@ export class AgentSession implements SettingsScope {
 		this.#slashCommands = config.slashCommands ?? [];
 		this.#extensionRunner = config.extensionRunner;
 		this.#chatMode = config.chatMode;
+		this.#chatModeBlockedReason = config.chatModeBlockedReason;
 		this.#getEvalPreludes = config.getEvalPreludes;
 		this.#reconcileBrowserMcpFilter = config.reconcileBrowserMcpFilter;
 		this.#customCommands = config.customCommands ?? [];
@@ -6721,6 +6732,11 @@ export class AgentSession implements SettingsScope {
 		const sessionId = this.sessionManager.getSessionId();
 		if (this.#chatModeJournaledSessionId === sessionId) return;
 		this.#chatModeJournaledSessionId = sessionId;
+		this.#recordChatMode();
+	}
+
+	/** Append a chat-mode entry when the branch's recorded state differs from the live one. */
+	#recordChatMode(): void {
 		const recorded = readChatModeEntry(this.sessionManager.getBranch());
 		const current = this.#chatMode ?? null;
 		if (sameChatMode(recorded, current) || (current === null && recorded === undefined)) return;
@@ -12441,6 +12457,45 @@ export class AgentSession implements SettingsScope {
 	/** Chat mode this session runs in; undefined for an ordinary coding session. */
 	get chatMode(): ChatModeConfig | undefined {
 		return this.#chatMode;
+	}
+
+	/**
+	 * Switch chat mode on the live session (`/chat`, RPC `set_chat_mode`).
+	 * The system prompt is rebuilt now, so the next turn uses it; the prompt
+	 * cache break is intended. Entering chat mode deactivates every tool, as a
+	 * launch without `--tools` does; leaving restores the selection it saved.
+	 * The new state is journaled so a resume restores it, and a
+	 * `chat_mode_changed` event is emitted when the state changes.
+	 */
+	async setChatMode(request: ChatModeChangeRequest): Promise<ChatModeConfig | undefined> {
+		if (this.isStreaming) throw new Error("Change chat mode after the current turn finishes.");
+		const current = this.#chatMode;
+		const last = this.#lastChatMode ?? readLastActiveChatMode(this.sessionManager.getBranch());
+		const next = resolveChatModeChange(request, current, last, cfgChatInclude.get(this.settings)) ?? undefined;
+		if (next && this.#chatModeBlockedReason) throw new Error(this.#chatModeBlockedReason);
+		if (sameChatMode(current, next)) return current;
+		this.#chatMode = next;
+		this.#lastChatMode = next ?? current;
+		this.#extensionRunner?.setChatMode(next !== undefined);
+		this.#advisors.setChatMode(next?.mode);
+		if (!current) {
+			this.#chatModeStashedTools = {
+				enabled: this.getEnabledToolNames(),
+				mounted: this.getMountedXdevToolNames(),
+			};
+			await this.setActiveToolsByName([]);
+		} else if (!next && this.#chatModeStashedTools) {
+			const { enabled, mounted } = this.#chatModeStashedTools;
+			this.#chatModeStashedTools = undefined;
+			await this.setActiveToolPresentation(enabled, mounted);
+		}
+		if (this.#agentKind === "main") {
+			this.#recordChatMode();
+			this.#chatModeJournaledSessionId = this.sessionManager.getSessionId();
+		}
+		await this.refreshBaseSystemPrompt();
+		this.#emit({ type: "chat_mode_changed", ...chatModeState(next) });
+		return next;
 	}
 
 	/**

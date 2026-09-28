@@ -57,6 +57,7 @@ import {
 	watchAndReportPromptResult,
 } from "./rpc-prompt-results";
 import { RpcRoles } from "./rpc-roles";
+import { setRpcChatMode } from "./rpc-chat-mode";
 import { RpcSessionEventForwarder } from "./rpc-session-events";
 import { isRpcSessionSettled, RpcSessionSettleWatcher } from "./rpc-session-settle";
 import { RpcSubagentRegistry, readRpcSubagentTranscript } from "./rpc-subagents";
@@ -1389,6 +1390,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					})),
 					contextUsage: session.getContextUsage(),
 					activeRole: rpcRoles.activeRole(),
+					chatMode: session.chatMode?.mode ?? "off",
 				};
 				return success(id, "get_state", state);
 			}
@@ -1402,6 +1404,12 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					enabled: session.isFastModeEnabled(),
 					active: session.isFastModeActive(),
 				});
+			}
+
+			case "set_chat_mode": {
+				const outcome = await setRpcChatMode(session, command);
+				if (!outcome.ok) return error(id, "set_chat_mode", outcome.message, outcome.code);
+				return success(id, "set_chat_mode", outcome.state);
 			}
 
 			case "get_available_commands": {

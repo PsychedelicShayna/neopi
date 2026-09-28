@@ -2,6 +2,7 @@ import type { AgentEvent, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Effort } from "@oh-my-pi/pi-ai";
 import type { Rule } from "../capability/rule";
+import type { ChatModeSetting } from "../chat/chat-mode";
 import type { RetryErrorUpdate } from "../extensibility/shared-events";
 import type { Goal } from "@oh-my-pi/pi-tui/tools/goal";
 import type { GoalModeState } from "../goals/state";
@@ -78,7 +79,9 @@ export type AgentSessionEvent =
 			/** The level `auto` resolved to this turn, once classified. */
 			resolved?: Effort;
 	  }
-	| { type: "goal_updated"; goal: Goal | null; state?: GoalModeState };
+	| { type: "goal_updated"; goal: Goal | null; state?: GoalModeState }
+	/** Live chat-mode change: `mode` is `off` outside chat mode; `include` is comma-joined. */
+	| { type: "chat_mode_changed"; mode: ChatModeSetting; include: string };
 
 /** Listener function for agent session events. */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
