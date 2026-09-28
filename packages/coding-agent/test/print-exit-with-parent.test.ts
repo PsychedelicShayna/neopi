@@ -52,6 +52,54 @@ void new Response(run.stdout).text();
 await run.exited;
 `;
 
+const SRC = path.join(import.meta.dir, "../src");
+
+/**
+ * SDK embedder worker: installs exitWithParent(), attaches a session whose
+ * extension records session_shutdown, then idles until the watchdog acts.
+ */
+const SDK_WORKER = `
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { ModelRegistry } from "${SRC}/config/model-registry";
+import { Settings } from "${SRC}/config/settings";
+import { exitWithParent } from "${SRC}/exit-with-parent";
+import { createAgentSession } from "${SRC}/sdk";
+import { AuthStorage } from "${SRC}/session/auth-storage";
+import { SessionManager } from "${SRC}/session/session-manager";
+
+const [dir, shutdownFile, readyFile] = process.argv.slice(2);
+const parentExit = exitWithParent();
+const authStorage = await AuthStorage.create(path.join(dir, "auth.db"));
+const { session } = await createAgentSession({
+	cwd: dir,
+	agentDir: dir,
+	sessionManager: SessionManager.inMemory(),
+	authStorage,
+	modelRegistry: new ModelRegistry(authStorage, path.join(dir, "models.yml")),
+	settings: Settings.isolated(),
+	enableLsp: false,
+	enableMCP: false,
+	skipPythonPreflight: true,
+	skills: [],
+	rules: [],
+	contextFiles: [],
+	promptTemplates: [],
+	slashCommands: [],
+	toolNames: ["read"],
+	extensions: [
+		pi => {
+			pi.on("session_shutdown", () => {
+				fs.writeFileSync(shutdownFile, "session_shutdown");
+			});
+		},
+	],
+});
+parentExit.attach({ session });
+fs.writeFileSync(readyFile, "ready");
+setInterval(() => {}, 1 << 30);
+`;
+
 /** `[state, pgrp]` from /proc/<pid>/stat; zombies count as gone (their reaper may lag). */
 function procStat(pid: string): [string, number] | undefined {
 	try {
@@ -313,5 +361,51 @@ describe.skipIf(process.platform !== "linux")("print mode exit-with-parent", () 
 
 		await waitUntil(() => !isAlive(runPid!), 5_000);
 		expect(isAlive(runPid!)).toBe(false);
+	}, 90_000);
+
+	it("disposes an SDK embedder's attached session when the host is SIGKILLed", async () => {
+		// Abort alone leaves resources only dispose() releases (browser tabs,
+		// provider state, persistence flush); session_shutdown proves dispose ran.
+		const { dir, work, env } = await createSandbox();
+		const workerFile = path.join(dir, "worker.ts");
+		const shutdownFile = path.join(dir, "shutdown");
+		const readyFile = path.join(dir, "ready");
+		const workerPidFile = path.join(dir, "worker.pid");
+		await Bun.write(workerFile, SDK_WORKER);
+		const hostFile = path.join(dir, "sdk-host.ts");
+		await Bun.write(
+			hostFile,
+			`const worker = Bun.spawn([process.execPath, ...process.argv.slice(3)], { stdio: ["ignore", "ignore", "inherit"] });
+			await Bun.write(process.argv[2], String(worker.pid));
+			await worker.exited;`,
+		);
+		const host = Bun.spawn([process.execPath, hostFile, workerPidFile, workerFile, dir, shutdownFile, readyFile], {
+			cwd: work,
+			env,
+			stdio: ["ignore", "ignore", "inherit"],
+		});
+		let workerPid: number | undefined;
+		cleanups.push(() => {
+			for (const pid of [host.pid, workerPid]) {
+				if (pid === undefined) continue;
+				try {
+					process.kill(pid, "SIGKILL");
+				} catch {}
+			}
+		});
+
+		const ready = await waitUntil(async () => {
+			workerPid ??= await readPid(workerPidFile);
+			return fs.existsSync(readyFile);
+		}, 60_000);
+		expect({ ready, workerPid }).toMatchObject({ ready: true });
+
+		process.kill(host.pid, "SIGKILL");
+
+		await waitUntil(() => !isAlive(workerPid!), 5_000);
+		expect({ alive: isAlive(workerPid!), shutdownSeen: fs.existsSync(shutdownFile) }).toEqual({
+			alive: false,
+			shutdownSeen: true,
+		});
 	}, 90_000);
 });

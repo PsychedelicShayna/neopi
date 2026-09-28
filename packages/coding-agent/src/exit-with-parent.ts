@@ -19,6 +19,7 @@ import { shutdownAll as shutdownAllLspClients } from "./lsp/client";
 import type { MCPManager } from "./mcp/manager";
 import { killDetachedStdioProcessGroups } from "./mcp/transports/stdio";
 import type { AgentSession } from "./session/agent-session";
+import { SHUTDOWN_CONSOLIDATE_BUDGET_MS } from "./session/agent-session-types";
 import { watchParentProcess } from "./utils/parent-watchdog";
 
 /** Exit status after the parent died: 128 + SIGHUP, the status a hung-up session reports. */
@@ -131,8 +132,17 @@ async function tearDownOwnedProcesses(targets: ExitWithParentTarget[], teardownM
 	const work: Promise<unknown>[] = [shutdownAllLspClients(), disposeAllKernelSessions(), disposeAllVmContexts()];
 	for (const { session, mcpManager } of targets) {
 		// abort() kills the running tool (a foreground bash command) right away;
-		// dispose() reaches MCP and async jobs only after its drain windows.
+		// dispose() reaches MCP and async jobs only after its drain windows, so
+		// those are torn down directly as well. dispose() still has to run: it
+		// alone releases browser tabs, computer sessions, provider state, session
+		// disposers and the persistence flush. The overall deadline bounds it.
 		work.push(session.abort({ reason: PARENT_EXIT_ABORT_REASON }));
+		work.push(
+			session.dispose({
+				drainTimeoutMs: teardownMs,
+				mnemopiConsolidateTimeoutMs: Math.min(teardownMs, SHUTDOWN_CONSOLIDATE_BUDGET_MS),
+			}),
+		);
 		if (session.asyncJobManager) work.push(session.asyncJobManager.dispose({ timeoutMs: teardownMs }));
 		if (mcpManager) work.push(mcpManager.disconnectAll());
 	}
