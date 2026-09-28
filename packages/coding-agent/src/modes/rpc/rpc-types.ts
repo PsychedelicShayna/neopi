@@ -16,6 +16,7 @@ import type { AgentProgress } from "@oh-my-pi/pi-tui/tools/task";
 import type { SubagentEventPayload, SubagentLifecyclePayload, SubagentProgressPayload } from "../../task";
 import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import type { RpcMessagesPage } from "./rpc-messages";
+import type { RpcRolesResult, RpcSetRoleResult } from "./rpc-roles";
 import type { RpcUsageResult } from "./rpc-usage";
 
 // ============================================================================
@@ -53,6 +54,8 @@ export type RpcCommand =
 	| { id?: string; type: "set_model"; provider: string; modelId: string }
 	| { id?: string; type: "cycle_model" }
 	| { id?: string; type: "get_available_models" }
+	| { id?: string; type: "get_roles" }
+	| { id?: string; type: "set_role"; role: string }
 
 	// Thinking
 	| { id?: string; type: "set_thinking_level"; level: ThinkingLevel }
@@ -126,6 +129,8 @@ export interface RpcSessionState {
 	dumpTools?: Array<{ name: string; description: string; parameters: unknown; examples?: readonly ToolExample[] }>;
 	/** Current context window usage. */
 	contextUsage?: ContextUsage;
+	/** Role the current model was selected through (`set_role`, `--model @<role>`); absent after a direct model choice. */
+	activeRole?: string;
 }
 
 export interface RpcAvailableSlashCommand {
@@ -345,6 +350,20 @@ export type RpcResponse =
 			command: "get_available_models";
 			success: true;
 			data: { models: Model[] };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_roles";
+			success: true;
+			data: RpcRolesResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_role";
+			success: true;
+			data: RpcSetRoleResult;
 	  }
 
 	// Thinking

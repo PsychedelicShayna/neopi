@@ -56,6 +56,7 @@ import {
 	type RpcPromptTicket,
 	watchAndReportPromptResult,
 } from "./rpc-prompt-results";
+import { RpcRoles } from "./rpc-roles";
 import { RpcSessionEventForwarder } from "./rpc-session-events";
 import { isRpcSessionSettled, RpcSessionSettleWatcher } from "./rpc-session-settle";
 import { RpcSubagentRegistry, readRpcSubagentTranscript } from "./rpc-subagents";
@@ -807,6 +808,8 @@ export interface RpcModeOptions {
 	headless?: boolean;
 	subagentEventBus?: EventBus;
 	input?: ReadableStream<Uint8Array>;
+	/** `--model` selector the process launched with (absent with `--provider`); a role selector seeds `activeRole`. */
+	launchModel?: string;
 }
 
 /**
@@ -814,7 +817,7 @@ export interface RpcModeOptions {
  * Listens for JSON commands on stdin, outputs events and responses on stdout.
  */
 export async function runRpcMode(session: AgentSession, options: RpcModeOptions = {}): Promise<never> {
-	const { setToolUIContext, headless = false, subagentEventBus, input = claimRpcInput() } = options;
+	const { setToolUIContext, headless = false, subagentEventBus, input = claimRpcInput(), launchModel } = options;
 	// Signal to RPC clients that the server is ready to accept commands
 	// Suppress terminal notifications: they write \x07 (BEL) or OSC sequences directly to
 	// process.stdout with no newline, which the reader merges with the next JSON line and
@@ -867,6 +870,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	const hostToolBridge = new RpcHostToolBridge(output);
 	const hostUriBridge = new RpcHostUriBridge(output);
 	const subagentRegistry = subagentEventBus ? new RpcSubagentRegistry(subagentEventBus, output) : undefined;
+	const rpcRoles = new RpcRoles(session, launchModel);
 
 	// Shutdown request flag (wrapped in object to allow mutation with const)
 	const shutdownState = { requested: false };
@@ -1384,6 +1388,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 						examples: tool.examples,
 					})),
 					contextUsage: session.getContextUsage(),
+					activeRole: rpcRoles.activeRole(),
 				};
 				return success(id, "get_state", state);
 			}
@@ -1533,6 +1538,18 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				await session.modelRegistry.awaitBackgroundRefresh();
 				const models = session.getAvailableModels();
 				return success(id, "get_available_models", { models });
+			}
+
+			case "get_roles": {
+				await session.modelRegistry.awaitBackgroundRefresh();
+				return success(id, "get_roles", rpcRoles.list());
+			}
+
+			case "set_role": {
+				const result = await rpcRoles.setRole(command.role);
+				if (!result.ok) return error(id, "set_role", result.message, result.code);
+				output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
+				return success(id, "set_role", result.data);
 			}
 
 			// =================================================================
