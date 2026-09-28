@@ -528,6 +528,10 @@ fields follows; setting the current state again responds without an event.
   the date/cwd reminder, and non-chat extension prompt injection, exactly as
   `--chat` does. Only explicit `--system-prompt` / `--append-system-prompt`
   text carries into chat mode.
+- Chat mode cannot start while plan mode is on: `set_chat_mode` (and `/chat`)
+  fails with `Exit plan mode first.` and no `code`, like the other chat-mode
+  refusals. Leave plan mode with `set_mode { mode: "default" }` first. See
+  [Plan Mode Sub-Protocol](#plan-mode-sub-protocol).
 - The change is journaled on the session, so `--resume` / `--session` restores
   the last mode. `--chat` flags still set the initial mode at launch.
 - Failures: `session_busy` while a turn is streaming; a session launched with
@@ -1125,6 +1129,7 @@ Response data: `{ "mode": "plan" | "default", "planFilePath"?: string }`. `planF
 
 - `mode: "plan"` enters plan mode like the interactive `/plan`: the session gets a plan-mode state with `planFilePath` (the supplied path, else the path of the plan state being re-entered, else `local://PLAN.md`) and `workflow` (carried over, else `"parallel"`); the built-in `write` tool joins the active tools so the agent can draft the plan and submit it; the session switches to the `plan` model role when one is configured; and a `mode_change` entry is appended to the session. Sending `plan` while already in plan mode only retargets the plan file when `planFilePath` differs.
 - `mode: "default"` leaves plan mode: plan state and the proposal handler are cleared, the pre-plan tools and model are restored, and a `mode_change` entry is appended. If a plan proposal is pending, it is first resolved as `refine` without feedback. Sending `default` outside plan mode succeeds without changes. The exit is all-or-nothing: if restoring the pre-plan model or tools fails, the command fails and the session stays in plan mode with the plan tools, the plan model, and its proposal handler, so a retry can complete the exit.
+- Plan mode and chat mode are mutually exclusive. Chat mode runs without tools, and plan mode adds `write` to draft and propose the plan. `set_mode { mode: "plan" }` fails with `mode_blocked` while chat mode is on, and entering chat mode fails while plan mode is on (see [`set_chat_mode`](#set_chat_mode-payload)). So leaving plan mode never reactivates tools under chat mode.
 - Only `"default"` and `"plan"` are accepted; any other value, or a non-string or empty `planFilePath`, fails without a `code`.
 
 Failures leave the session unchanged and carry a machine-readable `code`:
@@ -1132,7 +1137,7 @@ Failures leave the session unchanged and carry a machine-readable `code`:
 | `code` | When |
 | --- | --- |
 | `plan_disabled` | `mode: "plan"` while the `plan.enabled` setting is `false`. |
-| `mode_blocked` | `mode: "plan"` while goal mode (active or paused) or vibe mode is on. |
+| `mode_blocked` | `mode: "plan"` while goal mode (active or paused), vibe mode, or chat mode is on. |
 | `session_busy` | The session is streaming or compacting. Mode changes apply between turns. `mode: "default"` is exempt while a plan proposal is pending, since the proposing turn is still streaming. |
 
 ### `mode_changed`

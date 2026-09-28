@@ -17,6 +17,7 @@ import { cfgModelRoles } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { dispatchRpcControlFrame, type RpcInputFrameDeps } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-mode";
+import { setRpcChatMode } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-chat-mode";
 import { RpcPlanModeController, RpcSetModeError } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-plan-mode";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -223,6 +224,31 @@ describe("RPC plan mode", () => {
 		expect(session.getActiveToolNames()).toEqual(["read"]);
 		expect(session.model?.id).toBe(originalModelId);
 		expect(modeEntries()).toEqual(["plan", "none"]);
+	});
+
+	it("chat mode cannot start while plan mode is on, so leaving plan mode never reactivates tools under chat", async () => {
+		const { session, planMode } = setup();
+		await planMode.setMode("plan", undefined);
+
+		expect(await setRpcChatMode(session, { mode: "chat" })).toEqual({ ok: false, message: "Exit plan mode first." });
+		expect(session.chatMode).toBeUndefined();
+
+		await planMode.setMode("default", undefined);
+		expect(session.chatMode).toBeUndefined();
+		expect(session.getActiveToolNames()).toEqual(["read"]);
+	});
+
+	it("plan mode cannot start while chat mode is on, and chat stays tool-free", async () => {
+		const { session, planMode, frames } = setup();
+		expect(await setRpcChatMode(session, { mode: "chat" })).toMatchObject({ ok: true });
+		expect(session.getActiveToolNames()).toEqual([]);
+
+		const blocked = await planMode.setMode("plan", undefined).catch(error => error);
+		expect(blocked).toBeInstanceOf(RpcSetModeError);
+		expect(blocked.code).toBe("mode_blocked");
+		expect(session.getActiveToolNames()).toEqual([]);
+		expect(planMode.state).toEqual({ mode: "default" });
+		expect(frames).toEqual([]);
 	});
 
 	it("honors a host-supplied plan file path", async () => {

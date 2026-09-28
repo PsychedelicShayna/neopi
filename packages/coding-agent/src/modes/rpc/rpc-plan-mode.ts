@@ -171,6 +171,12 @@ export class RpcPlanModeController {
 		if (session.getVibeModeState()?.enabled) {
 			throw new RpcSetModeError("Exit vibe mode first.", "mode_blocked");
 		}
+		// Chat mode runs without tools, and plan mode needs `write` to draft and
+		// propose; the two are mutually exclusive (AgentSession.setChatMode
+		// refuses the other direction).
+		if (session.chatMode) {
+			throw new RpcSetModeError("Exit chat mode first.", "mode_blocked");
+		}
 		if (session.isStreaming || session.isCompacting) {
 			throw new RpcSetModeError("Cannot change mode while a response or compaction is in progress", "session_busy");
 		}
