@@ -137,12 +137,12 @@ export class SwitchStore {
 	publishGeneration(actor: string, config: SwitchConfig, generation: string, plans: readonly ResolvedPlan[], issues: Issue[], pendingRestart: PendingRestart[]): void {
 		this.#assertReady();
 		const nextPlans = new Map(plans.map(plan => [plan.config.id, plan]));
-		for (const key of this.#keys.values()) for (const budget of key.budgets) {
-			if (budget.unit === "plan_pct" && budget.scope.plan && nextPlans.get(budget.scope.plan)?.config.attribution === "tokens") throw new SwitchError(422, "attribution_tokens", "A token-attribution Plan cannot retain percentage-point Budgets");
-		}
-		// Capacity changes never rescue unsupported transfer debits by silently unwinding them.
-		validateAllocations(this.#keys, nextPlans, this.#allocationVersion + 1);
 		this.#transaction(stage => {
+			for (const key of stage.keys.values()) for (const budget of key.budgets) {
+				if (budget.unit === "plan_pct" && budget.scope.plan && nextPlans.get(budget.scope.plan)?.config.attribution === "tokens") throw new SwitchError(422, "attribution_tokens", "A token-attribution Plan cannot retain percentage-point Budgets");
+			}
+			// Revalidate the complete allocation set in the publication transaction.
+			validateAllocations(stage.keys, nextPlans, stage.allocationVersion + 1);
 			const previous = stage.generation;
 			stage.config = config; stage.generation = generation; stage.plans = nextPlans;
 			stage.policyVersion++; stage.allocationVersion++;

@@ -119,21 +119,25 @@ export class SwitchAdminController {
 	#write<T>(writer: () => T): Response { return this.#read(writer); }
 
 	async handle(request: Request): Promise<Response> {
+		let allowedOrigin: string | undefined;
 		try {
 			const url = new URL(request.url);
 			const origin = request.headers.get("origin");
 			const allowedOrigins = this.#operations.loaded().config.admin?.corsOrigins ?? [];
 			if (origin && !allowedOrigins.includes(origin)) throw new SwitchError(403, "origin_forbidden", "Browser origin is not allow-listed");
+			if (origin) allowedOrigin = origin;
 			if (request.method === "OPTIONS") {
 				if (!origin) throw new SwitchError(403, "origin_forbidden", "An Origin header is required for admin preflight");
 				return new Response(null, { status: 204, headers: { "Access-Control-Allow-Origin": origin, "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS", "Access-Control-Allow-Headers": "authorization, content-type, if-match, if-none-match, last-event-id", Vary: "Origin", "Cache-Control": "no-store" } });
 			}
 			const result = await this.#route(request, url);
-			if (origin) { result.headers.set("Access-Control-Allow-Origin", origin); result.headers.set("Vary", "Origin"); }
+			if (allowedOrigin) { result.headers.set("Access-Control-Allow-Origin", allowedOrigin); result.headers.set("Vary", "Origin"); }
 			return result;
 		} catch (error) {
 			const failure = error instanceof SwitchError ? error : new SwitchError(500, "internal_error", "The switch could not complete the admin request");
-			return json(failure.toJSON(), failure.status);
+			const result = json(failure.toJSON(), failure.status);
+			if (allowedOrigin) { result.headers.set("Access-Control-Allow-Origin", allowedOrigin); result.headers.set("Vary", "Origin"); }
+			return result;
 		}
 	}
 
