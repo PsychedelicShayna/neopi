@@ -260,6 +260,7 @@ describe("session lifetime lease", () => {
 			modelRegistry: new ModelRegistry(authStorage),
 		});
 		try {
+			const reservedId = session.sessionManager.reserveEntryId();
 			let takenDuringSwitch: boolean | undefined;
 			const switched = await session.switchSession(target.file, {
 				onCwdChange: async () => {
@@ -274,7 +275,11 @@ describe("session lifetime lease", () => {
 			expect(await anotherProcessCanTake(older.file)).toBe(false);
 			// The restored session still owns and writes its file.
 			const sizeBefore = fs.statSync(older.file).size;
-			session.sessionManager.appendMessage({ role: "user", content: "after rollback", timestamp: Date.now() });
+			const writtenId = session.sessionManager.appendMessage(
+				{ role: "user", content: "after rollback", timestamp: Date.now() },
+				reservedId,
+			);
+			expect(writtenId).toBe(reservedId);
 			await session.sessionManager.flush();
 			expect(fs.statSync(older.file).size).toBeGreaterThan(sizeBefore);
 		} finally {
