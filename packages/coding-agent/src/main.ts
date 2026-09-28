@@ -161,6 +161,7 @@ import {
 import { cfgDisabledProviders, cfgEnabledModels } from "./config/model-settings";
 import { cfgTaskAgentIdleTtlMs } from "./task/settings";
 import { cfgSkillsIncludeSkills } from "./extensibility/settings";
+import { cfgMcpIncludeServers } from "./mcp/settings";
 import { cfgChatInclude, cfgChatMode } from "./chat/settings";
 import { cfgWorkspaceAdditionalDirectories } from "./session/context-settings";
 
@@ -1765,6 +1766,13 @@ export async function buildSessionOptions(
 		} else if (parsed.skills && parsed.skills.length > 0) {
 			// Override includeSkills for this session
 			cfgSkillsIncludeSkills.override(activeSettings, parsed.skills as string[]);
+		}
+
+		// MCP servers
+		if (parsed.noMcp) {
+			options.enableMCP = false;
+		} else if (parsed.mcp && parsed.mcp.length > 0) {
+			cfgMcpIncludeServers.override(activeSettings, parsed.mcp);
 		}
 
 		// Rules

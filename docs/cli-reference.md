@@ -139,6 +139,8 @@ See [providers](./providers.md) and [models](./models.md) for model resolution.
 | `--no-extensions` | Disable extension discovery (explicit `-e` paths still work). |
 | `--skills <globs>` | Comma-separated glob patterns to filter [skills](./skills.md) (e.g. `git-*,docker`). |
 | `--no-skills` | Disable skills discovery and loading. |
+| `--mcp <globs>` | Comma-separated glob patterns of MCP server names to connect for this run (e.g. `github,linear-*`). Sets the `mcp.includeServers` session setting; the user `disabledServers` list still wins. |
+| `--no-mcp` | Disable MCP server discovery and connection. |
 | `--no-rules` | Disable rules discovery and loading. See [context files](./context-files.md). |
 
 #### System prompt

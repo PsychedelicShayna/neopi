@@ -22,6 +22,8 @@ export interface LoadMCPConfigsOptions {
 	filterBrowser?: boolean;
 	/** Session-local extension roots for post-startup rediscovery (explicit + mode + configured). */
 	extensionRoots?: EffectiveExtensionRoots;
+	/** Server name globs to admit; empty or absent admits every server. */
+	includeServers?: readonly string[];
 }
 
 /** Result of loading MCP configs */
@@ -138,9 +140,13 @@ export async function loadAllMCPConfigs(cwd: string, options?: LoadMCPConfigsOpt
 	// lower-priority user `foo` disabled), but never equivalence-shadow a
 	// differently-named enabled server — otherwise the disabled alias would be
 	// removed downstream and starve the surviving connection.
+	// Allowlist misses are suppressed like disabled servers, for the same
+	// dedupe reason: they keep their name but never shadow an admitted server.
+	const includeGlobs = (options?.includeServers ?? []).map(pattern => new Bun.Glob(pattern));
 	const suppressServer = (server: MCPServer & { _source: SourceMeta }): boolean => {
 		if (disabledServers.has(server.name)) return true;
 		if (server.enabled === false && !forcedEnabled.has(server.name)) return true;
+		if (includeGlobs.length > 0 && !includeGlobs.some(glob => glob.match(server.name))) return true;
 		return false;
 	};
 

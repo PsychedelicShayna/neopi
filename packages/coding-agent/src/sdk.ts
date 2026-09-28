@@ -348,6 +348,7 @@ import { cfgImagesBlockImages, cfgStartupQuiet, cfgTuiReactions, cfgTuiRenderMer
 import { cfgLspLazy, cfgLspShared } from "./lsp/settings";
 import {
 	cfgMcpEnableProjectConfig,
+	cfgMcpIncludeServers,
 	cfgMcpNotificationDebounceMs,
 	cfgMcpNotifications,
 	cfgMcpStartupTimeoutMs,
@@ -2309,6 +2310,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// Filter browser MCP only when Eval can expose the built-in browser prelude.
 			filterBrowser: initialBrowserPreludeAvailable,
 			extensionRoots: buildSessionExtensionRoots(),
+			includeServers: cfgMcpIncludeServers.get(settings),
 		};
 		if (enableMCP && !mcpManager) {
 			if (deferMCPDiscoveryForUI) {

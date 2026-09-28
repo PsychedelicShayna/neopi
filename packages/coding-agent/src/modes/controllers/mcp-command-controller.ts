@@ -71,7 +71,7 @@ import { theme } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext } from "../types";
 import { groupBySource, parseRemoveArgs, readScopeFlag, showCommandMessage } from "./command-controller-shared";
 
-import { cfgMcpEnableProjectConfig } from "../../mcp/settings";
+import { cfgMcpEnableProjectConfig, cfgMcpIncludeServers } from "../../mcp/settings";
 
 const MCP_MANUAL_INPUT_PROVIDER_ID = "mcp";
 const MCP_MANUAL_LOGIN_TIP = "Headless? Paste the redirect URL or code with /login <value>.";
@@ -2228,6 +2228,7 @@ export class MCPCommandController {
 			filterExa: true,
 			filterBrowser: this.ctx.session.getEvalPreludes().some(definition => definition.name === "browser"),
 			extensionRoots: this.ctx.session.effectiveExtensionRoots,
+			includeServers: cfgMcpIncludeServers.get(this.ctx.settings),
 		});
 		await this.ctx.session.refreshMCPTools(this.ctx.mcpManager.getTools());
 

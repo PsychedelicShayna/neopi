@@ -228,6 +228,8 @@ export interface MCPDiscoverOptions {
 	filterBrowser?: boolean;
 	/** Session-local extension roots for post-startup rediscovery (explicit + mode + configured). */
 	extensionRoots?: EffectiveExtensionRoots;
+	/** Server name globs to admit; empty or absent admits every server. */
+	includeServers?: readonly string[];
 	/** Called when MCP server connection state changes. */
 	onStatus?: (event: McpConnectionStatusEvent) => void;
 	/** Non-blocking discovery window in milliseconds; environment override wins. */
@@ -545,6 +547,7 @@ export class MCPManager {
 				filterExa: options?.filterExa,
 				filterBrowser: options?.filterBrowser,
 				extensionRoots: options?.extensionRoots,
+				includeServers: options?.includeServers,
 			});
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
@@ -592,6 +595,7 @@ export class MCPManager {
 			filterExa: options.filterExa,
 			filterBrowser: options.filterBrowser,
 			extensionRoots: options.extensionRoots,
+			includeServers: options.includeServers,
 		});
 		// Every server whose resolution depends on the flag: project-level ones
 		// known now, plus project-level ones the enabled load resolves.
@@ -626,6 +630,7 @@ export class MCPManager {
 			filterExa: options?.filterExa,
 			filterBrowser: false,
 			extensionRoots: options?.extensionRoots,
+			includeServers: options?.includeServers,
 		});
 		const browserConfigs: Record<string, MCPServerConfig> = {};
 		const browserSources: Record<string, SourceMeta> = {};
