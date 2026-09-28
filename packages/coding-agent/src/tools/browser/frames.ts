@@ -9,6 +9,7 @@ import { throwIfAborted } from "../tool-errors";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { type AriaSnapshotOptions, buildAriaSnapshotScript } from "./aria/aria-snapshot";
 import { clickElement, fillViaHandle } from "./interactions";
+import { browserScreenshotResizeOptions } from "./screenshot";
 import { RunOutput } from "./run-output";
 import type { ScreenshotResult, SessionSnapshot } from "./tab-protocol";
 
@@ -382,7 +383,7 @@ export async function captureFrameScreenshot(
 	}
 	const resized = await resizeImage(
 		{ type: "image", data: buffer.toBase64(), mimeType: "image/png" },
-		{ maxWidth: 1024, maxHeight: 1024, maxBytes: 150 * 1024, jpegQuality: 70, excludeWebP: session.excludeWebP },
+		browserScreenshotResizeOptions(session),
 	);
 	const saveFullRes = !!session.browserScreenshotDir;
 	const savedBuffer = saveFullRes ? buffer : resized.buffer;

@@ -80,6 +80,7 @@ import {
 } from "../snapshot-plus";
 import {
 	createPngDiff,
+	browserScreenshotResizeOptions,
 	type DiffScreenshotOptions,
 	type DiffScreenshotResult,
 	type PdfOptions,
@@ -1179,13 +1180,7 @@ export class CmuxTab {
 		const captureMime = "image/png";
 		const resized = await resizeImage(
 			{ type: "image", data: result.png_base64, mimeType: captureMime },
-			{
-				maxWidth: 1024,
-				maxHeight: 1024,
-				maxBytes: 150 * 1024,
-				jpegQuality: 70,
-				excludeWebP: context.session.excludeWebP,
-			},
+			browserScreenshotResizeOptions(context.session),
 		);
 		const saveFullRes = !!context.session.browserScreenshotDir;
 		const savedBuffer = saveFullRes ? buffer : Buffer.from(resized.buffer);
@@ -1239,13 +1234,7 @@ export class CmuxTab {
 		await Bun.write(diffPath, diff.png);
 		const resized = await resizeImage(
 			{ type: "image", data: diff.png.toString("base64"), mimeType: "image/png" },
-			{
-				maxWidth: 1024,
-				maxHeight: 1024,
-				maxBytes: 150 * 1024,
-				jpegQuality: 70,
-				excludeWebP: context.session.excludeWebP,
-			},
+			browserScreenshotResizeOptions(context.session),
 		);
 		context.screenshots.push({
 			dest: diffPath,

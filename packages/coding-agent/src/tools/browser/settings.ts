@@ -109,6 +109,30 @@ export const cfgBrowserIdleCloseSec = register({
 	},
 });
 
+export const cfgBrowserScreenshotMaxWidth = register({
+	id: "browser.screenshotMaxWidth",
+	type: "number",
+	default: 1024,
+	ui: {
+		tab: "tools",
+		group: "Grep & Browser",
+		label: "Browser Screenshot Width",
+		description: "Maximum width in pixels for browser screenshots sent to the model",
+	},
+});
+
+export const cfgBrowserScreenshotMaxHeight = register({
+	id: "browser.screenshotMaxHeight",
+	type: "number",
+	default: 1024,
+	ui: {
+		tab: "tools",
+		group: "Grep & Browser",
+		label: "Browser Screenshot Height",
+		description: "Maximum height in pixels for browser screenshots sent to the model",
+	},
+});
+
 export const cfgBrowserScreenshotDir = register({
 	id: "browser.screenshotDir",
 	type: "string",

@@ -53,13 +53,22 @@ function makeKind(socketSuffix: string): CmuxKind {
 	};
 }
 
-function makeSession(cwd: string, screenshotDir?: string): ToolSession {
+function makeSession(
+	cwd: string,
+	screenshotDir?: string,
+	limits?: { maxWidth: number; maxHeight: number },
+): ToolSession {
 	// Minimal shape: `runInTab` reads `cwd`, the `browser.screenshotDir` setting,
 	// and `getActiveModel?.()`. Everything else is untouched by this flow.
 	return {
 		cwd,
 		hasUI: false,
-		settings: Settings.isolated({ "browser.screenshotDir": screenshotDir }),
+		settings: Settings.isolated({
+			"browser.screenshotDir": screenshotDir,
+			...(limits
+				? { "browser.screenshotMaxWidth": limits.maxWidth, "browser.screenshotMaxHeight": limits.maxHeight }
+				: {}),
+		}),
 		getSessionFile: () => null,
 	} as unknown as ToolSession;
 }
@@ -498,6 +507,56 @@ describe("browser tab-supervisor — cmux tab close mid-run (#4499)", () => {
 		expect(savedPath).not.toBe("/workspace/screenshots/daemon-owned.png");
 		expect(await Bun.file(savedPath).exists()).toBe(true);
 		await fs.rm(savedPath);
+	});
+
+	it("applies configurable screenshot dimensions to successive cmux captures", async () => {
+		const seed = Buffer.from(
+			"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
+			"base64",
+		);
+		const png = await new Bun.Image(seed).resize(1600, 1200, { filter: "nearest" }).png().bytes();
+		spyOn(CmuxSocketClient.prototype, "connect").mockResolvedValue(undefined);
+		spyOn(CmuxSocketClient.prototype, "close").mockImplementation(() => undefined);
+		spyOn(CmuxSocketClient.prototype, "request").mockImplementation(async (method: string) => {
+			switch (method) {
+				case "browser.open_split":
+					return { surface_id: "surface-screenshot-dimensions", url: "about:blank" };
+				case "browser.url.get":
+					return { url: "about:blank" };
+				case "browser.snapshot":
+					return { page: { html: "" } };
+				case "browser.eval":
+					return { value: "" };
+				case "browser.screenshot":
+					return { png_base64: Buffer.from(png).toString("base64") };
+				default:
+					return {};
+			}
+		});
+		const browser = await acquireBrowser(makeKind("screenshot-dimensions"), { cwd: "/tmp" });
+		await acquireTab("screenshot-dimensions", browser, {
+			timeoutMs: 5_000,
+			ownerSessionId: "session-screenshot-dimensions",
+		});
+		const savedPaths: string[] = [];
+		try {
+			for (const [session, expected] of [
+				[makeSession("/tmp"), { width: 1024, height: 768 }],
+				[makeSession("/tmp", undefined, { maxWidth: 600, maxHeight: 500 }), { width: 600, height: 450 }],
+			] as const) {
+				const result = await runInTab("screenshot-dimensions", {
+					code: "return await tab.screenshot({ silent: true });",
+					timeoutMs: 5_000,
+					session,
+				});
+				if (typeof result.returnValue !== "string") throw new Error("tab.screenshot() did not return a path");
+				savedPaths.push(result.returnValue);
+				const metadata = await new Bun.Image(await Bun.file(result.returnValue).bytes()).metadata();
+				expect({ width: metadata.width, height: metadata.height }).toEqual(expected);
+			}
+		} finally {
+			await Promise.all(savedPaths.map(savedPath => fs.rm(savedPath, { force: true })));
+		}
 	});
 
 	it("saves screenshots under the configured screenshot directory", async () => {
