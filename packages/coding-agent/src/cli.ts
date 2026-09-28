@@ -16,7 +16,6 @@ try {
  */
 import type * as WorkerThreads from "node:worker_threads";
 import type { MessagePort } from "node:worker_threads";
-import type { Process, ProcessStatus } from "@oh-my-pi/pi-natives";
 import type { CliConfig, CommandMetadata } from "@oh-my-pi/pi-utils/cli";
 import type * as Postmortem from "@oh-my-pi/pi-utils/postmortem";
 import {
@@ -384,66 +383,11 @@ async function runIpcSubprocessWorker<In, Out>(
 			};
 		},
 	});
-	let parentWatchdog: NodeJS.Timeout | undefined;
-	const initialParentPid = process.ppid;
-	if (process.platform === "win32" && initialParentPid <= 0) {
-		shutdown();
-	} else if (initialParentPid > 0) {
-		let parentProcess: Process | null = null;
-		let runningStatus: ProcessStatus | undefined;
-		try {
-			if (!process.env.PI_TEST_NO_NATIVES) {
-				const natives = await import("@oh-my-pi/pi-natives");
-				parentProcess = natives.Process.fromPid(initialParentPid);
-				runningStatus = natives.ProcessStatus.Running;
-			}
-		} catch {}
-
-		// Note on container environments (Docker/Kubernetes): NeoPi often runs as
-		// PID 1, so workers start with process.ppid === 1. Treating ppid <= 1 as
-		// an orphan at boot would break containerized workers. Instead, we allow
-		// PID 1 to boot normally and detect post-spawn reparenting dynamically via
-		// `process.ppid !== initialParentPid`.
-		//
-		// Note on Linux seccomp/kernels: On hosts where pidfd_open is blocked or
-		// unavailable (e.g. pre-5.3 kernels, restrictive seccomp), Process.fromPid
-		// returns null even when the parent is alive. We treat null as the native
-		// handle being unavailable and fall through to the isParentAlive() check
-		// rather than assuming null means dead at boot.
-		const isParentAlive = (): boolean => {
-			if (process.ppid !== initialParentPid) {
-				return false;
-			}
-			if (parentProcess && runningStatus !== undefined) {
-				try {
-					return parentProcess.status() === runningStatus;
-				} catch {}
-			}
-			try {
-				process.kill(initialParentPid, 0);
-				return true;
-			} catch (err: unknown) {
-				return (err as NodeJS.ErrnoException)?.code === "EPERM";
-			}
-		};
-
-		if (!isParentAlive()) {
-			shutdown();
-		} else {
-			if (parentProcess) {
-				void parentProcess.waitForExit().then(
-					() => shutdown(),
-					() => shutdown(),
-				);
-			}
-			parentWatchdog = setInterval(() => {
-				if (!isParentAlive()) {
-					shutdown();
-				}
-			}, 1000);
-			parentWatchdog.unref();
-		}
-	}
+	// A host that dies without a clean IPC disconnect (SIGKILL) is caught by the
+	// parent-liveness watchdog. Latency boundary: it loads the native process
+	// API, which worker selectors that never reach this runner do not need.
+	const { watchParentProcess } = await import("./utils/parent-watchdog");
+	const parentWatchdog = watchParentProcess({ onParentExit: () => shutdown() });
 	const keepalive = setInterval(() => {}, 2 ** 30);
 	// Parent went away (crashed, SIGKILL, etc.) — commit suicide so we don't
 	// linger as an orphan. SIGKILL via `process.kill` keeps us symmetrical with
@@ -453,7 +397,7 @@ async function runIpcSubprocessWorker<In, Out>(
 		await shuttingDown;
 	} finally {
 		clearInterval(keepalive);
-		if (parentWatchdog) clearInterval(parentWatchdog);
+		parentWatchdog.stop();
 	}
 	process.kill(process.pid, "SIGKILL");
 }
