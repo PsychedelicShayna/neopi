@@ -366,7 +366,18 @@ describe("RPC eval prelude approval", () => {
 	test("without the host handler the prelude still asks through the select dialog", async () => {
 		const child = await spawnChild({ mode: "rpc-ui", approvalMode: "always-ask", config });
 		const call = await promptToolCall(child, "eval", cell);
-		const dialog = await child.waitFor(frame => frame.type === "extension_ui_request" && frame.method === "select");
+		// The nested browser approval arrives after eval's tool-start frame; allow
+		// the worker time to start under CI load without dropping this assertion.
+		const dialog = await child
+			.waitFor(frame => frame.type === "extension_ui_request" && frame.method === "select", 60_000)
+			.catch(error => {
+				const frames = child.frames.map(frame =>
+					[frame.type, frame.method, frame.toolName].filter(Boolean).join(":"),
+				);
+				throw new Error(`Browser approval select missing after eval start; frames: ${frames.join(", ")}`, {
+					cause: error,
+				});
+			});
 		expect(dialog.title).toBe("Allow tool: browser");
 		expect(dialog.options).toEqual(["Approve", "Deny"]);
 		child.send({ type: "extension_ui_response", id: dialog.id, value: "Deny" });
