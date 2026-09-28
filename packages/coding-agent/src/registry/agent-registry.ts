@@ -376,6 +376,26 @@ export class AgentRegistry {
 		return undefined;
 	}
 
+	/** The top-level ref that currently holds `session`, i.e. the root a UI bound to that session belongs to. */
+	rootForSession(session: AgentSession): AgentRef | undefined {
+		for (const ref of this.#refs.values()) {
+			if (ref.kind === "main" && ref.session === session) return ref;
+		}
+		return undefined;
+	}
+
+	/**
+	 * Whether a surface owned by `root` may display or drive agent `id`: true
+	 * unless `id` resolves to a different root. With no known owning root, or an
+	 * unresolvable parent chain, the agent stays reachable, so a single-root
+	 * process behaves exactly as before.
+	 */
+	isInRootTree(id: string, root: AgentRef | undefined): boolean {
+		if (!root) return true;
+		const owner = this.rootOf(id);
+		return !owner || owner === root;
+	}
+
 	/** Whether a ref's claimed running state is corroborated by its attached live session. */
 	isRunning(ref: AgentRef): boolean {
 		if (ref.status !== "running") return false;

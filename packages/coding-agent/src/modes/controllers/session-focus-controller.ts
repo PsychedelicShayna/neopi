@@ -67,6 +67,11 @@ export class SessionFocusController {
 	async focusAgent(id: string): Promise<void> {
 		if (this.ctx.collabGuest) throw new Error("Viewing agents is unavailable in a collab session.");
 		if (id === MAIN_AGENT_ID || this.registry.get(id)?.kind === "main") return this.unfocus();
+		// Several top-level roots can share the registry; this view may only
+		// attach to agents of the root it belongs to.
+		if (!this.registry.isInRootTree(id, this.registry.rootForSession(this.ctx.session))) {
+			throw new Error(`Agent ${id} belongs to another session.`);
+		}
 		const request = ++this.#focusRequestSeq;
 		let session: AgentSession;
 		try {
