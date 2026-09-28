@@ -136,6 +136,7 @@ async function promptToolCall(
 	child: RpcChild,
 	tool: string,
 	input: unknown,
+	settlementTimeoutMs = 20_000,
 ): Promise<{ start: RpcFrame; settled: Promise<RpcFrame> }> {
 	const id = `prompt-${++promptCount}`;
 	const seen = child.frames.length;
@@ -144,7 +145,7 @@ async function promptToolCall(
 	const start = await child.waitFor(
 		frame => frame.type === "tool_execution_start" && frame.toolName === tool && child.frames.indexOf(frame) >= seen,
 	);
-	const settled = child.waitFor(frame => frame.type === "prompt_result" && frame.id === id);
+	const settled = child.waitFor(frame => frame.type === "prompt_result" && frame.id === id, settlementTimeoutMs);
 	return { start, settled };
 }
 
@@ -365,7 +366,7 @@ describe("RPC eval prelude approval", () => {
 
 	test("without the host handler the prelude still asks through the select dialog", async () => {
 		const child = await spawnChild({ mode: "rpc-ui", approvalMode: "always-ask", config });
-		const call = await promptToolCall(child, "eval", cell);
+		const call = await promptToolCall(child, "eval", cell, 90_000);
 		// The nested browser approval arrives after eval's tool-start frame; allow
 		// the worker time to start under CI load without dropping this assertion.
 		const dialog = await child
