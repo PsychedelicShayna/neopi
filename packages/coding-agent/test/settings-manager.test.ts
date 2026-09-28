@@ -314,6 +314,33 @@ describe("Settings", () => {
 			expect(await Bun.file(getConfigPath()).text()).toContain("# Captain comment");
 		});
 
+		it("preserves comments while persisting legacy-key migrations", async () => {
+			await Bun.write(
+				getConfigPath(),
+				[
+					"# legacy config owner",
+					"queueMode: all",
+					"collapseChangelog: false",
+					"futureFeature:",
+					"  mode: careful # future comment",
+					"",
+				].join("\n"),
+			);
+			const settings = await Settings.loadIsolated({ cwd: projectDir, agentDir });
+			cfgAdvisorEnabled.set(settings, true);
+			await settings.flush();
+
+			const saved = await Bun.file(getConfigPath()).text();
+			expect(saved).toContain("# legacy config owner");
+			expect(saved).toContain("# future comment");
+			expect(await readSettings()).toEqual({
+				steeringMode: "all",
+				startup: { changelogMode: "expanded" },
+				futureFeature: { mode: "careful" },
+				advisor: { enabled: true },
+			});
+		});
+
 		it("merges disjoint Settings writes and preserves the existing same-key conflict winner", async () => {
 			await Bun.write(
 				getConfigPath(),

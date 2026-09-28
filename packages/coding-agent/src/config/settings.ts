@@ -165,13 +165,32 @@ function yamlGenerationsMatch(left: YamlGeneration, right: YamlGeneration): bool
 	}
 }
 
-function yamlSourceMatchesSettings(source: string, settings: RawSettings): boolean {
+function collectYamlMutations(
+	before: unknown,
+	after: unknown,
+	path: readonly string[],
+	mutations: YamlPathMutation[],
+): void {
+	if (Bun.deepEquals(before, after)) return;
+	if (isRecord(before) && isRecord(after)) {
+		const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+		for (const key of keys) collectYamlMutations(before[key], after[key], [...path, key], mutations);
+		return;
+	}
+	if (after === undefined) mutations.push({ path, operation: "delete" });
+	else mutations.push({ path, operation: "set", value: after });
+}
+
+function yamlMigrationMutations(source: string, settings: RawSettings): YamlPathMutation[] | null {
 	try {
 		const parsed: unknown = YAML.parse(source);
-		if (parsed === null || parsed === undefined) return Object.keys(settings).length === 0;
-		return isRecord(parsed) && Bun.deepEquals(parsed, settings);
+		const raw = parsed === null || parsed === undefined ? {} : parsed;
+		if (!isRecord(raw)) return null;
+		const mutations: YamlPathMutation[] = [];
+		collectYamlMutations(raw, settings, [], mutations);
+		return mutations;
 	} catch {
-		return false;
+		return null;
 	}
 }
 
@@ -3479,12 +3498,13 @@ export class Settings {
 				// malformed file aside, recover from its last in-memory state
 				// rather than recreating the config from only the pending path.
 				const loaded = await this.#loadYamlIfPresentForWriteLocked(configPath, writePath);
-				const canPatchLoadedDocument =
-					!this.#quarantinedYamlTargets.has(configPath) &&
-					(loaded.generation.kind === "missing" ||
-						(loaded.settings !== null &&
-							loaded.generation.kind === "content" &&
-							yamlSourceMatchesSettings(loaded.generation.source, loaded.settings)));
+				const migrationMutations =
+					loaded.generation.kind === "missing"
+						? []
+						: loaded.settings !== null && loaded.generation.kind === "content"
+							? yamlMigrationMutations(loaded.generation.source, loaded.settings)
+							: null;
+				const canPatchLoadedDocument = !this.#quarantinedYamlTargets.has(configPath) && migrationMutations !== null;
 				const current =
 					loaded.settings ?? (this.#quarantinedYamlTargets.has(configPath) ? structuredClone(this.#global) : {});
 				let shouldWrite = false;
@@ -3570,10 +3590,13 @@ export class Settings {
 						...appliedPaths.map(path => path.split(".")),
 						...[...new Set([...rolesToApply, ...rolesToPreserve])].map(role => ["modelRoles", role]),
 					];
-					const mutations: YamlPathMutation[] = changedPaths.map(path => {
+					const mutations: YamlPathMutation[] = [...(migrationMutations ?? [])];
+					for (const path of changedPaths) {
 						const value = getByPath(current, path);
-						return value === undefined ? { path, operation: "delete" } : { path, operation: "set", value };
-					});
+						mutations.push(
+							value === undefined ? { path, operation: "delete" } : { path, operation: "set", value },
+						);
+					}
 					const canPatchDocument = canPatchLoadedDocument;
 					const source = loaded.generation.kind === "content" ? loaded.generation.source : "";
 					await this.#writeYamlAtomically(
@@ -3706,18 +3729,20 @@ export class Settings {
 			await fs.promises.mkdir(path.dirname(projectConfigPath), { recursive: true });
 			await this.#withYamlWriteLock(projectConfigPath, async writePath => {
 				const loaded = await this.#loadYamlIfPresentForWriteLocked(projectConfigPath, writePath);
+				const migrationMutations =
+					loaded.generation.kind === "missing"
+						? []
+						: loaded.settings !== null && loaded.generation.kind === "content"
+							? yamlMigrationMutations(loaded.generation.source, loaded.settings)
+							: null;
 				const canPatchLoadedDocument =
-					!this.#quarantinedYamlTargets.has(projectConfigPath) &&
-					(loaded.generation.kind === "missing" ||
-						(loaded.settings !== null &&
-							loaded.generation.kind === "content" &&
-							yamlSourceMatchesSettings(loaded.generation.source, loaded.settings)));
+					!this.#quarantinedYamlTargets.has(projectConfigPath) && migrationMutations !== null;
 				const projectSettings =
 					loaded.settings ??
 					(this.#quarantinedYamlTargets.has(projectConfigPath) ? structuredClone(this.#projectFileSettings) : {});
 
 				const projectRoles = getByPath(this.#project, ["modelRoles"]);
-				const mutations: YamlPathMutation[] = [];
+				const mutations: YamlPathMutation[] = [...(migrationMutations ?? [])];
 				for (const role of modifiedModelRoles) {
 					const path = ["modelRoles", role];
 					const value = isRecord(projectRoles) ? projectRoles[role] : undefined;

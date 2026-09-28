@@ -33,10 +33,12 @@ interface WatchdogAdvisorOrigin {
 interface WatchdogBaseline {
 	doc: WatchdogConfigDoc;
 	origins: WatchdogAdvisorOrigin[];
+	sourceWasPresent: boolean;
 }
 
 /** Load snapshots stay out of the public editor shape while saves compute path-level changes. */
 const watchdogBaselines = new WeakMap<WatchdogConfigDoc, WatchdogBaseline>();
+const watchdogRepairDocs = new WeakSet<WatchdogConfigDoc>();
 
 /**
  * Runtime health of a single advisor, surfaced in stats and the status line.
@@ -306,14 +308,14 @@ export async function resolveAdvisorConfigEditPath(
 	return yml;
 }
 
-function rememberWatchdogBaseline(doc: WatchdogConfigDoc): void {
+function rememberWatchdogBaseline(doc: WatchdogConfigDoc, sourceWasPresent = true): void {
 	const occurrences = new Map<string, number>();
 	const origins = doc.advisors.map(advisor => {
 		const occurrence = occurrences.get(advisor.name) ?? 0;
 		occurrences.set(advisor.name, occurrence + 1);
 		return { advisor, base: structuredClone(advisor), name: advisor.name, occurrence };
 	});
-	watchdogBaselines.set(doc, { doc: structuredClone(doc), origins });
+	watchdogBaselines.set(doc, { doc: structuredClone(doc), origins, sourceWasPresent });
 }
 
 /**
@@ -333,7 +335,7 @@ export async function loadWatchdogConfigFile(filePath: string): Promise<Watchdog
 			return { advisors: [] };
 		}
 		const doc: WatchdogConfigDoc = { advisors: [] };
-		rememberWatchdogBaseline(doc);
+		rememberWatchdogBaseline(doc, false);
 		return doc;
 	}
 	let parsed: unknown;
@@ -341,13 +343,20 @@ export async function loadWatchdogConfigFile(filePath: string): Promise<Watchdog
 		parsed = YAML.parse(text);
 	} catch (err) {
 		logger.warn("Advisor config: failed to parse for edit", { path: filePath, error: String(err) });
-		return { advisors: [], warnings: [`${filePath}: failed to parse YAML (${String(err)})`] };
+		const doc: WatchdogConfigDoc = {
+			advisors: [],
+			warnings: [`${filePath}: failed to parse YAML (${String(err)})`],
+		};
+		watchdogRepairDocs.add(doc);
+		return doc;
 	}
 	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
 		// Parity with discovery: a non-mapping document is reported, not silently blanked.
 		const message = `${filePath}: expected a YAML mapping — file skipped`;
 		logger.warn("Advisor config", { path: filePath, error: message });
-		return { advisors: [], warnings: [message] };
+		const doc: WatchdogConfigDoc = { advisors: [], warnings: [message] };
+		watchdogRepairDocs.add(doc);
+		return doc;
 	}
 	const { instructions, entries, sharedMaxNotesPerUpdate, warnings } = parseWatchdogDoc(
 		parsed as Record<string, unknown>,
@@ -491,7 +500,7 @@ function patchWatchdogAdvisor(map: YAMLMap<unknown, unknown>, advisor: AdvisorCo
 }
 
 function patchWatchdogDocument(source: string, doc: WatchdogConfigDoc, baseline?: WatchdogBaseline): string {
-	if (!source.trim()) return serializeWatchdogConfig(doc);
+	if (!source.trim() && (!baseline || !baseline.sourceWasPresent)) return serializeWatchdogConfig(doc);
 	const document = parseYamlMappingDocument(source);
 	const root = yamlDocumentRoot(document);
 	const topLevelValues = {
@@ -585,10 +594,11 @@ function patchWatchdogDocument(source: string, doc: WatchdogConfigDoc, baseline?
 	const advisorsToAppend: AdvisorConfig[] = [];
 	for (const advisor of doc.advisors) {
 		const resolved = matches.get(advisor);
-		if (!resolved?.existing) {
+		if (!resolved) {
 			advisorsToAppend.push(advisor);
 			continue;
 		}
+		if (!resolved.existing) continue;
 		patchWatchdogAdvisor(resolved.existing.map, advisor, resolved.origin.base);
 	}
 
@@ -618,13 +628,21 @@ export async function saveWatchdogConfigFile(filePath: string, doc: WatchdogConf
 		} catch (err) {
 			if (!isEnoent(err)) throw err;
 		}
-		const content = patchWatchdogDocument(source, doc, baseline);
-		const root = yamlDocumentRoot(parseYamlMappingDocument(content));
-		if (root.items.length === 0) {
-			await fs.rm(filePath, { force: true });
-		} else {
-			await Bun.write(filePath, content);
+		let content: string;
+		try {
+			content = patchWatchdogDocument(source, doc, baseline);
+		} catch (error) {
+			if (!watchdogRepairDocs.has(doc)) throw error;
+			content = serializeWatchdogConfig(doc);
 		}
-		if (baseline) rememberWatchdogBaseline(doc);
+		const root = yamlDocumentRoot(parseYamlMappingDocument(content));
+		const wroteFile = root.items.length > 0;
+		if (wroteFile) {
+			await Bun.write(filePath, content);
+		} else {
+			await fs.rm(filePath, { force: true });
+		}
+		watchdogRepairDocs.delete(doc);
+		if (baseline) rememberWatchdogBaseline(doc, wroteFile);
 	});
 }

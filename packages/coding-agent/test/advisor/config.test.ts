@@ -91,6 +91,11 @@ describe("discoverAdvisorConfigs", () => {
 		expect(doc.advisors).toEqual([]);
 		expect(doc.warnings).toHaveLength(1);
 		expect(doc.warnings?.[0]).toContain("failed to parse YAML");
+		doc.advisors.push({ name: "Repaired", enabled: false });
+		await saveWatchdogConfigFile(path.join(tmp, "WATCHDOG.yml"), doc);
+		expect(await loadWatchdogConfigFile(path.join(tmp, "WATCHDOG.yml"))).toEqual({
+			advisors: [{ name: "Repaired", enabled: false }],
+		});
 	});
 
 	it("skips a file whose shape fails the schema (advisors must be a list)", async () => {
@@ -432,6 +437,28 @@ describe("WATCHDOG.yml file round-trip", () => {
 			advisors: [{ name: "Reviewer", model: "test/new", futureId: "keep" }],
 		});
 		expect(saved).toContain("# cloned");
+	});
+
+	it("does not resurrect an advisor renamed or deleted by a newer editor", async () => {
+		const file = path.join(tmp, "WATCHDOG.yml");
+		await Bun.write(file, "advisors:\n  - name: Original\n    futureId: keep\n");
+		const renameWinner = await loadWatchdogConfigFile(file);
+		const staleAfterRename = await loadWatchdogConfigFile(file);
+		renameWinner.advisors[0].name = "Renamed";
+		await saveWatchdogConfigFile(file, renameWinner);
+		staleAfterRename.advisors[0].enabled = false;
+		await saveWatchdogConfigFile(file, staleAfterRename);
+		expect(YAML.parse(await Bun.file(file).text())).toEqual({
+			advisors: [{ name: "Renamed", futureId: "keep" }],
+		});
+
+		const deleteWinner = await loadWatchdogConfigFile(file);
+		const staleAfterDelete = await loadWatchdogConfigFile(file);
+		deleteWinner.advisors.splice(0, 1);
+		await saveWatchdogConfigFile(file, deleteWinner);
+		staleAfterDelete.advisors[0].enabled = false;
+		await saveWatchdogConfigFile(file, staleAfterDelete);
+		expect(await Bun.file(file).exists()).toBe(false);
 	});
 
 	it("removes the file when the doc is empty so legacy discovery resumes", async () => {
