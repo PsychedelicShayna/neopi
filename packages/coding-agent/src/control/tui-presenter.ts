@@ -5,11 +5,17 @@
  */
 import { runWithDetachedDraft } from "@oh-my-pi/pi-tui/draft-scope";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
+import type { AgentSession } from "../session/agent-session";
+import type { ToolApprovalVerdict } from "../extensibility/extensions/tool-approval-requester";
+import { cfgControlApprovals } from "./settings";
+import { currentControlActor, runAsControlActor } from "./actor";
+import { DialogRegistry, setDialogRegistry } from "./dialogs";
 import type { ControlHost } from "./host";
 import type { ControlPresenter } from "./presenter";
 import type { DialogSummary } from "./types";
 
 export interface TuiControlSurface {
+	session: AgentSession;
 	editor: {
 		getText(): string;
 		setText(text: string): void;
@@ -28,18 +34,29 @@ export interface TuiControlSurface {
 	notify(text: string): void;
 }
 
-/** Attach the presenter and the human-input revision hook. */
+/** Attach the presenter, the dialog registry, and the approval arbiter. */
 export function attachTuiPresenter(host: ControlHost, surface: TuiControlSurface): void {
+	const registry = new DialogRegistry();
+	setDialogRegistry(registry);
+	registry.onChange(() => host.bumpDialogs());
 	surface.ui.onHumanInput = () => host.bumpHuman();
+	installApprovalArbiter(surface.session, registry, surface.notify);
 	const presenter: ControlPresenter = {
 		async submit(text) {
-			let delivery = "local";
-			await runWithDetachedDraft(async () => {
-				surface.editor.setText(text);
-				await surface.editor.onSubmit?.(text);
-				delivery = "started";
+			const outer = currentControlActor();
+			const actor = outer ?? {
+				connectionId: "control",
+				label: "control",
+				humanAtAdmission: host.revisions.human,
+				humanNow: () => host.revisions.human,
+			};
+			return runAsControlActor(actor, async () => {
+				await runWithDetachedDraft(async () => {
+					surface.editor.setText(text);
+					await surface.editor.onSubmit?.(text);
+				});
+				return { delivery: "started" };
 			});
-			return { delivery };
 		},
 		async action(actionId) {
 			if (actionId === "app.suspend") return { handled: false, exempt: "exempt_job_control" };
@@ -57,10 +74,10 @@ export function attachTuiPresenter(host: ControlHost, surface: TuiControlSurface
 			return { lines: surface.ui.getDebugDocument(), overlays: surface.ui.overlayStack.length };
 		},
 		dialogs(): DialogSummary[] {
-			return [];
+			return registry.list();
 		},
-		async answerDialog() {
-			return { settled: false, error: "no answerable dialog" };
+		async answerDialog(dialogId, answer) {
+			return registry.answer(dialogId, answer);
 		},
 		draft() {
 			return { text: surface.editor.getText(), images: [...surface.editor.pendingImages] };
@@ -75,4 +92,54 @@ export function attachTuiPresenter(host: ControlHost, surface: TuiControlSurface
 	};
 	host.presenter = presenter;
 	host.markReady();
+}
+
+/**
+ * Every tool approval settles here. The pane dialog is the keyboard route.
+ * A control answer is refused unless `control.approvals` is on, and an
+ * accepted one is attributed in the pane.
+ */
+function installApprovalArbiter(
+	session: AgentSession,
+	registry: DialogRegistry,
+	notify: (text: string) => void,
+): void {
+	const runner = session.extensionRunner;
+	if (!runner) return;
+	const ui = runner.getUIContext();
+	runner.setToolApprovalRequester(async request => {
+		const { promise, resolve } = Promise.withResolvers<ToolApprovalVerdict>();
+		let done = false;
+		const finish = (verdict: ToolApprovalVerdict): void => {
+			if (done) return;
+			done = true;
+			registry.close(opened.dialogId);
+			resolve(verdict);
+		};
+		const opened = registry.open({
+			family: "approval",
+			kind: "approval",
+			title: `Approve ${request.toolName}?`,
+			openedBy: "agent",
+			schema: { toolName: request.toolName, details: request.details },
+			answer: value => {
+				if (cfgControlApprovals.get(session.settings) !== true) {
+					const actor = currentControlActor();
+					const who = actor ? `${actor.label}#${actor.connectionId}` : "control";
+					notify(`⌁ ${who} tried to approve ${request.toolName} — approvals are yours (control.approvals is off)`);
+					return false;
+				}
+				const actor = currentControlActor();
+				const record = typeof value === "object" && value !== null ? (value as { approved?: boolean }) : undefined;
+				const approved = value === "Approve" || value === true || record?.approved === true;
+				if (approved && actor) notify(`⌁ ${actor.label}#${actor.connectionId} approved ${request.toolName}`);
+				finish(approved ? { approved: true } : { approved: false, reason: "denied by control" });
+				return true;
+			},
+			cancel: () => finish({ approved: false, reason: "cancelled" }),
+		});
+		const choice = await ui.select(`Approve ${request.toolName}?`, ["Approve", "Deny"]);
+		finish(choice === "Approve" ? { approved: true } : { approved: false, reason: "denied" });
+		return promise;
+	});
 }

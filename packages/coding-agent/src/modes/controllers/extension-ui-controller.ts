@@ -2,6 +2,8 @@ import type { Component, OverlayHandle, TUI } from "@oh-my-pi/pi-tui";
 import { Container, Spacer, Text } from "@oh-my-pi/pi-tui";
 import type { CollabUiRequestDraft, CollabUiSelectItem } from "@oh-my-pi/pi-wire";
 import type { CollabHost } from "../../collab/host";
+import { currentControlActor } from "../../control/actor";
+import { dialogRegistry } from "../../control/dialogs";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import type {
 	CompactOptions,
@@ -73,6 +75,7 @@ function toWireSelectOptions(options: ExtensionUISelectItem[]): CollabUiSelectIt
 }
 
 export class ExtensionUiController {
+	#nextDialog?: { family: "ask" | "extension" | "approval" | "plan_review" | "login" | "selector" | "confirm" | "app" | "panel" | "custom" | "session_in_use"; kind: string; title: string; schema?: unknown };
 	#extensionTerminalInputUnsubscribers = new Set<() => void>();
 	#composerShapeDisposers: Array<() => void> = [];
 	#hookWidgetsAbove = new Map<string, ExtensionUiComponent>();
@@ -653,6 +656,7 @@ export class ExtensionUiController {
 		questions: ExtensionAskDialogQuestion[],
 		dialogOptions?: ExtensionUIDialogOptions,
 	): Promise<ExtensionAskDialogResult | undefined> {
+		this.#nextDialog = { family: "ask", kind: "ask", title: "Ask" };
 		return this.#presentDialog<ExtensionAskDialogResult>(dialogOptions?.signal, settle => {
 			let promptEditor: HookEditorComponent | undefined;
 			let promptResolve: ((value: string | undefined) => void) | undefined;
@@ -952,6 +956,7 @@ export class ExtensionUiController {
 		dialogOptions?: InteractiveSelectorDialogOptions,
 		extra?: { slider?: HookSelectorSlider },
 	): Promise<string | undefined> {
+		this.#nextDialog = { family: "extension", kind: "select", title };
 		return this.#presentDialog(dialogOptions?.signal, settle => {
 			const maxVisible = Math.max(4, Math.min(15, this.ctx.ui.terminal.rows - 12));
 			this.ctx.hookSelector = new HookSelectorComponent(
@@ -1024,6 +1029,7 @@ export class ExtensionUiController {
 		placeholder?: string,
 		dialogOptions?: ExtensionUIDialogOptions,
 	): Promise<string | undefined> {
+		this.#nextDialog = { family: "extension", kind: "input", title };
 		return this.#presentDialog(dialogOptions?.signal, settle => {
 			this.ctx.hookInput = new HookInputComponent(
 				title,
@@ -1065,6 +1071,7 @@ export class ExtensionUiController {
 		dialogOptions?: ExtensionUIDialogOptions,
 		editorOptions?: { promptStyle?: boolean },
 	): Promise<string | undefined> {
+		this.#nextDialog = { family: "extension", kind: "editor", title };
 		return this.#presentDialog(dialogOptions?.signal, settle => {
 			this.ctx.hookEditor = new HookEditorComponent(
 				this.ctx.ui,
@@ -1278,11 +1285,13 @@ export class ExtensionUiController {
 	#presentDialog<T = string>(
 		signal: AbortSignal | undefined,
 		present: (settle: (value: T | undefined) => void) => () => void,
+		meta?: { family: import("../../control/dialogs").OpenDialog["family"]; kind: string; title: string; schema?: unknown },
 	): Promise<T | undefined> {
 		const { promise, resolve, reject } = Promise.withResolvers<T | undefined>();
 		let settled = false;
 		let started = false;
 		let hide: (() => void) | undefined;
+		let dialogId: string | undefined;
 
 		function onAbort(): void {
 			settle(undefined);
@@ -1292,6 +1301,7 @@ export class ExtensionUiController {
 			if (settled) return;
 			settled = true;
 			signal?.removeEventListener("abort", onAbort);
+			if (dialogId) dialogRegistry()?.close(dialogId);
 			if (started) {
 				hide?.();
 				this.#dialogActive = false;
@@ -1306,8 +1316,32 @@ export class ExtensionUiController {
 				this.#advanceDialogQueue();
 				return;
 			}
+			const actor = currentControlActor();
+			if (actor && actor.humanNow() !== actor.humanAtAdmission) {
+				this.ctx.showStatus(`⌁ ${actor.label}#${actor.connectionId} backed off (you were interacting)`);
+				settle(undefined);
+				return;
+			}
 			started = true;
 			this.#dialogActive = true;
+			const registry = dialogRegistry();
+			const described = meta ?? this.#nextDialog;
+			this.#nextDialog = undefined;
+			const opened = described
+				? registry?.open({
+						family: described.family,
+						kind: described.kind,
+						title: described.title,
+						schema: described.schema,
+						openedBy: actor ? "control" : "extension",
+						answer: value => {
+							settle(value as T);
+							return true;
+						},
+						cancel: () => settle(undefined),
+					})
+				: undefined;
+			dialogId = opened?.dialogId;
 			try {
 				hide = present(settle);
 			} catch (error) {

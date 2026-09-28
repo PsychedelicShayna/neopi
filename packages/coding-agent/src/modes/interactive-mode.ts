@@ -2123,6 +2123,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const controlHost = controlHostFor(this.session);
 		if (controlHost) {
 			attachTuiPresenter(controlHost, {
+				session: this.session,
 				editor: this.editor,
 				ui: this.ui,
 				runAction: id => this.#inputController.runAppAction(id),

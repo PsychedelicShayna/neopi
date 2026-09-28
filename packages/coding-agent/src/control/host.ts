@@ -276,6 +276,16 @@ export class ControlHost {
 	}
 
 	async #dispatch(connection: ControlConnection, frame: Record<string, unknown>): Promise<void> {
+		const { runAsControlActor } = await import("./actor");
+		return runAsControlActor({
+			connectionId: connection.id,
+			label: connection.label || "ctl",
+			humanAtAdmission: this.#revisions.human,
+			humanNow: () => this.#revisions.human,
+		}, () => this.#dispatchInner(connection, frame));
+	}
+
+	async #dispatchInner(connection: ControlConnection, frame: Record<string, unknown>): Promise<void> {
 		const type = String(frame.type ?? "");
 		if (connection.probe && type !== "get_status" && type !== "state" && type !== "bye") {
 			this.#reply(connection, frame, { success: false, error: "probe connections are read-only", code: "probe_only" });
