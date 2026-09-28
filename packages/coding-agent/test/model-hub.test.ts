@@ -1077,6 +1077,22 @@ describe("ModelHub", () => {
 			expect(cfgRetryFallbackChains.get(settings).slow).toEqual(["test/model-a"]);
 		});
 
+		test("y on a routed role primary keeps its upstream when pasted into another chain", () => {
+			const model = getBundledModel("openrouter", "z-ai/glm-4.7");
+			if (!model) throw new Error("Expected bundled OpenRouter model z-ai/glm-4.7");
+			const settings = Settings.isolated({
+				modelRoles: { default: "openrouter/z-ai/glm-4.7@fireworks" },
+			});
+			const { hub, onFallbackChainChange } = createHub({ models: [model], scoped: true, settings });
+
+			enterRolesView(hub);
+			hub.handleInput("y");
+			hub.handleInput(DOWN); // smol role
+			hub.handleInput("p");
+
+			expect(onFallbackChainChange).toHaveBeenCalledWith("smol", ["openrouter/z-ai/glm-4.7@fireworks"]);
+		});
+
 		test("y on a fallback preserves its configured effort and appends only once", () => {
 			const a = makeModel("test", "model-a");
 			const b = makeModel("test", "model-b");

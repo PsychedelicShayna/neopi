@@ -85,6 +85,8 @@ export interface ModelHubSource extends ModelBrowserSource {
 	getProjectModelRole(role: string): string | undefined;
 	getGlobalModelRole(role: string): string | undefined;
 	getModelRoleSource(role: string): "global" | "project" | "default";
+	/** Serialize a resolved role model, retaining any host-specific upstream route. */
+	formatModelSelector(model: Model): string;
 }
 
 /** Catalog capabilities required by the model hub. */
@@ -1806,7 +1808,7 @@ export class ModelHubComponent implements Component {
 		if (printable === "y") {
 			if (row?.kind === "role") {
 				const model = this.#roles[row.role]?.model;
-				if (model) this.#yankedFallback = [`${model.provider}/${model.id}`];
+				if (model) this.#yankedFallback = [this.#settings.formatModelSelector(model)];
 			} else if (row?.kind === "fallback") {
 				this.#yankedFallback = [row.selector];
 			}
