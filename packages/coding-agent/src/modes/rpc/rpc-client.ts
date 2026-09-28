@@ -24,6 +24,7 @@ import {
 } from "./rpc-messages";
 import type {
 	RpcAvailableCommandsUpdateFrame,
+	RpcApprovalHandler,
 	RpcAvailableSlashCommand,
 	RpcCommand,
 	RpcExtensionUIRequest,
@@ -49,6 +50,10 @@ import type {
 	RpcSubagentProgressFrame,
 	RpcSubagentSnapshot,
 	RpcSubagentSubscriptionLevel,
+	RpcToolApprovalCancel,
+	RpcToolApprovalDecision,
+	RpcToolApprovalRequest,
+	RpcToolApprovalResponse,
 } from "./rpc-types";
 
 /** Distributive Omit that works with union types */
@@ -113,6 +118,8 @@ export type RpcPromptResultListener = (result: RpcPromptResultFrame) => void;
 export type RpcSessionSettledListener = () => void;
 export type RpcPlanProposalRequestListener = (request: RpcPlanProposalRequest) => void;
 export type RpcModeChangedListener = (frame: RpcModeChangedFrame) => void;
+export type RpcToolApprovalRequestListener = (request: RpcToolApprovalRequest) => void;
+export type RpcToolApprovalCancelListener = (cancel: RpcToolApprovalCancel) => void;
 
 export interface RpcClientToolContext<TDetails = unknown> {
 	toolCallId: string;
@@ -274,6 +281,21 @@ function isRpcPlanProposalRequest(value: unknown): value is RpcPlanProposalReque
 	);
 }
 
+function isRpcToolApprovalRequest(value: unknown): value is RpcToolApprovalRequest {
+	if (!isRecord(value)) return false;
+	return (
+		value.type === "tool_approval_request" &&
+		typeof value.id === "string" &&
+		typeof value.toolCallId === "string" &&
+		typeof value.toolName === "string"
+	);
+}
+
+function isRpcToolApprovalCancel(value: unknown): value is RpcToolApprovalCancel {
+	if (!isRecord(value)) return false;
+	return value.type === "tool_approval_cancel" && typeof value.id === "string" && typeof value.targetId === "string";
+}
+
 function isRpcModeChangedFrame(value: unknown): value is RpcModeChangedFrame {
 	if (!isRecord(value)) return false;
 	return value.type === "mode_changed" && (value.mode === "default" || value.mode === "plan");
@@ -325,6 +347,8 @@ export class RpcClient {
 	#sessionSettledListeners = new Set<RpcSessionSettledListener>();
 	#planProposalRequestListeners = new Set<RpcPlanProposalRequestListener>();
 	#modeChangedListeners = new Set<RpcModeChangedListener>();
+	#toolApprovalRequestListeners = new Set<RpcToolApprovalRequestListener>();
+	#toolApprovalCancelListeners = new Set<RpcToolApprovalCancelListener>();
 	/** `promptAndWait` completions keyed by request id; registered before the prompt is sent. */
 	#promptResultWaiters = new Map<string, (result: RpcPromptResultFrame) => void>();
 	#pendingRequests: Map<string, { resolve: (response: RpcResponse) => void; reject: (error: Error) => void }> =
@@ -650,6 +674,30 @@ export class RpcClient {
 		};
 	}
 
+	/**
+	 * Subscribe to `tool_approval_request` frames, emitted after
+	 * {@link setApprovalHandler}("host") whenever a tool call needs approval.
+	 * Answer each with {@link respondToToolApproval} using `request.id`; the tool
+	 * call waits for that answer until `request.timeout` elapses, then is denied.
+	 */
+	onToolApprovalRequest(listener: RpcToolApprovalRequestListener): () => void {
+		this.#toolApprovalRequestListeners.add(listener);
+		return () => {
+			this.#toolApprovalRequestListeners.delete(listener);
+		};
+	}
+
+	/**
+	 * Subscribe to `tool_approval_cancel` frames: the tool call behind the request
+	 * `cancel.targetId` was aborted and has been denied; drop its approval UI.
+	 */
+	onToolApprovalCancel(listener: RpcToolApprovalCancelListener): () => void {
+		this.#toolApprovalCancelListeners.add(listener);
+		return () => {
+			this.#toolApprovalCancelListeners.delete(listener);
+		};
+	}
+
 	/** Subscribe to `mode_changed`: every change of the session mode or the active plan file. */
 	onModeChanged(listener: RpcModeChangedListener): () => void {
 		this.#modeChangedListeners.add(listener);
@@ -788,6 +836,25 @@ export class RpcClient {
 	/** Answer a `plan_proposal_request`; anything but `approve` keeps plan mode on. */
 	respondToPlanProposal(id: string, decision: RpcPlanProposalResponse["decision"], feedback?: string): void {
 		this.#writeFrame({ type: "plan_proposal_response", id, decision, feedback });
+	}
+
+	/**
+	 * Choose who answers tool approvals: `ui` (default) keeps the `Allow tool:`
+	 * `extension_ui_request` select dialog; `host` switches to typed
+	 * `tool_approval_request` frames (see {@link onToolApprovalRequest}).
+	 */
+	async setApprovalHandler(handler: RpcApprovalHandler): Promise<RpcApprovalHandler> {
+		const response = await this.#send({ type: "set_approval_handler", handler });
+		return this.#getData<{ handler: RpcApprovalHandler }>(response).handler;
+	}
+
+	/**
+	 * Answer a `tool_approval_request`. `allow_session` also allows later calls of
+	 * that tool for the rest of the process; `reason` on `deny` reaches the model
+	 * in the tool error text.
+	 */
+	respondToToolApproval(id: string, decision: RpcToolApprovalDecision, reason?: string): void {
+		this.#writeFrame({ type: "tool_approval_response", id, decision, ...(reason !== undefined ? { reason } : {}) });
 	}
 
 	/**
@@ -1350,6 +1417,20 @@ export class RpcClient {
 			return;
 		}
 
+		if (isRpcToolApprovalRequest(data)) {
+			for (const listener of this.#toolApprovalRequestListeners) {
+				listener(data);
+			}
+			return;
+		}
+
+		if (isRpcToolApprovalCancel(data)) {
+			for (const listener of this.#toolApprovalCancelListeners) {
+				listener(data);
+			}
+			return;
+		}
+
 		if (isRpcModeChangedFrame(data)) {
 			for (const listener of this.#modeChangedListeners) {
 				listener(data);
@@ -1467,7 +1548,13 @@ export class RpcClient {
 	}
 
 	#writeFrame(
-		frame: RpcCommand | RpcExtensionUIResponse | RpcHostToolResult | RpcHostToolUpdate | RpcPlanProposalResponse,
+		frame:
+			| RpcCommand
+			| RpcExtensionUIResponse
+			| RpcHostToolResult
+			| RpcHostToolUpdate
+			| RpcPlanProposalResponse
+			| RpcToolApprovalResponse,
 		onError?: (error: Error) => void,
 	): void {
 		if (!this.#process?.stdin) {
