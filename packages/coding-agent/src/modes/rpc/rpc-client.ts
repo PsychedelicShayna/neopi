@@ -33,10 +33,12 @@ import type {
 	RpcHostToolResult,
 	RpcHostToolUpdate,
 	RpcOpenSessionResult,
+	RpcPlanProposalResponse,
 	RpcPromptResultFrame,
 	RpcResponse,
 	RpcSessionSettledFrame,
 	RpcSessionState,
+	RpcSetModeResult,
 	RpcSubagentEventFrame,
 	RpcSubagentLifecycleFrame,
 	RpcSubagentMessagesResult,
@@ -716,6 +718,20 @@ export class RpcClient {
 	}
 
 	/**
+	 * Switch between `default` and `plan` mode. Failures carry `code`
+	 * `plan_disabled`, `mode_blocked`, or `session_busy` on {@link RpcCommandError}.
+	 */
+	async setMode(mode: RpcSetModeResult["mode"], planFilePath?: string): Promise<RpcSetModeResult> {
+		const response = await this.#send({ type: "set_mode", mode, planFilePath });
+		return this.#getData(response);
+	}
+
+	/** Answer a `plan_proposal_request`; anything but `approve` keeps plan mode on. */
+	respondToPlanProposal(id: string, decision: RpcPlanProposalResponse["decision"], feedback?: string): void {
+		this.#writeFrame({ type: "plan_proposal_response", id, decision, feedback });
+	}
+
+	/**
 	 * Configure subagent frames emitted by the RPC server. Servers default to "off".
 	 * "progress" emits lifecycle/progress frames; "events" additionally emits raw subagent session events.
 	 */
@@ -1362,7 +1378,7 @@ export class RpcClient {
 	}
 
 	#writeFrame(
-		frame: RpcCommand | RpcExtensionUIResponse | RpcHostToolResult | RpcHostToolUpdate,
+		frame: RpcCommand | RpcExtensionUIResponse | RpcHostToolResult | RpcHostToolUpdate | RpcPlanProposalResponse,
 		onError?: (error: Error) => void,
 	): void {
 		if (!this.#process?.stdin) {

@@ -37,6 +37,7 @@ export type RpcCommand =
 	// State
 	| { id?: string; type: "get_state" }
 	| { id?: string; type: "set_fast_mode"; enabled: boolean }
+	| { id?: string; type: "set_mode"; mode: RpcMode; planFilePath?: string }
 	| { id?: string; type: "get_available_commands" }
 	| { id?: string; type: "get_entries"; since?: string }
 	| { id?: string; type: "get_tree" }
@@ -124,6 +125,51 @@ export interface RpcSessionState {
 	dumpTools?: Array<{ name: string; description: string; parameters: unknown; examples?: readonly ToolExample[] }>;
 	/** Current context window usage. */
 	contextUsage?: ContextUsage;
+	/** Session mode; `plan` while plan mode is active, whichever path entered it. */
+	mode: RpcMode;
+	/** Active plan-mode details; present only while `mode` is `plan`. */
+	planMode?: RpcPlanModeInfo;
+}
+
+/** Session modes `set_mode` switches between. */
+export type RpcMode = "default" | "plan";
+
+/** Plan-mode details reported by `get_state`. */
+export interface RpcPlanModeInfo {
+	planFilePath: string;
+	workflow: string;
+}
+
+/** `set_mode` response data. */
+export interface RpcSetModeResult {
+	mode: RpcMode;
+	/** The plan file plan mode targets; present only for `plan`. */
+	planFilePath?: string;
+}
+
+/** Emitted whenever the session mode or the active plan file changes, whichever path caused it. */
+export interface RpcModeChangedFrame {
+	type: "mode_changed";
+	mode: RpcMode;
+	planFilePath?: string;
+}
+
+/** Emitted when the agent submits a plan via `xd://propose` after the host entered plan mode with `set_mode`. */
+export interface RpcPlanProposalRequest {
+	type: "plan_proposal_request";
+	id: string;
+	title: string;
+	planFilePath: string;
+	planMarkdown: string;
+}
+
+/** Host decision for a `plan_proposal_request` (stdin control frame). */
+export interface RpcPlanProposalResponse {
+	type: "plan_proposal_response";
+	id: string;
+	decision: "approve" | "refine";
+	/** Reviewer note for `refine`; included in the tool result the agent sees. */
+	feedback?: string;
 }
 
 export interface RpcAvailableSlashCommand {
@@ -275,6 +321,7 @@ export type RpcResponse =
 			success: true;
 			data: { enabled: boolean; active: boolean };
 	  }
+	| { id?: string; type: "response"; command: "set_mode"; success: true; data: RpcSetModeResult }
 	| {
 			id?: string;
 			type: "response";
