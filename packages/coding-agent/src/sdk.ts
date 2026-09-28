@@ -4523,6 +4523,19 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						const root = registeredAgentRef;
 						const lifecycle = AgentLifecycleManager.global();
 						const ownsLifecycle = root !== undefined && lifecycle.manages(agentRegistry);
+						const rootAgentGenerations =
+							ownsLifecycle && root
+								? new Set(
+										agentRegistry
+											.list()
+											.filter(ref => ref.kind !== "main" && agentRegistry.rootOf(ref.id) === root),
+									)
+								: undefined;
+						const workPoolRegistry = WorkPoolRegistry.global();
+						const poolGenerations = workPoolRegistry.snapshotOwners(
+							ownerId =>
+								ownerId === resolvedAgentId || (root !== undefined && agentRegistry.rootOf(ownerId) === root),
+						);
 						// Tag the aborts as a release, like owning-root shutdown: interrupted
 						// subagents are disposed and unregistered with their transcripts
 						// kept, never left behind as terminal kill tombstones.
@@ -4531,13 +4544,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 							deadlineAt,
 							ASYNC_JOB_MANAGER_SHUTDOWN_REASON,
 						);
-						// Close workpools owned anywhere in this root's tree and drop their
-						// cancelled aggregate jobs so the names are free again; another
-						// root's pools are untouched.
-						const releasedPools = WorkPoolRegistry.global().releaseOwners(
-							ownerId =>
-								ownerId === resolvedAgentId || (root !== undefined && agentRegistry.rootOf(ownerId) === root),
-						);
+						// Close only workpool generations that existed when cancellation
+						// began. The active root may launch replacement work while older
+						// jobs settle, and that new work is outside this cancellation.
+						const releasedPools = workPoolRegistry.releasePools(poolGenerations);
 						asyncJobManager.evictSettledJobs(releasedPools);
 						if (!reap.settled && releasedPools.length > 0) {
 							trackLateCleanup(
@@ -4547,7 +4557,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 								{ id: resolvedAgentId, resource: "root-cancel-workpool-jobs" },
 							);
 						}
-						if (ownsLifecycle) await lifecycle.releaseRootAgents(root, deadlineAt);
+						if (ownsLifecycle) {
+							await lifecycle.releaseRootAgents(root, deadlineAt, rootAgentGenerations);
+						}
 						if (!reap.settled && ownsLifecycle) {
 							// A cancelled child still settling at the deadline may finalize
 							// gracefully and be adopted afterward. Release exactly those
@@ -4558,7 +4570,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 							const lateRefs = reap.pendingJobIds.flatMap(jobId => {
 								const job = asyncJobManager.getJob(jobId);
 								const ref = agentRegistry.get(job?.agentId ?? jobId);
-								return ref && ref.kind !== "main" ? [ref] : [];
+								return ref && ref.kind !== "main" && rootAgentGenerations?.has(ref) ? [ref] : [];
 							});
 							trackLateCleanup(
 								reap.completion.then(async () => {

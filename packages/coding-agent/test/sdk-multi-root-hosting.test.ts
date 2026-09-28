@@ -17,6 +17,7 @@ import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { WorkPoolRegistry } from "@oh-my-pi/pi-coding-agent/task/workpool";
 import { TASK_SUBAGENT_LIFECYCLE_CHANNEL } from "@oh-my-pi/pi-coding-agent/task/types";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { createAssistantMessage, createInMemoryAuthStorage } from "./helpers/agent-session-setup";
@@ -167,7 +168,10 @@ describe("two simultaneous top-level roots (issue #121)", () => {
 		tempDir.removeSync();
 	});
 
-	async function createRoot(agentId: string | undefined, options: { sessionFile?: string } = {}): Promise<Root> {
+	async function createRoot(
+		agentId: string | undefined,
+		options: { sessionFile?: string; settings?: Record<string, unknown> } = {},
+	): Promise<Root> {
 		const label = agentId ?? MAIN_AGENT_ID;
 		const cwd = tempDir.join(`ws-${label}`);
 		fs.mkdirSync(cwd, { recursive: true });
@@ -189,6 +193,7 @@ describe("two simultaneous top-level roots (issue #121)", () => {
 				"task.isolation.mode": "none",
 				"task.enableLsp": false,
 				modelRoles: { default: `${PROVIDER}/${MODEL_ID}` },
+				...options.settings,
 			}),
 			disableExtensionDiscovery: true,
 			skills: [],
@@ -450,6 +455,75 @@ describe("two simultaneous top-level roots (issue #121)", () => {
 		});
 		expect(JSON.stringify(again.content)).not.toContain("already exists");
 		expect(JSON.stringify(again.content)).toContain("pool");
+	}, 60000);
+
+	it("cancelRootWork preserves pools and adopted agents created while its original jobs settle", async () => {
+		const a = await createRoot("DeckA", { settings: { "task.maxConcurrency": 1 } });
+		const registry = AgentRegistry.global();
+		const lifecycle = AgentLifecycleManager.global();
+		await a.session.getToolByName("eval")!.execute("eval-old-pool", {
+			language: "js",
+			code: 'return (await workpool("task", { name: "old-pool" })).name;',
+		});
+		const oldPool = WorkPoolRegistry.global().get("DeckA", "old-pool");
+		expect(oldPool).toBeDefined();
+		const oldAgent = registry.register({
+			id: "DeckA.Old",
+			displayName: "task",
+			kind: "sub",
+			parentId: "DeckA",
+			session: { dispose: async () => {} } as unknown as AgentSession,
+		});
+		registry.setStatus(oldAgent.id, "idle", oldAgent);
+		expect(lifecycle.adopt(oldAgent.id, { idleTtlMs: 0 }, oldAgent)).toBe(true);
+
+		const abortObserved = Promise.withResolvers<void>();
+		const finishOldJob = Promise.withResolvers<void>();
+		a.session.asyncJobManager!.register(
+			"task",
+			"old job",
+			async ({ signal }) => {
+				signal.addEventListener("abort", () => abortObserved.resolve(), { once: true });
+				await finishOldJob.promise;
+				return "done";
+			},
+			{ id: "old-job", ownerId: "DeckA" },
+		);
+
+		const cancellation = a.session.cancelRootWork({ timeoutMs: 5_000 });
+		await abortObserved.promise;
+
+		await a.session.getToolByName("eval")!.execute("eval-new-pool", {
+			language: "js",
+			code: 'return (await workpool("task", { name: "new-pool" })).name;',
+		});
+		const newPool = WorkPoolRegistry.global().get("DeckA", "new-pool");
+		expect(newPool).toBeDefined();
+		newPool!.push(["HOLD:new", "queued item"]);
+		for (let i = 0; i < 200 && newPool!.status().items.running === 0; i++) await Bun.sleep(5);
+		expect(newPool!.status().items).toMatchObject({ running: 1, queued: 1 });
+		const newAgent = registry.register({
+			id: "DeckA.New",
+			displayName: "task",
+			kind: "sub",
+			parentId: "DeckA",
+			session: { dispose: async () => {} } as unknown as AgentSession,
+		});
+		registry.setStatus(newAgent.id, "idle", newAgent);
+		expect(lifecycle.adopt(newAgent.id, { idleTtlMs: 0 }, newAgent)).toBe(true);
+
+		finishOldJob.resolve();
+		expect(await cancellation).toEqual({ settled: true, pendingJobIds: [] });
+
+		expect(WorkPoolRegistry.global().get("DeckA", "old-pool")).toBeUndefined();
+		expect(oldPool!.closed).toBe(true);
+		expect(registry.get(oldAgent.id)).toBeUndefined();
+		expect(WorkPoolRegistry.global().get("DeckA", "new-pool")).toBe(newPool);
+		expect(newPool!.closed).toBe(false);
+		expect(newPool!.status().items).toMatchObject({ running: 1, queued: 1, cancelled: 0 });
+		expect(a.session.asyncJobManager!.getJob("new-pool")?.status).toBe("running");
+		expect(registry.get(newAgent.id)).toBe(newAgent);
+		expect(lifecycle.has(newAgent.id)).toBe(true);
 	}, 60000);
 
 	it("cancelRootWork releases a child whose job settles after the deadline", async () => {

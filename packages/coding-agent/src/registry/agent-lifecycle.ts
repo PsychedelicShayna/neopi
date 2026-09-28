@@ -604,11 +604,20 @@ export class AgentLifecycleManager {
 	 * descendants), waiting at most until `deadlineAt`. The root itself and every
 	 * other root's agents are untouched, and the root may adopt new agents
 	 * afterward. Each release is bound to the adopted generation, so a same-id
-	 * replacement is never released.
+	 * replacement is never released. When `generations` is provided, agents
+	 * created after that snapshot are left alone.
 	 */
-	async releaseRootAgents(root: AgentRef, deadlineAt: number = Date.now() + AGENT_RELEASE_GRACE_MS): Promise<void> {
+	async releaseRootAgents(
+		root: AgentRef,
+		deadlineAt: number = Date.now() + AGENT_RELEASE_GRACE_MS,
+		generations?: ReadonlySet<AgentRef>,
+	): Promise<void> {
 		const owned = [...this.#adopted]
-			.filter(([id, adopted]) => (adopted.root ?? this.#registry.rootOf(id)) === root)
+			.filter(
+				([id, adopted]) =>
+					(generations === undefined || generations.has(adopted.ref)) &&
+					(adopted.root ?? this.#registry.rootOf(id)) === root,
+			)
 			.map(([id, adopted]) => ({ id, expected: adopted.ref }));
 		await this.#releaseBefore(owned, deadlineAt);
 	}

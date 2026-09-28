@@ -659,6 +659,24 @@ export class WorkPoolRegistry {
 		return this.#pools.get(this.#key(ownerId, name));
 	}
 
+	/** Snapshot matching pool generations so later cleanup cannot close pools created in the meantime. */
+	snapshotOwners(matches: (ownerId: string) => boolean): WorkPool[] {
+		return [...this.#pools.values()].filter(pool => matches(pool.ownerId));
+	}
+
+	/** Close only pool generations from an earlier snapshot. */
+	releasePools(pools: readonly WorkPool[]): string[] {
+		const released: string[] = [];
+		for (const pool of pools) {
+			const key = this.#key(pool.ownerId, pool.name);
+			if (this.#pools.get(key) !== pool) continue;
+			pool.close();
+			this.#pools.delete(key);
+			released.push(pool.name);
+		}
+		return released;
+	}
+
 	/** Close and forget every pool owned by an ending session. */
 	releaseOwner(ownerId: string): void {
 		this.releaseOwners(owner => owner === ownerId);
