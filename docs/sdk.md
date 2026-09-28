@@ -27,7 +27,7 @@ Import these core embedding APIs from the package root:
 - `Settings`
 - `AuthStorage`
 - `ModelRegistry`
-- `AgentRegistry`
+- `AgentRegistry`, `AgentIdConflictError`
 - `discoverAuthStorage`
 - Discovery helpers (`discoverExtensions`, `discoverSkills`, `discoverContextFiles`, `discoverPromptTemplates`, `discoverSlashCommands`, `discoverCustomTSCommands`, `discoverMCPServers`)
 - Tool factory surface (`createTools`, `BUILTIN_TOOLS`, tool classes)
@@ -94,9 +94,8 @@ function createAgentSession(
   - `model` or `modelPattern` (if deterministic model selection matters)
   - `settings` (if you need isolated/test config)
 
-For multiple concurrent top-level sessions in one process, pass a private
-`AgentRegistry` to each session. The default process-global registry admits
-only one `"Main"` identity per generation.
+For multiple concurrent top-level sessions in one process, give each one a
+distinct `agentId`; see [Hosting several top-level sessions](#hosting-several-top-level-sessions).
 
 ## Session manager behavior (persistent vs in-memory)
 
@@ -289,6 +288,42 @@ async function closeEmbeddedSession(
 During asynchronous disposal, the session records and synchronously flushes its exit diagnostic, emits `session_shutdown` once, stops extension fallback timers, aborts retries, compaction, and the active agent turn, and gives post-prompt and auto-learn work bounded time to settle. It then tears down session-owned async jobs, eval kernels, browser tabs, native computer sessions, MCP connections, advisor state, and memory state concurrently. These subsystem drains are best-effort and bounded where applicable; failures are logged rather than preventing the remaining subsystem cleanup.
 
 Only after work capable of appending session entries has settled does disposal clean up an empty moved session, close the `SessionManager`, close provider session state, disconnect the agent, and remove listeners. A failure from the final persistence cleanup or `SessionManager.close()` rejects the shared disposal promise; individual provider-session close failures are logged.
+
+## Hosting several top-level sessions
+
+One process can host several live top-level sessions ("roots"), for example one per workspace in a multi-session UI. Each root is a fully capable session: its own subagents, async jobs, artifacts, and event streams.
+
+- **One id per live root.** Pass a distinct `agentId` for every concurrently live top-level session, and a fresh one per generation if you recreate a root while its old generation may still be disposing. `createAgentSession()` never replaces a registered agent it does not own: a duplicate id, including a second session that omits `agentId` and so defaults to `"Main"`, rejects with `AgentIdConflictError` (its `agentId` field names the conflict). The existing session stays registered and fully usable, and the rejected construction releases what it acquired. Omitting `agentId` is fine for a single-session embedder or the CLI.
+- **Per-root async job domains.** Every top-level session owns its own async job manager (`session.asyncJobManager`). Background bash, task subagents, eval workpools and completions, `wait` delivery, and `getAsyncJobSnapshot()` stay inside the root that started them. Subagents inherit their root's manager explicitly, so creating or disposing another root never disables or retargets a root's async work.
+- **Root-wide cancellation.** `await session.cancelRootWork({ timeoutMs })` cancels every job in the root's domain (its own and every descendant's), waits up to `timeoutMs` (default 5 s) for them to settle, then releases the root's kept-alive subagents. It resolves `{ settled, pendingJobIds }`. Other roots are untouched and the session stays usable, so it can launch new work afterward. It does not abort the root's own in-flight turn; call `session.abort()` first if you want that. Only top-level sessions have a domain; calling it on a subagent session throws. `dispose()` performs the same teardown for that root only. When the last live root is disposed, the shared agent lifecycle is torn down as before.
+- **Scoped child ids.** Subagents of a root whose id is not `"Main"` get ids nested under the root id, such as `DeckA.Research` and `DeckA.Research.Research`, so two roots can both spawn `Research` without colliding in the registry, `agent://`/`history://` routing, or artifact file names. The default `"Main"` root keeps unprefixed ids. Repeated labels inside one root still become `Research-2`, `Research-3`, and so on, and a resumed session reserves ids already on disk.
+- **Global compatibility views.** A few process-wide fallbacks follow the most recently created root: the active skill and rule lists behind `skill://` and `rule://`, and the `local://` override. Tool calls resolve these through their own session's context first, so a newer root never retargets an older root's tools. Only code that reads the process-wide fallbacks directly sees last-root-wins behavior.
+
+```ts
+import { AgentIdConflictError, createAgentSession, SessionManager } from "@oh-my-pi/pi-coding-agent";
+
+const { session: deckA } = await createAgentSession({
+  agentId: "DeckA",
+  cwd: "/work/a",
+  sessionManager: SessionManager.create("/work/a"),
+});
+const { session: deckB } = await createAgentSession({
+  agentId: "DeckB",
+  cwd: "/work/b",
+  sessionManager: SessionManager.create("/work/b"),
+});
+
+try {
+  await createAgentSession({ agentId: "DeckA" });
+} catch (error) {
+  if (!(error instanceof AgentIdConflictError)) throw error;
+  // deckA is still registered and running.
+}
+
+await deckA.cancelRootWork({ timeoutMs: 3_000 }); // drains DeckA only
+await deckA.dispose(); // deckB keeps running
+await deckB.dispose();
+```
 
 ## Tools and extension integration
 

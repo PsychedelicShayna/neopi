@@ -7,6 +7,8 @@ import { createAgentSession, SessionManager } from "@oh-my-pi/pi-coding-agent";
 
 // Option 1: Replace prompt entirely
 const { session: session1 } = await createAgentSession({
+	// Each concurrently live session needs a distinct root id (a duplicate throws AgentIdConflictError).
+	agentId: "ReplacePrompt",
 	systemPrompt: [
 		`You are a helpful assistant that speaks like a pirate.
 Always end responses with "Arrr!"`,
@@ -26,6 +28,7 @@ console.log("\n");
 
 // Option 2: Modify default prompt (receives default, returns modified)
 const { session: session2 } = await createAgentSession({
+	agentId: "ModifyPrompt",
 	systemPrompt: defaultPrompt => [
 		...defaultPrompt,
 		`## Additional Instructions
