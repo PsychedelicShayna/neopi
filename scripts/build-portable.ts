@@ -93,8 +93,6 @@ async function publishPortable(stagingDir: string, portableDir: string): Promise
 }
 
 export async function buildPortable(): Promise<PortableManifest> {
-	// Before any native or bundle generator touches tracked placeholders.
-	const buildInfo = await resolveBuildIdentity(repoRoot);
 	const codingManifest = (await Bun.file(path.join(packageDir, "package.json")).json()) as { version: string };
 	const nativesManifest = (await Bun.file(path.join(repoRoot, "packages/natives/package.json")).json()) as {
 		version: string;
@@ -127,6 +125,10 @@ export async function buildPortable(): Promise<PortableManifest> {
 		const nativePath = path.join(nativeDir, baselineNativeName);
 		if (!(await Bun.file(nativePath).exists()))
 			throw new Error(`Baseline native build did not produce ${nativePath}`);
+
+		// After the native build (so a fresh checkout has a loadable vcs binding)
+		// and before any bundle generator touches tracked placeholders.
+		const buildInfo = await resolveBuildIdentity(repoRoot);
 
 		await run([process.execPath, "--cwd=packages/stats", "run", "gen:stats"]);
 		generatedStats = true;
