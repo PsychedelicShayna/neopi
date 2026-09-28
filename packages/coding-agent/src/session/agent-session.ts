@@ -128,6 +128,7 @@ import { renderChatCompactionPrompt } from "../chat/chat-system-prompt";
 import { cfgChatInclude } from "../chat/settings";
 import { SessionChronicler } from "../chronicler/session-chronicler";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
+import type { EffortOrigin, EffortSelection } from "../config/effort-policy";
 import type { ModelRegistry } from "../config/model-registry";
 import {
 	DEFAULT_PREWALK_TARGET,
@@ -1593,6 +1594,8 @@ export class AgentSession implements SettingsScope {
 		this.#models = new ModelControls(modelControlsHost, {
 			scopedModels: config.scopedModels,
 			thinkingLevel: config.thinkingLevel,
+			thinkingOrigin: config.thinkingOrigin,
+			autoSelection: config.autoSelection,
 			thinkingLevelCeiling: config.thinkingLevelCeiling,
 			serviceTierByFamily: config.serviceTierByFamily,
 		});
@@ -1617,7 +1620,11 @@ export class AgentSession implements SettingsScope {
 			textOutputCommitted: () => this.#textOutputCommitted,
 			thinkingLevel: () => this.thinkingLevel,
 			configuredThinkingLevel: () => this.configuredThinkingLevel(),
-			setThinkingLevel: level => this.setThinkingLevel(level),
+			setThinkingLevel: (level, origin, selection) => this.#models.setThinkingLevel(level, false, origin ?? "fallback", selection),
+			autoSelection: () => this.#models.autoSelection,
+			thinkingOrigin: () => this.#models.effortOrigin,
+			thinkingRevision: () => this.#models.effortRevision,
+			emitNotice: message => this.emitNotice("warning", message, "effort-policy"),
 			thinkingLevelCeiling: () => this.#models.thinkingLevelCeiling,
 			isDisposed: () => this.#isDisposed,
 			isStreaming: () => this.isStreaming,
@@ -2816,6 +2823,8 @@ export class AgentSession implements SettingsScope {
 			sessionId: this.sessionId,
 			metadataResolver: provider => this.agent.metadataForProvider(provider),
 			onUsage: journalJudgmentUsage(this.sessionManager, "ttsr"),
+			sessionManager: this.sessionManager,
+			onEffortDisclosure: message => this.emitNotice("warning", message, "effort-policy"),
 		});
 	}
 
@@ -5776,6 +5785,15 @@ export class AgentSession implements SettingsScope {
 	configuredThinkingLevel(): ConfiguredThinkingLevel | undefined {
 		return this.#models.configuredThinkingLevel();
 	}
+	/** Provenance of the active selection, not of its last classified concrete level. */
+	get effortOrigin(): EffortOrigin {
+		return this.#models.effortOrigin;
+	}
+
+	/** Model-bound Auto candidates of the active selection. */
+	get autoSelection(): EffortSelection | undefined {
+		return this.#models.autoSelection;
+	}
 
 	/** True when `auto` thinking mode is active. */
 	get isAutoThinking(): boolean {
@@ -6344,12 +6362,12 @@ export class AgentSession implements SettingsScope {
 	}
 
 	/** Scoped models for cycling (from --models flag) */
-	get scopedModels(): ReadonlyArray<{ model: Model; thinkingLevel?: ThinkingLevel }> {
+	get scopedModels(): ReadonlyArray<{ model: Model; thinkingLevel?: ThinkingLevel; explicitThinkingLevel?: boolean }> {
 		return this.#models.scopedModels;
 	}
 
 	/** Replace the Ctrl+P/`/models` cycle scope (post-discovery rebuild; see {@link ModelControls.setScopedModels}). */
-	setScopedModels(scopedModels: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>): void {
+	setScopedModels(scopedModels: Array<{ model: Model; thinkingLevel?: ThinkingLevel; explicitThinkingLevel?: boolean }>): void {
 		this.#models.setScopedModels(scopedModels);
 	}
 
@@ -9233,7 +9251,7 @@ export class AgentSession implements SettingsScope {
 			this.#queuedMessageDrainBlocked = false;
 			this.#usagePreflightReadyForNextModelCall = false;
 
-			this.sessionManager.appendThinkingLevelChange(this.thinkingLevel, this.configuredThinkingLevel());
+			this.sessionManager.appendThinkingLevelChange(this.thinkingLevel, this.configuredThinkingLevel(), this.effortOrigin, this.autoSelection);
 			this.sessionManager.appendServiceTierChange(this.#models.serviceTierEntry());
 
 			this.#todo.resetCycle();
@@ -9456,6 +9474,7 @@ export class AgentSession implements SettingsScope {
 			selector?: string;
 			thinkingLevel?: ThinkingLevel;
 			persist?: boolean;
+			effortSelection?: EffortSelection;
 		},
 	): Promise<{ switched: boolean }> {
 		return this.#models.setModel(model, role, options);
@@ -9499,8 +9518,8 @@ export class AgentSession implements SettingsScope {
 	}
 
 	/** Selects the session thinking level and optionally persists it as the default. */
-	setThinkingLevel(level: ConfiguredThinkingLevel | undefined, persist: boolean = false): void {
-		this.#models.setThinkingLevel(level, persist);
+	setThinkingLevel(level: ConfiguredThinkingLevel | undefined, persist: boolean = false, origin: EffortOrigin = "manual", selection?: EffortSelection): void {
+		this.#models.setThinkingLevel(level, persist, origin, selection);
 	}
 
 	/** Advances through the thinking selectors supported by the active model. */
@@ -10684,6 +10703,10 @@ export class AgentSession implements SettingsScope {
 		const previousThinkingLevel = this.thinkingLevel;
 		const previousAutoThinking = this.isAutoThinking;
 		const previousAutoResolvedLevel = this.autoResolvedThinkingLevel();
+		const previousEffortOrigin = this.effortOrigin;
+		const previousAutoSelection = this.autoSelection;
+		const previousConfiguredThinkingLevel = this.configuredThinkingLevel();
+		const previousEffortRevision = this.#models.effortRevision;
 		const previousServiceTierByFamily = this.serviceTierByFamily;
 		const previousTools = [...this.agent.state.tools];
 		const previousBaseSystemPrompt = this.#tools.baseSystemPrompt;
@@ -10855,11 +10878,21 @@ export class AgentSession implements SettingsScope {
 			const restoredConfigured = sessionContext.configuredThinkingLevel;
 			const restoredThinkingLevel: ConfiguredThinkingLevel | undefined =
 				hasThinkingEntry || (defaultThinkingLevel === AUTO_THINKING && sessionContext.thinkingLevel !== "off")
-					? restoredConfigured === AUTO_THINKING
-						? AUTO_THINKING
-						: (sessionContext.thinkingLevel as ThinkingLevel | undefined)
+					? parseConfiguredThinkingLevel(restoredConfigured) ??
+						(sessionContext.thinkingLevel as ThinkingLevel | undefined)
 					: defaultThinkingLevel;
-			this.#models.restoreThinkingLevel(restoredThinkingLevel);
+			const restoredRole = this.sessionManager.getLastModelChangeRole();
+			const restoredOrigin = sessionContext.effortOrigin ??
+				(restoredRole && this.settings.getModelRole(restoredRole) ? "role" : "default");
+			const restoredAutoSelection = sessionContext.autoSelection ??
+				(restoredThinkingLevel === AUTO_THINKING && restoredOrigin === "role"
+					? this.settings.getRoleEffortSelection(this.sessionManager.getLastModelChangeRole() ?? "default")
+					: undefined);
+			this.#models.restoreThinkingLevel(
+				restoredThinkingLevel,
+				restoredOrigin,
+				restoredAutoSelection?.mode === "auto" ? restoredAutoSelection : undefined,
+			);
 			this.#models.restoreServiceTiers(
 				hasServiceTierEntry ? (sessionContext.serviceTier ?? {}) : configuredServiceTierByFamily,
 			);
@@ -10954,7 +10987,7 @@ export class AgentSession implements SettingsScope {
 				this.agent.setModel(previousModel);
 				modelRolledBack = !modelsAreEqual(rolledBackModel, previousModel);
 			}
-			this.#models.restoreThinkingSnapshot(previousThinkingLevel, previousAutoThinking, previousAutoResolvedLevel);
+			this.#models.restoreThinkingSnapshot(previousThinkingLevel, previousAutoThinking, previousAutoResolvedLevel, previousEffortOrigin, previousAutoSelection, previousConfiguredThinkingLevel, previousEffortRevision);
 			this.#models.restoreServiceTiers(previousServiceTierByFamily);
 			if (modelRolledBack) {
 				this.#emit({ type: "model_changed" });

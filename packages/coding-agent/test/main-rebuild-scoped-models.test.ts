@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { Api, AuthStorage, Model } from "@oh-my-pi/pi-ai";
+import { Effort, type Api, type AuthStorage, type Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { parseArgs } from "@oh-my-pi/pi-coding-agent/cli/args";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -208,5 +208,33 @@ describe("buildSessionOptions --models scope selection", () => {
 		expect(options.model?.id).toBe("a");
 		expect(options.rebindModelAfterDiscovery).toBe(true);
 		expect(options.scopedModels?.map(entry => entry.model.id)).toEqual(["a"]);
+	});
+
+	it("lets CLI suffixes bypass implicit policy, but keeps saved and bare scope efforts implicit", async () => {
+		const target = buildModel({
+			id: "a", name: "a", api: "anthropic-messages", provider: "prov",
+			baseUrl: "https://example.com", reasoning: true,
+			thinking: { mode: "effort", efforts: [Effort.Low, Effort.High] },
+			input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000, maxTokens: 8_192,
+		});
+		const settings = Settings.isolated({ enabledModels: ["prov/a:high"] });
+		const scoped = await resolveModelScope(["prov/a:high"], { getAvailable: () => [target] }, undefined, settings);
+		const saved = await buildSessionOptions(
+			parseArgs([]), scoped, SessionManager.inMemory(), registry(), settings,
+		);
+		const explicit = await buildSessionOptions(
+			parseArgs(["--models", "prov/a:high"]), scoped, SessionManager.inMemory(), registry(), settings,
+		);
+		const bareScope = await resolveModelScope(["prov/a"], { getAvailable: () => [target] }, undefined, settings);
+		const bare = await buildSessionOptions(
+			parseArgs(["--models", "prov/a"]), bareScope, SessionManager.inMemory(), registry(), settings,
+		);
+		expect(saved.thinkingOrigin).toBe("default");
+		expect(saved.scopedModels?.[0]).toMatchObject({ thinkingLevel: Effort.High, explicitThinkingLevel: false });
+		expect(explicit.thinkingOrigin).toBe("caller");
+		expect(explicit.scopedModels?.[0]).toMatchObject({ thinkingLevel: Effort.High, explicitThinkingLevel: true });
+		expect(bare.thinkingOrigin).not.toBe("caller");
+		expect(bare.scopedModels?.[0]?.explicitThinkingLevel).toBe(false);
 	});
 });

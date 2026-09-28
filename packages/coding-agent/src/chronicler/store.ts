@@ -212,6 +212,78 @@ interface LoadedBatch {
 	records: BeatRecord[];
 }
 
+/** One coherent, read-only view of a batch published before the directory scan. */
+export interface CommittedChroniclerBatch {
+	readonly checkpoint: Readonly<Omit<CaptureCheckpoint, "entries" | "beats" | "carry">> & {
+		readonly entries: readonly Readonly<CaptureSource>[];
+		readonly beats: readonly Readonly<{ id: string; file: string }>[];
+		readonly carry: { readonly sources: readonly string[]; readonly text: string } | null;
+	};
+	readonly beats: readonly BeatRecord[];
+}
+
+/**
+ * Read immutable committed batches without opening the writer, creating a
+ * directory, rebuilding derived caches, or consulting the live Chronicler.
+ * The directory listing fixes the snapshot's commit boundary; publication is
+ * an atomic directory rename and the listed files are immutable thereafter.
+ */
+export async function readCommittedChroniclerBatches(rootDir: string): Promise<readonly CommittedChroniclerBatch[]> {
+	const store = new ChroniclerStore(rootDir, { sessionId: "", project: "", model: "" }, {}, true);
+	let entries: import("node:fs").Dirent[];
+	try {
+		entries = await fs.readdir(path.join(rootDir, "beats"), { withFileTypes: true });
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+		throw error;
+	}
+	const batches = await Promise.all(
+		entries
+			.filter(entry => entry.isDirectory() && UUID_RE.test(entry.name))
+			.map(entry => store.readCommittedBatch(entry.name)),
+	);
+	batches.sort(
+		(a, b) =>
+			a.checkpoint.committedAt.localeCompare(b.checkpoint.committedAt) ||
+			a.checkpoint.batchId.localeCompare(b.checkpoint.batchId),
+	);
+	const sources = new Set<string>();
+	for (const { checkpoint } of batches) {
+		for (const entry of checkpoint.entries) {
+			if (sources.has(entry.id)) throw new ChroniclerCorruptionError(`entry ${entry.id} belongs to multiple committed batches`);
+			sources.add(entry.id);
+		}
+	}
+	for (const { checkpoint, records } of batches) {
+		for (const record of records) {
+			if (record.sources.some(id => !sources.has(id))) {
+				throw new ChroniclerCorruptionError(`beat ${record.id} cites an uncommitted source`);
+			}
+		}
+		if (checkpoint.carry?.sources.some(id => !sources.has(id))) {
+			throw new ChroniclerCorruptionError(`batch ${checkpoint.batchId} carry cites an uncommitted source`);
+		}
+	}
+	return Object.freeze(
+		batches.map(({ checkpoint, records }) =>
+			Object.freeze({
+				checkpoint: Object.freeze({
+					...checkpoint,
+					entries: Object.freeze(checkpoint.entries.map(entry => Object.freeze(entry))),
+					beats: Object.freeze(checkpoint.beats.map(beat => Object.freeze(beat))),
+					carry: checkpoint.carry
+						? Object.freeze({
+								sources: Object.freeze([...checkpoint.carry.sources]),
+								text: checkpoint.carry.text,
+							})
+						: null,
+				}),
+				beats: Object.freeze(records),
+			}),
+		),
+	);
+}
+
 /**
  * One serialized owner per store instance; distinct sessions use distinct
  * artifact roots and therefore need no shared lock.
@@ -221,6 +293,7 @@ export class ChroniclerStore {
 	readonly #beatsDir: string;
 	readonly #meta: { sessionId: string; project: string; model: string };
 	readonly #hooks: ChroniclerStoreHooks;
+	readonly #readOnlySnapshot: boolean;
 
 	#opened = false;
 	#haltReason: string | null = null;
@@ -249,11 +322,18 @@ export class ChroniclerStore {
 		rootDir: string,
 		meta: { sessionId: string; project: string; model: string },
 		hooks: ChroniclerStoreHooks = {},
+		readOnlySnapshot = false,
 	) {
 		this.#root = rootDir;
 		this.#beatsDir = path.join(rootDir, "beats");
 		this.#meta = { ...meta };
 		this.#hooks = hooks;
+		this.#readOnlySnapshot = readOnlySnapshot;
+	}
+
+	/** Parser reuse only; the snapshot reader does not open or mutate this store. */
+	readCommittedBatch(batchId: string): Promise<LoadedBatch> {
+		return this.#loadBatch(batchId);
 	}
 
 	get beats(): readonly BeatRecord[] {
@@ -1089,6 +1169,7 @@ export class ChroniclerStore {
 	}
 
 	#halt(reason: string, file?: string): ChroniclerCorruptionError {
+		if (this.#readOnlySnapshot) return new ChroniclerCorruptionError(reason, file);
 		if (this.#haltReason === null) {
 			this.#haltReason = reason;
 			this.#records = [];

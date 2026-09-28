@@ -38,6 +38,7 @@ export type CellAnswer = Answer | { type: "bool"; bool: number };
 export interface EvalJudgmentResult {
 	answers: Record<string, CellAnswer>;
 	model: string;
+	notices?: string[];
 }
 
 function invalid(detail: string): ToolError {
@@ -169,6 +170,7 @@ export function sessionJudge(
 	options: Pick<EvalCompletionBridgeOptions, "session">,
 	purpose: string,
 	onUsage?: (usage: JudgmentUsage) => void,
+	onEffortDisclosure?: (message: string) => void,
 ): ChainJudge {
 	const { session } = options;
 	const registry = session.modelRegistry;
@@ -178,6 +180,8 @@ export function sessionJudge(
 		settings: session.settings,
 		registry,
 		sessionId: session.getSessionId?.() ?? undefined,
+		sessionManager: session.sessionManager,
+		onEffortDisclosure,
 		onUsage:
 			onUsage && journal
 				? usage => {
@@ -196,12 +200,16 @@ export async function runEvalJudgment(
 	if (!isRecord(args)) throw invalid("expected { state, questions }");
 	const state = parseState(args.state);
 	const questions = parseQuestions(args.questions);
-	const judge = sessionJudge(options, "judge");
+	const notices: string[] = [];
+	const judge = sessionJudge(options, "judge", undefined, message => {
+		notices.push(message);
+		options.session.onEffortDisclosure?.(message);
+	});
 	const signal = options.signal;
 	return withBridgeTimeoutPause(options.emitStatus, async () => {
 		await evalRequestSlots.acquire(signal);
 		try {
-			return toEvalJudgmentResult(await judge.judge({ state, questions }, { signal }));
+			return { ...toEvalJudgmentResult(await judge.judge({ state, questions }, { signal })), ...(notices.length ? { notices } : {}) };
 		} finally {
 			evalRequestSlots.release();
 		}

@@ -6,7 +6,7 @@ import { type } from "@oh-my-pi/omptype";
 import * as AIError from "../error";
 import { retryTransientCompletion } from "../oneshot-retry";
 import { completeSimple } from "../stream";
-import type { Api, AssistantMessage, Model, SimpleStreamOptions, Tool } from "../types";
+import type { Api, AssistantMessage, Effort, Model, SimpleStreamOptions, Tool } from "../types";
 import type { TextBackend, TextCompletion, TextPrompt } from "./text";
 import type { JudgeOptions } from "./types";
 
@@ -34,11 +34,15 @@ const SUBMIT_JUDGMENT: Tool = {
 };
 
 export type ChatTextBackendOptions = Pick<SimpleStreamOptions, "apiKey" | "sessionId" | "metadata"> & {
+	/** A concrete, policy-resolved candidate effort; omitted for fast ordinary judgments. */
+	reasoning?: Effort;
+	/** On-demand Auto selection for an ordinary judgment's actual request. */
+	resolveReasoning?: (prompt: TextPrompt, judge: JudgeOptions) => Promise<Effort>;
 	/** Receives every completed attempt (including transient failures) for usage accounting. */
 	onAttempt?: (message: AssistantMessage) => void;
 };
 
-/** Chat completions with reasoning disabled, temperature 0, and transient-failure retry. */
+/** Chat completions with candidate reasoning (when supplied), temperature 0, and transient-failure retry. */
 export function chatTextBackend(model: Model<Api>, options: ChatTextBackendOptions): TextBackend {
 	return {
 		api: model.api,
@@ -46,6 +50,9 @@ export function chatTextBackend(model: Model<Api>, options: ChatTextBackendOptio
 		model: model.id,
 		parseRetries: 2,
 		async complete(prompt: TextPrompt, judge: JudgeOptions): Promise<TextCompletion> {
+			const reasoning = options.resolveReasoning
+				? await options.resolveReasoning(prompt, judge)
+				: options.reasoning;
 			const response = await retryTransientCompletion(
 				() =>
 					completeSimple(
@@ -59,9 +66,9 @@ export function chatTextBackend(model: Model<Api>, options: ChatTextBackendOptio
 							apiKey: options.apiKey,
 							sessionId: options.sessionId,
 							metadata: options.metadata,
-							maxTokens: JUDGMENT_CHAT_MAX_TOKENS,
+							maxTokens: reasoning ? (model.maxTokens ?? 16_384) : JUDGMENT_CHAT_MAX_TOKENS,
 							temperature: 0,
-							disableReasoning: true,
+							...(reasoning ? { reasoning } : { disableReasoning: true }),
 							toolChoice: prompt.retry ? { type: "function", name: SUBMIT_JUDGMENT.name } : undefined,
 							signal: judge.signal,
 							onAttempt: options.onAttempt,

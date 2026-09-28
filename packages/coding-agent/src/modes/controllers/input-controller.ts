@@ -1510,6 +1510,8 @@ export class InputController {
 			const result = await runChain(chain, text, {
 				settings: this.ctx.settings,
 				modelRegistry: this.ctx.session.modelRegistry,
+				sessionManager: this.ctx.sessionManager,
+				onEffortNotice: (message: string) => this.ctx.session.emitNotice("warning", message, "effort-policy"),
 				tools: this.ctx.session.agent.state.tools,
 				messages: this.ctx.session.agent.state.messages,
 				obfuscator: this.ctx.session.obfuscator,

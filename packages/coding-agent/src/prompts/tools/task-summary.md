@@ -6,6 +6,13 @@
 {{#if error}}
 <error>{{error}}</error>
 {{/if}}
+{{#if effortPolicy}}
+<effort-policy model="{{effortPolicy.model}}" requested="{{effortPolicy.requested}}" origin="{{effortPolicy.origin}}" rule="{{effortPolicy.rule}}">
+<supported>{{effortPolicy.supported}}</supported>
+<permitted>{{effortPolicy.permitted}}</permitted>
+<alternatives>{{effortPolicy.alternatives}}</alternatives>
+</effort-policy>
+{{/if}}
 {{#if truncated}}
 <preview full-output="agent://{{id}}">
 {{preview}}

@@ -126,7 +126,8 @@ import type { SessionObserverRegistry } from "@oh-my-pi/pi-tui/overlays/session-
 
 import { cfgBranchSummaryEnabled } from "../../session/context-settings";
 import { cfgCycleOrder, cfgDisabledProviders, cfgModelRoleStorage } from "../../config/model-settings";
-import { cfgDefaultThinkingLevel, cfgRetryFallbackChains } from "../../session/settings";
+import { cfgDefaultThinkingLevel } from "../../session/settings";
+import { cfgEffortRules, cfgFallbackEffortSelections } from "../../config/effort-policy";
 import {
 	cfgStatusLineCompactThinkingLevel,
 	cfgStatusLineContextLine,
@@ -867,7 +868,7 @@ export class SelectorController {
 			this.ctx.session.modelRegistry,
 			this.ctx.session.scopedModels,
 			{
-				onAssign: async (model, role, thinkingLevel, selector, scope?: ModelRoleSelectionScope) => {
+				onAssign: async (model, role, thinkingLevel, selector, scope: ModelRoleSelectionScope | undefined, selection) => {
 					const releaseDefaultMutation = role === "default" ? await this.#acquireDefaultRoleMutation() : undefined;
 					const configuredStorage = cfgModelRoleStorage.get(this.ctx.settings);
 					const targetScope = configuredStorage === "project" ? (scope ?? "project") : "global";
@@ -893,39 +894,32 @@ export class SelectorController {
 								configuredStorage === "project" &&
 								targetScope === "project" &&
 								effectiveProvenance === "overlay";
+							const savedValue = formatModelSelectorValue(selectorValue, concreteThinking);
+							this.ctx.settings.validateRoleModelAndEffort("default", savedValue, selection, targetScope);
 							if (shadowedGlobal) {
-								this.ctx.settings.setModelRole(
-									"default",
-									formatModelSelectorValue(selectorValue, concreteThinking),
-								);
-								if (isAuto) {
+								this.ctx.settings.setRoleModelAndEffort("default", savedValue, selection, targetScope);
+								if (isAuto && !selection) {
 									cfgDefaultThinkingLevel.set(this.ctx.settings, AUTO_THINKING);
 								}
 							} else if (shadowedProject) {
-								this.ctx.settings.setProjectModelRole(
-									"default",
-									formatModelSelectorValue(selectorValue, concreteThinking),
-								);
-								if (isAuto) {
+								this.ctx.settings.setRoleModelAndEffort("default", savedValue, selection, targetScope);
+								if (isAuto && !selection) {
 									cfgDefaultThinkingLevel.set(this.ctx.settings, AUTO_THINKING);
 								}
 							} else {
 								const { switched } = await this.ctx.session.setModel(model, role, {
 									selector,
 									thinkingLevel: isAuto ? ThinkingLevel.Inherit : concreteThinking,
-									persist: targetScope === "global",
+									persist: false,
+									effortSelection: selection,
 								});
 								if (!switched) return false;
-								if (targetScope === "project") {
-									this.ctx.settings.setProjectModelRole(
-										"default",
-										formatModelSelectorValue(selectorValue, concreteThinking),
-									);
-								}
-								if (isAuto) {
-									this.ctx.session.setThinkingLevel(AUTO_THINKING, true);
-								} else if (concreteThinking && concreteThinking !== ThinkingLevel.Inherit) {
-									this.ctx.session.setThinkingLevel(concreteThinking);
+								this.ctx.settings.setRoleModelAndEffort("default", savedValue, selection, targetScope);
+								if (!selection) {
+									if (isAuto) this.ctx.session.setThinkingLevel(AUTO_THINKING, true);
+									else if (concreteThinking && concreteThinking !== ThinkingLevel.Inherit) {
+										this.ctx.session.setThinkingLevel(concreteThinking);
+									}
 								}
 								this.ctx.statusLine.invalidate();
 								this.ctx.updateEditorBorderColor();
@@ -934,11 +928,7 @@ export class SelectorController {
 						} else {
 							// Other roles (smol, slow, custom): update settings, not the current model.
 							const modelRoleValue = formatModelSelectorValue(selectorValue, thinkingLevel);
-							if (targetScope === "project") {
-								this.ctx.settings.setProjectModelRole(role, modelRoleValue);
-							} else {
-								this.ctx.settings.setModelRole(role, modelRoleValue);
-							}
+							this.ctx.settings.setRoleModelAndEffort(role, modelRoleValue, selection, targetScope);
 							const roleInfo = getRoleInfo(role, settings);
 							this.ctx.showStatus(
 								`${scopeLabel}${roleInfo?.tag ?? roleInfo?.name ?? role} model: ${selector ?? model.id}`,
@@ -953,6 +943,17 @@ export class SelectorController {
 						hub?.refreshAfterExternalMutation();
 					}
 				},
+				onEffortRulesChange: rules => {
+					try {
+						cfgEffortRules.set(this.ctx.settings, rules);
+						this.ctx.showStatus(`Implicit effort rules: ${rules.length}`);
+						hub?.refreshAfterExternalMutation();
+						return true;
+					} catch (error) {
+						this.ctx.showError(error instanceof Error ? error.message : String(error));
+						return false;
+					}
+				},
 				onUnassign: async (role, scope?: ModelRoleSelectionScope) => {
 					const releaseDefaultMutation = role === "default" ? await this.#acquireDefaultRoleMutation() : undefined;
 					const configuredStorage = cfgModelRoleStorage.get(this.ctx.settings);
@@ -962,11 +963,7 @@ export class SelectorController {
 					try {
 						const previousEffectiveRoleValue =
 							role === "default" ? this.ctx.settings.getModelRole("default") : undefined;
-						if (targetScope === "project") {
-							this.ctx.settings.clearProjectModelRole(role);
-						} else {
-							this.ctx.settings.setModelRole(role, undefined);
-						}
+						this.ctx.settings.setRoleModelAndEffort(role, undefined, undefined, targetScope);
 						const roleInfo = getRoleInfo(role, settings);
 						this.ctx.showStatus(
 							`${scopeLabel}${roleInfo?.tag ?? roleInfo?.name ?? role} role cleared — auto-selection applies`,
@@ -1032,23 +1029,23 @@ export class SelectorController {
 						hub?.refreshAfterExternalMutation();
 					}
 				},
-				onFallbackChainChange: (role, chain) => {
+				onFallbackChainChange: (role, chain, effort) => {
 					try {
-						const chains = { ...cfgRetryFallbackChains.get(this.ctx.settings) };
-						if (chain.length === 0) {
-							delete chains[role];
-						} else {
-							chains[role] = chain;
-						}
-						cfgRetryFallbackChains.set(this.ctx.settings, chains);
+						const selections = { ...cfgFallbackEffortSelections.get(this.ctx.settings)[role] };
+						for (const selector of Object.keys(selections)) if (!chain.includes(selector)) delete selections[selector];
+						if (effort) selections[effort.selector] = effort.selection;
+						this.ctx.settings.setFallbackChainAndEfforts(role, chain, selections);
 						const roleInfo = getRoleInfo(role, settings);
 						this.ctx.showStatus(
 							chain.length > 0
 								? `${roleInfo?.tag ?? roleInfo?.name ?? role} fallbacks: ${chain.join(" → ")}`
 								: `${roleInfo?.tag ?? roleInfo?.name ?? role} fallbacks cleared`,
 						);
+						hub?.refreshAfterExternalMutation();
+						return true;
 					} catch (error) {
 						this.ctx.showError(error instanceof Error ? error.message : String(error));
+						return false;
 					}
 				},
 

@@ -157,6 +157,8 @@ export interface EffectiveSubagentPolicy {
 	modelOverride?: string[];
 	/** Explicit pre-expansion model role alias selected for this run. */
 	modelRole?: string;
+	/** Raw caller selector before role expansion, distinct from saved agent defaults. */
+	callerModelSelector?: string | string[];
 	/** Extension routing note explaining a `before_subagent_spawn` model replacement. */
 	modelRoute?: string;
 	/** Exact-name `task.agentServiceTierOverrides` entry for this agent, applied after model resolution. */
@@ -394,6 +396,7 @@ export async function resolveEffectiveSubagentPolicy(
 		agent,
 		effectiveAgent,
 		modelOverride,
+		callerModelSelector: selectorModel ?? request.model,
 		modelRole,
 		serviceTierOverride,
 		compactionThresholdOverride,
@@ -529,6 +532,7 @@ function buildExecutorOptions(
 		acquiredAt: request.acquiredAt,
 		modelOverride: policy.modelOverride,
 		modelRole: policy.modelRole,
+		callerModelSelector: policy.callerModelSelector,
 		modelRoute: policy.modelRoute,
 		serviceTierOverride: policy.serviceTierOverride,
 		compactionThresholdOverride: policy.compactionThresholdOverride,

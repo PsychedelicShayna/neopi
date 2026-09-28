@@ -5,6 +5,8 @@ import { logger } from "@oh-my-pi/pi-utils";
 import type { AsyncJobManager } from "../async/job-manager";
 import type { Rule } from "../capability/rule";
 import type { EffectiveExtensionRoots } from "../capability/types";
+import type { EffortOrigin, EffortSelection } from "../config/effort-policy";
+import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { EvalPreludeDefinition } from "../eval/preludes";
 import type { PromptTemplate } from "../config/prompt-templates";
 import type { Settings } from "../config/settings";
@@ -407,6 +409,10 @@ export interface ToolSession {
 	getActiveModelString?: () => string | undefined;
 	/** Get the current session model object (provider/api capabilities), regardless of how it was chosen. */
 	getActiveModel?: () => Model | undefined;
+	/** Live configured effort, not the last concrete Auto result; direct calls inherit its provenance. */
+	getActiveEffort?: () => { level: ConfiguredThinkingLevel | undefined; origin: EffortOrigin; selection?: EffortSelection };
+	/** Surface direct-call effort adjustments even when an eval helper returns only its answer. */
+	onEffortDisclosure?: (message: string) => void;
 	/** Get the session's live per-family service tiers (undefined = none). Source of truth for subagent `tier.subagent: inherit`. */
 	getServiceTierByFamily?: () => ServiceTierByFamily | undefined;
 	/**

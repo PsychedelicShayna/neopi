@@ -234,6 +234,20 @@ describe("AgentsHub configuration strips", () => {
 		expect(strip()).toContain("anthropic/claude-sonnet-4-5");
 	});
 
+	test("model pattern entry persists a selectable subagent override", async () => {
+		const settings = createSettings();
+		const { hub, type, strip } = await createHub(settings);
+		hub.handleInput("\r"); // agent properties
+		hub.handleInput("\r"); // model choices
+		expect(strip()).toContain("pick model");
+		expect(strip()).toContain("pattern");
+		hub.handleInput("\x1b[C"); // pattern entry
+		hub.handleInput("\r");
+		type("anthropic/claude-*");
+		hub.handleInput("\r");
+		expect(settings.get("task.agentModelOverrides")).toEqual({ dev: "anthropic/claude-*" });
+	});
+
 	test("clear override chip removes an existing model override", async () => {
 		const settings = createSettings();
 		settings.set("task.agentModelOverrides", { dev: "anthropic/claude-sonnet-4-5" });

@@ -71,6 +71,17 @@ export function formatTaskResultSummary(
 		duration: formatDuration(options.totalDurationMs),
 		abortReason: result.aborted ? result.abortReason : undefined,
 		error,
+		effortPolicy: result.effortPolicy
+			? {
+					model: result.effortPolicy.model,
+					requested: result.effortPolicy.requested ?? result.effortPolicy.model,
+					origin: result.effortPolicy.origin ?? "default",
+					supported: result.effortPolicy.supported.join(", ") || "none",
+					permitted: result.effortPolicy.permitted.join(", ") || "none",
+					rule: result.effortPolicy.selector ?? "none",
+					alternatives: result.effortPolicy.alternatives.join(", ") || "none",
+				}
+			: undefined,
 		resumable,
 		preview,
 		truncated,

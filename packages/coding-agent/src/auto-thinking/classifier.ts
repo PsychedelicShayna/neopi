@@ -1,27 +1,25 @@
 /**
- * Per-prompt difficulty classifier for the `auto` thinking level.
+ * On-demand Auto effort classification. Replacement mode asks the dedicated
+ * @effort role to choose directly among the resolved sparse candidates, using
+ * the committed branch-safe diary and uncovered transcript. A singleton never
+ * calls an LLM. Legacy mode retains the judge role's coarse local buckets and
+ * ceiling/clamping behavior for explicitly opted-in configurations.
  *
- * Asks one {@link ChoiceQuestion} about the user's request and maps the
- * chosen level to a concrete {@link Effort}, clamped into the active model's
- * supported range (never below {@link Effort.Low}). The judge comes from the
- * live `judge` role chain. A local on-device candidate gets the coarser
- * `trivial|moderate|hard` question (3-class is more reliable
- * than 4-way ordinal on sub-2B models), mapped to `low|high|xhigh`.
- *
- * Throws on any failure (no judge, no key, unparseable output, abort/timeout);
- * the caller falls back to a concrete level and continues the turn.
+ * Throws on failure; session owners disclose it and select the lowest
+ * permitted candidate without extending the allowed set.
  */
-import { type ChoiceQuestion, Effort, type Model } from "@oh-my-pi/pi-ai";
+import { type ChoiceQuestion, Effort, type Model, THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import type { ModelRegistry } from "../config/model-registry";
+import { cfgEffortPolicyMode, resolveImplicitEffort } from "../config/effort-policy";
 import bucketQuestionInstructions from "../prompts/system/auto-thinking-bucket-question.md" with { type: "text" };
+import effortQuestionInstructions from "../prompts/system/auto-thinking-effort-question.md" with { type: "text" };
 import type { Settings } from "../config/settings";
-import { type JudgmentUsage, resolveJudge } from "../judgment";
+import { type JudgmentUsage, resolveEffortJudge, resolveJudge } from "../judgment";
 import { clampAutoThinkingEffort } from "@oh-my-pi/pi-tui/thinking";
 import { preprocessTinyMessage } from "../tiny/message-preproc";
-
+import { readEffortContext, type EffortContextSession } from "./context";
 import { cfgProvidersAutoThinkingMaxEffort } from "../session/settings";
-
 type Level = "low" | "medium" | "high" | "xhigh" | "max";
 type Bucket = "trivial" | "moderate" | "hard";
 
@@ -85,29 +83,59 @@ export interface ClassifyDifficultyDeps {
 	signal?: AbortSignal;
 	metadataResolver?: (provider: string) => Record<string, unknown> | undefined;
 	onUsage?: (usage: JudgmentUsage) => void;
+	/** Policy-resolved sparse candidates for this selection, not an ordinal ceiling. */
+	allowedEfforts?: readonly Effort[];
+	sessionManager?: EffortContextSession;
+	onContextFallback?: (reason: string) => void;
+	onEffortDisclosure?: (message: string) => void;
 }
 
-/**
- * Highest effort this turn's classification may resolve to: the configured
- * ceiling, further limited by what the target model actually exposes. The
- * default keeps `auto` one tier below the top, so only an explicit
- * `ultrathink` reaches {@link Effort.Max}.
- */
+/** Legacy-only configured ceiling, further limited by the target model. */
 function autoEffortCeiling(deps: ClassifyDifficultyDeps): Effort {
 	if (cfgProvidersAutoThinkingMaxEffort.get(deps.settings) !== Effort.Max) return Effort.XHigh;
 	return getSupportedEfforts(deps.model).includes(Effort.Max) ? Effort.Max : Effort.XHigh;
 }
 
 /**
- * Classify `promptText` and return a concrete effort clamped to `deps.model`,
- * or `undefined` when the model has no controllable effort surface (auto has
- * nothing to pick — the caller leaves the prior reasoning level in place).
+ * Classify `promptText` among this selection's allowed efforts.
+ * Legacy mode may return undefined when no controllable level exists.
  * @throws when the backend cannot produce a usable classification.
  */
 export async function classifyDifficulty(
 	promptText: string,
 	deps: ClassifyDifficultyDeps,
 ): Promise<Effort | undefined> {
+	if (cfgEffortPolicyMode.get(deps.settings) === "replacement") {
+		const supported = getSupportedEfforts(deps.model);
+		const allowed = deps.allowedEfforts ?? resolveImplicitEffort(deps.settings, deps.model, { mode: "auto" }).candidates;
+		const candidates = THINKING_EFFORTS.filter(effort => supported.includes(effort) && allowed.includes(effort));
+		if (!candidates.length) {
+			throw new Error(`No permitted Auto effort for ${deps.model.provider}/${deps.model.id}; supported: ${supported.join(", ") || "none"}; permitted: ${allowed.join(", ") || "none"}`);
+		}
+		deps.signal?.throwIfAborted();
+		if (candidates.length === 1) return candidates[0];
+		const state = { request: await readEffortContext(promptText, deps.sessionManager, deps.onContextFallback) };
+		deps.signal?.throwIfAborted();
+		const criteria = Object.fromEntries(candidates.map(effort => [
+			effort,
+			effort === Effort.Minimal
+				? "Simple lookup or mechanical edit requiring the least reasoning."
+				: effort === Effort.Max ? MAX_CRITERION : LEVEL_CRITERIA[effort as Exclude<Level, "max">],
+		])) as Record<Effort, string>;
+		const question: ChoiceQuestion = { type: "choice", instructions: effortQuestionInstructions, criteria };
+		const judge = resolveEffortJudge({
+			settings: deps.settings,
+			registry: deps.registry,
+			sessionId: deps.sessionId,
+			metadataResolver: deps.metadataResolver,
+			onUsage: deps.onUsage,
+			onEffortDisclosure: deps.onEffortDisclosure,
+		});
+		const { answers } = await judge.judge({ state, questions: { effort: question } }, { signal: deps.signal });
+		const chosen = answers.effort.choice as Effort;
+		if (!candidates.includes(chosen)) throw new Error(`@effort returned an unpermitted level: ${chosen}`);
+		return chosen;
+	}
 	const judge = resolveJudge({
 		settings: deps.settings,
 		registry: deps.registry,

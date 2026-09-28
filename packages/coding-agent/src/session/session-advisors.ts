@@ -36,10 +36,11 @@ import type {
 	ServiceTier,
 	SimpleStreamOptions,
 } from "@oh-my-pi/pi-ai";
-import { isUsageLimitOutcome, resolveModelServiceTier, streamSimple } from "@oh-my-pi/pi-ai";
+import { Effort, isUsageLimitOutcome, resolveModelServiceTier, streamSimple } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { extractProviderRetryHint } from "@oh-my-pi/pi-ai/utils/retry-after";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
+import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { extractHttpStatusFromError, logger, prompt } from "@oh-my-pi/pi-utils";
 import type { AdvisorConfig } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import {
@@ -65,6 +66,8 @@ import {
 	slugifyAdvisorName,
 } from "../advisor";
 import { evictStaleToolResults } from "../advisor/tool-result-eviction";
+import { classifyDifficulty } from "../auto-thinking/classifier";
+import { cfgEffortPolicyMode, EffortPolicyError, resolveImplicitEffort, type EffortDecision, type EffortSelection } from "../config/effort-policy";
 import type { ModelRegistry } from "../config/model-registry";
 import {
 	formatModelString,
@@ -74,6 +77,7 @@ import {
 } from "../config/model-resolver";
 import { MODEL_ROLES } from "../config/model-roles";
 import { serviceTierForAllFamilies, serviceTierSettingToTier } from "../config/service-tier";
+import { getFallbackEffortSelection } from "./retry-fallback-chains";
 import type { Settings } from "../config/settings";
 import { CursorExecHandlers, type CursorMcpResourceAdapter } from "../cursor";
 import { bridgeToolMap } from "../cursor-bridge-tools";
@@ -254,7 +258,10 @@ interface AdvisorRetryFallbackState {
 	role: string;
 	originalSelector: string;
 	originalThinkingLevel: ThinkingLevel;
+	originalAutoThinking: boolean;
+	originalAutoSelection?: EffortSelection;
 	lastAppliedThinkingLevel: ThinkingLevel;
+	lastAppliedAutoThinking: boolean;
 }
 
 interface ActiveAdvisor {
@@ -274,6 +281,7 @@ interface ActiveAdvisor {
 	 * to there, retuned at each review boundary.
 	 */
 	autoThinking: boolean;
+	autoSelection?: EffortSelection;
 	providerSessionId: string | undefined;
 	retryFallback?: AdvisorRetryFallbackState;
 	retryFallbackPendingSuccess: boolean;
@@ -313,6 +321,7 @@ interface AdvisorRuntimeDescriptor {
 	model: Model;
 	thinkingLevel: ThinkingLevel;
 	autoThinking: boolean;
+	autoSelection?: EffortSelection;
 	signature: string;
 }
 
@@ -517,7 +526,6 @@ export class SessionAdvisors {
 		const terminalBoundary = willContinue !== true;
 		if (terminalBoundary) this.#terminalUnwindActive = true;
 		try {
-			this.#retuneAutoThinkingAdvisors();
 			for (const advisor of this.#advisors) {
 				if (advisor.runtime.disposed) continue;
 				try {
@@ -908,19 +916,24 @@ export class SessionAdvisors {
 				autoThinking = sel.thinkingLevel === AUTO_THINKING;
 				thinkingLevel = concreteThinkingLevel(sel.thinkingLevel);
 			}
-			// Clamp the effort against the resolved model. Historically we defaulted
-			// to `ThinkingLevel.Medium` unconditionally, which threw at first stream
-			// on reasoning models that expose no controllable effort surface
-			// (e.g. `devin-agent`: Cascade routes by sibling model id, not a wire
-			// param; `getSupportedEfforts` returns `[]`). `resolveThinkingLevelForModel`
-			// preserves an explicit `off`, clamps a concrete effort into the model's
-			// supported range, and returns `undefined` for reasoning models without
-			// controllable efforts — for that case we forward `Inherit` so no effort
-			// is sent and reasoning stays enabled (matching the `auto`-path fix for
-			// Devin models via `clampAutoThinkingEffort`). See #4579.
-			const requestedLevel = autoThinking
-				? this.#autoAdvisorThinkingLevel()
-				: (thinkingLevel ?? ThinkingLevel.Medium);
+			const saved = config.model ? undefined : this.#host.settings.getRoleEffortSelection("advisor");
+			const selection: EffortSelection = saved && saved.mode !== "inherit" ? saved :
+				autoThinking ? { mode: "auto" } : { mode: "fixed", level: thinkingLevel ?? ThinkingLevel.Medium };
+			autoThinking = selection.mode === "auto";
+			let decision: EffortDecision | undefined;
+			if (cfgEffortPolicyMode.get(this.#host.settings) === "replacement") {
+				try {
+					decision = resolveImplicitEffort(this.#host.settings, model, selection, "role");
+				} catch (error) {
+					if (!(error instanceof EffortPolicyError)) throw error;
+					this.#advisorStatuses.set(slug, { name: config.name, status: "no_model" });
+					if (emitWarnings) this.#host.emitNotice("warning", `Advisor "${config.name}" cannot run: ${error.message}`, "effort-policy");
+					continue;
+				}
+			}
+			if (decision?.disclosure && emitWarnings) this.#host.emitNotice("warning", decision.disclosure, "effort-policy");
+			const requestedLevel = autoThinking ? decision?.candidates[0] ?? ThinkingLevel.Low :
+				decision?.level ?? thinkingLevel ?? ThinkingLevel.Medium;
 			const resolvedLevel = resolveThinkingLevelForModel(model, requestedLevel);
 			const advisorThinkingLevel: ThinkingLevel = resolvedLevel ?? ThinkingLevel.Inherit;
 			// Record the status entry now (in roster order) so the Map's insertion
@@ -935,6 +948,7 @@ export class SessionAdvisors {
 				model,
 				thinkingLevel: advisorThinkingLevel,
 				autoThinking,
+				autoSelection: autoThinking ? selection : undefined,
 				// An `auto` advisor's concrete level changes every turn; signing the
 				// resolved level would make each change look like a config edit and
 				// rebuild the advisor, losing its context. Sign the selector instead.
@@ -1066,6 +1080,7 @@ export class SessionAdvisors {
 				name: advisorName,
 				thinkingLevel: advisorThinkingLevel,
 				autoThinking: advisorAutoThinking,
+				autoSelection: advisorAutoSelection,
 				signature,
 			} = descriptor;
 
@@ -1290,6 +1305,36 @@ export class SessionAdvisors {
 						currentAdvisorInput = Array.isArray(input)
 							? formatSessionHistoryMarkdown(input, { watchedRoles: true })
 							: input;
+						if (advisorRef.autoThinking && getSupportedEfforts(advisorAgent.state.model).length > 0) {
+							const model = advisorAgent.state.model;
+							const decision = cfgEffortPolicyMode.get(this.#host.settings) === "replacement"
+								? resolveImplicitEffort(this.#host.settings, model, advisorRef.autoSelection ?? { mode: "auto" }, "role")
+								: undefined;
+							const candidates = decision?.candidates;
+							if (decision?.disclosure) this.#host.emitNotice("warning", decision.disclosure, "effort-policy");
+							let effort: Effort | undefined;
+							try {
+								effort = await classifyDifficulty(currentAdvisorInput, {
+									settings: this.#host.settings,
+									registry: this.#host.modelRegistry,
+									model,
+									sessionManager: this.#host.sessionManager,
+									allowedEfforts: candidates,
+									onEffortDisclosure: message => this.#host.emitNotice("warning", message, "effort-policy"),
+									onContextFallback: message => this.#host.emitNotice("warning", message, "effort-policy"),
+								});
+							} catch {
+								// A failed classifier must not fail the advisor's review.
+							}
+							if (!effort || candidates && !candidates.includes(effort)) {
+								effort = candidates?.[0] ?? Effort.Low;
+								this.#host.emitNotice("warning", `Advisor "${advisorName}" classification failed; using lowest permitted effort ${effort}.`, "effort-policy");
+							}
+							const next = resolveThinkingLevelForModel(model, effort) ?? ThinkingLevel.Inherit;
+							advisorAgent.setThinkingLevel(toReasoningEffort(next));
+							advisorAgent.setDisableReasoning(shouldDisableReasoning(next));
+							advisorRef.thinkingLevel = next;
+						}
 						// Agent.prompt's overloads accept string OR AgentMessage[] but not
 						// the union, so narrow first; both branches intentionally identical.
 						if (Array.isArray(input)) await advisorAgent.prompt(input);
@@ -1411,6 +1456,7 @@ export class SessionAdvisors {
 				model: advisorModel,
 				thinkingLevel: advisorThinkingLevel,
 				autoThinking: advisorAutoThinking,
+				autoSelection: advisorAutoSelection,
 				providerSessionId: advisorProviderSessionId,
 				retryFallbackPendingSuccess: false,
 				usageLimitRetries: 0,
@@ -1611,40 +1657,6 @@ export class SessionAdvisors {
 		return nextThinkingLevel;
 	}
 
-	/**
-	 * The level an `auto` advisor runs at: the effort the primary agent is
-	 * running at — the classifier's pick under `auto`, the pinned level
-	 * otherwise — so the advisor follows a mid-session switch in either
-	 * direction. When the primary has no effort (`off`, `inherit`, unset) it is
-	 * the `medium` default an advisor without a configured level gets. One
-	 * source for build, review-boundary retune and fallback restore, so a live
-	 * advisor always matches what a fresh build would give it.
-	 */
-	#autoAdvisorThinkingLevel(): ThinkingLevel {
-		return this.#host.agent.state.thinkingLevel ?? ThinkingLevel.Medium;
-	}
-
-	/**
-	 * Re-point every `auto` advisor at {@link #autoAdvisorThinkingLevel} — the
-	 * primary turn's level, or the build-time default while the primary is off.
-	 *
-	 * Deliberately not {@link #setAdvisorModel}: the model is unchanged, and that
-	 * path invalidates the append-only context, which would throw away the
-	 * advisor's cached prefix on every turn. Only the effort moves here.
-	 */
-	#retuneAutoThinkingAdvisors(): void {
-		const requested = this.#autoAdvisorThinkingLevel();
-		for (const advisor of this.#advisors) {
-			// A retry-fallback selector pinned its own effort for the fallback
-			// model; the retune resumes once the configured model is restored.
-			if (!advisor.autoThinking || advisor.runtime.disposed || advisor.retryFallback) continue;
-			const next = resolveThinkingLevelForModel(advisor.model, requested) ?? ThinkingLevel.Inherit;
-			if (next === advisor.thinkingLevel) continue;
-			advisor.agent.setThinkingLevel(toReasoningEffort(next));
-			advisor.agent.setDisableReasoning(shouldDisableReasoning(next));
-			advisor.thinkingLevel = next;
-		}
-	}
 
 	#canReplayAdvisorHistory(advisor: ActiveAdvisor, model: Model): boolean {
 		return advisor.agent.state.messages.every(
@@ -1687,14 +1699,29 @@ export class SessionAdvisors {
 		if (!apiKey) return;
 		signal.throwIfAborted();
 
-		// An `auto` advisor skipped the retune while on the fallback: rejoin the
-		// primary's live level now, not the level it had when it fell back.
-		const thinkingToApply = advisor.autoThinking
-			? this.#autoAdvisorThinkingLevel()
-			: advisor.thinkingLevel === fallback.lastAppliedThinkingLevel
-				? fallback.originalThinkingLevel
-				: advisor.thinkingLevel;
+		// Auto classification changes the concrete level every review without changing
+		// the selection; it must not prevent restoration of the pre-fallback Auto set.
+		const restoreOriginal = advisor.autoThinking && fallback.lastAppliedAutoThinking ||
+			!advisor.autoThinking && !fallback.lastAppliedAutoThinking &&
+				advisor.thinkingLevel === fallback.lastAppliedThinkingLevel;
+		const autoThinking = restoreOriginal ? fallback.originalAutoThinking : advisor.autoThinking;
+		const autoSelection = restoreOriginal ? fallback.originalAutoSelection : advisor.autoSelection;
+		let thinkingToApply: ThinkingLevel = restoreOriginal ? fallback.originalThinkingLevel : advisor.thinkingLevel;
+		if (cfgEffortPolicyMode.get(this.#host.settings) === "replacement") {
+			try {
+				const decision = resolveImplicitEffort(this.#host.settings, primaryModel,
+					autoThinking ? autoSelection ?? { mode: "auto" } : { mode: "fixed", level: thinkingToApply }, "role");
+				thinkingToApply = (autoThinking ? decision.candidates[0] : decision.level) ?? ThinkingLevel.Inherit;
+				if (decision.disclosure) this.#host.emitNotice("warning", decision.disclosure, "effort-policy");
+			} catch (error) {
+				if (!(error instanceof EffortPolicyError)) throw error;
+				this.#host.emitNotice("warning", `Advisor primary cannot be restored: ${error.message}`, "effort-policy");
+				return;
+			}
+		}
 		this.#setAdvisorModel(advisor, primaryModel, thinkingToApply);
+		advisor.autoThinking = autoThinking;
+		advisor.autoSelection = autoSelection;
 		this.#host.settings.getStorage()?.recordModelUsage(formatModelStringWithRouting(primaryModel));
 		advisor.retryFallback = undefined;
 		advisor.retryFallbackPendingSuccess = false;
@@ -1833,16 +1860,44 @@ export class SessionAdvisors {
 				signal.throwIfAborted();
 
 				const originalThinkingLevel = advisor.thinkingLevel;
-				const requestedThinkingLevel = selector.thinkingLevel ?? originalThinkingLevel;
-				const nextThinkingLevel = this.#setAdvisorModel(advisor, candidate, requestedThinkingLevel);
+				const originalAutoThinking = advisor.autoThinking;
+				const originalAutoSelection = advisor.autoSelection;
+				const saved = getFallbackEffortSelection(this.#host.settings, role, selector);
+				const selection: EffortSelection = saved ?? (selector.thinkingLevel === undefined
+					? { mode: "inherit" }
+					: { mode: "fixed", level: selector.thinkingLevel });
+				const autoThinking = selection.mode === "auto" || (selection.mode === "inherit" && advisor.autoThinking);
+				const autoSelection = selection.mode === "auto" ? selection :
+					selection.mode === "inherit" ? advisor.autoSelection : undefined;
+				const requested = selection.mode === "fixed" ? selection.level : originalThinkingLevel;
+				let nextRequested: ThinkingLevel = requested;
+				if (cfgEffortPolicyMode.get(this.#host.settings) === "replacement") {
+					try {
+						const decision = resolveImplicitEffort(this.#host.settings, candidate,
+							autoThinking ? autoSelection ?? { mode: "auto" } : { mode: "fixed", level: requested }, "fallback");
+						nextRequested = (autoThinking ? decision.candidates[0] : decision.level) ?? ThinkingLevel.Inherit;
+						if (decision.disclosure) this.#host.emitNotice("warning", decision.disclosure, "effort-policy");
+					} catch (policyError) {
+						if (!(policyError instanceof EffortPolicyError)) throw policyError;
+						this.#host.emitNotice("warning", `Skipping advisor fallback ${selector.raw}: ${policyError.message}`, "effort-policy");
+						continue;
+					}
+				}
+				const nextThinkingLevel = this.#setAdvisorModel(advisor, candidate, nextRequested);
+				advisor.autoThinking = autoThinking;
+				advisor.autoSelection = autoSelection;
 				if (advisor.retryFallback) {
 					advisor.retryFallback.lastAppliedThinkingLevel = nextThinkingLevel;
+					advisor.retryFallback.lastAppliedAutoThinking = autoThinking;
 				} else {
 					advisor.retryFallback = {
 						role,
 						originalSelector: currentSelector,
 						originalThinkingLevel,
+						originalAutoThinking,
+						originalAutoSelection,
 						lastAppliedThinkingLevel: nextThinkingLevel,
+						lastAppliedAutoThinking: autoThinking,
 					};
 				}
 				advisor.retryFallbackPendingSuccess = true;
