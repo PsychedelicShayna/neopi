@@ -251,7 +251,7 @@ describe("daemon broker client placement", () => {
 		expect(await spawnedThroughScope(true)).toBe(true);
 	});
 	if (process.platform === "linux") {
-		it("keeps a shared broker and daemon unmarked while a second client stays connected", async () => {
+		it("keeps a scoped broker and explicit daemon env unmarked while a second client stays connected", async () => {
 			resetSettingsForTest();
 			const fake = await fakeSystemd('while [ "${1#--}" != "$1" ]; do shift; done\nexec "$@"', true);
 			const projectDir = path.join(fake.root, "project");
@@ -271,27 +271,37 @@ describe("daemon broker client placement", () => {
 				if (brokerPid === undefined) throw new Error("Scoped broker did not acquire its lease");
 				const brokerEnv = await fs.readFile(`/proc/${brokerPid}/environ`, "utf8");
 				expect(brokerEnv.split("\0").some(entry => entry.startsWith("NPI_DECK_GEN="))).toBe(false);
-				const started = await clientA.request({
-					op: "start",
-					spec: {
-						name: "shared-lsp",
-						application: process.execPath,
-						args: [
-							"-e",
-							'console.log(`marker:${process.env.NPI_DECK_GEN ?? "none"}`); setInterval(() => {}, 1000)',
-						],
-						env: {},
-						cwd: projectDir,
-						pty: false,
-						restart: "no",
-						persist: true,
-						detached: false,
-						ready: { log: "marker:none", timeoutMs: 3000 },
-					},
-				});
-				expect(started.op).toBe("start");
-				if (started.op !== "start") throw new Error("Daemon start returned a different operation");
-				expect(started.readyTimedOut).toBe(false);
+				const daemons: Array<{ name: string; pid: number }> = [];
+				for (const mode of [
+					{ name: "shared-pipe", pty: false, detached: false },
+					{ name: "shared-pty", pty: true, detached: false },
+					{ name: "shared-detached", pty: false, detached: true },
+				]) {
+					const started = await clientA.request({
+						op: "start",
+						spec: {
+							name: mode.name,
+							application: process.execPath,
+							args: [
+								"-e",
+								'console.log("marker:" + (process.env.NPI_DECK_GEN ?? "none")); setInterval(() => {}, 1000)',
+							],
+							env: { NPI_DECK_GEN: "deck-worker-a" },
+							cwd: projectDir,
+							pty: mode.pty,
+							restart: "no",
+							persist: true,
+							detached: mode.detached,
+							ready: { log: "marker:none", timeoutMs: 3000 },
+						},
+					});
+					expect(started.op).toBe("start");
+					if (started.op !== "start" || started.daemon.pid === undefined) throw new Error("Daemon did not start");
+					expect(started.readyTimedOut).toBe(false);
+					const daemonEnv = await fs.readFile(`/proc/${started.daemon.pid}/environ`, "utf8");
+					expect(daemonEnv.split("\0").some(entry => entry.startsWith("NPI_DECK_GEN="))).toBe(false);
+					daemons.push({ name: mode.name, pid: started.daemon.pid });
+				}
 				clientB = await createDaemonBrokerClient(projectDir, { runtimeDir, idleGraceMs: 100 });
 				await clientB.request({ op: "ping" });
 				clientA.close();
@@ -300,12 +310,61 @@ describe("daemon broker client placement", () => {
 				const listed = await clientB.request({ op: "list" });
 				expect(listed.op).toBe("list");
 				if (listed.op !== "list") throw new Error("Daemon list returned a different operation");
-				expect(listed.daemons.find(daemon => daemon.name === "shared-lsp")?.pid).toBe(started.daemon.pid);
+				for (const daemon of daemons) {
+					expect(listed.daemons.find(entry => entry.name === daemon.name)?.pid).toBe(daemon.pid);
+				}
 			} finally {
 				const client = clientB ?? clientA;
 				if (client) await client.request({ op: "shutdown" }).catch(() => {});
 				clientA?.close();
 				clientB?.close();
+				if (priorGeneration === undefined) delete process.env.NPI_DECK_GEN;
+				else process.env.NPI_DECK_GEN = priorGeneration;
+			}
+		}, 30_000);
+
+		it("keeps an inherited broker daemon in the worker's generation", async () => {
+			resetSettingsForTest();
+			const fake = await fakeSystemd("exit 0", true);
+			const projectDir = path.join(fake.root, "project");
+			const runtimeDir = path.join(fake.root, "broker-run");
+			await fs.mkdir(getProjectAgentDir(projectDir), { recursive: true });
+			await Bun.write(path.join(getProjectAgentDir(projectDir), "config.yml"), "launch:\n  brokerScope: false\n");
+			process.env.PATH = `${fake.env.PATH}${path.delimiter}${savedEnv.PATH ?? ""}`;
+			process.env.XDG_RUNTIME_DIR = fake.env.XDG_RUNTIME_DIR;
+			const priorGeneration = process.env.NPI_DECK_GEN;
+			process.env.NPI_DECK_GEN = "deck-worker-direct";
+			let client: DaemonBrokerClient | undefined;
+			try {
+				client = await createDaemonBrokerClient(projectDir, { runtimeDir, idleGraceMs: 100 });
+				await client.request({ op: "ping" });
+				const brokerPid = await readLiveDaemonBrokerPid(runtimeDir);
+				if (brokerPid === undefined) throw new Error("Inherited broker did not acquire its lease");
+				const brokerEnv = await fs.readFile(`/proc/${brokerPid}/environ`, "utf8");
+				expect(brokerEnv.split("\0")).toContain("NPI_DECK_GEN=deck-worker-direct");
+				const started = await client.request({
+					op: "start",
+					spec: {
+						name: "direct-daemon",
+						application: process.execPath,
+						args: ["-e", 'console.log("marker:" + process.env.NPI_DECK_GEN); setInterval(() => {}, 1000)'],
+						env: { NPI_DECK_GEN: "deck-worker-direct" },
+						cwd: projectDir,
+						pty: false,
+						restart: "no",
+						persist: true,
+						detached: false,
+						ready: { log: "marker:deck-worker-direct", timeoutMs: 3000 },
+					},
+				});
+				expect(started.op).toBe("start");
+				if (started.op !== "start" || started.daemon.pid === undefined) throw new Error("Daemon did not start");
+				expect(started.readyTimedOut).toBe(false);
+				const daemonEnv = await fs.readFile(`/proc/${started.daemon.pid}/environ`, "utf8");
+				expect(daemonEnv.split("\0")).toContain("NPI_DECK_GEN=deck-worker-direct");
+			} finally {
+				if (client) await client.request({ op: "shutdown" }).catch(() => {});
+				client?.close();
 				if (priorGeneration === undefined) delete process.env.NPI_DECK_GEN;
 				else process.env.NPI_DECK_GEN = priorGeneration;
 			}
