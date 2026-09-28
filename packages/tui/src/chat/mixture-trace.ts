@@ -5,6 +5,7 @@
  * the hop's output when it is visible; header-only cards (hidden output, the
  * terminal hop whose output is the answer) still carry the run totals.
  */
+import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { Disclosure } from "../components/disclosure";
 import type { MixtureTraceDetails } from "../overlays/mixture-types";
 import { Ellipsis, truncateToWidth } from "../render";
@@ -82,7 +83,7 @@ class TraceHeader implements Component {
 		const tag = uiTheme.fg("customMessageLabel", uiTheme.bold(glyph));
 		const lines = [
 			truncateToWidth(
-				`${tag} ${uiTheme.fg("dim", replaceTabs(mixtureTraceTitle(this.#details)))}`,
+				`${tag} ${uiTheme.fg("dim", replaceTabs(sanitizeText(mixtureTraceTitle(this.#details))))}`,
 				width,
 				Ellipsis.Unicode,
 			),
@@ -98,7 +99,8 @@ class TraceBody implements Component {
 	#cache: { width: number; lines: readonly string[] } | undefined;
 
 	constructor(text: string, uiTheme: Theme) {
-		this.#text = text;
+		// Member output is model text: strip escape and control sequences before it reaches the terminal.
+		this.#text = replaceTabs(sanitizeText(text));
 		this.#uiTheme = uiTheme;
 	}
 
@@ -112,7 +114,7 @@ class TraceBody implements Component {
 		const wrapWidth = Math.max(10, Math.min(BODY_WIDTH, width) - 2);
 		const lines: string[] = [];
 		for (const paragraph of this.#text.split("\n")) {
-			const wrapped = paragraph ? wrapTextWithAnsi(replaceTabs(paragraph), wrapWidth) : [""];
+			const wrapped = paragraph ? wrapTextWithAnsi(paragraph, wrapWidth) : [""];
 			for (const line of wrapped) {
 				lines.push(truncateToWidth(`  ${this.#uiTheme.fg("customMessageText", line)}`, width, Ellipsis.Unicode));
 			}

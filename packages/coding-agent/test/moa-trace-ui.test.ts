@@ -141,4 +141,16 @@ describe("mixture trace cards in the transcript", () => {
 		expect(rendered[1]!.split("\n").filter(line => line.trim() !== "")).toHaveLength(1);
 		expect(rendered[2]).toContain("The answer.");
 	});
+
+	it("strips terminal control sequences from a visible member's output before rendering it", () => {
+		const ctx = createInteractiveModeContext({ toolOutputExpanded: true });
+		new UiHelpers(ctx).addMessageToChat(
+			card(hopTrace(1, "writer", "\x1b[2J\x1b]0;pwned\x07clear\x1b[31m red\x1b[0m\rline\x08 end")),
+		);
+		const raw = ctx.chatContainer.children[0]!.render(100).join("\n");
+		for (const sequence of ["\x1b[2J", "\x1b]0;", "\x07", "\x1b[31m", "\r", "\x08"]) {
+			expect(raw).not.toContain(sequence);
+		}
+		expect(Bun.stripANSI(raw)).toContain("clear redline end");
+	});
 });
