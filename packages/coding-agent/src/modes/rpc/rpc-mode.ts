@@ -57,6 +57,7 @@ import {
 	watchAndReportPromptResult,
 } from "./rpc-prompt-results";
 import { RpcSessionEventForwarder } from "./rpc-session-events";
+import { sessionLeaseErrorCode } from "./rpc-session-lease";
 import { isRpcSessionSettled, RpcSessionSettleWatcher } from "./rpc-session-settle";
 import { RpcSubagentRegistry, readRpcSubagentTranscript } from "./rpc-subagents";
 import type {
@@ -1321,7 +1322,14 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			case "new_session":
 			case "switch_session":
 			case "branch": {
-				const result = await handleRpcSessionChange(session, command, subagentRegistry);
+				let result: RpcSessionChangeResult;
+				try {
+					result = await handleRpcSessionChange(session, command, subagentRegistry);
+				} catch (err) {
+					const code = sessionLeaseErrorCode(err);
+					if (!code) throw err;
+					return error(id, command.type, err instanceof Error ? err.message : String(err), code);
+				}
 				if (!result.data.cancelled) {
 					promptResults.abortOpen();
 					// The detached run publishes no terminal agent_end to settle on.
@@ -1332,7 +1340,14 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			}
 
 			case "open_session": {
-				const result = await openRpcSession(session, command.sessionDir, subagentRegistry);
+				let result: RpcOpenSessionResult;
+				try {
+					result = await openRpcSession(session, command.sessionDir, subagentRegistry);
+				} catch (err) {
+					const code = sessionLeaseErrorCode(err);
+					if (!code) throw err;
+					return error(id, "open_session", err instanceof Error ? err.message : String(err), code);
+				}
 				if (!result.cancelled) {
 					promptResults.abortOpen();
 					void settleWatcher.check();

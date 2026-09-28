@@ -203,6 +203,19 @@ export interface RpcReadyFrame {
 	capabilities: string[];
 }
 
+/**
+ * One JSON line written to **stderr** (not stdout) when startup fails before
+ * any `ready` frame; the process then exits non-zero.
+ */
+export interface RpcStartupError {
+	type: "startup_error";
+	/** `--session` names a file another live process holds (see the `session_lease` capability). */
+	code: "session_in_use";
+	/** Process id of the holder; 0 when it had not yet recorded itself. */
+	pid: number;
+	sessionFile: string;
+}
+
 export interface RpcChunkFrame {
 	type: "rpc_chunk";
 	chunkId: string;
