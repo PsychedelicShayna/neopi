@@ -9,7 +9,7 @@
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { type } from "@oh-my-pi/omptype";
-import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentTool, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -249,6 +249,32 @@ describe("RPC plan mode", () => {
 		expect(session.getActiveToolNames()).toEqual([]);
 		expect(planMode.state).toEqual({ mode: "default" });
 		expect(frames).toEqual([]);
+	});
+
+	it("keeps a model the host chose while planning when plan mode ends", async () => {
+		const { session, planMode } = setup();
+		cfgModelRoles.override(session.settings, { plan: "anthropic/claude-sonnet-4-6" });
+		await planMode.setMode("plan", undefined);
+		const chosen = modelRegistry.find("anthropic", "claude-opus-4-1");
+		if (!chosen) throw new Error("Expected claude-opus-4-1 in the registry");
+		await session.setModel(chosen);
+
+		await planMode.setMode("default", undefined);
+
+		expect(session.model?.id).toBe("claude-opus-4-1");
+		expect(session.getActiveToolNames()).toEqual(["read"]);
+	});
+
+	it("keeps a thinking level the host chose while planning when plan mode ends", async () => {
+		const { session, planMode } = setup();
+		cfgModelRoles.override(session.settings, { plan: "anthropic/claude-sonnet-4-6" });
+		await planMode.setMode("plan", undefined);
+		session.setThinkingLevel(ThinkingLevel.High);
+
+		await planMode.setMode("default", undefined);
+
+		expect(session.model?.id).toBe("claude-sonnet-4-6");
+		expect(session.configuredThinkingLevel()).toBe(ThinkingLevel.High);
 	});
 
 	it("honors a host-supplied plan file path", async () => {
