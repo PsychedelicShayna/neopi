@@ -213,6 +213,72 @@ describe("workspace-scoped rosters on a shared registry", () => {
 		await Bun.write(path.join(fixture.agentDir, "MIXTURES.toml"), "");
 	});
 
+	function failNextRegistration(error: Error): void {
+		const registerProvider = fixture.registry.registerProvider.bind(fixture.registry);
+		vi.spyOn(fixture.registry, "registerProvider").mockImplementationOnce((...args) => {
+			registerProvider(...args);
+			throw error;
+		});
+	}
+
+	it("cleans a partially registered startup scope so a later session can discover and run it", async () => {
+		const cwd = await workspace("startup-retry-ws", DRAFT_THEN_EDIT_TOML);
+		const failure = new Error("provider registration failed after mutation");
+		failNextRegistration(failure);
+
+		await expect(sessionIn(cwd)).rejects.toBe(failure);
+		expect(fixture.registry.find("mixture", "draft-then-edit")).toBeUndefined();
+
+		const recovered = await sessionIn(cwd);
+		expect(await run(recovered, "draft-then-edit")).toEqual({
+			calls: ["writer", "editor"],
+			error: undefined,
+		});
+	});
+
+	it("preserves the registration failure if cleaning the failed scope also throws", async () => {
+		const cwd = await workspace("startup-cleanup-failure-ws", DRAFT_THEN_EDIT_TOML);
+		const registrationFailure = new Error("registration failure");
+		const cleanupFailure = new Error("cleanup failure");
+		failNextRegistration(registrationFailure);
+		vi.spyOn(fixture.registry, "unregisterProvider").mockImplementationOnce(() => {
+			throw cleanupFailure;
+		});
+
+		await expect(sessionIn(cwd)).rejects.toBe(registrationFailure);
+
+		const recovered = await sessionIn(cwd);
+		expect(await run(recovered, "draft-then-edit")).toEqual({
+			calls: ["writer", "editor"],
+			error: undefined,
+		});
+	});
+
+	it("restores the source after failed rebind, then can register and run the destination", async () => {
+		const sourceDir = await workspace(
+			"failed-rebind-source-ws",
+			DRAFT_THEN_EDIT_TOML.replace("Tighten the draft.", "SOURCE."),
+		);
+		const destinationDir = await workspace(
+			"failed-rebind-destination-ws",
+			DRAFT_THEN_EDIT_TOML.replace("Tighten the draft.", "DESTINATION."),
+		);
+		const moved = await sessionIn(sourceDir);
+		const editorPrompt = () => (members.callsTo("editor").at(-1)?.context.systemPrompt ?? []).join("\n");
+		expect(await run(moved, "draft-then-edit")).toEqual({ calls: ["writer", "editor"], error: undefined });
+		expect(editorPrompt()).toContain("SOURCE.");
+
+		const failure = new Error("destination registration failed after mutation");
+		failNextRegistration(failure);
+		await expect(moved.rebindMixturesForCwd(destinationDir)).rejects.toBe(failure);
+		expect(await run(moved, "draft-then-edit")).toEqual({ calls: ["writer", "editor"], error: undefined });
+		expect(editorPrompt()).toContain("SOURCE.");
+
+		await moved.rebindMixturesForCwd(destinationDir);
+		expect(await run(moved, "draft-then-edit")).toEqual({ calls: ["writer", "editor"], error: undefined });
+		expect(editorPrompt()).toContain("DESTINATION.");
+	});
+
 	it("runs only each workspace's own definitions, and unregisters with the last live scope", async () => {
 		const a = await sessionIn(await workspace("alpha-ws", renamed("alpha")));
 		const b = await sessionIn(await workspace("beta-ws", renamed("beta")));

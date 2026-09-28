@@ -49,12 +49,26 @@ export async function discoverRegistrableMixtures(ctx: MixtureRegistrationContex
 
 /**
  * Hold the workspace's scope of the registry's catalog for `owner`; the scope's first
- * holder discovers and registers that workspace's roster.
+ * holder discovers and registers that workspace's roster. If discovery, resolution,
+ * validation, or registration throws, the hold is dropped before the error propagates,
+ * so a failed retain leaves no owner behind.
  */
 async function retainScope(owner: string, ctx: MixtureRegistrationContext): Promise<MixtureScope> {
 	const scope = MixtureCatalog.for(ctx.registry).scope(ctx.cwd, ctx.agentDir);
 	scope.retain(owner);
-	if (!scope.hasRoster) scope.setRoster(await discoverRegistrableMixtures(ctx));
+	try {
+		if (!scope.hasRoster) scope.setRoster(await discoverRegistrableMixtures(ctx));
+	} catch (error) {
+		try {
+			scope.release(owner);
+		} catch (cleanupError) {
+			logger.warn("Mixture scope cleanup failed after retain error", {
+				scope: scope.key,
+				cleanupError: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+			});
+		}
+		throw error;
+	}
 	return scope;
 }
 

@@ -208,13 +208,17 @@ export class MixtureCatalog {
 			this.#registered = false;
 			return;
 		}
+		// Treat an attempted registration as live before calling into the registry:
+		// it may mutate provider state and then throw. A failed scope retain will
+		// release its owner, and an empty catalog must then unregister that partial
+		// provider before a later retain retries discovery and registration.
+		this.#registered = true;
 		this.#registry.registerProvider(MIXTURE_PROVIDER, {
 			baseUrl: this.baseUrl,
 			api: MIXTURE_API,
 			auth: "none",
 			models: roster.map(mixtureModelDefinition),
 		});
-		this.#registered = true;
 	}
 }
 
