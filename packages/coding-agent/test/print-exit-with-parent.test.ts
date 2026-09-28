@@ -107,6 +107,7 @@ setInterval(() => {}, 1 << 30);
 const INTERRUPTED_TURN_WORKER = `
 import * as path from "node:path";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { postmortem } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "${SRC}/config/model-registry";
 import { Settings } from "${SRC}/config/settings";
 import { exitWithParent } from "${SRC}/exit-with-parent";
@@ -161,7 +162,11 @@ sessionManager.appendMessage({ role: "user", content: "second model-only turn", 
 sessionManager.flushSync();
 parentExit.attach({ session });
 await Bun.write(sessionPathFile, sessionManager.getSessionFile());
-await Bun.write(readyFile, "ready");
+postmortem.register("manual-hold", async () => {
+	await Bun.write(readyFile, "ready");
+	await Bun.sleep(500);
+});
+void postmortem.cleanup();
 setInterval(() => {}, 1 << 30);
 `;
 
