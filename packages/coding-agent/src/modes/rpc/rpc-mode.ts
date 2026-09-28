@@ -45,6 +45,7 @@ import { formatPersistenceDurabilityFailure, formatPersistenceFailure } from "..
 import { initializeExtensions } from "../runtime-init";
 import { isRpcHostToolResult, isRpcHostToolUpdate, RpcHostToolBridge } from "./host-tools";
 import { isRpcHostUriResult, RpcHostUriBridge } from "./host-uris";
+import { RPC_CAPABILITIES } from "./rpc-capabilities";
 import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameEncoder } from "./rpc-frame";
 import { claimRpcInput, readRpcInputFrames } from "./rpc-input";
 import { pageRpcMessages, RPC_MESSAGES_PAGE_BUSY_ERROR, RpcMessagesPageError } from "./rpc-messages";
@@ -72,6 +73,7 @@ import type {
 	RpcHostUriRequest,
 	RpcHostUriResult,
 	RpcOpenSessionResult,
+	RpcReadyFrame,
 	RpcResponse,
 	RpcSessionState,
 	RpcSubagentSubscriptionLevel,
@@ -326,16 +328,37 @@ export function dispatchRpcInputFrame(parsed: unknown, deps: RpcInputFrameDeps):
 	})();
 }
 
-/** Serializes ordinary RPC commands while allowing control frames to dispatch immediately. */
+/**
+ * Serializes ordinary RPC commands while allowing control frames to dispatch immediately.
+ *
+ * With a `ready` gate, control frames (extension UI responses, host tool/URI
+ * results) still dispatch on arrival, but every command, `bash` included, waits
+ * for the gate to settle. RPC mode settles it once extension startup finishes,
+ * so an extension that asks the host a question during `session_start` gets the
+ * answer instead of deadlocking startup (issue #110).
+ */
 export class RpcInputDispatcher {
 	#tail: Promise<void> = Promise.resolve();
 	#tasks = new Set<Promise<void>>();
+	#gate: Promise<void> | undefined;
 	readonly #deps: RpcInputFrameDeps;
 	readonly #afterSerialCommand: (() => Promise<void>) | undefined;
 
-	constructor(options: { deps: RpcInputFrameDeps; afterSerialCommand?: () => Promise<void> }) {
+	constructor(options: { deps: RpcInputFrameDeps; afterSerialCommand?: () => Promise<void>; ready?: Promise<void> }) {
 		this.#deps = options.deps;
 		this.#afterSerialCommand = options.afterSerialCommand;
+		if (options.ready) {
+			const gate = options.ready.then(
+				() => {
+					this.#gate = undefined;
+				},
+				() => {
+					this.#gate = undefined;
+				},
+			);
+			this.#gate = gate;
+			this.#tail = gate;
+		}
 	}
 
 	/** Accept a parsed input frame without blocking the stdin reader. */
@@ -345,7 +368,16 @@ export class RpcInputDispatcher {
 
 			const command = parsed as RpcCommand;
 			if (command.type === "bash") {
-				dispatchRpcInputFrame(command, this.#deps);
+				const gate = this.#gate;
+				if (gate) {
+					this.#track(
+						gate.then(() => {
+							dispatchRpcInputFrame(command, this.#deps);
+						}),
+					);
+				} else {
+					dispatchRpcInputFrame(command, this.#deps);
+				}
 				return;
 			}
 
@@ -354,14 +386,18 @@ export class RpcInputDispatcher {
 				() => this.#dispatchSerialCommand(command),
 			);
 			this.#tail = task.catch(() => {});
-			this.#tasks.add(task);
-			void task.finally(() => {
-				this.#tasks.delete(task);
-			});
+			this.#track(task);
 		} catch (err: unknown) {
 			const message = err instanceof Error ? err.message : String(err);
 			this.#deps.output(this.#deps.errorResponse(undefined, "parse", `Failed to parse command: ${message}`));
 		}
+	}
+
+	#track(task: Promise<void>): void {
+		this.#tasks.add(task);
+		void task.finally(() => {
+			this.#tasks.delete(task);
+		});
 	}
 
 	/** Await every accepted serial command, including commands queued before EOF. */
@@ -781,15 +817,15 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		logger.error("RPC output delivery failed", { error: String(failure) });
 		void session.dispose().finally(() => process.exit(1));
 	});
-	outputWriter.write(
-		frameEncoder.encodeFrames({
-			type: "ready",
-			protocolVersion: 1,
-			supportedProtocolVersions: [1, 2],
-			maxFrameBytes: MAX_RPC_FRAME_BYTES,
-			maxReassembledFrameBytes: MAX_RPC_REASSEMBLED_BYTES,
-		}),
-	);
+	const readyFrame: RpcReadyFrame = {
+		type: "ready",
+		protocolVersion: 1,
+		supportedProtocolVersions: [1, 2],
+		maxFrameBytes: MAX_RPC_FRAME_BYTES,
+		maxReassembledFrameBytes: MAX_RPC_REASSEMBLED_BYTES,
+		capabilities: [...RPC_CAPABILITIES],
+	};
+	outputWriter.write(frameEncoder.encodeFrames(readyFrame));
 	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
 		outputWriter.write(frameEncoder.encodeFrames(obj));
 		if (isRecord(obj) && obj.type === "response" && obj.command === "negotiate_protocol" && obj.success === true)
@@ -1017,6 +1053,45 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	setToolUIContext?.(rpcUiContext, true);
 	const onPromptError = (id: string | undefined, command: string) => (promptError: Error) =>
 		output(error(id, command, promptError.message));
+
+	// Read stdin before extension startup (issue #110): an extension that awaits
+	// a dialog in `session_start` needs its `extension_ui_response` dispatched
+	// while `initializeExtensions` is still pending. Control frames dispatch on
+	// arrival; commands queue behind `startup` until the session is initialized.
+	// The deps below late-bind `handleCommand` and `shutdownCoordinator`, which
+	// are only invoked after `startup` resolves.
+	const startup = Promise.withResolvers<void>();
+	const dispatchFrameDeps: RpcInputFrameDeps = {
+		handleCommand: command => handleCommand(command),
+		output,
+		errorResponse: error,
+		trackBackgroundTask: task => shutdownCoordinator.track(task),
+		pendingExtensionRequests,
+		onHostToolResult: frame => hostToolBridge.handleResult(frame),
+		onHostToolUpdate: frame => hostToolBridge.handleUpdate(frame),
+		onHostUriResult: frame => hostUriBridge.handleResult(frame),
+	};
+	const inputDispatcher = new RpcInputDispatcher({
+		deps: dispatchFrameDeps,
+		afterSerialCommand: () => shutdownCoordinator.checkShutdownRequested(),
+		ready: startup.promise,
+	});
+	// Keep the stdin reader moving: side-channel frames dispatch immediately,
+	// ordinary commands serialize through inputDispatcher, and bash remains
+	// background-dispatched so abort_bash can overtake it. Frames are read
+	// line-by-line by readRpcInputFrames so a single malformed line is reported
+	// as an error frame and the loop keeps running instead of throwing out of
+	// the reader and killing the whole process (issue #5194).
+	const inputClosed = readRpcInputFrames(
+		input ?? Bun.stdin.stream(),
+		parsed => inputDispatcher.dispatch(parsed),
+		message => output(error(undefined, "parse", message)),
+	);
+	// EOF during startup must fail a pending startup dialog, not strand it.
+	void inputClosed.then(
+		() => pendingExtensionRequests.rejectAll("RPC client disconnected before extension UI response completed"),
+		() => {},
+	);
 
 	// Set up extensions with RPC-based UI context
 	await initializeExtensions(session, {
@@ -1714,33 +1789,9 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		},
 	});
 
-	const dispatchFrameDeps: RpcInputFrameDeps = {
-		handleCommand,
-		output,
-		errorResponse: error,
-		trackBackgroundTask: task => shutdownCoordinator.track(task),
-		pendingExtensionRequests,
-		onHostToolResult: frame => hostToolBridge.handleResult(frame),
-		onHostToolUpdate: frame => hostToolBridge.handleUpdate(frame),
-		onHostUriResult: frame => hostUriBridge.handleResult(frame),
-	};
-
-	const inputDispatcher = new RpcInputDispatcher({
-		deps: dispatchFrameDeps,
-		afterSerialCommand: () => shutdownCoordinator.checkShutdownRequested(),
-	});
-
-	// Keep the stdin reader moving: side-channel frames dispatch immediately,
-	// ordinary commands serialize through inputDispatcher, and bash remains
-	// background-dispatched so abort_bash can overtake it. Frames are read
-	// line-by-line by readRpcInputFrames so a single malformed line is reported
-	// as an error frame and the loop keeps running instead of throwing out of
-	// the reader and killing the whole process (issue #5194).
-	await readRpcInputFrames(
-		input ?? Bun.stdin.stream(),
-		parsed => inputDispatcher.dispatch(parsed),
-		message => output(error(undefined, "parse", message)),
-	);
+	// Startup is complete: release commands queued behind extension init.
+	startup.resolve();
+	await inputClosed;
 
 	// stdin closed — RPC client is gone. Fail pending side-channel requests
 	// first so active/queued commands can settle, then drain accepted work.

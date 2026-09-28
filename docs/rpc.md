@@ -26,9 +26,14 @@ Behavior notes:
 - RPC mode disables automatic session title generation by default to avoid an extra model call.
 - RPC/ACP host defaults cover task isolation/execution, memory, advisor, tier, async-job, and bash auto-background settings. They are applied only when a path is not explicitly configured; project/global config, `--config`, and isolated settings remain authoritative. Todo settings are not host-defaulted.
 - The process claims stdin before extension discovery, then parses it one non-empty JSONL line at a time. Malformed JSON emits a recoverable `command: "parse"` failure and does not terminate the loop.
-- At startup it writes a `ready` frame before processing commands. The frame advertises supported protocol versions and transport limits.
+- At startup it writes a `ready` frame, then starts reading stdin while extensions initialize. Control frames (`extension_ui_response`, `host_tool_result`, `host_tool_update`, `host_uri_result`) are dispatched on arrival, so an extension that asks a dialog question during `session_start` receives the host's answer. Commands, `bash` included, are queued and processed in arrival order once initialization completes. Hosts that send no startup dialog answers observe no change in frame order.
 - When stdin closes, pending extension UI, host-tool, and host-URI requests are rejected; accepted commands are drained, the session is disposed, pending stdout is delivered, and the process exits with code `0`.
 - Responses/events are written as one JSON object per line.
+
+### Capabilities
+
+| String | Feature |
+| --- | --- |
 
 ## Transport and Framing
 
@@ -42,9 +47,12 @@ The initial ready frame uses protocol v1 and advertises the opt-in lossless tran
   "protocolVersion": 1,
   "supportedProtocolVersions": [1, 2],
   "maxFrameBytes": 1048576,
-  "maxReassembledFrameBytes": 67108864
+  "maxReassembledFrameBytes": 67108864,
+  "capabilities": []
 }
 ```
+
+`capabilities` lists optional features this process supports. Hosts MUST gate optional features on these exact strings rather than on NeoPi version numbers; strings are never renamed. See [Capabilities](#capabilities).
 
 Clients that support protocol v2 SHOULD immediately send:
 

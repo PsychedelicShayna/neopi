@@ -199,6 +199,8 @@ export interface RpcReadyFrame {
 	supportedProtocolVersions: [1, 2];
 	maxFrameBytes: number;
 	maxReassembledFrameBytes: number;
+	/** Optional features this process supports; hosts gate on exact strings (see `rpc-capabilities.ts`). */
+	capabilities: string[];
 }
 
 export interface RpcChunkFrame {
