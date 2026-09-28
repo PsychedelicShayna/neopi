@@ -236,6 +236,27 @@ describe("input controller — slash command history (#3148)", () => {
 		expect(prompt).not.toHaveBeenCalled();
 		expect(editor.getText()).toBe("/typo");
 	});
+	it("keeps a newer composer draft when an asynchronous input hook triggers the warning", async () => {
+		const { ctx, editor, addToHistory, prompt } = makeCtx();
+		const gate = Promise.withResolvers<{ handled: false }>();
+		Object.assign(ctx.session, {
+			extensionRunner: {
+				hasHandlers: () => true,
+				emitInput: () => gate.promise,
+				getCommand: () => undefined,
+			},
+		});
+		controllerFor(ctx);
+
+		const pending = editor.onSubmit?.("/typo");
+		editor.setText("new draft");
+		gate.resolve({ handled: false });
+		await pending;
+
+		expect(editor.getText()).toBe("new draft");
+		expect(addToHistory).toHaveBeenCalledWith("/typo");
+		expect(prompt).not.toHaveBeenCalled();
+	});
 	it("keeps the Alt+C chain request when an unknown command needs confirmation", async () => {
 		const discovery = vi.spyOn(chainConfig, "discoverChains").mockResolvedValue({ chains: [], warnings: [] });
 		try {

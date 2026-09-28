@@ -1100,10 +1100,18 @@ export class InputController {
 			if (unknownSlash) {
 				this.#unknownSlashWarned = text;
 				const hint = unknownSlash.suggestion ? ` Did you mean /${unknownSlash.suggestion}?` : "";
-				this.ctx.showWarning(
-					`Unknown command /${unknownSlash.name}.${hint} Press Enter again to send it as a message.`,
-				);
-				if (!this.ctx.editor.restoreSubmittedDraft()) this.ctx.editor.setCollapsedText(text);
+				if (this.ctx.editor.getText()) {
+					// An input hook may have awaited while the operator started a new draft.
+					this.ctx.editor.addToHistory(text);
+					this.ctx.showWarning(
+						`Unknown command /${unknownSlash.name}.${hint} New draft kept; previous command saved to history (Up) for confirmation.`,
+					);
+				} else {
+					this.ctx.showWarning(
+						`Unknown command /${unknownSlash.name}.${hint} Press Enter again to send it as a message.`,
+					);
+					if (!this.ctx.editor.restoreSubmittedDraft()) this.ctx.editor.setCollapsedText(text);
+				}
 				if (forceChain) this.#chainNextSubmit = true;
 				return;
 			}

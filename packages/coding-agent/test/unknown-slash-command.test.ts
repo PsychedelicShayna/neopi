@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { findUnknownSlashCommand } from "../src/modes/utils/unknown-slash-command";
 
-const KNOWN = ["rename", "resume", "model", "skill:grilling", "q"];
+const KNOWN = ["rename", "resume", "model", "quit", "skill:grilling", "q"];
 
 describe("findUnknownSlashCommand", () => {
 	it("suggests the closest command for a typo", () => {
@@ -19,7 +19,7 @@ describe("findUnknownSlashCommand", () => {
 		expect(findUnknownSlashCommand("/rename x", KNOWN)).toBeUndefined();
 		expect(findUnknownSlashCommand("/q", KNOWN)).toBeUndefined();
 		expect(findUnknownSlashCommand("/skill:grilling plan", KNOWN)).toBeUndefined();
-		expect(findUnknownSlashCommand("/model:opus", KNOWN)).toBeUndefined();
+		expect(findUnknownSlashCommand("/rename:session", KNOWN)).toBeUndefined();
 	});
 
 	it("flags an unknown namespaced command", () => {
@@ -27,6 +27,11 @@ describe("findUnknownSlashCommand", () => {
 			name: "skill:griling",
 			suggestion: "skill:grilling",
 		});
+	});
+
+	it("warns when a builtin does not accept colon arguments", () => {
+		expect(findUnknownSlashCommand("/model:opus", KNOWN)).toEqual({ name: "model:opus" });
+		expect(findUnknownSlashCommand("/quit:foo", KNOWN)).toEqual({ name: "quit:foo" });
 	});
 
 	it("ignores paths and text that is not a leading command token", () => {

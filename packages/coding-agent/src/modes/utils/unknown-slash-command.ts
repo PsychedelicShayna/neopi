@@ -1,3 +1,5 @@
+import { lookupBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
+
 /**
  * Detects `/name` input that matches no registered command, so the TUI can warn instead of sending a
  * mistyped command to the model as prose.
@@ -25,7 +27,8 @@ export function findUnknownSlashCommand(text: string, known: Iterable<string>): 
 	let suggestion: string | undefined;
 	let best = MAX_SUGGESTION_DISTANCE + 1;
 	for (const candidate of known) {
-		if (candidate === name || candidate === prefix) return undefined;
+		if (candidate === name || (candidate === prefix && lookupBuiltinSlashCommand(prefix)?.allowArgs))
+			return undefined;
 		const distance = boundedEditDistance(name.toLowerCase(), candidate.toLowerCase(), best - 1);
 		if (distance < best) {
 			best = distance;
