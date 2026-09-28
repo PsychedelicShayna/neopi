@@ -286,7 +286,7 @@ import { registerLocalInferenceApi } from "./tiny/local-inference-api";
 import { streamMixture } from "./moa/engine";
 import { createSessionMixtureHost } from "./moa/host";
 import { isMixtureModel, registerMixtureApi } from "./moa/provider";
-import { retainMixtureCatalog } from "./moa/registration";
+import { MixtureWorkspace } from "./moa/registration";
 import { buildWorkspaceTree, type WorkspaceTree } from "./workspace-tree";
 
 import {
@@ -2534,10 +2534,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// workspace scope: a subagent sharing the registry and cwd only retains, and a
 		// scope's roster is dropped when its last holder releases.
 		const mixtureOwner = `session:${sessionManager.getSessionId()}:${Bun.randomUUIDv7()}`;
-		const mixtureScope = await logger.time("retainMixtureCatalog", () =>
-			retainMixtureCatalog(mixtureOwner, { cwd, agentDir, registry: modelRegistry, settings }),
+		const mixtureWorkspace = await logger.time("retainMixtureCatalog", () =>
+			MixtureWorkspace.retain(mixtureOwner, { cwd, agentDir, registry: modelRegistry, settings }),
 		);
-		const releaseMixtureCatalog = () => mixtureScope.release(mixtureOwner);
+		const releaseMixtureCatalog = () => mixtureWorkspace.release();
 		startupCleanup.defer(releaseMixtureCatalog);
 		disposeCallbacks.add(releaseMixtureCatalog);
 		// Online runtime discovery must not steal the event loop from the first UI
@@ -4146,7 +4146,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		const sessionMixtureHost = createSessionMixtureHost({
 			sessionManager,
 			modelRegistry,
-			mixtures: mixtureScope,
+			workspace: mixtureWorkspace,
 			settings,
 			stream: primaryStreamFn,
 			prepareContext: transformMemberContext,

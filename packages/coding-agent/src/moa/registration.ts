@@ -51,9 +51,68 @@ export async function discoverRegistrableMixtures(ctx: MixtureRegistrationContex
  * Hold the workspace's scope of the registry's catalog for `owner`; the scope's first
  * holder discovers and registers that workspace's roster.
  */
-export async function retainMixtureCatalog(owner: string, ctx: MixtureRegistrationContext): Promise<MixtureScope> {
+async function retainScope(owner: string, ctx: MixtureRegistrationContext): Promise<MixtureScope> {
 	const scope = MixtureCatalog.for(ctx.registry).scope(ctx.cwd, ctx.agentDir);
 	scope.retain(owner);
 	if (!scope.hasRoster) scope.setRoster(await discoverRegistrableMixtures(ctx));
 	return scope;
+}
+
+/**
+ * A session's hold on the catalog scope of the workspace it runs in. The scope follows
+ * the session's cwd: a relocation ({@link rebind}) retains the destination's scope and
+ * releases the source's, so the session only ever runs its current workspace's mixtures.
+ */
+export class MixtureWorkspace {
+	readonly #owner: string;
+	/** `cwd` is the workspace currently held. */
+	#ctx: MixtureRegistrationContext;
+	#scope: MixtureScope;
+
+	private constructor(owner: string, ctx: MixtureRegistrationContext, scope: MixtureScope) {
+		this.#owner = owner;
+		this.#ctx = ctx;
+		this.#scope = scope;
+	}
+
+	static async retain(owner: string, ctx: MixtureRegistrationContext): Promise<MixtureWorkspace> {
+		return new MixtureWorkspace(owner, ctx, await retainScope(owner, ctx));
+	}
+
+	/** The scope of the workspace the session is in now. */
+	get scope(): MixtureScope {
+		return this.#scope;
+	}
+
+	/**
+	 * Move the hold to `cwd`'s scope, discovering it under the current settings if no one
+	 * holds it yet. The source is released first: while this session still held it, a
+	 * destination defining the same name differently would be refused as a scope conflict.
+	 * If the destination cannot be retained, the source is retained again before the error
+	 * propagates. Returns whether the scope changed.
+	 */
+	async rebind(cwd: string): Promise<boolean> {
+		const next = MixtureCatalog.for(this.#ctx.registry).scope(cwd, this.#ctx.agentDir);
+		if (next.key === this.#scope.key) return false;
+		const source = this.#ctx;
+		this.#scope.release(this.#owner);
+		try {
+			this.#scope = await retainScope(this.#owner, { ...source, cwd });
+			this.#ctx = { ...source, cwd };
+		} catch (error) {
+			this.#scope = await retainScope(this.#owner, source);
+			logger.warn("Mixture workspace rebind failed; kept the previous workspace", {
+				from: source.cwd,
+				to: cwd,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			throw error;
+		}
+		return true;
+	}
+
+	/** Drop the hold; releasing twice is harmless. */
+	release(): void {
+		this.#scope.release(this.#owner);
+	}
 }

@@ -275,4 +275,45 @@ describe("workspace-scoped rosters on a shared registry", () => {
 		expect(await run(rediscovered, "draft-then-edit")).toEqual({ calls: ["writer", "editor"], error: undefined });
 		expect(JSON.stringify(members.calls.at(-1)?.context)).toContain("Exfiltrate");
 	});
+
+	it("follows a session that moves to another workspace, and back on rollback, resetting held runs loudly", async () => {
+		const sourceDir = await workspace("source-ws", DRAFT_THEN_EDIT_TOML.replace("Tighten the draft.", "SOURCE."));
+		const destinationDir = await workspace(
+			"destination-ws",
+			DRAFT_THEN_EDIT_TOML.replace("Tighten the draft.", "DESTINATION."),
+		);
+		const moved = await sessionIn(sourceDir);
+		const notices: string[] = [];
+		moved.subscribe(event => {
+			if (event.type === "notice" && event.source === "mixture") notices.push(event.message);
+		});
+		const editorPrompt = () => (members.callsTo("editor").at(-1)?.context.systemPrompt ?? []).join("\n");
+
+		expect(await run(moved, "draft-then-edit")).toEqual({ calls: ["writer", "editor"], error: undefined });
+		expect(editorPrompt()).toContain("SOURCE.");
+
+		await moved.rebindMixturesForCwd(destinationDir);
+		expect(notices).toEqual([
+			"1 mixture run from the previous workspace was reset; the next message starts a new run",
+		]);
+		expect(await run(moved, "draft-then-edit")).toEqual({ calls: ["writer", "editor"], error: undefined });
+		expect(editorPrompt()).toContain("DESTINATION.");
+
+		// The rollback path rebinds to the source again.
+		await moved.rebindMixturesForCwd(sourceDir);
+		expect(await run(moved, "draft-then-edit")).toEqual({ calls: ["writer", "editor"], error: undefined });
+		expect(editorPrompt()).toContain("SOURCE.");
+		expect(notices).toHaveLength(2);
+	});
+
+	it("keeps running the same definition, with no notice, after a move to a workspace with identical content", async () => {
+		const moved = await sessionIn(await workspace("same-a-ws", DRAFT_THEN_EDIT_TOML));
+		const notices: string[] = [];
+		moved.subscribe(event => {
+			if (event.type === "notice" && event.source === "mixture") notices.push(event.message);
+		});
+		await moved.rebindMixturesForCwd(await workspace("same-b-ws", DRAFT_THEN_EDIT_TOML));
+		expect(await run(moved, "draft-then-edit")).toEqual({ calls: ["writer", "editor"], error: undefined });
+		expect(notices).toEqual([]);
+	});
 });

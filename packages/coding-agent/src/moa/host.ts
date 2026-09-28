@@ -14,7 +14,8 @@ import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
 import type { SessionManager } from "../session/session-manager";
 import { commitMixtureResponse } from "./engine";
-import { isMixtureModel, type MixtureScope } from "./provider";
+import { isMixtureModel } from "./provider";
+import type { MixtureWorkspace } from "./registration";
 import { resolveMixture } from "./resolve";
 import { MixtureRunStore } from "./run-store";
 import {
@@ -37,8 +38,8 @@ export type MixtureSessionEvent =
 export interface SessionMixtureHostDeps {
 	sessionManager: SessionManager;
 	modelRegistry: ModelRegistry;
-	/** The session's workspace scope of the catalog: the only definitions it may run. */
-	mixtures: MixtureScope;
+	/** The session's hold on its workspace's catalog scope: the only definitions it may run. */
+	workspace: MixtureWorkspace;
 	settings: Settings;
 	/** The session's settings-aware stream function. */
 	stream: StreamFn;
@@ -58,6 +59,12 @@ export interface SessionMixtureHost extends MixtureHost {
 	 * boundary. A run still finishing afterwards persists nothing.
 	 */
 	resetConversation(): void;
+	/**
+	 * The session moved to `cwd` (`/move`, a cross-project resume, or the rollback of
+	 * one). Rebinds to that workspace's mixtures; runs held from the previous workspace
+	 * are dropped, with a warning when there were any.
+	 */
+	rebindWorkspace(cwd: string): Promise<void>;
 }
 
 function traceSummary(details: MixtureTraceDetails): string {
@@ -158,7 +165,7 @@ export function createSessionMixtureHost(deps: SessionMixtureHostDeps): SessionM
 		resolveRun(name: string): ResolvedMixture | string {
 			// Only this workspace's definitions: a same-named mixture another workspace
 			// registered on the shared registry never runs here.
-			const registered = deps.mixtures.find(name);
+			const registered = deps.workspace.scope.find(name);
 			if (!registered) return `mixture/${name} is not defined in this workspace`;
 			const fresh = resolveMixture(registered.definition, {
 				registry: modelRegistry,
@@ -168,7 +175,7 @@ export function createSessionMixtureHost(deps: SessionMixtureHostDeps): SessionM
 			});
 			const { errors } = validateMixture(fresh, {
 				settings,
-				names: deps.mixtures.roster().map(mixture => mixture.definition.name),
+				names: deps.workspace.scope.roster().map(mixture => mixture.definition.name),
 			});
 			if (errors.length > 0) {
 				return `mixture/${name} no longer validates: ${errors.map(issue => `${issue.code} (${issue.message})`).join("; ")}`;
@@ -219,6 +226,19 @@ export function createSessionMixtureHost(deps: SessionMixtureHostDeps): SessionM
 		resetConversation(): void {
 			runs.clear();
 			credentials.clear();
+		},
+		async rebindWorkspace(cwd: string): Promise<void> {
+			if (!(await deps.workspace.rebind(cwd))) return;
+			// A run belongs to the workspace whose definition it pinned: none crosses a move.
+			const held = runs.runs().length;
+			runs.clear();
+			credentials.clear();
+			if (held > 0) {
+				deps.notice(
+					"warning",
+					`${held} mixture run${held === 1 ? "" : "s"} from the previous workspace ${held === 1 ? "was" : "were"} reset; the next message starts a new run`,
+				);
+			}
 		},
 		commitPersisted(message: AssistantMessage): void {
 			if (!isMixtureModel(message) || !message.responseId) return;
