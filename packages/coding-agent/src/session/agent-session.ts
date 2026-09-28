@@ -3242,6 +3242,10 @@ export class AgentSession implements SettingsScope {
 			const entry = branch[index];
 			if (entry.type !== "message") continue;
 			if (sessionMessagePersistenceKey(entry.message) !== key) continue;
+			// Distinct reserved submissions can have identical text and timestamps;
+			// a prior entry must not consume the later submission's id.
+			const reservedId = getMessageEntryId(message);
+			if (reservedId !== undefined && entry.id !== reservedId) continue;
 			if (!sameMessageContent(entry.message, message)) continue;
 			if (
 				entry.message.role === "assistant" &&
@@ -6896,7 +6900,7 @@ export class AgentSession implements SettingsScope {
 			}
 
 			// Try custom commands (TypeScript slash commands)
-			const customResult = await this.#tryExecuteCustomCommand(text);
+			const customResult = options?.customCommandResult ?? (await this.executeCustomCommand(text));
 			if (customResult !== null) {
 				if (customResult === "") {
 					return false;
@@ -7690,7 +7694,7 @@ export class AgentSession implements SettingsScope {
 	 * Try to execute a custom command. Returns the prompt string if found, null otherwise.
 	 * If the command returns void, returns empty string to indicate it was handled.
 	 */
-	async #tryExecuteCustomCommand(text: string): Promise<string | null> {
+	async executeCustomCommand(text: string): Promise<string | null> {
 		if (this.#customCommands.length === 0 && this.#mcpPromptCommands.length === 0) return null;
 
 		// Parse command name and args
@@ -8548,6 +8552,7 @@ export class AgentSession implements SettingsScope {
 			if (!keep(message) && message.role === "custom" && message.customType === "ttsr-injection") {
 				this.#ttsr.releaseDeferredReservationFromDetails(message.details);
 			}
+			if (!keep(message)) this.sessionManager.releaseEntryId(getMessageEntryId(message));
 		}
 		this.agent.replaceQueues(steeringAll.filter(keep), followUpAll.filter(keep));
 		this.#reconcileQueuedMessageDrain();
@@ -8599,6 +8604,7 @@ export class AgentSession implements SettingsScope {
 		const fromSteer = lastUserIndex(steering);
 		if (fromSteer >= 0) {
 			const removed = steering[fromSteer];
+			this.sessionManager.releaseEntryId(getMessageEntryId(removed));
 			this.agent.replaceQueues(removeWithCompanions(steering, fromSteer), followUp.slice());
 			this.#reconcileQueuedMessageDrain();
 			return toRestoredQueuedMessage(removed);
@@ -8606,6 +8612,7 @@ export class AgentSession implements SettingsScope {
 		const fromFollowUp = lastUserIndex(followUp);
 		if (fromFollowUp >= 0) {
 			const removed = followUp[fromFollowUp];
+			this.sessionManager.releaseEntryId(getMessageEntryId(removed));
 			this.agent.replaceQueues(steering.slice(), removeWithCompanions(followUp, fromFollowUp));
 			this.#reconcileQueuedMessageDrain();
 			return toRestoredQueuedMessage(removed);
@@ -11114,6 +11121,9 @@ export class AgentSession implements SettingsScope {
 		this.#pendingNextTurnMessages = [];
 		this.#scheduledHiddenNextTurnGeneration = undefined;
 		this.#releaseQueuedTtsrReservations();
+		for (const message of [...this.agent.peekSteeringQueue(), ...this.agent.peekFollowUpQueue()]) {
+			this.sessionManager.releaseEntryId(getMessageEntryId(message));
+		}
 		this.agent.replaceQueues([], []);
 		this.#queuedMessageDrainBlocked = false;
 		this.#usagePreflightReadyForNextModelCall = false;
