@@ -624,6 +624,12 @@ export class WorkPool {
 }
 
 /** Process-local workpool registry scoped by owner id and pool name. */
+interface WorkPoolGenerationSnapshot {
+	pool: WorkPool;
+	/** Monotonic item count at cancellation entry; growth means the pool accepted later work. */
+	itemCount: number;
+}
+
 export class WorkPoolRegistry {
 	static #instance: WorkPoolRegistry | undefined;
 
@@ -659,17 +665,22 @@ export class WorkPoolRegistry {
 		return this.#pools.get(this.#key(ownerId, name));
 	}
 
-	/** Snapshot matching pool generations so later cleanup cannot close pools created in the meantime. */
-	snapshotOwners(matches: (ownerId: string) => boolean): WorkPool[] {
-		return [...this.#pools.values()].filter(pool => matches(pool.ownerId));
+	/** Snapshot matching pools and the work each had accepted so far. */
+	snapshotOwners(matches: (ownerId: string) => boolean): WorkPoolGenerationSnapshot[] {
+		return [...this.#pools.values()]
+			.filter(pool => matches(pool.ownerId))
+			.map(pool => ({ pool, itemCount: pool.items.length }));
 	}
 
-	/** Close only pool generations from an earlier snapshot. */
-	releasePools(pools: readonly WorkPool[]): string[] {
+	/** Close only unchanged pool generations from an earlier snapshot. */
+	releasePools(snapshots: readonly WorkPoolGenerationSnapshot[]): string[] {
 		const released: string[] = [];
-		for (const pool of pools) {
+		for (const { pool, itemCount } of snapshots) {
 			const key = this.#key(pool.ownerId, pool.name);
-			if (this.#pools.get(key) !== pool) continue;
+			// items is append-only. Growth proves the active root reused this pool
+			// after cancellation began, so neither that work nor its pool belongs
+			// to the cleanup snapshot.
+			if (this.#pools.get(key) !== pool || pool.items.length !== itemCount) continue;
 			pool.close();
 			this.#pools.delete(key);
 			released.push(pool.name);

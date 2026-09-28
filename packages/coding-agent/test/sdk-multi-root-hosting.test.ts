@@ -457,7 +457,7 @@ describe("two simultaneous top-level roots (issue #121)", () => {
 		expect(JSON.stringify(again.content)).toContain("pool");
 	}, 60000);
 
-	it("cancelRootWork preserves pools and adopted agents created while its original jobs settle", async () => {
+	it("cancelRootWork preserves post-snapshot work in new and existing pools and agents", async () => {
 		const a = await createRoot("DeckA", { settings: { "task.maxConcurrency": 1 } });
 		const registry = AgentRegistry.global();
 		const lifecycle = AgentLifecycleManager.global();
@@ -467,6 +467,12 @@ describe("two simultaneous top-level roots (issue #121)", () => {
 		});
 		const oldPool = WorkPoolRegistry.global().get("DeckA", "old-pool");
 		expect(oldPool).toBeDefined();
+		await a.session.getToolByName("eval")!.execute("eval-reused-pool", {
+			language: "js",
+			code: 'return (await workpool("task", { name: "reused-pool" })).name;',
+		});
+		const reusedPool = WorkPoolRegistry.global().get("DeckA", "reused-pool");
+		expect(reusedPool).toBeDefined();
 		const oldAgent = registry.register({
 			id: "DeckA.Old",
 			displayName: "task",
@@ -502,6 +508,9 @@ describe("two simultaneous top-level roots (issue #121)", () => {
 		newPool!.push(["HOLD:new", "queued item"]);
 		for (let i = 0; i < 200 && newPool!.status().items.running === 0; i++) await Bun.sleep(5);
 		expect(newPool!.status().items).toMatchObject({ running: 1, queued: 1 });
+		reusedPool!.push(["HOLD:reused", "queued reused item"]);
+		for (let i = 0; i < 200 && reusedPool!.status().items.running === 0; i++) await Bun.sleep(5);
+		expect(reusedPool!.status().items).toMatchObject({ running: 1, queued: 1 });
 		const newAgent = registry.register({
 			id: "DeckA.New",
 			displayName: "task",
@@ -522,6 +531,10 @@ describe("two simultaneous top-level roots (issue #121)", () => {
 		expect(newPool!.closed).toBe(false);
 		expect(newPool!.status().items).toMatchObject({ running: 1, queued: 1, cancelled: 0 });
 		expect(a.session.asyncJobManager!.getJob("new-pool")?.status).toBe("running");
+		expect(WorkPoolRegistry.global().get("DeckA", "reused-pool")).toBe(reusedPool);
+		expect(reusedPool!.closed).toBe(false);
+		expect(reusedPool!.status().items).toMatchObject({ running: 1, queued: 1, cancelled: 0 });
+		expect(a.session.asyncJobManager!.getJob("reused-pool")?.status).toBe("running");
 		expect(registry.get(newAgent.id)).toBe(newAgent);
 		expect(lifecycle.has(newAgent.id)).toBe(true);
 	}, 60000);
