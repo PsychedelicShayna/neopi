@@ -4580,7 +4580,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 									await Promise.all(
 										lateRefs.map(({ ref, generation }) =>
 											agentRegistry.runGeneration(ref) === generation
-												? lifecycle.release(ref.id, ref)
+												? lifecycle.release(ref.id, ref, { expectedRunGeneration: generation })
 												: Promise.resolve(false),
 										),
 									);

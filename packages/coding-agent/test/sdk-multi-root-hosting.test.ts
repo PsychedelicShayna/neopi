@@ -597,6 +597,37 @@ describe("two simultaneous top-level roots (issue #121)", () => {
 		expect(lifecycle.has(nested.id)).toBe(false);
 	}, 60000);
 
+	it("guarded cancellation release preserves a child woken while its park is cancelled", async () => {
+		await createRoot("DeckA");
+		const registry = AgentRegistry.global();
+		const lifecycle = AgentLifecycleManager.global();
+		const root = registry.get("DeckA")!;
+		const child = registry.register({
+			id: "DeckA.ParkWake",
+			displayName: "task",
+			kind: "sub",
+			parentId: root.id,
+			session: { dispose: async () => {} } as unknown as AgentSession,
+		});
+		registry.setStatus(child.id, "idle", child);
+		expect(lifecycle.adopt(child.id, { idleTtlMs: 0, root }, child)).toBe(true);
+		const cancelledGeneration = registry.runGeneration(child);
+
+		const parking = lifecycle.park(child.id);
+		const releasing = lifecycle.release(child.id, child, {
+			expectedRunGeneration: cancelledGeneration,
+		});
+		// release() cancels the in-flight park, then awaits its promise. A wake
+		// accepted in that gap reuses the same ref but begins a new run.
+		expect(registry.setStatus(child.id, "running", child)).toBe(true);
+		await parking;
+
+		expect(await releasing).toBe(false);
+		expect(registry.get(child.id)).toBe(child);
+		expect(child.status).toBe("running");
+		expect(lifecycle.has(child.id)).toBe(true);
+	}, 60000);
+
 	it("cancelRootWork releases a child whose job settles after the deadline", async () => {
 		const a = await createRoot("DeckA");
 		const registry = AgentRegistry.global();
