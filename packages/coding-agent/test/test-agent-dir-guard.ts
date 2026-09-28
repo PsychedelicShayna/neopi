@@ -4,6 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { removeSyncWithRetries } from "@oh-my-pi/pi-utils/temp";
 
+const codingAgentDir = path.resolve(import.meta.dir, "..");
+const guardActiveEnvironmentKey = "NPI_TEST_STORAGE_GUARD_ACTIVE";
 const allowedStorageRoot = os.tmpdir();
 const suiteRoot = fs.mkdtempSync(path.join(allowedStorageRoot, "npi-test-agent-dir-"));
 const guardedEnvironmentKeys = [
@@ -27,6 +29,7 @@ suiteEnvironment.set("XDG_CACHE_HOME", path.join(suiteRoot, "xdg-cache"));
 const testGlobal = globalThis as typeof globalThis & {
 	__npiTestDirectoryGuardEnabled?: boolean;
 	__npiTestResetDirsFromEnv?: () => void;
+	__npiTestStorageGuardActive?: () => boolean;
 };
 testGlobal.__npiTestDirectoryGuardEnabled = true;
 
@@ -39,10 +42,26 @@ function applyEnvironment(environment: ReadonlyMap<(typeof guardedEnvironmentKey
 	testGlobal.__npiTestResetDirsFromEnv?.();
 }
 
+function runsCodingAgentTest(): boolean {
+	const testPath = path.resolve(Bun.main);
+	return testPath === codingAgentDir || testPath.startsWith(`${codingAgentDir}${path.sep}`);
+}
+
+function applyGuardScope(): void {
+	if (runsCodingAgentTest()) {
+		process.env[guardActiveEnvironmentKey] = "1";
+	} else {
+		delete process.env[guardActiveEnvironmentKey];
+	}
+}
+testGlobal.__npiTestStorageGuardActive = runsCodingAgentTest;
+
 applyEnvironment(suiteEnvironment);
+applyGuardScope();
 
 beforeEach(() => {
 	applyEnvironment(suiteEnvironment);
+	applyGuardScope();
 });
 
 process.once("exit", () => {

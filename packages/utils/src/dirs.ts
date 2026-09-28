@@ -222,8 +222,15 @@ function normalizePathThroughExistingAncestor(inputPath: string): string {
 }
 
 const TEST_ALLOWED_STORAGE_ROOT_ENV = "NPI_TEST_ALLOWED_STORAGE_ROOT";
+const TEST_STORAGE_GUARD_ACTIVE_ENV = "NPI_TEST_STORAGE_GUARD_ACTIVE";
 
 function assertTestPathIsIsolated(candidate: string, kind: "agent" | "sessions"): void {
+	const scopedGuard = (
+		globalThis as typeof globalThis & {
+			__npiTestStorageGuardActive?: () => boolean;
+		}
+	).__npiTestStorageGuardActive;
+	if (!(scopedGuard?.() ?? process.env[TEST_STORAGE_GUARD_ACTIVE_ENV] === "1")) return;
 	const allowedRoot = process.env[TEST_ALLOWED_STORAGE_ROOT_ENV];
 	if (!allowedRoot) return;
 	const normalizedAllowedRoot = normalizePathThroughExistingAncestor(allowedRoot);

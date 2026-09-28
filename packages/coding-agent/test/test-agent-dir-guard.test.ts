@@ -69,6 +69,18 @@ if (inheritedProfileProbe) {
 		}
 	});
 
+	test("leaves root-invoked utility profile tests outside the coding-agent guard", () => {
+		const repoRoot = path.resolve(import.meta.dir, "..", "..", "..");
+		const result = Bun.spawnSync({
+			cmd: [process.execPath, "test", "packages/utils/test/profiles.test.ts"],
+			cwd: repoRoot,
+			env: process.env,
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		expect(result.exitCode, new TextDecoder().decode(result.stderr)).toBe(0);
+	});
+
 	test("clears profiles inherited by the test process", () => {
 		const result = Bun.spawnSync({
 			cmd: [process.execPath, "test", import.meta.path],
