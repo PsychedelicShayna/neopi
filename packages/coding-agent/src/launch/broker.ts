@@ -17,6 +17,7 @@ import { daemonBrokerEndpoint, writeDaemonScopeMeta } from "./paths";
 import type { DaemonReadySpec, DaemonSnapshot, DaemonSpec } from "@oh-my-pi/pi-tui/tools/daemon";
 import { hasLiveDaemonProjectPresence, pruneDeadDaemonRuntimeDirs } from "./presence";
 import {
+	DAEMON_BROKER_SCOPED_ENV,
 	DAEMON_IDLE_GRACE_ENV,
 	DAEMON_PROJECT_DIR_ENV,
 	DAEMON_PTY_COLUMNS,
@@ -414,6 +415,7 @@ class DaemonBroker {
 	readonly #token: string;
 	readonly #idleGraceMs: number;
 	readonly #restartBackoffBaseMs: number;
+	readonly #scoped: boolean;
 	readonly #records = new Map<string, ManagedDaemon>();
 	/**
 	 * Names reserved by an in-flight `start` before its record lands in
@@ -440,6 +442,7 @@ class DaemonBroker {
 		token: string,
 		idleGraceMs: number,
 		restartBackoffBaseMs: number,
+		scoped: boolean,
 	) {
 		this.#projectDir = projectDir;
 		this.#runtimeDir = runtimeDir;
@@ -447,6 +450,7 @@ class DaemonBroker {
 		this.#token = token;
 		this.#idleGraceMs = idleGraceMs;
 		this.#restartBackoffBaseMs = restartBackoffBaseMs;
+		this.#scoped = scoped;
 	}
 
 	async run(onListening?: () => void): Promise<void> {
@@ -790,12 +794,20 @@ class DaemonBroker {
 		}
 	}
 
+	/** An independent broker owns its daemons even when a client explicitly supplies the deck's marker. */
+	#daemonEnv(overlay: Record<string, string>): Record<string, string> {
+		const env = workerEnvFromParent(overlay);
+		delete env[DAEMON_BROKER_SCOPED_ENV];
+		if (this.#scoped) delete env.NPI_DECK_GEN;
+		return env;
+	}
+
 	async #launchPty(record: ManagedDaemon, generation: number): Promise<void> {
 		const session = new PtySession();
 		record.pty = session;
 		const options = {
 			cwd: record.spec.cwd,
-			env: workerEnvFromParent({ TERM: "xterm-256color", ...record.spec.env }),
+			env: this.#daemonEnv({ TERM: "xterm-256color", ...record.spec.env }),
 			cols: DAEMON_PTY_COLUMNS,
 			rows: DAEMON_PTY_ROWS,
 		};
@@ -864,7 +876,7 @@ class DaemonBroker {
 	#launchPipe(record: ManagedDaemon, generation: number): void {
 		const process = Bun.spawn([record.spec.application, ...record.spec.args], {
 			cwd: record.spec.cwd,
-			env: workerEnvFromParent(record.spec.env),
+			env: this.#daemonEnv(record.spec.env),
 			stdin: "pipe",
 			stdout: "pipe",
 			stderr: "pipe",
@@ -889,7 +901,7 @@ class DaemonBroker {
 		try {
 			const process = Bun.spawn([record.spec.application, ...record.spec.args], {
 				cwd: record.spec.cwd,
-				env: workerEnvFromParent(record.spec.env),
+				env: this.#daemonEnv(record.spec.env),
 				stdio: ["ignore", output.fd, output.fd],
 				...DAEMON_SPAWN_OPTIONS,
 			});
@@ -1506,6 +1518,8 @@ export async function startDaemonBrokerFromEnvironment(options: DaemonBrokerStar
 	if (!projectDir || !runtimeDir) throw new Error("Daemon broker environment is incomplete");
 	delete process.env[DAEMON_PROJECT_DIR_ENV];
 	delete process.env[DAEMON_RUNTIME_DIR_ENV];
+	const scoped = process.env[DAEMON_BROKER_SCOPED_ENV] === "1";
+	delete process.env[DAEMON_BROKER_SCOPED_ENV];
 	const rawGrace = process.env[DAEMON_IDLE_GRACE_ENV];
 	delete process.env[DAEMON_IDLE_GRACE_ENV];
 	const parsedGrace = rawGrace === undefined ? DEFAULT_IDLE_GRACE_MS : Number.parseInt(rawGrace, 10);
@@ -1538,7 +1552,7 @@ export async function startDaemonBrokerFromEnvironment(options: DaemonBrokerStar
 	});
 	const token = (await Bun.file(path.join(runtimeDir, TOKEN_FILE)).text()).trim();
 	if (!token) throw new Error("Daemon broker token is empty");
-	const broker = new DaemonBroker(projectDir, runtimeDir, token, idleGraceMs, restartBackoffBaseMs);
+	const broker = new DaemonBroker(projectDir, runtimeDir, token, idleGraceMs, restartBackoffBaseMs, scoped);
 	const cancelCleanup = postmortem.register("daemon-broker", () => broker.shutdown());
 	try {
 		await broker.run(options.onListening);

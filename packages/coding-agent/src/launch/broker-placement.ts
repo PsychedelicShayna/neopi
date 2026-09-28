@@ -2,6 +2,7 @@ import * as net from "node:net";
 import * as path from "node:path";
 import { $which, logger } from "@oh-my-pi/pi-utils";
 import { findScopedSettings, Settings } from "../config/settings";
+import { DAEMON_BROKER_SCOPED_ENV } from "./protocol";
 import { cfgLaunchBrokerScope, cfgLaunchBrokerSlice } from "./settings";
 import type { DaemonSpawnOptions } from "./spawn-options";
 
@@ -160,22 +161,25 @@ export function launchBroker(
 	runtimeDir: string,
 	startupTimeoutMs = SCOPE_STARTUP_TIMEOUT_MS,
 ): LaunchedBroker {
+	let inheritedLaunch = launch;
+	if (DAEMON_BROKER_SCOPED_ENV in launch.env) {
+		const env = { ...launch.env };
+		delete env[DAEMON_BROKER_SCOPED_ENV];
+		inheritedLaunch = { ...launch, env };
+	}
 	if (placement.kind === "inherit") {
-		spawnDetachedBroker(launch, launch.cmd);
+		spawnDetachedBroker(inheritedLaunch, launch.cmd);
 		logger.info("Daemon broker placed in the spawning client's cgroup", { runtimeDir, reason: placement.reason });
 		return { settle() {} };
 	}
-	// A shared scope outlives the worker that first opened it. The deck's
-	// generation sweep must not claim its broker or daemon children; retain
-	// the marker in the original launch for direct and failed-scope fallback.
-	let scopedLaunch = launch;
-	if ("NPI_DECK_GEN" in launch.env) {
-		const env = { ...launch.env };
-		delete env.NPI_DECK_GEN;
-		scopedLaunch = { ...launch, env };
-	}
+	// A shared scope outlives the worker that first opened it. Keep both the
+	// launcher and broker unmarked, and tell that broker to reject explicit
+	// generation overlays on its daemons. Direct and failed-scope launches
+	// retain the worker's original generation marker.
+	const scopedEnv: Record<string, string> = { ...inheritedLaunch.env, [DAEMON_BROKER_SCOPED_ENV]: "1" };
+	delete scopedEnv.NPI_DECK_GEN;
 	let settled = false;
-	const child = spawnDetachedBroker(scopedLaunch, [...placement.launcher, ...launch.cmd]);
+	const child = spawnDetachedBroker({ ...launch, env: scopedEnv }, [...placement.launcher, ...launch.cmd]);
 	logger.info("Daemon broker placed in its own systemd user scope", {
 		runtimeDir,
 		unit: placement.unit,
@@ -194,7 +198,7 @@ export function launchBroker(
 	const fallBack = (failure: Record<string, unknown>): void => {
 		if (settled) return;
 		settle();
-		spawnDetachedBroker(launch, launch.cmd);
+		spawnDetachedBroker(inheritedLaunch, launch.cmd);
 		logger.warn("Daemon broker scope launch failed; placed in the spawning client's cgroup", {
 			runtimeDir,
 			unit: placement.unit,

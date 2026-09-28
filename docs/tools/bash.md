@@ -192,7 +192,7 @@ Choose the setting by the desired outcome:
   - Client-terminal mode delegates process execution to the connected client terminal capability.
   - Named services run in the project-scoped launch broker and retain logs/status for `proc://`.
   - The broker is spawned by the first client that needs it. On Linux with a reachable systemd user manager it starts in its own transient scope under `launch.brokerSlice` (default `neopi-broker.slice`), so its supervised daemons outlive a client whose unit is killed; with `launch.brokerScope: false` or without systemd it stays in the spawning client's cgroup. Either way it exits 3 s after its last client disconnects and no persistent daemon is live.
-    A separately scoped broker and its supervised daemons do not inherit the spawning deck worker's `NPI_DECK_GEN` marker, so a deck generation sweep cannot claim resources still used by another client. Brokers launched in the worker's cgroup, including failed-scope fallbacks, retain the marker and remain sweepable.
+    A separately scoped broker and its supervised daemons omit the spawning deck worker's `NPI_DECK_GEN` marker, including a marker explicitly supplied in a daemon's `spec.env`. The shared scope, not the first client, owns their lifetime; a deck generation sweep must not claim resources still used by another client. Brokers launched in the worker's cgroup, including failed-scope fallbacks, retain the marker on themselves and their daemons and remain sweepable.
 - Session state
   - Reads session settings for async, auto-background, interceptor, direnv, global timeout cap, tool availability, and shell configuration.
   - Registers jobs with `session.asyncJobManager` for explicit/auto background runs.
