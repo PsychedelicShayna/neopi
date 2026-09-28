@@ -259,8 +259,8 @@ describe("createAgentSession cwd after /move", () => {
 				output: text => {
 					output.push(text);
 				},
-				refreshCommands: () => { },
-				reloadPlugins: async () => { },
+				refreshCommands: () => {},
+				reloadPlugins: async () => {},
 			});
 			expect(output.join("\n")).toContain("Moved to ");
 			expect(sessionManager.getCwd()).toBe(cwdB);
@@ -317,8 +317,8 @@ max_tokens = 2000
 				.getBranch()
 				.flatMap(entry =>
 					entry.type === "custom" &&
-						entry.customType === MIXTURE_RUN_ENTRY_TYPE &&
-						"reason" in (entry.data as object)
+					entry.customType === MIXTURE_RUN_ENTRY_TYPE &&
+					"reason" in (entry.data as object)
 						? [(entry.data as { run: { id: string } }).run.id]
 						: [],
 				);
@@ -331,8 +331,8 @@ max_tokens = 2000
 			output: (text: string) => {
 				output.push(text);
 			},
-			refreshCommands: () => { },
-			reloadPlugins: async () => { },
+			refreshCommands: () => {},
+			reloadPlugins: async () => {},
 		};
 		const notices: string[] = [];
 		const modelChanges: string[] = [];
@@ -373,7 +373,7 @@ max_tokens = 2000
 
 			expect(notices).toEqual([]);
 
-			runtime.reloadPlugins = async () => { };
+			runtime.reloadPlugins = async () => {};
 			await executeAcpBuiltinSlashCommand(`/move ${destination}`, runtime);
 			expect(manager.getCwd()).toBe(destination);
 			expect(session.agent.state.model?.provider).toBe("mixture");
