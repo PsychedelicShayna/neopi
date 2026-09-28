@@ -5,7 +5,7 @@ import { roundOperatorAmount } from "./windows";
 import type { Adjustment, AdjustmentPreviewRequest, Budget, Gate, ImportApplyRequest, ImportRequest, Issue, MintKeyRequest, PatchKeyRequest, Scope } from "./wire";
 
 export const KEY_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
-const DIAL_NAMES = ["effort", "temp", "top_p", "top_k", "min_p", "max_tokens", "budget", "verbosity", "tier"];
+export const DIAL_NAMES = ["effort", "temp", "top_p", "top_k", "min_p", "max_tokens", "budget", "verbosity", "tier"] as const;
 const UNITS = ["requests", "tokens", "usd", "plan_pct"];
 const POLICIES = ["hard", "soft", "burst"];
 

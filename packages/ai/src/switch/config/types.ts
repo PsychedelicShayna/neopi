@@ -33,6 +33,8 @@ export interface ModelRow {
 	cost?: { input: number; output: number };
 	hidden: boolean;
 	aliases: string[];
+	/** TOML field presence distinguishes a partial override from an added model's defaults. */
+	declaredFields: readonly string[];
 }
 export interface ProviderConfig {
 	id: string;
