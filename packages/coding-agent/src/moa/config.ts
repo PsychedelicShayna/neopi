@@ -428,7 +428,10 @@ export interface DiscoveredMixture {
 }
 
 export interface DiscoveredMixtures {
-	/** Merged roster, later files shadowing earlier ones by name, in declaration order. */
+	/**
+	 * Merged roster, later files shadowing earlier ones by name, in declaration order.
+	 * A name declared twice in one file keeps both declarations, so validation refuses it.
+	 */
 	mixtures: DiscoveredMixture[];
 	warnings: string[];
 }
@@ -436,7 +439,7 @@ export interface DiscoveredMixtures {
 /** Discover mixtures from every `MIXTURES.toml` on the user + project search path. */
 export async function discoverMixtures(cwd: string, agentDir?: string): Promise<DiscoveredMixtures> {
 	const items = await collectConfigCandidates(cwd, agentDir, [MIXTURES_FILE_NAME]);
-	const mixtures = new Map<string, DiscoveredMixture>();
+	const mixtures = new Map<string, DiscoveredMixture[]>();
 	const warnings: string[] = [];
 	// Candidates arrive user first, then project ancestor→leaf, so later files shadow earlier ones.
 	for (const item of items) {
@@ -446,16 +449,22 @@ export async function discoverMixtures(cwd: string, agentDir?: string): Promise<
 			logger.warn("Mixture config", { path: item.path, error: message });
 		}
 		for (const definition of doc.mixtures) {
-			mixtures.delete(definition.name);
-			mixtures.set(definition.name, {
+			const declared: DiscoveredMixture = {
 				definition,
 				envelopes: doc.envelopes ?? {},
 				roles: doc.roles ?? {},
 				path: item.path,
-			});
+			};
+			const same = mixtures.get(definition.name);
+			if (same?.[0]?.path === item.path) {
+				same.push(declared);
+				continue;
+			}
+			mixtures.delete(definition.name);
+			mixtures.set(definition.name, [declared]);
 		}
 	}
-	return { mixtures: [...mixtures.values()], warnings };
+	return { mixtures: [...mixtures.values()].flat(), warnings };
 }
 
 /** `project` → `<projectDir>/MIXTURES.toml`, `user` → `<agentDir>/MIXTURES.toml`. */

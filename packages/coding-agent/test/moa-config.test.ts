@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
@@ -7,8 +7,11 @@ import {
 	parseMixturesDoc,
 	saveMixturesConfigFile,
 } from "@oh-my-pi/pi-coding-agent/moa/config";
+import { discoverRegistrableMixtures } from "@oh-my-pi/pi-coding-agent/moa/registration";
 import { serializeMixturesConfig } from "@oh-my-pi/pi-coding-agent/moa/toml";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { logger, TempDir } from "@oh-my-pi/pi-utils";
+import { createMoaFixture, DRAFT_THEN_EDIT_TOML } from "./helpers/moa-setup";
 
 const DRAFT_THEN_EDIT = `
 [[mixtures]]
@@ -310,5 +313,48 @@ model = "x/y"
 		expect(byName.get("ancestor-only")?.definition.description).toBe("ancestor");
 		expect(byName.get("user-only")?.roles).toEqual({ shared: "user role" });
 		expect(discovered.warnings).toEqual([]);
+	});
+
+	/** The mixtures registration accepts, and the codes it refused them with. */
+	async function register(dir: TempDir, userToml: string, projectToml?: string) {
+		const fixture = await createMoaFixture(dir, userToml);
+		try {
+			if (projectToml !== undefined) await Bun.write(path.join(fixture.cwd, "MIXTURES.toml"), projectToml);
+			const warn = vi.spyOn(logger, "warn");
+			const registrable = await discoverRegistrableMixtures({
+				cwd: fixture.cwd,
+				agentDir: fixture.agentDir,
+				registry: fixture.registry,
+				settings: Settings.isolated(),
+			});
+			const refused = warn.mock.calls.flatMap(([message, context]) =>
+				message === "Mixture refused at registration" ? [[context?.mixture, context?.code]] : [],
+			);
+			warn.mockRestore();
+			return { registered: registrable.map(mixture => mixture.definition), refused };
+		} finally {
+			fixture.authStorage.close();
+		}
+	}
+
+	it("refuses a name declared twice in one file, logging name.duplicate for each declaration", async () => {
+		using dir = TempDir.createSync("@moa-config-duplicate-");
+		const solo = DRAFT_THEN_EDIT_TOML.replace('name = "draft-then-edit"', 'name = "solo"');
+		const { registered, refused } = await register(dir, `${DRAFT_THEN_EDIT_TOML}${DRAFT_THEN_EDIT_TOML}${solo}`);
+		expect(registered.map(definition => definition.name)).toEqual(["solo"]);
+		expect(refused).toEqual([
+			["draft-then-edit", "name.duplicate"],
+			["draft-then-edit", "name.duplicate"],
+		]);
+	});
+
+	it("lets a project file shadow a user file's single declaration with no error", async () => {
+		using dir = TempDir.createSync("@moa-config-shadow-");
+		const project = DRAFT_THEN_EDIT_TOML.replace('entry = "writer"', 'description = "project"\nentry = "writer"');
+		const { registered, refused } = await register(dir, DRAFT_THEN_EDIT_TOML, project);
+		expect(registered.map(definition => [definition.name, definition.description])).toEqual([
+			["draft-then-edit", "project"],
+		]);
+		expect(refused).toEqual([]);
 	});
 });
