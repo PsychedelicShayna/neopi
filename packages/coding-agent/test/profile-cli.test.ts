@@ -14,6 +14,7 @@ import {
 	setProfile,
 	VERSION,
 } from "@oh-my-pi/pi-utils/dirs";
+import { createTempConfigRoot, type TempConfigRoot } from "./helpers/temp-config-root";
 import { runCli } from "../src/cli";
 import * as profileAliasCli from "../src/cli/profile-alias";
 
@@ -38,26 +39,23 @@ async function readStream(stream: ReadableStream<Uint8Array>): Promise<string> {
 
 describe("global --profile flag", () => {
 	let configDir = "";
-	let configRoot = "";
+	let configRoot: TempConfigRoot | undefined;
 	let originalProfile: string | undefined;
 	let originalAgentDir = "";
 	let originalAgentDirEnv: string | undefined;
 	let originalOmpProfileEnv: string | undefined;
 	let originalPiProfileEnv: string | undefined;
 	let originalConfigDir: string | undefined;
-	let originalAllowedStorageRoot: string | undefined;
 
-	beforeEach(async () => {
+	beforeEach(() => {
 		originalProfile = getActiveProfile();
 		originalAgentDir = getAgentDir();
 		originalAgentDirEnv = process.env.PI_CODING_AGENT_DIR;
 		originalOmpProfileEnv = process.env.OMP_PROFILE;
 		originalPiProfileEnv = process.env.PI_PROFILE;
 		originalConfigDir = process.env.PI_CONFIG_DIR;
-		originalAllowedStorageRoot = process.env.NPI_TEST_ALLOWED_STORAGE_ROOT;
-		configRoot = await fs.mkdtemp(path.join(os.homedir(), ".omp-profile-cli-test-"));
-		configDir = path.relative(os.homedir(), configRoot);
-		process.env.NPI_TEST_ALLOWED_STORAGE_ROOT = configRoot;
+		configRoot = createTempConfigRoot("omp-profile-cli-test-");
+		configDir = configRoot.configDir;
 		process.env.PI_CONFIG_DIR = configDir;
 		process.exitCode = 0;
 	});
@@ -92,14 +90,10 @@ describe("global --profile flag", () => {
 		} else {
 			process.env.PI_CODING_AGENT_DIR = originalAgentDirEnv;
 		}
-		if (originalAllowedStorageRoot === undefined) {
-			delete process.env.NPI_TEST_ALLOWED_STORAGE_ROOT;
-		} else {
-			process.env.NPI_TEST_ALLOWED_STORAGE_ROOT = originalAllowedStorageRoot;
-		}
 		__resetProfileSnapshotForTests();
 		process.exitCode = 0;
-		await removeWithRetries(configRoot);
+		configRoot?.remove();
+		configRoot = undefined;
 	});
 
 	it("activates a profile before dispatching root flags", async () => {

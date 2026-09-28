@@ -18,6 +18,7 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { VibeSessionRegistry } from "@oh-my-pi/pi-coding-agent/vibe/runtime";
 import { getSessionsDir, removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 import { getActiveProfile, getConfigRootDir, setAgentDir, setProfile } from "@oh-my-pi/pi-utils/dirs";
+import { createTempConfigRoot } from "./helpers/temp-config-root";
 
 function createTtsrRule(name: string): Rule {
 	return {
@@ -58,13 +59,11 @@ async function withTempConfigRoot<T>(run: () => Promise<T>): Promise<T> {
 	const originalProfile = getActiveProfile();
 	const originalConfigDir = process.env.PI_CONFIG_DIR;
 	const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
-	const originalAllowedStorageRoot = process.env.NPI_TEST_ALLOWED_STORAGE_ROOT;
-	const configRoot = fs.mkdtempSync(path.join(os.homedir(), ".omp-sdk-session-"));
-	const configDirName = path.relative(os.homedir(), configRoot);
+	const configRoot = createTempConfigRoot("omp-sdk-session-");
+	const configDirName = configRoot.configDir;
 	try {
-		process.env.NPI_TEST_ALLOWED_STORAGE_ROOT = configRoot;
 		process.env.PI_CONFIG_DIR = configDirName;
-		setAgentDir(path.join(configRoot, "agent"));
+		setAgentDir(path.join(configRoot.path, "agent"));
 		return await run();
 	} finally {
 		setProfile(undefined);
@@ -72,11 +71,6 @@ async function withTempConfigRoot<T>(run: () => Promise<T>): Promise<T> {
 			delete process.env.PI_CONFIG_DIR;
 		} else {
 			process.env.PI_CONFIG_DIR = originalConfigDir;
-		}
-		if (originalAllowedStorageRoot === undefined) {
-			delete process.env.NPI_TEST_ALLOWED_STORAGE_ROOT;
-		} else {
-			process.env.NPI_TEST_ALLOWED_STORAGE_ROOT = originalAllowedStorageRoot;
 		}
 		if (originalProfile) {
 			setProfile(originalProfile);
@@ -86,7 +80,7 @@ async function withTempConfigRoot<T>(run: () => Promise<T>): Promise<T> {
 		} else {
 			setAgentDir(originalAgentDir);
 		}
-		fs.rmSync(configRoot, { recursive: true, force: true });
+		configRoot.remove();
 	}
 }
 
@@ -676,7 +670,6 @@ describe("createAgentSession session storage isolation", () => {
 				tempDirs.push(tempDir);
 				const cwd = path.join(tempDir, "project");
 				const agentDir = path.join(tempDir, "agent");
-				process.env.NPI_TEST_ALLOWED_STORAGE_ROOT = tempDir;
 				setAgentDir(agentDir);
 				fs.mkdirSync(path.join(cwd, ".omp"), { recursive: true });
 				fs.writeFileSync(

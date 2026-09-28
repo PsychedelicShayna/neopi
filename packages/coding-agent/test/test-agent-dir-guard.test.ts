@@ -37,12 +37,27 @@ if (inheritedProfileProbe) {
 		fs.mkdirSync(actualRoot);
 		fs.symlinkSync(actualRoot, symlinkRoot, process.platform === "win32" ? "junction" : "dir");
 		try {
-			process.env.NPI_TEST_ALLOWED_STORAGE_ROOT = symlinkRoot;
 			const agentDir = path.join(symlinkRoot, "missing", "agent");
-			setAgentDir(agentDir);
-
-			expect(getAgentDir()).toBe(agentDir);
-			expect(getSessionsDir()).toBe(path.join(agentDir, "sessions"));
+			const result = Bun.spawnSync({
+				cmd: [
+					process.execPath,
+					"-e",
+					'import { getAgentDir, getSessionsDir } from "@oh-my-pi/pi-utils/dirs"; console.log(getAgentDir()); console.log(getSessionsDir());',
+				],
+				cwd: path.resolve(import.meta.dir, ".."),
+				env: {
+					...process.env,
+					NPI_TEST_ALLOWED_STORAGE_ROOT: symlinkRoot,
+					PI_CODING_AGENT_DIR: agentDir,
+				},
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			expect(result.exitCode, new TextDecoder().decode(result.stderr)).toBe(0);
+			expect(new TextDecoder().decode(result.stdout).trim().split("\n")).toEqual([
+				agentDir,
+				path.join(agentDir, "sessions"),
+			]);
 		} finally {
 			removeSyncWithRetries(container);
 		}
@@ -51,7 +66,7 @@ if (inheritedProfileProbe) {
 	test("clears profiles inherited by the test process", () => {
 		const result = Bun.spawnSync({
 			cmd: [process.execPath, "test", import.meta.path],
-			cwd: path.resolve(import.meta.dir, ".."),
+			cwd: path.resolve(import.meta.dir, "..", "..", ".."),
 			env: {
 				...process.env,
 				NPI_TEST_INHERITED_PROFILE_PROBE: "1",
