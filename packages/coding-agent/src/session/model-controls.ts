@@ -319,6 +319,11 @@ export class ModelControls {
 		}
 
 		const targetModel = await this.#host.modelRegistry.refreshSelectedModelMetadata(model);
+		this.#validateTargetThinkingLevel(
+			targetModel,
+			thinkingLevel ?? this.#reappliedThinkingLevel(targetModel.thinking?.defaultLevel),
+			thinkingLevel === undefined ? this.#effortOrigin : "manual",
+		);
 
 		this.#host.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(targetModel));
 		this.#host.clearActiveRetryFallback();
@@ -526,6 +531,7 @@ export class ModelControls {
 		if (!apiKey) {
 			throw new Error(`No API key for ${nextModel.provider}/${nextModel.id}`);
 		}
+		this.#validateTargetThinkingLevel(nextModel, this.#reappliedThinkingLevel(), this.#effortOrigin);
 
 		this.#host.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(nextModel));
 		this.#host.clearActiveRetryFallback();
@@ -642,9 +648,26 @@ export class ModelControls {
 	 * (re-clamping the provisional level to the new model); otherwise re-applies the
 	 * preferred default or the current effective level.
 	 */
-	#reapplyThinkingLevel(preferredDefault?: ThinkingLevel): void {
+	#reappliedThinkingLevel(preferredDefault?: ThinkingLevel): ConfiguredThinkingLevel | undefined {
 		const explicit = this.#effortOrigin === "manual" || this.#effortOrigin === "caller";
-		this.setThinkingLevel(this.#autoThinking ? AUTO_THINKING : (explicit ? this.#requestedLevel : preferredDefault ?? this.#requestedLevel), false, this.#effortOrigin);
+		return this.#autoThinking ? AUTO_THINKING : (explicit ? this.#requestedLevel : preferredDefault ?? this.#requestedLevel);
+	}
+
+	/** Check the same selection setThinkingLevel will apply before changing model or transcript. */
+	#validateTargetThinkingLevel(model: Model, level: ConfiguredThinkingLevel | undefined, origin: EffortOrigin): void {
+		if (cfgEffortPolicyMode.get(this.#host.settings) !== "replacement") return;
+		resolveImplicitEffort(
+			this.#host.settings,
+			model,
+			level === AUTO_THINKING
+				? (this.#autoSelection ?? { mode: "auto" })
+				: { mode: "fixed", level: level ?? ThinkingLevel.Inherit },
+			origin,
+		);
+	}
+
+	#reapplyThinkingLevel(preferredDefault?: ThinkingLevel): void {
+		this.setThinkingLevel(this.#reappliedThinkingLevel(preferredDefault), false, this.#effortOrigin);
 	}
 
 	/**

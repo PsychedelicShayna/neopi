@@ -16,6 +16,7 @@
  * The durability guarantee is process interruption and restart on a local
  * filesystem. `rename` without `fsync` is not a power-loss claim.
  */
+import type * as fsTypes from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { logger, parseFrontmatter } from "@oh-my-pi/pi-utils";
@@ -230,7 +231,7 @@ export interface CommittedChroniclerBatch {
  */
 export async function readCommittedChroniclerBatches(rootDir: string): Promise<readonly CommittedChroniclerBatch[]> {
 	const store = new ChroniclerStore(rootDir, { sessionId: "", project: "", model: "" }, {}, true);
-	let entries: import("node:fs").Dirent[];
+	let entries: fsTypes.Dirent[];
 	try {
 		entries = await fs.readdir(path.join(rootDir, "beats"), { withFileTypes: true });
 	} catch (error) {

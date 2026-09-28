@@ -435,6 +435,54 @@ describe("Settings", () => {
 			saved = await readSettings();
 			expect(saved.defaultThinkingLevel).toBe(Effort.Medium);
 		});
+		it("persists paired global model and effort edits by role across concurrent sessions", async () => {
+			await Bun.write(
+				getConfigPath(),
+				"modelRoles:\n  reviewer: mock/original\n  advisor: mock/original\nroleEffortSelections:\n  reviewer: { mode: fixed, level: low }\n  advisor: { mode: fixed, level: low }\n",
+			);
+			const first = await Settings.loadIsolated({ cwd: projectDir, agentDir });
+			const second = await Settings.loadIsolated({ cwd: projectDir, agentDir });
+			first.setRoleModelAndEffort("reviewer", "mock/first", { mode: "fixed", level: Effort.High }, "global");
+			second.setRoleModelAndEffort("advisor", "mock/second", { mode: "fixed", level: Effort.Medium }, "global");
+			await second.flush();
+			await first.flush();
+			expect(await readSettings()).toMatchObject({
+				modelRoles: { reviewer: "mock/first", advisor: "mock/second" },
+				roleEffortSelections: {
+					reviewer: { mode: "fixed", level: Effort.High },
+					advisor: { mode: "fixed", level: Effort.Medium },
+				},
+			});
+
+			const stale = await Settings.loadIsolated({ cwd: projectDir, agentDir });
+			const winner = await Settings.loadIsolated({ cwd: projectDir, agentDir });
+			stale.setRoleModelAndEffort("reviewer", "mock/stale", { mode: "fixed", level: Effort.Low }, "global");
+			winner.setRoleModelAndEffort("reviewer", "mock/winner", { mode: "fixed", level: Effort.Medium }, "global");
+			await winner.flush();
+			await stale.flush();
+			expect(await readSettings()).toMatchObject({
+				modelRoles: { reviewer: "mock/winner", advisor: "mock/second" },
+				roleEffortSelections: {
+					reviewer: { mode: "fixed", level: Effort.Medium },
+					advisor: { mode: "fixed", level: Effort.Medium },
+				},
+			});
+
+			const staleAgainstEffort = await Settings.loadIsolated({ cwd: projectDir, agentDir });
+			const effortEditor = await Settings.loadIsolated({ cwd: projectDir, agentDir });
+			staleAgainstEffort.setRoleModelAndEffort("reviewer", "mock/stale", { mode: "fixed", level: Effort.High }, "global");
+			effortEditor.setRoleEffortSelection("reviewer", { mode: "fixed", level: Effort.Low });
+			await effortEditor.flush();
+			await staleAgainstEffort.flush();
+			expect(await readSettings()).toMatchObject({
+				modelRoles: { reviewer: "mock/winner", advisor: "mock/second" },
+				roleEffortSelections: {
+					reviewer: { mode: "fixed", level: Effort.Low },
+					advisor: { mode: "fixed", level: Effort.Medium },
+				},
+			});
+		});
+
 	});
 
 	describe("status line segment validation", () => {
