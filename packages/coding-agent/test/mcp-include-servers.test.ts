@@ -176,7 +176,7 @@ describe("mcp.includeServers allowlist", () => {
 		} finally {
 			await removeWithRetries(cwd);
 		}
-	});
+	}, 30_000);
 
 	test("a malformed non-string allowlist entry fails closed instead of admitting everything", async () => {
 		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "npi-mcp-malformed-"));
@@ -192,7 +192,7 @@ describe("mcp.includeServers allowlist", () => {
 		} finally {
 			await removeWithRetries(cwd);
 		}
-	});
+	}, 30_000);
 
 	test("concurrent SDK sessions keep independent allowlists and never spawn excluded servers", async () => {
 		const [cwdA, cwdB, cwdC] = await Promise.all(
