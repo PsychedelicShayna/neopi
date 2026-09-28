@@ -2074,13 +2074,13 @@ export class SessionTools {
 		}
 	}
 
-	/** Replaces RPC host-owned tools and refreshes the active set before the next model call. */
-	refreshRpcHostTools(rpcTools: AgentTool[]): Promise<void> {
+	/** Replaces host tools; chat mode registers them without exposing them to the model. */
+	refreshRpcHostTools(rpcTools: AgentTool[], activateNewTools = true): Promise<void> {
 		const snapshot = [...rpcTools];
-		return this.runToolRegistryMutation(() => this.#applyRpcHostToolRefresh(snapshot));
+		return this.runToolRegistryMutation(() => this.#applyRpcHostToolRefresh(snapshot, activateNewTools));
 	}
 
-	async #applyRpcHostToolRefresh(rpcTools: AgentTool[]): Promise<void> {
+	async #applyRpcHostToolRefresh(rpcTools: AgentTool[], activateNewTools: boolean): Promise<void> {
 		const nextToolNames = rpcTools.map(tool => tool.name);
 		const uniqueToolNames = new Set(nextToolNames);
 		if (uniqueToolNames.size !== nextToolNames.length) {
@@ -2120,9 +2120,9 @@ export class SessionTools {
 		const preservedRpcToolNames = previousActiveToolNames.filter(
 			name => previousRpcHostToolNames.has(name) && this.#rpcHostToolNames.has(name),
 		);
-		const autoActivatedRpcToolNames = rpcTools
-			.filter(tool => !tool.hidden && !previousRpcHostToolNames.has(tool.name))
-			.map(tool => tool.name);
+		const autoActivatedRpcToolNames = activateNewTools
+			? rpcTools.filter(tool => !tool.hidden && !previousRpcHostToolNames.has(tool.name)).map(tool => tool.name)
+			: [];
 		try {
 			await this.#applyActiveToolsByName(
 				Array.from(new Set([...activeNonRpcToolNames, ...preservedRpcToolNames, ...autoActivatedRpcToolNames])),

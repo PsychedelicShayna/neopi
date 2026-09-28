@@ -82,6 +82,8 @@ interface PlanModelSwitch {
 /** What `set_mode` changed on entry; present while it owns plan mode. */
 interface OwnedPlanMode {
 	tools: PlanToolPresentation;
+	/** Host-owned tools captured on entry are superseded by the live host selection. */
+	hostTools: string[];
 	/** Absent when no `plan` role resolved, so the model was left alone. */
 	model: PlanModelSwitch | undefined;
 }
@@ -221,7 +223,11 @@ export class RpcPlanModeController {
 			throw error;
 		}
 		session.setPlanProposalHandler(this.#proposalHandler);
-		this.#owned = { tools: previousTools, model: await this.#applyPlanModel() };
+		this.#owned = {
+			tools: previousTools,
+			hostTools: previousTools.enabled.filter(name => session.hasRpcHostTool(name)),
+			model: await this.#applyPlanModel(),
+		};
 		session.sessionManager.appendModeChange("plan", { planFilePath: state.planFilePath });
 		return { mode: "plan", planFilePath: state.planFilePath };
 	}
@@ -266,7 +272,7 @@ export class RpcPlanModeController {
 		// Code Mode the direct surface keeps `write` only while plan mode needs it.
 		session.setPlanModeState(undefined);
 		try {
-			if (owned) await session.restoreNonMCPToolPresentation(owned.tools.enabled, owned.tools.mounted);
+			if (owned) await this.#restoreTools(owned);
 		} catch (error) {
 			session.setPlanModeState(state);
 			session.setPlanProposalHandler(this.#proposalHandler);
@@ -274,6 +280,18 @@ export class RpcPlanModeController {
 			throw error;
 		}
 		this.#owned = undefined;
+	}
+
+	/** Keep the pre-plan non-host selection while honoring host updates made in plan mode. */
+	#restoreTools(owned: OwnedPlanMode): Promise<void> {
+		const session = this.#session;
+		const capturedHostTools = new Set(owned.hostTools);
+		const currentHostTools = session.getEnabledToolNames().filter(name => session.hasRpcHostTool(name));
+		const currentMountedHostTools = session.getMountedXdevToolNames().filter(name => session.hasRpcHostTool(name));
+		return session.restoreNonMCPToolPresentation(
+			[...owned.tools.enabled.filter(name => !capturedHostTools.has(name)), ...currentHostTools],
+			[...owned.tools.mounted.filter(name => !capturedHostTools.has(name)), ...currentMountedHostTools],
+		);
 	}
 
 	/** Best-effort return to the plan model and tools after a failed exit. */
@@ -339,7 +357,7 @@ export class RpcPlanModeController {
 		this.#owned = undefined;
 		if (!owned) return;
 		try {
-			await this.#session.restoreNonMCPToolPresentation(owned.tools.enabled, owned.tools.mounted);
+			await this.#restoreTools(owned);
 		} catch (error) {
 			logger.warn("Failed to restore pre-plan tools after plan approval", { error: String(error) });
 		}
@@ -371,7 +389,7 @@ export class RpcPlanModeController {
 		const model = owned?.model ?? deferred;
 		this.#track(async () => {
 			await session.waitForSessionTransition();
-			if (owned) await session.restoreNonMCPToolPresentation(owned.tools.enabled, owned.tools.mounted);
+			if (owned) await this.#restoreTools(owned);
 			if (model && origin === "carried") await this.#restorePrePlanModel(model);
 		});
 	}
