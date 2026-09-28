@@ -1105,6 +1105,24 @@ export class TUI extends Container {
 	}
 
 	/**
+	 * Inject input with an origin. Terminal stdin is `keyboard`; control-socket
+	 * injection passes `control` so approval and revision checks can tell them
+	 * apart (#171). `onHumanInput` fires only for keyboard origin.
+	 */
+	inputOrigin: "keyboard" | "control" = "keyboard";
+	onHumanInput?: () => void;
+
+	injectInput(data: string, origin: "keyboard" | "control" = "control"): void {
+		const previous = this.inputOrigin;
+		this.inputOrigin = origin;
+		try {
+			this.#handleInput(data);
+		} finally {
+			this.inputOrigin = previous;
+		}
+	}
+
+	/**
 	 * Show an overlay component with configurable positioning and sizing.
 	 * Returns a handle to control the overlay's visibility.
 	 */
@@ -2259,6 +2277,7 @@ export class TUI extends Container {
 	}
 
 	#handleInput(data: string): void {
+		if (this.inputOrigin === "keyboard") this.onHumanInput?.();
 		// Consume CPR replies (CSI row;col R) while an anchor probe is unanswered;
 		// they are terminal reports, never keystrokes, and must not reach the
 		// focused component.

@@ -310,6 +310,9 @@ export class EventController {
 			todo_auto_clear: e => this.#handleTodoAutoClear(e),
 			irc_message: e => this.#handleIrcMessage(e),
 			notice: e => this.#handleNotice(e),
+			// Run-ownership bookkeeping for control-socket receipts (#171); nothing renders.
+			run_owners_joined: async () => {},
+			run_owners_skipped: async () => {},
 			mixture_hop_end: async e => this.#showMixtureTrace(e.details),
 			mixture_limit: async e => this.#showMixtureTrace(e.details),
 			mixture_checkpoint: async e => this.#showMixtureTrace(e.details),

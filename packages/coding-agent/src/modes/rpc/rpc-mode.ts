@@ -54,9 +54,9 @@ import { isRpcPlanProposalResponse, RpcPlanModeController, RpcSetModeError } fro
 import {
 	RpcExtensionUserMessageTracker,
 	RpcPromptResults,
-	type RpcPromptTicket,
 	watchAndReportPromptResult,
 } from "./rpc-prompt-results";
+import type { RpcPromptTicket } from "./rpc-prompt-results";
 import { RpcRoles } from "./rpc-roles";
 import { setRpcChatMode } from "./rpc-chat-mode";
 import { RpcSessionEventForwarder } from "./rpc-session-events";
@@ -180,6 +180,7 @@ export async function runRpcSkillCommand(
 	streamingBehavior: "steer" | "followUp" = "steer",
 	prebuilt?: BuiltSkillPromptMessage,
 	entryId?: string,
+	runOwner?: string,
 ): Promise<boolean> {
 	const built = prebuilt ?? (await buildSkillPromptMessage(invocation.skill, invocation, "user"));
 	return session.promptCustomMessage(
@@ -190,7 +191,7 @@ export async function runRpcSkillCommand(
 			details: built.details,
 			attribution: "user",
 		},
-		{ streamingBehavior, entryId },
+		{ streamingBehavior, entryId, runOwner },
 	);
 }
 
@@ -213,6 +214,8 @@ export async function dispatchRpcSkillPrompt(input: {
 	results: RpcPromptResults;
 	onError: (error: Error) => void;
 	extensionUserMessageTracker: RpcExtensionUserMessageTracker;
+	/** Run owner the skill prompt's work is scheduled under (#171). */
+	runOwner?: string;
 }): Promise<RpcSkillCommandResult | null> {
 	const invocation = resolveRpcSkillInvocation(input.session, input.message);
 	if (!invocation) return null;
@@ -223,10 +226,19 @@ export async function dispatchRpcSkillPrompt(input: {
 	// calls) is what moves behind the acknowledgement.
 	const built = await buildSkillPromptMessage(invocation.skill, invocation, "user");
 	const userEntryId = input.reserveEntryId();
+	input.results.bindEntry(input.ticket, userEntryId);
+	if (input.runOwner) input.results.bindOwner(input.ticket, input.runOwner);
 	watchAndReportPromptResult({
 		ticket: input.ticket,
 		startPrompt: () =>
-			runRpcSkillCommand(input.session, invocation, input.streamingBehavior ?? "steer", built, userEntryId),
+			runRpcSkillCommand(
+				input.session,
+				invocation,
+				input.streamingBehavior ?? "steer",
+				built,
+				userEntryId,
+				input.runOwner,
+			),
 		results: input.results,
 		releaseReservation: () => input.releaseEntryId?.(userEntryId),
 		onError: input.onError,
@@ -1268,6 +1280,15 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	// TypeScript/MCP command may also consume the prompt without writing one.
 	const reservePromptEntryId = (message: string): string | undefined =>
 		session.isExtensionCommand(message) ? undefined : session.sessionManager.reserveEntryId();
+	// Run ownership (#171): every prompt-family request schedules its work under a
+	// handle that the run's enriched `agent_start.runOwners` carries back, so the
+	// correlator binds receipts to runs instead of counting them.
+	let runOwnerSeq = 0;
+	const ownPrompt = (ticket: RpcPromptTicket): string => {
+		const owner = ticket.requestHandle ?? `rpc-${++runOwnerSeq}`;
+		promptResults.bindOwner(ticket, owner);
+		return owner;
+	};
 	const executeCustomPromptCommand = async (message: string): Promise<string | null> => {
 		if (!message.startsWith("/") || session.isExtensionCommand(message)) return null;
 		const space = message.indexOf(" ");
@@ -1303,6 +1324,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 						results: promptResults,
 						onError: onPromptError(id, "prompt"),
 						extensionUserMessageTracker,
+						runOwner: ownPrompt(ticket),
 					});
 					if (skillResult) {
 						return success(id, "prompt", skillResult);
@@ -1326,10 +1348,16 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					if (builtinResult !== false) {
 						if ("prompt" in builtinResult) {
 							const userEntryId = session.sessionManager.reserveEntryId();
+							promptResults.bindEntry(ticket, userEntryId);
+							const runOwner = ownPrompt(ticket);
 							watchAndReportPromptResult({
 								ticket,
 								startPrompt: () =>
-									session.prompt(builtinResult.prompt, { images: command.images, entryId: userEntryId }),
+									session.prompt(builtinResult.prompt, {
+										images: command.images,
+										entryId: userEntryId,
+										runOwner,
+									}),
 								results: promptResults,
 								onError: onPromptError(id, "prompt"),
 								releaseReservation: () => session.sessionManager.releaseEntryId(userEntryId),
@@ -1368,6 +1396,8 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					// Extension commands are executed immediately, file prompt templates are expanded
 					// If streaming and streamingBehavior specified, queues via steer/followUp
 					const userEntryId = reservePromptEntryId(command.message);
+					if (userEntryId) promptResults.bindEntry(ticket, userEntryId);
+					const runOwner = ownPrompt(ticket);
 					watchAndReportPromptResult({
 						ticket,
 						startPrompt: () =>
@@ -1375,6 +1405,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 								images: command.images,
 								streamingBehavior: command.streamingBehavior,
 								entryId: userEntryId,
+								runOwner,
 								customCommandResult: customCommandResult ?? undefined,
 							}),
 						results: promptResults,
@@ -1425,13 +1456,17 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					return success(id, "abort_and_prompt", { agentInvoked: false });
 				}
 				const userEntryId = reservePromptEntryId(command.message);
+				const ticket = promptResults.begin(id);
+				if (userEntryId) promptResults.bindEntry(ticket, userEntryId);
+				const runOwner = ownPrompt(ticket);
 				// After the abort so the aborted run's terminal agent_end cannot settle this prompt.
 				watchAndReportPromptResult({
-					ticket: promptResults.begin(id),
+					ticket,
 					startPrompt: () =>
 						session.prompt(command.message, {
 							images: command.images,
 							entryId: userEntryId,
+							runOwner,
 							customCommandResult: customCommandResult ?? undefined,
 						}),
 					results: promptResults,

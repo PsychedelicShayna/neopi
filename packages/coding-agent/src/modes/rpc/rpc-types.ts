@@ -277,6 +277,10 @@ export interface RpcPromptResultFrame {
 	 * When false, a {@link RpcSessionSettledFrame} follows once that work is done.
 	 */
 	sessionSettled: boolean;
+	/** Control-socket request handle the receipt belongs to (#171); absent on stdio. */
+	requestHandle?: string;
+	/** Why an `aborted` prompt ended without its own run (`skipped:<reason>`), when known. */
+	reason?: string;
 }
 
 /**
