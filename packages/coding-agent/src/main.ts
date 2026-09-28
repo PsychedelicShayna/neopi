@@ -1203,8 +1203,11 @@ export async function createSessionManager(
 	// Auto-resume: behave like --continue if the setting is enabled and a prior
 	// session exists. When a prior session is resumed, mark parsed.continue so
 	// buildSessionOptions restores the session's model/thinking instead of
-	// overriding them with CLI defaults.
-	if (cfgAutoResume.get(activeSettings)) {
+	// overriding them with CLI defaults. `--new-session` opts out, and protocol
+	// hosts (rpc, rpc-ui, acp) never inherit the user's interactive preference:
+	// a flagless protocol launch is always a new session.
+	const protocolMode = parsed.mode === "rpc" || parsed.mode === "rpc-ui" || parsed.mode === "acp";
+	if (!parsed.newSession && !protocolMode && cfgAutoResume.get(activeSettings)) {
 		const manager = await SessionManager.continueRecent(cwd, parsed.sessionDir);
 		if (manager.getEntries().length > 0) {
 			parsed.continue = true;

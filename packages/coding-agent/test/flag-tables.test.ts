@@ -197,7 +197,10 @@ describe("restartArgv (/restart relaunch argv)", () => {
 
 	it("drops every session-source flag, including inline = and value forms", () => {
 		expect(
-			restartArgv(["--resume=old", "-r", "old2", "--continue", "-c", "--fork", "xyz", "--from-claude"], "sid"),
+			restartArgv(
+				["--resume=old", "-r", "old2", "--continue", "-c", "--fork", "xyz", "--from-claude", "--new-session"],
+				"sid",
+			),
 		).toEqual(["--resume", "sid"]);
 	});
 

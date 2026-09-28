@@ -320,7 +320,7 @@ Cross-project id match behavior:
 4. Otherwise, if the breadcrumb's cwd matches the current cwd, uses the breadcrumb session; else falls back to the most recently modified session file.
 5. Opens the found session; if none exists, creates a new session.
 
-For compatibility, `--continue <full-UUID>` is normalized to `--resume <UUID>` when the UUID is the sole positional message. The `autoResume` setting invokes the same `continueRecent` behavior when no explicit session flag/session directory is supplied, and restores session model/thinking state when a prior transcript was found.
+For compatibility, `--continue <full-UUID>` is normalized to `--resume <UUID>` when the UUID is the sole positional message. The `autoResume` setting invokes the same `continueRecent` behavior when no explicit session flag/session directory is supplied, and restores session model/thinking state when a prior transcript was found. `--new-session` skips `autoResume` and always starts a fresh session; protocol modes (`rpc`, `rpc-ui`, `acp`) never auto-resume.
 
 This is startup-only behavior; there is no interactive `/continue` slash command.
 

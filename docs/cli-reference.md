@@ -65,6 +65,7 @@ Argument handling:
 | `--config <file>` | Load an extra `config.yml`-style overlay for this run (repeatable). |
 | `--session-dir <dir>` | Directory for session storage and lookup. |
 | `--no-session` | Don't save the session (ephemeral). |
+| `--new-session` | Start a new session in the default per-cwd session directory (or `--session-dir`), ignoring `autoResume`. Cannot be combined with `--continue`, `--resume`/`--session`, or `--fork`. |
 
 #### Session history
 
