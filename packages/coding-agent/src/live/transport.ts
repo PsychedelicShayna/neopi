@@ -388,6 +388,19 @@ export class CodexLiveTransport {
 		return this.#peer?.pushAudio(samples) ?? false;
 	}
 
+	/** Speaker backlog still queued, and audio dropped to stay near two seconds. */
+	playbackQueueStats(): { queuedMs: number; droppedMs: number } {
+		// The method is on the native peer. Bindings are generated, so call it
+		// structurally until `build:bindings` republishes the declaration.
+		const peer = this.#peer as
+			| { playbackQueueStats?: () => { queuedMs: number; droppedMs: number } }
+			| undefined;
+		const stats = peer?.playbackQueueStats?.();
+		if (!stats) return { queuedMs: 0, droppedMs: 0 };
+		return { queuedMs: stats.queuedMs, droppedMs: stats.droppedMs };
+	}
+
+
 	/** Enable or disable the native audio source and discard partial input when muted. */
 	async setMuted(muted: boolean): Promise<void> {
 		this.#muted = muted;

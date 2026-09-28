@@ -20,6 +20,8 @@
 - Added post-processing chains: named, ordered model steps in `CHAINS.yml` (user and project) that rewrite composer text before it is sent. Alt+C sends one prompt through the active chain; `/chaining on|off|use|status|configure` manages automatic mode, the active chain, and a fullscreen editor. Steps without a model use the new Prose role, which falls back to the configured `smol` role.
 ### Fixed
 
+- Live voice playback stays within about two seconds of live audio by dropping the oldest queued speaker audio instead of letting the decoder outrun the speaker. The live transcript audio-frame summary now includes the queued and dropped milliseconds.
+- Live voice deletes user turns once they are handed off or answered, and caps context held while the operator is speaking. Repeated thinking and progress updates collapse to the latest item.
 - Live voice now clears stale speaker activity after 250 ms without output, allowing microphone input through the existing echo-suppression gate after playback. Gate and native audio-queue frame drops are counted in a live transcript artifact summary instead of going unreported.
 - MCP literal allowlists now reject disabled project server names even when a lower-priority user server has the same name; equivalence aliases remain valid.
 - Restored independent whole-recording xAI speech input on Ctrl+Space; configured dictation now has its own Ctrl+Alt+Space shortcut.

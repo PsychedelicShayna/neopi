@@ -6,12 +6,16 @@
 //! TypeScript, and [`crate::live`] shares [`PlaybackStream`] for remote-audio
 //! rendering.
 
-use std::sync::{
-	Arc,
-	atomic::{AtomicBool, AtomicU32, Ordering},
+use std::{
+	collections::VecDeque,
+	sync::{
+		Arc,
+		atomic::{AtomicBool, AtomicU32, Ordering},
+	},
+	time::Duration,
 };
 
-use flume::TryRecvError;
+use parking_lot::Mutex;
 use tokio::sync::Notify;
 
 use crate::{
@@ -39,6 +43,120 @@ const CAPTURE_PERIOD_MS: u32 = 20;
 // wakes — so count one extra empty callback: the racy, possibly-uncommitted
 // write is always the last one, which is margin rather than accounted flush.
 const PLAYBACK_DRAIN_MARGIN_CALLBACKS: usize = 1;
+/// Speaker backlog past which the oldest queued audio is dropped so playback
+/// catches up to live. Two seconds absorbs a decode burst without letting a
+/// stalled playout lag the conversation. The bound is on the queue the decoder
+/// feeds, not the OS device buffer.
+const PLAYBACK_QUEUE_BOUND: Duration = Duration::from_secs(2);
+
+/// Queued speaker audio and how much has been dropped to stay near the bound.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PlaybackQueueStats {
+	pub queued_ms:  u32,
+	pub dropped_ms: u32,
+}
+
+#[derive(Debug)]
+enum PlaybackRecv {
+	Empty,
+	Disconnected,
+}
+
+struct PlaybackQueueInner {
+	chunks:          VecDeque<Vec<f32>>,
+	queued_samples:  usize,
+	dropped_samples: u64,
+	senders:         usize,
+}
+
+/// Shared playback queue. `write` never waits for the speaker: when the queued
+/// duration exceeds [`PLAYBACK_QUEUE_BOUND`], the oldest chunks are discarded
+/// and the newest audio stays. The render callback and the decoder share one
+/// short mutex; neither waits for playout.
+struct PlaybackQueue {
+	inner:         Mutex<PlaybackQueueInner>,
+	sample_rate:   u32,
+	bound_samples: usize,
+}
+
+impl PlaybackQueue {
+	fn new(sample_rate: u32) -> Self {
+		let bound_samples =
+			(u64::from(sample_rate) * PLAYBACK_QUEUE_BOUND.as_millis() as u64 / 1_000) as usize;
+		Self {
+			inner: Mutex::new(PlaybackQueueInner {
+				chunks:          VecDeque::new(),
+				queued_samples:  0,
+				dropped_samples: 0,
+				senders:         0,
+			}),
+			sample_rate,
+			bound_samples,
+		}
+	}
+
+	fn retain_sender(&self) {
+		self.inner.lock().senders += 1;
+	}
+
+	fn release_sender(&self) {
+		let mut inner = self.inner.lock();
+		inner.senders = inner.senders.saturating_sub(1);
+	}
+
+	/// Queue `samples`, dropping the oldest audio until the backlog is within
+	/// the bound. Returns false when every producer has already been dropped.
+	/// A single newest chunk larger than the bound is kept: catch-up must not
+	/// discard the audio that just arrived.
+	fn push(&self, samples: &[f32]) -> bool {
+		if samples.is_empty() {
+			return true;
+		}
+		let mut inner = self.inner.lock();
+		if inner.senders == 0 {
+			return false;
+		}
+		let mut queued = inner.queued_samples + samples.len();
+		inner.chunks.push_back(samples.to_vec());
+		while queued > self.bound_samples && inner.chunks.len() > 1 {
+			let Some(old) = inner.chunks.pop_front() else {
+				break;
+			};
+			queued -= old.len();
+			inner.dropped_samples += old.len() as u64;
+		}
+		inner.queued_samples = queued;
+		true
+	}
+
+	fn try_pop(&self) -> Result<Vec<f32>, PlaybackRecv> {
+		let mut inner = self.inner.lock();
+		if let Some(chunk) = inner.chunks.pop_front() {
+			inner.queued_samples -= chunk.len();
+			return Ok(chunk);
+		}
+		if inner.senders == 0 {
+			Err(PlaybackRecv::Disconnected)
+		} else {
+			Err(PlaybackRecv::Empty)
+		}
+	}
+
+	fn stats(&self) -> PlaybackQueueStats {
+		let inner = self.inner.lock();
+		PlaybackQueueStats {
+			queued_ms:  samples_to_ms(inner.queued_samples as u64, self.sample_rate),
+			dropped_ms: samples_to_ms(inner.dropped_samples, self.sample_rate),
+		}
+	}
+}
+
+fn samples_to_ms(samples: u64, sample_rate: u32) -> u32 {
+	if sample_rate == 0 {
+		return 0;
+	}
+	u32::try_from(samples.saturating_mul(1_000) / u64::from(sample_rate)).unwrap_or(u32::MAX)
+}
 
 /// Shared render-time state for one playback device: gain, drain, stop.
 ///
@@ -107,14 +225,20 @@ impl Drop for FillGuard {
 
 /// Producer endpoint for one native playback device. Cloned into the WebRTC
 /// remote-audio decoder so it can feed the same speaker stream.
-#[derive(Clone)]
 pub struct PlaybackWriter {
-	tx:    flume::Sender<Vec<f32>>,
+	queue: Arc<PlaybackQueue>,
 	state: Arc<PlaybackState>,
 }
 
 impl PlaybackWriter {
-	/// Queue mono floating-point samples without blocking the caller.
+	fn new(queue: Arc<PlaybackQueue>, state: Arc<PlaybackState>) -> Self {
+		queue.retain_sender();
+		Self { queue, state }
+	}
+
+	/// Queue mono floating-point samples without blocking the caller. Audio
+	/// past the playback bound is dropped from the front of the queue; this
+	/// never waits for the speaker and never fails because the queue is full.
 	pub fn write(&self, samples: &[f32]) -> VoiceResult<()> {
 		if samples.is_empty() {
 			return Ok(());
@@ -122,10 +246,24 @@ impl PlaybackWriter {
 		if self.state.stopped.load(Ordering::Acquire) || self.state.drained.load(Ordering::Acquire) {
 			return Err("Native audio playback is closed".to_owned());
 		}
-		self
-			.tx
-			.send(samples.to_vec())
-			.map_err(|_| "Native audio playback is closed".to_owned())
+		if self.queue.push(samples) {
+			Ok(())
+		} else {
+			Err("Native audio playback is closed".to_owned())
+		}
+	}
+}
+
+impl Clone for PlaybackWriter {
+	fn clone(&self) -> Self {
+		self.queue.retain_sender();
+		Self { queue: Arc::clone(&self.queue), state: Arc::clone(&self.state) }
+	}
+}
+
+impl Drop for PlaybackWriter {
+	fn drop(&mut self) {
+		self.queue.release_sender();
 	}
 }
 
@@ -134,6 +272,7 @@ pub struct PlaybackStream {
 	device: Option<PlaybackDevice>,
 	writer: Option<PlaybackWriter>,
 	state:  Arc<PlaybackState>,
+	queue:  Arc<PlaybackQueue>,
 }
 
 impl PlaybackStream {
@@ -141,8 +280,9 @@ impl PlaybackStream {
 	pub fn start(sample_rate: u32) -> VoiceResult<Self> {
 		let sample_rate = audio_sample_rate(sample_rate)?;
 		let state = Arc::new(PlaybackState::new());
-		let (tx, rx) = flume::unbounded::<Vec<f32>>();
+		let queue = Arc::new(PlaybackQueue::new(sample_rate));
 		let callback_state = Arc::clone(&state);
+		let callback_queue = Arc::clone(&queue);
 		let mut current = Vec::new();
 		let mut cursor = 0;
 		let mut empty_callbacks = 0;
@@ -158,7 +298,7 @@ impl PlaybackStream {
 			Box::new(move |output| {
 				let _ = &guard;
 				fill_playback(
-					&rx,
+					&callback_queue,
 					&mut current,
 					&mut cursor,
 					output,
@@ -172,8 +312,9 @@ impl PlaybackStream {
 
 		Ok(Self {
 			device: Some(device),
-			writer: Some(PlaybackWriter { tx, state: Arc::clone(&state) }),
+			writer: Some(PlaybackWriter::new(Arc::clone(&queue), Arc::clone(&state))),
 			state,
+			queue,
 		})
 	}
 
@@ -189,6 +330,11 @@ impl PlaybackStream {
 	/// releasing the stream lock.
 	pub fn state(&self) -> Arc<PlaybackState> {
 		Arc::clone(&self.state)
+	}
+
+	/// Queued speaker duration and audio dropped to stay near the bound.
+	pub fn queue_stats(&self) -> PlaybackQueueStats {
+		self.queue.stats()
 	}
 
 	/// Close the producer side so the render callback can detect drain.
@@ -232,7 +378,7 @@ fn audio_sample_rate(sample_rate: u32) -> VoiceResult<u32> {
 }
 
 fn fill_playback(
-	rx: &flume::Receiver<Vec<f32>>,
+	queue: &PlaybackQueue,
 	current: &mut Vec<f32>,
 	cursor: &mut usize,
 	output: &mut [f32],
@@ -249,17 +395,17 @@ fn fill_playback(
 	let mut output_offset = 0;
 	while output_offset < output.len() {
 		if *cursor == current.len() {
-			match rx.try_recv() {
+			match queue.try_pop() {
 				Ok(next) => {
 					*current = next;
 					*cursor = 0;
 					*empty_callbacks = 0;
 				},
-				Err(TryRecvError::Empty) => {
+				Err(PlaybackRecv::Empty) => {
 					*empty_callbacks = 0;
 					break;
 				},
-				Err(TryRecvError::Disconnected) => {
+				Err(PlaybackRecv::Disconnected) => {
 					*empty_callbacks += 1;
 					if *empty_callbacks >= drain_callbacks {
 						state.mark_drained();
@@ -345,21 +491,28 @@ mod tests {
 	// period-sized local target.
 	const LOCAL_DRAIN_CALLBACKS: usize = 3 + PLAYBACK_DRAIN_MARGIN_CALLBACKS;
 
+	fn disconnected_queue(state: &Arc<PlaybackState>, chunks: &[Vec<f32>]) -> Arc<PlaybackQueue> {
+		let queue = Arc::new(PlaybackQueue::new(48_000));
+		let writer = PlaybackWriter::new(Arc::clone(&queue), Arc::clone(state));
+		for chunk in chunks {
+			writer.write(chunk).expect("queue accepts audio");
+		}
+		drop(writer);
+		queue
+	}
+
 	#[test]
 	fn playback_preserves_chunk_order_and_applies_render_gain() {
-		let state = PlaybackState::new();
+		let state = Arc::new(PlaybackState::new());
 		state.set_gain(0.5);
-		let (tx, rx) = flume::unbounded();
-		tx.send(vec![1.0, -1.0]).expect("receiver is live");
-		tx.send(vec![0.5, -0.5]).expect("receiver is live");
-		drop(tx);
+		let queue = disconnected_queue(&state, &[vec![1.0, -1.0], vec![0.5, -0.5]]);
 		let mut current = Vec::new();
 		let mut cursor = 0;
 		let mut empty_callbacks = 0;
 		let mut output = [9.0; 5];
 
 		fill_playback(
-			&rx,
+			&queue,
 			&mut current,
 			&mut cursor,
 			&mut output,
@@ -374,7 +527,7 @@ mod tests {
 		while empty_callbacks < LOCAL_DRAIN_CALLBACKS {
 			silence.fill(1.0);
 			fill_playback(
-				&rx,
+				&queue,
 				&mut current,
 				&mut cursor,
 				&mut silence,
@@ -397,9 +550,8 @@ mod tests {
 	/// wait out the full widened `drain_callbacks` count.
 	#[test]
 	fn widened_backlog_is_not_drained_within_local_margin() {
-		let state = PlaybackState::new();
-		let (tx, rx) = flume::unbounded::<Vec<f32>>();
-		drop(tx);
+		let state = Arc::new(PlaybackState::new());
+		let queue = disconnected_queue(&state, &[]);
 		let mut current = Vec::new();
 		let mut cursor = 0;
 		let mut empty_callbacks = 0;
@@ -408,7 +560,7 @@ mod tests {
 
 		for _ in 0..LOCAL_DRAIN_CALLBACKS {
 			fill_playback(
-				&rx,
+				&queue,
 				&mut current,
 				&mut cursor,
 				&mut output,
@@ -424,7 +576,7 @@ mod tests {
 
 		while empty_callbacks < widened_drain_callbacks {
 			fill_playback(
-				&rx,
+				&queue,
 				&mut current,
 				&mut cursor,
 				&mut output,
@@ -434,6 +586,41 @@ mod tests {
 			);
 		}
 		assert!(state.drained.load(Ordering::Acquire));
+	}
+
+	/// Past ~2 s of queued audio, the oldest chunks are dropped and the newest
+	/// stay. `write` returns immediately so the decoder is never blocked, and
+	/// the stats report both the remaining depth and the dropped duration.
+	#[test]
+	fn playback_queue_drops_oldest_past_bound_and_reports_depth() {
+		let rate = 48_000u32;
+		let state = Arc::new(PlaybackState::new());
+		let queue = Arc::new(PlaybackQueue::new(rate));
+		let writer = PlaybackWriter::new(Arc::clone(&queue), Arc::clone(&state));
+		let one_second = rate as usize;
+		writer
+			.write(&vec![1.0; one_second])
+			.expect("overflow drops oldest instead of failing the decoder");
+		writer
+			.write(&vec![2.0; one_second])
+			.expect("second second queues");
+		writer
+			.write(&vec![3.0; one_second])
+			.expect("third second drops the oldest and still returns");
+
+		let stats = queue.stats();
+		assert_eq!(stats.queued_ms, 2_000, "depth stays at the bound");
+		assert_eq!(stats.dropped_ms, 1_000, "the oldest second was dropped");
+
+		let first = queue.try_pop().expect("newest-but-one second remains");
+		let second = queue.try_pop().expect("newest second remains");
+		assert!(first.iter().all(|sample| *sample == 2.0), "oldest audio was dropped");
+		assert!(second.iter().all(|sample| *sample == 3.0), "newest audio was kept");
+		assert!(queue.try_pop().is_err(), "nothing older remains queued");
+
+		let after = queue.stats();
+		assert_eq!(after.queued_ms, 0);
+		assert_eq!(after.dropped_ms, 1_000, "drops stay reported after playout");
 	}
 
 	#[test]
