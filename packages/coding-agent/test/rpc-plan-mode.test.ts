@@ -587,6 +587,22 @@ describe("RPC plan mode", () => {
 		expect(session.getActiveToolNames()).not.toContain("host_lookup");
 	});
 
+	it("restores a deliberately pinned discoverable host tool after plan exit", async () => {
+		const { session, planMode } = setup({ xdev: true });
+		await session.refreshRpcHostTools([{ ...makeTool("host_lookup"), loadMode: "discoverable" }]);
+		await session.setActiveToolPresentation(["read", "write", "host_lookup"], ["host_lookup"]);
+		expect(session.getMountedXdevToolNames()).toContain("host_lookup");
+		await session.setActiveToolPresentation(["read", "write", "host_lookup"], []);
+		expect(session.getActiveToolNames()).toContain("host_lookup");
+
+		await planMode.setMode("plan", undefined);
+		await planMode.setMode("default", undefined);
+
+		expect(session.getEnabledToolNames()).toContain("host_lookup");
+		expect(session.getActiveToolNames()).toContain("host_lookup");
+		expect(session.getMountedXdevToolNames()).not.toContain("host_lookup");
+	});
+
 	it("refine: feedback reaches the tool result and plan mode stays on", async () => {
 		const { planMode, frames, deps, writePlan, propose, waitForRequest, cancels } = setup();
 		await planMode.setMode("plan", undefined);

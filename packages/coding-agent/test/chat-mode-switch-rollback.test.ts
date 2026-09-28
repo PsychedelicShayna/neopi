@@ -166,4 +166,33 @@ describe("AgentSession.setChatMode rollback", () => {
 		expect(target.getMountedXdevToolNames()).toContain(tool.name);
 		expect(target.getActiveToolNames()).not.toContain(tool.name);
 	}, 60_000);
+
+	it("keeps a pinned discoverable host tool top-level after a same-name chat refresh", async () => {
+		const { session: target } = await createSession();
+		const tool: AgentTool = {
+			name: "host_lookup",
+			label: "Host Lookup",
+			description: "Looks up records",
+			loadMode: "discoverable",
+			parameters: type({}),
+			async execute() {
+				return { content: [{ type: "text", text: "record" }] };
+			},
+		};
+		await target.refreshRpcHostTools([tool]);
+		expect(target.getMountedXdevToolNames()).toContain(tool.name);
+		await target.setActiveToolPresentation(
+			target.getEnabledToolNames(),
+			target.getMountedXdevToolNames().filter(name => name !== tool.name),
+		);
+		expect(target.getActiveToolNames()).toContain(tool.name);
+
+		await target.setChatMode({ mode: "chat" });
+		await target.refreshRpcHostTools([{ ...tool, description: "Updated lookup" }]);
+		await target.setChatMode({ mode: "off" });
+
+		expect(target.getToolByName(tool.name)?.description).toBe("Updated lookup");
+		expect(target.getActiveToolNames()).toContain(tool.name);
+		expect(target.getMountedXdevToolNames()).not.toContain(tool.name);
+	}, 60_000);
 });

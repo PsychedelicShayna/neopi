@@ -6115,6 +6115,15 @@ export class AgentSession implements SettingsScope {
 	async refreshRpcHostTools(rpcTools: AgentTool[]): Promise<void> {
 		const stash = this.#chatModeStashedTools;
 		const previousHostNames = new Set(stash?.enabled.filter(name => this.#tools.hasRpcHostTool(name)));
+		const previouslyMountable = stash
+			? new Set(
+					[...previousHostNames].filter(name => {
+						const tool = this.#tools.getToolByName(name);
+						return tool !== undefined && isMountableUnderXdev(tool);
+					}),
+				)
+			: undefined;
+		const previouslyMounted = stash ? new Set(stash.mounted) : undefined;
 		await this.#tools.refreshRpcHostTools(rpcTools, !this.#chatMode);
 		if (this.#chatMode && stash && this.#chatModeStashedTools === stash) {
 			const registered = new Set(rpcTools.map(tool => tool.name));
@@ -6128,7 +6137,12 @@ export class AgentSession implements SettingsScope {
 				mounted: [
 					...stash.mounted.filter(name => !previousHostNames.has(name)),
 					...rpcTools
-						.filter(tool => (!tool.hidden || previousHostNames.has(tool.name)) && mountable.has(tool.name))
+						.filter(
+							tool =>
+								(!tool.hidden || previousHostNames.has(tool.name)) &&
+								mountable.has(tool.name) &&
+								(!previouslyMountable?.has(tool.name) || previouslyMounted?.has(tool.name)),
+						)
 						.map(tool => tool.name),
 				],
 			};

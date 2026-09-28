@@ -93,6 +93,8 @@ interface OwnedPlanMode {
 	tools: PlanToolPresentation;
 	/** Host-owned tools captured on entry are superseded by the live host selection. */
 	hostTools: string[];
+	/** Entry-time mountability, used to distinguish a load-mode change from a pinned top-level tool. */
+	hostMountableTools: ReadonlySet<string>;
 	/** Absent when no `plan` role resolved, so the model was left alone. */
 	model: PlanModelSwitch | undefined;
 }
@@ -245,6 +247,13 @@ export class RpcPlanModeController {
 
 		const state = planModeEntryState(previous, planFilePath);
 		const { previous: previousTools, planTools } = planModeToolSet(session);
+		const hostTools = previousTools.enabled.filter(name => session.hasRpcHostTool(name));
+		const hostMountableTools = new Set(
+			hostTools.filter(name => {
+				const tool = session.getToolByName(name);
+				return tool !== undefined && isMountableUnderXdev(tool);
+			}),
+		);
 		// Plan state lands before the tool partition: under Code Mode the direct
 		// surface keeps `write` only while a transport needs it (see #enterPlanMode).
 		session.setPlanModeState(state);
@@ -257,7 +266,8 @@ export class RpcPlanModeController {
 		session.setPlanProposalHandler(this.#proposalHandler);
 		this.#owned = {
 			tools: previousTools,
-			hostTools: previousTools.enabled.filter(name => session.hasRpcHostTool(name)),
+			hostTools,
+			hostMountableTools,
 			model: await this.#applyPlanModel(),
 		};
 		session.sessionManager.appendModeChange("plan", { planFilePath: state.planFilePath });
@@ -319,9 +329,14 @@ export class RpcPlanModeController {
 		const session = this.#session;
 		const capturedHostTools = new Set(owned.hostTools);
 		const retainedHostTools = owned.hostTools.filter(name => session.hasRpcHostTool(name));
+		const previouslyMounted = new Set(owned.tools.mounted);
 		const retainedMountedHostTools = retainedHostTools.filter(name => {
 			const tool = session.getToolByName(name);
-			return tool !== undefined && isMountableUnderXdev(tool);
+			return (
+				tool !== undefined &&
+				isMountableUnderXdev(tool) &&
+				(!owned.hostMountableTools.has(name) || previouslyMounted.has(name))
+			);
 		});
 		const currentHostTools = session.getEnabledToolNames().filter(name => session.hasRpcHostTool(name));
 		const currentMountedHostTools = session.getMountedXdevToolNames().filter(name => session.hasRpcHostTool(name));
