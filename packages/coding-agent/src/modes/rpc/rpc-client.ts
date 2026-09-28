@@ -55,6 +55,7 @@ import type {
 	RpcToolApprovalRequest,
 	RpcToolApprovalResponse,
 } from "./rpc-types";
+import type { RpcUsageRequest, RpcUsageResult } from "./rpc-usage";
 
 /** Distributive Omit that works with union types */
 type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
@@ -1048,6 +1049,16 @@ export class RpcClient {
 	 */
 	async getSessionStats(): Promise<SessionStats> {
 		const response = await this.#send({ type: "get_session_stats" });
+		return this.#getData(response);
+	}
+
+	/**
+	 * Account-level provider usage reports, as `npi usage --json` prints them.
+	 * Failures without auth storage carry `code: "usage_unavailable"` on
+	 * {@link RpcCommandError}.
+	 */
+	async getUsage(options: RpcUsageRequest = {}): Promise<RpcUsageResult> {
+		const response = await this.#send({ type: "get_usage", ...options });
 		return this.#getData(response);
 	}
 

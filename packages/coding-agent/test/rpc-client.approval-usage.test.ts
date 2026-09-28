@@ -131,4 +131,21 @@ describe("RpcClient tool approvals and usage", () => {
 		}
 	});
 
+	test("getUsage sends get_usage with its options and returns the reports", async () => {
+		const server = fakeServer();
+		const client = new RpcClient({ spawn: server.spawn });
+
+		try {
+			await client.start();
+			expect(await client.getUsage()).toEqual({ generatedAt: 1_700_000_000_001, reports: [usageReport] });
+			await client.getUsage({ provider: "anthropic", refresh: true, redact: true });
+
+			expect(server.usageCommands.map(({ id: _id, ...command }) => command)).toEqual([
+				{ type: "get_usage" },
+				{ type: "get_usage", provider: "anthropic", refresh: true, redact: true },
+			]);
+		} finally {
+			await client.stop();
+		}
+	});
 });
