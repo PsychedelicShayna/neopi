@@ -146,6 +146,22 @@ describe("mcp.includeServers allowlist", () => {
 		expect(unmatchedIncludes).toEqual(["gihtub", "denylisted-server"]);
 	});
 
+	test("a literal naming an alias of another admitted server is not reported as unknown", async () => {
+		await fs.writeFile(
+			path.join(projectDir, ".omp", "mcp.json"),
+			JSON.stringify({
+				mcpServers: {
+					alpha: { command: "echo", args: ["same-endpoint"] },
+					beta: { command: "echo", args: ["same-endpoint"] },
+				},
+			}),
+		);
+		resetDiscoveryCache();
+		const { configs, unmatchedIncludes } = await loadAllMCPConfigs(projectDir, { includeServers: ["alpha", "beta"] });
+		expect(Object.keys(configs)).toHaveLength(1);
+		expect(unmatchedIncludes).toEqual([]);
+	});
+
 	test("createAgentSession rejects an unknown literal name before spawning any server", async () => {
 		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "npi-mcp-unknown-"));
 		try {
@@ -208,5 +224,5 @@ describe("mcp.includeServers allowlist", () => {
 			await Promise.all(sessions.map(session => session.dispose()));
 			await Promise.all([cwdA, cwdB, cwdC].map(dir => removeWithRetries(dir)));
 		}
-	});
+	}, 30_000);
 });

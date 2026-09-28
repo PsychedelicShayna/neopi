@@ -223,13 +223,18 @@ export async function loadAllMCPConfigs(cwd: string, options?: LoadMCPConfigsOpt
 	}
 
 	// Checked before the Exa/browser filters: those servers exist, NeoPi just
-	// replaces them natively, so naming one is not a typo.
+	// replaces them natively, so naming one is not a typo. Existence is read
+	// from the admitted items before equivalence dedupe, so a literal that
+	// names an alias of another admitted server is still known.
+	const availableNames = new Set(
+		result.all.filter(server => includeServer(server) && !suppressServer(server)).map(server => server.name),
+	);
 	const unmatchedIncludes: string[] = [...allowlist.invalid];
 	for (const pattern of allowlist.patterns) {
-		if (configs[pattern]) continue;
+		if (availableNames.has(pattern)) continue;
 		if (!isMCPGlobPattern(pattern)) {
 			unmatchedIncludes.push(pattern);
-		} else if (!Object.keys(configs).some(name => new Bun.Glob(pattern).match(name))) {
+		} else if (![...availableNames].some(name => new Bun.Glob(pattern).match(name))) {
 			logger.warn("MCP allowlist pattern matches no available server", { pattern });
 		}
 	}

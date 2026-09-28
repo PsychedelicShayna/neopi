@@ -11,6 +11,7 @@ import type { SourceMeta } from "../../capability/types";
 import { expandEnvVarsDeep } from "../../discovery/helpers";
 import {
 	analyzeAuthError,
+	compileMCPAllowlist,
 	discoverOAuthEndpoints,
 	fetchResourceMetadataScopes,
 	loadAllMCPConfigs,
@@ -1348,7 +1349,13 @@ export class MCPCommandController {
 
 			// Fallback: if manager state is still disconnected but direct test works,
 			// report as connected to avoid false-negative messaging.
-			if (!isConnected && !isConnecting && config.enabled !== false) {
+			// An allowlist-excluded server stays disconnected: never probe it.
+			if (
+				!isConnected &&
+				!isConnecting &&
+				config.enabled !== false &&
+				compileMCPAllowlist(cfgMcpIncludeServers.get(this.ctx.settings)).admits(name)
+			) {
 				try {
 					await this.#handleTestConnection(config);
 					isConnected = true;
@@ -1673,7 +1680,11 @@ export class MCPCommandController {
 				this.ctx.showError(`Server "${name}" is disabled. Run /mcp enable ${name} first.`);
 				return;
 			}
-
+			if (!compileMCPAllowlist(cfgMcpIncludeServers.get(this.ctx.settings)).admits(name)) {
+				this.ctx.mcpTestEscapeHandlers.delete(handleEscape);
+				this.ctx.showError(`Server "${name}" is excluded by this session's MCP allowlist (--mcp).`);
+				return;
+			}
 			// Esc may have been consumed during the awaited lookup, before any
 			// hint existed. Bail out instead of advertising a cancellation that
 			// is already gone.
