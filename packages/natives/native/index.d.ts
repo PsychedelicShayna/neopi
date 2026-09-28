@@ -206,8 +206,8 @@ export declare class LiveWebRtcPeer {
   acceptAnswer(sdp: string): Promise<void>
   /** Wait until the `oai-events` data channel is open. */
   waitForOpen(timeoutMs?: number | undefined | null): Promise<void>
-  /** Queue 16 kHz mono floating-point PCM for Opus transmission. */
-  pushAudio(samples: Float32Array): void
+  /** Queue 16 kHz mono floating-point PCM; false means the queue dropped it. */
+  pushAudio(samples: Float32Array): boolean
   /**
    * Enable or disable microphone transmission, discarding partial muted
    * frames.

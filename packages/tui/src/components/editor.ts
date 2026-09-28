@@ -2790,7 +2790,44 @@ export class Editor implements Component, Focusable {
 		this.#withUndoSuspended(() => this.#deleteCharsBeforeCursor(this.#volatileTextLen));
 		this.#volatileTextLen = 0;
 		this.#volatileSnapshot = undefined;
-		if (rest) {
+		if (rest === undefined && this.#volatileAdopted > 0 && !this.#volatileDropped) {
+			// A cursor move adopts the preview without changing its text. A corrected final can
+			// replace that intact span; an edited span is no longer tracked and stays untouched.
+			this.#reconcileSpans();
+			const adopted = this.#volatileUtterance.slice(0, this.#volatileAdopted);
+			const span = this.#speechSpans.find(
+				candidate =>
+					candidate.id === id &&
+					candidate.text === adopted &&
+					this.#spanBase.slice(candidate.start, candidate.end) === adopted,
+			);
+			if (span) {
+				this.#recordUndoState();
+				const cursor = this.#offsetOf(this.#state.cursorLine, this.#state.cursorCol);
+				const full = this.#spanBase.slice(0, span.start) + text + this.#spanBase.slice(span.end);
+				const newCursor =
+					cursor >= span.end
+						? cursor + text.length - adopted.length
+						: cursor > span.start
+							? span.start + Math.min(cursor - span.start, text.length)
+							: cursor;
+				this.#state.lines = full.split("\n");
+				let line = 0;
+				let col = newCursor;
+				while (line < this.#state.lines.length - 1 && col > (this.#state.lines[line]?.length ?? 0)) {
+					col -= (this.#state.lines[line]?.length ?? 0) + 1;
+					line += 1;
+				}
+				this.#state.cursorLine = line;
+				this.#setCursorCol(col);
+				this.#reconcileSpans(full);
+				if (text) this.#speechSpans.push({ id, start: span.start, end: span.start + text.length, text });
+				this.#lastAction = null;
+				this.#notifyChange();
+			} else {
+				this.#notifyChange();
+			}
+		} else if (rest) {
 			this.#reconcileSpans();
 			const start = this.#offsetOf(this.#state.cursorLine, this.#state.cursorCol);
 			this.#insertTextAtCursor(rest);

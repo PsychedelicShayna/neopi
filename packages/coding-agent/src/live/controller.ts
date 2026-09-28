@@ -28,6 +28,7 @@ import { DEFAULT_LIVE_VOICE } from "./voices";
 const OUTPUT_ACTIVE_LEVEL = 0.015;
 const MIN_BARGE_IN_LEVEL = 0.04;
 const OUTPUT_ECHO_RATIO = 0.65;
+const OUTPUT_SILENCE_MS = 250;
 /** Quiet time after operator activity (speech or composer edits) before held voice-triggering context is delivered. */
 const DEFAULT_SPEAKABLE_IDLE_MS = 10_000;
 
@@ -171,6 +172,12 @@ export class LiveSessionController {
 	#phase: LivePhase = "connecting";
 	#inputLevel = 0;
 	#outputLevel = 0;
+	#outputSilenceTimer: NodeJS.Timeout | undefined;
+	#outputSilenceDeadline = 0;
+	#microphoneFrames = 0;
+	#framesSent = 0;
+	#framesDroppedAtGate = 0;
+	#framesDroppedAtNativeQueue = 0;
 	#activeDelegationId: string | undefined;
 	/**
 	 * Last assistant message already relayed for the active delegation. A settle
@@ -366,6 +373,8 @@ export class LiveSessionController {
 		this.#pendingDelegation = undefined;
 		this.#pendingDelivery = undefined;
 		this.#stopped = true;
+		clearTimeout(this.#outputSilenceTimer);
+		this.#outputSilenceTimer = undefined;
 		clearTimeout(this.#speakableIdleTimer);
 		this.#speakableIdleTimer = undefined;
 		this.#speakableIdleDeadline = 0;
@@ -380,7 +389,6 @@ export class LiveSessionController {
 		if (this.#userTranscript && !this.#userTranscriptFinal) {
 			this.#recordLiveTranscript("user", this.#userTranscript, false);
 		}
-		await this.#transcriptLogChain;
 		let cleanupError: Error | undefined;
 
 		const recorder = this.#recorder;
@@ -392,6 +400,8 @@ export class LiveSessionController {
 				cleanupError = errorFrom(cause);
 			}
 		}
+		this.#recordAudioDropSummary();
+		await this.#transcriptLogChain;
 
 		await this.#sendChain;
 		const transport = this.#transport;
@@ -668,12 +678,12 @@ export class LiveSessionController {
 			if (!text) continue;
 			this.#lastRelayedResponse = message;
 			const finalContext = prompt.render(agentFinalMessageTemplate, { message: text });
-			this.#deliverOrHold(() => {
-				this.#contextSinceResponse = true;
-				for (const chunk of chunkLiveContext(finalContext)) {
-					this.#queueSend(buildDelegationContextAppend(delegationId, chunk));
-				}
-			});
+			// The operator asked for this answer: deliver it now. The speakable hold is for
+			// unsolicited context only; holding a final answer delays it until the next handoff.
+			this.#contextSinceResponse = true;
+			for (const chunk of chunkLiveContext(finalContext)) {
+				this.#queueSend(buildDelegationContextAppend(delegationId, chunk));
+			}
 			break;
 		}
 		if (options.closeDelegation) {
@@ -690,12 +700,10 @@ export class LiveSessionController {
 		if (text && message) {
 			this.#lastRelayedResponse = message;
 			const labelBytes = Buffer.byteLength(prompt.render(agentFinalMessageTemplate, { message: "" }), "utf8");
-			this.#deliverOrHold(() => {
-				this.#contextSinceResponse = true;
-				for (const part of chunkLiveContext(text, CONTEXT_CHUNK_BYTES - labelBytes)) {
-					this.#queueSend(buildSessionContextAppend(prompt.render(agentFinalMessageTemplate, { message: part })));
-				}
-			});
+			this.#contextSinceResponse = true;
+			for (const part of chunkLiveContext(text, CONTEXT_CHUNK_BYTES - labelBytes)) {
+				this.#queueSend(buildSessionContextAppend(prompt.render(agentFinalMessageTemplate, { message: part })));
+			}
 		}
 		if (options.closeDelegation) {
 			this.#operatorTurnPending = false;
@@ -890,6 +898,8 @@ export class LiveSessionController {
 
 	#handleOutputLevel(level: number): void {
 		const wasActive = this.#outputLevel > OUTPUT_ACTIVE_LEVEL;
+		this.#outputSilenceDeadline = Date.now() + OUTPUT_SILENCE_MS;
+		this.#outputSilenceTimer ??= setTimeout(() => this.#expireOutputLevel(), OUTPUT_SILENCE_MS);
 		this.#outputLevel = clampLevel(level);
 		this.#emitLevels();
 		if (this.#outputLevel > OUTPUT_ACTIVE_LEVEL && this.#heldContext.length > 0) {
@@ -900,17 +910,37 @@ export class LiveSessionController {
 		if (!this.#activeDelegationId) this.#refreshAudioPhase();
 	}
 
+	#expireOutputLevel(): void {
+		this.#outputSilenceTimer = undefined;
+		if (this.#stopped) return;
+		const remaining = this.#outputSilenceDeadline - Date.now();
+		if (remaining > 0) {
+			this.#outputSilenceTimer = setTimeout(() => this.#expireOutputLevel(), remaining);
+			return;
+		}
+		this.#outputLevel = 0;
+		this.#emitLevels();
+		if (!this.#activeDelegationId) this.#refreshAudioPhase();
+	}
+
 	#handleMicrophoneAudio(samples: Float32Array): void {
 		if (this.#stopped || !this.#transport) return;
 		if (this.#muted) return;
 		this.#inputLevel = microphoneLevel(samples);
 		this.#emitLevels();
+		this.#microphoneFrames += 1;
+		// Until the native audio path has AEC, suppress likely speaker echo
+		// during playback. The speaker level expires when packets stop arriving.
 		const outputActive = this.#outputLevel > OUTPUT_ACTIVE_LEVEL;
 		const echoThreshold = Math.max(MIN_BARGE_IN_LEVEL, this.#outputLevel * OUTPUT_ECHO_RATIO);
-		if (outputActive && this.#inputLevel < echoThreshold) return;
+		if (outputActive && this.#inputLevel < echoThreshold) {
+			this.#framesDroppedAtGate += 1;
+			return;
+		}
 		if (this.#inputLevel >= MIN_BARGE_IN_LEVEL) this.#markUserActivity();
 		try {
-			this.#transport.pushAudio(samples);
+			if (this.#transport.pushAudio(samples)) this.#framesSent += 1;
+			else this.#framesDroppedAtNativeQueue += 1;
 		} catch (cause) {
 			this.#reportFailure(errorFrom(cause));
 		}
@@ -1008,7 +1038,9 @@ export class LiveSessionController {
 		} else if (normalized.startsWith(current.text)) {
 			current.text = normalized;
 		} else if (!current.text.startsWith(normalized)) {
-			current.text += normalized;
+			// Incremental chunks carry their own leading space (" a", " bug"); a chunk without
+			// one continues the previous word. Trimming it away glued words together.
+			current.text += /^\s/.test(text) ? ` ${normalized}` : normalized;
 		}
 		this.#emitUserSpeech({ role: "user", turn: current.turn, text: current.text, final: current.final });
 		const pendingGeneration = this.#pendingDelegation?.generation;
@@ -1035,6 +1067,20 @@ export class LiveSessionController {
 		void this.#dispatchPendingDelegation(pending.generation).catch(cause => this.#reportFailure(errorFrom(cause)));
 	}
 
+	#recordAudioDropSummary(): void {
+		if (this.#framesDroppedAtGate === 0 && this.#framesDroppedAtNativeQueue === 0) return;
+		const summary = {
+			captured: this.#microphoneFrames,
+			sent: this.#framesSent,
+			droppedAtGate: this.#framesDroppedAtGate,
+			droppedAtNativeQueue: this.#framesDroppedAtNativeQueue,
+		};
+		logger.warn("Live microphone frame drops", summary);
+		this.#queueTranscriptLine(
+			JSON.stringify({ ts: new Date().toISOString(), type: "audio-frame-summary", ...summary }),
+		);
+	}
+
 	/**
 	 * Persist one raw transcript line to the session-scoped live-transcript
 	 * artifact. Recorded BEFORE UI dedupe on purpose: repeated identical
@@ -1045,7 +1091,10 @@ export class LiveSessionController {
 	 */
 	#recordLiveTranscript(role: LiveTranscript["role"], text: string, final: boolean): void {
 		if (!text.trim()) return;
-		const line = JSON.stringify({ ts: new Date().toISOString(), role, final, text });
+		this.#queueTranscriptLine(JSON.stringify({ ts: new Date().toISOString(), role, final, text }));
+	}
+
+	#queueTranscriptLine(line: string): void {
 		this.#transcriptLogChain = this.#transcriptLogChain
 			.then(() => this.#appendTranscriptLine(line))
 			.catch(error => {
