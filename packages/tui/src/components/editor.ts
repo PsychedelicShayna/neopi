@@ -687,6 +687,13 @@ export class Editor implements Component, Focusable {
 	onLargePaste?: (text: string, lineCount: number, options: PasteOptions) => boolean;
 	onAutocompleteCancel?: () => void;
 	disableSubmit: boolean = false;
+	/**
+	 * When true, Enter inserts a newline (Vim Normal mode: moves down a line)
+	 * instead of submitting; the host submits through its own key binding.
+	 * A one-line draft starting with `/` still submits, so slash commands stay
+	 * reachable.
+	 */
+	enterInsertsNewline: boolean = false;
 
 	// Custom top border (for status line integration). Either an eager `content`
 	// (set once, reused every frame) or a `provider` that recomputes lazily just
@@ -1893,6 +1900,13 @@ export class Editor implements Component, Focusable {
 		}
 		// Plain Enter - submit (handles both legacy \r and Kitty protocol with lock bits)
 		else if (kb.matchesCanonical(canonical, "tui.input.submit") || data === "\n") {
+			// Code-entry mode: Enter edits instead of submitting. Vim Normal/Visual
+			// mode moves down a line, as Enter does in Vim.
+			if (this.enterInsertsNewline && !this.#isSlashCommandDraft()) {
+				if (this.#vim !== null && this.#vim.mode !== "insert") this.#runVimKey("j", this.#vim);
+				else this.#addNewLine();
+				return;
+			}
 			// If submit is disabled, do nothing
 			if (this.disableSubmit) {
 				return;
@@ -3262,6 +3276,10 @@ export class Editor implements Component, Focusable {
 		this.#setCursorCol(0);
 
 		this.#notifyChange();
+	}
+
+	#isSlashCommandDraft(): boolean {
+		return this.#state.lines.length === 1 && (this.#state.lines[0] ?? "").startsWith("/");
 	}
 
 	#shouldSubmitOnBackslashEnter(data: string, kb: KeybindingsManager): boolean {
