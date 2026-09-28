@@ -12,6 +12,7 @@
  * it keeps the pre-existing behavior.
  */
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
+import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { isRecord, logger, Snowflake } from "@oh-my-pi/pi-utils";
 import {
 	type PlanPreviousModel,
@@ -80,6 +81,19 @@ function snapshotMode(state: PlanModeState | undefined): ModeSnapshot {
 	return state?.enabled ? { mode: "plan", planFilePath: state.planFilePath } : { mode: "default" };
 }
 
+/** The model switch `set_mode` made on entry: what ran before, and what plan mode applied. */
+interface PlanModelSwitch {
+	previous: PlanPreviousModel;
+	applied: PlanPreviousModel;
+}
+
+/** What `set_mode` changed on entry; present while it owns plan mode. */
+interface OwnedPlanMode {
+	tools: PlanToolPresentation;
+	/** Absent when no `plan` role resolved, so the model was left alone. */
+	model: PlanModelSwitch | undefined;
+}
+
 /** Owns plan mode for one RPC session. */
 export class RpcPlanModeController {
 	readonly #session: AgentSession;
@@ -89,13 +103,12 @@ export class RpcPlanModeController {
 	/** Proposals resolved without a host answer, by request id; a late answer to one fails. */
 	readonly #cancelled = new Map<string, RpcPlanProposalCancelReason>();
 	readonly #unsubscribe: () => void;
-	/** Tool presentation captured when `set_mode` entered plan mode. */
-	#previousTools: PlanToolPresentation | undefined;
-	/** Model captured when `set_mode` switched to the `plan` role model. */
-	#previousModel: PlanPreviousModel | undefined;
-	/** Pre-plan model whose restore waits for the current turn to end. */
-	#deferredModelRestore: PlanPreviousModel | undefined;
-	#modelRestore: Promise<void> | undefined;
+	readonly #unregisterSessionChange: () => void;
+	#owned: OwnedPlanMode | undefined;
+	/** Pre-plan model restore waiting for the current turn to end. */
+	#deferredModelRestore: PlanModelSwitch | undefined;
+	/** Background restores (deferred model, session-transition cleanup), serialized. */
+	#work: Promise<void> = Promise.resolve();
 	#emitted: ModeSnapshot;
 	#emitHold = 0;
 	#closed = false;
@@ -107,6 +120,7 @@ export class RpcPlanModeController {
 		this.#unsubscribe = session.subscribePlanModeChanged(() => {
 			if (this.#emitHold === 0) this.#emitModeIfChanged();
 		});
+		this.#unregisterSessionChange = session.registerSessionChangeCallback(() => this.#onSessionChanged());
 	}
 
 	/** `get_state` fields: the session mode and, in plan mode, its details. */
@@ -136,6 +150,11 @@ export class RpcPlanModeController {
 			this.#emitHold--;
 			this.#emitModeIfChanged();
 		}
+	}
+
+	/** Resolves once background restores (session-transition cleanup, a deferred model restore) have finished. */
+	settled(): Promise<void> {
+		return this.#work;
 	}
 
 	/**
@@ -173,14 +192,10 @@ export class RpcPlanModeController {
 	observe(event: AgentSessionEvent): void {
 		if (event.type !== "agent_end" || this.#session.isStreaming) return;
 		this.#cancelAllPending("agent_end");
-		const previous = this.#deferredModelRestore;
-		if (!previous) return;
+		const change = this.#deferredModelRestore;
+		if (!change) return;
 		this.#deferredModelRestore = undefined;
-		this.#modelRestore = this.#restoreModel(previous)
-			.catch(error => logger.warn("Failed to restore the pre-plan model", { error: String(error) }))
-			.finally(() => {
-				this.#modelRestore = undefined;
-			});
+		this.#track(() => this.#restorePrePlanModel(change));
 	}
 
 	/** The RPC client is gone: cancel pending proposals and refuse new ones. */
@@ -188,6 +203,7 @@ export class RpcPlanModeController {
 		this.#closed = true;
 		this.#cancelAllPending("shutdown");
 		this.#unsubscribe();
+		this.#unregisterSessionChange();
 	}
 
 	async #enterPlan(planFilePath: string | undefined): Promise<RpcSetModeResult> {
@@ -202,10 +218,16 @@ export class RpcPlanModeController {
 		if (session.getVibeModeState()?.enabled) {
 			throw new RpcSetModeError("Exit vibe mode first.", "mode_blocked");
 		}
+		// Chat mode runs without tools, and plan mode needs `write` to draft and
+		// propose; the two are mutually exclusive (AgentSession.setChatMode
+		// refuses the other direction).
+		if (session.chatMode) {
+			throw new RpcSetModeError("Exit chat mode first.", "mode_blocked");
+		}
 		if (session.isStreaming || session.isCompacting) {
 			throw new RpcSetModeError("Cannot change mode while a response or compaction is in progress", "session_busy");
 		}
-		await this.#modelRestore;
+		await this.#work;
 
 		const previous = session.getPlanModeState();
 		if (previous?.enabled) {
@@ -229,9 +251,8 @@ export class RpcPlanModeController {
 			session.setPlanModeState(previous);
 			throw error;
 		}
-		this.#previousTools = previousTools;
 		session.setPlanProposalHandler(this.#proposalHandler);
-		await this.#applyPlanModel();
+		this.#owned = { tools: previousTools, model: await this.#applyPlanModel() };
 		session.sessionManager.appendModeChange("plan", { planFilePath: state.planFilePath });
 		return { mode: "plan", planFilePath: state.planFilePath };
 	}
@@ -244,6 +265,7 @@ export class RpcPlanModeController {
 			throw new RpcSetModeError("Cannot change mode while a response or compaction is in progress", "session_busy");
 		}
 		this.#cancelAllPending("mode_change");
+		await this.#work;
 		const state = session.getPlanModeState();
 		if (!state?.enabled) {
 			session.setPlanProposalHandler(null);
@@ -258,37 +280,31 @@ export class RpcPlanModeController {
 	 * Leave plan mode all-or-nothing. The pre-plan model is restored first,
 	 * while plan mode still holds; then plan state clears and the pre-plan
 	 * tools return. A failure at either step leaves the session in plan mode
-	 * with the plan tools, the plan model, the proposal handler, and both
-	 * snapshots, so the state `get_state` reports matches the session and a
+	 * with the plan tools, the plan model, the proposal handler, and the entry
+	 * snapshot, so the state `get_state` reports matches the session and a
 	 * retry can still restore the original model and tools.
 	 */
 	async #leavePlanMode(state: PlanModeState): Promise<void> {
 		const session = this.#session;
-		const planModel = session.model
-			? { model: session.model, thinkingLevel: session.configuredThinkingLevel() }
-			: undefined;
+		const owned = this.#owned;
+		const planModel = this.#liveModel();
 		const planTools = session.getEnabledToolNames();
 		const planMounted = session.getMountedXdevToolNames();
-		const previousModel = this.#previousModel;
-		if (previousModel) await this.#restoreModel(previousModel);
+		if (owned?.model) await this.#restorePrePlanModel(owned.model);
 
-		const previousTools = this.#previousTools;
 		session.setPlanProposalHandler(null);
 		// Plan state clears before the tool partition, mirroring entry: under
 		// Code Mode the direct surface keeps `write` only while plan mode needs it.
 		session.setPlanModeState(undefined);
 		try {
-			if (previousTools) {
-				await session.restoreNonMCPToolPresentation(previousTools.enabled, previousTools.mounted);
-			}
+			if (owned) await session.restoreNonMCPToolPresentation(owned.tools.enabled, owned.tools.mounted);
 		} catch (error) {
 			session.setPlanModeState(state);
 			session.setPlanProposalHandler(this.#proposalHandler);
 			await this.#rollBackToPlan(planModel, planTools, planMounted);
 			throw error;
 		}
-		this.#previousTools = undefined;
-		this.#previousModel = undefined;
+		this.#owned = undefined;
 	}
 
 	/** Best-effort return to the plan model and tools after a failed exit. */
@@ -297,7 +313,7 @@ export class RpcPlanModeController {
 		this.#deferredModelRestore = undefined;
 		if (planModel) {
 			try {
-				await this.#restoreModel(planModel);
+				await this.#switchModel(planModel);
 			} catch (error) {
 				logger.warn("Failed to restore the plan model after a failed plan exit", { error: String(error) });
 			}
@@ -319,15 +335,14 @@ export class RpcPlanModeController {
 		}
 	}
 
-	/** Switch to the `plan` role model, remembering the model to restore on exit. */
-	async #applyPlanModel(): Promise<void> {
+	/** Switch to the `plan` role model; returns the switch to undo on exit, if one resolved. */
+	async #applyPlanModel(): Promise<PlanModelSwitch | undefined> {
 		const session = this.#session;
 		const resolved = session.resolveRoleModelWithThinking("plan");
-		if (!resolved.model) return;
-		const current = session.model;
-		this.#previousModel = current ? { model: current, thinkingLevel: session.configuredThinkingLevel() } : undefined;
+		if (!resolved.model) return undefined;
+		const previous = this.#liveModel();
 		// `set_mode` only enters plan mode between turns, so the switch is never deferred.
-		const transition = resolvePlanModelTransition(current, resolved, false);
+		const transition = resolvePlanModelTransition(session.model, resolved, false);
 		if (transition.kind === "thinking") {
 			session.setThinkingLevel(transition.thinkingLevel);
 		} else if (transition.kind === "apply") {
@@ -341,6 +356,8 @@ export class RpcPlanModeController {
 				);
 			}
 		}
+		const applied = this.#liveModel();
+		return previous && applied ? { previous, applied } : undefined;
 	}
 
 	/**
@@ -349,32 +366,96 @@ export class RpcPlanModeController {
 	 * approval stands.
 	 */
 	async #restoreAfterApproval(): Promise<void> {
-		const tools = this.#previousTools;
-		this.#previousTools = undefined;
-		const model = this.#previousModel;
-		this.#previousModel = undefined;
+		const owned = this.#owned;
+		this.#owned = undefined;
+		if (!owned) return;
 		try {
-			if (tools) await this.#session.restoreNonMCPToolPresentation(tools.enabled, tools.mounted);
+			await this.#session.restoreNonMCPToolPresentation(owned.tools.enabled, owned.tools.mounted);
 		} catch (error) {
 			logger.warn("Failed to restore pre-plan tools after plan approval", { error: String(error) });
 		}
 		try {
-			if (model) await this.#restoreModel(model);
+			if (owned.model) await this.#restorePrePlanModel(owned.model);
 		} catch (error) {
 			logger.warn("Failed to restore the pre-plan model after plan approval", { error: String(error) });
 		}
 	}
 
-	async #restoreModel(previous: PlanPreviousModel): Promise<void> {
+	/**
+	 * A session transition (new, switch, open, branch, handoff, whichever path
+	 * ran it) ends the plan mode `set_mode` entered: the plan belongs to the
+	 * conversation that was left, and the entry snapshot must never be applied
+	 * to another one. Plan state and the proposal handler clear now; the
+	 * pre-plan tools return once the transition settles, and the pre-plan model
+	 * only when the session still runs the plan model (the target session keeps
+	 * the model it loaded).
+	 */
+	#onSessionChanged(): void {
+		const owned = this.#owned;
+		const deferred = this.#deferredModelRestore;
+		if (!owned && !deferred) return;
+		this.#owned = undefined;
+		this.#deferredModelRestore = undefined;
 		const session = this.#session;
-		const restore = resolvePlanModelRestore(session.model, previous, session.isStreaming);
+		if (owned) {
+			this.#cancelAllPending("mode_change");
+			session.setPlanProposalHandler(null);
+			session.setPlanModeState(undefined);
+		}
+		const model = owned?.model ?? deferred;
+		this.#track(async () => {
+			await session.waitForSessionTransition();
+			if (owned) await session.restoreNonMCPToolPresentation(owned.tools.enabled, owned.tools.mounted);
+			if (model) await this.#restorePrePlanModel(model);
+		});
+	}
+
+	#liveModel(): PlanPreviousModel | undefined {
+		const model = this.#session.model;
+		return model ? { model, thinkingLevel: this.#session.configuredThinkingLevel() } : undefined;
+	}
+
+	/**
+	 * Restore the pre-plan model, but only while the session still runs the
+	 * model and thinking level plan mode applied. A model the host chose while
+	 * planning (`set_model`, `cycle_model`, `set_role`, `set_thinking_level`,
+	 * `/model`), or the model a switched-to session loaded, is kept.
+	 */
+	async #restorePrePlanModel(change: PlanModelSwitch): Promise<void> {
+		const live = this.#liveModel();
+		if (
+			!live ||
+			!modelsAreEqual(live.model, change.applied.model) ||
+			live.thinkingLevel !== change.applied.thinkingLevel
+		) {
+			return;
+		}
+		const session = this.#session;
+		const restore = resolvePlanModelRestore(live.model, change.previous, session.isStreaming);
 		if (restore.kind === "thinking") {
 			session.setThinkingLevel(restore.thinkingLevel);
 		} else if (restore.deferred) {
-			this.#deferredModelRestore = previous;
+			this.#deferredModelRestore = change;
 		} else {
 			await session.setModelTemporary(restore.model, restore.thinkingLevel);
 		}
+	}
+
+	/** Move to `target` unconditionally; a mid-turn switch is dropped, since nothing changed yet. */
+	async #switchModel(target: PlanPreviousModel): Promise<void> {
+		const session = this.#session;
+		const restore = resolvePlanModelRestore(session.model, target, session.isStreaming);
+		if (restore.kind === "thinking") {
+			session.setThinkingLevel(restore.thinkingLevel);
+		} else if (!restore.deferred) {
+			await session.setModelTemporary(restore.model, restore.thinkingLevel);
+		}
+	}
+
+	#track(work: () => Promise<void>): void {
+		this.#work = this.#work
+			.then(work)
+			.catch(error => logger.warn("Failed to restore the pre-plan session state", { error: String(error) }));
 	}
 
 	readonly #proposalHandler = (title: string, signal?: AbortSignal): Promise<AgentToolResult<unknown>> =>

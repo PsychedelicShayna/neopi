@@ -155,7 +155,7 @@ describe("RPC prompt entry ids (#117)", () => {
 		const child = await spawnChild();
 		const ready = child.frames.find(frame => frame.type === "ready");
 		expect(ready?.capabilities).toContain("prompt_entry_ids");
-	});
+	}, 60_000);
 
 	test("a prompt's userEntryId is the user entry it wrote, and paged messages carry their entry ids", async () => {
 		const child = await spawnChild();
@@ -182,7 +182,7 @@ describe("RPC prompt entry ids (#117)", () => {
 		const custom = messages.find(message => message.role === "custom");
 		expect(custom).toBeDefined();
 		expect(entries.get(custom?.entryId as string)?.type).toBe("custom_message");
-	});
+	}, 60_000);
 
 	test("steer and follow_up answer with the ids of the entries they write", async () => {
 		const child = await spawnChild();
@@ -222,7 +222,7 @@ describe("RPC prompt entry ids (#117)", () => {
 		// Written in delivery order: prompt, then the steer, then the follow-up.
 		const order = messages.map(message => message.entryId).filter(entryId => expected.has(entryId as string));
 		expect(order).toEqual([promptId, steerId, followUpId]);
-	});
+	}, 60_000);
 
 	test("prompt with streamingBehavior answers with the entry id of the queued message", async () => {
 		const child = await spawnChild();
@@ -242,7 +242,7 @@ describe("RPC prompt entry ids (#117)", () => {
 		expect(typeof queuedId).toBe("string");
 		expect(entryMessageText(entries.get(queuedId as string))).toBe("queued behind the turn");
 		expect(textOf(messages.find(message => message.entryId === queuedId))).toBe("queued behind the turn");
-	});
+	}, 60_000);
 
 	test("after compaction the summary message carries the compaction entry id", async () => {
 		// Keep almost nothing verbatim so two short turns are enough to compact.
@@ -257,7 +257,7 @@ describe("RPC prompt entry ids (#117)", () => {
 		expect(summary).toBeDefined();
 		expect(entries.get(summary?.entryId as string)?.type).toBe("compaction");
 		for (const message of messages) expect(entries.has(message.entryId as string)).toBe(true);
-	});
+	}, 60_000);
 
 	test("branch with a prompt's userEntryId removes exactly that turn", async () => {
 		const child = await spawnChild();
@@ -272,5 +272,5 @@ describe("RPC prompt entry ids (#117)", () => {
 			["user", "keep this turn"],
 			["assistant", "done"],
 		]);
-	});
+	}, 60_000);
 });

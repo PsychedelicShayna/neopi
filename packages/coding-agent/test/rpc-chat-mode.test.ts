@@ -143,11 +143,34 @@ describe("RPC set_chat_mode", () => {
 		await first.dispose();
 
 		const resumed = await spawn(["--session", file], root);
-		expect((await state(resumed)).chatMode).toBe("erp");
+		const inChat = await state(resumed);
+		expect(inChat.chatMode).toBe("erp");
+		expect(inChat.tools).toEqual([]);
 		// The restored include set comes back too: switching mode keeps it.
 		expect(data(await resumed.request({ type: "set_chat_mode", mode: "chat" }))).toEqual({
 			mode: "chat",
 			include: "cwd",
 		});
+		// Switching off a session resumed into chat mode brings back the coding tools.
+		data(await resumed.request({ type: "set_chat_mode", mode: "off" }));
+		expect((await state(resumed)).tools.length).toBeGreaterThan(0);
 	}, 60_000);
+
+	it("restores the normal tool selection when a session launched in chat mode switches off", async () => {
+		const coding = await spawn();
+		const codingTools = (await state(coding)).tools;
+		const codingRead = await spawn(["--tools", "read"]);
+		const codingReadTools = (await state(codingRead)).tools;
+
+		const chat = await spawn(["--chat=erp"]);
+		expect((await state(chat)).tools).toEqual([]);
+		data(await chat.request({ type: "set_chat_mode", mode: "off" }));
+		expect((await state(chat)).tools).toEqual(codingTools);
+
+		// `--tools` grants exactly those tools in chat mode and keeps its coding meaning once off.
+		const chatRead = await spawn(["--chat=erp", "--tools", "read"]);
+		expect((await state(chatRead)).tools).toEqual(["read"]);
+		data(await chatRead.request({ type: "set_chat_mode", mode: "off" }));
+		expect((await state(chatRead)).tools).toEqual(codingReadTools);
+	}, 120_000);
 });

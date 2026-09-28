@@ -29,7 +29,7 @@ import * as logger from "@oh-my-pi/pi-utils/logger";
 /** Another live process holds the lifetime lease on this session file. */
 export class SessionInUseError extends Error {
 	readonly sessionFile: string;
-	/** Holder process id; 0 when the holder had not yet recorded itself. */
+	/** Holder process id; 0 when the holder has not recorded itself (not yet, or could not). */
 	readonly pid: number;
 	/** Epoch milliseconds when the holder acquired the lease; 0 when unknown. */
 	readonly since: number;
@@ -50,9 +50,15 @@ export interface SessionLeaseHolder {
 	since: number;
 }
 
-/** A held lease. `release` is idempotent. */
-export interface SessionLease {
+/** A held lease. `release` (or leaving a `using` scope) is idempotent. */
+export interface SessionLease extends Disposable {
 	readonly sessionFile: string;
+	/**
+	 * Another reference to this same held lease. It never touches the OS and
+	 * cannot fail, so a caller can keep a file owned across a transition that
+	 * releases this reference.
+	 */
+	retain(): SessionLease;
 	release(): void;
 }
 
@@ -140,10 +146,17 @@ function writeLeaseRecord(recordPath: string, holder: SessionLeaseHolder): void 
 }
 
 /**
- * Identity of a session file for leasing: its directory's real path plus the
- * basename, so symlinked aliases of one directory share a single lease.
+ * Identity of a session file for leasing: the file's own real path, so every
+ * alias (a symlinked file or a symlinked directory) shares one lease. A file
+ * that does not exist yet uses its directory's real path plus the basename,
+ * which is the real path the file will have once it is created.
  */
 function sessionLeaseKey(resolvedSessionFile: string): string {
+	try {
+		return fs.realpathSync(resolvedSessionFile);
+	} catch {
+		// Missing (or dangling) file: fall back to the directory.
+	}
 	try {
 		return path.join(fs.realpathSync(path.dirname(resolvedSessionFile)), path.basename(resolvedSessionFile));
 	} catch {
@@ -207,6 +220,16 @@ class ProcessSessionLease implements SessionLease {
 		this.#held = held;
 	}
 
+	retain(): SessionLease {
+		if (this.#released) throw new Error(`Cannot retain a released session lease: ${this.sessionFile}`);
+		this.#held.refs++;
+		return new ProcessSessionLease(this.#key, this.sessionFile, this.#held);
+	}
+
+	[Symbol.dispose](): void {
+		this.release();
+	}
+
 	release(): void {
 		if (this.#released) return;
 		this.#released = true;
@@ -254,20 +277,40 @@ export function acquireSessionLease(sessionFile: string): SessionLease {
 }
 
 /**
+ * Linux abstract sockets and Windows named mutexes are not files, so probing
+ * them creates nothing. `flock(2)` platforms lock a sidecar the probe would
+ * create; there a missing sidecar already proves no holder ever gated the file.
+ */
+const GATE_IS_SIDECAR_FILE = process.platform !== "linux" && process.platform !== "win32";
+
+/**
  * Holder of the lease on `sessionFile` when another live process owns it.
  * Returns `undefined` for a free file or one this process holds. Never takes
  * the lease; a free gate is released immediately and nothing is written.
+ *
+ * The gate, not the record, decides: a holder that could not write its
+ * record (read-only or full directory) or has not written it yet still owns
+ * the file, and is reported with `pid: 0` (unknown holder).
  */
 export function inspectSessionLease(sessionFile: string): SessionLeaseHolder | undefined {
 	const key = sessionLeaseKey(path.resolve(sessionFile));
 	if (heldLeases.has(key)) return undefined;
 	const recordPath = sessionLeasePath(key);
-	// Every owner records itself, so a missing record means a free file; this
-	// also keeps listing from creating gate sidecars on `flock(2)` platforms.
-	if (!fs.existsSync(recordPath)) return undefined;
-	const gate = NativeFileLock.tryAcquire(leaseGatePath(recordPath));
+	const gatePath = leaseGatePath(recordPath);
+	if (GATE_IS_SIDECAR_FILE && !fs.existsSync(gatePath)) return undefined;
+	let gate: NativeFileLock;
+	try {
+		gate = NativeFileLock.tryAcquire(gatePath);
+	} catch (err) {
+		// A gate nobody can create is a gate nobody holds.
+		if (isUnwritableFsError(err)) return undefined;
+		throw err;
+	}
 	const held = !gate.acquired;
 	gate.release();
 	if (!held) return undefined;
-	return readLeaseRecord(recordPath);
+	const record = readLeaseRecord(recordPath);
+	// A missing record, or one left by a dead process, names nobody live.
+	if (!record || record.pid === process.pid || !isPidAlive(record.pid)) return { pid: 0, since: 0 };
+	return record;
 }

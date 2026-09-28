@@ -55,7 +55,7 @@ A process that writes a session file holds an exclusive OS-level lease on it fro
   { "type": "startup_error", "code": "session_in_use", "pid": 4242, "sessionFile": "/home/u/.omp/agent/sessions/.../2026-...jsonl" }
   ```
 
-  `pid` is the holder's process id (`0` in the rare case the holder had not recorded itself yet).
+  `pid` is the holder's process id, or `0` when the holder has not recorded itself (it is still starting, or its session directory is read-only or full and the record could not be written). A holder with `pid: 0` still owns the file.
 - **Commands.** `switch_session` (and `branch`) targeting a file another process holds return `success: false` with `code: "session_in_use"`; the current session, including a running turn, is left unchanged. `open_session` skips leased sessions when picking the newest one in `sessionDir`, as `--continue` does.
 - **Flagless launches** create a new file and hold its lease, so a later `--resume` of that file from another process is refused while this process lives.
 - Read-only consumers (`get_subagent_messages`, `export_html`, `npi render`, transcript readers) never take the lease and work on leased files.
@@ -540,20 +540,27 @@ the state changes, a `chat_mode_changed` event with the same `{ mode, include }`
 fields follows; setting the current state again responds without an event.
 
 - Entering chat mode deactivates every tool, as a `--chat` launch without
-  `--tools` does; leaving restores the tool selection saved on entry. Chat mode
+  `--tools` does; leaving restores the tool selection saved on entry, or, for a
+  session launched or resumed in chat mode, the selection a coding launch with
+  the same flags would have. A failed switch changes nothing. Chat mode
   also drops discovered `SYSTEM.md` / `APPEND_SYSTEM.md`, memory instructions,
   the date/cwd reminder, and non-chat extension prompt injection, exactly as
   `--chat` does. Only explicit `--system-prompt` / `--append-system-prompt`
   text carries into chat mode.
+- Chat mode cannot start while plan mode is on: `set_chat_mode` (and `/chat`)
+  fails with `Exit plan mode first.` and no `code`, like the other chat-mode
+  refusals. Leave plan mode with `set_mode { mode: "default" }` first. See
+  [Plan Mode Sub-Protocol](#plan-mode-sub-protocol).
 - The change is journaled on the session, so `--resume` / `--session` restores
   the last mode. `--chat` flags still set the initial mode at launch.
 - Failures: `session_busy` while a turn is streaming; a session launched with
   `--system-prompt-template` rejects every chat mode (same rule as the launch
   flag); unknown modes or include categories fail with a message.
 - A session launched in chat mode never loaded what chat mode skips at launch
-  (coding tools, MCP, LSP, discovered skills, rules, and `SYSTEM.md`). Switching
-  it `off` restores the coding system prompt but not those resources; relaunch
-  without `--chat` for a full coding session.
+  (MCP, LSP, memory, discovered skills, rules, and `SYSTEM.md`). Switching it
+  `off` restores the coding tools and system prompt but not those resources;
+  relaunch without `--chat` for a full coding session.
+
 `mode` is `"plan"` while plan mode is active, whichever path entered it, and `"default"` otherwise. `planMode` is present only in plan mode: `planFilePath` is the plan file the agent drafts, and `workflow` is `"parallel"` or `"iterative"`. See [Plan Mode Sub-Protocol](#plan-mode-sub-protocol).
 
 ### `set_fast_mode` payload
@@ -1142,7 +1149,10 @@ Capability: `set_mode`. It mirrors ACP `session/set_mode`: a host switches the s
 Response data: `{ "mode": "plan" | "default", "planFilePath"?: string }`. `planFilePath` is present only for `plan`.
 
 - `mode: "plan"` enters plan mode like the interactive `/plan`: the session gets a plan-mode state with `planFilePath` (the supplied path, else the path of the plan state being re-entered, else `local://PLAN.md`) and `workflow` (carried over, else `"parallel"`); the built-in `write` tool joins the active tools so the agent can draft the plan and submit it; the session switches to the `plan` model role when one is configured; and a `mode_change` entry is appended to the session. Sending `plan` while already in plan mode only retargets the plan file when `planFilePath` differs.
-- `mode: "default"` leaves plan mode: plan state and the proposal handler are cleared, the pre-plan tools and model are restored, and a `mode_change` entry is appended. If a plan proposal is pending, it is first resolved as `refine` without feedback and cancelled with `reason: "mode_change"` (before `mode_changed`). Sending `default` outside plan mode succeeds without changes. The exit is all-or-nothing: if restoring the pre-plan model or tools fails, the command fails and the session stays in plan mode with the plan tools, the plan model, and its proposal handler, so a retry can complete the exit.
+- `mode: "default"` leaves plan mode: plan state and the proposal handler are cleared, the pre-plan tools return, the pre-plan model and thinking level are restored, and a `mode_change` entry is appended. If a plan proposal is pending, it is first resolved as `refine` without feedback and cancelled with `reason: "mode_change"` (before `mode_changed`). Sending `default` outside plan mode succeeds without changes. The exit is all-or-nothing: if restoring the pre-plan model or tools fails, the command fails and the session stays in plan mode with the plan tools, the plan model, and its proposal handler, so a retry can complete the exit.
+- A model or thinking level the host picks while planning (`set_model`, `cycle_model`, `set_role`, `set_thinking_level`, or `/model`) is kept when plan mode ends. The pre-plan model and thinking level are restored only while the session still runs the exact model and thinking level plan mode switched to. This applies to `set_mode { mode: "default" }`, plan approval, and session transitions.
+- Plan mode and chat mode are mutually exclusive. Chat mode runs without tools, and plan mode adds `write` to draft and propose the plan. `set_mode { mode: "plan" }` fails with `mode_blocked` while chat mode is on, and entering chat mode fails while plan mode is on (see [`set_chat_mode`](#set_chat_mode-payload)). So leaving plan mode never reactivates tools under chat mode.
+- A session transition ends the plan mode `set_mode` entered, whichever path runs it: `new_session`, `switch_session`, `open_session`, `branch`, `handoff`, or the same through a slash command or an extension. The plan belongs to the conversation that was left. A pending proposal resolves as `refine`, plan state and the proposal handler clear, and `mode_changed { mode: "default" }` is written. The pre-plan tools return. The pre-plan model returns only when the session still runs the plan model, as after `new_session` or `branch`. A switched-to session keeps the model it loaded, and the entry snapshot is never applied to it. No `mode_change` entry is appended. The transition's response is written after this cleanup finishes. Send `set_mode { mode: "plan" }` again to plan in the new session.
 - Only `"default"` and `"plan"` are accepted; any other value, or a non-string or empty `planFilePath`, fails without a `code`.
 
 Failures leave the session unchanged and carry a machine-readable `code`:
@@ -1150,7 +1160,7 @@ Failures leave the session unchanged and carry a machine-readable `code`:
 | `code` | When |
 | --- | --- |
 | `plan_disabled` | `mode: "plan"` while the `plan.enabled` setting is `false`. |
-| `mode_blocked` | `mode: "plan"` while goal mode (active or paused) or vibe mode is on. |
+| `mode_blocked` | `mode: "plan"` while goal mode (active or paused), vibe mode, or chat mode is on. |
 | `session_busy` | The session is streaming or compacting. Mode changes apply between turns. `mode: "default"` is exempt while a plan proposal is pending, since the proposing turn is still streaming. |
 
 ### `mode_changed`
@@ -1314,6 +1324,8 @@ Current helper characteristics:
 - Dispatches recognized core `AgentEvent` types to listeners
 - Supports host-owned custom tools via `setCustomTools()` and automatic handling of `host_tool_call` / `host_tool_cancel`
 - Plan mode via `setMode(...)`, `onModeChanged(...)`, `onPlanProposalRequest(...)`, and `respondToPlanProposal(id, decision, feedback?)`
+- Host tool approvals via `setApprovalHandler("host" | "ui")`, `onToolApprovalRequest(...)`, `onToolApprovalCancel(...)`, and `respondToToolApproval(id, decision, reason?)`
+- Provider usage via `getUsage({ provider?, refresh?, redact? })`
 - Wraps common protocol commands including OAuth `getLoginProviders()` / `login(...)`; use raw protocol frames for any surface not wrapped by the helper.
 
 ### Python package

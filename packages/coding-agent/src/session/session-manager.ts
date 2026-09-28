@@ -1832,14 +1832,15 @@ export class SessionManager {
 		try {
 			this.#syncLease();
 		} catch (error) {
-			// A rollback onto a file another process took in the meantime: keep the
-			// restored state usable, but it no longer owns the file.
 			if (!(error instanceof SessionInUseError)) throw error;
-			logger.warn("Restored session is now leased by another process", {
-				sessionFile: this.#sessionFile,
-				pid: error.pid,
-			});
+			// Another process took the restored file while this manager did not
+			// own it. Writing on without the lease would interleave with that
+			// owner, so fail closed: seal every later write and report the loss
+			// through the persistence-failure surface. Callers that must keep the
+			// file across a transition hold it with retainLease() instead.
 			this.#adoptLease(undefined);
+			this.seal();
+			this.#noteDiskFailure(error);
 		}
 		if (this.#sessionFile) this.#rememberBreadcrumb(this.#cwd, this.#sessionFile);
 	}
@@ -2452,6 +2453,17 @@ export class SessionManager {
 	assertSessionNotInUse(sessionPath: string): void {
 		const holder = this.#storage.inspectSessionLease?.(sessionPath);
 		if (holder) throw new SessionInUseError(path.resolve(sessionPath), holder.pid, holder.since);
+	}
+
+	/**
+	 * Keep the current session file owned until the returned reference is
+	 * released, even if this manager switches to another file meanwhile. A
+	 * transition that may roll back (see `AgentSession.switchSession`) holds it
+	 * so another process cannot take the file in the gap. `undefined` when the
+	 * manager holds no lease (in memory, or a backend without leases).
+	 */
+	retainLease(): SessionLease | undefined {
+		return this.#lease?.retain();
 	}
 
 	/**
