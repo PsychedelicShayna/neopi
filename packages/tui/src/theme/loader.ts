@@ -8,7 +8,12 @@ import darkThemeJson from "./dark.json" with { type: "json" };
 import { defaultThemes } from "./defaults";
 import lightThemeJson from "./light.json" with { type: "json" };
 import type { ColorMode, ThemeBg, ThemeColor, ThemeJson } from "./schema";
-import { normalizeSpinnerFramesOverride, type SymbolPreset } from "./symbols";
+import {
+	normalizeSpinnerFramesOverride,
+	type SymbolCyclers,
+	type SymbolPreset,
+	symbolCyclerOverrides,
+} from "./symbols";
 import { Theme } from "./theme-class";
 
 // ============================================================================
@@ -139,6 +144,8 @@ export function loadThemeJsonSync(name: string): ThemeJson {
 export interface CreateThemeOptions {
 	mode?: ColorMode;
 	symbolPresetOverride?: SymbolPreset;
+	/** Temporary brand/effort glyph cyclers (#32); win over theme overrides. */
+	symbolCyclers?: SymbolCyclers;
 	colorBlindMode?: boolean;
 }
 
@@ -146,7 +153,7 @@ export interface CreateThemeOptions {
 const COLORBLIND_ADJUSTMENT = { h: 60, s: 0.71 };
 
 export function createTheme(themeJson: ThemeJson, options: CreateThemeOptions = {}): Theme {
-	const { mode, symbolPresetOverride, colorBlindMode } = options;
+	const { mode, symbolPresetOverride, symbolCyclers, colorBlindMode } = options;
 	const colorMode = mode ?? detectColorMode();
 	const resolvedColors = resolveThemeColors(themeJson.colors, themeJson.vars);
 
@@ -177,7 +184,10 @@ export function createTheme(themeJson: ThemeJson, options: CreateThemeOptions = 
 	}
 	// Extract symbol configuration - settings override takes precedence over theme
 	const symbolPreset: SymbolPreset = symbolPresetOverride ?? themeJson.symbols?.preset ?? "unicode";
-	const symbolOverrides = themeJson.symbols?.overrides ?? {};
+	const symbolOverrides = {
+		...themeJson.symbols?.overrides,
+		...(symbolCyclers ? symbolCyclerOverrides(symbolCyclers) : undefined),
+	};
 	const spinnerFramesOverrides = normalizeSpinnerFramesOverride(themeJson.symbols?.spinnerFrames);
 	return new Theme(fgColors, bgColors, colorMode, symbolPreset, symbolOverrides, spinnerFramesOverrides);
 }

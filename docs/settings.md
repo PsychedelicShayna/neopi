@@ -745,6 +745,8 @@ theme:
   light: light
 symbolPreset: unicode # unicode, nerd, ascii
 colorBlindMode: false
+symbolBrandGlyph: theme # temporary; theme, pi, fae-pi, md-axis-z, diamond
+symbolEffortGlyphs: theme # temporary; theme, poimandres, nerd
 
 statusLine:
   preset: default # default, minimal, compact, full, nerd, ascii, custom
@@ -767,6 +769,8 @@ tui:
 | `theme.light`               | string  | `light`          | Theme used on a light terminal background.                                |
 | `symbolPreset`              | enum    | `unicode`        | `unicode`, `nerd`, `ascii`.                                               |
 | `colorBlindMode`            | boolean | `false`          | Use blue instead of green for diff additions.                             |
+| `symbolBrandGlyph`          | enum    | `theme`          | Temporary: `theme`, `pi`, `fae-pi`, `md-axis-z`, `diamond`.               |
+| `symbolEffortGlyphs`        | enum    | `theme`          | Temporary: `theme`, `poimandres`, `nerd` thinking-level glyphs.           |
 | `showHardwareCursor`        | boolean | `true`           | Show the terminal hardware cursor.                                        |
 | `statusLine.preset`         | enum    | `default`        | `default`, `minimal`, `compact`, `full`, `nerd`, `ascii`, `custom`.       |
 | `statusLine.separator`      | enum    | `powerline-thin` | `powerline`, `powerline-thin`, `slash`, `pipe`, `block`, `none`, `ascii`. |

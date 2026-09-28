@@ -93,6 +93,8 @@ Runtime precedence:
 2. theme JSON `symbols.preset`
 3. fallback `"unicode"`
 
+The temporary settings `symbolBrandGlyph` (`icon.omp`) and `symbolEffortGlyphs` (`thinking.*`) override the theme's `symbols.overrides` for their keys when not `theme`. Named glyph sets will replace them.
+
 Invalid override keys are ignored and logged (`logger.debug`).
 
 #### Box-drawing borders

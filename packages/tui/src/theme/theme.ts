@@ -8,12 +8,14 @@ import * as logger from "@oh-my-pi/pi-utils/logger";
 import { ansi256ToHex, resolveThemeColors, resolveVarRefs } from "./color";
 import { type CreateThemeOptions, getBuiltinThemes, loadTheme, loadThemeJson, loadThemeSync } from "./loader";
 import type { ThemeColor, ThemeJson } from "./schema";
-import type { SymbolPreset } from "./symbols";
+import type { BrandGlyphChoice, EffortGlyphChoice, SymbolCyclers, SymbolPreset } from "./symbols";
 import type { Theme } from "./theme-class";
 
 export { getAvailableThemes, getAvailableThemesWithPaths, getThemeByName, type ThemeInfo } from "./loader";
 export { isValidThemeColor, type ThemeBg, type ThemeColor } from "./schema";
 export {
+	type BrandGlyphChoice,
+	type EffortGlyphChoice,
 	getAvailableSymbolPresets,
 	isValidSymbolPreset,
 	type SpinnerType,
@@ -119,6 +121,7 @@ export interface ThemeChangeEvent {
 }
 
 var currentSymbolPresetOverride: SymbolPreset | undefined;
+var currentSymbolCyclers: SymbolCyclers = { brand: "theme", effort: "theme" };
 var currentColorBlindMode: boolean = false;
 var themeWatcher: fs.FSWatcher | undefined;
 var themeReloadTimer: NodeJS.Timeout | undefined;
@@ -133,6 +136,7 @@ let themeEpoch = 0;
 function getCurrentThemeOptions(): CreateThemeOptions {
 	return {
 		symbolPresetOverride: currentSymbolPresetOverride,
+		symbolCyclers: currentSymbolCyclers,
 		colorBlindMode: currentColorBlindMode,
 	};
 }
@@ -160,10 +164,7 @@ export function initThemeSync(
 	lightTheme?: string,
 ): void {
 	const name = configureTheme(symbolPreset, colorBlindMode, darkTheme, lightTheme);
-	const options: CreateThemeOptions = {
-		symbolPresetOverride: currentSymbolPresetOverride,
-		colorBlindMode: currentColorBlindMode,
-	};
+	const options = getCurrentThemeOptions();
 	try {
 		assignTheme(loadThemeSync(name, options));
 	} catch (error) {
@@ -322,6 +323,37 @@ export async function setSymbolPreset(preset: SymbolPreset): Promise<void> {
 	} catch {
 		if (requestId !== themeLoadRequestId) return;
 		// Fall back to dark theme with new preset
+		assignTheme(await loadTheme("dark", getCurrentThemeOptions()));
+		if (requestId !== themeLoadRequestId) return;
+	}
+	notifyThemeChange({ ephemeral: true });
+}
+
+/**
+ * Set the temporary brand-glyph cycler (#32), recreating the theme. Superseded by glyph sets (#37).
+ */
+export function setBrandGlyph(choice: BrandGlyphChoice): Promise<void> {
+	currentSymbolCyclers = { ...currentSymbolCyclers, brand: choice };
+	return reloadCurrentTheme();
+}
+
+/**
+ * Set the temporary effort-glyph cycler (#32), recreating the theme. Superseded by glyph sets (#37).
+ */
+export function setEffortGlyphs(choice: EffortGlyphChoice): Promise<void> {
+	currentSymbolCyclers = { ...currentSymbolCyclers, effort: choice };
+	return reloadCurrentTheme();
+}
+
+async function reloadCurrentTheme(): Promise<void> {
+	if (!currentThemeName) return;
+	const requestId = ++themeLoadRequestId;
+	try {
+		const loadedTheme = await loadTheme(currentThemeName, getCurrentThemeOptions());
+		if (requestId !== themeLoadRequestId) return;
+		assignTheme(loadedTheme);
+	} catch {
+		if (requestId !== themeLoadRequestId) return;
 		assignTheme(await loadTheme("dark", getCurrentThemeOptions()));
 		if (requestId !== themeLoadRequestId) return;
 	}
