@@ -52,12 +52,16 @@ gh api "repos/$REPO/issues/$PR/comments?per_page=100" --jq '
   | [scan("\\*\\*(Code|Security) Review\\*\\* \\| [^*]*\\*\\*([A-Za-z ]+)\\*\\*[^|]*\\| `([0-9a-f]+)`")]
   | map({pass: .[0], status: .[1], commit: .[2]})'
 
-# Unresolved review threads, with the fields used for triage
-gh api graphql -F owner=$OWNER -F name=$NAME -F pr=$PR -f query='
-  query($owner:String!,$name:String!,$pr:Int!){repository(owner:$owner,name:$name){
-    pullRequest(number:$pr){reviewThreads(first:100){nodes{
-      id isResolved isOutdated path line
-      comments(first:50){nodes{databaseId author{login} createdAt body}}}}}}}' --jq '
+# Unresolved review threads, with the fields used for triage. --paginate
+# follows the first pageInfo in the response, so reviewThreads' pageInfo
+# must come before its nodes. --jq runs once per page.
+gh api graphql --paginate -F owner=$OWNER -F name=$NAME -F pr=$PR -f query='
+  query($owner:String!,$name:String!,$pr:Int!,$endCursor:String){
+    repository(owner:$owner,name:$name){pullRequest(number:$pr){
+      reviewThreads(first:100,after:$endCursor){
+        pageInfo{hasNextPage endCursor}
+        nodes{id isResolved isOutdated path line
+          comments(first:100){nodes{databaseId author{login} createdAt body}}}}}}}' --jq '
   .data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved | not)
   | .comments.nodes as $c
   | {thread: .id, comment: $c[0].databaseId, author: $c[0].author.login,
