@@ -26,14 +26,15 @@ Behavior notes:
 - RPC mode disables automatic session title generation by default to avoid an extra model call.
 - RPC/ACP host defaults cover task isolation/execution, memory, advisor, tier, async-job, and bash auto-background settings. They are applied only when a path is not explicitly configured; project/global config, `--config`, and isolated settings remain authoritative. Todo settings are not host-defaulted.
 - The process claims stdin before extension discovery, then parses it one non-empty JSONL line at a time. Malformed JSON emits a recoverable `command: "parse"` failure and does not terminate the loop.
-- At startup it writes a `ready` frame, then starts reading stdin while extensions initialize. Control frames (`extension_ui_response`, `host_tool_result`, `host_tool_update`, `host_uri_result`) are dispatched on arrival, so an extension that asks a dialog question during `session_start` receives the host's answer. Commands, `bash` included, are queued and processed in arrival order once initialization completes. Hosts that send no startup dialog answers observe no change in frame order.
-- When stdin closes, pending extension UI, host-tool, and host-URI requests are rejected; accepted commands are drained, the session is disposed, pending stdout is delivered, and the process exits with code `0`.
+- At startup it writes a `ready` frame, then starts reading stdin while extensions initialize. Control frames (`extension_ui_response`, `host_tool_result`, `host_tool_update`, `host_uri_result`, `plan_proposal_response`) are dispatched on arrival, so an extension that asks a dialog question during `session_start` receives the host's answer. Commands, `bash` included, are queued and processed in arrival order once initialization completes. Hosts that send no startup dialog answers observe no change in frame order.
+- When stdin closes, pending extension UI, host-tool, and host-URI requests are rejected and a pending plan proposal resolves as `refine`; accepted commands are drained, the session is disposed, pending stdout is delivered, and the process exits with code `0`.
 - Responses/events are written as one JSON object per line.
 
 ### Capabilities
 
 | String | Feature |
 | --- | --- |
+| `set_mode` | `set_mode` command, `get_state` `mode`/`planMode`, `mode_changed` event, and the `plan_proposal_request`/`plan_proposal_response` round trip. See [Plan Mode Sub-Protocol](#plan-mode-sub-protocol). |
 
 ## Transport and Framing
 
@@ -95,6 +96,7 @@ Clients MUST continue reading stdout after closing stdin. Normal EOF and extensi
 10. Session quiescence (`{ type: "session_settled" }`); see [Yield vs settled](#yield-vs-settled)
 11. Subagent frames (`subagent_lifecycle`, `subagent_progress`, `subagent_event`), gated by `set_subagent_subscription`
 12. Builtin slash-command side channels (`command_output`, `session_info_update`, `config_update`)
+13. Plan mode frames (`mode_changed`, `plan_proposal_request`); see [Plan Mode Sub-Protocol](#plan-mode-sub-protocol)
 
 ### Inbound frame categories (stdin)
 
@@ -102,6 +104,7 @@ Clients MUST continue reading stdout after closing stdin. Normal EOF and extensi
 2. `RpcExtensionUIResponse` (`{ type: "extension_ui_response", ... }`)
 3. Host tool updates/results (`host_tool_update`, `host_tool_result`)
 4. Host URI results (`host_uri_result`)
+5. Plan proposal decisions (`plan_proposal_response`)
 
 ## Request/Response Correlation
 
@@ -139,6 +142,7 @@ Important edge behavior from runtime:
 
 - `{ id?, type: "get_state" }`
 - `{ id?, type: "set_fast_mode", enabled: boolean }`
+- `{ id?, type: "set_mode", mode: "default" | "plan", planFilePath?: string }`
 - `{ id?, type: "get_available_commands" }`
 - `{ id?, type: "get_entries", since?: string }`
 - `{ id?, type: "get_tree" }`
@@ -337,9 +341,16 @@ is re-armed.
     "tokens": 1100,
     "contextWindow": 200000,
     "percent": 0.55
+  },
+  "mode": "plan",
+  "planMode": {
+    "planFilePath": "local://PLAN.md",
+    "workflow": "parallel"
   }
 }
 ```
+
+`mode` is `"plan"` while plan mode is active, whichever path entered it, and `"default"` otherwise. `planMode` is present only in plan mode: `planFilePath` is the plan file the agent drafts, and `workflow` is `"parallel"` or `"iterative"`. See [Plan Mode Sub-Protocol](#plan-mode-sub-protocol).
 
 ### `set_fast_mode` payload
 
@@ -551,7 +562,7 @@ Extension runner errors are emitted separately as:
 
 `message_start`, `message_update`, and `message_end` carry a `messageId` string assigned by RPC mode. One message keeps the same id from its start through every update to its end; ids are unique within the process. Records injected mid-stream (advisor cards, IRC messages) get their own id and do not disturb the id of the reply streaming around them.
 
-`set_event_filter` restricts which session event frames are written: pass the event `type` strings to forward, or `null` to forward everything (the default). The response echoes the active selection as `{ events }`. The filter applies only to the session events listed above; every other outbound category (responses, `prompt_result`, `session_settled`, extension UI and host tool/URI requests, `extension_error`, `available_commands_update`, subagent frames, builtin slash-command side channels, and session-persistence `notice` frames) is always written. Hosts that fail closed on unknown event kinds can pin the set they understand here instead of breaking when OMP adds an event.
+`set_event_filter` restricts which session event frames are written: pass the event `type` strings to forward, or `null` to forward everything (the default). The response echoes the active selection as `{ events }`. The filter applies only to the session events listed above; every other outbound category (responses, `prompt_result`, `session_settled`, extension UI and host tool/URI requests, plan mode frames, `extension_error`, `available_commands_update`, subagent frames, builtin slash-command side channels, and session-persistence `notice` frames) is always written. Hosts that fail closed on unknown event kinds can pin the set they understand here instead of breaking when OMP adds an event.
 
 `agent_end` has this session-level shape (in addition to optional telemetry fields):
 
@@ -857,6 +868,66 @@ a message or fall back to `content` for textual error surfacing:
   `"application/json"`. A result-level `immutable` overrides the registered
   scheme's value for that read.
 
+## Plan Mode Sub-Protocol
+
+Capability: `set_mode`. It mirrors ACP `session/set_mode`: a host switches the session between `default` and `plan` mode, observes every mode change, and approves or refines the plan the agent proposes.
+
+### `set_mode`
+
+```json
+{ "id": "m1", "type": "set_mode", "mode": "plan", "planFilePath": "local://auth-plan.md" }
+```
+
+Response data: `{ "mode": "plan" | "default", "planFilePath"?: string }`. `planFilePath` is present only for `plan`.
+
+- `mode: "plan"` enters plan mode like the interactive `/plan`: the session gets a plan-mode state with `planFilePath` (the supplied path, else the path of the plan state being re-entered, else `local://PLAN.md`) and `workflow` (carried over, else `"parallel"`); the built-in `write` tool joins the active tools so the agent can draft the plan and submit it; the session switches to the `plan` model role when one is configured; and a `mode_change` entry is appended to the session. Sending `plan` while already in plan mode only retargets the plan file when `planFilePath` differs.
+- `mode: "default"` leaves plan mode: plan state and the proposal handler are cleared, the pre-plan tools and model are restored, and a `mode_change` entry is appended. If a plan proposal is pending, it is first resolved as `refine` without feedback. Sending `default` outside plan mode succeeds without changes.
+- Only `"default"` and `"plan"` are accepted; any other value, or a non-string or empty `planFilePath`, fails without a `code`.
+
+Failures leave the session unchanged and carry a machine-readable `code`:
+
+| `code` | When |
+| --- | --- |
+| `plan_disabled` | `mode: "plan"` while the `plan.enabled` setting is `false`. |
+| `mode_blocked` | `mode: "plan"` while goal mode (active or paused) or vibe mode is on. |
+| `session_busy` | The session is streaming or compacting. Mode changes apply between turns. `mode: "default"` is exempt while a plan proposal is pending, since the proposing turn is still streaming. |
+
+### `mode_changed`
+
+```json
+{ "type": "mode_changed", "mode": "plan", "planFilePath": "local://PLAN.md" }
+```
+
+Written whenever the session mode or the active plan file changes, whichever path caused it: `set_mode`, plan approval clearing plan mode, a refinement that retargets the plan file, or plan mode entered by other means (for example `--plan-yolo`). `planFilePath` is present only for `plan`. A `set_mode` that changes the mode writes `mode_changed` before its response. The frame is not a session event, so `set_event_filter` does not suppress it.
+
+### Plan proposal round trip
+
+After `set_mode { mode: "plan" }`, the agent submits its finished plan by writing the plan title to `xd://propose`. RPC mode validates the plan file and asks the host:
+
+```json
+{
+  "type": "plan_proposal_request",
+  "id": "7342",
+  "title": "auth-refactor",
+  "planFilePath": "local://auth-refactor-plan.md",
+  "planMarkdown": "# Auth refactor\n\n1. ..."
+}
+```
+
+The host answers on stdin. The answer is a control frame: it is dispatched on arrival, not queued behind commands, because the proposing turn is waiting on it.
+
+```json
+{ "type": "plan_proposal_response", "id": "7342", "decision": "approve" }
+{ "type": "plan_proposal_response", "id": "7342", "decision": "refine", "feedback": "Split step 2 into tests first." }
+```
+
+- `approve`: the approved file becomes the plan reference for the next turn, plan mode is cleared (`mode_changed { mode: "default" }`), the pre-plan tools and model are restored (a model switch waits for the turn to end), the plan is autosaved when `plan.autosave` is on, and the agent is told to proceed with the implementation.
+- `refine`: plan mode stays on, the reviewed file becomes the plan-mode target, and the agent is asked to revise and resubmit. Non-empty `feedback` is appended to that tool result under `Reviewer feedback:`, so the agent sees the note.
+- Any `decision` other than `approve` counts as `refine`. A proposal the host never answers resolves as `refine` without feedback when the turn is aborted (`abort`, `abort_and_prompt`), when `set_mode { mode: "default" }` arrives, or when stdin closes; it never resolves as `approve`. No further frame is written for a proposal resolved this way; hosts should dismiss an open approval prompt on the turn's `agent_end`. There is no proposal timeout.
+- Responses with an unknown or already-resolved `id` are ignored.
+
+A host that never sends `set_mode` keeps the previous behavior in both `--mode rpc` and `--mode rpc-ui`: no proposal handler is installed, so an `xd://propose` write fails with "No plan is awaiting approval", and no tools or models change.
+
 ## Error Model and Recoverability
 
 ### Command-level failures
@@ -879,6 +950,7 @@ Failures are `success: false` with string `error`.
 - Malformed JSONL / parse-loop exceptions emit a `parse` error response and continue reading subsequent lines.
 - Empty `set_session_name` is rejected (`Session name cannot be empty`).
 - Extension UI responses with unknown `id` are ignored.
+- Plan proposal responses with unknown `id` are ignored.
 - Process termination conditions are stdin close or explicit extension-triggered shutdown after the current command.
 
 ## Compact Command Flows
