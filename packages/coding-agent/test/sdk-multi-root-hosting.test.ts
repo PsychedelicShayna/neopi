@@ -17,6 +17,7 @@ import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { WorkPoolRegistry } from "@oh-my-pi/pi-coding-agent/task/workpool";
 import { TASK_SUBAGENT_LIFECYCLE_CHANNEL } from "@oh-my-pi/pi-coding-agent/task/types";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { createAssistantMessage, createInMemoryAuthStorage } from "./helpers/agent-session-setup";
@@ -167,7 +168,10 @@ describe("two simultaneous top-level roots (issue #121)", () => {
 		tempDir.removeSync();
 	});
 
-	async function createRoot(agentId: string | undefined, options: { sessionFile?: string } = {}): Promise<Root> {
+	async function createRoot(
+		agentId: string | undefined,
+		options: { sessionFile?: string; settings?: Record<string, unknown> } = {},
+	): Promise<Root> {
 		const label = agentId ?? MAIN_AGENT_ID;
 		const cwd = tempDir.join(`ws-${label}`);
 		fs.mkdirSync(cwd, { recursive: true });
@@ -189,6 +193,7 @@ describe("two simultaneous top-level roots (issue #121)", () => {
 				"task.isolation.mode": "none",
 				"task.enableLsp": false,
 				modelRoles: { default: `${PROVIDER}/${MODEL_ID}` },
+				...options.settings,
 			}),
 			disableExtensionDiscovery: true,
 			skills: [],
@@ -452,6 +457,177 @@ describe("two simultaneous top-level roots (issue #121)", () => {
 		expect(JSON.stringify(again.content)).toContain("pool");
 	}, 60000);
 
+	it("cancelRootWork preserves post-snapshot work in new and existing pools and agents", async () => {
+		const a = await createRoot("DeckA", { settings: { "task.maxConcurrency": 1 } });
+		const registry = AgentRegistry.global();
+		const lifecycle = AgentLifecycleManager.global();
+		await a.session.getToolByName("eval")!.execute("eval-old-pool", {
+			language: "js",
+			code: 'return (await workpool("task", { name: "old-pool" })).name;',
+		});
+		const oldPool = WorkPoolRegistry.global().get("DeckA", "old-pool");
+		expect(oldPool).toBeDefined();
+		await a.session.getToolByName("eval")!.execute("eval-reused-pool", {
+			language: "js",
+			code: 'return (await workpool("task", { name: "reused-pool" })).name;',
+		});
+		const reusedPool = WorkPoolRegistry.global().get("DeckA", "reused-pool");
+		expect(reusedPool).toBeDefined();
+		const oldAgent = registry.register({
+			id: "DeckA.Old",
+			displayName: "task",
+			kind: "sub",
+			parentId: "DeckA",
+			session: { dispose: async () => {} } as unknown as AgentSession,
+		});
+		registry.setStatus(oldAgent.id, "idle", oldAgent);
+		expect(lifecycle.adopt(oldAgent.id, { idleTtlMs: 0 }, oldAgent)).toBe(true);
+		const reusedAgent = registry.register({
+			id: "DeckA.Reused",
+			displayName: "task",
+			kind: "sub",
+			parentId: "DeckA",
+			session: { dispose: async () => {} } as unknown as AgentSession,
+		});
+		registry.setStatus(reusedAgent.id, "idle", reusedAgent);
+		expect(lifecycle.adopt(reusedAgent.id, { idleTtlMs: 0 }, reusedAgent)).toBe(true);
+
+		const abortObserved = Promise.withResolvers<void>();
+		const finishOldJob = Promise.withResolvers<void>();
+		a.session.asyncJobManager!.register(
+			"task",
+			"old job",
+			async ({ signal }) => {
+				signal.addEventListener("abort", () => abortObserved.resolve(), { once: true });
+				await finishOldJob.promise;
+				return "done";
+			},
+			{ id: "old-job", ownerId: "DeckA" },
+		);
+
+		const cancellation = a.session.cancelRootWork({ timeoutMs: 5_000 });
+		await abortObserved.promise;
+		expect(registry.setStatus(reusedAgent.id, "running", reusedAgent)).toBe(true);
+		a.session.asyncJobManager!.register(
+			"task",
+			"reused agent turn",
+			async ({ signal }) => {
+				const aborted = Promise.withResolvers<void>();
+				signal.addEventListener("abort", () => aborted.resolve(), { once: true });
+				await Promise.race([gate("reused-agent").promise, aborted.promise]);
+				return signal.aborted ? "aborted" : "done";
+			},
+			{ id: "reused-agent-turn", agentId: reusedAgent.id, ownerId: "DeckA" },
+		);
+
+		await a.session.getToolByName("eval")!.execute("eval-new-pool", {
+			language: "js",
+			code: 'return (await workpool("task", { name: "new-pool" })).name;',
+		});
+		const newPool = WorkPoolRegistry.global().get("DeckA", "new-pool");
+		expect(newPool).toBeDefined();
+		newPool!.push(["HOLD:new", "queued item"]);
+		for (let i = 0; i < 200 && newPool!.status().items.running === 0; i++) await Bun.sleep(5);
+		expect(newPool!.status().items).toMatchObject({ running: 1, queued: 1 });
+		reusedPool!.push(["HOLD:reused", "queued reused item"]);
+		for (let i = 0; i < 200 && reusedPool!.status().items.running === 0; i++) await Bun.sleep(5);
+		expect(reusedPool!.status().items).toMatchObject({ running: 1, queued: 1 });
+		const newAgent = registry.register({
+			id: "DeckA.New",
+			displayName: "task",
+			kind: "sub",
+			parentId: "DeckA",
+			session: { dispose: async () => {} } as unknown as AgentSession,
+		});
+		registry.setStatus(newAgent.id, "idle", newAgent);
+		expect(lifecycle.adopt(newAgent.id, { idleTtlMs: 0 }, newAgent)).toBe(true);
+
+		finishOldJob.resolve();
+		expect(await cancellation).toEqual({ settled: true, pendingJobIds: [] });
+
+		expect(WorkPoolRegistry.global().get("DeckA", "old-pool")).toBeUndefined();
+		expect(oldPool!.closed).toBe(true);
+		expect(registry.get(oldAgent.id)).toBeUndefined();
+		expect(WorkPoolRegistry.global().get("DeckA", "new-pool")).toBe(newPool);
+		expect(newPool!.closed).toBe(false);
+		expect(newPool!.status().items).toMatchObject({ running: 1, queued: 1, cancelled: 0 });
+		expect(a.session.asyncJobManager!.getJob("new-pool")?.status).toBe("running");
+		expect(WorkPoolRegistry.global().get("DeckA", "reused-pool")).toBe(reusedPool);
+		expect(reusedPool!.closed).toBe(false);
+		expect(reusedPool!.status().items).toMatchObject({ running: 1, queued: 1, cancelled: 0 });
+		expect(a.session.asyncJobManager!.getJob("reused-pool")?.status).toBe("running");
+		expect(registry.get(newAgent.id)).toBe(newAgent);
+		expect(lifecycle.has(newAgent.id)).toBe(true);
+		expect(registry.get(reusedAgent.id)).toBe(reusedAgent);
+		expect(reusedAgent.status).toBe("running");
+		expect(lifecycle.has(reusedAgent.id)).toBe(true);
+		expect(a.session.asyncJobManager!.getJob("reused-agent-turn")?.status).toBe("running");
+	}, 60000);
+
+	it("cancelRootWork releases an adopted descendant after its intermediate parent disappears", async () => {
+		const a = await createRoot("DeckA");
+		const registry = AgentRegistry.global();
+		const lifecycle = AgentLifecycleManager.global();
+		const root = registry.get("DeckA")!;
+		const parent = registry.register({
+			id: "DeckA.Parent",
+			displayName: "task",
+			kind: "sub",
+			parentId: "DeckA",
+			session: { dispose: async () => {} } as unknown as AgentSession,
+		});
+		const nested = registry.register({
+			id: "DeckA.Parent.Nested",
+			displayName: "task",
+			kind: "sub",
+			parentId: parent.id,
+			session: { dispose: async () => {} } as unknown as AgentSession,
+		});
+		registry.setStatus(nested.id, "idle", nested);
+		expect(lifecycle.adopt(nested.id, { idleTtlMs: 0, root }, nested)).toBe(true);
+		expect(registry.unregister(parent.id, parent)).toBe(true);
+		expect(registry.rootOf(nested.id)).toBeUndefined();
+
+		expect(await a.session.cancelRootWork({ timeoutMs: 5_000 })).toEqual({
+			settled: true,
+			pendingJobIds: [],
+		});
+
+		expect(registry.get(nested.id)).toBeUndefined();
+		expect(lifecycle.has(nested.id)).toBe(false);
+	}, 60000);
+
+	it("guarded cancellation release preserves a child woken while its park is cancelled", async () => {
+		await createRoot("DeckA");
+		const registry = AgentRegistry.global();
+		const lifecycle = AgentLifecycleManager.global();
+		const root = registry.get("DeckA")!;
+		const child = registry.register({
+			id: "DeckA.ParkWake",
+			displayName: "task",
+			kind: "sub",
+			parentId: root.id,
+			session: { dispose: async () => {} } as unknown as AgentSession,
+		});
+		registry.setStatus(child.id, "idle", child);
+		expect(lifecycle.adopt(child.id, { idleTtlMs: 0, root }, child)).toBe(true);
+		const cancelledGeneration = registry.runGeneration(child);
+
+		const parking = lifecycle.park(child.id);
+		const releasing = lifecycle.release(child.id, child, {
+			expectedRunGeneration: cancelledGeneration,
+		});
+		// release() cancels the in-flight park, then awaits its promise. A wake
+		// accepted in that gap reuses the same ref but begins a new run.
+		expect(registry.setStatus(child.id, "running", child)).toBe(true);
+		await parking;
+
+		expect(await releasing).toBe(false);
+		expect(registry.get(child.id)).toBe(child);
+		expect(child.status).toBe("running");
+		expect(lifecycle.has(child.id)).toBe(true);
+	}, 60000);
+
 	it("cancelRootWork releases a child whose job settles after the deadline", async () => {
 		const a = await createRoot("DeckA");
 		const registry = AgentRegistry.global();
@@ -485,6 +661,56 @@ describe("two simultaneous top-level roots (issue #121)", () => {
 		for (let i = 0; i < 200 && registry.get("DeckA.Late"); i++) await Bun.sleep(10);
 		expect(registry.get("DeckA.Late")).toBeUndefined();
 		expect(AgentLifecycleManager.global().has("DeckA.Late")).toBe(false);
+	}, 60000);
+
+	it("cancelRootWork preserves a snapshotted child reused during late reap completion", async () => {
+		const a = await createRoot("DeckA");
+		const registry = AgentRegistry.global();
+		const lifecycle = AgentLifecycleManager.global();
+		const reused = registry.register({
+			id: "DeckA.ReusedLate",
+			displayName: "task",
+			kind: "sub",
+			parentId: "DeckA",
+			session: { dispose: async () => {} } as unknown as AgentSession,
+		});
+		const finishOldJob = Promise.withResolvers<void>();
+		a.session.asyncJobManager!.register(
+			"task",
+			"late old turn",
+			async () => {
+				await finishOldJob.promise;
+				return "old done";
+			},
+			{ id: "late-old-turn", agentId: reused.id, ownerId: "DeckA" },
+		);
+
+		const result = await a.session.cancelRootWork({ timeoutMs: 20 });
+		expect(result).toEqual({ settled: false, pendingJobIds: ["late-old-turn"] });
+
+		expect(registry.setStatus(reused.id, "idle", reused)).toBe(true);
+		expect(lifecycle.adopt(reused.id, { idleTtlMs: 0 }, reused)).toBe(true);
+		expect(registry.setStatus(reused.id, "running", reused)).toBe(true);
+		a.session.asyncJobManager!.register(
+			"task",
+			"new turn",
+			async ({ signal }) => {
+				const aborted = Promise.withResolvers<void>();
+				signal.addEventListener("abort", () => aborted.resolve(), { once: true });
+				await Promise.race([gate("late-reused-agent").promise, aborted.promise]);
+				return signal.aborted ? "aborted" : "new done";
+			},
+			{ id: "late-new-turn", agentId: reused.id, ownerId: "DeckA" },
+		);
+
+		finishOldJob.resolve();
+		await a.session.asyncJobManager!.getJob("late-old-turn")!.promise;
+		await Bun.sleep(10);
+
+		expect(registry.get(reused.id)).toBe(reused);
+		expect(reused.status).toBe("running");
+		expect(lifecycle.has(reused.id)).toBe(true);
+		expect(a.session.asyncJobManager!.getJob("late-new-turn")?.status).toBe("running");
 	}, 60000);
 
 	it("cancelRootWork releases a running workpool batch instead of tombstoning it", async () => {

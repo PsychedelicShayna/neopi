@@ -152,6 +152,8 @@ export class AgentRegistry {
 	}
 
 	readonly #refs = new Map<string, AgentRef>();
+	/** Run epoch keyed by ref identity; incremented whenever an existing ref starts another turn. */
+	readonly #runGenerations = new WeakMap<AgentRef, number>();
 	readonly #listeners = new Set<RegistryListener>();
 
 	#matchesExpected(ref: AgentRef, expected?: AgentRefExpectation): boolean {
@@ -180,6 +182,7 @@ export class AgentRegistry {
 			lifecycle: input.lifecycle,
 		};
 		this.#refs.set(ref.id, ref);
+		this.#runGenerations.set(ref, 0);
 		this.#emit({ type: "registered", ref });
 		return ref;
 	}
@@ -208,6 +211,11 @@ export class AgentRegistry {
 		return true;
 	}
 
+	/** Current run epoch for an exact ref, or -1 when the ref was never registered here. */
+	runGeneration(ref: AgentRef): number {
+		return this.#runGenerations.get(ref) ?? -1;
+	}
+
 	setStatus(id: string, status: AgentStatus, expected?: AgentRefExpectation): boolean {
 		const ref = this.#refs.get(id);
 		if (!ref) return this.#rejectStatusUpdate(id, status, "missing-ref");
@@ -226,6 +234,9 @@ export class AgentRegistry {
 		// leaves `running`, so drop it to avoid showing stale work in rosters.
 		if (status !== "running") ref.activity = undefined;
 		ref.lastActivity = Date.now();
+		if (status === "running") {
+			this.#runGenerations.set(ref, this.runGeneration(ref) + 1);
+		}
 		if (status === "running") {
 			// Milestones are run-scoped. A ref reused by a follow-up or wake
 			// turn must not carry the previous run's response/acceptance into

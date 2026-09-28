@@ -1010,3 +1010,54 @@ describe("AsyncJobManager", () => {
 		expect(manager.getJob("hung-1")?.status).toBe("cancelled");
 	});
 });
+
+describe("cancelAndReapJobs scope", () => {
+	function gatedJob(manager: AsyncJobManager, id: string, options: { honorAbort: boolean }) {
+		const release = Promise.withResolvers<void>();
+		manager.register(
+			"task",
+			id,
+			async ({ signal }) => {
+				const aborted = Promise.withResolvers<void>();
+				if (options.honorAbort) signal.addEventListener("abort", () => aborted.resolve(), { once: true });
+				await Promise.race([release.promise, aborted.promise]);
+				return id;
+			},
+			{ id, ownerId: "Root" },
+		);
+		return release;
+	}
+
+	test("settles on the cancelled jobs alone, ignoring work registered after cancellation began", async () => {
+		const manager = new AsyncJobManager({});
+		gatedJob(manager, "cancelled-job", { honorAbort: true });
+		const reap = manager.cancelAndReapJobs(undefined, Date.now() + 200);
+		// The root's own turn keeps working and launches a job mid-reap.
+		const releaseNew = gatedJob(manager, "new-job", { honorAbort: false });
+
+		const result = await reap;
+		expect(result.settled).toBe(true);
+		expect(result.pendingJobIds).toEqual([]);
+		expect(manager.getJob("new-job")?.status).toBe("running");
+		releaseNew.resolve();
+		await manager.dispose({ timeoutMs: 1_000 });
+	});
+
+	test("reports and completes only the cancelled generation when the deadline passes", async () => {
+		const manager = new AsyncJobManager({});
+		const releaseStuck = gatedJob(manager, "stuck-job", { honorAbort: false });
+		const reap = manager.cancelAndReapJobs(undefined, Date.now() + 30);
+		const releaseNew = gatedJob(manager, "new-job", { honorAbort: false });
+
+		const result = await reap;
+		expect(result.settled).toBe(false);
+		expect(result.pendingJobIds).toEqual(["stuck-job"]);
+		releaseStuck.resolve();
+		// Completion follows the cancelled job only; the new job is still running.
+		const completed = await Promise.race([result.completion.then(() => true), Bun.sleep(1_000).then(() => false)]);
+		expect(completed).toBe(true);
+		expect(manager.getJob("new-job")?.status).toBe("running");
+		releaseNew.resolve();
+		await manager.dispose({ timeoutMs: 1_000 });
+	});
+});

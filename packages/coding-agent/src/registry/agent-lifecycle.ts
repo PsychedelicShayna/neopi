@@ -298,6 +298,26 @@ export class AgentLifecycleManager {
 	}
 
 	/**
+	 * Snapshot every descendant generation owned by `root`, including adopted
+	 * descendants whose intermediate registry parent has already disappeared.
+	 * Non-adopted running children are resolved through the live registry tree.
+	 */
+	snapshotRootAgentGenerations(root: AgentRef): Map<AgentRef, number> {
+		const generations = new Map<AgentRef, number>();
+		for (const ref of this.#registry.list()) {
+			if (ref.kind !== "main" && this.#registry.rootOf(ref.id) === root) {
+				generations.set(ref, this.#registry.runGeneration(ref));
+			}
+		}
+		for (const [id, adopted] of this.#adopted) {
+			if ((adopted.root ?? this.#registry.rootOf(id)) === root) {
+				generations.set(adopted.ref, this.#registry.runGeneration(adopted.ref));
+			}
+		}
+		return generations;
+	}
+
+	/**
 	 * True while {@link park} is disposing this agent's session (lets dispose
 	 * hooks distinguish park from teardown). False once the park is cancelled
 	 * by ensureLive or after detach+dispose completes. When `expected` is
@@ -494,7 +514,11 @@ export class AgentLifecycleManager {
 	 * on-disk transcript as a fresh `parked` row. Mirrors
 	 * `finalizeSubagentLifecycle`'s genuine-kill path.
 	 */
-	async release(id: string, expected?: AgentRefExpectation, options?: { tombstone?: boolean }): Promise<boolean> {
+	async release(
+		id: string,
+		expected?: AgentRefExpectation,
+		options?: { tombstone?: boolean; expectedRunGeneration?: number },
+	): Promise<boolean> {
 		const adopted = this.#adopted.get(id);
 		const current = this.#registry.get(id);
 		const currentMatches =
@@ -504,16 +528,31 @@ export class AgentLifecycleManager {
 		const ref = currentMatches ? current : adoptedMatches ? adopted.ref : undefined;
 		const onRelease = adopted && adopted.ref === ref ? adopted.onRelease : undefined;
 		if (!ref) return false;
-		if (adopted?.ref === ref) {
-			clearTimeout(adopted.timer);
-			this.#adopted.delete(id);
+		if (
+			options?.expectedRunGeneration !== undefined &&
+			this.#registry.runGeneration(ref) !== options.expectedRunGeneration
+		) {
+			return false;
 		}
+		if (adopted?.ref === ref) clearTimeout(adopted.timer);
 
 		const park = this.#parks.get(id);
 		if (park && park.ref === ref) {
 			// Prefer cancel when the session is still live so release owns dispose.
 			if (!park.detached) park.cancel();
 			await park.promise;
+		}
+		// A guarded cancellation release may have yielded to an in-flight park.
+		// Revalidate after that await: ensureLive can cancel the park, retain the
+		// same ref, and start a new turn while release is suspended.
+		if (
+			options?.expectedRunGeneration !== undefined &&
+			(this.#registry.get(id) !== ref || this.#registry.runGeneration(ref) !== options.expectedRunGeneration)
+		) {
+			return false;
+		}
+		if (adopted?.ref === ref && this.#adopted.get(id) === adopted) {
+			this.#adopted.delete(id);
 		}
 
 		const live = this.#registry.get(id) === ref ? ref.session : null;
@@ -604,20 +643,38 @@ export class AgentLifecycleManager {
 	 * descendants), waiting at most until `deadlineAt`. The root itself and every
 	 * other root's agents are untouched, and the root may adopt new agents
 	 * afterward. Each release is bound to the adopted generation, so a same-id
-	 * replacement is never released.
+	 * replacement is never released. When `generations` is provided, agents
+	 * that began another run after that snapshot are left alone.
 	 */
-	async releaseRootAgents(root: AgentRef, deadlineAt: number = Date.now() + AGENT_RELEASE_GRACE_MS): Promise<void> {
+	async releaseRootAgents(
+		root: AgentRef,
+		deadlineAt: number = Date.now() + AGENT_RELEASE_GRACE_MS,
+		generations?: ReadonlyMap<AgentRef, number>,
+	): Promise<void> {
 		const owned = [...this.#adopted]
-			.filter(([id, adopted]) => (adopted.root ?? this.#registry.rootOf(id)) === root)
-			.map(([id, adopted]) => ({ id, expected: adopted.ref }));
+			.filter(
+				([id, adopted]) =>
+					(generations === undefined ||
+						(generations.has(adopted.ref) &&
+							generations.get(adopted.ref) === this.#registry.runGeneration(adopted.ref))) &&
+					(adopted.root ?? this.#registry.rootOf(id)) === root,
+			)
+			.map(([id, adopted]) => ({
+				id,
+				expected: adopted.ref,
+				expectedRunGeneration: generations?.get(adopted.ref),
+			}));
 		await this.#releaseBefore(owned, deadlineAt);
 	}
 
 	/** Release each id, waiting at most until `deadlineAt`; overrunning releases continue as tracked late cleanup. */
-	async #releaseBefore(targets: readonly { id: string; expected?: AgentRef }[], deadlineAt: number): Promise<void> {
+	async #releaseBefore(
+		targets: readonly { id: string; expected?: AgentRef; expectedRunGeneration?: number }[],
+		deadlineAt: number,
+	): Promise<void> {
 		await Promise.all(
-			targets.map(async ({ id, expected }) => {
-				const release = this.release(id, expected).then(() => {});
+			targets.map(async ({ id, expected, expectedRunGeneration }) => {
+				const release = this.release(id, expected, { expectedRunGeneration }).then(() => {});
 				try {
 					await untilAborted(AbortSignal.timeout(Math.max(0, deadlineAt - Date.now())), () => release);
 				} catch (error) {
