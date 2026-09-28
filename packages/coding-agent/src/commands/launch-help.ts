@@ -105,6 +105,10 @@ export const launchHelp = {
 		}),
 		"no-skills": Flags.boolean({ description: "Disable skills discovery and loading" }),
 		skills: Flags.string({ description: "Comma-separated glob patterns to filter skills (e.g., git-*,docker)" }),
+		"no-mcp": Flags.boolean({ description: "Disable MCP server discovery and connection" }),
+		mcp: Flags.string({
+			description: "Comma-separated glob patterns of MCP server names to connect (e.g., github,linear-*)",
+		}),
 		"no-rules": Flags.boolean({ description: "Disable rules discovery and loading" }),
 		export: Flags.string({ description: "Export session file to HTML and exit" }),
 		"no-title": Flags.boolean({ description: "Disable title auto-generation" }),

@@ -138,8 +138,10 @@ import {
 	deduplicateMCPToolsByName,
 	discoverAndLoadMCPTools,
 	getMCPToolOriginKey,
+	loadAllMCPConfigs,
 	type MCPLoadResult,
 	MCPManager,
+	MCPUnknownServerError,
 	MCPToolCache,
 	type MCPToolsLoadResult,
 	shouldFilterBrowserMCPForPrelude,
@@ -348,6 +350,7 @@ import { cfgImagesBlockImages, cfgStartupQuiet, cfgTuiReactions, cfgTuiRenderMer
 import { cfgLspLazy, cfgLspShared } from "./lsp/settings";
 import {
 	cfgMcpEnableProjectConfig,
+	cfgMcpIncludeServers,
 	cfgMcpNotificationDebounceMs,
 	cfgMcpNotifications,
 	cfgMcpStartupTimeoutMs,
@@ -879,6 +882,10 @@ export type * from "./extensibility/extensions";
 export type { Skill } from "./extensibility/skills";
 export type { FileSlashCommand } from "./extensibility/slash-commands";
 export type { MCPManager, MCPServerConfig, MCPServerConnection, MCPToolsLoadResult } from "./mcp";
+export { MCPUnknownServerError } from "./mcp";
+// Per-session MCP allowlist: `cfgMcpIncludeServers.override(settings, ["github", "linear-*"])`
+// on the Settings passed to createAgentSession. Its presence is the capability marker.
+export { cfgMcpIncludeServers } from "./mcp/settings";
 // Agent registry: pass a private instance per `createAgentSession` when
 // embedding several concurrent top-level sessions in one process (the default
 // global registry admits only one "Main" per process generation).
@@ -2309,7 +2316,18 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// Filter browser MCP only when Eval can expose the built-in browser prelude.
 			filterBrowser: initialBrowserPreludeAvailable,
 			extensionRoots: buildSessionExtensionRoots(),
+			includeServers: cfgMcpIncludeServers.get(settings),
 		};
+		if (enableMCP && !mcpManager && mcpDiscoverOptions.includeServers.length > 0) {
+			// Fail before anything starts: an allowlist whose literal names match
+			// nothing would otherwise run the session with no MCP servers at all.
+			const { unmatchedIncludes } = await loadAllMCPConfigs(cwd, {
+				enableProjectConfig: mcpDiscoverOptions.enableProjectConfig,
+				extensionRoots: mcpDiscoverOptions.extensionRoots,
+				includeServers: mcpDiscoverOptions.includeServers,
+			});
+			if (unmatchedIncludes && unmatchedIncludes.length > 0) throw new MCPUnknownServerError(unmatchedIncludes);
+		}
 		if (enableMCP && !mcpManager) {
 			if (deferMCPDiscoveryForUI) {
 				const cacheStorage = settings.getStorage();

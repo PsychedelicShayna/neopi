@@ -67,6 +67,7 @@ import { scheduleMarketplaceAutoUpdate } from "./extensibility/plugins/marketpla
 import { registerDaemonProjectPresence } from "./launch/presence";
 import { discoverStartupLspServers } from "./lsp/servers";
 import type { MCPManager } from "./mcp";
+import { MCPUnknownServerError } from "./mcp/config";
 import type { InteractiveMode } from "./modes/interactive-mode";
 import type { PrintModeOptions } from "./modes/print-mode";
 import type { RpcModeOptions } from "./modes/rpc/rpc-mode";
@@ -161,6 +162,7 @@ import {
 import { cfgDisabledProviders, cfgEnabledModels } from "./config/model-settings";
 import { cfgTaskAgentIdleTtlMs } from "./task/settings";
 import { cfgSkillsIncludeSkills } from "./extensibility/settings";
+import { cfgMcpIncludeServers } from "./mcp/settings";
 import { cfgChatInclude, cfgChatMode } from "./chat/settings";
 import { cfgWorkspaceAdditionalDirectories } from "./session/context-settings";
 
@@ -1767,6 +1769,13 @@ export async function buildSessionOptions(
 			cfgSkillsIncludeSkills.override(activeSettings, parsed.skills as string[]);
 		}
 
+		// MCP servers
+		if (parsed.noMcp) {
+			options.enableMCP = false;
+		} else if (parsed.mcp && parsed.mcp.length > 0) {
+			cfgMcpIncludeServers.override(activeSettings, parsed.mcp);
+		}
+
 		// Rules
 		if (parsed.noRules) {
 			options.rules = [];
@@ -2430,6 +2439,22 @@ export async function runRootCommand(
 					)
 				: undefined;
 
+			let created: CreateAgentSessionResult;
+			try {
+				created = await createSession({
+					...sessionOptions,
+					eventBus,
+					subagentEventBus,
+					preloadedExtensions: extensionsResult,
+				});
+			} catch (error) {
+				// A `--mcp` name matching no server is a usage error, like an unknown flag.
+				if (error instanceof MCPUnknownServerError) {
+					process.stderr.write(`${chalk.red(`Error: ${error.message}`)}\n`);
+					process.exit(2);
+				}
+				throw error;
+			}
 			const {
 				session,
 				setToolUIContext,
@@ -2437,12 +2462,7 @@ export async function runRootCommand(
 				lspServers,
 				mcpManager,
 				startBackgroundModelDiscovery,
-			} = await createSession({
-				...sessionOptions,
-				eventBus,
-				subagentEventBus,
-				preloadedExtensions: extensionsResult,
-			});
+			} = created;
 
 			try {
 				validateToolNames(initialArgs.tools, session.getAllToolNames());

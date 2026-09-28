@@ -30,6 +30,16 @@ export const cfgMcpStartupTimeoutMs = register({
 	},
 });
 
+/**
+ * Session allowlist of MCP server name globs; empty admits every server.
+ * Set per run by `--mcp`. The user `disabledServers` denylist still wins.
+ */
+export const cfgMcpIncludeServers = register({
+	id: "mcp.includeServers",
+	type: "array",
+	default: [] as string[],
+});
+
 export const cfgMcpRenderMarkdownResults = register({
 	id: "mcp.renderMarkdownResults",
 	type: "boolean",

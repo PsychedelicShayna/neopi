@@ -213,6 +213,29 @@ describe("RPC plan mode", () => {
 		expect(modeEntries()).toEqual(["plan", "none"]);
 	});
 
+	it("keeps host tools inactive during chat and restores replacements when chat ends", async () => {
+		const { session } = setup();
+		await session.refreshRpcHostTools([makeTool("old_host")]);
+		expect(session.getEnabledToolNames()).toContain("old_host");
+		await session.setChatMode({ mode: "chat" });
+		await session.refreshRpcHostTools([makeTool("new_host")]);
+		expect(session.getEnabledToolNames()).toEqual([]);
+		await session.setChatMode({ mode: "off" });
+		expect(session.getEnabledToolNames()).toContain("new_host");
+		expect(session.getEnabledToolNames()).not.toContain("old_host");
+	});
+
+	it("retains host tools changed during plan mode on exit", async () => {
+		const { session, planMode } = setup();
+		await session.refreshRpcHostTools([makeTool("old_host")]);
+		await planMode.setMode("plan", undefined);
+		await session.refreshRpcHostTools([makeTool("new_host")]);
+		expect(session.getEnabledToolNames()).toContain("new_host");
+		await planMode.setMode("default", undefined);
+		expect(session.getEnabledToolNames()).toContain("new_host");
+		expect(session.getEnabledToolNames()).not.toContain("old_host");
+	});
+
 	it("a failed pre-plan model restore leaves plan mode fully intact, and a retry completes the exit", async () => {
 		const { session, planMode, frames, modeEntries } = setup();
 		cfgModelRoles.override(session.settings, { plan: "anthropic/claude-sonnet-4-6" });
@@ -484,6 +507,22 @@ describe("RPC plan mode", () => {
 		planMode.close();
 		expect(respond(request.id, "approve")).toEqual([]);
 		expect(cancels()).toEqual([]);
+	});
+
+	it("restores host tools changed while planning after a proposal is approved", async () => {
+		const { session, planMode, deps, writePlan, propose, waitForRequest } = setup();
+		await session.refreshRpcHostTools([makeTool("old_host")]);
+		await planMode.setMode("plan", undefined);
+		await session.refreshRpcHostTools([makeTool("new_host")]);
+		await writePlan("updated-host-tools", "# Updated host tools\n");
+		const submission = propose("updated-host-tools");
+		const request = await waitForRequest();
+		expect(
+			dispatchRpcControlFrame({ type: "plan_proposal_response", id: request.id, decision: "approve" }, deps),
+		).toBe(true);
+		await submission;
+		expect(session.getEnabledToolNames()).toContain("new_host");
+		expect(session.getEnabledToolNames()).not.toContain("old_host");
 	});
 
 	it("refine: feedback reaches the tool result and plan mode stays on", async () => {
