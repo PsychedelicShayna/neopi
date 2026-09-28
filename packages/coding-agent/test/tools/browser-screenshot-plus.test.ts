@@ -10,7 +10,7 @@ import { chromiumAvailable } from "./chromium-probe";
 
 const CHROMIUM_AVAILABLE = await chromiumAvailable();
 
-function createHost() {
+function createHost(limits?: { maxWidth: number; maxHeight: number }) {
 	const session: ToolSession = {
 		cwd: process.cwd(),
 		hasUI: false,
@@ -21,6 +21,9 @@ function createHost() {
 			"browser.headless": true,
 			"browser.cmux": false,
 			"tools.maxTimeout": 0,
+			...(limits
+				? { "browser.screenshotMaxWidth": limits.maxWidth, "browser.screenshotMaxHeight": limits.maxHeight }
+				: {}),
 		}),
 	};
 	const prelude = createBrowserPrelude(session);
@@ -205,6 +208,30 @@ button { margin: 80px; width: 180px; height: 60px; }
 			expect(pdf.byteLength).toBeGreaterThan(100);
 			expect(pdf.subarray(0, 4).toString()).toBe("%PDF");
 		} finally {
+			await invoke({ action: "close", name, kill: true }).catch(() => undefined);
+		}
+	}, 30_000);
+	test("applies configured screenshot dimensions in the Chromium worker", async () => {
+		const invoke = createHost({ maxWidth: 600, maxHeight: 500 });
+		const name = `screenshot-size-${crypto.randomUUID()}`;
+		await invoke({
+			action: "open",
+			name,
+			url: "data:text/html,<body style='margin:0;background:white'></body>",
+			viewport: { width: 1600, height: 1200 },
+		});
+		let savedPath: string | undefined;
+		try {
+			const result = await invoke({
+				action: "call",
+				name,
+				chain: [{ method: "screenshot", args: [{ silent: true }] }],
+			});
+			savedPath = valueFrom<string>(result);
+			const image = await new Bun.Image(await fs.readFile(savedPath)).metadata();
+			expect({ width: image.width, height: image.height }).toEqual({ width: 600, height: 450 });
+		} finally {
+			if (savedPath) await fs.rm(savedPath, { force: true });
 			await invoke({ action: "close", name, kill: true }).catch(() => undefined);
 		}
 	}, 30_000);

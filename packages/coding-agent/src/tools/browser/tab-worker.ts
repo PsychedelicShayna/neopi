@@ -176,6 +176,7 @@ import {
 } from "./interactions";
 import {
 	captureScreenshotBuffer,
+	browserScreenshotResizeOptions,
 	createPngDiff,
 	type DiffScreenshotOptions,
 	type DiffScreenshotResult,
@@ -2641,7 +2642,7 @@ export class WorkerCore {
 		}
 		const resized = await resizeImage(
 			{ type: "image", data: buffer.toBase64(), mimeType: captureMime },
-			{ maxWidth: 1024, maxHeight: 1024, maxBytes: 150 * 1024, jpegQuality: 70, excludeWebP: session.excludeWebP },
+			browserScreenshotResizeOptions(session),
 		);
 		const preserveFormat = opts.format !== undefined;
 		const saveFullRes = !!session.browserScreenshotDir || preserveFormat;
@@ -2702,7 +2703,7 @@ export class WorkerCore {
 		await Bun.write(diffPath, diff.png);
 		const resized = await resizeImage(
 			{ type: "image", data: diff.png.toBase64(), mimeType: "image/png" },
-			{ maxWidth: 1024, maxHeight: 1024, maxBytes: 150 * 1024, jpegQuality: 70, excludeWebP: session.excludeWebP },
+			browserScreenshotResizeOptions(session),
 		);
 		screenshots.push({
 			dest: diffPath,
