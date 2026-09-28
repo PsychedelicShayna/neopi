@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "bun:test";
+import * as chainConfig from "../src/chains/config";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import { isQueuedMessageList, splitQueuedMessages } from "@oh-my-pi/pi-tui/prompt/queue-input";
@@ -234,6 +235,49 @@ describe("input controller — slash command history (#3148)", () => {
 		expect(ctx.showWarning).toHaveBeenCalledTimes(2);
 		expect(prompt).not.toHaveBeenCalled();
 		expect(editor.getText()).toBe("/typo");
+	});
+	it("keeps the Alt+C chain request when an unknown command needs confirmation", async () => {
+		const discovery = vi.spyOn(chainConfig, "discoverChains").mockResolvedValue({ chains: [], warnings: [] });
+		try {
+			const { ctx, editor, prompt } = makeCtx();
+			let chainKey: (() => void) | undefined;
+			let submission: Promise<void> | undefined;
+			Object.assign(ctx, {
+				keybindings: { getKeys: (action: string) => (action === "app.message.chain" ? ["alt+c"] : []) },
+				dictationSpaceHold: () => vi.fn(),
+				sessionManager: { getCwd: () => process.cwd() },
+			});
+			Object.assign(ctx.ui, { addInputListener: vi.fn(), addStartListener: vi.fn() });
+			Object.assign(editor, {
+				setActionKeys: vi.fn(),
+				clearCustomKeyHandlers: vi.fn(),
+				setCustomKeyHandler: (key: string, handler: () => void) => {
+					if (key === "alt+c") chainKey = handler;
+				},
+				spaceHold: {},
+				submit: () => {
+					const text = editor.getText();
+					editor.setText("");
+					submission = editor.onSubmit?.(text);
+				},
+				setChainLock: vi.fn(),
+			});
+			const controller = controllerFor(ctx);
+			controller.setupKeyHandlers();
+			editor.setText("/typo");
+
+			chainKey?.();
+			await submission;
+			expect(ctx.showWarning).toHaveBeenCalledWith(expect.stringContaining("Unknown command /typo"));
+			expect(editor.getText()).toBe("/typo");
+
+			editor.setText("");
+			await editor.onSubmit?.("/typo");
+			expect(ctx.showWarning).toHaveBeenCalledWith(expect.stringContaining("No post-processing chains defined"));
+			expect(prompt).not.toHaveBeenCalled();
+		} finally {
+			discovery.mockRestore();
+		}
 	});
 });
 

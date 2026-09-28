@@ -20,10 +20,12 @@ export interface UnknownSlashCommand {
 export function findUnknownSlashCommand(text: string, known: Iterable<string>): UnknownSlashCommand | undefined {
 	const name = COMMAND_TOKEN.exec(text)?.[1];
 	if (!name) return undefined;
+	const separator = name.indexOf(":");
+	const prefix = separator === -1 ? undefined : name.slice(0, separator);
 	let suggestion: string | undefined;
 	let best = MAX_SUGGESTION_DISTANCE + 1;
 	for (const candidate of known) {
-		if (candidate === name) return undefined;
+		if (candidate === name || candidate === prefix) return undefined;
 		const distance = boundedEditDistance(name.toLowerCase(), candidate.toLowerCase(), best - 1);
 		if (distance < best) {
 			best = distance;

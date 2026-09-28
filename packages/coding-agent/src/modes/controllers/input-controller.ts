@@ -1104,6 +1104,7 @@ export class InputController {
 					`Unknown command /${unknownSlash.name}.${hint} Press Enter again to send it as a message.`,
 				);
 				if (!this.ctx.editor.restoreSubmittedDraft()) this.ctx.editor.setCollapsedText(text);
+				if (forceChain) this.#chainNextSubmit = true;
 				return;
 			}
 			// Handle built-in slash commands

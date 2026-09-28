@@ -19,6 +19,7 @@ describe("findUnknownSlashCommand", () => {
 		expect(findUnknownSlashCommand("/rename x", KNOWN)).toBeUndefined();
 		expect(findUnknownSlashCommand("/q", KNOWN)).toBeUndefined();
 		expect(findUnknownSlashCommand("/skill:grilling plan", KNOWN)).toBeUndefined();
+		expect(findUnknownSlashCommand("/model:opus", KNOWN)).toBeUndefined();
 	});
 
 	it("flags an unknown namespaced command", () => {
