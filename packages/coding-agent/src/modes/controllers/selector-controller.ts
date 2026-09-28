@@ -1029,11 +1029,16 @@ export class SelectorController {
 						hub?.refreshAfterExternalMutation();
 					}
 				},
-				onFallbackChainChange: (role, chain, effort) => {
+				onFallbackChainChange: (role, chain, effort, copiedSelections) => {
 					try {
 						const selections = { ...cfgFallbackEffortSelections.get(this.ctx.settings)[role] };
 						for (const selector of Object.keys(selections)) if (!chain.includes(selector)) delete selections[selector];
 						if (effort) selections[effort.selector] = effort.selection;
+						if (copiedSelections) {
+							for (const [selector, selection] of Object.entries(copiedSelections)) {
+								if (chain.includes(selector) && !(selector in selections)) selections[selector] = selection;
+							}
+						}
 						this.ctx.settings.setFallbackChainAndEfforts(role, chain, selections);
 						const roleInfo = getRoleInfo(role, settings);
 						this.ctx.showStatus(
