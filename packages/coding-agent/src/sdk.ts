@@ -4524,14 +4524,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						const lifecycle = AgentLifecycleManager.global();
 						const ownsLifecycle = root !== undefined && lifecycle.manages(agentRegistry);
 						const rootAgentGenerations =
-							ownsLifecycle && root
-								? new Map(
-										agentRegistry
-											.list()
-											.filter(ref => ref.kind !== "main" && agentRegistry.rootOf(ref.id) === root)
-											.map(ref => [ref, agentRegistry.runGeneration(ref)]),
-									)
-								: undefined;
+							ownsLifecycle && root ? lifecycle.snapshotRootAgentGenerations(root) : undefined;
 						const workPoolRegistry = WorkPoolRegistry.global();
 						const poolGenerations = workPoolRegistry.snapshotOwners(
 							ownerId =>

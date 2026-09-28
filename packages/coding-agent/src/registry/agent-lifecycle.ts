@@ -298,6 +298,26 @@ export class AgentLifecycleManager {
 	}
 
 	/**
+	 * Snapshot every descendant generation owned by `root`, including adopted
+	 * descendants whose intermediate registry parent has already disappeared.
+	 * Non-adopted running children are resolved through the live registry tree.
+	 */
+	snapshotRootAgentGenerations(root: AgentRef): Map<AgentRef, number> {
+		const generations = new Map<AgentRef, number>();
+		for (const ref of this.#registry.list()) {
+			if (ref.kind !== "main" && this.#registry.rootOf(ref.id) === root) {
+				generations.set(ref, this.#registry.runGeneration(ref));
+			}
+		}
+		for (const [id, adopted] of this.#adopted) {
+			if ((adopted.root ?? this.#registry.rootOf(id)) === root) {
+				generations.set(adopted.ref, this.#registry.runGeneration(adopted.ref));
+			}
+		}
+		return generations;
+	}
+
+	/**
 	 * True while {@link park} is disposing this agent's session (lets dispose
 	 * hooks distinguish park from teardown). False once the park is cancelled
 	 * by ensureLive or after detach+dispose completes. When `expected` is

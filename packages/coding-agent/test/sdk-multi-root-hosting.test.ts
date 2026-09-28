@@ -564,6 +564,39 @@ describe("two simultaneous top-level roots (issue #121)", () => {
 		expect(a.session.asyncJobManager!.getJob("reused-agent-turn")?.status).toBe("running");
 	}, 60000);
 
+	it("cancelRootWork releases an adopted descendant after its intermediate parent disappears", async () => {
+		const a = await createRoot("DeckA");
+		const registry = AgentRegistry.global();
+		const lifecycle = AgentLifecycleManager.global();
+		const root = registry.get("DeckA")!;
+		const parent = registry.register({
+			id: "DeckA.Parent",
+			displayName: "task",
+			kind: "sub",
+			parentId: "DeckA",
+			session: { dispose: async () => {} } as unknown as AgentSession,
+		});
+		const nested = registry.register({
+			id: "DeckA.Parent.Nested",
+			displayName: "task",
+			kind: "sub",
+			parentId: parent.id,
+			session: { dispose: async () => {} } as unknown as AgentSession,
+		});
+		registry.setStatus(nested.id, "idle", nested);
+		expect(lifecycle.adopt(nested.id, { idleTtlMs: 0, root }, nested)).toBe(true);
+		expect(registry.unregister(parent.id, parent)).toBe(true);
+		expect(registry.rootOf(nested.id)).toBeUndefined();
+
+		expect(await a.session.cancelRootWork({ timeoutMs: 5_000 })).toEqual({
+			settled: true,
+			pendingJobIds: [],
+		});
+
+		expect(registry.get(nested.id)).toBeUndefined();
+		expect(lifecycle.has(nested.id)).toBe(false);
+	}, 60000);
+
 	it("cancelRootWork releases a child whose job settles after the deadline", async () => {
 		const a = await createRoot("DeckA");
 		const registry = AgentRegistry.global();
