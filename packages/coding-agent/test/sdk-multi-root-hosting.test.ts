@@ -7,7 +7,12 @@ import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream"
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
-import { AgentIdConflictError, AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import {
+	AgentIdConflictError,
+	AgentRegistry,
+	getAgentTombstonePath,
+	MAIN_AGENT_ID,
+} from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -405,6 +410,30 @@ describe("two simultaneous top-level roots (issue #121)", () => {
 		const deckJob = await asyncBash(deck, "echo deck-ok");
 		await settle(deck);
 		expect(deck.session.asyncJobManager!.getJob(deckJob)?.status).toBe("completed");
+	}, 60000);
+
+	it("cancelRootWork releases a running child instead of leaving a kill tombstone", async () => {
+		const a = await createRoot("DeckA");
+		const b = await createRoot("DeckB");
+		const registry = AgentRegistry.global();
+		const childA = await spawn(a, `${HOLD}a`);
+		const childB = await spawn(b, `${HOLD}b`);
+		while (!registry.get(childA)?.session) await Bun.sleep(5);
+		const sessionFile = registry.get(childA)?.sessionFile;
+		expect(sessionFile).toBeTruthy();
+
+		const drained = await a.session.cancelRootWork({ timeoutMs: 5_000 });
+		expect(drained.settled).toBe(true);
+		await a.session.asyncJobManager!.waitForAll();
+
+		// Root cancellation is a release, not a kill: no terminal row stays
+		// registered and no tombstone sidecar blocks later rediscovery.
+		expect(registry.get(childA)).toBeUndefined();
+		expect(fs.existsSync(getAgentTombstonePath(sessionFile!))).toBe(false);
+		expect(b.session.asyncJobManager!.getJob(childB)?.status).toBe("running");
+		gate("b").resolve();
+		await settle(b);
+		expect(b.session.asyncJobManager!.getJob(childB)?.status).toBe("completed");
 	}, 60000);
 
 	it("7: drains and disposes both roots without leaking processes, jobs, refs, or overwriting artifacts", async () => {

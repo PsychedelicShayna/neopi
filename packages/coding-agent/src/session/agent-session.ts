@@ -2749,7 +2749,8 @@ export class AgentSession implements SettingsScope {
 	 * until `timeoutMs` (default 5s) for them to settle, then releases the root's
 	 * kept-alive descendant agents. Jobs and agents of any other root are never
 	 * touched, and this session stays usable: new async work may be launched
-	 * afterward. The root's own in-flight turn is not aborted; call
+	 * afterward. Interrupted descendants are released (transcripts kept, refs
+	 * unregistered), not tombstoned as kills. The root's own in-flight turn is not aborted; call
 	 * {@link abort} first to stop it. Idempotent.
 	 *
 	 * Only a top-level session owns a job domain; calling this on a subagent
@@ -2761,7 +2762,10 @@ export class AgentSession implements SettingsScope {
 			throw new Error("cancelRootWork() requires a top-level session that owns its async-job domain.");
 		}
 		const deadlineAt = Date.now() + Math.max(0, options.timeoutMs ?? 5_000);
-		const reap = await manager.cancelAndReapJobs(undefined, deadlineAt);
+		// Tag the aborts as a release, like owning-root shutdown: interrupted
+		// subagents are disposed and unregistered with their transcripts kept,
+		// never left behind as terminal kill tombstones.
+		const reap = await manager.cancelAndReapJobs(undefined, deadlineAt, ASYNC_JOB_MANAGER_SHUTDOWN_REASON);
 		await this.#releaseRootDescendants?.(deadlineAt);
 		return { settled: reap.settled, pendingJobIds: reap.pendingJobIds };
 	}

@@ -674,9 +674,14 @@ export class AsyncJobManager {
 	 * {@link cancelAndReapOwnerJobs} over any filter. With no filter it cancels
 	 * and reaps every job in this manager — the whole async-job domain of the
 	 * root that owns it — while the manager stays usable for new jobs.
+	 * `reason` is forwarded to each aborted job like {@link cancelAll}.
 	 */
-	async cancelAndReapJobs(filter: AsyncJobFilter | undefined, deadlineAt: number): Promise<AsyncJobReapResult> {
-		this.cancelAll(filter);
+	async cancelAndReapJobs(
+		filter: AsyncJobFilter | undefined,
+		deadlineAt: number,
+		reason?: unknown,
+	): Promise<AsyncJobReapResult> {
+		this.cancelAll(filter, reason);
 		const timeoutMs = Math.max(0, deadlineAt - Date.now());
 		const settled = await this.#waitForJobs(filter, { timeoutMs });
 		if (settled) {
