@@ -20,6 +20,7 @@
 - Added post-processing chains: named, ordered model steps in `CHAINS.yml` (user and project) that rewrite composer text before it is sent. Alt+C sends one prompt through the active chain; `/chaining on|off|use|status|configure` manages automatic mode, the active chain, and a fullscreen editor. Steps without a model use the new Prose role, which falls back to the configured `smol` role.
 ### Fixed
 
+- MCP literal allowlists now reject disabled project server names even when a lower-priority user server has the same name; equivalence aliases remain valid.
 - Restored independent whole-recording xAI speech input on Ctrl+Space; configured dictation now has its own Ctrl+Alt+Space shortcut.
 - Relaunching an unlinked fork executable now falls back to `npi`, not the upstream `omp` binary.
 - Fork extension installs and rebuilds now respect explicit quarantine markers instead of reactivating disabled extensions.
