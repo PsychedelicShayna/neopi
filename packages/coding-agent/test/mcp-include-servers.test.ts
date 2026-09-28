@@ -9,9 +9,68 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { initializeWithSettings, reset as resetDiscoveryCache } from "@oh-my-pi/pi-coding-agent/discovery";
-import { loadAllMCPConfigs } from "@oh-my-pi/pi-coding-agent/mcp/config";
+import { loadAllMCPConfigs, MCPUnknownServerError } from "@oh-my-pi/pi-coding-agent/mcp/config";
 import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
+import { cfgMcpIncludeServers } from "@oh-my-pi/pi-coding-agent/mcp/settings";
+import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
+import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { __resetDirsFromEnvForTests, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
+
+const MARKER_SERVER = path.join(import.meta.dir, "fixtures", "mcp-marker-server.ts");
+const MARKER_SERVER_NAMES = ["github", "linear-work", "other"] as const;
+
+/** A project whose three stdio servers each touch `<dir>/ran-<name>` when spawned. */
+async function writeMarkerProject(dir: string): Promise<void> {
+	const mcpServers = Object.fromEntries(
+		MARKER_SERVER_NAMES.map(name => [
+			name,
+			{ command: process.execPath, args: [MARKER_SERVER, name, path.join(dir, `ran-${name}`)] },
+		]),
+	);
+	await fs.mkdir(path.join(dir, ".omp"), { recursive: true });
+	await fs.writeFile(path.join(dir, ".omp", "mcp.json"), JSON.stringify({ mcpServers }));
+}
+
+async function spawnedServers(dir: string): Promise<string[]> {
+	const entries = await fs.readdir(dir);
+	return entries
+		.filter(entry => entry.startsWith("ran-"))
+		.map(entry => entry.slice(4))
+		.sort();
+}
+
+async function startSession(cwd: string, includeServers: string[]): Promise<AgentSession> {
+	const settings = Settings.isolated();
+	if (includeServers.length > 0) cfgMcpIncludeServers.override(settings, includeServers);
+	const { session } = await createAgentSession({
+		cwd,
+		agentDir: path.join(cwd, "agent"),
+		settings,
+		agentRegistry: new AgentRegistry(),
+		agentId: `mcp-allowlist-${path.basename(cwd)}`,
+		disableExtensionDiscovery: true,
+		skills: [],
+		contextFiles: [],
+		promptTemplates: [],
+		slashCommands: [],
+		enableLsp: false,
+		hasUI: false,
+	});
+	return session;
+}
+
+async function mcpToolNamesWhenSettled(session: AgentSession, expectedCount: number): Promise<string[]> {
+	const deadline = Date.now() + 10_000;
+	for (;;) {
+		const names = session
+			.getAllToolNames()
+			.filter(name => name.startsWith("mcp__"))
+			.sort();
+		if (names.length >= expectedCount || Date.now() > deadline) return names;
+		await Bun.sleep(50);
+	}
+}
 
 describe("mcp.includeServers allowlist", () => {
 	let projectDir = "";
@@ -76,5 +135,59 @@ describe("mcp.includeServers allowlist", () => {
 		await manager.disconnectAll();
 		expect(result.errors.get("unrelated")).toContain("allowlist");
 		expect(await Bun.file(marker).exists()).toBe(false);
+	});
+
+	test("a literal entry naming no available server is reported; a glob matching nothing is not", async () => {
+		const { unmatchedIncludes } = await loadAllMCPConfigs(projectDir, {
+			includeServers: ["github", "gihtub", "denylisted-server", "nothing-*"],
+		});
+		expect(unmatchedIncludes).toEqual(["gihtub", "denylisted-server"]);
+	});
+
+	test("createAgentSession rejects an unknown literal name before spawning any server", async () => {
+		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "npi-mcp-unknown-"));
+		try {
+			await writeMarkerProject(cwd);
+			const failure = await startSession(cwd, ["github", "gihtub"]).then(
+				() => undefined,
+				(error: unknown) => error,
+			);
+			expect(failure).toBeInstanceOf(MCPUnknownServerError);
+			expect((failure as MCPUnknownServerError).serverNames).toEqual(["gihtub"]);
+			expect(await spawnedServers(cwd)).toEqual([]);
+		} finally {
+			await removeWithRetries(cwd);
+		}
+	});
+
+	test("concurrent SDK sessions keep independent allowlists and never spawn excluded servers", async () => {
+		const [cwdA, cwdB, cwdC] = await Promise.all(
+			["a", "b", "c"].map(label => fs.mkdtemp(path.join(os.tmpdir(), `npi-mcp-session-${label}-`))),
+		);
+		const sessions: AgentSession[] = [];
+		try {
+			await Promise.all([writeMarkerProject(cwdA), writeMarkerProject(cwdB), writeMarkerProject(cwdC)]);
+			sessions.push(
+				...(await Promise.all([
+					startSession(cwdA, ["github", "linear-*"]),
+					startSession(cwdB, ["oth*"]),
+					startSession(cwdC, []),
+				])),
+			);
+			const [toolsA, toolsB, toolsC] = await Promise.all([
+				mcpToolNamesWhenSettled(sessions[0]!, 2),
+				mcpToolNamesWhenSettled(sessions[1]!, 1),
+				mcpToolNamesWhenSettled(sessions[2]!, 3),
+			]);
+			expect(toolsA).toEqual(["mcp__github_ping", "mcp__linear_work_ping"]);
+			expect(toolsB).toEqual(["mcp__other_ping"]);
+			expect(toolsC).toEqual(["mcp__github_ping", "mcp__linear_work_ping", "mcp__other_ping"]);
+			expect(await spawnedServers(cwdA)).toEqual(["github", "linear-work"]);
+			expect(await spawnedServers(cwdB)).toEqual(["other"]);
+			expect(await spawnedServers(cwdC)).toEqual(["github", "linear-work", "other"]);
+		} finally {
+			await Promise.all(sessions.map(session => session.dispose()));
+			await Promise.all([cwdA, cwdB, cwdC].map(dir => removeWithRetries(dir)));
+		}
 	});
 });

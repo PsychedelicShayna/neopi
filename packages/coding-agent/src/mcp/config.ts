@@ -34,6 +34,36 @@ export interface LoadMCPConfigsResult {
 	exaApiKeys: string[];
 	/** Source metadata for each server */
 	sources: Record<string, SourceMeta>;
+	/**
+	 * `includeServers` entries without glob metacharacters that name no
+	 * available server (unconfigured, disabled, or denylisted).
+	 */
+	unmatchedIncludes?: string[];
+}
+
+const MCP_GLOB_METACHARACTERS = /[*?[\]{}\\]/;
+
+/** Whether an `includeServers` entry is a glob pattern rather than a literal server name. */
+export function isMCPGlobPattern(entry: string): boolean {
+	return MCP_GLOB_METACHARACTERS.test(entry);
+}
+
+/**
+ * A literal `--mcp` / `mcp.includeServers` entry names no available server.
+ * Thrown before any server starts, so a typo cannot leave a run with an
+ * allowlist that silently matches nothing.
+ */
+export class MCPUnknownServerError extends Error {
+	readonly serverNames: readonly string[];
+
+	constructor(serverNames: readonly string[]) {
+		super(
+			`MCP allowlist (--mcp / mcp.includeServers) names no available server: ${serverNames.join(", ")}. ` +
+				"The server is not configured, is disabled, or is in disabledServers.",
+		);
+		this.name = "MCPUnknownServerError";
+		this.serverNames = serverNames;
+	}
 }
 
 /**
@@ -165,6 +195,18 @@ export async function loadAllMCPConfigs(cwd: string, options?: LoadMCPConfigsOpt
 		sources[server.name] = server._source;
 	}
 
+	// Checked before the Exa/browser filters: those servers exist, NeoPi just
+	// replaces them natively, so naming one is not a typo.
+	const unmatchedIncludes: string[] = [];
+	for (const pattern of options?.includeServers ?? []) {
+		if (configs[pattern]) continue;
+		if (!isMCPGlobPattern(pattern)) {
+			unmatchedIncludes.push(pattern);
+		} else if (!Object.keys(configs).some(name => new Bun.Glob(pattern).match(name))) {
+			logger.warn("MCP allowlist pattern matches no available server", { pattern });
+		}
+	}
+
 	let exaApiKeys: string[] = [];
 
 	if (filterExa) {
@@ -180,7 +222,7 @@ export async function loadAllMCPConfigs(cwd: string, options?: LoadMCPConfigsOpt
 		sources = browserResult.sources;
 	}
 
-	return { configs, exaApiKeys, sources };
+	return { configs, exaApiKeys, sources, unmatchedIncludes };
 }
 
 /** Pattern to match Exa MCP servers */

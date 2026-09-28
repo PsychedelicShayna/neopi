@@ -559,6 +559,11 @@ export class MCPManager {
 		const { configs, exaApiKeys, sources } = loadedConfigs;
 		const result = await this.connectServers(configs, sources, options?.onStatus, options?.startupTimeoutMs);
 		result.exaApiKeys = exaApiKeys;
+		// Startup rejects these up front (MCPUnknownServerError); a later
+		// `/mcp reload` after a config edit reports them instead.
+		for (const name of loadedConfigs.unmatchedIncludes ?? []) {
+			result.errors.set(name, "listed in the MCP allowlist but not configured, disabled, or denylisted");
+		}
 		return result;
 	}
 
