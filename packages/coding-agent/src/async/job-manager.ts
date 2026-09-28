@@ -684,23 +684,11 @@ export class AsyncJobManager {
 	 * user-visible Task wait without losing ownership of the live work.
 	 */
 	async cancelAndReapOwnerJobs(ownerId: string, deadlineAt: number): Promise<AsyncJobReapResult> {
-		return this.cancelAndReapJobs({ ownerId }, deadlineAt);
-	}
-
-	/**
-	 * {@link cancelAndReapOwnerJobs} over any filter. With no filter it cancels
-	 * and reaps every job in this manager — the whole async-job domain of the
-	 * root that owns it — while the manager stays usable for new jobs.
-	 * `reason` is forwarded to each aborted job like {@link cancelAll}.
-	 */
-	async cancelAndReapJobs(
-		filter: AsyncJobFilter | undefined,
-		deadlineAt: number,
-		reason?: unknown,
-	): Promise<AsyncJobReapResult> {
-		this.cancelAll(filter, reason);
-		const timeoutMs = Math.max(0, deadlineAt - Date.now());
-		const settled = await this.#waitForJobs(filter, { timeoutMs });
+		// A subagent teardown reap also waits on jobs the dying owner registers
+		// mid-reap: every process it owns must exit before its worktree goes.
+		const filter = { ownerId };
+		this.cancelAll(filter);
+		const settled = await this.#waitForJobs(filter, { timeoutMs: Math.max(0, deadlineAt - Date.now()) });
 		if (settled) {
 			return { settled: true, pendingJobIds: [], completion: Promise.resolve() };
 		}
@@ -709,6 +697,37 @@ export class AsyncJobManager {
 			.map(job => job.id);
 		const completion = this.#waitForJobs(filter).then(() => {});
 		return { settled: false, pendingJobIds, completion };
+	}
+
+	/**
+	 * Root-wide counterpart of {@link cancelAndReapOwnerJobs}. With no filter it cancels
+	 * and reaps every job in this manager — the whole async-job domain of the
+	 * root that owns it — while the manager stays usable for new jobs.
+	 * `reason` is forwarded to each aborted job like {@link cancelAll}.
+	 *
+	 * The reap covers exactly the job generations present when it starts (the
+	 * ones it cancels, plus earlier-cancelled jobs still winding down). A job
+	 * registered concurrently — e.g. by the owner's still-active turn — is
+	 * neither waited on nor reported in `pendingJobIds`, so callers never treat
+	 * work launched after cancellation began as part of it.
+	 */
+	async cancelAndReapJobs(
+		filter: AsyncJobFilter | undefined,
+		deadlineAt: number,
+		reason?: unknown,
+	): Promise<AsyncJobReapResult> {
+		const reaped = this.#filterJobs(this.#jobs.values(), filter).filter(
+			job => job.status === "running" || (job.status === "cancelled" && job.endTime === undefined),
+		);
+		this.#cancelJobs(filter, reason);
+		const settledAll = Promise.all(reaped.map(job => job.promise)).then(() => {});
+		const settled = reaped.length === 0 || (await this.#waitForDeliveryPromise(settledAll, deadlineAt));
+		if (settled) {
+			return { settled: true, pendingJobIds: [], completion: Promise.resolve() };
+		}
+		// Unsettled jobs are never evicted, so each id still names this generation.
+		const pendingJobIds = reaped.filter(job => job.endTime === undefined).map(job => job.id);
+		return { settled: false, pendingJobIds, completion: settledAll };
 	}
 
 	async #waitForAllUntil(deadline: number): Promise<boolean> {
