@@ -13,37 +13,37 @@ import type { ResolvedMixture } from "./types";
 import { validateMixture } from "./validate";
 
 export interface MixtureRegistrationContext {
- cwd: string;
- agentDir?: string;
- registry: ModelRegistry;
- settings: Settings;
+	cwd: string;
+	agentDir?: string;
+	registry: ModelRegistry;
+	settings: Settings;
 }
 
 /** Discover, resolve, and validate; returns the mixtures that may be registered. */
 export async function discoverRegistrableMixtures(ctx: MixtureRegistrationContext): Promise<ResolvedMixture[]> {
- const discovered = await discoverMixtures(ctx.cwd, ctx.agentDir);
- const names = discovered.mixtures.map(entry => entry.definition.name);
- const registrable: ResolvedMixture[] = [];
- for (const entry of discovered.mixtures) {
-  const resolved = resolveMixture(entry.definition, {
-   registry: ctx.registry,
-   settings: ctx.settings,
-   preparedPresets: entry.preparedPresets,
-  });
-  const { errors, warnings } = validateMixture(resolved, { settings: ctx.settings, names });
-  const mixture = entry.definition.name;
-  for (const issue of warnings) {
-   logger.warn("Mixture definition warning", { mixture, file: entry.path, ...issue });
-  }
-  if (errors.length > 0) {
-   for (const issue of errors) {
-    logger.warn("Mixture refused at registration", { mixture, file: entry.path, ...issue });
-   }
-   continue;
-  }
-  registrable.push(resolved);
- }
- return registrable;
+	const discovered = await discoverMixtures(ctx.cwd, ctx.agentDir);
+	const names = discovered.mixtures.map(entry => entry.definition.name);
+	const registrable: ResolvedMixture[] = [];
+	for (const entry of discovered.mixtures) {
+		const resolved = resolveMixture(entry.definition, {
+			registry: ctx.registry,
+			settings: ctx.settings,
+			preparedPresets: entry.preparedPresets,
+		});
+		const { errors, warnings } = validateMixture(resolved, { settings: ctx.settings, names });
+		const mixture = entry.definition.name;
+		for (const issue of warnings) {
+			logger.warn("Mixture definition warning", { mixture, file: entry.path, ...issue });
+		}
+		if (errors.length > 0) {
+			for (const issue of errors) {
+				logger.warn("Mixture refused at registration", { mixture, file: entry.path, ...issue });
+			}
+			continue;
+		}
+		registrable.push(resolved);
+	}
+	return registrable;
 }
 
 /**
@@ -53,36 +53,36 @@ export async function discoverRegistrableMixtures(ctx: MixtureRegistrationContex
  * so a failed retain leaves no owner behind.
  */
 async function retainScope(
- owner: string,
- ctx: MixtureRegistrationContext,
- restoredRoster?: readonly ResolvedMixture[],
- restoredResolution?: readonly ResolvedMixture[],
+	owner: string,
+	ctx: MixtureRegistrationContext,
+	restoredRoster?: readonly ResolvedMixture[],
+	restoredResolution?: readonly ResolvedMixture[],
 ): Promise<MixtureScope> {
- const scope = MixtureCatalog.for(ctx.registry).scope(ctx.cwd, ctx.agentDir);
- scope.retain(owner);
- try {
-  await scope.initializeRoster(
-   owner,
-   () =>
-    restoredResolution !== undefined
-     ? Promise.resolve(restoredResolution)
-     : restoredRoster !== undefined
-      ? Promise.resolve(restoredRoster)
-      : discoverRegistrableMixtures(ctx),
-   restoredRoster,
-  );
- } catch (error) {
-  try {
-   scope.release(owner);
-  } catch (cleanupError) {
-   logger.warn("Mixture scope cleanup failed after retain error", {
-    scope: scope.key,
-    cleanupError: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
-   });
-  }
-  throw error;
- }
- return scope;
+	const scope = MixtureCatalog.for(ctx.registry).scope(ctx.cwd, ctx.agentDir);
+	scope.retain(owner);
+	try {
+		await scope.initializeRoster(
+			owner,
+			() =>
+				restoredResolution !== undefined
+					? Promise.resolve(restoredResolution)
+					: restoredRoster !== undefined
+						? Promise.resolve(restoredRoster)
+						: discoverRegistrableMixtures(ctx),
+			restoredRoster,
+		);
+	} catch (error) {
+		try {
+			scope.release(owner);
+		} catch (cleanupError) {
+			logger.warn("Mixture scope cleanup failed after retain error", {
+				scope: scope.key,
+				cleanupError: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+			});
+		}
+		throw error;
+	}
+	return scope;
 }
 
 /**
@@ -91,105 +91,105 @@ async function retainScope(
  * releases the source's, so the session only ever runs its current workspace's mixtures.
  */
 export class MixtureWorkspace {
- readonly #owner: string;
- /** `cwd` is the workspace currently held. */
- #ctx: MixtureRegistrationContext;
- #scope: MixtureScope;
- /** A failed rollback can leave this workspace without its source owner. */
- #held = true;
- #released = false;
- #sourceRoster: readonly ResolvedMixture[] | undefined;
- /** This owner's model-role resolution can differ from the scope's canonical roster. */
- #sourceResolution: readonly ResolvedMixture[] | undefined;
- #catalogListener?: () => void;
+	readonly #owner: string;
+	/** `cwd` is the workspace currently held. */
+	#ctx: MixtureRegistrationContext;
+	#scope: MixtureScope;
+	/** A failed rollback can leave this workspace without its source owner. */
+	#held = true;
+	#released = false;
+	#sourceRoster: readonly ResolvedMixture[] | undefined;
+	/** This owner's model-role resolution can differ from the scope's canonical roster. */
+	#sourceResolution: readonly ResolvedMixture[] | undefined;
+	#catalogListener?: () => void;
 
- private constructor(owner: string, ctx: MixtureRegistrationContext, scope: MixtureScope) {
-  this.#owner = owner;
-  this.#ctx = ctx;
-  this.#scope = scope;
- }
+	private constructor(owner: string, ctx: MixtureRegistrationContext, scope: MixtureScope) {
+		this.#owner = owner;
+		this.#ctx = ctx;
+		this.#scope = scope;
+	}
 
- static async retain(owner: string, ctx: MixtureRegistrationContext): Promise<MixtureWorkspace> {
-  return new MixtureWorkspace(owner, ctx, await retainScope(owner, ctx));
- }
+	static async retain(owner: string, ctx: MixtureRegistrationContext): Promise<MixtureWorkspace> {
+		return new MixtureWorkspace(owner, ctx, await retainScope(owner, ctx));
+	}
 
- /** The scope of the workspace the session is in now. */
- get scope(): MixtureScope {
-  return this.#scope;
- }
+	/** The scope of the workspace the session is in now. */
+	get scope(): MixtureScope {
+		return this.#scope;
+	}
 
- /** Keep the live session's selected model in sync with shared registry metadata. */
- observeCatalog(listener: () => void): void {
-  this.#catalogListener = listener;
-  if (this.#held) this.#scope.observe(this.#owner, listener);
- }
- /**
-  * Move the hold to `cwd`'s scope, discovering it under the current settings if no one
-  * holds it yet. Release the source first to avoid a false name.scope_conflict.
-  * On failure restore both the canonical roster and this owner's resolution
-  * without rediscovery under destination settings. Returns whether the scope changed.
-  */
- async rebind(cwd: string): Promise<boolean> {
-  if (this.#released) throw new Error("Cannot rebind a released mixture workspace");
-  const source = this.#ctx;
-  const next = MixtureCatalog.for(source.registry).scope(cwd, source.agentDir);
-  if (next.key === this.#scope.key) {
-   if (!this.#held) {
-    this.#scope = await retainScope(this.#owner, source, this.#sourceRoster, this.#sourceResolution);
-    this.#held = true;
-    if (this.#catalogListener) this.#scope.observe(this.#owner, this.#catalogListener);
-    this.#sourceRoster = undefined;
-    this.#sourceResolution = undefined;
-   }
-   return false;
-  }
-  // Keep both the canonical roster and this owner's resolution if the move
-  // and immediate restoration fail; a retry must not rediscover under destination settings.
-  this.#sourceRoster ??= this.#scope.roster();
-  this.#sourceResolution ??= this.#scope.resolution(this.#owner) ?? this.#sourceRoster;
-  try {
-   // release may remove the owner and then throw while registering the remaining scopes.
-   this.#held = false;
-   this.#scope.release(this.#owner);
-   const destination = await retainScope(this.#owner, { ...source, cwd });
-   this.#scope = destination;
-   this.#ctx = { ...source, cwd };
-   this.#held = true;
-   if (this.#catalogListener) destination.observe(this.#owner, this.#catalogListener);
-   this.#sourceRoster = undefined;
-   this.#sourceResolution = undefined;
-  } catch (error) {
-   try {
-    this.#scope = await retainScope(this.#owner, source, this.#sourceRoster, this.#sourceResolution);
-    this.#held = true;
-    if (this.#catalogListener) this.#scope.observe(this.#owner, this.#catalogListener);
-    this.#sourceRoster = undefined;
-    this.#sourceResolution = undefined;
-   } catch (restoreError) {
-    logger.warn("Mixture source scope restoration failed after rebind error", {
-     from: source.cwd,
-     to: cwd,
-     restoreError: restoreError instanceof Error ? restoreError.message : String(restoreError),
-    });
-   }
-   logger.warn("Mixture workspace rebind failed; attempted to keep the previous workspace", {
-    from: source.cwd,
-    to: cwd,
-    error: error instanceof Error ? error.message : String(error),
-   });
-   throw error;
-  }
-  return true;
- }
+	/** Keep the live session's selected model in sync with shared registry metadata. */
+	observeCatalog(listener: () => void): void {
+		this.#catalogListener = listener;
+		if (this.#held) this.#scope.observe(this.#owner, listener);
+	}
+	/**
+	 * Move the hold to `cwd`'s scope, discovering it under the current settings if no one
+	 * holds it yet. Release the source first to avoid a false name.scope_conflict.
+	 * On failure restore both the canonical roster and this owner's resolution
+	 * without rediscovery under destination settings. Returns whether the scope changed.
+	 */
+	async rebind(cwd: string): Promise<boolean> {
+		if (this.#released) throw new Error("Cannot rebind a released mixture workspace");
+		const source = this.#ctx;
+		const next = MixtureCatalog.for(source.registry).scope(cwd, source.agentDir);
+		if (next.key === this.#scope.key) {
+			if (!this.#held) {
+				this.#scope = await retainScope(this.#owner, source, this.#sourceRoster, this.#sourceResolution);
+				this.#held = true;
+				if (this.#catalogListener) this.#scope.observe(this.#owner, this.#catalogListener);
+				this.#sourceRoster = undefined;
+				this.#sourceResolution = undefined;
+			}
+			return false;
+		}
+		// Keep both the canonical roster and this owner's resolution if the move
+		// and immediate restoration fail; a retry must not rediscover under destination settings.
+		this.#sourceRoster ??= this.#scope.roster();
+		this.#sourceResolution ??= this.#scope.resolution(this.#owner) ?? this.#sourceRoster;
+		try {
+			// release may remove the owner and then throw while registering the remaining scopes.
+			this.#held = false;
+			this.#scope.release(this.#owner);
+			const destination = await retainScope(this.#owner, { ...source, cwd });
+			this.#scope = destination;
+			this.#ctx = { ...source, cwd };
+			this.#held = true;
+			if (this.#catalogListener) destination.observe(this.#owner, this.#catalogListener);
+			this.#sourceRoster = undefined;
+			this.#sourceResolution = undefined;
+		} catch (error) {
+			try {
+				this.#scope = await retainScope(this.#owner, source, this.#sourceRoster, this.#sourceResolution);
+				this.#held = true;
+				if (this.#catalogListener) this.#scope.observe(this.#owner, this.#catalogListener);
+				this.#sourceRoster = undefined;
+				this.#sourceResolution = undefined;
+			} catch (restoreError) {
+				logger.warn("Mixture source scope restoration failed after rebind error", {
+					from: source.cwd,
+					to: cwd,
+					restoreError: restoreError instanceof Error ? restoreError.message : String(restoreError),
+				});
+			}
+			logger.warn("Mixture workspace rebind failed; attempted to keep the previous workspace", {
+				from: source.cwd,
+				to: cwd,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			throw error;
+		}
+		return true;
+	}
 
- /** Drop the hold; releasing twice is harmless and never restores a failed move. */
- release(): void {
-  if (this.#released) return;
-  this.#released = true;
-  this.#sourceRoster = undefined;
-  this.#sourceResolution = undefined;
-  if (!this.#held) return;
-  this.#held = false;
-  this.#scope.release(this.#owner);
- }
+	/** Drop the hold; releasing twice is harmless and never restores a failed move. */
+	release(): void {
+		if (this.#released) return;
+		this.#released = true;
+		this.#sourceRoster = undefined;
+		this.#sourceResolution = undefined;
+		if (!this.#held) return;
+		this.#held = false;
+		this.#scope.release(this.#owner);
+	}
 }
