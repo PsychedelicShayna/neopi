@@ -6,12 +6,18 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { Agent } from "@oh-my-pi/pi-agent-core";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import type { Args } from "@oh-my-pi/pi-coding-agent/cli/args";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { exportFromFile } from "@oh-my-pi/pi-coding-agent/export/html";
 import { createSessionManager, type SessionInUseChoice } from "@oh-my-pi/pi-coding-agent/main";
+import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionInUseError } from "@oh-my-pi/pi-coding-agent/session/session-lease";
 import { loadSessionFile } from "@oh-my-pi/pi-coding-agent/session/session-loader";
+import { findMostRecentNonEmptySession } from "@oh-my-pi/pi-coding-agent/session/session-listing";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { getConfigRootDir, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 import { RpcChild } from "../helpers/rpc-child";
@@ -180,6 +186,102 @@ describe("session lifetime lease", () => {
 		const second = await LeaseHolder.start(missing, agentDir);
 		await second.kill();
 	}, 30_000);
+
+	/** Whether a separate process can take the lease on `file` right now. */
+	async function anotherProcessCanTake(file: string): Promise<boolean> {
+		let probe: LeaseHolder;
+		try {
+			probe = await LeaseHolder.start(file, agentDir);
+		} catch (error) {
+			if (String(error).includes("SessionInUseError")) return false;
+			throw error;
+		}
+		await probe.kill();
+		return true;
+	}
+
+	it("a symlinked alias of a leased file shares its lease", async () => {
+		const aliasDir = path.join(tempDir.path(), "aliases");
+		fs.mkdirSync(aliasDir);
+		const alias = path.join(aliasDir, "alias.jsonl");
+		fs.symlinkSync(leased.file, alias);
+
+		const rejection = await SessionManager.open(alias).then(
+			() => undefined,
+			(error: unknown) => error,
+		);
+		expect(rejection).toBeInstanceOf(SessionInUseError);
+		expect((rejection as SessionInUseError).pid).toBe(holder!.pid);
+	}, 30_000);
+
+	it("a holder that could not write its record is still reported in use", async () => {
+		// The degraded holder state: gate held, no `.lease` record (unwritable or full directory).
+		fs.rmSync(path.join(dir, `.${path.basename(leased.file)}.lease`));
+
+		const sessions = await SessionManager.list(cwd, dir);
+		expect(sessions.find(session => session.path === leased.file)?.inUse).toEqual({ pid: 0 });
+		// Newest-session selection (--continue, open_session) moves on to the free one.
+		expect(await findMostRecentNonEmptySession(dir)).toBe(older.file);
+	}, 30_000);
+
+	it("a rollback that cannot reacquire its file stops writing and reports the loss", async () => {
+		const manager = await SessionManager.open(older.file);
+		const failures: Error[] = [];
+		manager.onPersistenceError(error => failures.push(error));
+		const snapshot = manager.captureState();
+		const other = await seedSession(cwd, path.join(tempDir.path(), "other"), "other question");
+		await manager.setSessionFile(other.file);
+		// The switch released older.file; another process takes it before the rollback.
+		const thief = await LeaseHolder.start(older.file, agentDir);
+		try {
+			const sizeBefore = fs.statSync(older.file).size;
+			manager.restoreState(snapshot);
+			manager.appendMessage({ role: "user", content: "must not land", timestamp: Date.now() });
+			await manager.flush().catch(() => {});
+			expect(fs.statSync(older.file).size).toBe(sizeBefore);
+			expect(failures.some(error => error instanceof SessionInUseError)).toBe(true);
+			await expect(manager.close()).rejects.toBeInstanceOf(SessionInUseError);
+		} finally {
+			await thief.kill();
+		}
+	}, 30_000);
+
+	it("switchSession keeps its file leased until a rolled-back switch restores it", async () => {
+		const authStorage = await AuthStorage.create(":memory:");
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected built-in anthropic model to exist");
+		const otherProject = path.join(tempDir.path(), "other-project");
+		fs.mkdirSync(otherProject);
+		const target = await seedSession(otherProject, path.join(tempDir.path(), "other"), "target question");
+		const session = new AgentSession({
+			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
+			sessionManager: await SessionManager.open(older.file),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry: new ModelRegistry(authStorage),
+		});
+		try {
+			let takenDuringSwitch: boolean | undefined;
+			const switched = await session.switchSession(target.file, {
+				onCwdChange: async () => {
+					// The manager already moved to the target file; the original is mid-transition.
+					takenDuringSwitch = await anotherProcessCanTake(older.file);
+					return false;
+				},
+			});
+			expect(switched).toBe(false);
+			expect(takenDuringSwitch).toBe(false);
+			expect(session.sessionFile).toBe(older.file);
+			expect(await anotherProcessCanTake(older.file)).toBe(false);
+			// The restored session still owns and writes its file.
+			const sizeBefore = fs.statSync(older.file).size;
+			session.sessionManager.appendMessage({ role: "user", content: "after rollback", timestamp: Date.now() });
+			await session.sessionManager.flush();
+			expect(fs.statSync(older.file).size).toBeGreaterThan(sizeBefore);
+		} finally {
+			await session.dispose();
+			authStorage.close();
+		}
+	}, 60_000);
 
 	describe("--resume on a leased session", () => {
 		async function resumeWith(choice: SessionInUseChoice | undefined): Promise<SessionManager | undefined> {

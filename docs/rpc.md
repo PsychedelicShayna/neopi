@@ -53,7 +53,7 @@ A process that writes a session file holds an exclusive OS-level lease on it fro
   { "type": "startup_error", "code": "session_in_use", "pid": 4242, "sessionFile": "/home/u/.omp/agent/sessions/.../2026-...jsonl" }
   ```
 
-  `pid` is the holder's process id (`0` in the rare case the holder had not recorded itself yet).
+  `pid` is the holder's process id, or `0` when the holder has not recorded itself (it is still starting, or its session directory is read-only or full and the record could not be written). A holder with `pid: 0` still owns the file.
 - **Commands.** `switch_session` (and `branch`) targeting a file another process holds return `success: false` with `code: "session_in_use"`; the current session, including a running turn, is left unchanged. `open_session` skips leased sessions when picking the newest one in `sessionDir`, as `--continue` does.
 - **Flagless launches** create a new file and hold its lease, so a later `--resume` of that file from another process is refused while this process lives.
 - Read-only consumers (`get_subagent_messages`, `export_html`, `npi render`, transcript readers) never take the lease and work on leased files.
