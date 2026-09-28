@@ -2,8 +2,8 @@ import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import type { CoordinationDetails } from "@oh-my-pi/pi-tui/tools/wait";
 import type { Settings } from "../config/settings";
-import { IrcBus } from "./bus";
-import { type AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
+import { IrcBus, ircRelayRoot } from "./bus";
+import type { AgentRegistry } from "../registry/agent-registry";
 import { ensurePersistedRoster } from "../registry/persisted-agents";
 import { canSpawnAtDepth } from "../task/types";
 
@@ -62,7 +62,10 @@ export async function executeSend(
 	}
 
 	const targets = isBroadcast ? registry.listVisibleTo(senderId).map(ref => ref.id) : [to];
-	const suppressRelay = isBroadcast && targets.includes(MAIN_AGENT_ID);
+	// A broadcast that reaches the sender's root is shown there directly; the
+	// display-only relay to that root would duplicate it.
+	const relayRootId = ircRelayRoot(registry, senderId)?.id;
+	const suppressRelay = isBroadcast && relayRootId !== undefined && targets.includes(relayRootId);
 	const bus = IrcBus.global();
 	const receipts = await Promise.all(
 		targets.map(target => bus.send({ from: senderId, to: target, body: message }, { suppressRelay })),

@@ -185,14 +185,12 @@ describe("runSubprocess soft request budget", () => {
 	beforeEach(() => {
 		AgentRegistry.resetGlobalForTests();
 		AgentLifecycleManager.resetGlobalForTests();
-		AsyncJobManager.resetForTests();
 		tempDir = TempDir.createSync("@pi-soft-budget-");
 	});
 	afterEach(() => {
 		vi.restoreAllMocks();
 		AgentLifecycleManager.resetGlobalForTests();
 		AgentRegistry.resetGlobalForTests();
-		AsyncJobManager.resetForTests();
 		tempDir[Symbol.dispose]();
 	});
 
@@ -518,12 +516,11 @@ describe("runSubprocess soft request budget", () => {
 		mockCreateAgentSession(handle.session);
 		registerRunning(id, handle.session, workerSessionFile);
 		const manager = new AsyncJobManager({ maxRunningJobs: 1 });
-		AsyncJobManager.setInstance(manager);
 		manager.register(
 			"task",
 			"shutdown regression",
 			async ({ signal }) => {
-				const result = await runSubprocess({ ...baseOptions(id), signal });
+				const result = await runSubprocess({ ...baseOptions(id), signal, asyncJobManager: manager });
 				return result.output;
 			},
 			{ ownerId: "Main", agentId: id },
@@ -531,7 +528,6 @@ describe("runSubprocess soft request budget", () => {
 
 		await promptStarted.promise;
 		await manager.dispose({ timeoutMs: 1_000 });
-		AsyncJobManager.setInstance(undefined);
 
 		expect(await Bun.file(`${workerSessionFile}.tombstone`).exists()).toBe(false);
 		expect(AgentRegistry.global().get(id)).toBeUndefined();

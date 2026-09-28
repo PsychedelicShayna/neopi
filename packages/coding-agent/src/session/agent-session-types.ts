@@ -83,6 +83,14 @@ export interface AsyncJobSnapshot {
 	delivery: AsyncJobDeliveryState;
 }
 
+/** Outcome of {@link AgentSession.cancelRootWork}. */
+export interface RootWorkCancelResult {
+	/** True when every cancelled job of the root's domain settled before the deadline. */
+	settled: boolean;
+	/** Jobs still winding down at the deadline; they keep settling in the background. */
+	pendingJobIds: string[];
+}
+
 export type { ShakeMode, ShakeResult } from "./shake-types";
 
 /**
@@ -281,10 +289,16 @@ export interface AgentSessionConfig {
 	parentEvalSessionId?: string;
 	/** Logical owner for retained eval kernels created by this session. */
 	evalKernelOwnerId?: string;
-	/** Async job manager owned and disposed by this session. */
+	/** Async job manager owned and disposed by this session: the root's async-job domain. Top-level sessions only. */
 	ownedAsyncJobManager?: AsyncJobManager;
-	/** Async job manager visible to this session. */
+	/** Async job manager visible to this session (a subagent's is its root's). */
 	asyncJobManager?: AsyncJobManager;
+	/**
+	 * Root-wide cancellation of this root's async-job domain and descendants,
+	 * wired by `createAgentSession` for top-level sessions; backs
+	 * {@link AgentSession.cancelRootWork}.
+	 */
+	cancelRootWork?: (options: { timeoutMs?: number }) => Promise<RootWorkCancelResult>;
 	/** Registry identity used for IRC routing. */
 	agentId?: string;
 	/** Whether this is a top-level or subagent session. */

@@ -18,6 +18,8 @@ const authStorage = await discoverAuthStorage();
 const modelRegistry = await discoverModels(authStorage);
 
 await createAgentSession({
+	// Each concurrently live session needs a distinct root id (a duplicate throws AgentIdConflictError).
+	agentId: "DefaultAuth",
 	sessionManager: SessionManager.inMemory(),
 	authStorage,
 	modelRegistry,
@@ -29,6 +31,7 @@ const customAuthStorage = await AuthStorage.create("/tmp/my-app/agent.db");
 const customModelRegistry = await ModelRegistry.create(customAuthStorage, "/tmp/my-app/models.json");
 
 await createAgentSession({
+	agentId: "CustomAuth",
 	sessionManager: SessionManager.inMemory(),
 	authStorage: customAuthStorage,
 	modelRegistry: customModelRegistry,
@@ -38,6 +41,7 @@ console.log("Session with custom auth storage location");
 // Runtime API key override (not persisted to disk)
 authStorage.keys.setRuntime("anthropic", "sk-my-temp-key");
 await createAgentSession({
+	agentId: "RuntimeKey",
 	sessionManager: SessionManager.inMemory(),
 	authStorage,
 	modelRegistry,
@@ -47,6 +51,7 @@ console.log("Session with runtime API key override");
 // No models.json - only built-in models
 const simpleRegistry = await ModelRegistry.create(authStorage); // null = no models.json
 await createAgentSession({
+	agentId: "CustomRegistry",
 	sessionManager: SessionManager.inMemory(),
 	authStorage,
 	modelRegistry: simpleRegistry,

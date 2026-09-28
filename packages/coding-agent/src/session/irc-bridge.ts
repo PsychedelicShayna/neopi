@@ -178,9 +178,11 @@ export class IrcBridge {
 		const streaming = this.#host.isStreaming();
 		const planModeIdle = !streaming && this.#host.planModeEnabled();
 		// An idle subagent runs a monitored wake turn whose output is relayed
-		// back to the sender (task executor `relayWakeTurnOutput`); the main
-		// agent and mid-turn asides have no such relay.
-		const relayOnStop = !streaming && !planModeIdle && msg.to !== MAIN_AGENT_ID && msg.wakeRelay !== true;
+		// back to the sender (task executor `relayWakeTurnOutput`); a root agent
+		// (the default "Main" or any other top-level session) and mid-turn
+		// asides have no such relay.
+		const recipientIsRoot = msg.to === MAIN_AGENT_ID || AgentRegistry.global().get(msg.to)?.kind === "main";
+		const relayOnStop = !streaming && !planModeIdle && !recipientIsRoot && msg.wakeRelay !== true;
 		const record: CustomMessage = {
 			role: "custom",
 			customType: "irc:incoming",

@@ -849,3 +849,33 @@ describe("pickRecentFocusableAgentId", () => {
 		expect(pickRecentFocusableAgentId(refs, "Gone")).toBe("Newest");
 	});
 });
+
+describe("SessionFocusController with several top-level roots", () => {
+	beforeAll(() => {
+		initTheme();
+	});
+
+	it("never attaches the UI to another root's subagent", async () => {
+		const h = makeHarness();
+		h.registry.register({ id: "DeckA", displayName: "main", kind: "main", session: h.main.session, status: "idle" });
+		const otherRoot = makeSessionStub();
+		h.registry.register({
+			id: "DeckB",
+			displayName: "main",
+			kind: "main",
+			session: otherRoot.session,
+			status: "idle",
+		});
+		const foreign = makeSessionStub();
+		registerSub(h.registry, "DeckB.Research", foreign.session, "DeckB");
+		const own = makeSessionStub();
+		registerSub(h.registry, "DeckA.Research", own.session, "DeckA");
+
+		await expect(h.controller.focusAgent("DeckB.Research")).rejects.toThrow(/another session/);
+		expect(h.controller.target).toBeUndefined();
+		expect(h.controller.focusedAgentId).toBeUndefined();
+
+		await h.controller.focusAgent("DeckA.Research");
+		expect(h.controller.target).toBe(own.session);
+	});
+});

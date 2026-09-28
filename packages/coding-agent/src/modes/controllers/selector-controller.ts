@@ -95,6 +95,7 @@ import { collapseSharedUsageReports } from "@oh-my-pi/pi-tui/overlays/usage-disp
 import { limitMatchesActiveAccount } from "../../slash-commands/helpers/active-oauth-account";
 import { AgentHubOverlayComponent } from "@oh-my-pi/pi-tui/overlays/agent-hub";
 import { createAgentHubRuntime } from "../agent-hub-runtime";
+import { AgentRegistry } from "../../registry/agent-registry";
 import { AgentsHubComponent } from "@oh-my-pi/pi-tui/overlays/agents-hub";
 import { CopySelectorComponent } from "@oh-my-pi/pi-tui/overlays/copy-selector";
 import { ExtensionDashboard } from "@oh-my-pi/pi-tui/overlays/extensions/extension-dashboard";
@@ -2320,6 +2321,9 @@ export class SelectorController {
 				registry: this.ctx.collabGuest?.agentRegistry,
 				remote: this.ctx.collabGuest?.hubRemote,
 				sessionFile: this.ctx.sessionManager.getSessionFile() ?? null,
+				// A collab guest mirrors the host's own registry; locally, the hub
+				// only shows the root this UI belongs to.
+				root: this.ctx.collabGuest ? undefined : () => AgentRegistry.global().rootForSession(this.ctx.session),
 			}),
 			observers,
 			hubKeys,

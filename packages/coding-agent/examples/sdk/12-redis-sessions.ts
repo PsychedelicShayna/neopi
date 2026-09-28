@@ -34,12 +34,15 @@ const sessionDir = "/sessions/my-project";
 
 // 1) Fresh persistent session, JSONL backed by Redis.
 const { session } = await createAgentSession({
+	// Each concurrently live session needs a distinct root id (a duplicate throws AgentIdConflictError).
+	agentId: "RedisSession",
 	sessionManager: SessionManager.create(process.cwd(), sessionDir, storage),
 });
 console.log("New Redis session:", session.sessionFile);
 
 // 2) Continue the most recent session for this `sessionDir`.
 const { session: continued } = await createAgentSession({
+	agentId: "RedisContinued",
 	sessionManager: await SessionManager.continueRecent(process.cwd(), sessionDir, storage),
 });
 console.log("Resumed:", continued.sessionFile);

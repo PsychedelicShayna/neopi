@@ -28,10 +28,20 @@ export class AgentOutputManager {
 	readonly #taken = new Set<string>();
 	readonly #getArtifactsDir: () => string | null;
 	readonly #parentPrefix: string | undefined;
+	readonly #isReserved: ((id: string) => boolean) | undefined;
 
-	constructor(getArtifactsDir: () => string | null, options?: { parentPrefix?: string }) {
+	/**
+	 * @param options.parentPrefix Scope every allocated id under this prefix (`<prefix>.<name>`).
+	 * @param options.isReserved Reject a final (prefixed) id owned outside this manager, e.g. another
+	 * top-level root's id; the candidate is skipped like a repeated name.
+	 */
+	constructor(
+		getArtifactsDir: () => string | null,
+		options?: { parentPrefix?: string; isReserved?: (id: string) => boolean },
+	) {
 		this.#getArtifactsDir = getArtifactsDir;
 		this.#parentPrefix = options?.parentPrefix;
+		this.#isReserved = options?.isReserved;
 		// Reserve the advisor transcript stem: a subagent allocated this id would
 		// write `<id>.jsonl`, clobbering the advisor's `__advisor.jsonl` in the same
 		// artifacts dir. Reserving bumps such a request to `__advisor-2`.
@@ -83,11 +93,15 @@ export class AgentOutputManager {
 	/** Pick the first free name (base, then `base-2`, `base-3`, …) and reserve it. */
 	#allocateUnique(id: string): string {
 		let candidate = id;
-		for (let n = 2; this.#taken.has(candidate); n++) {
+		for (let n = 2; this.#taken.has(candidate) || this.#isReserved?.(this.#scoped(candidate)); n++) {
 			candidate = `${id}-${n}`;
 		}
 		this.#taken.add(candidate);
-		return this.#parentPrefix ? `${this.#parentPrefix}.${candidate}` : candidate;
+		return this.#scoped(candidate);
+	}
+
+	#scoped(name: string): string {
+		return this.#parentPrefix ? `${this.#parentPrefix}.${name}` : name;
 	}
 
 	/** Reserve final IDs discovered outside the output directory scan. */

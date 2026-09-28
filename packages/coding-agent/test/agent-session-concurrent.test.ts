@@ -85,7 +85,6 @@ describe("AgentSession concurrent prompt guard", () => {
 			removeSyncWithRetries(tempDir);
 		}
 		vi.restoreAllMocks();
-		AsyncJobManager.resetForTests();
 	});
 
 	it("continues a main session from session_stop feedback before settling", async () => {

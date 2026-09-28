@@ -109,7 +109,7 @@ import { formatUsageResetWindow } from "@oh-my-pi/pi-tui/overlays/usage-display"
 import type { MixtureSessionEvent, SessionMixtureHost } from "../moa/host";
 import { isMixtureModel } from "../moa/provider";
 import { loadAdvisorTranscriptCosts } from "../advisor";
-import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, type AsyncJob, AsyncJobManager } from "../async";
+import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, type AsyncJob, type AsyncJobManager } from "../async";
 import { reset as resetCapabilities } from "../capability";
 import type { EffectiveExtensionRoots } from "../capability/types";
 import {
@@ -294,6 +294,7 @@ import type {
 	Prewalk,
 	PromptOptions,
 	ResetSessionContextResult,
+	RootWorkCancelResult,
 	ResolvedRoleModel,
 	RestoredQueuedMessage,
 	RoleModelCycle,
@@ -829,18 +830,20 @@ export class AgentSession implements SettingsScope {
 	readonly #eval: EvalRunner;
 	readonly #evalToolSession: ToolSession | undefined;
 	/**
-	 * AsyncJobManager owned by this session (top-level only). Subagents leave
-	 * this undefined and **MUST NOT** dispose the global instance on teardown.
+	 * AsyncJobManager owned by this session: the async-job domain of the root
+	 * this top-level session heads. Subagents leave this undefined and **MUST
+	 * NOT** dispose their root's manager on teardown.
 	 */
 	readonly #ownedAsyncJobManager: AsyncJobManager | undefined;
 	/**
 	 * AsyncJobManager scoped to this session for introspection/cancellation.
 	 *
-	 * This differs from `#ownedAsyncJobManager`: subagents can inherit a parent
-	 * manager for their own owner id, while secondary top-level sessions are left
-	 * undefined to avoid reading the primary's jobs.
+	 * This differs from `#ownedAsyncJobManager`: subagents use their root's
+	 * manager for their own owner id; a top-level session uses the one it owns.
 	 */
 	readonly #asyncJobManager: AsyncJobManager | undefined;
+	/** Root-wide cancellation wired by createAgentSession; top-level sessions only. */
+	readonly #cancelRootWork: ((options: { timeoutMs?: number }) => Promise<RootWorkCancelResult>) | undefined;
 	/** Clears this session's owner delivery sink registration; set when a manager + agent id exist. */
 	#unregisterAsyncDeliverySink: (() => void) | undefined;
 	/**
@@ -1567,6 +1570,7 @@ export class AgentSession implements SettingsScope {
 		});
 		this.#ownedAsyncJobManager = config.ownedAsyncJobManager;
 		this.#asyncJobManager = config.asyncJobManager ?? config.ownedAsyncJobManager;
+		this.#cancelRootWork = config.cancelRootWork;
 		const modelControlsHost: ModelControlsHost = {
 			agent: this.agent,
 			settings: this.settings,
@@ -2639,11 +2643,9 @@ export class AgentSession implements SettingsScope {
 	 * Cleanup runs against this session's scoped manager: running jobs are
 	 * cancelled, finished rows are evicted with their pending deliveries, and any
 	 * async-result follow-up already queued for injection is dropped. Subagents have
-	 * unique agent ids and inherit the parent's manager to clean up their own
-	 * jobs. A secondary in-process top-level session gets no scoped manager,
-	 * because it defaults to `MAIN_AGENT_ID`; reaching through the global
-	 * singleton would tear down the owning primary session's bash/task jobs at
-	 * dispose time (issue #1923).
+	 * unique agent ids and use their root's manager, so this never reaches a
+	 * parent's or sibling's jobs; a top-level session only ever sees its own
+	 * root's manager, so it never reaches another root's jobs either.
 	 *
 	 * No-op when no manager is reachable or this session has no agent id.
 	 */
@@ -2739,6 +2741,29 @@ export class AgentSession implements SettingsScope {
 		await manager.waitForOwnerJobs(this.#agentId, { excludeSuppressed: true });
 		await manager.drainDeliveries({ filter: { ownerId: this.#agentId } });
 		await this.waitForIdle();
+	}
+
+	/**
+	 * Root-wide cancellation for embedders hosting several top-level sessions in
+	 * one process. Cancels every running job in the async-job domain this root
+	 * owns — its own and every descendant's bash, task, and eval work — waits
+	 * until `timeoutMs` (default 5s) for them to settle, then releases the root's
+	 * kept-alive descendant agents. Jobs and agents of any other root are never
+	 * touched, and this session stays usable: new async work may be launched
+	 * afterward. Interrupted descendants are released (transcripts kept, refs
+	 * unregistered), not tombstoned as kills; one still settling at the
+	 * deadline is released once its job settles. Workpools owned in this root's
+	 * tree are closed, so their names can be reused. The root's own in-flight turn is not aborted; call
+	 * {@link abort} first to stop it. Idempotent.
+	 *
+	 * Only a top-level session owns a job domain; calling this on a subagent
+	 * session throws.
+	 */
+	async cancelRootWork(options: { timeoutMs?: number } = {}): Promise<RootWorkCancelResult> {
+		if (!this.#ownedAsyncJobManager || !this.#cancelRootWork) {
+			throw new Error("cancelRootWork() requires a top-level session that owns its async-job domain.");
+		}
+		return this.#cancelRootWork(options);
 	}
 
 	/**
@@ -5197,16 +5222,10 @@ export class AgentSession implements SettingsScope {
 		this.#cancelOwnAsyncJobs(manager ? ASYNC_JOB_MANAGER_SHUTDOWN_REASON : undefined);
 		if (!manager) return;
 
-		try {
-			const drained = await manager.dispose({ timeoutMs: 3_000 });
-			const deliveryState = manager.getDeliveryState();
-			if (drained === false && deliveryState) {
-				logger.warn("Async job completion deliveries still pending during dispose", { ...deliveryState });
-			}
-		} finally {
-			if (AsyncJobManager.instance() === manager) {
-				AsyncJobManager.setInstance(undefined);
-			}
+		const drained = await manager.dispose({ timeoutMs: 3_000 });
+		const deliveryState = manager.getDeliveryState();
+		if (drained === false && deliveryState) {
+			logger.warn("Async job completion deliveries still pending during dispose", { ...deliveryState });
 		}
 	}
 
