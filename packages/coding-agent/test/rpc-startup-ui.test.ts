@@ -31,6 +31,9 @@ describe("RPC startup extension UI", () => {
 			30_000,
 		);
 		expect(dialog.title).toBe("Startup check");
+		// Version negotiation is transport-level: answered while the dialog is still open.
+		const negotiated = await child.request({ type: "negotiate_protocol", protocolVersion: 2 }, 30_000);
+		expect(negotiated).toMatchObject({ success: true, data: { protocolVersion: 2 } });
 		child.send({ type: "extension_ui_response", id: dialog.id, confirmed: true });
 
 		const notice = await child.waitFor(frame => frame.type === "extension_ui_request" && frame.method === "notify");
