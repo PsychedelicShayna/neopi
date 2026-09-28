@@ -23,7 +23,7 @@ import {
 	TempDir,
 } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
-import { createMoaFixture, createMoaSession, FakeMembers } from "./helpers/moa-setup";
+import { createMoaFixture, createMoaSession, DRAFT_THEN_EDIT_TOML, FakeMembers } from "./helpers/moa-setup";
 
 function textContent(result: { content?: Array<{ type: string; text?: string }> }): string {
 	return (
@@ -259,8 +259,8 @@ describe("createAgentSession cwd after /move", () => {
 				output: text => {
 					output.push(text);
 				},
-				refreshCommands: () => {},
-				reloadPlugins: async () => {},
+				refreshCommands: () => { },
+				reloadPlugins: async () => { },
 			});
 			expect(output.join("\n")).toContain("Moved to ");
 			expect(sessionManager.getCwd()).toBe(cwdB);
@@ -283,7 +283,7 @@ describe("createAgentSession cwd after /move", () => {
 });
 
 describe("headless /move mixture run continuity", () => {
-	it("keeps the source run on late refresh failure and warns only when the move commits", async () => {
+	it("rebinds same-name mixture metadata on move and restores it after a failed move", async () => {
 		const root = TempDir.createSync("@moa-move-");
 		const originalProjectDir = getProjectDir();
 		const members = new FakeMembers();
@@ -291,6 +291,24 @@ describe("headless /move mixture run continuity", () => {
 		const fixture = await createMoaFixture(root);
 		const destination = root.join("destination");
 		fs.mkdirSync(destination);
+		await Bun.write(
+			path.join(getProjectAgentDir(fixture.cwd), "MIXTURES.toml"),
+			DRAFT_THEN_EDIT_TOML.replace("tools = false", "tools = false\nmax_tokens = 8000"),
+		);
+		await Bun.write(
+			path.join(getProjectAgentDir(destination), "MIXTURES.toml"),
+			`[[mixtures]]
+name = "draft-then-edit"
+entry = "editor"
+
+[[mixtures.members]]
+id = "editor"
+model = "fake/editor"
+system_prompt = "Return the final answer."
+tools = false
+max_tokens = 2000
+`,
+		);
 		const manager = SessionManager.create(fixture.cwd, root.join("sessions"));
 		const settings = Settings.isolated({ "compaction.enabled": false });
 		const session = await createMoaSession(fixture, { sessionManager: manager, settings });
@@ -299,8 +317,8 @@ describe("headless /move mixture run continuity", () => {
 				.getBranch()
 				.flatMap(entry =>
 					entry.type === "custom" &&
-					entry.customType === MIXTURE_RUN_ENTRY_TYPE &&
-					"reason" in (entry.data as object)
+						entry.customType === MIXTURE_RUN_ENTRY_TYPE &&
+						"reason" in (entry.data as object)
 						? [(entry.data as { run: { id: string } }).run.id]
 						: [],
 				);
@@ -313,15 +331,24 @@ describe("headless /move mixture run continuity", () => {
 			output: (text: string) => {
 				output.push(text);
 			},
-			refreshCommands: () => {},
-			reloadPlugins: async () => {},
+			refreshCommands: () => { },
+			reloadPlugins: async () => { },
 		};
 		const notices: string[] = [];
+		const modelChanges: string[] = [];
 		session.subscribe(event => {
 			if (event.type === "notice" && event.source === "mixture") notices.push(event.message);
+			if (event.type === "model_changed") {
+				const model = session.agent.state.model;
+				modelChanges.push(`${model?.input.join(",")}/${model?.maxTokens}`);
+			}
 		});
 		try {
 			await session.setModel(fixture.registry.find("mixture", "draft-then-edit")!);
+			expect(session.agent.state.model?.input).toEqual(["text", "image"]);
+			expect(session.agent.state.model?.maxTokens).toBe(8000);
+			expect(session.agent.state.model?.contextWindow).toBe(64_000);
+			expect(modelChanges.at(-1)).toBe("text,image/8000");
 			await session.sendUserMessage("first");
 			const sourceRun = checkpointIds().at(-1);
 			expect(sourceRun).toBeDefined();
@@ -336,18 +363,32 @@ describe("headless /move mixture run continuity", () => {
 			await executeAcpBuiltinSlashCommand(`/move ${destination}`, runtime);
 			expect(manager.getCwd()).toBe(fixture.cwd);
 			expect(output.join("\n")).toContain("Move failed: destination plugin refresh failed");
+			expect(session.agent.state.model?.provider).toBe("mixture");
+			expect(session.agent.state.model?.id).toBe("draft-then-edit");
+			expect(session.agent.state.model?.input).toEqual(["text", "image"]);
+			expect(session.agent.state.model?.maxTokens).toBe(8000);
+			expect(session.agent.state.model?.contextWindow).toBe(64_000);
+			expect(modelChanges).toContain("text/2000");
+			expect(modelChanges.at(-1)).toBe("text,image/8000");
 
 			expect(notices).toEqual([]);
 
-			runtime.reloadPlugins = async () => {};
+			runtime.reloadPlugins = async () => { };
 			await executeAcpBuiltinSlashCommand(`/move ${destination}`, runtime);
 			expect(manager.getCwd()).toBe(destination);
+			expect(session.agent.state.model?.provider).toBe("mixture");
+			expect(session.agent.state.model?.id).toBe("draft-then-edit");
+			expect(session.agent.state.model?.input).toEqual(["text"]);
+			expect(session.agent.state.model?.maxTokens).toBe(2000);
+			expect(session.agent.state.model?.contextWindow).toBe(64_000);
+			expect(modelChanges.at(-1)).toBe("text/2000");
 			expect(notices).toEqual([
 				"1 mixture run from the previous workspace was reset; the next message starts a new run",
 			]);
 			await session.sendUserMessage("second");
 			expect(checkpointIds().at(-1)).not.toBe(sourceRun);
-			expect(members.callsTo("writer")).toHaveLength(2);
+			expect(members.callsTo("writer")).toHaveLength(1);
+			expect(members.callsTo("editor")).toHaveLength(2);
 		} finally {
 			await session.dispose();
 			fixture.authStorage.close();
