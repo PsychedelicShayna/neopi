@@ -1,3 +1,4 @@
+import type { CredentialBinding } from "../auth/types";
 import type { PlanConfig, SwitchConfig } from "./config/types";
 import type {
 	AttributionMode, AttemptView, Budget, ConsumptionView, Decision, EstimateView, GrantExpiry,
@@ -5,11 +6,7 @@ import type {
 } from "./wire";
 
 export type AccountingPrincipal = { kind: "key"; id: string } | { kind: "anonymous"; id: string };
-export interface CredentialBinding {
-	readonly provider: string;
-	readonly credentialId: number;
-	readonly fingerprint: string;
-}
+export type { CredentialBinding } from "../auth/types";
 export interface ResolvedPlan {
 	config: PlanConfig;
 	binding?: CredentialBinding;

@@ -95,6 +95,13 @@ export interface StoredAuthCredential {
 	disabledCause: string | null;
 }
 
+/** Immutable stored-row identity used by Plan pins and bound usage ingestion. */
+export interface CredentialBinding {
+	readonly provider: string;
+	readonly credentialId: number;
+	readonly fingerprint: string;
+}
+
 /** One persisted rate-limit block: credential row id + provider-type key + optional scope. */
 export interface StoredCredentialBlock {
 	/** SQLite row id of the credential (auth_credentials.id). */
@@ -856,6 +863,14 @@ export interface KeysApi {
 		sessionId?: string,
 		options?: AuthApiKeyOptions,
 	): Promise<ResolvedApiKey | undefined>;
+	/** Fingerprint one active stored row without consulting ambient runtime/config/env overrides. */
+	fingerprintPinned(credentialId: number, expectedProvider: string): Promise<string | undefined>;
+	/** Resolve only the specified stored row; never rotate to a sibling or ambient credential source. */
+	getPinned(
+		credentialId: number,
+		sessionId: string,
+		options: { expectedProvider: string; expectedFingerprint: string; modelId?: string; signal?: AbortSignal; forceRefresh?: boolean },
+	): Promise<string | undefined>;
 	/**
 	 * Peek at API key for a provider without refreshing OAuth tokens.
 	 * Used for model discovery where we only need to know if credentials exist
