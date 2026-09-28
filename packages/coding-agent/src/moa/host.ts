@@ -72,16 +72,26 @@ function traceSummary(details: MixtureTraceDetails): string {
 	}
 }
 
-/** Wrap a rotation-capable resolver so a switch to another credential row resets account-scoped state. */
-function watchAccount(resolver: ApiKey, onAccount: () => void): ApiKey {
+/**
+ * Wrap a rotation-capable resolver so a switch to another credential row resets
+ * account-scoped state. `credentials` is keyed by the member's provider session
+ * and outlives the call, so a retried member call that lands on another row is
+ * a switch too.
+ */
+function watchAccount(
+	resolver: ApiKey,
+	credentials: Map<string, number>,
+	sessionId: string,
+	onAccount: () => void,
+): ApiKey {
 	if (typeof resolver !== "function") return resolver;
-	let lastCredential: number | undefined;
 	return async context => {
 		const resolved = await resolver(context);
 		const credential = typeof resolved === "object" ? resolved?.credentialId : undefined;
 		if (credential !== undefined) {
-			if (lastCredential !== undefined && credential !== lastCredential) onAccount();
-			lastCredential = credential;
+			const last = credentials.get(sessionId);
+			if (last !== undefined && credential !== last) onAccount();
+			credentials.set(sessionId, credential);
 		}
 		return resolved;
 	};
@@ -90,6 +100,8 @@ function watchAccount(resolver: ApiKey, onAccount: () => void): ApiKey {
 export function createSessionMixtureHost(deps: SessionMixtureHostDeps): SessionMixtureHost {
 	const { sessionManager, modelRegistry, settings } = deps;
 	const runs = new MixtureRunStore();
+	/** Last credential row per member provider session; forgotten with the conversation. */
+	const credentials = new Map<string, number>();
 
 	const persistCard = (details: MixtureTraceDetails): void => {
 		sessionManager.appendCustomMessageEntry(
@@ -161,7 +173,7 @@ export function createSessionMixtureHost(deps: SessionMixtureHostDeps): SessionM
 			return fresh;
 		},
 		resolver(model, sessionId, onAccount) {
-			return watchAccount(modelRegistry.resolver(model, sessionId), onAccount);
+			return watchAccount(modelRegistry.resolver(model, sessionId), credentials, sessionId, onAccount);
 		},
 		prepareContext: deps.prepareContext,
 		conversationKey: () => sessionManager.getSessionId(),
@@ -203,6 +215,7 @@ export function createSessionMixtureHost(deps: SessionMixtureHostDeps): SessionM
 		onEvent,
 		resetConversation(): void {
 			runs.clear();
+			credentials.clear();
 		},
 		commitPersisted(message: AssistantMessage): void {
 			if (!isMixtureModel(message) || !message.responseId) return;

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { Tokenizer } from "@oh-my-pi/pi-agent-core";
 import {
+	type ApiKeyResolver,
 	type AssistantMessage,
 	clearCustomApis,
 	getCustomApi,
@@ -811,6 +812,31 @@ describe("engine contract through a session host", () => {
 			expect(members.calls.map(entry => entry.model.id)).toEqual(["writer", "editor"]);
 		},
 	);
+
+	it("detects a member's credential switch across its calls, per member, until the conversation resets", async () => {
+		let credentialId = 1;
+		const rotating: ApiKeyResolver = async () => ({ apiKey: "fake-key", credentialId });
+		vi.spyOn(fixture.registry, "resolver").mockReturnValue(rotating);
+		const writer = fixture.registry.find("fake", "writer")!;
+		const switched: string[] = [];
+		const resolve = async (sessionId: string) => {
+			const key = host.resolver(writer, sessionId, () => switched.push(sessionId));
+			if (typeof key === "function") await key({ lastChance: false, error: undefined });
+		};
+		await resolve("conv:mix::writer");
+		credentialId = 2;
+		// A retried call of the same member lands on another credential: that is a switch.
+		await resolve("conv:mix::writer");
+		// Another member's first call, and a repeat on the same credential, are not.
+		await resolve("conv:mix::editor");
+		await resolve("conv:mix::writer");
+		expect(switched).toEqual(["conv:mix::writer"]);
+
+		host.resetConversation();
+		credentialId = 3;
+		await resolve("conv:mix::writer");
+		expect(switched).toEqual(["conv:mix::writer"]);
+	});
 
 	const REQUIRED_CHOICES: ToolChoice[] = ["required", "any", { type: "function", name: "yield" }];
 
