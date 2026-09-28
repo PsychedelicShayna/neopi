@@ -20,6 +20,7 @@ import type {
 } from "../usage";
 import { DEFAULT_USAGE_PROVIDERS } from "../usage/registry";
 import { raceSignal } from "./abort";
+import { fingerprintCredential } from "./credential-binding";
 import type { SessionAffinity } from "./affinity";
 import type { CredentialBlocks } from "./blocks";
 import type { KeyOverrides } from "./cascade";
@@ -38,7 +39,7 @@ import { OAUTH_REFRESH_SKEW_MS } from "./refresh";
 import type { OAuthRefresher } from "./refresh";
 import { USAGE_REPORT_TTL_MS } from "./sqlite-credential-store";
 import type { AuthCredentialStore } from "./store";
-import type { AuthCredential, OAuthCredential, ObservedUsageInput, UsageApi } from "./types";
+import type { AuthCredential, CredentialBinding, OAuthCredential, ObservedUsageInput, UsageApi } from "./types";
 import {
 	dedupeUsageReports,
 	isUsageLimitExhausted,
@@ -454,17 +455,41 @@ export class UsageService implements UsageApi {
 		return this.#deps.store.getClientUsageSummary?.(sinceMs) ?? { clients: [] };
 	}
 
-	/** Merge rate-limit headers into the latest account report. */
+	/** Merge rate-limit headers for the session's active OAuth credential (legacy callers). */
 	ingestHeaders(
 		provider: Provider,
 		headers: Record<string, string>,
 		options?: { sessionId?: string; baseUrl?: string; responseStatus?: number },
 	): boolean {
+		const credential = this.#deps.affinity.activeOAuth(provider, options?.sessionId);
+		return credential ? this.#ingestHeadersForCredential(provider, credential, headers, options) : false;
+	}
+
+	/**
+	 * Attribute headers only to the exact local row that supplied this attempt.
+	 * Remote/broker-backed stores cannot persist this report authoritatively and
+	 * must never overlay their local cache or guess an account from affinity.
+	 */
+	ingestHeadersPinned(
+		binding: CredentialBinding,
+		headers: Record<string, string>,
+		options?: { baseUrl?: string; responseStatus?: number },
+	): boolean {
+		if (this.#deps.store.refreshSnapshot || this.#deps.store.fetchUsageReports) return false;
+		const row = this.#deps.store.listAuthCredentials(binding.provider).find(entry => entry.id === binding.credentialId);
+		if (!row || row.disabledCause !== null || row.credential.type !== "oauth") return false;
+		if (fingerprintCredential(row) !== binding.fingerprint) return false;
+		return this.#ingestHeadersForCredential(binding.provider, row.credential, headers, options);
+	}
+
+	#ingestHeadersForCredential(
+		provider: Provider,
+		credential: OAuthCredential,
+		headers: Record<string, string>,
+		options?: { baseUrl?: string; responseStatus?: number },
+	): boolean {
 		const parseHeaders = this.providerFor(provider)?.parseRateLimitHeaders;
 		if (!parseHeaders) return false;
-
-		const credential = this.#deps.affinity.activeOAuth(provider, options?.sessionId);
-		if (!credential) return false;
 
 		const cacheKey = this.#deps.cache.reportKey(oauthUsageRequest(provider, credential, options?.baseUrl));
 		const now = Date.now();
