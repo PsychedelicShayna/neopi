@@ -214,7 +214,11 @@ postmortem.register("exit-only-owner", async () => {
 	await Bun.sleep(100);
 	await Bun.write(exitOnlyFile, "flushed");
 }, { exitOnly: true });
-await Bun.write(readyFile, "ready");
+postmortem.register("manual-hold", async () => {
+	await Bun.write(readyFile, "ready");
+	await Bun.sleep(500);
+});
+void postmortem.cleanup();
 setInterval(() => {}, 1 << 30);
 `;
 
@@ -553,16 +557,7 @@ describe.skipIf(process.platform !== "linux")("print mode exit-with-parent", () 
 			await worker.exited;`,
 		);
 		const host = Bun.spawn(
-			[
-				process.execPath,
-				hostFile,
-				workerPidFile,
-				workerFile,
-				readyFile,
-				cleanupFile,
-				childPidFile,
-				targetFile,
-			],
+			[process.execPath, hostFile, workerPidFile, workerFile, readyFile, cleanupFile, childPidFile, targetFile],
 			{ cwd: REPO_ROOT, env, stdio: ["ignore", "ignore", "inherit"] },
 		);
 		let workerPid: number | undefined;
@@ -616,10 +611,11 @@ describe.skipIf(process.platform !== "linux")("print mode exit-with-parent", () 
 			await Bun.write(process.argv[2], String(worker.pid));
 			await worker.exited;`,
 		);
-		const host = Bun.spawn(
-			[process.execPath, hostFile, workerPidFile, workerFile, readyFile, exitOnlyFile],
-			{ cwd: REPO_ROOT, env, stdio: ["ignore", "ignore", "inherit"] },
-		);
+		const host = Bun.spawn([process.execPath, hostFile, workerPidFile, workerFile, readyFile, exitOnlyFile], {
+			cwd: REPO_ROOT,
+			env,
+			stdio: ["ignore", "ignore", "inherit"],
+		});
 		let workerPid: number | undefined;
 		cleanups.push(() => {
 			for (const pid of [host.pid, workerPid]) {
@@ -657,10 +653,11 @@ describe.skipIf(process.platform !== "linux")("print mode exit-with-parent", () 
 			await Bun.write(process.argv[2], String(worker.pid));
 			await worker.exited;`,
 		);
-		const host = Bun.spawn(
-			[process.execPath, hostFile, workerPidFile, workerFile, dir, sessionPathFile, readyFile],
-			{ cwd: REPO_ROOT, env, stdio: ["ignore", "ignore", "inherit"] },
-		);
+		const host = Bun.spawn([process.execPath, hostFile, workerPidFile, workerFile, dir, sessionPathFile, readyFile], {
+			cwd: REPO_ROOT,
+			env,
+			stdio: ["ignore", "ignore", "inherit"],
+		});
 		let workerPid: number | undefined;
 		cleanups.push(() => {
 			for (const pid of [host.pid, workerPid]) {

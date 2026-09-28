@@ -690,6 +690,10 @@ export function cleanup(): Promise<void> {
  * can await this pass, then use {@link exitProcess}.
  */
 export function cleanupForExit(reason: Reason): Promise<void> {
+	if (cleanupStage === "running" && activeCleanupKeepAlive) {
+		const keepAlivePass = cleanupPromise ?? Promise.resolve();
+		return keepAlivePass.then(() => runCleanup(reason));
+	}
 	return runCleanup(reason);
 }
 

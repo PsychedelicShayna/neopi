@@ -141,10 +141,7 @@ async function tearDownGlobalOwnedProcesses(): Promise<void> {
 	await Promise.allSettled([shutdownAllLspClients(), disposeAllKernelSessions(), disposeAllVmContexts()]);
 }
 
-async function tearDownTarget(
-	{ session, mcpManager }: ExitWithParentTarget,
-	teardownMs: number,
-): Promise<void> {
+async function tearDownTarget({ session, mcpManager }: ExitWithParentTarget, teardownMs: number): Promise<void> {
 	// abort() kills the running tool (a foreground bash command) right away;
 	// dispose() reaches MCP and async jobs only after its drain windows, so
 	// those are torn down directly as well. dispose() still has to run: it
