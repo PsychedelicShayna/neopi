@@ -5,6 +5,8 @@
  * request succeeds once the failure clears.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { type } from "@oh-my-pi/omptype";
+import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -120,5 +122,26 @@ describe("AgentSession.setChatMode rollback", () => {
 		expect(await target.setChatMode({ mode: "off" })).toBeUndefined();
 		expect(target.getEnabledToolNames()).toEqual(tools);
 		expect(changes.map(event => event.type === "chat_mode_changed" && event.mode)).toEqual(["erp", "off"]);
+	}, 60_000);
+	it("mounts discoverable host tools registered during chat when coding mode resumes", async () => {
+		const { session: target } = await createSession();
+		const tool: AgentTool = {
+			name: "host_lookup",
+			label: "Host Lookup",
+			description: "Looks up records",
+			loadMode: "discoverable",
+			parameters: type({}),
+			async execute() {
+				return { content: [{ type: "text", text: "record" }] };
+			},
+		};
+		await target.setChatMode({ mode: "chat" });
+		await target.refreshRpcHostTools([tool]);
+		expect(target.getActiveToolNames()).not.toContain(tool.name);
+
+		await target.setChatMode({ mode: "off" });
+		expect(target.getEnabledToolNames()).toContain(tool.name);
+		expect(target.getMountedXdevToolNames()).toContain(tool.name);
+		expect(target.getActiveToolNames()).not.toContain(tool.name);
 	}, 60_000);
 });

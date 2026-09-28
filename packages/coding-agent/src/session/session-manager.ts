@@ -636,6 +636,7 @@ interface SessionManagerStateSnapshot {
 	fallbackRuntimeOnly: boolean;
 	header: SessionHeader;
 	entries: SessionEntry[];
+	reservedEntryIds: string[];
 }
 
 interface DiskQueueOptions {
@@ -1786,6 +1787,7 @@ export class SessionManager {
 			// a rollback observe the move it is undoing.
 			header: structuredClone(this.#header),
 			entries: [...this.#entries],
+			reservedEntryIds: [...this.#reservedEntryIds],
 		};
 	}
 
@@ -1825,6 +1827,9 @@ export class SessionManager {
 		this.#draftOnlySessionCleanupArmed = snapshot.draftOnlySessionCleanupArmed;
 		this.#fallbackRuntimeOnly = snapshot.fallbackRuntimeOnly;
 		this.#applyEntries(snapshot.header, [...snapshot.entries]);
+		for (const id of snapshot.reservedEntryIds) {
+			if (!this.#index.has(id)) this.#reservedEntryIds.add(id);
+		}
 		this.#additionalDirectories = snapshot.header.additionalDirectories ?? [];
 		this.#sessionName = snapshot.sessionName;
 

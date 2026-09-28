@@ -225,6 +225,20 @@ describe("RPC plan mode", () => {
 		expect(session.getEnabledToolNames()).not.toContain("old_host");
 	});
 
+	it("restores a selected host tool refreshed under the same name while planning", async () => {
+		const { session, planMode } = setup();
+		await session.refreshRpcHostTools([makeTool("host_lookup")]);
+		expect(session.getEnabledToolNames()).toContain("host_lookup");
+		await planMode.setMode("plan", undefined);
+		await session.setActiveToolsByName(["read", "write"]);
+		await session.refreshRpcHostTools([{ ...makeTool("host_lookup"), description: "Updated lookup" }]);
+		expect(session.getEnabledToolNames()).not.toContain("host_lookup");
+
+		await planMode.setMode("default", undefined);
+		expect(session.getEnabledToolNames()).toContain("host_lookup");
+		expect(session.getToolByName("host_lookup")?.description).toBe("Updated lookup");
+	});
+
 	it("retains host tools changed during plan mode on exit", async () => {
 		const { session, planMode } = setup();
 		await session.refreshRpcHostTools([makeTool("old_host")]);
@@ -523,6 +537,23 @@ describe("RPC plan mode", () => {
 		await submission;
 		expect(session.getEnabledToolNames()).toContain("new_host");
 		expect(session.getEnabledToolNames()).not.toContain("old_host");
+	});
+
+	it("restores a same-name host tool refresh when the plan is approved", async () => {
+		const { session, planMode, deps, writePlan, propose, waitForRequest } = setup();
+		await session.refreshRpcHostTools([makeTool("host_lookup")]);
+		await planMode.setMode("plan", undefined);
+		await session.setActiveToolsByName(["read", "write"]);
+		await session.refreshRpcHostTools([{ ...makeTool("host_lookup"), description: "Updated lookup" }]);
+		await writePlan("refreshed-host-tool", "# Refreshed host tool\n");
+		const submission = propose("refreshed-host-tool");
+		const request = await waitForRequest();
+		expect(
+			dispatchRpcControlFrame({ type: "plan_proposal_response", id: request.id, decision: "approve" }, deps),
+		).toBe(true);
+		await submission;
+		expect(session.getEnabledToolNames()).toContain("host_lookup");
+		expect(session.getToolByName("host_lookup")?.description).toBe("Updated lookup");
 	});
 
 	it("refine: feedback reaches the tool result and plan mode stays on", async () => {

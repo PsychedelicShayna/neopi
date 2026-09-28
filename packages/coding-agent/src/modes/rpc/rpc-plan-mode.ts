@@ -317,11 +317,21 @@ export class RpcPlanModeController {
 	#restoreTools(owned: OwnedPlanMode): Promise<void> {
 		const session = this.#session;
 		const capturedHostTools = new Set(owned.hostTools);
+		const retainedHostTools = owned.hostTools.filter(name => session.hasRpcHostTool(name));
+		const retainedMountedHostTools = owned.tools.mounted.filter(
+			name => capturedHostTools.has(name) && session.hasRpcHostTool(name),
+		);
 		const currentHostTools = session.getEnabledToolNames().filter(name => session.hasRpcHostTool(name));
 		const currentMountedHostTools = session.getMountedXdevToolNames().filter(name => session.hasRpcHostTool(name));
 		return session.restoreNonMCPToolPresentation(
-			[...owned.tools.enabled.filter(name => !capturedHostTools.has(name)), ...currentHostTools],
-			[...owned.tools.mounted.filter(name => !capturedHostTools.has(name)), ...currentMountedHostTools],
+			[
+				...owned.tools.enabled.filter(name => !capturedHostTools.has(name)),
+				...new Set([...retainedHostTools, ...currentHostTools]),
+			],
+			[
+				...owned.tools.mounted.filter(name => !capturedHostTools.has(name)),
+				...new Set([...retainedMountedHostTools, ...currentMountedHostTools]),
+			],
 		);
 	}
 
