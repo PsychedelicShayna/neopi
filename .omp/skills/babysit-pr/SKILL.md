@@ -202,8 +202,9 @@ phrase.
 ## 6. Reply, then resolve
 
 Replies go out after the push, so they can cite commits that are already on
-the PR. Write each reply to a file. NEVER put comment text or reply text
-inside a shell command line.
+the PR. Write each reply to a file. NEVER put comment text, reply text, a PR
+title, or any other GitHub-supplied text inside shell source; capture it into
+a variable or a file with `gh … --jq` and pass that instead.
 
 ```sh
 # reply.md holds the reply, in the policy's shape and ending with the signature line
@@ -257,10 +258,14 @@ Then merge:
 
 ```sh
 HEAD=$(gh pr view $PR --json headRefOid --jq .headRefOid)
+# The title comes from GitHub and is untrusted: build the subject in jq and
+# only ever pass it as a quoted variable.
+SUBJECT=$(gh pr view $PR --json number,title,author \
+  --jq '"Merge PR #\(.number): \(.title) (@\(.author.login))"')
 # merge-note.md: the head commit, each bot's last round (pass and commit),
 # deferred P2s with thread links and follow-ups, any owner decisions, and the signature line
 gh pr merge $PR --merge --match-head-commit "$HEAD" \
-  --subject "Merge PR #$PR: <PR title> (@<author login>)" \
+  --subject "$SUBJECT" \
   --body-file merge-note.md
 ```
 
