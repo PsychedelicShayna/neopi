@@ -101,6 +101,28 @@ export function configCandidatePaths(
 }
 
 /**
+ * Read a config file's text, or report its size without reading it when it is
+ * larger than `maxBytes`: the size comes from a stat, so an oversized file is
+ * never read or decoded. Missing files reject as `Bun.file().text()` does.
+ */
+export type BoundedText = { content: string } | { tooLarge: number };
+
+export async function readBoundedText(filePath: string, maxBytes: number | undefined): Promise<BoundedText> {
+	const file = Bun.file(filePath);
+	if (maxBytes !== undefined) {
+		const bytes = (await file.stat()).size;
+		if (bytes > maxBytes) return { tooLarge: bytes };
+	}
+	return { content: await file.text() };
+}
+
+export interface CollectConfigOptions {
+	/** Candidates larger than this are skipped unread and reported through `onTooLarge`. */
+	maxBytes?: number;
+	onTooLarge?(filePath: string, bytes: number): void;
+}
+
+/**
  * Walk the config search path ({@link configCandidatePaths}) and return the
  * readable candidates with their raw content, sorted user-first then project
  * ancestor→leaf (depth descending, so the leaf directory is most
@@ -112,22 +134,26 @@ export async function collectConfigCandidates(
 	cwd: string,
 	agentDir: string | undefined,
 	filenames: string[],
+	options: CollectConfigOptions = {},
 ): Promise<ConfigCandidate[]> {
 	const { candidates, userPaths } = configCandidatePaths(cwd, agentDir, filenames);
 	const items: ConfigCandidate[] = [];
 	for (const candidate of candidates) {
+		const parent = path.dirname(candidate);
+		const baseName = parent.split(path.sep).pop() ?? "";
+		const isUser = userPaths.has(candidate);
+		const ownerDir = baseName === ".omp" ? path.dirname(parent) : parent;
+		const ownerBaseName = ownerDir.split(path.sep).pop() ?? "";
+		if (!isUser && ownerBaseName.startsWith(".") && baseName !== ".omp") continue;
 		try {
-			const content = await Bun.file(candidate).text();
-			const parent = path.dirname(candidate);
-			const baseName = parent.split(path.sep).pop() ?? "";
-			const isUser = userPaths.has(candidate);
-			const ownerDir = baseName === ".omp" ? path.dirname(parent) : parent;
-			const ownerBaseName = ownerDir.split(path.sep).pop() ?? "";
-			if (isUser || !ownerBaseName.startsWith(".") || baseName === ".omp") {
-				const relative = path.relative(cwd, ownerDir);
-				const depth = relative === "" ? 0 : relative.split(path.sep).filter(Boolean).length;
-				items.push({ path: candidate, content, level: isUser ? "user" : "project", depth });
+			const read = await readBoundedText(candidate, options.maxBytes);
+			if ("tooLarge" in read) {
+				options.onTooLarge?.(candidate, read.tooLarge);
+				continue;
 			}
+			const relative = path.relative(cwd, ownerDir);
+			const depth = relative === "" ? 0 : relative.split(path.sep).filter(Boolean).length;
+			items.push({ path: candidate, content: read.content, level: isUser ? "user" : "project", depth });
 		} catch (err) {
 			if (!isEnoent(err)) {
 				logger.warn("Failed to read config candidate", { path: candidate, error: String(err) });

@@ -25,7 +25,7 @@ import type {
 	TransitPartName,
 	TransitSpec,
 } from "@oh-my-pi/pi-tui/overlays/mixture-types";
-import { collectConfigCandidates, configCandidatePaths } from "../advisor/watchdog";
+import { type BoundedText, collectConfigCandidates, configCandidatePaths, readBoundedText } from "../advisor/watchdog";
 import { serializeMixturesConfig } from "./toml";
 import { MAX_FILE_BYTES } from "./validate";
 
@@ -407,15 +407,12 @@ export function parseMixturesDoc(raw: unknown, filePath: string): MixturesConfig
 	return doc;
 }
 
+/** A file over `MAX_FILE_BYTES`, skipped unread: its size came from a stat, never a read. */
+function tooLargeWarning(filePath: string, bytes: number): string {
+	return `${filePath}: file.too_large (${bytes} bytes; the cap is ${MAX_FILE_BYTES}) — file skipped`;
+}
+
 function parseMixturesText(text: string, filePath: string): MixturesConfigDoc {
-	// Bounded before any parser sees it: every session reads these files at startup.
-	const bytes = Buffer.byteLength(text, "utf8");
-	if (bytes > MAX_FILE_BYTES) {
-		return {
-			mixtures: [],
-			warnings: [`${filePath}: file.too_large (${bytes} bytes; the cap is ${MAX_FILE_BYTES}) — file skipped`],
-		};
-	}
 	let parsed: unknown;
 	try {
 		parsed = Bun.TOML.parse(text);
@@ -456,9 +453,17 @@ export function mixtureScopeKey(cwd: string, agentDir?: string): string {
 
 /** Discover mixtures from every `MIXTURES.toml` on the user + project search path. */
 export async function discoverMixtures(cwd: string, agentDir?: string): Promise<DiscoveredMixtures> {
-	const items = await collectConfigCandidates(cwd, agentDir, [MIXTURES_FILE_NAME]);
-	const mixtures = new Map<string, DiscoveredMixture[]>();
 	const warnings: string[] = [];
+	// Bounded before anything reads it: every session discovers these files at startup.
+	const items = await collectConfigCandidates(cwd, agentDir, [MIXTURES_FILE_NAME], {
+		maxBytes: MAX_FILE_BYTES,
+		onTooLarge: (filePath, bytes) => {
+			const message = tooLargeWarning(filePath, bytes);
+			warnings.push(message);
+			logger.warn("Mixture config", { path: filePath, error: message });
+		},
+	});
+	const mixtures = new Map<string, DiscoveredMixture[]>();
 	// Candidates arrive user first, then project ancestor→leaf, so later files shadow earlier ones.
 	for (const item of items) {
 		const doc = parseMixturesText(item.content, item.path);
@@ -495,15 +500,16 @@ export function mixturesConfigFilePath(
 
 /** Load one `MIXTURES.toml` for editing, raw and un-merged. A missing file is an empty doc. */
 export async function loadMixturesConfigFile(filePath: string): Promise<MixturesConfigDoc> {
-	let text: string;
+	let read: BoundedText;
 	try {
-		text = await Bun.file(filePath).text();
+		read = await readBoundedText(filePath, MAX_FILE_BYTES);
 	} catch (err) {
 		if (!isEnoent(err))
 			logger.warn("Mixture config: failed to read for edit", { path: filePath, error: String(err) });
 		return { mixtures: [] };
 	}
-	return parseMixturesText(text, filePath);
+	if ("tooLarge" in read) return { mixtures: [], warnings: [tooLargeWarning(filePath, read.tooLarge)] };
+	return parseMixturesText(read.content, filePath);
 }
 
 /** Write a doc to `MIXTURES.toml`; an empty doc removes the file. */

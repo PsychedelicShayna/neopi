@@ -9,7 +9,6 @@ import {
 } from "@oh-my-pi/pi-coding-agent/moa/config";
 import { discoverRegistrableMixtures } from "@oh-my-pi/pi-coding-agent/moa/registration";
 import { serializeMixturesConfig } from "@oh-my-pi/pi-coding-agent/moa/toml";
-import { MAX_FILE_BYTES } from "@oh-my-pi/pi-coding-agent/moa/validate";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { logger, TempDir } from "@oh-my-pi/pi-utils";
 import { createMoaFixture, DRAFT_THEN_EDIT_TOML } from "./helpers/moa-setup";
@@ -377,21 +376,25 @@ tools = false
 		expect(refused).toEqual([["draft-then-edit", "member.model.excluded"]]);
 	});
 
-	it("skips a MIXTURES.toml over the file cap with file.too_large, and still loads a sibling file", async () => {
+	it("skips a MIXTURES.toml over the file cap by its size alone, never reading it, and still loads a sibling file", async () => {
 		using dir = TempDir.createSync("@moa-config-too-large-");
 		const agentDir = dir.join("agent");
 		const cwd = dir.join("project");
 		await fs.mkdir(agentDir, { recursive: true });
 		await fs.mkdir(cwd, { recursive: true });
+		// A sparse 8 GiB file with no read permission: its size is visible to a stat, and any
+		// attempt to read it fails, so only a size check before the read yields file.too_large.
 		const userFile = path.join(agentDir, "MIXTURES.toml");
-		const padding = `# ${"x".repeat(1022)}\n`.repeat(Math.ceil((MAX_FILE_BYTES + 1) / 1024));
-		await Bun.write(userFile, `${DRAFT_THEN_EDIT_TOML}${padding}`);
+		await Bun.write(userFile, DRAFT_THEN_EDIT_TOML);
+		await fs.truncate(userFile, 8 * 1024 ** 3);
+		await fs.chmod(userFile, 0o000);
 		const project = DRAFT_THEN_EDIT_TOML.replace('name = "draft-then-edit"', 'name = "project-only"');
 		await Bun.write(path.join(cwd, "MIXTURES.toml"), project);
 
 		const discovered = await discoverMixtures(cwd, agentDir);
 		expect(discovered.mixtures.map(entry => entry.definition.name)).toEqual(["project-only"]);
-		expect(discovered.warnings).toEqual([expect.stringContaining("file.too_large")]);
-		expect(discovered.warnings[0]).toContain(userFile);
+		expect(discovered.warnings).toEqual([expect.stringContaining(`${userFile}: file.too_large`)]);
+		const edited = await loadMixturesConfigFile(userFile);
+		expect(edited).toEqual({ mixtures: [], warnings: [expect.stringContaining("file.too_large")] });
 	});
 });
