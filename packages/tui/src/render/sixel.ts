@@ -81,12 +81,14 @@ export function replaceSixelSequences(lines: readonly string[], replacement: str
 	return lines.map(line => {
 		let out = "";
 		let rest = line;
+		// A continued payload owes its label to the first retained row even when
+		// that row is blank (the retention cut can land on an empty payload row).
+		if (inside && !replaced) {
+			out += replacement;
+			replaced = true;
+		}
 		while (rest.length > 0) {
 			if (inside) {
-				if (!replaced) {
-					out += replacement;
-					replaced = true;
-				}
 				const end = findSixelTerminator(rest);
 				if (end === undefined) break;
 				rest = rest.slice(end.index + end.length);

@@ -293,6 +293,20 @@ describe("formatOutputPaneLines SIXEL presentation", () => {
 		]);
 	});
 
+	it("labels a continued payload whose first retained row is blank", () => {
+		setInlineImagePresentation("text");
+		const label = "[image omitted while docked]";
+		const format = (lines: string[]) =>
+			formatOutputPaneLines(
+				{ lines, expanded: true, collapsedMaxLines: 100, sixelContinuation: true },
+				darkTheme,
+			).lines.map(line => Bun.stripANSI(line));
+		// The retention cut landed on a blank payload row: the label still leads.
+		expect(format(["", "#1~~~~-", "#0????\x1b\\", "after"])).toEqual([label, "", "", "after"]);
+		// Every retained row is a blank continuation row: the label still appears.
+		expect(format(["", ""])).toEqual([label, ""]);
+	});
+
 	it("passes raw payload rows through as graphics", () => {
 		const result = format();
 		expect(result.hasSixel).toBe(true);
