@@ -2,8 +2,11 @@ import { describe, expect, it } from "bun:test";
 import {
 	CHAT_MODE_ENTRY_TYPE,
 	type ChatModeResolutionInput,
+	parseChatCommandArgs,
 	readChatModeEntry,
+	readLastActiveChatMode,
 	resolveChatMode,
+	resolveChatModeChange,
 } from "@oh-my-pi/pi-coding-agent/chat/chat-mode";
 import { buildChatSystemPrompt } from "@oh-my-pi/pi-coding-agent/chat/chat-system-prompt";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
@@ -56,6 +59,58 @@ describe("readChatModeEntry", () => {
 		expect(
 			readChatModeEntry([chatEntry({ mode: "erp", include: [] }), chatEntry({ mode: "off", include: [] })]),
 		).toBeNull();
+	});
+});
+
+describe("resolveChatModeChange", () => {
+	const erp = { mode: "erp" as const, include: ["date" as const] };
+
+	it("toggles off from chat mode and back into the last-used mode, defaulting to chat", () => {
+		expect(resolveChatModeChange({}, erp, undefined, [])).toBeNull();
+		expect(resolveChatModeChange({}, undefined, erp, [])).toEqual(erp);
+		expect(resolveChatModeChange({}, undefined, undefined, ["cwd"])).toEqual({ mode: "chat", include: ["cwd"] });
+	});
+
+	it("keeps the current or last-used includes unless the request names them", () => {
+		expect(resolveChatModeChange({ mode: "raw" }, erp, undefined, ["memory"])).toEqual({
+			mode: "raw",
+			include: ["date"],
+		});
+		expect(resolveChatModeChange({ mode: "chat" }, undefined, erp, ["memory"])).toEqual({
+			mode: "chat",
+			include: ["date"],
+		});
+		expect(resolveChatModeChange({ include: ["cwd"] }, erp, undefined, [])).toEqual({
+			mode: "erp",
+			include: ["cwd"],
+		});
+	});
+
+	it("rejects includes without a chat mode and unknown categories", () => {
+		expect(() => resolveChatModeChange({ mode: "off", include: ["date"] }, erp, undefined, [])).toThrow();
+		expect(() => resolveChatModeChange({ mode: "chat", include: ["tools"] }, undefined, undefined, [])).toThrow();
+	});
+});
+
+describe("readLastActiveChatMode", () => {
+	it("skips a later off entry so a bare /chat re-enters the recorded mode", () => {
+		const entries = [chatEntry({ mode: "erp", include: ["cwd"] }), chatEntry({ mode: "off", include: [] })];
+		expect(readLastActiveChatMode(entries)).toEqual({ mode: "erp", include: ["cwd"] });
+		expect(readLastActiveChatMode([])).toBeUndefined();
+	});
+});
+
+describe("parseChatCommandArgs", () => {
+	it("reads a mode and a comma-separated include list in either flag form", () => {
+		expect(parseChatCommandArgs("")).toEqual({});
+		expect(parseChatCommandArgs("ERP --include date,cwd")).toEqual({ mode: "erp", include: ["date", "cwd"] });
+		expect(parseChatCommandArgs("--include=memory raw")).toEqual({ mode: "raw", include: ["memory"] });
+	});
+
+	it("rejects unknown modes, a second mode, and a dangling --include", () => {
+		expect(() => parseChatCommandArgs("roleplay")).toThrow();
+		expect(() => parseChatCommandArgs("chat erp")).toThrow();
+		expect(() => parseChatCommandArgs("chat --include")).toThrow();
 	});
 });
 

@@ -1,8 +1,8 @@
 /**
  * Chat mode (`--chat[=erp|raw]`): a session with the harness's agentic
- * context stripped. The mode is resolved once at launch, persisted as a
- * session journal entry, and consulted by each subsystem at its existing
- * injection gate.
+ * context stripped. The mode is resolved at launch, can be switched live
+ * (`/chat`, RPC `set_chat_mode`), is persisted as a session journal entry,
+ * and is consulted by each subsystem at its existing injection gate.
  */
 import { isRecord } from "@oh-my-pi/pi-utils";
 import { CliUsageError } from "../cli/usage-error";
@@ -76,15 +76,31 @@ export function parseChatIncludes(values: readonly string[], source: string): Ch
 export function readChatModeEntry(entries: readonly SessionEntry[]): ChatModeConfig | null | undefined {
 	let state: ChatModeConfig | null | undefined;
 	for (const entry of entries) {
-		if (entry.type !== "custom" || entry.customType !== CHAT_MODE_ENTRY_TYPE || !isRecord(entry.data)) continue;
-		const { mode, include } = entry.data;
-		if (mode === "off") {
-			state = null;
-		} else if (isChatMode(mode)) {
-			state = { mode, include: Array.isArray(include) ? include.filter(isChatInclude) : [] };
-		}
+		const recorded = chatModeEntryState(entry);
+		if (recorded !== undefined) state = recorded;
 	}
 	return state;
+}
+
+/**
+ * Most recent chat config recorded on a session branch, skipping `off`
+ * entries: the mode a bare `/chat` toggles back into.
+ */
+export function readLastActiveChatMode(entries: readonly SessionEntry[]): ChatModeConfig | undefined {
+	let last: ChatModeConfig | undefined;
+	for (const entry of entries) {
+		const recorded = chatModeEntryState(entry);
+		if (recorded) last = recorded;
+	}
+	return last;
+}
+
+function chatModeEntryState(entry: SessionEntry): ChatModeConfig | null | undefined {
+	if (entry.type !== "custom" || entry.customType !== CHAT_MODE_ENTRY_TYPE || !isRecord(entry.data)) return undefined;
+	const { mode, include } = entry.data;
+	if (mode === "off") return null;
+	if (!isChatMode(mode)) return undefined;
+	return { mode, include: Array.isArray(include) ? include.filter(isChatInclude) : [] };
 }
 
 /** Journal payload for {@link CHAT_MODE_ENTRY_TYPE}. */
@@ -98,6 +114,86 @@ export function sameChatMode(a: ChatModeConfig | null | undefined, b: ChatModeCo
 	return (
 		a.mode === b.mode && a.include.length === b.include.length && a.include.every(item => b.include.includes(item))
 	);
+}
+
+/** Wire form of a session's chat mode: `off` outside chat mode, includes comma-joined. */
+export interface ChatModeState {
+	mode: ChatModeSetting;
+	include: string;
+}
+
+export function chatModeState(config: ChatModeConfig | null | undefined): ChatModeState {
+	return config ? { mode: config.mode, include: config.include.join(",") } : { mode: "off", include: "" };
+}
+
+/** A requested live chat-mode change. An omitted `mode` toggles between off and the last-used mode. */
+export interface ChatModeChangeRequest {
+	mode?: ChatModeSetting;
+	/** Include categories; omitted keeps the current or last-used set. */
+	include?: readonly string[];
+}
+
+/** Parse a live chat-mode name (`off`, `chat`, `erp`, `raw`). */
+export function parseChatModeSetting(value: string): ChatModeSetting {
+	const normalized = value.trim().toLowerCase();
+	if (normalized === "off" || isChatMode(normalized)) return normalized;
+	throw new Error(
+		`Invalid chat mode: ${JSON.stringify(value)}. Expected one of: ${CHAT_MODE_SETTING_VALUES.join(", ")}.`,
+	);
+}
+
+/** Split comma-separated include lists (`date,cwd`) into their names. */
+export function splitChatIncludes(values: readonly string[]): string[] {
+	return values.flatMap(value => value.split(",")).map(value => value.trim());
+}
+
+export const CHAT_COMMAND_USAGE = `Usage: /chat [${CHAT_MODE_SETTING_VALUES.join("|")}] [--include <${CHAT_INCLUDES.join(",")}>]`;
+
+/** Parse `/chat` arguments: `[chat|erp|raw|off] [--include <list>]`. */
+export function parseChatCommandArgs(args: string): ChatModeChangeRequest {
+	const tokens = args.trim().split(/\s+/).filter(Boolean);
+	const request: ChatModeChangeRequest = {};
+	for (let index = 0; index < tokens.length; index++) {
+		const token = tokens[index];
+		if (token === "--include" || token.startsWith("--include=")) {
+			const value = token === "--include" ? tokens[++index] : token.slice("--include=".length);
+			if (value === undefined || request.include !== undefined) throw new Error(CHAT_COMMAND_USAGE);
+			request.include = splitChatIncludes([value]);
+			continue;
+		}
+		if (request.mode !== undefined || token.startsWith("-")) throw new Error(CHAT_COMMAND_USAGE);
+		request.mode = parseChatModeSetting(token);
+	}
+	return request;
+}
+
+/**
+ * Resolve a live chat-mode change against the session's current and last-used
+ * modes. A bare toggle leaves chat mode when it is on and otherwise re-enters
+ * the last-used mode (`chat` when none). Omitted includes keep the current or
+ * last-used set, falling back to the `chat.include` setting.
+ */
+export function resolveChatModeChange(
+	request: ChatModeChangeRequest,
+	current: ChatModeConfig | undefined,
+	last: ChatModeConfig | undefined,
+	settingsInclude: readonly string[],
+): ChatModeConfig | null {
+	// `/chat --include <list>` without a mode keeps (or enters) chat mode with the new set.
+	const toggleOff = current !== undefined && request.include === undefined;
+	const mode = request.mode ?? (toggleOff ? "off" : (current?.mode ?? last?.mode ?? "chat"));
+	if (mode === "off") {
+		if (request.include !== undefined) throw new Error("include requires a chat mode (chat, erp, or raw)");
+		return null;
+	}
+	const base = current ?? last;
+	const include =
+		request.include !== undefined
+			? parseChatIncludes(request.include, "include")
+			: base
+				? [...base.include]
+				: [...new Set(settingsInclude.filter(isChatInclude))];
+	return { mode, include };
 }
 
 export interface ChatModeResolutionInput {

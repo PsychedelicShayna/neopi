@@ -1313,6 +1313,11 @@ export async function buildSessionOptions(
 					? Promise.resolve(undefined)
 					: loadSystemPromptTemplateFile(templatePath),
 		]);
+	// Chat mode switched on live must ignore discovered prompt files, as a chat launch does.
+	if (discoveredOverride) options.systemPromptDiscovered = true;
+	if (parsed.appendSystemPrompt === undefined && appendPromptSource !== undefined) {
+		options.appendSystemPromptDiscovered = true;
+	}
 
 	if (sessionManager) {
 		options.sessionManager = sessionManager;
