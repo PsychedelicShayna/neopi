@@ -25,7 +25,13 @@ import type {
 	TransitPartName,
 	TransitSpec,
 } from "@oh-my-pi/pi-tui/overlays/mixture-types";
-import { type BoundedText, collectConfigCandidates, configCandidatePaths, readBoundedText } from "../advisor/watchdog";
+import {
+	type BoundedText,
+	collectConfigCandidates,
+	type ConfigRejection,
+	configCandidatePaths,
+	readBoundedText,
+} from "../advisor/watchdog";
 import { serializeMixturesConfig } from "./toml";
 import { MAX_FILE_BYTES } from "./validate";
 
@@ -407,9 +413,11 @@ export function parseMixturesDoc(raw: unknown, filePath: string): MixturesConfig
 	return doc;
 }
 
-/** A file over `MAX_FILE_BYTES`, skipped unread: its size came from a stat, never a read. */
-function tooLargeWarning(filePath: string, bytes: number): string {
-	return `${filePath}: file.too_large (${bytes} bytes; the cap is ${MAX_FILE_BYTES}) — file skipped`;
+/** A candidate skipped unread: over `MAX_FILE_BYTES`, or not a regular file at all. */
+function rejectionWarning(filePath: string, rejection: ConfigRejection): string {
+	return rejection.kind === "too_large"
+		? `${filePath}: file.too_large (${rejection.bytes} bytes; the cap is ${MAX_FILE_BYTES}) — file skipped`
+		: `${filePath}: file.not_regular (not a regular file) — file skipped`;
 }
 
 function parseMixturesText(text: string, filePath: string): MixturesConfigDoc {
@@ -457,8 +465,8 @@ export async function discoverMixtures(cwd: string, agentDir?: string): Promise<
 	// Bounded before anything reads it: every session discovers these files at startup.
 	const items = await collectConfigCandidates(cwd, agentDir, [MIXTURES_FILE_NAME], {
 		maxBytes: MAX_FILE_BYTES,
-		onTooLarge: (filePath, bytes) => {
-			const message = tooLargeWarning(filePath, bytes);
+		onRejected: (filePath, rejection) => {
+			const message = rejectionWarning(filePath, rejection);
 			warnings.push(message);
 			logger.warn("Mixture config", { path: filePath, error: message });
 		},
@@ -508,7 +516,7 @@ export async function loadMixturesConfigFile(filePath: string): Promise<Mixtures
 			logger.warn("Mixture config: failed to read for edit", { path: filePath, error: String(err) });
 		return { mixtures: [] };
 	}
-	if ("tooLarge" in read) return { mixtures: [], warnings: [tooLargeWarning(filePath, read.tooLarge)] };
+	if ("rejected" in read) return { mixtures: [], warnings: [rejectionWarning(filePath, read.rejected)] };
 	return parseMixturesText(read.content, filePath);
 }
 

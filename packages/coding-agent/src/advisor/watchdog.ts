@@ -1,3 +1,5 @@
+import { constants as fsConstants } from "node:fs";
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
@@ -100,26 +102,51 @@ export function configCandidatePaths(
 	return { candidates: [...candidates], userPaths };
 }
 
-/**
- * Read a config file's text, or report its size without reading it when it is
- * larger than `maxBytes`: the size comes from a stat, so an oversized file is
- * never read or decoded. Missing files reject as `Bun.file().text()` does.
- */
-export type BoundedText = { content: string } | { tooLarge: number };
+/** Why a config candidate was skipped unread. */
+export type ConfigRejection = { kind: "too_large"; bytes: number } | { kind: "not_regular" };
 
+export type BoundedText = { content: string } | { rejected: ConfigRejection };
+
+const utf8 = new TextDecoder();
+/** Opening a FIFO must not wait for a writer before the handle's stat can refuse it. */
+const OPEN_FLAGS = fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0);
+
+/**
+ * Read a config file through one handle. Anything but a regular file (a device such as
+ * `/dev/zero` behind a symlink, a FIFO, a socket) is refused by the handle's stat before
+ * any read. With `maxBytes`, at most `maxBytes + 1` bytes are ever read, so a file that
+ * lies about its size or grows after the stat is still bounded. Missing files reject.
+ */
 export async function readBoundedText(filePath: string, maxBytes: number | undefined): Promise<BoundedText> {
-	const file = Bun.file(filePath);
-	if (maxBytes !== undefined) {
-		const bytes = (await file.stat()).size;
-		if (bytes > maxBytes) return { tooLarge: bytes };
+	const handle = await fs.open(filePath, OPEN_FLAGS);
+	try {
+		const stat = await handle.stat();
+		if (!stat.isFile()) return { rejected: { kind: "not_regular" } };
+		if (maxBytes === undefined) return { content: utf8.decode(await handle.readFile()) };
+		if (stat.size > maxBytes) return { rejected: { kind: "too_large", bytes: stat.size } };
+		const limit = maxBytes + 1;
+		const chunks: Buffer[] = [];
+		let total = 0;
+		while (total < limit) {
+			// Sized for the whole file in one read; the stat is a hint, the limit is the bound.
+			const chunk = Buffer.allocUnsafe(Math.min(Math.max(stat.size + 1, 4096), limit - total));
+			const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
+			if (bytesRead === 0) break;
+			chunks.push(bytesRead === chunk.length ? chunk : chunk.subarray(0, bytesRead));
+			total += bytesRead;
+		}
+		if (total > maxBytes) return { rejected: { kind: "too_large", bytes: total } };
+		return { content: utf8.decode(Buffer.concat(chunks, total)) };
+	} finally {
+		await handle.close();
 	}
-	return { content: await file.text() };
 }
 
 export interface CollectConfigOptions {
-	/** Candidates larger than this are skipped unread and reported through `onTooLarge`. */
+	/** Candidates larger than this are skipped, never read past the bound, and reported through `onRejected`. */
 	maxBytes?: number;
-	onTooLarge?(filePath: string, bytes: number): void;
+	/** A candidate skipped unread; without it a rejection is logged. */
+	onRejected?(filePath: string, rejection: ConfigRejection): void;
 }
 
 /**
@@ -147,8 +174,9 @@ export async function collectConfigCandidates(
 		if (!isUser && ownerBaseName.startsWith(".") && baseName !== ".omp") continue;
 		try {
 			const read = await readBoundedText(candidate, options.maxBytes);
-			if ("tooLarge" in read) {
-				options.onTooLarge?.(candidate, read.tooLarge);
+			if ("rejected" in read) {
+				if (options.onRejected) options.onRejected(candidate, read.rejected);
+				else logger.warn("Skipped config candidate", { path: candidate, ...read.rejected });
 				continue;
 			}
 			const relative = path.relative(cwd, ownerDir);

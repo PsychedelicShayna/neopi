@@ -376,25 +376,52 @@ tools = false
 		expect(refused).toEqual([["draft-then-edit", "member.model.excluded"]]);
 	});
 
-	it("skips a MIXTURES.toml over the file cap by its size alone, never reading it, and still loads a sibling file", async () => {
-		using dir = TempDir.createSync("@moa-config-too-large-");
+	/**
+	 * Discovery and the configurator's loader on a workspace whose user MIXTURES.toml is
+	 * prepared by `setup`, beside a readable project file that must still load.
+	 */
+	async function withUserFile(prefix: string, setup: (userFile: string) => Promise<void>) {
+		using dir = TempDir.createSync(prefix);
 		const agentDir = dir.join("agent");
 		const cwd = dir.join("project");
 		await fs.mkdir(agentDir, { recursive: true });
 		await fs.mkdir(cwd, { recursive: true });
-		// A sparse 8 GiB file with no read permission: its size is visible to a stat, and any
-		// attempt to read it fails, so only a size check before the read yields file.too_large.
 		const userFile = path.join(agentDir, "MIXTURES.toml");
-		await Bun.write(userFile, DRAFT_THEN_EDIT_TOML);
-		await fs.truncate(userFile, 8 * 1024 ** 3);
-		await fs.chmod(userFile, 0o000);
+		await setup(userFile);
 		const project = DRAFT_THEN_EDIT_TOML.replace('name = "draft-then-edit"', 'name = "project-only"');
 		await Bun.write(path.join(cwd, "MIXTURES.toml"), project);
-
 		const discovered = await discoverMixtures(cwd, agentDir);
+		const edited = await loadMixturesConfigFile(userFile);
+		return { userFile, discovered, edited };
+	}
+
+	it("skips a MIXTURES.toml over the file cap by its size, without reading it, and still loads a sibling file", async () => {
+		// A sparse 8 GiB file: reading it whole would take seconds and gigabytes.
+		const { userFile, discovered, edited } = await withUserFile("@moa-config-too-large-", async userFile => {
+			await Bun.write(userFile, DRAFT_THEN_EDIT_TOML);
+			await fs.truncate(userFile, 8 * 1024 ** 3);
+		});
 		expect(discovered.mixtures.map(entry => entry.definition.name)).toEqual(["project-only"]);
 		expect(discovered.warnings).toEqual([expect.stringContaining(`${userFile}: file.too_large`)]);
-		const edited = await loadMixturesConfigFile(userFile);
 		expect(edited).toEqual({ mixtures: [], warnings: [expect.stringContaining("file.too_large")] });
 	});
+
+	it.each<[string, (userFile: string) => Promise<void>]>([
+		["a symlink to /dev/zero", userFile => fs.symlink("/dev/zero", userFile)],
+		[
+			"a FIFO no one writes to",
+			async userFile => {
+				expect(Bun.spawnSync(["mkfifo", userFile]).exitCode).toBe(0);
+			},
+		],
+	])(
+		"refuses %s as file.not_regular without reading it, and still loads a sibling file",
+		async (_label, setup) => {
+			const { userFile, discovered, edited } = await withUserFile("@moa-config-not-regular-", setup);
+			expect(discovered.mixtures.map(entry => entry.definition.name)).toEqual(["project-only"]);
+			expect(discovered.warnings).toEqual([expect.stringContaining(`${userFile}: file.not_regular`)]);
+			expect(edited).toEqual({ mixtures: [], warnings: [expect.stringContaining("file.not_regular")] });
+		},
+		5_000,
+	);
 });
