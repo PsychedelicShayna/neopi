@@ -957,6 +957,8 @@ export class InputController {
 			text = this.#compactDraftImages(text.trim());
 			const hasPendingImages = this.ctx.editor.pendingImages.length > 0;
 			if ((!isSettingsInitialized() || cfgEmojiAutocomplete.get(settings)) && text) text = expandEmoticons(text);
+			const warnedSlashText = this.#unknownSlashWarned;
+			this.#unknownSlashWarned = undefined;
 
 			// Focused subagent session: the editor is a plain chat box for it.
 			// Everything below (continue shortcuts, slash/bash/python, loop,
@@ -1085,6 +1087,25 @@ export class InputController {
 				return;
 			}
 
+			// Check the submitted top-level command before a built-in can rewrite its prompt.
+			// Confirmation is valid for only the next submission, even when it returns early.
+			const unknownSlash =
+				text !== warnedSlashText &&
+				!this.ctx.collabGuest &&
+				text.startsWith("/") &&
+				!this.ctx.isKnownSlashCommand(text) &&
+				!isKnownSkillCommand(this.ctx, text)
+					? findUnknownSlashCommand(text, this.ctx.slashCommandNames)
+					: undefined;
+			if (unknownSlash) {
+				this.#unknownSlashWarned = text;
+				const hint = unknownSlash.suggestion ? ` Did you mean /${unknownSlash.suggestion}?` : "";
+				this.ctx.showWarning(
+					`Unknown command /${unknownSlash.name}.${hint} Press Enter again to send it as a message.`,
+				);
+				if (!this.ctx.editor.restoreSubmittedDraft()) this.ctx.editor.setCollapsedText(text);
+				return;
+			}
 			// Handle built-in slash commands
 			if (text) {
 				this.#recordSlashCommandUsage(text);
@@ -1135,26 +1156,6 @@ export class InputController {
 				this.ctx.collabGuest.sendPrompt(text, images);
 				return;
 			}
-
-			// A mistyped `/command` would otherwise reach the model as prose. Warn and keep the draft;
-			// submitting the same text again sends it unchanged.
-			const unknownSlash =
-				text !== this.#unknownSlashWarned &&
-				text.startsWith("/") &&
-				!this.ctx.isKnownSlashCommand(text) &&
-				!isKnownSkillCommand(this.ctx, text)
-					? findUnknownSlashCommand(text, this.ctx.slashCommandNames)
-					: undefined;
-			if (unknownSlash) {
-				this.#unknownSlashWarned = text;
-				const hint = unknownSlash.suggestion ? ` Did you mean /${unknownSlash.suggestion}?` : "";
-				this.ctx.showWarning(
-					`Unknown command /${unknownSlash.name}.${hint} Press Enter again to send it as a message.`,
-				);
-				if (!this.ctx.editor.restoreSubmittedDraft()) this.ctx.editor.setCollapsedText(text);
-				return;
-			}
-			this.#unknownSlashWarned = undefined;
 
 			// Handle skill commands (/skill:name [args]). Enter ⇒ steer (matches the
 			// free-text Enter semantics below); Ctrl+Enter routes through `handleFollowUp`.

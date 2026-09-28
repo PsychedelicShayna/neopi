@@ -10,7 +10,7 @@ function createLoopContext(options: {
 	onInputCallback?: (...args: never[]) => void;
 }) {
 	const extensionCommandNames = options.extensionCommandNames ?? [];
-	const slashCommandNames = new Set([...extensionCommandNames, "void-cmd"]);
+	const slashCommandNames = new Set([...extensionCommandNames, "void-cmd", "loop"]);
 	const extensionRunner =
 		extensionCommandNames.length > 0
 			? {
@@ -139,6 +139,18 @@ describe("loop mode interjections", () => {
 		expect(setLoopPrompt).toHaveBeenCalledWith("inline loop body");
 		expect(getLoopPrompt()).toBe("inline loop body");
 		expect(prompt).toHaveBeenCalledTimes(1);
+	});
+
+	it("forwards a slash-prefixed inline body without warning after /loop changes state", async () => {
+		const { ctx, prompt, setLoopPrompt } = createLoopContext({ isStreaming: true });
+		(ctx as unknown as Record<string, unknown>).handleLoopCommand = vi.fn(async () => "/draft");
+		const controller = new InputController(ctx);
+		controller.setupEditorSubmitHandler();
+
+		await ctx.editor.onSubmit?.("/loop 3 /draft");
+
+		expect(prompt).toHaveBeenCalledWith("/draft", { streamingBehavior: "steer", images: undefined });
+		expect(setLoopPrompt).toHaveBeenCalledWith("/draft");
 	});
 
 	it("records an inline /loop prompt queued during compaction", async () => {

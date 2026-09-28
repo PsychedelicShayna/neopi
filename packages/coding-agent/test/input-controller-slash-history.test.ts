@@ -44,7 +44,7 @@ function makeCtx(isStreaming = false) {
 	};
 	const ctx = {
 		editor,
-		slashCommandNames: new Set(["rename"]),
+		slashCommandNames: new Set(["rename", "hotkeys", "mcp", "queue"]),
 		isKnownSlashCommand: (command: string) =>
 			Boolean(ctx.session.extensionRunner?.getCommand(command.slice(1).split(/\s+/, 1)[0]!)),
 		session: {
@@ -221,6 +221,19 @@ describe("input controller — slash command history (#3148)", () => {
 			streamingBehavior: "steer",
 			images: undefined,
 		});
+	});
+	it("expires unknown-command confirmation after a handled built-in", async () => {
+		const { ctx, editor, prompt } = makeCtx(true);
+		controllerFor(ctx);
+
+		await editor.onSubmit?.("/typo");
+		expect(ctx.showWarning).toHaveBeenCalledTimes(1);
+		await editor.onSubmit?.("/hotkeys");
+		await editor.onSubmit?.("/typo");
+
+		expect(ctx.showWarning).toHaveBeenCalledTimes(2);
+		expect(prompt).not.toHaveBeenCalled();
+		expect(editor.getText()).toBe("/typo");
 	});
 });
 
