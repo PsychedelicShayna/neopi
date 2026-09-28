@@ -2308,7 +2308,7 @@ export class MixtureCatalog {
 export interface MixtureScope {
   readonly key: string;                        // the serialized candidate-path list
   retain(owner: string): void;                 // a session or gateway holds this scope
-  initializeRoster(load: () => Promise<readonly ResolvedMixture[]>): Promise<void>; // serialize discovery, merging newly permitted names
+  initializeRoster(owner: string, load: () => Promise<readonly ResolvedMixture[]>): Promise<void>; // serialize discovery and retain this owner's resolution
   release(owner: string): void;                // the last owner of a scope drops its roster and re-registers the union
   setRoster(mixtures: ResolvedMixture[]): void;   // this scope's definitions; the provider registers the union over live scopes
   roster(): readonly ResolvedMixture[];        // this scope's registered definitions only
@@ -2348,12 +2348,14 @@ export function isMixtureModel(model: Model<Api>): boolean;
   session's `MixtureHost` lives in the primary wrapper's closure (§4.9).
   `MixtureWorkspace.retain` holds
   `MixtureCatalog.for(registry).scope(cwd, agentDir)` and starts roster
-  discovery through `scope.initializeRoster(load)` after extension provider
-  registrations and runtime-provider hydration. Every new holder discovers
-  under its own settings; discovery is serialized and adds newly permitted names
-  without removing the first holder's roster. An explicit `setRoster` replaces
-  that discovered roster and supersedes pending file discovery. A scope retired
-  while discovery is in flight cannot install a stale result into a later scope
+  discovery through `scope.initializeRoster(owner, load)` after extension
+  provider registrations and runtime-provider hydration. Every new holder
+  discovers under its own settings; discovery is serialized and adds newly
+  permitted names without removing the first holder's roster. The catalog
+  retains each live owner's resolution to bound shared-model metadata (§9.2).
+  An explicit `setRoster` replaces that discovered roster and supersedes
+  pending file discovery. A scope retired while discovery is in flight cannot
+  install a stale result into a later scope
   with the same key. Run start re-resolves and validates members under the
   session's settings, so a more permissive holder cannot bypass another
   holder's enabled-model restrictions.
@@ -2427,11 +2429,11 @@ export function isMixtureModel(model: Model<Api>): boolean;
 | `id` | `definition.name` |
 | `name` | `definition.description ?? definition.name` |
 | `reasoning` | `true` |
-| `input` | the entry member model's `input` (the entry is a model member, E5) |
+| `input` | the entry member's input modalities; intersect across live owners' resolutions of the same name |
 | `cost` | zeros; real cost is on each response's `usage` |
-| `contextWindow` | the entry member model's `contextWindow` |
-| `maxTokens` | max over model members' `maxTokens` |
-| `supportsTools` | `true` when any model member's effective tools are not `false` |
+| `contextWindow` | the entry member's context window; minimum across live resolutions |
+| `maxTokens` | max over model members' output limits per resolution; minimum across live resolutions |
+| `supportsTools` | true if any member permits tools per resolution; true only if every live resolution does |
 
 `ModelRegistry.find("mixture", name)` and every selector surface
 (`resolveModelFromString`, `parseModelPattern`,
@@ -3054,6 +3056,20 @@ None open. Every question raised in rounds 1 to 3 is answered in §15.
 - A failed target model restoration after cwd adoption rolls the session and
   workspace back with the original mixture run still held. Retrying a
   successful resume drops that run once the switch commits.
+
+### Amendment 6.13 (Codex P2 r4127257683: safe shared-model metadata)
+
+- A shared registry has one synthetic model per name even when two sessions in
+  one workspace resolve a role such as `@default` to different member models.
+  Discovery records each live owner's resolved mixtures. For names in the
+  scope roster, the registered model intersects input modalities and tool
+  support, and uses the smallest context and output limits over live
+  resolutions. The host still re-resolves under each session's settings at
+  run start; the synthetic model cannot overstate another owner's limits.
+- Releasing an owner drops its resolution and recomputes the shared metadata;
+  an explicit `setRoster` supersedes discovered variants. Re-registration
+  skips unchanged metadata, but a provider registration that mutates state and
+  then throws invalidates its cached metadata so cleanup retries correctly.
 
 ### Amendment 6.9 (Codex security P2 r4118194866, post-merge: unbounded validation work)
 

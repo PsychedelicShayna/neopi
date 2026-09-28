@@ -76,8 +76,8 @@ export interface MixtureScope {
 	readonly key: string;
 	/** Whether this scope has a roster since its last owner released it; an empty roster counts. */
 	readonly hasRoster: boolean;
-	/** Serialize per-owner discovery, then add mixtures permitted by that owner's settings. */
-	initializeRoster(load: () => Promise<readonly ResolvedMixture[]>): Promise<void>;
+	/** Serialize discovery and retain this owner's resolved metadata until it releases. */
+	initializeRoster(owner: string, load: () => Promise<readonly ResolvedMixture[]>): Promise<void>;
 	/** A session or gateway holds this scope. */
 	retain(owner: string): void;
 	/** The last owner drops this scope's roster and the provider re-registers the rest. */
@@ -96,6 +96,8 @@ export interface MixtureScope {
 interface ScopeState {
 	owners: Set<string>;
 	roster: ResolvedMixture[] | undefined;
+	/** Resolution variants supplied by live owners, including shared names with different model roles. */
+	resolutions: Map<string, readonly ResolvedMixture[]>;
 	initialization?: Promise<void>;
 	/** An explicit edit supersedes file discovery until the last owner releases the scope. */
 	saved?: boolean;
@@ -113,6 +115,7 @@ export class MixtureCatalog {
 	/** In registration order: the first scope to register a name holds it. */
 	readonly #scopes = new Map<string, ScopeState>();
 	#registered = false;
+	#registeredModels: MixtureModelDefinition[] = [];
 
 	private constructor(registry: ModelRegistry) {
 		this.#registry = registry;
@@ -141,9 +144,9 @@ export class MixtureCatalog {
 			get hasRoster() {
 				return scopes.get(key)?.roster !== undefined;
 			},
-			async initializeRoster(load) {
+			async initializeRoster(owner, load) {
 				const state = scopes.get(key);
-				if (!state) throw new Error(`Mixture scope ${key} must be retained before discovery`);
+				if (!state?.owners.has(owner)) throw new Error(`Mixture scope ${key} must be retained before discovery`);
 				if (state.saved) return;
 				const previous = state.initialization;
 				const initialization = (async () => {
@@ -152,7 +155,8 @@ export class MixtureCatalog {
 					const before = state.roster;
 					const discovered = await load();
 					// A retired scope or explicit save must not be overwritten by stale discovery.
-					if (scopes.get(key) !== state || state.roster !== before || state.saved) return;
+					if (scopes.get(key) !== state || !state.owners.has(owner) || state.roster !== before || state.saved)
+						return;
 					const merged = [...(before ?? [])];
 					const names = new Set(merged.map(mixture => mixture.definition.name));
 					for (const mixture of discovered) {
@@ -160,7 +164,9 @@ export class MixtureCatalog {
 						names.add(mixture.definition.name);
 						merged.push(mixture);
 					}
+					state.resolutions.set(owner, discovered);
 					if (before === undefined || merged.length !== before.length) installDiscovered(merged);
+					else register();
 				})().finally(() => {
 					if (state.initialization === initialization) state.initialization = undefined;
 				});
@@ -170,14 +176,16 @@ export class MixtureCatalog {
 			retain(owner) {
 				let state = scopes.get(key);
 				if (!state) {
-					state = { owners: new Set(), roster: undefined };
+					state = { owners: new Set(), roster: undefined, resolutions: new Map() };
 					scopes.set(key, state);
 				}
 				state.owners.add(owner);
 			},
 			release(owner) {
 				const state = scopes.get(key);
-				if (!state?.owners.delete(owner) || state.owners.size > 0) return;
+				if (!state?.owners.delete(owner)) return;
+				if (state.resolutions.delete(owner) && state.owners.size > 0 && !state.saved) register();
+				if (state.owners.size > 0) return;
 				scopes.delete(key);
 				register();
 			},
@@ -205,10 +213,13 @@ export class MixtureCatalog {
 	#setScopeRoster(key: string, mixtures: readonly ResolvedMixture[], saved = false): void {
 		let state = this.#scopes.get(key);
 		if (!state) {
-			state = { owners: new Set(), roster: undefined };
+			state = { owners: new Set(), roster: undefined, resolutions: new Map() };
 			this.#scopes.set(key, state);
 		}
-		if (saved) state.saved = true;
+		if (saved) {
+			state.saved = true;
+			state.resolutions.clear();
+		}
 		// What the other live scopes registered: a differing definition of one of those names conflicts.
 		const held = new Map<string, { scope: string; mixture: ResolvedMixture }>();
 		for (const [scope, other] of this.#scopes) {
@@ -232,26 +243,71 @@ export class MixtureCatalog {
 		this.#register();
 	}
 
-	/** Register the union over live scopes; an empty union unregisters the provider. */
+	/** Register the union over live scopes, conservatively bounded by every live owner's resolution. */
 	#register(): void {
-		const roster = this.roster();
+		const models = new Map<string, MixtureModelDefinition>();
+		for (const state of this.#scopes.values()) {
+			const accepted = new Set<string>();
+			for (const mixture of state.roster ?? []) {
+				const name = mixture.definition.name;
+				accepted.add(name);
+				if (!models.has(name)) models.set(name, mixtureModelDefinition(mixture));
+			}
+			if (state.saved) continue;
+			for (const resolutions of state.resolutions.values()) {
+				for (const mixture of resolutions) {
+					const name = mixture.definition.name;
+					if (!accepted.has(name)) continue;
+					const current = models.get(name)!;
+					const variant = mixtureModelDefinition(mixture);
+					models.set(name, {
+						...current,
+						input: current.input!.filter(modality => variant.input?.includes(modality)),
+						supportsTools: current.supportsTools && variant.supportsTools,
+						contextWindow: Math.min(current.contextWindow!, variant.contextWindow!),
+						maxTokens: Math.min(current.maxTokens!, variant.maxTokens!),
+					});
+				}
+			}
+		}
+		const roster = [...models.values()];
 		if (roster.length === 0) {
 			// registerProvider only replaces models when the list is non-empty.
 			if (this.#registered) this.#registry.unregisterProvider(MIXTURE_PROVIDER);
 			this.#registered = false;
+			this.#registeredModels = [];
 			return;
 		}
-		// Treat an attempted registration as live before calling into the registry:
-		// it may mutate provider state and then throw. A failed scope retain will
-		// release its owner, and an empty catalog must then unregister that partial
-		// provider before a later retain retries discovery and registration.
+		const previous = this.#registeredModels;
+		if (
+			this.#registered &&
+			previous.length === roster.length &&
+			previous.every((model, index) => {
+				const next = roster[index]!;
+				return (
+					model.id === next.id &&
+					model.name === next.name &&
+					model.supportsTools === next.supportsTools &&
+					model.contextWindow === next.contextWindow &&
+					model.maxTokens === next.maxTokens &&
+					model.input?.length === next.input?.length &&
+					model.input?.every((modality, i) => modality === next.input?.[i])
+				);
+			})
+		)
+			return;
+		// A registration can mutate provider state before throwing. Invalidate
+		// the metadata cache before the call so cleanup cannot mistake a partial
+		// registration for the previous successful one.
 		this.#registered = true;
+		this.#registeredModels = [];
 		this.#registry.registerProvider(MIXTURE_PROVIDER, {
 			baseUrl: this.baseUrl,
 			api: MIXTURE_API,
 			auth: "none",
-			models: roster.map(mixtureModelDefinition),
+			models: roster,
 		});
+		this.#registeredModels = roster;
 	}
 }
 

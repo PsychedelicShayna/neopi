@@ -225,7 +225,7 @@ describe("workspace-scoped rosters on a shared registry", () => {
 		cfgEnabledModels.override(excluded, ["fake/other", "mixture/draft-then-edit"]);
 		const later = Promise.withResolvers<void>();
 		try {
-			const first = scope.initializeRoster(() =>
+			const first = scope.initializeRoster("first", () =>
 				discoverRegistrableMixtures({
 					cwd,
 					agentDir: fixture.agentDir,
@@ -233,7 +233,7 @@ describe("workspace-scoped rosters on a shared registry", () => {
 					settings: allowed,
 				}),
 			);
-			const second = scope.initializeRoster(async () => {
+			const second = scope.initializeRoster("second", async () => {
 				await later.promise;
 				return discoverRegistrableMixtures({
 					cwd,
@@ -285,6 +285,41 @@ describe("workspace-scoped rosters on a shared registry", () => {
 			calls: ["writer", "writer"],
 			error: undefined,
 		});
+	});
+	it("keeps shared mixture metadata safe when owners resolve the same role to different member models", async () => {
+		const toml = DRAFT_THEN_EDIT_TOML.replaceAll(/fake\/(writer|editor)/g, "@default");
+		const cwd = await workspace("different-role-metadata-ws", toml);
+		fixture.registry.registerProvider("narrow", {
+			baseUrl: "http://127.0.0.1:1/v1",
+			apiKey: "fake-key",
+			api: "moa-fake",
+			models: [
+				{
+					id: "compact",
+					name: "Compact",
+					reasoning: true,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 4096,
+					maxTokens: 512,
+				},
+			],
+		});
+		const first = await sessionIn(cwd, Settings.isolated({ ...SETTINGS, modelRoles: { default: "fake/writer" } }));
+		expect(fixture.registry.find("mixture", "draft-then-edit")?.contextWindow).toBe(64_000);
+
+		const second = await sessionIn(
+			cwd,
+			Settings.isolated({ ...SETTINGS, modelRoles: { default: "narrow/compact" } }),
+		);
+		const shared = fixture.registry.find("mixture", "draft-then-edit");
+		expect(shared?.contextWindow).toBe(4096);
+		expect(shared?.maxTokens).toBe(512);
+		expect(shared?.input).toEqual(["text"]);
+		expect(await run(first, "draft-then-edit")).toEqual({ calls: ["writer", "writer"], error: undefined });
+		expect(await run(second, "draft-then-edit")).toEqual({ calls: ["compact", "compact"], error: undefined });
+		await second.dispose();
+		expect(fixture.registry.find("mixture", "draft-then-edit")?.contextWindow).toBe(64_000);
 	});
 	it("preserves a source mixture run when a cross-project resume fails after cwd adoption", async () => {
 		const sourceDir = await workspace("resume-rollback-source", DRAFT_THEN_EDIT_TOML);
