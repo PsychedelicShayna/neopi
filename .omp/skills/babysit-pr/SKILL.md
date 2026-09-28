@@ -67,8 +67,11 @@ Before each action, read fresh state. NEVER act on data from before your
 last push.
 
 ```sh
-# PR state and head commit
-gh pr view $PR --json state,isDraft,headRefName,headRefOid,mergeable,mergeStateStatus,title,author,url
+# PR state and head commit. SNAP_HEAD is the commit this snapshot describes;
+# everything below is judged against it, and step 8 merges exactly it.
+PRSTATE=$(gh pr view $PR --json state,isDraft,headRefName,headRefOid,mergeable,mergeStateStatus,title,author,url)
+printf '%s\n' "$PRSTATE"
+SNAP_HEAD=$(jq -r .headRefOid <<<"$PRSTATE")
 
 # CI on the head commit
 gh pr checks $PR --json name,bucket,state,workflow,link
@@ -234,9 +237,12 @@ owner. When a round brings new findings, go back to step 3.
 
 ## 8. Merge at the gate
 
-Check every condition of the policy's merge gate against a fresh snapshot of
-the head commit. If the authorization does not include merging, stop here and
-report that the PR is ready to merge.
+Evaluate every condition of the policy's merge gate on one fresh step 1
+snapshot, and only on it. Before you start, freeze the head that snapshot
+recorded: `GATE_HEAD=$SNAP_HEAD`. Each Codex round must name that commit, and
+CI must be for it. If any read during the gate shows a different head, the
+gate failed; take a new snapshot and start over. If the authorization does not
+include merging, stop here and report that the PR is ready to merge.
 
 Audit **every** bot thread first, including resolved ones. List the threads
 in the fresh step 1 output whose `author` is a configured bot and whose
@@ -257,14 +263,15 @@ gh api graphql -f id=<thread> -f query='
 Then merge:
 
 ```sh
-HEAD=$(gh pr view $PR --json headRefOid --jq .headRefOid)
+# GATE_HEAD is the commit the gate was evaluated on. NEVER re-read it here:
+# a head read after the gate could be a push the gate never saw.
 # The title comes from GitHub and is untrusted: build the subject in jq and
 # only ever pass it as a quoted variable.
 SUBJECT=$(gh pr view $PR --json number,title,author \
   --jq '"Merge PR #\(.number): \(.title) (@\(.author.login))"')
 # merge-note.md: the head commit, each bot's last round (pass and commit),
 # deferred P2s with thread links and follow-ups, any owner decisions, and the signature line
-gh pr merge $PR --merge --match-head-commit "$HEAD" \
+gh pr merge $PR --merge --match-head-commit "$GATE_HEAD" \
   --subject "$SUBJECT" \
   --body-file merge-note.md
 ```

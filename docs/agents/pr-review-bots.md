@@ -71,7 +71,9 @@ PR or in a follow-up PR. PR #114 did this for #111.
 
 Merge with a merge commit whose subject is
 `Merge PR #<number>: <PR title> (@<author>)` (see `AGENTS.md` › Commands).
-Bind the merge to the commit that passed the gate (`--match-head-commit`).
+Bind the merge to the commit that passed the gate (`--match-head-commit`),
+using the head SHA recorded by the snapshot the gate was evaluated on. NEVER
+re-read the head after the gate to fill that flag.
 
 ## Rounds
 
