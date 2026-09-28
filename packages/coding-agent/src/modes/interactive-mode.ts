@@ -2286,9 +2286,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * Re-point the process and every cwd-derived cache at `newCwd` after the
 	 * active session's working directory changed (`/move` relocation or resuming
 	 * a session from another project). The SessionManager's cwd MUST already
-	 * reflect `newCwd` before this is called.
+	 * reflect `newCwd` before this is called. A resume commits only after the
+	 * enclosing session switch succeeds.
 	 */
-	async applyCwdChange(newCwd: string): Promise<boolean> {
+	async applyCwdChange(newCwd: string, options?: { deferMixtureCommit?: boolean }): Promise<boolean> {
 		const previousCwd = getProjectDir();
 		try {
 			setProjectDir(newCwd);
@@ -2362,7 +2363,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
 		this.statusLine.applyCwdChange();
-		this.session.commitMixtureWorkspaceMove();
+		if (!options?.deferMixtureCommit) this.session.commitMixtureWorkspaceMove();
 		return true;
 	}
 

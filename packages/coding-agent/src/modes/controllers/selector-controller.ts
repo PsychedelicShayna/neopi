@@ -1820,7 +1820,7 @@ export class SelectorController {
 			(await this.ctx.session.switchSession(sessionPath, {
 				onCwdChange: async (newCwd, sourceCwd) => {
 					if (normalizePathForComparison(newCwd) === normalizePathForComparison(sourceCwd)) return true;
-					return this.ctx.applyCwdChange(newCwd);
+					return this.ctx.applyCwdChange(newCwd, { deferMixtureCommit: true });
 				},
 			})) === false
 		) {

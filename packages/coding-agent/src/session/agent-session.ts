@@ -10799,7 +10799,6 @@ export class AgentSession implements SettingsScope {
 			}
 
 			this.agent.replaceMessages(sessionContext.messages);
-			this.#mixtureHost?.resetConversation();
 			this.#reseedTokenRate();
 			this.#advisors.resetSessionState({ preserveCost: true });
 			this.#todo.syncFromBranch();
@@ -10931,7 +10930,6 @@ export class AgentSession implements SettingsScope {
 			}
 			generationSettled.resolve();
 			this.#sessionGenerationSettled = previousSessionGenerationSettled;
-			return true;
 		} catch (error) {
 			this.sessionManager.restoreState(previousSessionState);
 			this.#freshProviderSessionId = previousFreshProviderSessionId;
@@ -11014,6 +11012,13 @@ export class AgentSession implements SettingsScope {
 			if (error === SESSION_CWD_CHANGE_REJECTED) return false;
 			throw error;
 		}
+		// Only now is a cross-project resume committed. The cwd callback ran
+		// before fallible target initialization; rolling back it must preserve
+		// source runs and credential state. A successful session replacement
+		// discards the old conversation's runs regardless of its workspace.
+		this.commitMixtureWorkspaceMove();
+		this.#mixtureHost?.resetConversation();
+		return true;
 	}
 
 	/**

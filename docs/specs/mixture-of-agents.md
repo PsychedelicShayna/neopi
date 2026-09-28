@@ -2385,12 +2385,15 @@ export function isMixtureModel(model: Model<Api>): boolean;
   awaited transition, during which no prompt can run. Before release,
   retain the source's resolved roster; if destination retention fails,
   restore that roster without rediscovering against destination Settings,
-  then propagate the error. A move defers destructive host state changes
-  until every fallible cwd rescope has succeeded. Rollback to the source
+  then propagate the error. A direct `/move` defers destructive host state
+  changes until every fallible cwd rescope has succeeded. A cross-project
+  `/resume` also defers its mixture move commit and conversation reset until
+  `AgentSession.switchSession` succeeds: target context/model restoration
+  remains fallible after `applyCwdChange` returns. Rollback to the source
   leaves held runs and per-member credential memory untouched, without a
-  reset notice. When relocation commits to a different scope, the host
-  drops held runs and credential memory (`runs.clear()` as in
-  `resetConversation`) and, when runs were held, warns
+  reset notice. When a move commits to a different scope, the host drops
+  held runs and credential memory (`runs.clear()` as in `resetConversation`)
+  and, when runs were held, warns
   `<n> mixture run(s) from the previous workspace were reset; the next message starts a new run`
   (`onEvent` persists nothing for a dropped run). The selected model is
   left as it is: a destination that does not define it yields the
@@ -3040,6 +3043,17 @@ None open. Every question raised in rounds 1 to 3 is answered in §15.
   conflict check still applies when a newly permitted name belongs to another
   scope. The picker lists the shared registry union (§6.10); run start validates
   member permissions using the current session's settings.
+
+### Amendment 6.12 (Codex P2 r4126969897: resume transaction rollback)
+
+- `InteractiveMode.applyCwdChange` refreshes cwd state during cross-project
+  `/resume` but defers `commitMixtureWorkspaceMove`; a standalone `/move`
+  still commits after its own rescope finishes. `AgentSession.switchSession`
+  commits the workspace move and resets the replaced conversation's mixture
+  runs only after its remaining fallible target initialization succeeds.
+- A failed target model restoration after cwd adoption rolls the session and
+  workspace back with the original mixture run still held. Retrying a
+  successful resume drops that run once the switch commits.
 
 ### Amendment 6.9 (Codex security P2 r4118194866, post-merge: unbounded validation work)
 

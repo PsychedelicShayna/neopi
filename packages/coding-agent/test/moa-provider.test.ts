@@ -4,8 +4,10 @@ import { streamSimple } from "@oh-my-pi/pi-ai/stream";
 import { cfgEnabledModels } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { MixtureCatalog, registerMixtureApi } from "@oh-my-pi/pi-coding-agent/moa/provider";
+import type { SessionMixtureHost } from "@oh-my-pi/pi-coding-agent/moa/host";
 import { discoverRegistrableMixtures, MixtureWorkspace } from "@oh-my-pi/pi-coding-agent/moa/registration";
-import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { logger, TempDir } from "@oh-my-pi/pi-utils";
@@ -283,6 +285,49 @@ describe("workspace-scoped rosters on a shared registry", () => {
 			calls: ["writer", "writer"],
 			error: undefined,
 		});
+	});
+	it("preserves a source mixture run when a cross-project resume fails after cwd adoption", async () => {
+		const sourceDir = await workspace("resume-rollback-source", DRAFT_THEN_EDIT_TOML);
+		const targetDir = await workspace("resume-rollback-target", DRAFT_THEN_EDIT_TOML);
+		let host: SessionMixtureHost | undefined;
+		const attach = AgentSession.prototype.attachMixtureHost;
+		vi.spyOn(AgentSession.prototype, "attachMixtureHost").mockImplementation(function (this: AgentSession, value) {
+			host = value as SessionMixtureHost;
+			attach.call(this, value);
+		});
+		const source = await createMoaSession(fixture, {
+			cwd: sourceDir,
+			sessionManager: SessionManager.create(sourceDir, sourceDir),
+		});
+		sessions.push(source);
+		await run(source, "draft-then-edit");
+		const originalRun = host?.runs.runs()[0];
+		expect(originalRun).toBeDefined();
+
+		const target = SessionManager.create(targetDir, targetDir);
+		target.appendModelChange("fake/other");
+		await target.ensureOnDisk();
+		await target.flush();
+		const targetPath = target.getSessionFile();
+		await target.close();
+		if (!targetPath) throw new Error("Missing target session file");
+		const failure = new Error("target model loading failed");
+		let failTarget = true;
+		const onCwdChange = async (cwd: string) => {
+			await source.rebindMixturesForCwd(cwd, true);
+			if (cwd === targetDir && failTarget) {
+				vi.spyOn(fixture.registry, "getAvailable").mockImplementationOnce(() => {
+					throw failure;
+				});
+			}
+			return true;
+		};
+		await expect(source.switchSession(targetPath, { onCwdChange })).rejects.toBe(failure);
+		expect(source.sessionManager.getCwd()).toBe(sourceDir);
+		expect(host?.runs.runs()).toContain(originalRun);
+		failTarget = false;
+		expect(await source.switchSession(targetPath, { onCwdChange })).toBe(true);
+		expect(host?.runs.runs()).toEqual([]);
 	});
 
 	function failNextRegistration(error: Error): void {

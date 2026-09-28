@@ -487,7 +487,7 @@ export interface InteractiveModeContext {
 	refreshSlashCommandState(cwd?: string): Promise<void>;
 	/** Reload session skills and derived `/skill:<name>` commands. */
 	refreshSkillState(): Promise<void>;
-	applyCwdChange(newCwd: string): Promise<boolean>;
+	applyCwdChange(newCwd: string, options?: { deferMixtureCommit?: boolean }): Promise<boolean>;
 
 	// Selector handling
 	showSettingsSelector(): void;
