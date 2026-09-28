@@ -1069,6 +1069,139 @@ function redactReportForJson(
 	return { ...report, metadata, limits };
 }
 
+/** Reports for one provider id (case-insensitive), or every report when `provider` is unset. */
+export function filterUsageReports(reports: UsageReport[], provider?: string): UsageReport[] {
+	if (!provider) return reports;
+	const wanted = provider.toLowerCase();
+	return reports.filter(report => report.provider.toLowerCase() === wanted);
+}
+
+/**
+ * Stored credentials worth a usage row ({@link selectReportableAccounts}),
+ * narrowed to `provider` (case-insensitive). `storedAccounts` is the full
+ * pool before the usage-endpoint cull and the provider filter.
+ */
+export function collectReportableAccounts(
+	authStorage: AuthStorage,
+	provider?: string,
+): { storedAccounts: UsageAccountIdentity[]; accounts: UsageAccountIdentity[] } {
+	const storedAccounts = collectStoredAccounts(authStorage);
+	let accounts = selectReportableAccounts(
+		storedAccounts,
+		candidate => authStorage.usage.providerFor(candidate) !== undefined,
+		provider,
+	);
+	if (provider) {
+		const wanted = provider.toLowerCase();
+		accounts = accounts.filter(account => account.provider.toLowerCase() === wanted);
+	}
+	return { storedAccounts, accounts };
+}
+
+/** Everything one `npi usage` snapshot renders, narrowed to the requested provider. */
+export interface UsageView {
+	reports: UsageReport[];
+	storedAccounts: UsageAccountIdentity[];
+	accounts: UsageAccountIdentity[];
+	disabled: DisabledCredentialSummary[];
+	/** `--redact` masks over every identity string the view can surface. */
+	redaction?: Map<string, string>;
+}
+
+/**
+ * Pair fetched reports with the stored account pool and disabled tombstones,
+ * filter all three to `provider`, and build the `--redact` masks. The masks
+ * depend on every identity in the view (colliding prefixes reveal more), so
+ * any surface that promises `npi usage --redact` output must build them here.
+ */
+export async function prepareUsageView(
+	authStorage: AuthStorage,
+	reports: UsageReport[],
+	options: Pick<UsageCommandArgs, "provider" | "redact">,
+): Promise<UsageView> {
+	const { storedAccounts, accounts } = collectReportableAccounts(authStorage, options.provider);
+	// Tombstones ride alongside the live pool so an auto-disabled account
+	// (e.g. an expired Anthropic grant) is loudly visible instead of just
+	// missing. Best-effort: a broker predating the endpoint yields [].
+	let disabled: DisabledCredentialSummary[] = [];
+	try {
+		disabled = await authStorage.credentials.listDisabled();
+	} catch {
+		// Usage output must not fail because tombstone listing did.
+	}
+	if (options.provider) {
+		const wanted = options.provider.toLowerCase();
+		disabled = disabled.filter(summary => summary.provider.toLowerCase() === wanted);
+	}
+	const filteredReports = filterUsageReports(reports, options.provider);
+	const redaction = options.redact
+		? buildRedactionMap(collectIdentityStrings(filteredReports, accounts, disabled))
+		: undefined;
+	return { reports: filteredReports, storedAccounts, accounts, disabled, redaction };
+}
+
+/**
+ * Reports as `npi usage --json` prints them: the heavy provider-specific `raw`
+ * payload dropped (same shape as the broker/gateway `/v1/usage` endpoints),
+ * and identity fields masked when a `--redact` map is given.
+ */
+export function usageReportsForJson(
+	reports: UsageReport[],
+	redaction?: Map<string, string>,
+): Array<Omit<UsageReport, "raw">> {
+	const trimmed = reports.map(({ raw: _raw, ...rest }) => rest);
+	return redaction ? trimmed.map(report => redactReportForJson(report, redaction)) : trimmed;
+}
+
+/** `npi usage --json` output. */
+export interface UsageJsonPayload {
+	generatedAt: number;
+	reports: Array<Omit<UsageReport, "raw">>;
+	accountsWithoutUsage: UsageAccountIdentity[];
+	disabledCredentials: DisabledCredentialSummary[];
+	capacity: Record<string, ProviderWindowStat[]>;
+}
+
+/** The `npi usage --json` payload for a prepared view. */
+export function formatUsageJson(view: UsageView, nowMs = Date.now()): UsageJsonPayload {
+	const { reports, accounts, disabled, redaction } = view;
+	let unreportedAccounts = collectUnreportedAccounts(reports, accounts);
+	if (redaction) {
+		unreportedAccounts = unreportedAccounts.map(account => ({
+			...account,
+			email: maskIdentity(redaction, account.email),
+			accountId: maskIdentity(redaction, account.accountId),
+			projectId: maskIdentity(redaction, account.projectId),
+			enterpriseUrl: maskIdentity(redaction, account.enterpriseUrl),
+			orgId: maskIdentity(redaction, account.orgId),
+			orgName: maskIdentity(redaction, account.orgName),
+		}));
+	}
+	const capacity: Record<string, ProviderWindowStat[]> = {};
+	for (const report of reports) {
+		if (capacity[report.provider]) continue;
+		const stats = computeProviderWindowStats(reports.filter(peer => peer.provider === report.provider));
+		if (stats.length > 0) capacity[report.provider] = stats;
+	}
+	let disabledForJson = disabled.filter(summary => isActionableDisable(summary, accounts));
+	if (redaction) {
+		disabledForJson = disabledForJson.map(summary => ({
+			...summary,
+			email: maskIdentity(redaction, summary.email),
+			accountId: maskIdentity(redaction, summary.accountId),
+			orgId: maskIdentity(redaction, summary.orgId),
+			orgName: maskIdentity(redaction, summary.orgName),
+		}));
+	}
+	return {
+		generatedAt: nowMs,
+		reports: usageReportsForJson(reports, redaction),
+		accountsWithoutUsage: unreportedAccounts,
+		disabledCredentials: disabledForJson,
+		capacity,
+	};
+}
+
 /** Compact token count for burn tables: 1234 → "1.2k", 4_500_000_000 → "4.50B". */
 function formatTokenCount(value: number): string {
 	if (value >= 1e9) return `${(value / 1e9).toFixed(2)}B`;
@@ -1233,76 +1366,13 @@ export async function runUsageCommand(cmd: UsageCommandArgs): Promise<void> {
 		} catch {
 			// Stale identities beat no output.
 		}
-		const storedAccounts = collectStoredAccounts(authStorage);
-		let accounts = selectReportableAccounts(
-			storedAccounts,
-			provider => authStorage.usage.providerFor(provider) !== undefined,
-			cmd.provider,
-		);
-		// Tombstones ride alongside the live pool so an auto-disabled account
-		// (e.g. an expired Anthropic grant) is loudly visible instead of just
-		// missing. Best-effort: a broker predating the endpoint yields [].
-		let disabled: DisabledCredentialSummary[] = [];
-		try {
-			disabled = await authStorage.credentials.listDisabled();
-		} catch {
-			// Usage output must not fail because tombstone listing did.
-		}
-		let filteredReports = reports;
-		if (cmd.provider) {
-			const wanted = cmd.provider.toLowerCase();
-			filteredReports = reports.filter(report => report.provider.toLowerCase() === wanted);
-			accounts = accounts.filter(account => account.provider.toLowerCase() === wanted);
-			disabled = disabled.filter(summary => summary.provider.toLowerCase() === wanted);
-		}
-
-		const redaction = cmd.redact
-			? buildRedactionMap(collectIdentityStrings(filteredReports, accounts, disabled))
-			: undefined;
-
+		const view = await prepareUsageView(authStorage, reports, cmd);
 		if (cmd.json) {
-			// Drop the heavy provider-specific `raw` payload — same shape as the
-			// broker/gateway `/v1/usage` endpoints.
-			let trimmed = filteredReports.map(({ raw: _raw, ...rest }) => rest);
-			let unreportedAccounts = collectUnreportedAccounts(filteredReports, accounts);
-			if (redaction) {
-				trimmed = trimmed.map(report => redactReportForJson(report, redaction));
-				unreportedAccounts = unreportedAccounts.map(account => ({
-					...account,
-					email: maskIdentity(redaction, account.email),
-					accountId: maskIdentity(redaction, account.accountId),
-					projectId: maskIdentity(redaction, account.projectId),
-					enterpriseUrl: maskIdentity(redaction, account.enterpriseUrl),
-					orgId: maskIdentity(redaction, account.orgId),
-					orgName: maskIdentity(redaction, account.orgName),
-				}));
-			}
-			const capacity: Record<string, ProviderWindowStat[]> = {};
-			for (const report of filteredReports) {
-				if (capacity[report.provider]) continue;
-				const stats = computeProviderWindowStats(filteredReports.filter(peer => peer.provider === report.provider));
-				if (stats.length > 0) capacity[report.provider] = stats;
-			}
-			let disabledForJson = disabled.filter(summary => isActionableDisable(summary, accounts));
-			if (redaction) {
-				disabledForJson = disabledForJson.map(summary => ({
-					...summary,
-					email: maskIdentity(redaction, summary.email),
-					accountId: maskIdentity(redaction, summary.accountId),
-					orgId: maskIdentity(redaction, summary.orgId),
-					orgName: maskIdentity(redaction, summary.orgName),
-				}));
-			}
-			const payload = {
-				generatedAt: Date.now(),
-				reports: trimmed,
-				accountsWithoutUsage: unreportedAccounts,
-				disabledCredentials: disabledForJson,
-				capacity,
-			};
-			process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+			process.stdout.write(`${JSON.stringify(formatUsageJson(view), null, 2)}\n`);
 			return;
 		}
+		const { storedAccounts, accounts, disabled, redaction } = view;
+		const filteredReports = view.reports;
 
 		if (filteredReports.length === 0 && accounts.length === 0) {
 			const scope = cmd.provider ? ` for provider "${cmd.provider}"` : "";

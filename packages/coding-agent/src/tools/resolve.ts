@@ -103,8 +103,12 @@ export function writeDeviceDispatch(toolName: string, result: unknown): XdevDisp
 	return xdev as XdevDispatch;
 }
 
-/** Handler installed by plan mode; `xd://propose` dispatches the written plan title to it. */
-export type PlanProposalHandler = (title: string) => Promise<AgentToolResult<unknown>>;
+/**
+ * Handler installed by plan mode; `xd://propose` dispatches the written plan
+ * title to it. `signal` is the proposing tool call's abort signal, so a host
+ * waiting on a reviewer can settle when the turn is aborted.
+ */
+export type PlanProposalHandler = (title: string, signal?: AbortSignal) => Promise<AgentToolResult<unknown>>;
 
 /** Parse a completed `write` dispatch targeting `xd://resolve` or `xd://reject`. */
 export function resolveDispatchDetails(toolName: string, result: unknown): ResolveDetails | undefined {
@@ -279,6 +283,7 @@ export async function dispatchResolutionDevice(
 	session: ToolSession,
 	device: ResolutionDeviceName,
 	text: string,
+	signal?: AbortSignal,
 ): Promise<{ result: AgentToolResult<unknown>; xdev: XdevDispatch }> {
 	const body = text.trim();
 	if (device === PROPOSE_DEVICE_NAME) {
@@ -288,7 +293,7 @@ export async function dispatchResolutionDevice(
 				`No plan is awaiting approval — ${PROPOSE_DEVICE_PATH} only accepts a plan title while plan mode is active.`,
 			);
 		}
-		const result = await handler(body);
+		const result = await handler(body, signal);
 		return { result, xdev: { tool: device, mode: "execute", args: { title: body }, inner: result.details } };
 	}
 

@@ -2392,6 +2392,19 @@ export class SessionAdvisors {
 	}
 
 	/**
+	 * Switch the default advisor prompt between the coding reviewer and the
+	 * chat-mode spectator after a live chat-mode change. Rebuilds live runtimes
+	 * like {@link setContextPrompt}; a no-op when the mode is unchanged.
+	 */
+	setChatMode(chatMode: ChatMode | undefined): void {
+		if (chatMode === this.#chatMode) return;
+		this.#chatMode = chatMode;
+		if (!this.#advisorEnabled || this.#advisors.length === 0) return;
+		this.#stopAdvisorRuntime();
+		this.#buildAdvisorRuntime(true);
+	}
+
+	/**
 	 * Store the memory backend's developer instructions for advisor system
 	 * prompts. Unlike {@link setContextPrompt} this never rebuilds live
 	 * runtimes: hindsight/mnemopi refresh their instructions on every turn

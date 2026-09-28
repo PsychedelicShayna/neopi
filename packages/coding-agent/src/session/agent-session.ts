@@ -114,13 +114,18 @@ import { reset as resetCapabilities } from "../capability";
 import type { EffectiveExtensionRoots } from "../capability/types";
 import {
 	CHAT_MODE_ENTRY_TYPE,
+	type ChatModeChangeRequest,
 	type ChatModeConfig,
 	chatModeEntryData,
 	chatModeIncludes,
+	chatModeState,
 	readChatModeEntry,
+	readLastActiveChatMode,
+	resolveChatModeChange,
 	sameChatMode,
 } from "../chat/chat-mode";
 import { renderChatCompactionPrompt } from "../chat/chat-system-prompt";
+import { cfgChatInclude } from "../chat/settings";
 import { SessionChronicler } from "../chronicler/session-chronicler";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
 import type { ModelRegistry } from "../config/model-registry";
@@ -672,6 +677,9 @@ export function powerAssertionOptions(mode: "off" | "idle" | "display" | "system
 	};
 }
 
+/** A session change either carries the live model or loads an existing session. */
+export type SessionChangeOrigin = "carried" | "loaded";
+
 export class AgentSession implements SettingsScope {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
@@ -749,7 +757,7 @@ export class AgentSession implements SettingsScope {
 	#activeToolExecutionUpdates = new Map<string, Extract<AgentSessionEvent, { type: "tool_execution_update" }>>();
 	#runStateListeners = new Set<(state: "running" | "idle") => void>();
 	#commandMetadataChangedListeners: CommandMetadataChangedListener[] = [];
-	#sessionChangeCallbacks = new Set<() => void>();
+	#sessionChangeCallbacks = new Set<(origin: SessionChangeOrigin) => void>();
 	#observedSessionId: string | undefined;
 
 	/** Messages queued to be included with the next user prompt as context ("asides"). */
@@ -865,6 +873,11 @@ export class AgentSession implements SettingsScope {
 	#extensionRunner: ExtensionRunner | undefined = undefined;
 	#chatMode: ChatModeConfig | undefined;
 	#chatModeJournaledSessionId: string | undefined;
+	#chatModeBlockedReason: string | undefined;
+	/** Chat mode left most recently this process; a bare `/chat` re-enters it. */
+	#lastChatMode: ChatModeConfig | undefined;
+	/** Tool selection saved when chat mode was entered live; restored when it is left. */
+	#chatModeStashedTools: { enabled: string[]; mounted: string[] } | undefined;
 	#getEvalPreludes: (() => readonly EvalPreludeDefinition[]) | undefined;
 	#reconcileBrowserMcpFilter: AgentSessionConfig["reconcileBrowserMcpFilter"];
 	#skillDescriptions: SkillDescriptionCatalog;
@@ -1585,6 +1598,8 @@ export class AgentSession implements SettingsScope {
 		this.#slashCommands = config.slashCommands ?? [];
 		this.#extensionRunner = config.extensionRunner;
 		this.#chatMode = config.chatMode;
+		this.#chatModeBlockedReason = config.chatModeBlockedReason;
+		this.#chatModeStashedTools = config.chatMode ? config.chatModeCodingTools : undefined;
 		this.#getEvalPreludes = config.getEvalPreludes;
 		this.#reconcileBrowserMcpFilter = config.reconcileBrowserMcpFilter;
 		this.#customCommands = config.customCommands ?? [];
@@ -4938,8 +4953,8 @@ export class AgentSession implements SettingsScope {
 		return this.#sessionTransitionScope;
 	}
 
-	/** Register cleanup that runs when this AgentSession adopts a different session ID. */
-	registerSessionChangeCallback(callback: () => void): () => void {
+	/** Register cleanup on session ID changes, including whether an existing session was loaded. */
+	registerSessionChangeCallback(callback: (origin: SessionChangeOrigin) => void): () => void {
 		this.#sessionChangeCallbacks.add(callback);
 		return () => this.#sessionChangeCallbacks.delete(callback);
 	}
@@ -5024,7 +5039,7 @@ export class AgentSession implements SettingsScope {
 			this.#observedSessionId = currentSessionId;
 		} else if (this.#observedSessionId !== currentSessionId) {
 			this.#observedSessionId = currentSessionId;
-			if (notifyChange) this.#notifySessionChangeCallbacks();
+			if (notifyChange) this.#notifySessionChangeCallbacks("carried");
 		}
 		const sid = this.#activeProviderSessionId(sessionId);
 		this.agent.sessionId = sid;
@@ -5047,10 +5062,10 @@ export class AgentSession implements SettingsScope {
 		if (this.#advisors) this.#advisors.refreshProviderIdentity();
 	}
 
-	#notifySessionChangeCallbacks(): void {
+	#notifySessionChangeCallbacks(origin: SessionChangeOrigin): void {
 		for (const callback of Array.from(this.#sessionChangeCallbacks)) {
 			try {
-				callback();
+				callback(origin);
 			} catch (error) {
 				logger.warn("Session change callback failed", { error: String(error) });
 			}
@@ -6281,6 +6296,19 @@ export class AgentSession implements SettingsScope {
 		return this.#prewalk.state;
 	}
 
+	/** Plan-mode state listeners; see {@link subscribePlanModeChanged}. */
+	#planModeListeners = new Set<(state: PlanModeState | undefined) => void>();
+
+	/**
+	 * Observe every {@link setPlanModeState} call, whichever path makes it (host
+	 * mode switches, plan approval, PlanYolo). Listeners run synchronously after
+	 * the state lands; returns an unsubscribe function.
+	 */
+	subscribePlanModeChanged(listener: (state: PlanModeState | undefined) => void): () => void {
+		this.#planModeListeners.add(listener);
+		return () => this.#planModeListeners.delete(listener);
+	}
+
 	setPlanModeState(state: PlanModeState | undefined): void {
 		this.#planModeState = state;
 		if (state?.enabled) {
@@ -6292,6 +6320,13 @@ export class AgentSession implements SettingsScope {
 			// Drop any unconsumed forced decision so a post-plan execution turn
 			// does not inherit a stale `required` tool choice.
 			this.#toolChoiceQueue.removeByLabel("plan-mode-decision");
+		}
+		for (const listener of this.#planModeListeners) {
+			try {
+				listener(state);
+			} catch (err) {
+				logger.error("Plan mode listener threw", { err });
+			}
 		}
 	}
 
@@ -6747,6 +6782,11 @@ export class AgentSession implements SettingsScope {
 		const sessionId = this.sessionManager.getSessionId();
 		if (this.#chatModeJournaledSessionId === sessionId) return;
 		this.#chatModeJournaledSessionId = sessionId;
+		this.#recordChatMode();
+	}
+
+	/** Append a chat-mode entry when the branch's recorded state differs from the live one. */
+	#recordChatMode(): void {
 		const recorded = readChatModeEntry(this.sessionManager.getBranch());
 		const current = this.#chatMode ?? null;
 		if (sameChatMode(recorded, current) || (current === null && recorded === undefined)) return;
@@ -10487,6 +10527,9 @@ export class AgentSession implements SettingsScope {
 		const switchingToDifferentSession = previousSessionFile
 			? path.resolve(previousSessionFile) !== path.resolve(sessionPath)
 			: true;
+		// A file another process owns fails before anything is torn down, so the
+		// current session (and any running turn) stays exactly as it was.
+		if (switchingToDifferentSession) this.sessionManager.assertSessionNotInUse(sessionPath);
 		// Emit session_before_switch event (can be cancelled)
 		if (this.#extensionRunner?.hasHandlers("session_before_switch")) {
 			const result = (await this.#extensionRunner.emit({
@@ -10508,6 +10551,9 @@ export class AgentSession implements SettingsScope {
 		// Flush pending writes before switching so restore snapshots reflect committed state.
 		await this.sessionManager.flush();
 		const previousSessionState = this.sessionManager.captureState();
+		// Keep owning the current file until this switch settles: a rollback
+		// restores it, and another process must not take it in the gap.
+		using _previousSessionLease = this.sessionManager.retainLease();
 		const bashTransition = this.#bash.beginSessionTransition();
 		// Only same-session reloads compare against the prior context to detect
 		// rollback edits (`#didSessionMessagesChange` below). Building it for a
@@ -10755,7 +10801,7 @@ export class AgentSession implements SettingsScope {
 			this.#releaseTtsrReservations(previousSteeringMessages);
 			this.#releaseTtsrReservations(previousFollowUpMessages);
 			if (previousSessionState.sessionId !== this.sessionManager.getSessionId()) {
-				this.#notifySessionChangeCallbacks();
+				this.#notifySessionChangeCallbacks("loaded");
 			}
 			generationSettled.resolve();
 			this.#sessionGenerationSettled = previousSessionGenerationSettled;
@@ -12472,6 +12518,63 @@ export class AgentSession implements SettingsScope {
 	/** Chat mode this session runs in; undefined for an ordinary coding session. */
 	get chatMode(): ChatModeConfig | undefined {
 		return this.#chatMode;
+	}
+
+	/**
+	 * Switch chat mode on the live session (`/chat`, RPC `set_chat_mode`).
+	 * The system prompt is rebuilt now, so the next turn uses it; the prompt
+	 * cache break is intended. Entering chat mode deactivates every tool, as a
+	 * launch without `--tools` does; leaving restores the coding selection saved
+	 * on entry (or computed at construction for a session launched in chat mode).
+	 * The switch is all-or-nothing: if the tool change or prompt rebuild fails,
+	 * the previous mode, tools, and prompt are restored and the error rethrown.
+	 * On success the new state is journaled so a resume restores it, and a
+	 * `chat_mode_changed` event is emitted.
+	 */
+	async setChatMode(request: ChatModeChangeRequest): Promise<ChatModeConfig | undefined> {
+		if (this.isStreaming) throw new Error("Change chat mode after the current turn finishes.");
+		const current = this.#chatMode;
+		const last = this.#lastChatMode ?? readLastActiveChatMode(this.sessionManager.getBranch());
+		const next = resolveChatModeChange(request, current, last, cfgChatInclude.get(this.settings)) ?? undefined;
+		if (next && this.#chatModeBlockedReason) throw new Error(this.#chatModeBlockedReason);
+		// Chat mode runs without tools; leaving plan mode later would reactivate them under it.
+		if (next && this.#planModeState?.enabled) throw new Error("Exit plan mode first.");
+		if (sameChatMode(current, next)) return current;
+		const previousStash = this.#chatModeStashedTools;
+		const previousTools = { enabled: this.getEnabledToolNames(), mounted: this.getMountedXdevToolNames() };
+		// The prompt rebuild reads the live mode, so it changes before the rebuild.
+		this.#chatMode = next;
+		try {
+			if (!current) {
+				this.#chatModeStashedTools = previousTools;
+				await this.setActiveToolsByName([]);
+			} else if (!next && previousStash) {
+				this.#chatModeStashedTools = undefined;
+				await this.setActiveToolPresentation(previousStash.enabled, previousStash.mounted);
+			}
+			await this.refreshBaseSystemPrompt();
+		} catch (err) {
+			this.#chatMode = current;
+			this.#chatModeStashedTools = previousStash;
+			try {
+				await this.setActiveToolPresentation(previousTools.enabled, previousTools.mounted);
+				await this.refreshBaseSystemPrompt();
+			} catch (rollbackErr) {
+				logger.warn("Failed to restore tools and system prompt after a failed chat mode switch", {
+					error: rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr),
+				});
+			}
+			throw err;
+		}
+		this.#lastChatMode = next ?? current;
+		this.#extensionRunner?.setChatMode(next !== undefined);
+		this.#advisors.setChatMode(next?.mode);
+		if (this.#agentKind === "main") {
+			this.#recordChatMode();
+			this.#chatModeJournaledSessionId = this.sessionManager.getSessionId();
+		}
+		this.#emit({ type: "chat_mode_changed", ...chatModeState(next) });
+		return next;
 	}
 
 	/**

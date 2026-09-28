@@ -10,10 +10,12 @@ import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
 import { isRecord, ptree, readJsonl } from "@oh-my-pi/pi-utils";
 import type { FileSink } from "bun";
+import type { ChatModeSetting, ChatModeState } from "../../chat/chat-mode";
 import type { BashResult } from "../../exec/bash-executor";
 import type { AgentSessionEvent, SessionStats } from "../../session/agent-session";
 import type { SessionEntry, SessionTreeNode } from "../../session/session-entries";
 import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameDecoder, type RpcProtocolVersion } from "./rpc-frame";
+import type { RpcRolesResult, RpcSetRoleResult } from "./rpc-roles";
 import {
 	RPC_MESSAGES_PAGE_BUSY_ERROR,
 	RPC_MESSAGES_PAGE_STALE_ERROR,
@@ -22,6 +24,7 @@ import {
 } from "./rpc-messages";
 import type {
 	RpcAvailableCommandsUpdateFrame,
+	RpcApprovalHandler,
 	RpcAvailableSlashCommand,
 	RpcCommand,
 	RpcExtensionUIRequest,
@@ -32,18 +35,27 @@ import type {
 	RpcHostToolDefinition,
 	RpcHostToolResult,
 	RpcHostToolUpdate,
+	RpcModeChangedFrame,
 	RpcOpenSessionResult,
+	RpcPlanProposalRequest,
+	RpcPlanProposalResponse,
 	RpcPromptResultFrame,
 	RpcResponse,
 	RpcSessionSettledFrame,
 	RpcSessionState,
+	RpcSetModeResult,
 	RpcSubagentEventFrame,
 	RpcSubagentLifecycleFrame,
 	RpcSubagentMessagesResult,
 	RpcSubagentProgressFrame,
 	RpcSubagentSnapshot,
 	RpcSubagentSubscriptionLevel,
+	RpcToolApprovalCancel,
+	RpcToolApprovalDecision,
+	RpcToolApprovalRequest,
+	RpcToolApprovalResponse,
 } from "./rpc-types";
+import type { RpcUsageRequest, RpcUsageResult } from "./rpc-usage";
 
 /** Distributive Omit that works with union types */
 type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
@@ -105,6 +117,10 @@ export type RpcSubagentEventListener = (payload: RpcSubagentEventFrame["payload"
 export type RpcAvailableCommandsUpdateListener = (commands: RpcAvailableSlashCommand[]) => void;
 export type RpcPromptResultListener = (result: RpcPromptResultFrame) => void;
 export type RpcSessionSettledListener = () => void;
+export type RpcPlanProposalRequestListener = (request: RpcPlanProposalRequest) => void;
+export type RpcModeChangedListener = (frame: RpcModeChangedFrame) => void;
+export type RpcToolApprovalRequestListener = (request: RpcToolApprovalRequest) => void;
+export type RpcToolApprovalCancelListener = (cancel: RpcToolApprovalCancel) => void;
 
 export interface RpcClientToolContext<TDetails = unknown> {
 	toolCallId: string;
@@ -166,6 +182,7 @@ const sessionEventTypes = new Set<AgentSessionEvent["type"]>([
 	"thinking_level_changed",
 	"model_changed",
 	"goal_updated",
+	"chat_mode_changed",
 ]);
 
 function isRpcResponse(value: unknown): value is RpcResponse {
@@ -254,6 +271,37 @@ function isRpcExtensionUiRequest(value: unknown): value is RpcExtensionUIRequest
 	return value.type === "extension_ui_request" && typeof value.id === "string" && typeof value.method === "string";
 }
 
+function isRpcPlanProposalRequest(value: unknown): value is RpcPlanProposalRequest {
+	if (!isRecord(value)) return false;
+	return (
+		value.type === "plan_proposal_request" &&
+		typeof value.id === "string" &&
+		typeof value.title === "string" &&
+		typeof value.planFilePath === "string" &&
+		typeof value.planMarkdown === "string"
+	);
+}
+
+function isRpcToolApprovalRequest(value: unknown): value is RpcToolApprovalRequest {
+	if (!isRecord(value)) return false;
+	return (
+		value.type === "tool_approval_request" &&
+		typeof value.id === "string" &&
+		typeof value.toolCallId === "string" &&
+		typeof value.toolName === "string"
+	);
+}
+
+function isRpcToolApprovalCancel(value: unknown): value is RpcToolApprovalCancel {
+	if (!isRecord(value)) return false;
+	return value.type === "tool_approval_cancel" && typeof value.id === "string" && typeof value.targetId === "string";
+}
+
+function isRpcModeChangedFrame(value: unknown): value is RpcModeChangedFrame {
+	if (!isRecord(value)) return false;
+	return value.type === "mode_changed" && (value.mode === "default" || value.mode === "plan");
+}
+
 function normalizeToolResult<TDetails>(result: RpcClientToolResult<TDetails>): AgentToolResult<TDetails> {
 	if (typeof result === "string") {
 		return {
@@ -298,6 +346,10 @@ export class RpcClient {
 	#availableCommandsUpdateListeners = new Set<RpcAvailableCommandsUpdateListener>();
 	#promptResultListeners = new Set<RpcPromptResultListener>();
 	#sessionSettledListeners = new Set<RpcSessionSettledListener>();
+	#planProposalRequestListeners = new Set<RpcPlanProposalRequestListener>();
+	#modeChangedListeners = new Set<RpcModeChangedListener>();
+	#toolApprovalRequestListeners = new Set<RpcToolApprovalRequestListener>();
+	#toolApprovalCancelListeners = new Set<RpcToolApprovalCancelListener>();
 	/** `promptAndWait` completions keyed by request id; registered before the prompt is sent. */
 	#promptResultWaiters = new Map<string, (result: RpcPromptResultFrame) => void>();
 	#pendingRequests: Map<string, { resolve: (response: RpcResponse) => void; reject: (error: Error) => void }> =
@@ -611,6 +663,51 @@ export class RpcClient {
 	}
 
 	/**
+	 * Subscribe to `plan_proposal_request` frames, emitted when the agent submits
+	 * a plan after {@link setMode}("plan"). Answer each with
+	 * {@link respondToPlanProposal} using `request.id`; the proposing tool call
+	 * waits for that answer.
+	 */
+	onPlanProposalRequest(listener: RpcPlanProposalRequestListener): () => void {
+		this.#planProposalRequestListeners.add(listener);
+		return () => {
+			this.#planProposalRequestListeners.delete(listener);
+		};
+	}
+
+	/**
+	 * Subscribe to `tool_approval_request` frames, emitted after
+	 * {@link setApprovalHandler}("host") whenever a tool call needs approval.
+	 * Answer each with {@link respondToToolApproval} using `request.id`; the tool
+	 * call waits for that answer until `request.timeout` elapses, then is denied.
+	 */
+	onToolApprovalRequest(listener: RpcToolApprovalRequestListener): () => void {
+		this.#toolApprovalRequestListeners.add(listener);
+		return () => {
+			this.#toolApprovalRequestListeners.delete(listener);
+		};
+	}
+
+	/**
+	 * Subscribe to `tool_approval_cancel` frames: the tool call behind the request
+	 * `cancel.targetId` was aborted and has been denied; drop its approval UI.
+	 */
+	onToolApprovalCancel(listener: RpcToolApprovalCancelListener): () => void {
+		this.#toolApprovalCancelListeners.add(listener);
+		return () => {
+			this.#toolApprovalCancelListeners.delete(listener);
+		};
+	}
+
+	/** Subscribe to `mode_changed`: every change of the session mode or the active plan file. */
+	onModeChanged(listener: RpcModeChangedListener): () => void {
+		this.#modeChangedListeners.add(listener);
+		return () => {
+			this.#modeChangedListeners.delete(listener);
+		};
+	}
+
+	/**
 	 * Get collected stderr output (useful for debugging).
 	 */
 	getStderr(): string {
@@ -720,6 +817,48 @@ export class RpcClient {
 	}
 
 	/**
+	 * Switch chat mode live (`off`, `chat`, `erp`, `raw`). `include` lists the
+	 * re-enabled context categories; omitted keeps the current or last-used set.
+	 */
+	async setChatMode(mode: ChatModeSetting, include?: string | string[]): Promise<ChatModeState> {
+		const response = await this.#send({ type: "set_chat_mode", mode, ...(include !== undefined ? { include } : {}) });
+		return this.#getData(response);
+	}
+
+	/**
+	 * Switch between `default` and `plan` mode. Failures carry `code`
+	 * `plan_disabled`, `mode_blocked`, or `session_busy` on {@link RpcCommandError}.
+	 */
+	async setMode(mode: RpcSetModeResult["mode"], planFilePath?: string): Promise<RpcSetModeResult> {
+		const response = await this.#send({ type: "set_mode", mode, planFilePath });
+		return this.#getData(response);
+	}
+
+	/** Answer a `plan_proposal_request`; anything but `approve` keeps plan mode on. */
+	respondToPlanProposal(id: string, decision: RpcPlanProposalResponse["decision"], feedback?: string): void {
+		this.#writeFrame({ type: "plan_proposal_response", id, decision, feedback });
+	}
+
+	/**
+	 * Choose who answers tool approvals: `ui` (default) keeps the `Allow tool:`
+	 * `extension_ui_request` select dialog; `host` switches to typed
+	 * `tool_approval_request` frames (see {@link onToolApprovalRequest}).
+	 */
+	async setApprovalHandler(handler: RpcApprovalHandler): Promise<RpcApprovalHandler> {
+		const response = await this.#send({ type: "set_approval_handler", handler });
+		return this.#getData<{ handler: RpcApprovalHandler }>(response).handler;
+	}
+
+	/**
+	 * Answer a `tool_approval_request`. `allow_session` also allows later calls of
+	 * that tool for the rest of the process; `reason` on `deny` reaches the model
+	 * in the tool error text.
+	 */
+	respondToToolApproval(id: string, decision: RpcToolApprovalDecision, reason?: string): void {
+		this.#writeFrame({ type: "tool_approval_response", id, decision, ...(reason !== undefined ? { reason } : {}) });
+	}
+
+	/**
 	 * Configure subagent frames emitted by the RPC server. Servers default to "off".
 	 * "progress" emits lifecycle/progress frames; "events" additionally emits raw subagent session events.
 	 */
@@ -779,6 +918,22 @@ export class RpcClient {
 	async getAvailableModels(): Promise<ModelInfo[]> {
 		const response = await this.#send({ type: "get_available_models" });
 		return this.#getData<{ models: ModelInfo[] }>(response).models;
+	}
+
+	/**
+	 * List model roles with their pattern chains and resolution.
+	 */
+	async getRoles(): Promise<RpcRolesResult> {
+		const response = await this.#send({ type: "get_roles" });
+		return this.#getData<RpcRolesResult>(response);
+	}
+
+	/**
+	 * Select a model role for the session, as `--model @<role>` does at launch.
+	 */
+	async setRole(role: string): Promise<RpcSetRoleResult> {
+		const response = await this.#send({ type: "set_role", role });
+		return this.#getData<RpcSetRoleResult>(response);
 	}
 
 	/**
@@ -894,6 +1049,16 @@ export class RpcClient {
 	 */
 	async getSessionStats(): Promise<SessionStats> {
 		const response = await this.#send({ type: "get_session_stats" });
+		return this.#getData(response);
+	}
+
+	/**
+	 * Account-level provider usage reports, as `npi usage --json` prints them.
+	 * Failures without auth storage carry `code: "usage_unavailable"` on
+	 * {@link RpcCommandError}.
+	 */
+	async getUsage(options: RpcUsageRequest = {}): Promise<RpcUsageResult> {
+		const response = await this.#send({ type: "get_usage", ...options });
 		return this.#getData(response);
 	}
 
@@ -1256,6 +1421,34 @@ export class RpcClient {
 			return;
 		}
 
+		if (isRpcPlanProposalRequest(data)) {
+			for (const listener of this.#planProposalRequestListeners) {
+				listener(data);
+			}
+			return;
+		}
+
+		if (isRpcToolApprovalRequest(data)) {
+			for (const listener of this.#toolApprovalRequestListeners) {
+				listener(data);
+			}
+			return;
+		}
+
+		if (isRpcToolApprovalCancel(data)) {
+			for (const listener of this.#toolApprovalCancelListeners) {
+				listener(data);
+			}
+			return;
+		}
+
+		if (isRpcModeChangedFrame(data)) {
+			for (const listener of this.#modeChangedListeners) {
+				listener(data);
+			}
+			return;
+		}
+
 		if (!isAgentSessionEvent(data)) return;
 
 		for (const listener of this.#sessionEventListeners) {
@@ -1366,7 +1559,13 @@ export class RpcClient {
 	}
 
 	#writeFrame(
-		frame: RpcCommand | RpcExtensionUIResponse | RpcHostToolResult | RpcHostToolUpdate,
+		frame:
+			| RpcCommand
+			| RpcExtensionUIResponse
+			| RpcHostToolResult
+			| RpcHostToolUpdate
+			| RpcPlanProposalResponse
+			| RpcToolApprovalResponse,
 		onError?: (error: Error) => void,
 	): void {
 		if (!this.#process?.stdin) {

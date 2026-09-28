@@ -4,10 +4,11 @@
  * Commands are sent as JSON lines on stdin.
  * Responses and events are emitted as JSON lines on stdout.
  */
-import type { AgentMessage, AgentToolResult, ThinkingLevel, ToolLoadMode } from "@oh-my-pi/pi-agent-core";
+import type { AgentMessage, AgentToolResult, ThinkingLevel, ToolLoadMode, ToolTier } from "@oh-my-pi/pi-agent-core";
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Effort, ImageContent, Model, ToolExample } from "@oh-my-pi/pi-ai";
 import type { BashResult } from "../../exec/bash-executor";
+import type { ChatModeSetting, ChatModeState } from "../../chat/chat-mode";
 import type { ContextUsage } from "../../extensibility/extensions/types";
 import type { AgentSessionEvent, SessionStats } from "../../session/agent-session";
 import type { FileEntry, SessionEntry, SessionTreeNode } from "../../session/session-entries";
@@ -15,7 +16,10 @@ import type { AvailableSlashCommandSource } from "../../slash-commands/available
 import type { AgentProgress } from "@oh-my-pi/pi-tui/tools/task";
 import type { SubagentEventPayload, SubagentLifecyclePayload, SubagentProgressPayload } from "../../task";
 import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import type { ApprovalMode } from "../../tools/approval";
 import type { RpcMessagesPage } from "./rpc-messages";
+import type { RpcRolesResult, RpcSetRoleResult } from "./rpc-roles";
+import type { RpcUsageResult } from "./rpc-usage";
 
 // ============================================================================
 // RPC Commands (stdin)
@@ -37,6 +41,8 @@ export type RpcCommand =
 	// State
 	| { id?: string; type: "get_state" }
 	| { id?: string; type: "set_fast_mode"; enabled: boolean }
+	| RpcSetChatModeCommand
+	| { id?: string; type: "set_mode"; mode: RpcMode; planFilePath?: string }
 	| { id?: string; type: "get_available_commands" }
 	| { id?: string; type: "get_entries"; since?: string }
 	| { id?: string; type: "get_tree" }
@@ -45,6 +51,7 @@ export type RpcCommand =
 	| { id?: string; type: "set_host_uri_schemes"; schemes: RpcHostUriSchemeDefinition[] }
 	| { id?: string; type: "set_subagent_subscription"; level: RpcSubagentSubscriptionLevel }
 	| { id?: string; type: "set_event_filter"; events: string[] | null }
+	| { id?: string; type: "set_approval_handler"; handler: RpcApprovalHandler }
 	| { id?: string; type: "get_subagents" }
 	| { id?: string; type: "get_subagent_messages"; subagentId?: string; sessionFile?: string; fromByte?: number }
 
@@ -52,6 +59,8 @@ export type RpcCommand =
 	| { id?: string; type: "set_model"; provider: string; modelId: string }
 	| { id?: string; type: "cycle_model" }
 	| { id?: string; type: "get_available_models" }
+	| { id?: string; type: "get_roles" }
+	| { id?: string; type: "set_role"; role: string }
 
 	// Thinking
 	| { id?: string; type: "set_thinking_level"; level: ThinkingLevel }
@@ -77,6 +86,7 @@ export type RpcCommand =
 
 	// Session
 	| { id?: string; type: "get_session_stats" }
+	| { id?: string; type: "get_usage"; provider?: string; refresh?: boolean; redact?: boolean }
 	| { id?: string; type: "export_html"; outputPath?: string }
 	| { id?: string; type: "switch_session"; sessionPath: string }
 	| { id?: string; type: "branch"; entryId: string }
@@ -124,6 +134,67 @@ export interface RpcSessionState {
 	dumpTools?: Array<{ name: string; description: string; parameters: unknown; examples?: readonly ToolExample[] }>;
 	/** Current context window usage. */
 	contextUsage?: ContextUsage;
+	/** Role the current model was selected through (`set_role`, `--model @<role>`); absent after a direct model choice. */
+	activeRole?: string;
+	/** Live chat mode; `off` for an ordinary coding session. */
+	chatMode: ChatModeSetting;
+	/** Session mode; `plan` while plan mode is active, whichever path entered it. */
+	mode: RpcMode;
+	/** Active plan-mode details; present only while `mode` is `plan`. */
+	planMode?: RpcPlanModeInfo;
+}
+
+/** Session modes `set_mode` switches between. */
+export type RpcMode = "default" | "plan";
+
+/** Plan-mode details reported by `get_state`. */
+export interface RpcPlanModeInfo {
+	planFilePath: string;
+	workflow: string;
+}
+
+/** `set_mode` response data. */
+export interface RpcSetModeResult {
+	mode: RpcMode;
+	/** The plan file plan mode targets; present only for `plan`. */
+	planFilePath?: string;
+}
+
+/** Emitted whenever the session mode or the active plan file changes, whichever path caused it. */
+export interface RpcModeChangedFrame {
+	type: "mode_changed";
+	mode: RpcMode;
+	planFilePath?: string;
+}
+
+/** Emitted when the agent submits a plan via `xd://propose` after the host entered plan mode with `set_mode`. */
+export interface RpcPlanProposalRequest {
+	type: "plan_proposal_request";
+	id: string;
+	title: string;
+	planFilePath: string;
+	planMarkdown: string;
+}
+
+/** Host decision for a `plan_proposal_request` (stdin control frame). */
+export interface RpcPlanProposalResponse {
+	type: "plan_proposal_response";
+	id: string;
+	decision: "approve" | "refine";
+	/** Reviewer note for `refine`; included in the tool result the agent sees. */
+	feedback?: string;
+}
+
+/**
+ * Switch chat mode live. `include` lists the re-enabled context categories,
+ * comma-separated (`"date,cwd"`) or as an array; omitted keeps the current or
+ * last-used set. Responds with the resulting {@link ChatModeState}.
+ */
+export interface RpcSetChatModeCommand {
+	id?: string;
+	type: "set_chat_mode";
+	mode: ChatModeSetting;
+	include?: string | string[];
 }
 
 export interface RpcAvailableSlashCommand {
@@ -199,6 +270,21 @@ export interface RpcReadyFrame {
 	supportedProtocolVersions: [1, 2];
 	maxFrameBytes: number;
 	maxReassembledFrameBytes: number;
+	/** Optional features this process supports; hosts gate on exact strings (see `rpc-capabilities.ts`). */
+	capabilities: string[];
+}
+
+/**
+ * One JSON line written to **stderr** (not stdout) when startup fails before
+ * any `ready` frame; the process then exits non-zero.
+ */
+export interface RpcStartupError {
+	type: "startup_error";
+	/** `--session` names a file another live process holds (see the `session_lease` capability). */
+	code: "session_in_use";
+	/** Process id of the holder; 0 when it had not yet recorded itself. */
+	pid: number;
+	sessionFile: string;
 }
 
 export interface RpcChunkFrame {
@@ -273,6 +359,8 @@ export type RpcResponse =
 			success: true;
 			data: { enabled: boolean; active: boolean };
 	  }
+	| { id?: string; type: "response"; command: "set_chat_mode"; success: true; data: ChatModeState }
+	| { id?: string; type: "response"; command: "set_mode"; success: true; data: RpcSetModeResult }
 	| {
 			id?: string;
 			type: "response";
@@ -298,6 +386,13 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "set_host_tools"; success: true; data: { toolNames: string[] } }
 	| { id?: string; type: "response"; command: "set_host_uri_schemes"; success: true; data: { schemes: string[] } }
 	| { id?: string; type: "response"; command: "set_event_filter"; success: true; data: { events: string[] | null } }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_approval_handler";
+			success: true;
+			data: { handler: RpcApprovalHandler };
+	  }
 	| {
 			id?: string;
 			type: "response";
@@ -342,6 +437,20 @@ export type RpcResponse =
 			success: true;
 			data: { models: Model[] };
 	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_roles";
+			success: true;
+			data: RpcRolesResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_role";
+			success: true;
+			data: RpcSetRoleResult;
+	  }
 
 	// Thinking
 	| { id?: string; type: "response"; command: "set_thinking_level"; success: true }
@@ -379,6 +488,7 @@ export type RpcResponse =
 
 	// Session
 	| { id?: string; type: "response"; command: "get_session_stats"; success: true; data: SessionStats }
+	| { id?: string; type: "response"; command: "get_usage"; success: true; data: RpcUsageResult }
 	| { id?: string; type: "response"; command: "export_html"; success: true; data: { path: string } }
 	| { id?: string; type: "response"; command: "switch_session"; success: true; data: { cancelled: boolean } }
 	| { id?: string; type: "response"; command: "branch"; success: true; data: { text: string; cancelled: boolean } }
@@ -630,6 +740,53 @@ export interface RpcHostUriResult {
 	/** Optional error message; preferred over `content` for error surfacing. */
 	error?: string;
 }
+
+// ============================================================================
+// Tool Approval Frames (bidirectional)
+// ============================================================================
+
+/** Who answers tool approvals: the `extension_ui_request` select dialog (`ui`) or typed frames (`host`). */
+export type RpcApprovalHandler = "host" | "ui";
+
+/** A host's answer to one {@link RpcToolApprovalRequest}. */
+export type RpcToolApprovalDecision = "allow_once" | "allow_session" | "deny";
+
+/** A pending provider safety check attached to a computer-use tool call. */
+export interface RpcToolApprovalSafetyCheck {
+	id: string;
+	code?: string;
+	message?: string;
+}
+
+/** Emitted (with `set_approval_handler: host`) when a tool call needs approval. */
+export interface RpcToolApprovalRequest {
+	type: "tool_approval_request";
+	id: string;
+	toolCallId: string;
+	toolName: string;
+	/** The exact input that runs when approved (after any `tool_call` handler revision). */
+	args: unknown;
+	tier: ToolTier;
+	approvalMode: ApprovalMode;
+	reason?: string;
+	details: string[];
+	/** Present only when provider safety checks are pending. */
+	safetyChecks?: RpcToolApprovalSafetyCheck[];
+	/** Milliseconds until the request resolves as `deny`. */
+	timeout: number;
+}
+
+/** Emitted when a pending approval request is abandoned because the tool call was aborted. */
+export interface RpcToolApprovalCancel {
+	type: "tool_approval_cancel";
+	id: string;
+	targetId: string;
+}
+
+/** Sent by the host to answer a pending {@link RpcToolApprovalRequest}. */
+export type RpcToolApprovalResponse =
+	| { type: "tool_approval_response"; id: string; decision: RpcToolApprovalDecision; reason?: string }
+	| { type: "tool_approval_response"; id: string; cancelled: true };
 
 // ============================================================================
 // Extension UI Commands (stdin)

@@ -69,6 +69,7 @@ import {
 	type TtsrInjectionEntry,
 	type UsageStatistics,
 } from "./session-entries";
+import { type SessionLease, SessionInUseError } from "./session-lease";
 import {
 	filterSessionsForPicker,
 	findMostRecentNonEmptySession,
@@ -761,6 +762,11 @@ export class SessionManager {
 
 	/** The single open append writer; the manager only ever writes one file at a time. */
 	#writer: SessionStorageWriter | undefined;
+	/**
+	 * Lifetime ownership lease on {@link #sessionFile} (file backend only).
+	 * Follows the file this manager writes; released by {@link close}.
+	 */
+	#lease: SessionLease | undefined;
 	/** Sealed by {@link releaseRetainedEntries}: every later append/title/rewrite is a dropped no-op. */
 	#released = false;
 	/** Serializes async disk work (flush/close/atomic rewrite). Appends are synchronous and bypass it. */
@@ -833,6 +839,44 @@ export class SessionManager {
 	#materializeBreadcrumb(): void {
 		if (!this.#breadcrumbFresh || !this.#sessionFile) return;
 		this.#rememberBreadcrumb(this.#cwd, this.#sessionFile, false);
+	}
+
+	/**
+	 * Take the lifetime lease on `sessionFile` without adopting it, so callers
+	 * can fail before changing any state.
+	 *
+	 * @throws SessionInUseError when another live process holds the file.
+	 */
+	#takeLease(sessionFile: string | undefined): SessionLease | undefined {
+		if (!this.#persist || !sessionFile || !this.#storage.acquireSessionLease) return undefined;
+		return this.#storage.acquireSessionLease(sessionFile);
+	}
+
+	/** Hold `next` as this manager's lease and release the previous one. */
+	#adoptLease(next: SessionLease | undefined): void {
+		const previous = this.#lease;
+		this.#lease = next;
+		previous?.release();
+	}
+
+	/** Point the lease at the current {@link #sessionFile}. */
+	#syncLease(): void {
+		this.#adoptLease(this.#takeLease(this.#sessionFile));
+	}
+
+	/**
+	 * Run factory work for a manager that has not been handed to a caller yet.
+	 * If it throws, the manager is discarded, so drop its lease: the process-wide
+	 * lease table would otherwise keep the file locked against other processes
+	 * until this process exits.
+	 */
+	async #releaseLeaseOnFailure<T>(work: () => Promise<T>): Promise<T> {
+		try {
+			return await work();
+		} catch (error) {
+			this.#adoptLease(undefined);
+			throw error;
+		}
 	}
 
 	#clearDiskError(): void {
@@ -1547,6 +1591,7 @@ export class SessionManager {
 		} else {
 			this.#sessionFile = undefined;
 		}
+		this.#syncLease();
 
 		return this.#sessionFile;
 	}
@@ -1758,6 +1803,19 @@ export class SessionManager {
 		this.#artifactManagerSessionFile = null;
 		this.#adoptedArtifactManager = null;
 
+		try {
+			this.#syncLease();
+		} catch (error) {
+			if (!(error instanceof SessionInUseError)) throw error;
+			// Another process took the restored file while this manager did not
+			// own it. Writing on without the lease would interleave with that
+			// owner, so fail closed: seal every later write and report the loss
+			// through the persistence-failure surface. Callers that must keep the
+			// file across a transition hold it with retainLease() instead.
+			this.#adoptLease(undefined);
+			this.seal();
+			this.#noteDiskFailure(error);
+		}
 		if (this.#sessionFile) this.#rememberBreadcrumb(this.#cwd, this.#sessionFile);
 	}
 
@@ -1808,34 +1866,47 @@ export class SessionManager {
 		loadedSession?: SessionLoadResult,
 		options?: { throwIfMissing?: boolean; newSession?: NewSessionOptions },
 	): Promise<void> {
-		await this.#drainAndCloseWriter();
-		this.#clearDiskError();
-		this.#draftOnlySessionCleanupArmed = false;
-
 		const resolvedSessionFile = path.resolve(sessionFile);
-		const loaded = loadedSession ?? (await loadSessionFile(resolvedSessionFile, this.#storage));
-		const sourceSize =
-			loaded.sourceSize !== undefined
-				? loaded.sourceSize
-				: this.#storage.existsSync(resolvedSessionFile)
-					? this.#storage.statSync(resolvedSessionFile).size
-					: null;
-		if (loaded.invalidHeader) {
-			throw new Error(
-				`Cannot resume session "${resolvedSessionFile}": the session header is missing or malformed. The file was not modified.`,
-			);
-		}
+		// Fail closed before touching any state when another process owns the file.
+		const lease = this.#takeLease(resolvedSessionFile);
+		let loaded: SessionLoadResult;
+		let sourceSize: number | null;
+		try {
+			await this.#drainAndCloseWriter();
+			this.#clearDiskError();
+			this.#draftOnlySessionCleanupArmed = false;
 
-		this.#sessionFile = resolvedSessionFile;
-		this.#rememberBreadcrumb(this.#cwd, resolvedSessionFile);
-
-		const { entries: fileEntries, titleSlot } = loaded;
-		if (fileEntries.length === 0) {
-			if (options?.throwIfMissing) {
+			loaded = loadedSession ?? (await loadSessionFile(resolvedSessionFile, this.#storage));
+			sourceSize =
+				loaded.sourceSize !== undefined
+					? loaded.sourceSize
+					: this.#storage.existsSync(resolvedSessionFile)
+						? this.#storage.statSync(resolvedSessionFile).size
+						: null;
+			if (loaded.invalidHeader) {
+				throw new Error(
+					`Cannot resume session "${resolvedSessionFile}": the session header is missing or malformed. The file was not modified.`,
+				);
+			}
+			// Strict opens (persisted-task revival) must not adopt an empty file.
+			if (loaded.entries.length === 0 && options?.throwIfMissing) {
 				throw new Error(
 					`Cannot resume session "${resolvedSessionFile}": the session file holds no entries. The file was not modified.`,
 				);
 			}
+		} catch (error) {
+			// The lease stays provisional until validation passes; a rejected open
+			// must leave the file acquirable by other processes.
+			lease?.release();
+			throw error;
+		}
+
+		this.#sessionFile = resolvedSessionFile;
+		this.#adoptLease(lease);
+		this.#rememberBreadcrumb(this.#cwd, resolvedSessionFile);
+
+		const { entries: fileEntries, titleSlot } = loaded;
+		if (fileEntries.length === 0) {
 			// Explicit but empty/missing path (e.g. --session flag): start fresh but
 			// keep the requested path and materialize the header immediately.
 			this.#resetToNewSession(options?.newSession, resolvedSessionFile);
@@ -1927,6 +1998,7 @@ export class SessionManager {
 		const timestamp = nowIso();
 		this.#sessionId = mintSessionId();
 		this.#sessionFile = path.join(this.#sessionDir, `${fileSafeTimestamp(timestamp)}_${this.#sessionId}.jsonl`);
+		this.#syncLease();
 		this.#expectedDiskSize = null;
 		this.#header = {
 			type: "session",
@@ -2006,6 +2078,9 @@ export class SessionManager {
 					newArtifactsDir !== null &&
 					path.resolve(oldArtifactsDir) !== path.resolve(newArtifactsDir);
 				sessionFileExisted = this.#storage.existsSync(oldSessionFile);
+				// Own the destination before moving the file into it. Taken right
+				// before the guarded block, whose failure path releases it.
+				const destinationLease = sessionPathChanged ? this.#takeLease(newSessionFile) : undefined;
 
 				let sessionMoved = false;
 				let artifactsRenamed = false;
@@ -2037,6 +2112,7 @@ export class SessionManager {
 						}
 					}
 				} catch (err) {
+					destinationLease?.release();
 					if (artifactsRenamed && oldArtifactsDir && newArtifactsDir) {
 						try {
 							await fs.promises.rename(newArtifactsDir, oldArtifactsDir);
@@ -2072,6 +2148,7 @@ export class SessionManager {
 				}
 
 				this.#sessionFile = newSessionFile;
+				if (destinationLease) this.#adoptLease(destinationLease);
 				// The freshness expectation must describe the NEW path. A successful
 				// rename carried this manager's tracked bytes to `newSessionFile`, so
 				// #expectedDiskSize still applies; without a rename the destination
@@ -2145,7 +2222,7 @@ export class SessionManager {
 		manager.#entries = structuredClone(this.#entries);
 		manager.#index.rebuild(manager.#entries);
 		manager.#forceFileCreation = true;
-		await manager.#rewriteAtomically();
+		await manager.#releaseLeaseOnFailure(() => manager.#rewriteAtomically());
 		return manager;
 	}
 
@@ -2318,23 +2395,49 @@ export class SessionManager {
 		}
 	}
 
-	/** Flush, then close the append writer. */
+	/** Flush, then close the append writer and release the session lease. */
 	async close(): Promise<void> {
 		if (!this.#persist) return;
-		await this.#scheduleDiskWork(async () => {
-			const hadWriter = this.#writer !== undefined;
-			await this.#closeWriterHandle();
-			if (hadWriter || (this.#sessionFile && this.#storage.existsSync(this.#sessionFile)))
-				this.#fileIsCurrent = true;
-		});
-		await this.#dropIfEmptyAndNoDraft();
-		// Wait for any queued backing writes (IndexedSessionStorage per-path
-		// tail) to become durable so a graceful shutdown does not exit while
-		// a fire-and-forget publish is still on the wire.
-		await this.#scheduleDiskWork(async () => {
-			await this.#storage.drain();
-		});
+		try {
+			await this.#scheduleDiskWork(async () => {
+				const hadWriter = this.#writer !== undefined;
+				await this.#closeWriterHandle();
+				if (hadWriter || (this.#sessionFile && this.#storage.existsSync(this.#sessionFile)))
+					this.#fileIsCurrent = true;
+			});
+			await this.#dropIfEmptyAndNoDraft();
+			// Wait for any queued backing writes (IndexedSessionStorage per-path
+			// tail) to become durable so a graceful shutdown does not exit while
+			// a fire-and-forget publish is still on the wire.
+			await this.#scheduleDiskWork(async () => {
+				await this.#storage.drain();
+			});
+		} finally {
+			this.#adoptLease(undefined);
+		}
 		if (this.#diskFailure) throw this.#diskFailure;
+	}
+
+	/**
+	 * Fail fast when another live process holds the lifetime lease on
+	 * `sessionPath`, before a caller tears down state to switch to it.
+	 *
+	 * @throws SessionInUseError naming the holder.
+	 */
+	assertSessionNotInUse(sessionPath: string): void {
+		const holder = this.#storage.inspectSessionLease?.(sessionPath);
+		if (holder) throw new SessionInUseError(path.resolve(sessionPath), holder.pid, holder.since);
+	}
+
+	/**
+	 * Keep the current session file owned until the returned reference is
+	 * released, even if this manager switches to another file meanwhile. A
+	 * transition that may roll back (see `AgentSession.switchSession`) holds it
+	 * so another process cannot take the file in the gap. `undefined` when the
+	 * manager holds no lease (in memory, or a backend without leases).
+	 */
+	retainLease(): SessionLease | undefined {
+		return this.#lease?.retain();
 	}
 
 	/**
@@ -3287,6 +3390,7 @@ export class SessionManager {
 		}
 
 		this.#sessionFile = newSessionFile;
+		this.#syncLease();
 		this.#expectedDiskSize = null;
 		this.#rewriteSynchronously();
 		this.#rememberBreadcrumb(this.#cwd, newSessionFile);
@@ -3403,10 +3507,12 @@ export class SessionManager {
 			manager.#index.rebuild(history);
 		}
 		manager.#forceFileCreation = true;
-		await manager.#rewriteAtomically();
-		if (options?.copyArtifacts !== false) {
-			await copySessionArtifacts(sourcePath, manager.#sessionFile!);
-		}
+		await manager.#releaseLeaseOnFailure(async () => {
+			await manager.#rewriteAtomically();
+			if (options?.copyArtifacts !== false) {
+				await copySessionArtifacts(sourcePath, manager.#sessionFile!);
+			}
+		});
 		return manager;
 	}
 
@@ -3523,17 +3629,50 @@ export class SessionManager {
 		const loaded = options?.throwIfMissing
 			? await loadSessionFile(filePath, storage, { throwIfMissing: true })
 			: probed;
-		await manager.#setSessionFile(filePath, loaded, {
-			throwIfMissing: options?.throwIfMissing,
-			newSession: { parentSession: options?.parentSession },
-		});
+		await manager.#releaseLeaseOnFailure(() =>
+			manager.#setSessionFile(filePath, loaded, {
+				throwIfMissing: options?.throwIfMissing,
+				newSession: { parentSession: options?.parentSession },
+			}),
+		);
+		return manager;
+	}
+
+	/**
+	 * Load a session file into an in-memory manager that never writes it: no
+	 * lease, no writer, no breadcrumb. For viewing (or continuing without
+	 * saving) a transcript another process owns.
+	 *
+	 * @throws Error when the file is missing, empty, or has a malformed header.
+	 */
+	static async openReadOnly(
+		filePath: string,
+		storage: SessionStorage = new FileSessionStorage(),
+	): Promise<SessionManager> {
+		const resolved = path.resolve(filePath);
+		const loaded = await loadSessionFile(resolved, storage, { throwIfMissing: true });
+		if (loaded.invalidHeader || loaded.entries.length === 0) {
+			throw new Error(`Cannot open session "${resolved}" read-only: the session file holds no valid header.`);
+		}
+		const fileEntries = loaded.entries;
+		migrateToCurrentVersion(fileEntries);
+		const header = fileEntries[0] as SessionHeader;
+		const cwd = header.cwd && (await directoryIsEnterable(header.cwd)) ? header.cwd : getProjectDir();
+		const manager = new SessionManager(cwd, "", false, new MemorySessionStorage());
+		manager.#suppressBreadcrumb = true;
+		manager.#resetToNewSession();
+		await resolveBlobRefsInEntries(fileEntries, manager.#blobs);
+		manager.#applyEntries(header, fileEntries.slice(1) as SessionEntry[]);
+		manager.#additionalDirectories = header.additionalDirectories ?? [];
+		manager.#titleUpdatedAt = loaded.titleSlot?.updatedAt ?? header.timestamp;
+		manager.sanitizeLoadedOpenAIResponsesReplayMetadata();
 		return manager;
 	}
 
 	/**
 	 * Lock-free peek for cold subagent revival: returns the recorded working
 	 * directory (session header) and the latest `session_init` contract (system
-	 * prompt / tools / output schema) WITHOUT taking the single-writer lock that
+	 * prompt / tools / output schema) WITHOUT taking the lifetime lease that
 	 * {@link open} acquires — the caller re-opens for the actual revive. Returns
 	 * null when the file can't be read; `init` is null for files written before
 	 * `session_init` was recorded (no faithful contract to rebuild from).
@@ -3644,7 +3783,7 @@ export class SessionManager {
 					const manager = await SessionManager.open(breadcrumb.sessionFile, undefined, storage, {
 						initialCwd: breadcrumbCwd,
 					});
-					await manager.moveTo(cwd, sessionDir);
+					await manager.#releaseLeaseOnFailure(() => manager.moveTo(cwd, sessionDir));
 					return manager;
 				}
 				if (candidateForMove) {
@@ -3660,9 +3799,24 @@ export class SessionManager {
 
 		if (chosenSession === undefined) chosenSession = await findMostRecentNonEmptySession(dir, storage);
 
+		// Another live process owns a leased session; continue the next one instead.
 		const manager = new SessionManager(cwd, dir, true, storage);
-		if (chosenSession) await manager.setSessionFile(chosenSession);
-		else manager.#resetToNewSession();
+		const skipped = new Set<string>();
+		while (chosenSession) {
+			try {
+				await manager.setSessionFile(chosenSession);
+				return manager;
+			} catch (error) {
+				if (!(error instanceof SessionInUseError)) {
+					// This manager is never returned; free whatever it adopted.
+					manager.#adoptLease(undefined);
+					throw error;
+				}
+				skipped.add(path.resolve(chosenSession));
+				chosenSession = await findMostRecentNonEmptySession(dir, storage, skipped);
+			}
+		}
+		manager.#resetToNewSession();
 		return manager;
 	}
 
@@ -3714,6 +3868,34 @@ export class SessionManager {
 	static async listAllForPicker(storage: SessionStorage = new FileSessionStorage()): Promise<SessionInfo[]> {
 		const pinned = await loadPinnedSessionIds();
 		return sortPinnedFirst(filterSessionsForPicker(await listAllSessions(storage), pinned), pinned);
+	}
+}
+
+/**
+ * Scope guard for an opened manager that no live session owns yet. Leaving the
+ * `using` scope before {@link handOff} closes it, which releases its session
+ * lease, so a failed setup never keeps the transcript locked against other
+ * processes for the rest of this process's life.
+ */
+export class PendingSessionManager implements Disposable {
+	#manager: SessionManager | undefined;
+
+	constructor(manager: SessionManager) {
+		this.#manager = manager;
+	}
+
+	/** A live owner (an AgentSession) now closes the manager; leaving the scope no longer does. */
+	handOff(): void {
+		this.#manager = undefined;
+	}
+
+	[Symbol.dispose](): void {
+		const manager = this.#manager;
+		if (!manager) return;
+		this.#manager = undefined;
+		void manager.close().catch(error => {
+			logger.warn("Failed to close an abandoned session manager", { error: String(error) });
+		});
 	}
 }
 

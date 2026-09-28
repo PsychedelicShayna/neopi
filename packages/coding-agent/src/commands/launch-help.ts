@@ -68,6 +68,9 @@ export const launchHelp = {
 		"from-codex": Flags.boolean({ description: "Import a Codex session into NeoPi" }),
 		"session-dir": Flags.string({ description: "Directory for session storage and lookup" }),
 		"no-session": Flags.boolean({ description: "Don't save session (ephemeral)" }),
+		"new-session": Flags.boolean({
+			description: "Start a new session in the default session directory, ignoring autoResume",
+		}),
 		models: Flags.string({ description: "Comma-separated model patterns for Ctrl+P cycling" }),
 		"no-tools": Flags.boolean({ description: "Disable all built-in tools" }),
 		"no-lsp": Flags.boolean({ description: "Disable LSP tools, formatting, and diagnostics" }),

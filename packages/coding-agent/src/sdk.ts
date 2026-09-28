@@ -60,7 +60,7 @@ import {
 } from "./capability/rule";
 import { bucketRules } from "./capability/rule-buckets";
 import type { EffectiveExtensionRoots } from "./capability/types";
-import { type ChatModeConfig, chatModeIncludes } from "./chat/chat-mode";
+import { type ChatModeConfig, chatActiveToolNames, chatModeIncludes } from "./chat/chat-mode";
 import { buildChatSystemPrompt } from "./chat/chat-system-prompt";
 import { shouldEnableAppendOnlyContext } from "./config/append-only-context-mode";
 import { shouldInlineToolDescriptors } from "./config/inline-tool-descriptors-mode";
@@ -577,8 +577,17 @@ export interface CreateAgentSessionOptions {
 	/** Already-loaded text appended through the bundled system prompt templates. */
 	appendSystemPrompt?: string;
 	/**
+	 * `customSystemPrompt` or `systemPromptTemplate` came from a discovered
+	 * SYSTEM.md / SYSTEM_TEMPLATE.md rather than an explicit flag. Chat mode
+	 * ignores discovered prompts and honors only explicit ones.
+	 */
+	systemPromptDiscovered?: boolean;
+	/** `appendSystemPrompt` came from a discovered APPEND_SYSTEM.md; chat mode ignores it. */
+	appendSystemPromptDiscovered?: boolean;
+	/**
 	 * Chat mode (`--chat`): strips coding-agent context from the system prompt,
-	 * per-turn reminders, memory, and extension prompt injection.
+	 * per-turn reminders, memory, and extension prompt injection. This is the
+	 * initial mode; `AgentSession.setChatMode` switches it live.
 	 */
 	chatMode?: ChatModeConfig;
 	/**
@@ -2078,9 +2087,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					(cfgSkillful.get(settings) === true && (session?.skills ?? skills).length > 0)
 				);
 			},
-			// Chat mode owns its tool list exactly (`--tools` or none): no automatic
-			// auto-learn, memory, goal, or AST widening.
-			restrictToolNames: restrictToolNames || chatMode !== undefined,
+			// The registry follows the coding rules even in chat mode, so switching chat
+			// mode off can restore the normal tool selection; chat mode only narrows the
+			// active set (see `chatActiveToolNames` below).
+			restrictToolNames,
 			get hasEditTool() {
 				const requestedToolNames = options.toolNames ? normalizeToolNames(options.toolNames) : undefined;
 				return restrictToolNames
@@ -3558,15 +3568,20 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			const activeRepoContext = hasSession
 				? await logger.time("resolveActiveRepoContext", resolveRepoContext, promptCwd)
 				: initialActiveRepoContext;
-			if (hasSession && options.contextFiles === undefined && chatKeepsContextFiles) {
-				contextFiles = await logger.time(
-					"discoverContextFiles",
-					discoverContextFiles,
-					promptCwd,
-					agentDir,
-					[...cfgDisabledExtensions.get(settings)],
-					chatMode !== undefined,
-				);
+			// Chat mode can change live (`AgentSession.setChatMode`); read it per rebuild.
+			const liveChatMode = hasSession ? session.chatMode : chatMode;
+			if (hasSession && options.contextFiles === undefined) {
+				contextFiles =
+					liveChatMode && !chatModeIncludes(liveChatMode, "contextFiles")
+						? []
+						: await logger.time(
+								"discoverContextFiles",
+								discoverContextFiles,
+								promptCwd,
+								agentDir,
+								[...cfgDisabledExtensions.get(settings)],
+								liveChatMode !== undefined,
+							);
 				toolSession.contextFiles = contextFiles;
 				session.setAdvisorContextPrompt(formatAdvisorContextPrompt(contextFiles));
 			}
@@ -3604,7 +3619,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					setActiveRules(nextActiveRules);
 				}
 			}
-			const memoryBackend = memoryEnabled ? await resolveMemoryBackend(settings) : undefined;
+			const memoryBackend =
+				memoryEnabled && (!liveChatMode || chatModeIncludes(liveChatMode, "memory"))
+					? await resolveMemoryBackend(settings)
+					: undefined;
 			const memoryInstructions = memoryBackend
 				? await memoryBackend.buildDeveloperInstructions(agentDir, settings, session)
 				: undefined;
@@ -3621,14 +3639,15 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					systemPrompt: typeof options.systemPrompt === "string" ? [options.systemPrompt] : options.systemPrompt,
 				};
 			}
-			if (chatMode) {
+			if (liveChatMode) {
+				// Chat mode honors only explicit prompt flags, never discovered SYSTEM.md / APPEND_SYSTEM.md.
 				return {
 					systemPrompt: buildChatSystemPrompt({
-						config: chatMode,
-						customPrompt: options.customSystemPrompt,
+						config: liveChatMode,
+						customPrompt: options.systemPromptDiscovered ? undefined : options.customSystemPrompt,
 						appendPrompt: composeAppendPrompt(
 							memoryInstructions ? [memoryInstructions] : [],
-							options.appendSystemPrompt,
+							options.appendSystemPromptDiscovered ? undefined : options.appendSystemPrompt,
 						),
 						contextFiles,
 						cwd: promptCwd,
@@ -3805,7 +3824,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// Session-managed builtins may be force-included by createTools. Keep the
 		// active set consistent with that registry decision, using built-in
 		// provenance so same-named extension tools are never force-activated.
-		if (!restrictToolNames && !chatMode && explicitlyRequestedToolNames) {
+		if (!restrictToolNames && explicitlyRequestedToolNames) {
 			for (const name of SESSION_MANAGED_BUILTIN_TOOL_NAMES) {
 				if (builtInToolNames.includes(name) && !explicitlyRequestedToolNames.includes(name)) {
 					explicitlyRequestedToolNames.push(name);
@@ -3931,6 +3950,27 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			}
 		}
 
+		// Chat mode activates only the tools it was granted (`toolNames`, with the
+		// checkpoint/rewind pairing and a required `yield`) plus extension and SDK
+		// custom tools. The coding selection computed above is handed to the session,
+		// which restores it when chat mode is switched off.
+		let chatModeCodingTools: { enabled: string[]; mounted: string[] } | undefined;
+		if (chatMode) {
+			const mounted = toolSession.xdev ? [...toolSession.xdev.mountedNames] : [];
+			chatModeCodingTools = { enabled: [...new Set([...initialToolNames, ...mounted])], mounted };
+			toolSession.xdev?.mountedNames.clear();
+			initialToolNames = chatActiveToolNames({
+				granted: options.toolNames ? normalizeToolNames(options.toolNames) : [],
+				requireYield: options.requireYieldTool === true,
+				alwaysInclude: restrictToolNames
+					? []
+					: [...sdkCustomTools.map(t => t.name), ...registeredTools.map(t => t.definition.name)].filter(
+							name => !defaultInactiveToolNames.has(name),
+						),
+				isRegistered: name => toolRegistry.has(name),
+			});
+		}
+
 		setSessionActiveToolNames(initialToolNames);
 		const { systemPrompt } = await logger.time(
 			"buildSystemPrompt",
@@ -4031,12 +4071,13 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// reminder rides on the first user turn so open-weight providers keep
 			// their tool-schema prefix cache (#7404). Chat mode sends it only when
 			// `date` is re-included, without the cwd (the chat prompt carries that).
-			if (chatMode && !chatModeIncludes(chatMode, "date")) return transformed;
+			const liveChatMode = hasSession ? session.chatMode : chatMode;
+			if (liveChatMode && !chatModeIncludes(liveChatMode, "date")) return transformed;
 			return reminder.transform(
 				transformed,
 				formatLocalCalendarDate(),
-				chatMode ? "" : normalizePromptPath(sessionManager.getCwd()),
-				chatMode !== undefined,
+				liveChatMode ? "" : normalizePromptPath(sessionManager.getCwd()),
+				liveChatMode !== undefined,
 			);
 		};
 		// A mixture is a synthetic model with no provider: its images, snapcompact frames,
@@ -4367,6 +4408,12 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// streamed and parsed on the main thread.
 		session = new AgentSession({
 			chatMode,
+			chatModeCodingTools,
+			// Launch validation (main.ts) rejects chat mode with an explicit template; live switches match it.
+			chatModeBlockedReason:
+				options.systemPromptTemplate !== undefined && !options.systemPromptDiscovered
+					? "--system-prompt-template cannot be combined with chat mode"
+					: undefined,
 			codeModeState,
 			advisorWatchdogPrompt,
 			advisorContextPrompt,

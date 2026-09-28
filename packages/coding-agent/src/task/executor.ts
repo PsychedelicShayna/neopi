@@ -59,7 +59,7 @@ import { type ArtifactManager, writeArtifact } from "../session/artifacts";
 import { ASYNC_RESULT_MESSAGE_TYPE } from "../session/async-job-delivery";
 import type { AuthStorage } from "../session/auth-storage";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../session/messages";
-import { hasConversationalHistory, SessionManager } from "../session/session-manager";
+import { hasConversationalHistory, PendingSessionManager, SessionManager } from "../session/session-manager";
 import { truncateTail } from "@oh-my-pi/pi-tui/tools/streaming-output";
 import {
 	type ConfiguredThinkingLevel,
@@ -3737,6 +3737,11 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		let sessionOpenedAt: number | undefined;
 		let sessionCreatedAt: number | undefined;
 		let readyAt: number | undefined;
+		/**
+		 * Closes the opened session manager (releasing its session lease) while no
+		 * AgentSession has adopted it; cleared once createAgentSession takes over.
+		 */
+		let closeUnadoptedSessionManager: (() => void) | undefined;
 
 		try {
 			checkAbort();
@@ -3866,6 +3871,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			// Setup below can fail before this promise's consumption boundary.
 			// Observe rejection immediately while preserving it for the later await.
 			sessionManagerPromise.catch(() => {});
+			closeUnadoptedSessionManager = () => {
+				void sessionManagerPromise.then(manager => manager.close()).catch(() => {});
+			};
 			// Per-agent prewalk: the agent definition's `prewalk` frontmatter or the
 			// `task.agentPrewalk` settings override hands the subagent off to a
 			// fast/cheap target at its first edit/write — the same mechanism as the
@@ -4072,14 +4080,21 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 			const hasExistingModelRole = sessionManager.getLastModelChangeRole() !== undefined;
 			const sessionPromise = createAgentSession(buildSubagentSessionOptions(sessionManager, null));
+			closeUnadoptedSessionManager = undefined;
 			let session: AgentSession;
 			try {
 				({ session } = await awaitAbortable(sessionPromise));
 			} catch (err) {
 				// Abort raced session startup. The session may still resolve later
 				// holding live LSP/MCP child processes — dispose it when it does so
-				// a cancelled subagent cannot leak them.
-				void sessionPromise.then(created => created.session.dispose()).catch(() => {});
+				// a cancelled subagent cannot leak them. If creation failed, no
+				// session adopted the manager: close it to release its lease.
+				void sessionPromise
+					.then(
+						created => created.session.dispose(),
+						() => sessionManager.close(),
+					)
+					.catch(() => {});
 				throw err;
 			}
 			// The SDK records a new session's initial model as the default role.
@@ -4133,6 +4148,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 								`(truncated to header/session_init). The agent was not revived.`,
 						);
 					}
+					// Until createAgentSession adopts it, a setup failure must close the
+					// manager so its session lease does not outlive the failed revive.
+					using pendingManager = new PendingSessionManager(reopened);
 					if (options.parentArtifactManager) {
 						reopened.adoptArtifactManager(options.parentArtifactManager);
 					}
@@ -4148,6 +4166,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					const { session: revived } = await createAgentSession(
 						buildSubagentSessionOptions(reopened, expectedAgentRef, true),
 					);
+					pendingManager.handOff();
 					// Re-run the executor's extension wiring on the rebuilt session.
 					// Skipping it leaves the runner pre-init, so a `tool_call` handler
 					// touching a runtime action trips the fail-closed gate and blocks
@@ -4335,6 +4354,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				error = err instanceof Error ? err.stack || err.message : String(err);
 			}
 		} finally {
+			closeUnadoptedSessionManager?.();
 			const cleanupDeadlineAt = Date.now() + cleanupGraceMs;
 			const cleanupChangeStatus =
 				worktree === undefined

@@ -10,6 +10,13 @@ import { peekFileEnds } from "@oh-my-pi/pi-utils/peek-file";
 import { Snowflake } from "@oh-my-pi/pi-utils/snowflake";
 import { toError } from "@oh-my-pi/pi-utils/type-guards";
 import { isAssistantMessageLine } from "./session-entries";
+import {
+	acquireSessionLease,
+	inspectSessionLease,
+	isPidAlive,
+	type SessionLease,
+	type SessionLeaseHolder,
+} from "./session-lease";
 import { overlayTitleSlotContent, type SessionTitleUpdate, serializeTitleSlot } from "./session-title-slot";
 
 /** Shared base flags for the held transcript descriptor; callers add `O_APPEND` or `O_TRUNC`. */
@@ -169,6 +176,17 @@ export interface SessionStorage {
 	 * cross-process conditional-delete primitive must skip opportunistic GC.
 	 */
 	deleteSessionWithArtifactsIf?(sessionPath: string, shouldDelete: (content: string) => boolean): Promise<boolean>;
+	/**
+	 * Take the lifetime ownership lease on a session file (see
+	 * `session-lease.ts`). Optional because only backends whose files are
+	 * shared between local processes need one; managers on other backends
+	 * run without a lease.
+	 *
+	 * @throws SessionInUseError when another live process holds it.
+	 */
+	acquireSessionLease?(sessionPath: string): SessionLease;
+	/** Holder of the lease on `sessionPath` when another live process owns it. */
+	inspectSessionLease?(sessionPath: string): SessionLeaseHolder | undefined;
 	openWriter(path: string, options?: { flags?: "a" | "w"; onError?: (err: Error) => void }): SessionStorageWriter;
 	/**
 	 * Wait for every backing write scheduled by this storage to become durably
@@ -381,17 +399,6 @@ function publishLockPid(content: string): number | undefined {
 	if (!match) return undefined;
 	const pid = Number.parseInt(match[1], 10);
 	return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined;
-}
-
-function isPidAlive(pid: number): boolean {
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch (err) {
-		// ESRCH: no such process (dead). EPERM: alive without signal
-		// permission. Anything else: assume alive (fail closed).
-		return hasFsCode(err, "EPERM") || !hasFsCode(err, "ESRCH");
-	}
 }
 
 export class FileSessionStorage implements SessionStorage {
@@ -855,6 +862,14 @@ export class FileSessionStorage implements SessionStorage {
 			...options,
 			publishLock: task => this.#withPublishLock(path, task),
 		});
+	}
+
+	acquireSessionLease(sessionPath: string): SessionLease {
+		return acquireSessionLease(sessionPath);
+	}
+
+	inspectSessionLease(sessionPath: string): SessionLeaseHolder | undefined {
+		return inspectSessionLease(sessionPath);
 	}
 
 	/** Run a synchronous session mutation under its cross-process lock. */

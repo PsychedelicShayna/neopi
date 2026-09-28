@@ -247,6 +247,7 @@ function noUiRunner(): ExtensionRunner {
 		hasHandlers: () => false,
 		consumeToolCallEmitted: () => false,
 		hasUI: () => false,
+		getToolApprovalRequester: () => undefined,
 		sessionId: "acp-permission-test",
 		runScoped<T>(fn: () => T): T {
 			return fn();
