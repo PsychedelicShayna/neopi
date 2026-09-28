@@ -3,6 +3,13 @@ import type { Effort } from "@oh-my-pi/pi-catalog/effort";
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 export type AdminRole = "read" | "write";
+/** Capability presence describes an implemented operation, never an operator role grant. */
+export type AdminCapability =
+	| "keys.read" | "keys.write" | "keys.adjust.preview" | "keys.adjust"
+	| "plans.read" | "plans.refresh" | "plans.check" | "usage.read"
+	| "decisions.read" | "events.read" | "events.stream" | "audit.read"
+	| "config.read" | "config.reload" | "explain" | "models.read"
+	| "keys.export" | "keys.import" | "backup" | "glue.read" | "glue.restart";
 export type Unit = "requests" | "tokens" | "usd" | "plan_pct";
 export type AttributionMode = "proportional" | "declared" | "tokens";
 export type OvercommitMode = "allow" | "normalize" | "deny";
