@@ -1059,6 +1059,106 @@ describe("ModelHub", () => {
 			expect(onFallbackChainChange).toHaveBeenLastCalledWith("default", ["test/model-b"]);
 		});
 
+		test("y on a configured primary appends its model to another role without changing other chains", () => {
+			const a = makeModel("test", "model-a");
+			const b = makeModel("test", "model-b");
+			const settings = Settings.isolated({
+				modelRoles: { default: "test/model-a" },
+				"retry.fallbackChains": { smol: ["test/model-b"], slow: ["test/model-a"] },
+			});
+			const { hub, onFallbackChainChange } = createHub({ models: [a, b], scoped: true, settings });
+
+			enterRolesView(hub);
+			hub.handleInput("y"); // default primary model
+			hub.handleInput(DOWN); // smol role
+			hub.handleInput("p");
+
+			expect(onFallbackChainChange).toHaveBeenCalledWith("smol", ["test/model-b", "test/model-a"]);
+			expect(cfgRetryFallbackChains.get(settings).slow).toEqual(["test/model-a"]);
+		});
+
+		test("y on a routed role primary keeps its upstream when pasted into another chain", () => {
+			const model = getBundledModel("openrouter", "z-ai/glm-4.7");
+			if (!model) throw new Error("Expected bundled OpenRouter model z-ai/glm-4.7");
+			const settings = Settings.isolated({
+				modelRoles: { default: "openrouter/z-ai/glm-4.7@fireworks" },
+			});
+			const { hub, onFallbackChainChange } = createHub({ models: [model], scoped: true, settings });
+
+			enterRolesView(hub);
+			hub.handleInput("y");
+			hub.handleInput(DOWN); // smol role
+			hub.handleInput("p");
+
+			expect(onFallbackChainChange).toHaveBeenCalledWith("smol", ["openrouter/z-ai/glm-4.7@fireworks"]);
+		});
+
+		test("y on a fallback preserves its configured effort and appends only once", () => {
+			const a = makeModel("test", "model-a");
+			const b = makeModel("test", "model-b");
+			const settings = Settings.isolated({
+				"retry.fallbackChains": { default: ["test/model-a:low"], smol: ["test/model-b"] },
+			});
+			const { hub, onFallbackChainChange } = createHub({ models: [a, b], scoped: true, settings });
+
+			enterRolesView(hub);
+			hub.handleInput(DOWN); // default fallback
+			hub.handleInput("y");
+			hub.handleInput(DOWN); // smol role
+			hub.handleInput("p");
+			hub.handleInput("p");
+
+			expect(onFallbackChainChange).toHaveBeenCalledTimes(1);
+			expect(onFallbackChainChange).toHaveBeenCalledWith("smol", ["test/model-b", "test/model-a:low"]);
+			expect(cfgRetryFallbackChains.get(settings).default).toEqual(["test/model-a:low"]);
+		});
+
+		test("Shift+Y from a later fallback appends missing entries in source order to the target chain", () => {
+			const models = ["model-a", "model-b", "model-c"].map(id => makeModel("test", id));
+			const source = ["test/model-a:low", "test/model-b", "test/model-c"];
+			const settings = Settings.isolated({
+				"retry.fallbackChains": { default: source, smol: ["test/model-b"], slow: ["test/model-c"] },
+			});
+			const { hub, onFallbackChainChange } = createHub({ models, scoped: true, settings });
+
+			enterRolesView(hub);
+			hub.handleInput(DOWN); // first default fallback
+			hub.handleInput(DOWN); // middle default fallback
+			hub.handleInput("Y");
+			hub.handleInput(DOWN); // last default fallback
+			hub.handleInput(DOWN); // smol role
+			hub.handleInput("p");
+
+			expect(onFallbackChainChange).toHaveBeenCalledWith("smol", [
+				"test/model-b",
+				"test/model-a:low",
+				"test/model-c",
+			]);
+			expect(cfgRetryFallbackChains.get(settings).default).toEqual(source);
+			expect(cfgRetryFallbackChains.get(settings).slow).toEqual(["test/model-c"]);
+		});
+
+		test("p on a model-keyed chain header appends a yanked fallback without replacing the source", () => {
+			const a = makeModel("test", "model-a");
+			const b = makeModel("test", "model-b");
+			const settings = Settings.isolated({
+				"retry.fallbackChains": { default: ["test/model-a"], "test/*": ["test/model-b"] },
+			});
+			const { hub, onFallbackChainChange } = createHub({ models: [a, b], scoped: true, settings });
+
+			enterRolesView(hub);
+			hub.handleInput(DOWN); // default fallback
+			hub.handleInput("y");
+			hub.handleInput(UP); // default role
+			hub.handleInput(UP); // + New fallback…
+			hub.handleInput(UP); // test/* fallback
+			hub.handleInput(UP); // test/* chain header
+			hub.handleInput("p");
+
+			expect(onFallbackChainChange).toHaveBeenCalledWith("test/*", ["test/model-b", "test/model-a"]);
+			expect(cfgRetryFallbackChains.get(settings).default).toEqual(["test/model-a"]);
+		});
+
 		test("windows the roles list so model-keyed chains past the panel height stay reachable", () => {
 			const settings = Settings.isolated({
 				// Model-keyed chains sort alphabetically; the unique tail key lands last.
