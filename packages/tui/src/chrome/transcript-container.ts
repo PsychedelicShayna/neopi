@@ -179,6 +179,22 @@ export class TranscriptContainer extends Container {
 		});
 	}
 
+	/**
+	 * Insert before a live block. A block that already emitted rows to native
+	 * scrollback (or is committed) cannot have anything placed above it any more,
+	 * and an offered history batch pins entry indices, so in either case the
+	 * component is appended instead.
+	 */
+	override insertBefore(component: Component, before: Component): void {
+		if (this.#offered !== undefined || !this.canRemoveBlock(before)) {
+			this.addChild(component);
+			return;
+		}
+		if (isToolActivityComponent(component)) component.setToolActivityVisible(this.#toolActivityVisible);
+		super.insertBefore(component, before);
+		this.#syncEntries();
+	}
+
 	override removeChild(component: Component): void {
 		if (this.children.indexOf(component) < 0 || !this.canRemoveBlock(component)) return;
 		super.removeChild(component);

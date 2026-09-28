@@ -1,6 +1,6 @@
 import type { KeybindingsManager, OverlayHandle, SgrMouseEvent, TUI } from "@oh-my-pi/pi-tui";
 import { SidePanel, SidePanelFullscreenComponent, type SidePanelSection } from "@oh-my-pi/pi-tui/chrome";
-import type { LayoutRect } from "@oh-my-pi/pi-tui/components/layout/geometry";
+import { type LayoutRect, layoutSize } from "@oh-my-pi/pi-tui/components/layout/geometry";
 import type { Composer, SidePanelDock } from "@oh-my-pi/pi-tui/prompt/composer";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../../config/settings";
@@ -176,8 +176,12 @@ export class SidePanelController {
 			this.#warnInvalid(cfgSidebarWidthRatio.id, ratio, `outside [${RATIO_BOUNDS.min}, ${RATIO_BOUNDS.max}]`);
 			ratio = cfgSidebarWidthRatio.default;
 		}
-		let min = cfgSidebarWidthMin.get(settings);
-		let max = cfgSidebarWidthMax.get(settings);
+		// Whole columns, normalized once with the helper SplitPane itself uses,
+		// so the toggle's wide/narrow decision and the split's own eligibility
+		// read the same numbers (60.9 must not demand 124 columns here while the
+		// split docks at 123).
+		let min = layoutSize(cfgSidebarWidthMin.get(settings));
+		let max = layoutSize(cfgSidebarWidthMax.get(settings));
 		// Each bound must be a positive column count on its own: SplitPane
 		// normalizes a non-positive one to 0, which passes min <= max yet leaves
 		// the panel nothing but its divider.
@@ -194,7 +198,7 @@ export class SidePanelController {
 			min = cfgSidebarWidthMin.default;
 			max = cfgSidebarWidthMax.default;
 		}
-		let splitAt = cfgSidebarSplitAt.get(settings);
+		let splitAt = layoutSize(cfgSidebarSplitAt.get(settings));
 		const smallest = min + CHAT_MIN_WIDTH + DIVIDER_WIDTH;
 		if (splitAt < smallest) {
 			this.#warnInvalid(cfgSidebarSplitAt.id, splitAt, `below the ${smallest} columns a dock needs`);

@@ -261,6 +261,52 @@ describe("formatOutputPaneLines SIXEL presentation", () => {
 		}
 	});
 
+	it("replaces only the SIXEL bytes, labelling every span", () => {
+		setInlineImagePresentation("text");
+		const one = "\x1bPq#1~~~~-\x1b\\";
+		const result = formatOutputPaneLines(
+			{
+				lines: [
+					// Output around an inline payload survives.
+					`before${one}after`,
+					// Two payloads on consecutive lines: each gets its own label.
+					one,
+					one,
+					// A multi-line payload whose last row continues with ordinary text.
+					"\x1bPq#0;2;0;0;0",
+					"#1~~~~-",
+					"#0????\x1b\\tail",
+				],
+				expanded: true,
+				collapsedMaxLines: 100,
+			},
+			darkTheme,
+		);
+		const plain = result.lines.map(line => Bun.stripANSI(line));
+		expect(plain).toEqual([
+			"before[image omitted while docked]after",
+			"[image omitted while docked]",
+			"[image omitted while docked]",
+			"[image omitted while docked]",
+			"",
+			"tail",
+		]);
+	});
+
+	it("labels a continued payload whose first retained row is blank", () => {
+		setInlineImagePresentation("text");
+		const label = "[image omitted while docked]";
+		const format = (lines: string[]) =>
+			formatOutputPaneLines(
+				{ lines, expanded: true, collapsedMaxLines: 100, sixelContinuation: true },
+				darkTheme,
+			).lines.map(line => Bun.stripANSI(line));
+		// The retention cut landed on a blank payload row: the label still leads.
+		expect(format(["", "#1~~~~-", "#0????\x1b\\", "after"])).toEqual([label, "", "", "after"]);
+		// Every retained row is a blank continuation row: the label still appears.
+		expect(format(["", ""])).toEqual([label, ""]);
+	});
+
 	it("passes raw payload rows through as graphics", () => {
 		const result = format();
 		expect(result.hasSixel).toBe(true);

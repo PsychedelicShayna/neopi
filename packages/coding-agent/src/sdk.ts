@@ -8,6 +8,7 @@ import {
 	type AgentTool,
 	AppendOnlyContextManager,
 	filterProviderReplayMessages,
+	resolveOwnedDialectFromEnv,
 	type StreamFn,
 	type ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
@@ -26,6 +27,7 @@ import type {
 import { resolveApiKeyOnce } from "@oh-my-pi/pi-ai/auth-retry";
 import type { DiscoverAuthStorageOptions } from "@oh-my-pi/pi-ai/auth-broker/discover";
 import type { Dialect } from "@oh-my-pi/pi-ai/dialect";
+import { ConfigurationError } from "@oh-my-pi/pi-ai/error";
 import { prewarmOpenAICodexResponses } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import { isOpenAICodexWebSocketPreferred } from "@oh-my-pi/pi-ai/providers/openai-codex-transport";
 import { withCredentialRedaction } from "@oh-my-pi/pi-ai/providers/transform-messages";
@@ -281,6 +283,10 @@ import { normalizePromptPath } from "./utils/prompt-path";
 import { buildNamedToolChoice } from "./utils/tool-choice";
 import { VibeSessionRegistry } from "./vibe/runtime";
 import { registerLocalInferenceApi } from "./tiny/local-inference-api";
+import { streamMixture } from "./moa/engine";
+import { createSessionMixtureHost } from "./moa/host";
+import { isMixtureModel, registerMixtureApi } from "./moa/provider";
+import { retainMixtureCatalog } from "./moa/registration";
 import { buildWorkspaceTree, type WorkspaceTree } from "./workspace-tree";
 
 import {
@@ -1398,6 +1404,8 @@ export interface AutoLearnCaptureRunnerOptions {
 	onPayload?: SimpleStreamOptions["onPayload"];
 	onResponse?: SimpleStreamOptions["onResponse"];
 	createSessionId?: () => string;
+	/** The capture model when the session model is a mixture (`@smol`); undefined skips capture. */
+	resolveMixtureCaptureModel?: () => Model | undefined;
 }
 
 /** Build a private capture runner over a detached message snapshot and provider session. */
@@ -1407,7 +1415,10 @@ export function createAutoLearnCaptureRunner(
 	return async (content, signal) => {
 		const captureTools = options.captureTools();
 		if (captureTools.length === 0 || signal?.aborted) return;
-		const captureModel = options.sourceAgent.state.model;
+		const sourceModel = options.sourceAgent.state.model;
+		// A mixture only runs as the primary agent's model; capture runs on `@smol` instead.
+		const captureModel =
+			sourceModel && isMixtureModel(sourceModel) ? options.resolveMixtureCaptureModel?.() : sourceModel;
 		if (!captureModel) return;
 
 		const captureSessionId = options.createSessionId?.() ?? Bun.randomUUIDv7();
@@ -1505,6 +1516,7 @@ export function createAutoLearnCaptureRunner(
  */
 export async function createAgentSession(options: CreateAgentSessionOptions = {}): Promise<CreateAgentSessionResult> {
 	registerLocalInferenceApi();
+	registerMixtureApi();
 	const extensionRoots = options.extensionRoots?.();
 	const explicit = extensionRoots?.explicit ?? options.additionalExtensionPaths ?? [];
 	const mode = extensionRoots?.mode ?? (options.disableExtensionDiscovery ? "explicit-only" : "merge");
@@ -2525,6 +2537,17 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// cache that `npi models find` uses before the online refresh continues in
 		// the background.
 		await modelRegistry.refreshRuntimeProviders("offline");
+		// Mixtures register after extension providers and runtime hydration, so member
+		// selectors resolve against the full catalog and session-model restore below sees
+		// `mixture/<name>`. The catalog belongs to the registry: a subagent sharing it only
+		// retains, and the provider is unregistered when the last holder releases.
+		const mixtureOwner = `session:${sessionManager.getSessionId()}:${Bun.randomUUIDv7()}`;
+		const mixtureCatalog = await logger.time("retainMixtureCatalog", () =>
+			retainMixtureCatalog(mixtureOwner, { cwd, agentDir, registry: modelRegistry, settings }),
+		);
+		const releaseMixtureCatalog = () => mixtureCatalog.release(mixtureOwner);
+		startupCleanup.defer(releaseMixtureCatalog);
+		disposeCallbacks.add(releaseMixtureCatalog);
 		// Online runtime discovery must not steal the event loop from the first UI
 		// frame. Explicit deferred model selectors still start it immediately
 		// because they await it below; normal UI startup receives a one-shot
@@ -4009,7 +4032,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// only when a provider fetches them, never held as pixels here.
 			blobBroker,
 		);
-		const transformProviderContext = async (context: Context, transformModel: Model): Promise<Context> => {
+		const transformModelContext = async (
+			context: Context,
+			transformModel: Model,
+			reminder: DateCwdReminderInjector,
+		): Promise<Context> => {
 			let transformed = obfuscator ? obfuscateProviderContext(obfuscator, context) : context;
 			transformed = await snapcompactInline.transform(transformed, transformModel);
 			transformed = clampProviderContextImages(transformed, transformModel);
@@ -4025,13 +4052,26 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// `date` is re-included, without the cwd (the chat prompt carries that).
 			const liveChatMode = hasSession ? session.chatMode : chatMode;
 			if (liveChatMode && !chatModeIncludes(liveChatMode, "date")) return transformed;
-			return dateCwdReminder.transform(
+			return reminder.transform(
 				transformed,
 				formatLocalCalendarDate(),
 				liveChatMode ? "" : normalizePromptPath(sessionManager.getCwd()),
 				liveChatMode !== undefined,
 			);
 		};
+		// A mixture is a synthetic model with no provider: its images, snapcompact frames,
+		// and URL decoration belong to each member's own request (the session mixture
+		// host runs the full pipeline per member). Only the model-neutral obfuscation runs
+		// here; the date/cwd reminder also moves to the members, because the stateful
+		// injector would otherwise fold it into the operator's prompt text.
+		const transformProviderContext = async (context: Context, transformModel: Model): Promise<Context> => {
+			if (isMixtureModel(transformModel)) {
+				return obfuscator ? obfuscateProviderContext(obfuscator, context) : context;
+			}
+			return transformModelContext(context, transformModel, dateCwdReminder);
+		};
+		const transformMemberContext = (context: Context, memberModel: Model): Promise<Context> =>
+			transformModelContext(context, memberModel, new DateCwdReminderInjector());
 		const onPayload = async (payload: unknown, model?: Model, signal?: AbortSignal) => {
 			return await extensionRunner.emitBeforeProviderRequest(payload, model, signal);
 		};
@@ -4109,6 +4149,28 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				preferWebsockets: streamOptions?.preferWebsockets ?? resolveOpenAIWebsocketPreference(settings),
 			});
 		};
+		// Side requests (advisor, `/btw`, handoff, IRC replies) never run a mixture: it is
+		// an orchestration of member calls, not a model a side channel can talk to.
+		const sideStreamFn: StreamFn = (streamModel, context, streamOptions) => {
+			if (isMixtureModel(streamModel)) {
+				throw new ConfigurationError("mixture models cannot serve side requests");
+			}
+			return settingsAwareStreamFn(streamModel, context, streamOptions);
+		};
+		// One mixture host per session, living only in the primary wrapper's closure (never in
+		// primaryStreamFn, which the auto-learn capture agent also uses). Member calls do go
+		// through primaryStreamFn: it fills the per-request provider options against the
+		// member model it is handed, and a member is never a mixture, so it cannot re-enter
+		// the branch.
+		const sessionMixtureHost = createSessionMixtureHost({
+			sessionManager,
+			modelRegistry,
+			settings,
+			stream: primaryStreamFn,
+			prepareContext: transformMemberContext,
+			emit: event => session?.emitMixtureEvent(event),
+			notice: (level, message) => session?.emitNotice(level, message, "mixture"),
+		});
 		const codeModeState: { namespacesInfo?: unknown } = {};
 		const transformToolCallArguments = (args: Record<string, unknown>): Record<string, unknown> => {
 			let result = args;
@@ -4168,6 +4230,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						});
 					}
 				}
+				if (isMixtureModel(streamModel)) {
+					return streamMixture(streamModel, context, streamOptions, sessionMixtureHost);
+				}
 				const externalThinking =
 					cfgExternalThinking.get(settings) &&
 					agent.state.tools.some(tool => tool.name === "think") &&
@@ -4205,8 +4270,15 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			intentTracing: cfgToolsIntentTracing.get(settings),
 			pruneToolDescriptions: resolveInlineToolDescriptors(),
 			// Per request against the model actually requested, so `tools.format`
-			// changes and model switches reach the next provider call.
-			dialectResolver: dialectModel => resolveDialect(cfgToolsFormat.get(settings), dialectModel),
+			// changes and model switches reach the next provider call. The resolver is
+			// authoritative, so it carries the `PI_DIALECT` fallback itself. A mixture
+			// never takes an owned dialect: its engine is its tool contract, and the
+			// in-band wrapper would re-seed the partial the engine's abort finalizer stamps.
+			dialectResolver: dialectModel =>
+				isMixtureModel(dialectModel)
+					? undefined
+					: (resolveDialect(cfgToolsFormat.get(settings), dialectModel) ??
+						resolveOwnedDialectFromEnv(Bun.env.PI_DIALECT)),
 			abortOnFabricatedToolResult: cfgToolsAbortOnFabricatedResult.get(settings),
 			speculativeToolExecution,
 			getToolChoice: () => session?.nextToolChoiceDirective(),
@@ -4395,8 +4467,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			transformProviderContext,
 			onPayload,
 			onResponse,
-			sideStreamFn: settingsAwareStreamFn,
-			advisorStreamFn: settingsAwareStreamFn,
+			sideStreamFn,
+			advisorStreamFn: sideStreamFn,
 			convertToLlm: convertToLlmFinal,
 			rebuildSystemPrompt,
 			getXdevToolEntries: () => (toolSession.xdev ? xdevEntries(toolSession.xdev) : []),
@@ -4454,6 +4526,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		});
 		hasSession = true;
 		credentialNoticeSession = session;
+		session.attachMixtureHost(sessionMixtureHost);
 		// A caller-supplied store belongs to the caller (the CLI keeps it in sync itself).
 		if (ownsAuthStorage) createAuthStorageSettingsSync(session, authStorage);
 		// One coalesced prompt rebuild for every prompt input (rule bucketing, the
@@ -4905,6 +4978,12 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 
 		const runAutoLearnCapture = createAutoLearnCaptureRunner({
 			sourceAgent: agent,
+			resolveMixtureCaptureModel: () =>
+				resolveModelRoleValue(
+					"@smol",
+					modelRegistry.getAvailable().filter(candidate => !isMixtureModel(candidate)),
+					{ settings },
+				).model,
 			captureTools: () =>
 				(["manage_skill", "learn"] as const)
 					.map(name => session.getToolByName(name))

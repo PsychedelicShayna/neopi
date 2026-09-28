@@ -21,6 +21,9 @@ import { ToolExecutionComponent, type ToolExecutionHandle, toolRenderName } from
 import { TtsrNotificationComponent } from "@oh-my-pi/pi-tui/chat/ttsr-notification";
 import { createUsageRowBlock, turnElapsedMs } from "@oh-my-pi/pi-tui/overlays/usage-row";
 import { getSymbolTheme, theme } from "@oh-my-pi/pi-tui/theme";
+import { createMixtureTraceCard } from "@oh-my-pi/pi-tui/chat/mixture-trace";
+import type { MixtureTraceDetails } from "@oh-my-pi/pi-tui/overlays/mixture-types";
+import { cfgMoaShowTraceCards } from "../../moa/settings";
 import type { InteractiveModeContext } from "../../modes/types";
 import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import idleRecapPrompt from "../../prompts/system/recap-user.md" with { type: "text" };
@@ -307,6 +310,13 @@ export class EventController {
 			todo_auto_clear: e => this.#handleTodoAutoClear(e),
 			irc_message: e => this.#handleIrcMessage(e),
 			notice: e => this.#handleNotice(e),
+			mixture_hop_end: async e => this.#showMixtureTrace(e.details),
+			mixture_limit: async e => this.#showMixtureTrace(e.details),
+			mixture_checkpoint: async e => this.#showMixtureTrace(e.details),
+			mixture_run_end: async () => {
+				this.ctx.statusLine.invalidate();
+				this.ctx.ui.requestRender();
+			},
 			model_changed: async () => {
 				this.ctx.statusLine.invalidate();
 				this.ctx.ui.requestRender();
@@ -1082,6 +1092,21 @@ export class EventController {
 			this.#streamingReveal.begin(this.ctx.streamingComponent, timeline.beforeTools, timeline.hasToolCalls);
 			this.ctx.ui.requestRender();
 		}
+	}
+
+	/**
+	 * A mixture trace card arrives while the outer answer streams; it is persisted
+	 * directly (never through agent state), so render it here, above the streaming
+	 * answer, matching the order a reload shows.
+	 */
+	#showMixtureTrace(details: MixtureTraceDetails): void {
+		if (!cfgMoaShowTraceCards.get(this.ctx.settings)) return;
+		this.#resetReadGroup();
+		const card = createMixtureTraceCard(details, () => this.ctx.toolOutputExpanded, theme);
+		const streaming = this.ctx.streamingComponent;
+		if (streaming) this.ctx.chatContainer.insertBefore(card, streaming);
+		else this.ctx.chatContainer.addChild(card);
+		this.ctx.ui.requestRender();
 	}
 
 	async #handleIrcMessage(event: Extract<AgentSessionEvent, { type: "irc_message" }>): Promise<void> {

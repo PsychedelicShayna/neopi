@@ -215,7 +215,7 @@ Changed:
 | `packages/tui/src/components/layout/split-pane.ts` | `rightSize`, `leftMinWidth`, `setRightSize`, `setLeftMinWidth` (§3.1) |
 | `packages/tui/src/prompt/composer.ts` | `SidePanelDock`, `setSidePanel(panel, dock, { refreshHistory })`, `sidePanelGeometry`, `sidePanelDocked`; chat column as a `LayoutRenderer`; join in `renderFrame`/`renderResizeFrame` with the scoped image mode; hover band on the chat column; `beginHistoryReplay` no-op while a replay is pending (§3.3) |
 | `packages/tui/src/render/output-pane.ts` | `formatOutputPaneLines` renders SIXEL spans as label + blanks when the presentation mode is `"text"`; `OutputPaneFormatOptions.sixelContinuation` forwarded to `getSixelLineMask(lines, startsInside)` (§3.3 step 6) |
-| `packages/tui/src/render/sixel.ts` | `getSixelLineMask(lines, startsInside = false)` (§3.3 step 6) |
+| `packages/tui/src/render/sixel.ts` | `getSixelLineMask(lines, startsInside = false)`, `sixelSpanContinues(lines, startsInside)`, `replaceSixelSequences(lines, replacement, startsInside)` (§3.3 step 6) |
 | `packages/tui/src/chat/bash-execution.ts` | records SIXEL span provenance across the streaming cap and passes `sixelContinuation` to its output pane (§3.3 step 6) |
 | `packages/tui/src/chrome/index.ts` | `export * from "./side-panel"` (the root barrel exports no chrome module; consumers import `@oh-my-pi/pi-tui/chrome`, the package's `"./chrome"` export) |
 | `packages/tui/src/app-keybindings.ts` | `app.sidebar.toggle`, `app.sidebar.scrollUp`, `app.sidebar.scrollDown` (§5) |
@@ -582,13 +582,15 @@ Details, numbered for review:
    // output-pane.ts, after sixelMask/hasSixel (:66-68), before styling
    const sixelSpan = hasSixel;                                    // remembered for the cap decision
    if (hasSixel && getInlineImagePresentation() === "text") {
-     let spanStart = true;
-     rawLines = rawLines.map((line, i) => {
-       if (!sixelMask[i]) { spanStart = true; return line; }      // non-SIXEL rows untouched
-       const out = spanStart ? theme.fg("muted", "[image omitted while docked]") : "";
-       spanStart = false;
-       return out;
-     });
+     // Sequence-level, not row-level (f1b9bcbebb): each DCS…ST/BEL sequence
+     // becomes one label; text before a start or after a terminator on the
+     // same row is kept; continuation rows of a multi-row payload become
+     // blank; with `startsInside` the first surviving row carries the label.
+     rawLines = replaceSixelSequences(
+       rawLines,
+       theme.fg("muted", "[image omitted while docked]"),
+       options.sixelContinuation ?? false,
+     );
      sixelMask = undefined; hasSixel = false;                     // styling and the result see text
    }
    // Cap decision uses sixelSpan, not hasSixel: rows that held a span stay
@@ -598,11 +600,14 @@ Details, numbered for review:
    const limit = sixelSpan && options.uncapSixel ? undefined : configuredLimit;
    ```
 
-   Consequences: the row count is unchanged (a 4-row payload becomes label +
-   3 blanks; a capped streaming payload becomes label + blanks over its
-   surviving rows, because the branch starts with `spanStart = true` and
-   the continuation bit marks row 0 as mid-span, so the first surviving row
-   carries the label; and the rows stay **uncapped** whenever the caller
+   Consequences: the row count is unchanged (a payload alone on its rows
+   becomes label + blanks, so a 4-row payload is label + 3 blanks; a row
+   that mixes text with a sequence keeps the text on either side of the
+   label; two payloads on consecutive rows get one label each; a capped
+   streaming payload becomes label + blanks over its surviving rows,
+   because `replaceSixelSequences(lines, label, startsInside)` treats row 0
+   as mid-span when the continuation bit says so, so the first surviving
+   row carries the label; and the rows stay **uncapped** whenever the caller
    passes `uncapSixel`, because the cap decision reads whether the rows
    *held* a span, not the post-transform `hasSixel` — otherwise bash's tail
    preview would cap a long payload to its last rows and drop the label,
@@ -985,15 +990,20 @@ config file it MUST be TOML; YAML is banned for anything new.
 | `sidebar.splitAt` | number | `110` | Dock Threshold — Terminals narrower than this hide the dock; the toggle opens the panel fullscreen instead |
 
 Validation in `applySettings`, in this order: `ratio` clamped to
-`[0.1, 0.6]`; `min ≥ 1` and `max ≥ 1` (539a3485c6: `SplitPane` normalizes
-a non-positive bound to 0, which would leave the panel as its divider
-alone); then `min ≤ max`; then `splitAt ≥ min + chatMinWidth +
-dividerWidth`. A value that fails warns once via the registry's warn-once
-diagnostics (`config/registry.ts:808-817`) and falls back: `ratio`, `min`,
-and `max` to their defaults (so `-1/-1` becomes `32/48`); `splitAt` to
-`max(110, min + chatMinWidth + dividerWidth)` (A4, 9c350e0006), so the
-fallback itself always satisfies the constraint it replaces — a bare `110`
-would not when `min` is raised.
+`[0.1, 0.6]`; `min`, `max`, and `splitAt` floored to whole columns with
+`layoutSize` (`geometry.ts:55-58`, the same normalizer `SplitPane` applies
+to every size it is given) **before** any check, so the controller's
+wide/narrow decision in `toggle()` and the split's own eligibility read
+the same integers (5681ffb8c1: `min 60.9 / max 80 / splitAt 110` at 123
+columns docks, because both sides see `60`); then `min ≥ 1` and `max ≥ 1`
+(539a3485c6: `SplitPane` normalizes a non-positive bound to 0, which would
+leave the panel as its divider alone); then `min ≤ max`; then `splitAt ≥
+min + chatMinWidth + dividerWidth`. A value that fails warns once via the
+registry's warn-once diagnostics (`config/registry.ts:808-817`) and falls
+back: `ratio`, `min`, and `max` to their defaults (so `-1/-1` becomes
+`32/48`); `splitAt` to `max(110, min + chatMinWidth + dividerWidth)` (A4,
+9c350e0006), so the fallback itself always satisfies the constraint it
+replaces — a bare `110` would not when `min` is raised.
 
 `sidebar.enabled` is the value `toggle()` flips, so the dock state persists
 across sessions like `hideThinkingBlock`.

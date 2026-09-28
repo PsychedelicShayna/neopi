@@ -39,6 +39,7 @@ import * as liveSettings from "../live/settings";
 import * as collabSettings from "../collab/settings";
 import * as commandsSettings from "../commands/settings";
 import * as chainsSettings from "../chains/settings";
+import * as moaSettings from "../moa/settings";
 import * as streamSettings from "../stream/settings";
 import * as commitSettings from "../commit/settings";
 import * as cliGcSettings from "../cli/gc-settings";
@@ -77,6 +78,7 @@ const DOMAINS: readonly Readonly<Record<string, unknown>>[] = [
 	collabSettings,
 	commandsSettings,
 	chainsSettings,
+	moaSettings,
 	streamSettings,
 	commitSettings,
 	cliGcSettings,

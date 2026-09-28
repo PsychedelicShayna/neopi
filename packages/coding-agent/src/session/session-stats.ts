@@ -8,6 +8,8 @@ import {
 import type { AssistantMessage, Model, ProviderResponseMetadata, Usage } from "@oh-my-pi/pi-ai";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
+import { isMixtureModel } from "../moa/provider";
+import { MIXTURE_USAGE_PURPOSE } from "../moa/types";
 import type { Settings } from "../config/settings";
 
 import type { ContextUsage } from "../extensibility/extensions/types";
@@ -18,7 +20,7 @@ import {
 } from "@oh-my-pi/pi-tui/status-line/context-usage";
 import type { ContextUsageBreakdown, SessionStats } from "./agent-session-types";
 import { getLatestCompactionEntry } from "./session-context";
-import type { ModelUsageEntry, SessionEntry } from "./session-entries";
+import type { SessionEntry } from "./session-entries";
 import type { SessionManager } from "./session-manager";
 import { cfgSkillful } from "./settings";
 
@@ -59,8 +61,8 @@ function isUsageWindowBoundary(entry: SessionEntry): boolean {
 	);
 }
 
-/** Model calls belonging to the same active transcript window as `agent.state.messages`. */
-function activeModelUsageEntries(branch: SessionEntry[]): ModelUsageEntry[] {
+/** Branch entries belonging to the same active transcript window as `agent.state.messages`. */
+function activeWindowEntries(branch: SessionEntry[]): SessionEntry[] {
 	const latestCompaction = getLatestCompactionEntry(branch);
 	const compactionIndex = latestCompaction ? branch.lastIndexOf(latestCompaction) : -1;
 	const resetIndex = branch.reduce((latest, entry, index) => (entry.type === "reset_boundary" ? index : latest), -1);
@@ -72,7 +74,27 @@ function activeModelUsageEntries(branch: SessionEntry[]): ModelUsageEntry[] {
 		startIndex = firstKeptIndex >= 0 ? firstKeptIndex : compactionIndex + 1;
 		while (startIndex > 0 && !isUsageWindowBoundary(branch[startIndex - 1])) startIndex--;
 	}
-	return branch.slice(startIndex).filter((entry): entry is ModelUsageEntry => entry.type === "model_usage");
+	return branch.slice(startIndex);
+}
+
+/**
+ * Committed mixture responses in the active window, once per `responseId`. The
+ * branch is authoritative for them: an errored mixture response carries billed
+ * member attempts, and both the retry path and a reload drop it from live state.
+ */
+function activeMixtureResponses(window: readonly SessionEntry[]): AssistantMessage[] {
+	const seen = new Set<string>();
+	const responses: AssistantMessage[] = [];
+	for (const entry of window) {
+		if (entry.type !== "message" || entry.message.role !== "assistant" || !isMixtureModel(entry.message)) continue;
+		const responseId = entry.message.responseId;
+		if (responseId !== undefined) {
+			if (seen.has(responseId)) continue;
+			seen.add(responseId);
+		}
+		responses.push(entry.message);
+	}
+	return responses;
 }
 
 /** Computes session totals and tracks the in-flight context estimate. */
@@ -163,14 +185,29 @@ export class SessionStatsTracker {
 				}
 				// Persisted and imported transcripts can predate usage metadata despite the current message type.
 				const usage = message.usage;
-				if (!usage) continue;
+				// Mixture responses are summed from the branch below, never from live state.
+				if (!usage || isMixtureModel(message)) continue;
 				addUsage(usage);
 				if (message.upstreamModel !== undefined) {
 					routedModels[message.upstreamModel] = (routedModels[message.upstreamModel] ?? 0) + 1;
 				}
 			}
 		}
-		for (const entry of activeModelUsageEntries(this.#host.sessionManager.getBranch())) addUsage(entry.usage);
+		const window = activeWindowEntries(this.#host.sessionManager.getBranch());
+		const countRouted = (provider: string, model: string): void => {
+			const routed = `${provider}/${model}`;
+			routedModels[routed] = (routedModels[routed] ?? 0) + 1;
+		};
+		for (const entry of window) {
+			if (entry.type !== "model_usage") continue;
+			addUsage(entry.usage);
+			// A late mixture attempt was routed to its member like a reported one.
+			if (entry.purpose === MIXTURE_USAGE_PURPOSE) countRouted(entry.provider, entry.model);
+		}
+		for (const response of activeMixtureResponses(window)) {
+			if (response.usage) addUsage(response.usage);
+			for (const attempt of response.usageBreakdown ?? []) countRouted(attempt.provider, attempt.model);
+		}
 		return {
 			sessionFile: this.#host.sessionManager.getSessionFile(),
 			sessionId: this.#host.sessionId(),
