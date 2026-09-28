@@ -466,6 +466,32 @@ describe("WATCHDOG.yml file round-trip", () => {
 		});
 	});
 
+	it("materializes an aliased advisor sequence before applying edits", async () => {
+		const file = path.join(tmp, "WATCHDOG.yml");
+		await Bun.write(
+			file,
+			[
+				"sharedRoster: &sharedRoster",
+				"  - name: Reviewer",
+				"    model: test/old",
+				"    futureId: keep # shared roster",
+				"advisors: *sharedRoster # roster alias",
+				"",
+			].join("\n"),
+		);
+		const loaded = await loadWatchdogConfigFile(file);
+		loaded.advisors[0].model = "test/new";
+		await saveWatchdogConfigFile(file, loaded);
+
+		const saved = await Bun.file(file).text();
+		expect(saved).toContain("# shared roster");
+		expect(saved).toContain("# roster alias");
+		expect(YAML.parse(saved)).toEqual({
+			sharedRoster: [{ name: "Reviewer", model: "test/old", futureId: "keep" }],
+			advisors: [{ name: "Reviewer", model: "test/new", futureId: "keep" }],
+		});
+	});
+
 	it("removes malformed advisor rows while preserving valid row comments and unknown fields", async () => {
 		const file = path.join(tmp, "WATCHDOG.yml");
 		await Bun.write(
@@ -546,6 +572,24 @@ describe("WATCHDOG.yml file round-trip", () => {
 		});
 		expect(saved).toContain("# inserted row");
 		expect(saved).toContain("# original row");
+	});
+
+	it("keeps the newer value when two editors change the same advisor field", async () => {
+		const file = path.join(tmp, "WATCHDOG.yml");
+		await Bun.write(file, "advisors:\n  - name: Reviewer\n    model: test/original # model owner\n");
+		const stale = await loadWatchdogConfigFile(file);
+		const winner = await loadWatchdogConfigFile(file);
+		winner.advisors[0].model = "test/winner";
+		await saveWatchdogConfigFile(file, winner);
+		stale.advisors[0].model = "test/stale";
+		stale.advisors[0].enabled = false;
+		await saveWatchdogConfigFile(file, stale);
+
+		const saved = await Bun.file(file).text();
+		expect(YAML.parse(saved)).toEqual({
+			advisors: [{ name: "Reviewer", model: "test/winner", enabled: false }],
+		});
+		expect(saved).toContain("# model owner");
 	});
 
 	it("does not resurrect an advisor renamed or deleted by a newer editor", async () => {

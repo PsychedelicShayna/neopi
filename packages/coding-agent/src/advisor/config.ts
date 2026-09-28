@@ -82,6 +82,23 @@ const advisorEntrySchema = type({
 
 type AdvisorYamlEntry = typeof advisorEntrySchema.infer;
 
+function editableAdvisorConfig(entry: AdvisorYamlEntry): AdvisorConfig {
+	const advisor: AdvisorConfig = { name: entry.name };
+	if (entry.model?.trim()) advisor.model = entry.model;
+	if (entry.tools !== undefined) advisor.tools = [...entry.tools];
+	if (entry.instructions?.trim()) advisor.instructions = entry.instructions;
+	if (entry.systemPrompt !== undefined) advisor.systemPrompt = entry.systemPrompt;
+	if (entry.enabled !== undefined) advisor.enabled = entry.enabled;
+	if (
+		typeof entry.maxNotesPerUpdate === "number" &&
+		Number.isFinite(entry.maxNotesPerUpdate) &&
+		entry.maxNotesPerUpdate >= 1
+	) {
+		advisor.maxNotesPerUpdate = Math.trunc(entry.maxNotesPerUpdate);
+	}
+	return advisor;
+}
+
 /**
  * Validate one parsed `WATCHDOG.yml` document per entry instead of as a whole:
  * a single malformed advisor drops out with a warning naming it, while the
@@ -402,18 +419,7 @@ export async function loadWatchdogConfigFile(filePath: string): Promise<Watchdog
 		filePath,
 	);
 	for (const message of warnings) logger.warn("Advisor config", { path: filePath, error: message });
-	const advisors = entries.map(a => {
-		const advisor: AdvisorConfig = { name: a.name };
-		if (a.model?.trim()) advisor.model = a.model;
-		if (a.tools !== undefined) advisor.tools = [...a.tools];
-		if (a.instructions?.trim()) advisor.instructions = a.instructions;
-		if (a.systemPrompt !== undefined) advisor.systemPrompt = a.systemPrompt;
-		if (a.enabled !== undefined) advisor.enabled = a.enabled;
-		if (typeof a.maxNotesPerUpdate === "number" && Number.isFinite(a.maxNotesPerUpdate) && a.maxNotesPerUpdate >= 1) {
-			advisor.maxNotesPerUpdate = Math.trunc(a.maxNotesPerUpdate);
-		}
-		return advisor;
-	});
+	const advisors = entries.map(editableAdvisorConfig);
 	const doc: WatchdogConfigDoc = { advisors };
 	if (instructions?.trim()) doc.instructions = instructions;
 	if (sharedMaxNotesPerUpdate !== undefined) doc.maxNotesPerUpdate = sharedMaxNotesPerUpdate;
@@ -560,8 +566,14 @@ function resolveWatchdogAdvisorOrigin(
 function patchWatchdogAdvisor(map: YAMLMap<unknown, unknown>, advisor: AdvisorConfig, base?: AdvisorConfig): void {
 	const values = watchdogAdvisorValues(advisor);
 	const baseValues = base ? watchdogAdvisorValues(base) : undefined;
+	const parsedCurrent = advisorEntrySchema(map.toJSON());
+	const currentValues =
+		baseValues && !(parsedCurrent instanceof type.errors)
+			? watchdogAdvisorValues(editableAdvisorConfig(parsedCurrent))
+			: undefined;
 	for (const key of WATCHDOG_ADVISOR_KEYS) {
 		if (baseValues && Bun.deepEquals(values[key], baseValues[key])) continue;
+		if (baseValues && currentValues && !Bun.deepEquals(currentValues[key], baseValues[key])) continue;
 		const value = values[key];
 		if (value === undefined) map.delete(key);
 		else map.set(key, value);
@@ -598,7 +610,7 @@ function patchWatchdogDocument(source: string, doc: WatchdogConfigDoc, baseline?
 		if (doc.advisors.length === 0) {
 			root.delete("advisors");
 		} else {
-			let existingNode = root.get("advisors");
+			let existingNode = materializeYamlAlias(document, ["advisors"]);
 			if (!isSeq(existingNode)) existingNode = document.createNode([]);
 			if (!isSeq(existingNode)) throw new Error("WATCHDOG.yml advisors must be a sequence");
 			const existingSequence = existingNode as YAMLSeq<unknown>;
@@ -621,7 +633,7 @@ function patchWatchdogDocument(source: string, doc: WatchdogConfigDoc, baseline?
 		return document.toString({ lineWidth: 0 });
 	}
 
-	let advisorNode = root.get("advisors");
+	let advisorNode = materializeYamlAlias(document, ["advisors"]);
 	if (!isSeq(advisorNode)) {
 		root.set("advisors", document.createNode([]));
 		advisorNode = root.get("advisors");
