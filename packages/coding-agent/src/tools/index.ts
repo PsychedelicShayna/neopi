@@ -11,6 +11,7 @@ import type { Settings } from "../config/settings";
 import { EditTool } from "../edit";
 import { checkPythonKernelAvailability } from "../eval/py/kernel";
 import type { ToolPathWithSource } from "../extensibility/custom-tools";
+import type { ToolApprovalRequester } from "../extensibility/extensions/tool-approval-requester";
 import type {
 	BeforeSubagentSpawnEvent,
 	BeforeSubagentSpawnEventResult,
@@ -354,6 +355,12 @@ export interface ToolSession {
 	getToolForEvalBridge?: (name: string) => AgentTool | undefined;
 	/** Current session context for eval-bridged tool execution. */
 	getToolContext?: () => AgentToolContext | undefined;
+	/**
+	 * Host approver registered on the session's extension runner (RPC
+	 * `set_approval_handler: host`). Approvals raised outside the tool wrapper,
+	 * such as eval prelude host calls, route through it instead of the select dialog.
+	 */
+	getToolApprovalRequester?: () => ToolApprovalRequester | undefined;
 	/** Names currently authorized for invocation through the eval bridge. */
 	getEvalBridgeToolNames?: () => readonly string[];
 	/** Direct partition of the active Code Mode surface; undefined when Code Mode is inactive. */
