@@ -1274,6 +1274,7 @@ Current helper characteristics:
 - Correlates responses by generated `req_<n>` ids
 - Dispatches recognized core `AgentEvent` types to listeners
 - Supports host-owned custom tools via `setCustomTools()` and automatic handling of `host_tool_call` / `host_tool_cancel`
+- Plan mode via `setMode(...)`, `onModeChanged(...)`, `onPlanProposalRequest(...)`, and `respondToPlanProposal(id, decision, feedback?)`
 - Wraps common protocol commands including OAuth `getLoginProviders()` / `login(...)`; use raw protocol frames for any surface not wrapped by the helper.
 
 ### Python package
