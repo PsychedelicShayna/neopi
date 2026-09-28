@@ -93,10 +93,11 @@ export class RpcPlanModeController {
 	/** Pending proposal settlers by request id. */
 	readonly #pending = new Map<string, (decision: PlanDecision) => void>();
 	readonly #unsubscribe: () => void;
+	readonly #unregisterSessionChange: () => void;
 	#owned: OwnedPlanMode | undefined;
 	/** Pre-plan model restore waiting for the current turn to end. */
 	#deferredModelRestore: PlanModelSwitch | undefined;
-	/** Background deferred model restores, serialized. */
+	/** Background restores (deferred model, session-transition cleanup), serialized. */
 	#work: Promise<void> = Promise.resolve();
 	#emitted: ModeSnapshot;
 	#emitHold = 0;
@@ -109,6 +110,7 @@ export class RpcPlanModeController {
 		this.#unsubscribe = session.subscribePlanModeChanged(() => {
 			if (this.#emitHold === 0) this.#emitModeIfChanged();
 		});
+		this.#unregisterSessionChange = session.registerSessionChangeCallback(() => this.#onSessionChanged());
 	}
 
 	/** `get_state` fields: the session mode and, in plan mode, its details. */
@@ -140,6 +142,11 @@ export class RpcPlanModeController {
 		}
 	}
 
+	/** Resolves once background restores (session-transition cleanup, a deferred model restore) have finished. */
+	settled(): Promise<void> {
+		return this.#work;
+	}
+
 	/** Route a host decision to its pending proposal; unknown ids are ignored. */
 	handleProposalResponse(frame: RpcPlanProposalResponse): void {
 		const settle = this.#pending.get(frame.id);
@@ -165,6 +172,7 @@ export class RpcPlanModeController {
 		this.#closed = true;
 		this.#settleAllPending();
 		this.#unsubscribe();
+		this.#unregisterSessionChange();
 	}
 
 	async #enterPlan(planFilePath: string | undefined): Promise<RpcSetModeResult> {
@@ -342,6 +350,35 @@ export class RpcPlanModeController {
 		}
 	}
 
+	/**
+	 * A session transition (new, switch, open, branch, handoff, whichever path
+	 * ran it) ends the plan mode `set_mode` entered: the plan belongs to the
+	 * conversation that was left, and the entry snapshot must never be applied
+	 * to another one. Plan state and the proposal handler clear now; the
+	 * pre-plan tools return once the transition settles, and the pre-plan model
+	 * only when the session still runs the plan model (the target session keeps
+	 * the model it loaded).
+	 */
+	#onSessionChanged(): void {
+		const owned = this.#owned;
+		const deferred = this.#deferredModelRestore;
+		if (!owned && !deferred) return;
+		this.#owned = undefined;
+		this.#deferredModelRestore = undefined;
+		const session = this.#session;
+		if (owned) {
+			this.#settleAllPending();
+			session.setPlanProposalHandler(null);
+			session.setPlanModeState(undefined);
+		}
+		const model = owned?.model ?? deferred;
+		this.#track(async () => {
+			await session.waitForSessionTransition();
+			if (owned) await session.restoreNonMCPToolPresentation(owned.tools.enabled, owned.tools.mounted);
+			if (model) await this.#restorePrePlanModel(model);
+		});
+	}
+
 	#liveModel(): PlanPreviousModel | undefined {
 		const model = this.#session.model;
 		return model ? { model, thinkingLevel: this.#session.configuredThinkingLevel() } : undefined;
@@ -351,7 +388,7 @@ export class RpcPlanModeController {
 	 * Restore the pre-plan model, but only while the session still runs the
 	 * model and thinking level plan mode applied. A model the host chose while
 	 * planning (`set_model`, `cycle_model`, `set_role`, `set_thinking_level`,
-	 * `/model`) is kept.
+	 * `/model`), or the model a switched-to session loaded, is kept.
 	 */
 	async #restorePrePlanModel(change: PlanModelSwitch): Promise<void> {
 		const live = this.#liveModel();

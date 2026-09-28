@@ -1375,6 +1375,8 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					// The detached run publishes no terminal agent_end to settle on.
 					void settleWatcher.check();
 					await emitAvailableCommandsUpdate();
+					// A session change ends set_mode's plan mode; answer once its restore landed.
+					await planMode.settled();
 				}
 				return success(id, result.type, result.data);
 			}
@@ -1392,6 +1394,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					promptResults.abortOpen();
 					void settleWatcher.check();
 					await emitAvailableCommandsUpdate();
+					await planMode.settled();
 				}
 				return success(id, "open_session", result);
 			}
@@ -1769,6 +1772,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					return error(id, "handoff", "Cannot hand off while a response is in progress");
 				}
 				const result = await session.handoff(command.customInstructions);
+				await planMode.settled();
 				return success(id, "handoff", result ? { savedPath: result.savedPath } : null);
 			}
 
