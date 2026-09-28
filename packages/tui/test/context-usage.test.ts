@@ -13,7 +13,6 @@ import {
 	type ContextBreakdown,
 	computeNonMessageBreakdown,
 	computeNonMessageTokens,
-	estimateSkillsTokens,
 	estimateToolSchemaTokens,
 	getToolSchemaMetadataRevision,
 	invalidateToolSchemaMetadata,
@@ -179,8 +178,8 @@ describe("renderContextUsage snapcompact section", () => {
  * inputs.
  */
 describe("computeNonMessageTokens / computeNonMessageBreakdown memoization", () => {
-	function makeSession(systemPrompt: string[], tools: unknown[] = [], skills: unknown[] = []) {
-		return { systemPrompt, agent: { state: { tools } }, skills };
+	function makeSession(systemPrompt: string[], tools: unknown[] = []) {
+		return { systemPrompt, agent: { state: { tools } } };
 	}
 
 	it("recomputes when the system prompt reference changes and caches otherwise", () => {
@@ -244,66 +243,11 @@ describe("computeNonMessageTokens / computeNonMessageBreakdown memoization", () 
 });
 
 /**
- * Contract: the Skills category counts only skills actually rendered into the
- * system prompt (mirroring `buildSystemPrompt`'s filter) — hidden/explicit-only
- * skills, and every skill when the `read` tool is absent, contribute zero. The
- * System-prompt subtraction must not be inflated by unrendered skill metadata
- * and clamped to 0 (issue #6498).
- */
-describe("computeNonMessageBreakdown skills filtering", () => {
-	const readTool = { name: "read", description: "read files", parameters: {} };
-	const hidden = { name: "hidden-skill", description: "X".repeat(4000), filePath: "/s/h.md", hide: true };
-	const visible = { name: "vis", description: "small visible skill", filePath: "/s/v.md" };
-	// First prompt block as rendered: only the visible skill appears.
-	const renderedPrompt = "You are an agent.\nSkills:\n- vis: small visible skill\n";
-
-	function session(tools: unknown[], skills: unknown[]) {
-		return { systemPrompt: [renderedPrompt], agent: { state: { tools } }, skills } as never;
-	}
-
-	it("excludes hidden skills and does not clamp System prompt to 0", () => {
-		const b = computeNonMessageBreakdown(session([readTool], [hidden, visible]), tokenizer);
-		// Only the visible skill is counted, not the large hidden one.
-		expect(b.skillsTokens).toBe(computeNonMessageBreakdown(session([readTool], [visible]), tokenizer).skillsTokens);
-		expect(b.skillsTokens).toBeLessThan(100);
-		expect(b.systemPromptTokens).toBeGreaterThan(0);
-	});
-
-	it("counts zero Skills tokens when the read tool is unavailable", () => {
-		const b = computeNonMessageBreakdown(session([], [hidden, visible]), tokenizer);
-		expect(b.skillsTokens).toBe(0);
-		expect(b.systemPromptTokens).toBe(computeNonMessageBreakdown(session([], []), tokenizer).systemPromptTokens);
-	});
-
-	it("counts frozen rendered descriptions, not full source descriptions", () => {
-		const full = { ...visible, description: "Use this skill for browser tasks. ".repeat(50) };
-		const rendered = { ...visible, description: "Use for interactive browser tasks." };
-		const promptText = `You are an agent.\nSkills:\n- vis: ${rendered.description}\n`;
-		const source = {
-			systemPrompt: [promptText],
-			agent: { state: { tools: [readTool] } },
-			skills: [full],
-			renderedSkills: [rendered],
-		};
-		const b = computeNonMessageBreakdown(source as never, tokenizer);
-		expect(b.skillsTokens).toBe(estimateSkillsTokens([rendered], tokenizer));
-		expect(b.skillsTokens).toBeLessThan(estimateSkillsTokens([full], tokenizer));
-		expect(b.systemPromptTokens + b.skillsTokens).toBe(tokenizer.countTokens(promptText));
-	});
-});
-
-/**
- * Contract: a tool, skill, or system-prompt section with a missing
- * (`undefined`) description/text must not crash the token estimate. Extensions
- * can contribute tools whose `description` is absent at runtime (the field is
- * typed `string` but the extension API does not enforce it); before the guard,
- * the `undefined` fragment reached the tokenizer and threw, killing every
- * subagent before its first turn (issue #9331). Each path must instead yield a
- * finite, non-negative estimate.
+ * Contract: missing tool descriptions or system-prompt sections still produce
+ * finite token estimates. Extensions can contribute tools whose descriptions
+ * are absent at runtime (issue #9331).
  */
 describe("non-message estimates tolerate a missing description", () => {
-	const readTool = { name: "read", description: "read files", parameters: {} };
-
 	it("estimateToolSchemaTokens does not throw on an undefined tool description", () => {
 		const tokens = estimateToolSchemaTokens(
 			[{ name: "lens_tool", description: undefined, parameters: {} } as never],
@@ -313,22 +257,10 @@ describe("non-message estimates tolerate a missing description", () => {
 		expect(tokens).toBeGreaterThanOrEqual(0);
 	});
 
-	it("computeNonMessageBreakdown does not throw on an undefined skill description", () => {
-		const session = {
-			systemPrompt: ["You are an agent."],
-			agent: { state: { tools: [readTool] } },
-			skills: [{ name: "lens", description: undefined, filePath: "/s/l.md" }],
-		} as never;
-		const b = computeNonMessageBreakdown(session, tokenizer);
-		expect(Number.isFinite(b.skillsTokens)).toBe(true);
-		expect(b.skillsTokens).toBeGreaterThanOrEqual(0);
-	});
-
 	it("computeNonMessageBreakdown does not throw on an undefined system-context section", () => {
 		const session = {
 			systemPrompt: ["primary prompt", undefined, "trailing context"],
-			agent: { state: { tools: [readTool] } },
-			skills: [],
+			agent: { state: { tools: [] } },
 		} as never;
 		const b = computeNonMessageBreakdown(session, tokenizer);
 		expect(Number.isFinite(b.systemContextTokens)).toBe(true);
