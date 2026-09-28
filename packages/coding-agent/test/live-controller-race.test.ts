@@ -104,6 +104,9 @@ interface Harness {
 	deliveries: DeliveryControl[];
 	speech: Array<{ turn: number; text: string; final: boolean }>;
 	delegated: number[][];
+	audioSent: Float32Array[];
+	fireOutputLevel(level: number): void;
+	fireMicrophone(samples: Float32Array): void;
 	fireLive(event: LiveServerEvent): void;
 	fireSession(event: AgentSessionEvent): void;
 	setStreaming(value: boolean): void;
@@ -115,11 +118,14 @@ function makeHarness(options?: {
 	artifactPath?: string | undefined;
 	speakableIdleMs?: number;
 	holdDelivery?: boolean;
+	dropAudio?: boolean;
 }): Harness {
 	const sent: LiveClientMessage[] = [];
 	const aborts: Array<Record<string, unknown>> = [];
 	const prompts: string[] = [];
 	const speech: Harness["speech"] = [];
+	const audioSent: Float32Array[] = [];
+	let microphoneCallback: ((error: Error | null, samples: Float32Array) => void) | undefined;
 	const delegated: number[][] = [];
 	const abortGates: Array<{ promise: Promise<void>; resolve: () => void }> = [];
 	const deliveries: Harness["deliveries"] = [];
@@ -228,10 +234,17 @@ function makeHarness(options?: {
 				},
 				async close() {},
 				async setMuted() {},
-				pushAudio() {},
+				pushAudio(samples: Float32Array) {
+					if (options?.dropAudio) return false;
+					audioSent.push(samples);
+					return true;
+				},
 			};
 		},
-		createRecorder: () => ({ stop() {} }),
+		createRecorder: (_sampleRate, callback) => {
+			microphoneCallback = callback;
+			return { stop() {} };
+		},
 	});
 
 	return {
@@ -242,6 +255,9 @@ function makeHarness(options?: {
 		deliveries,
 		speech,
 		delegated,
+		audioSent,
+		fireOutputLevel: level => liveCallbacks?.onOutputLevel(level),
+		fireMicrophone: samples => microphoneCallback?.(null, samples),
 		fireLive: event => liveCallbacks?.onEvent(event),
 		fireSession: event => sessionSubscriber?.(event),
 		setStreaming: value => {
@@ -277,6 +293,64 @@ function speakableTexts(sent: LiveClientMessage[]): string[] {
 	}
 	return texts;
 }
+
+describe("live microphone forwarding", () => {
+	it("suppresses likely speaker echo but forwards quiet speech after output falls silent", async () => {
+		const h = makeHarness();
+		await h.controller.start();
+		h.fireOutputLevel(0.6);
+		expect(h.controller.phase).toBe("speaking");
+		const speech = new Float32Array(320).fill(0.02);
+		h.fireMicrophone(speech);
+		expect(h.audioSent).toEqual([]);
+		await wait(300);
+		expect(h.controller.phase).toBe("listening");
+		h.fireMicrophone(speech);
+		expect(h.audioSent).toEqual([speech]);
+		await h.controller.stop();
+		const lines = (await readFile(h.artifactPath, "utf8")).trim().split("\n");
+		expect(lines.map(line => JSON.parse(line))).toEqual([
+			expect.objectContaining({
+				type: "audio-frame-summary",
+				captured: 2,
+				sent: 1,
+				droppedAtGate: 1,
+				droppedAtNativeQueue: 0,
+			}),
+		]);
+	});
+
+	it("expires speaker activity only after the last reported output packet", async () => {
+		const h = makeHarness();
+		await h.controller.start();
+		h.fireOutputLevel(0.5);
+		await wait(150);
+		h.fireOutputLevel(0.4);
+		await wait(150);
+		expect(h.controller.phase).toBe("speaking");
+		await wait(120);
+		expect(h.controller.phase).toBe("listening");
+		await h.controller.stop();
+	});
+
+	it("persists a counted native queue-drop summary when audio cannot be queued", async () => {
+		const h = makeHarness({ dropAudio: true });
+		await h.controller.start();
+		h.fireMicrophone(new Float32Array(320).fill(0.02));
+		h.fireMicrophone(new Float32Array(320).fill(0.02));
+		await h.controller.stop();
+		const lines = (await readFile(h.artifactPath, "utf8")).trim().split("\n");
+		expect(lines.map(line => JSON.parse(line))).toEqual([
+			expect.objectContaining({
+				type: "audio-frame-summary",
+				captured: 2,
+				sent: 0,
+				droppedAtGate: 0,
+				droppedAtNativeQueue: 2,
+			}),
+		]);
+	});
+});
 
 describe("live controller delegation ownership", () => {
 	it("builds the prompt from the controller transcript, not delegation content", async () => {

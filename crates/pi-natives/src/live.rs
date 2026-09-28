@@ -80,9 +80,9 @@ impl LiveWebRtcPeer {
 			.map_err(napi::Error::from_reason)
 	}
 
-	/// Queue 16 kHz mono floating-point PCM for Opus transmission.
+	/// Queue 16 kHz mono floating-point PCM; false means the queue dropped it.
 	#[napi]
-	pub fn push_audio(&self, samples: Float32Array) -> Result<()> {
+	pub fn push_audio(&self, samples: Float32Array) -> Result<bool> {
 		self
 			.inner
 			.push_audio(&samples)
