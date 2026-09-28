@@ -27,6 +27,7 @@ import type {
 } from "@oh-my-pi/pi-tui/overlays/mixture-types";
 import { collectConfigCandidates } from "../advisor/watchdog";
 import { serializeMixturesConfig } from "./toml";
+import { MAX_FILE_BYTES } from "./validate";
 
 export const MIXTURES_FILE_NAME = "MIXTURES.toml";
 
@@ -407,6 +408,14 @@ export function parseMixturesDoc(raw: unknown, filePath: string): MixturesConfig
 }
 
 function parseMixturesText(text: string, filePath: string): MixturesConfigDoc {
+	// Bounded before any parser sees it: every session reads these files at startup.
+	const bytes = Buffer.byteLength(text, "utf8");
+	if (bytes > MAX_FILE_BYTES) {
+		return {
+			mixtures: [],
+			warnings: [`${filePath}: file.too_large (${bytes} bytes; the cap is ${MAX_FILE_BYTES}) — file skipped`],
+		};
+	}
 	let parsed: unknown;
 	try {
 		parsed = Bun.TOML.parse(text);

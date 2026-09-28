@@ -9,6 +9,7 @@ import {
 	isFanoutEdge,
 	type MixtureDefinition,
 	type MixtureEdge,
+	type MixtureMember,
 	mixtureEdgeId,
 	TRANSIT_PART_NAMES,
 } from "@oh-my-pi/pi-tui/overlays/mixture-types";
@@ -22,6 +23,20 @@ const MEMBER_ID_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
 const KNOWN_PARTS = new Set<string>(TRANSIT_PART_NAMES);
 /** The milestone this build implements; the gate names the one that adds a feature. */
 const IMPLEMENTED_MILESTONE = "M1";
+
+// E23 size bounds (spec §11). Code constants, never settings: a project file must not be able to
+// raise them. Registration validates every discovered definition at startup, so the work a
+// definition can cause is bounded here before any pass that scales with it.
+export const MAX_MEMBERS = 32;
+export const MAX_EDGES = 128;
+/** Sum over edges of the target count (a fan-out's `to` list, else 1) plus one per `join`. */
+export const MAX_EDGE_TARGETS = 256;
+/** Every `state` array and every fan-out `slices` list. */
+export const MAX_STATE_PARTS = 8;
+/** Every string the definition hands to a model or a template compiler. */
+export const MAX_TEXT_CHARS = 65_536;
+/** A `MIXTURES.toml` file, checked by the loader before parsing. */
+export const MAX_FILE_BYTES = 4 * 1024 * 1024;
 
 export interface ValidateMixtureContext {
 	/** The settings the mixture runs under: `moa.hard_max_hops` bounds `limits.max_hops`. */
@@ -61,31 +76,166 @@ function declaredParts(edge: MixtureEdge): string[] {
 	return Object.keys(edge.x).filter(part => KNOWN_PARTS.has(part));
 }
 
-function outgoing(definition: MixtureDefinition, memberId: string): MixtureEdge[] {
-	return definition.edges.filter(edge => edge.from === memberId);
-}
-
 function edgeTargets(edge: MixtureEdge): string[] {
 	return isFanoutEdge(edge) ? [...edge.to, edge.join].filter(Boolean) : [edge.to];
 }
 
-function hasCycle(definition: MixtureDefinition): boolean {
-	const state = new Map<string, "visiting" | "done">();
-	const visit = (id: string): boolean => {
-		const current = state.get(id);
-		if (current === "visiting") return true;
-		if (current === "done") return false;
-		state.set(id, "visiting");
-		for (const edge of outgoing(definition, id)) {
-			for (const target of edgeTargets(edge)) if (visit(target)) return true;
-		}
-		state.set(id, "done");
-		return false;
-	};
-	return definition.members.some(member => visit(member.id));
+function sizeIssue(code: "limits.graph_size" | "limits.text_size", path: string, count: number, cap: number) {
+	const unit = code === "limits.text_size" ? "characters" : "entries";
+	return { code, path, message: `${path} has ${count} ${unit}; the cap is ${cap}` };
 }
 
-function capabilityGate(resolved: ResolvedMixture, errors: MixtureIssue[]): void {
+/**
+ * E23: the first size bound a definition breaks, checked before any other pass so an
+ * oversized definition costs time linear in its size and gets exactly one error.
+ */
+export function definitionSizeIssue(
+	definition: MixtureDefinition,
+	presets: { envelopes?: Record<string, string>; roles?: Record<string, string> } = {},
+): MixtureIssue | undefined {
+	if (definition.members.length > MAX_MEMBERS) {
+		return sizeIssue("limits.graph_size", "members", definition.members.length, MAX_MEMBERS);
+	}
+	if (definition.edges.length > MAX_EDGES) {
+		return sizeIssue("limits.graph_size", "edges", definition.edges.length, MAX_EDGES);
+	}
+	let targets = 0;
+	for (const [index, edge] of definition.edges.entries()) {
+		targets += isFanoutEdge(edge) ? edge.to.length + (edge.join ? 1 : 0) : 1;
+		if (targets > MAX_EDGE_TARGETS) {
+			return sizeIssue("limits.graph_size", `edges[${index}]`, targets, MAX_EDGE_TARGETS);
+		}
+	}
+	const texts: [path: string, text: string | null | undefined][] = [["description", definition.description]];
+	const parts: [path: string, parts: readonly unknown[] | undefined][] = [];
+	for (const [index, member] of definition.members.entries()) {
+		const path = `members[${index}]`;
+		texts.push([`${path}.description`, member.description]);
+		if (member.kind === "verdict") {
+			parts.push([`${path}.state`, member.state]);
+			texts.push([`${path}.render`, member.render], [`${path}.question.instructions`, member.question.instructions]);
+			const criteria = member.question.criteria;
+			if (Array.isArray(criteria)) {
+				criteria.forEach((rubric, rubricIndex) =>
+					texts.push([`${path}.question.criteria[${rubricIndex}]`, rubric]),
+				);
+			} else if (criteria) {
+				for (const [label, rubric] of Object.entries(criteria)) {
+					texts.push([`${path}.question.criteria.${label}`, rubric]);
+				}
+			}
+			continue;
+		}
+		texts.push([`${path}.system_prompt`, member.systemPrompt]);
+		if (member.route) {
+			parts.push([`${path}.route.state`, member.route.state]);
+			texts.push([`${path}.route.instructions`, member.route.instructions]);
+		}
+		if (member.terminate) {
+			parts.push([`${path}.terminate.state`, member.terminate.state]);
+			texts.push(
+				[`${path}.terminate.instructions`, member.terminate.instructions],
+				[`${path}.terminate.criteria.true`, member.terminate.criteria?.true],
+				[`${path}.terminate.criteria.false`, member.terminate.criteria?.false],
+			);
+		}
+	}
+	for (const [index, edge] of definition.edges.entries()) {
+		const path = `edges[${index}]`;
+		texts.push([`${path}.when`, edge.when], [`${path}.envelope`, edge.envelope]);
+		if (isFanoutEdge(edge)) {
+			if (Array.isArray(edge.slices)) parts.push([`${path}.slices`, edge.slices]);
+			texts.push([`${path}.join_envelope`, edge.joinEnvelope]);
+		}
+	}
+	for (const [table, entries] of [
+		["envelopes", definition.envelopes],
+		["roles", definition.roles],
+		["envelopes", presets.envelopes],
+		["roles", presets.roles],
+	] as const) {
+		for (const [name, text] of Object.entries(entries ?? {})) texts.push([`${table}.${name}`, text]);
+	}
+	for (const [path, list] of parts) {
+		if (list && list.length > MAX_STATE_PARTS) {
+			return sizeIssue("limits.graph_size", path, list.length, MAX_STATE_PARTS);
+		}
+	}
+	for (const [path, text] of texts) {
+		if (text && text.length > MAX_TEXT_CHARS) return sizeIssue("limits.text_size", path, text.length, MAX_TEXT_CHARS);
+	}
+	return undefined;
+}
+
+/** Adjacency built once per validation; every graph pass reads these maps. */
+interface MixtureGraph {
+	/** The first member declared under each id. */
+	members: Map<string, MixtureMember>;
+	outgoing: Map<string, MixtureEdge[]>;
+	/** Every member id, and every edge source, to its edge targets. */
+	successors: Map<string, string[]>;
+}
+
+function graphOf(definition: MixtureDefinition): MixtureGraph {
+	const members = new Map<string, MixtureMember>();
+	const outgoing = new Map<string, MixtureEdge[]>();
+	const successors = new Map<string, string[]>();
+	for (const member of definition.members) {
+		if (!members.has(member.id)) members.set(member.id, member);
+		successors.set(member.id, []);
+	}
+	for (const edge of definition.edges) {
+		const edges = outgoing.get(edge.from);
+		if (edges) edges.push(edge);
+		else outgoing.set(edge.from, [edge]);
+		const targets = successors.get(edge.from);
+		if (targets) targets.push(...edgeTargets(edge));
+		else successors.set(edge.from, edgeTargets(edge));
+	}
+	return { members, outgoing, successors };
+}
+
+/**
+ * Whether the directed graph has a cycle: a three-colour walk on an explicit stack, so
+ * its depth is bounded by memory, not the call stack. Targets that are not keys have no
+ * successors.
+ */
+export function hasCycle(successors: ReadonlyMap<string, readonly string[]>): boolean {
+	const VISITING = 1;
+	const DONE = 2;
+	const state = new Map<string, number>();
+	const stack: string[] = [];
+	const cursors: number[] = [];
+	for (const root of successors.keys()) {
+		if (state.has(root)) continue;
+		state.set(root, VISITING);
+		stack.push(root);
+		cursors.push(0);
+		while (stack.length > 0) {
+			const top = stack.length - 1;
+			const next = successors.get(stack[top]!) ?? [];
+			const cursor = cursors[top]!;
+			if (cursor === next.length) {
+				state.set(stack[top]!, DONE);
+				stack.pop();
+				cursors.pop();
+				continue;
+			}
+			cursors[top] = cursor + 1;
+			const target = next[cursor]!;
+			const seen = state.get(target);
+			if (seen === VISITING) return true;
+			if (seen === undefined) {
+				state.set(target, VISITING);
+				stack.push(target);
+				cursors.push(0);
+			}
+		}
+	}
+	return false;
+}
+
+function capabilityGate(resolved: ResolvedMixture, graph: MixtureGraph, errors: MixtureIssue[]): void {
 	const definition = resolved.definition;
 	const gate = (path: string, feature: string, milestone: string) =>
 		errors.push({
@@ -105,7 +255,7 @@ function capabilityGate(resolved: ResolvedMixture, errors: MixtureIssue[]): void
 		if (resolvedMember?.kind === "model" && resolvedMember.toolPolicy !== false) {
 			gate(`${path}.tools`, `tools on member ${member.id} (set tools = false)`, "M3");
 		}
-		if (outgoing(definition, member.id).length > 1) {
+		if ((graph.outgoing.get(member.id)?.length ?? 0) > 1) {
 			gate(path, `more than one outgoing edge from ${member.id} (routing)`, "M2");
 		}
 	});
@@ -117,7 +267,7 @@ function capabilityGate(resolved: ResolvedMixture, errors: MixtureIssue[]): void
 		if (edge.x.toolTrace) gate(`${path}.x.tool_trace`, `x.tool_trace on edge ${id}`, "M2");
 		if (edge.maxTraversals !== undefined) gate(`${path}.max_traversals`, `max_traversals on edge ${id}`, "M2");
 	});
-	if (hasCycle(definition)) gate("edges", "back-edges (cycles)", "M2");
+	if (hasCycle(graph.successors)) gate("edges", "back-edges (cycles)", "M2");
 	if (definition.steering) gate("steering", "steering targets", "M3");
 	const limits = definition.limits;
 	if (limits) {
@@ -145,9 +295,13 @@ function templateIssues(template: string, path: string, errors: MixtureIssue[]):
 
 export function validateMixture(resolved: ResolvedMixture, ctx: ValidateMixtureContext): MixtureValidation {
 	const definition = resolved.definition;
+	// E23 first and alone: nothing else runs over an oversized definition.
+	const oversized = definitionSizeIssue(definition, resolved.presets);
+	if (oversized) return { errors: [oversized], warnings: [] };
 	const errors: MixtureIssue[] = [...resolved.issues];
 	const warnings: MixtureIssue[] = [];
-	const memberIds = new Set(definition.members.map(member => member.id));
+	const graph = graphOf(definition);
+	const memberIds = graph.members;
 
 	// E1
 	if (!NAME_PATTERN.test(definition.name)) {
@@ -178,7 +332,7 @@ export function validateMixture(resolved: ResolvedMixture, ctx: ValidateMixtureC
 	});
 
 	// E5
-	const entry = definition.members.find(member => member.id === definition.entry);
+	const entry = graph.members.get(definition.entry);
 	if (!entry) {
 		errors.push({
 			code: "entry.unresolved",
@@ -207,7 +361,7 @@ export function validateMixture(resolved: ResolvedMixture, ctx: ValidateMixtureC
 				});
 			}
 		}
-		if (definition.members.find(member => member.id === edge.from)?.kind === "verdict") {
+		if (graph.members.get(edge.from)?.kind === "verdict") {
 			errors.push({
 				code: "edge.from_verdict",
 				path: `${path}.from`,
@@ -250,14 +404,15 @@ export function validateMixture(resolved: ResolvedMixture, ctx: ValidateMixtureC
 		}
 		edgeIds.add(id);
 	});
+	const edgeEnvelopes = new Set(definition.edges.map(edge => edge.envelope ?? DEFAULT_EDGE_ENVELOPE));
 	for (const [name, template] of Object.entries(resolved.envelopes)) {
-		if (definition.edges.some(edge => (edge.envelope ?? DEFAULT_EDGE_ENVELOPE) === name)) continue;
+		if (edgeEnvelopes.has(name)) continue;
 		templateIssues(template, `envelopes.${name}`, errors);
 	}
 
 	// E10, E19 terminate.terminal
 	definition.members.forEach((member, index) => {
-		const terminal = outgoing(definition, member.id).length === 0;
+		const terminal = !graph.outgoing.has(member.id);
 		if (terminal && member.show === "never") {
 			warnings.push({
 				code: "member.show.final",
@@ -301,15 +456,12 @@ export function validateMixture(resolved: ResolvedMixture, ctx: ValidateMixtureC
 	// E17
 	if (entry) {
 		const reachable = new Set<string>([entry.id]);
-		const queue = [entry.id];
-		while (queue.length > 0) {
-			const id = queue.shift()!;
-			for (const edge of outgoing(definition, id)) {
-				for (const target of edgeTargets(edge)) {
-					if (reachable.has(target)) continue;
-					reachable.add(target);
-					queue.push(target);
-				}
+		const order = [entry.id];
+		for (let index = 0; index < order.length; index++) {
+			for (const target of graph.successors.get(order[index]!) ?? []) {
+				if (reachable.has(target)) continue;
+				reachable.add(target);
+				order.push(target);
 			}
 		}
 		definition.members.forEach((member, index) => {
@@ -338,7 +490,7 @@ export function validateMixture(resolved: ResolvedMixture, ctx: ValidateMixtureC
 	definition.members.forEach((member, index) => {
 		if (!branches.has(member.id)) return;
 		const controls = member.kind !== "verdict" && (member.route || member.terminate);
-		if (controls || outgoing(definition, member.id).length > 0) {
+		if (controls || graph.outgoing.has(member.id)) {
 			warnings.push({
 				code: "fanout.branch.controls",
 				path: `members[${index}]`,
@@ -347,6 +499,6 @@ export function validateMixture(resolved: ResolvedMixture, ctx: ValidateMixtureC
 		}
 	});
 
-	capabilityGate(resolved, errors);
+	capabilityGate(resolved, graph, errors);
 	return { errors, warnings };
 }

@@ -7,7 +7,12 @@
  * collected as issues for `validateMixture`, never thrown.
  */
 import type { Api, Model } from "@oh-my-pi/pi-ai";
-import { isFanoutEdge, type MixtureDefinition, mixtureEdgeId } from "@oh-my-pi/pi-tui/overlays/mixture-types";
+import {
+	isFanoutEdge,
+	type MixtureDefinition,
+	mixtureEdgeId,
+	type ModelMember,
+} from "@oh-my-pi/pi-tui/overlays/mixture-types";
 import { toReasoningEffort } from "@oh-my-pi/pi-tui/thinking";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { ADVISOR_DEFAULT_TOOL_NAMES } from "../advisor/advise-tool";
@@ -26,6 +31,7 @@ import { judgeRoleChain } from "../judgment";
 import { BUNDLED_ENVELOPES, DEFAULT_EDGE_ENVELOPE, ENTRY_ENVELOPE, isInlineTemplate } from "./envelopes";
 import { MIXTURE_API } from "./provider";
 import type { MixtureIssue, ResolvedMember, ResolvedMixture, ToolPolicy } from "./types";
+import { definitionSizeIssue } from "./validate";
 
 export interface ResolveMixtureContext {
 	registry: ModelRegistry;
@@ -53,14 +59,24 @@ function allowedModels(ctx: ResolveMixtureContext, available: Model<Api>[]): (mo
 	return model => allowed.has(formatModelString(model));
 }
 
+/** Edge sources and fan-out branches of a definition, computed once per resolution. */
+interface GraphShape {
+	sources: ReadonlySet<string>;
+	branches: ReadonlySet<string>;
+}
+
+function graphShape(definition: MixtureDefinition): GraphShape {
+	return {
+		sources: new Set(definition.edges.map(edge => edge.from)),
+		branches: new Set(definition.edges.flatMap(edge => (isFanoutEdge(edge) ? edge.to : []))),
+	};
+}
+
 /** Effective tool policy: explicit, else on for members whose output reaches the operator (no outgoing edges). */
-export function effectiveToolPolicy(definition: MixtureDefinition, memberId: string): ToolPolicy {
-	const member = definition.members.find(candidate => candidate.id === memberId);
-	if (!member || member.kind === "verdict") return false;
+function effectiveToolPolicy(member: ModelMember, shape: GraphShape): ToolPolicy {
 	if (member.tools !== undefined) return member.tools;
-	const isBranch = definition.edges.some(edge => isFanoutEdge(edge) && edge.to.includes(memberId));
-	if (isBranch) return false;
-	return !definition.edges.some(edge => edge.from === memberId);
+	if (shape.branches.has(member.id)) return false;
+	return !shape.sources.has(member.id);
 }
 
 function lookupPreset(
@@ -116,12 +132,28 @@ function resolveJudgePlan(
 }
 
 export function resolveMixture(input: MixtureDefinition, ctx: ResolveMixtureContext): ResolvedMixture {
+	const presets = { envelopes: { ...ctx.documentEnvelopes }, roles: { ...ctx.documentRoles } };
+	// E23 first: an oversized definition is resolved no further, so nothing below scales with it.
+	const oversized = definitionSizeIssue(input, presets);
+	if (oversized) {
+		return {
+			definition: structuredClone(input),
+			members: {},
+			envelopes: {},
+			presets,
+			uses: { judge: false, summary: false, slicer: false },
+			judgePlan: undefined,
+			readOnlyTools: new Set(ADVISOR_DEFAULT_TOOL_NAMES),
+			issues: [oversized],
+			revision: Bun.hash(`${input.name}:${oversized.code}:${oversized.path}`).toString(16),
+		};
+	}
 	const definition = structuredClone(input);
 	const issues: MixtureIssue[] = [];
 	const available = ctx.registry.getAvailable();
 	const isAllowed = allowedModels(ctx, available);
+	const shape = graphShape(definition);
 	const members: Record<string, ResolvedMember> = {};
-
 	definition.members.forEach((member, index) => {
 		const show = member.show ?? "always";
 		if (member.kind === "verdict") {
@@ -186,7 +218,7 @@ export function resolveMixture(input: MixtureDefinition, ctx: ResolveMixtureCont
 			return;
 		}
 		const level = resolved.thinkingLevel;
-		const toolPolicy = effectiveToolPolicy(definition, member.id);
+		const toolPolicy = effectiveToolPolicy(member, shape);
 		members[member.id] = {
 			kind: "model",
 			id: member.id,
@@ -252,6 +284,5 @@ export function resolveMixture(input: MixtureDefinition, ctx: ResolveMixtureCont
 		}),
 	).toString(16);
 
-	const presets = { envelopes: { ...ctx.documentEnvelopes }, roles: { ...ctx.documentRoles } };
 	return { definition, members, envelopes, presets, uses, judgePlan, readOnlyTools, issues, revision };
 }

@@ -5,7 +5,14 @@ import { parseMixturesDoc } from "@oh-my-pi/pi-coding-agent/moa/config";
 import { MIXTURE_API, MIXTURE_PROVIDER } from "@oh-my-pi/pi-coding-agent/moa/provider";
 import { resolveMixture } from "@oh-my-pi/pi-coding-agent/moa/resolve";
 import type { MixtureIssue } from "@oh-my-pi/pi-coding-agent/moa/types";
-import { validateMixture } from "@oh-my-pi/pi-coding-agent/moa/validate";
+import {
+	hasCycle,
+	MAX_EDGE_TARGETS,
+	MAX_EDGES,
+	MAX_MEMBERS,
+	MAX_TEXT_CHARS,
+	validateMixture,
+} from "@oh-my-pi/pi-coding-agent/moa/validate";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import type { MixtureDefinition, MixturesConfigDoc } from "@oh-my-pi/pi-tui/overlays/mixture-types";
 import { TempDir } from "@oh-my-pi/pi-utils";
@@ -427,5 +434,73 @@ describe("model allow-list", () => {
 		const issue = result.errors.find(candidate => candidate.code === "helper.unresolved");
 		expect([issue?.path, issue?.message]).toEqual(["judge", expect.stringContaining("excluded by enabledModels")]);
 		expect(result.resolved.judgePlan).toBeUndefined();
+	});
+});
+
+describe("definition size bounds", () => {
+	/** A linear chain m0 -> m1 -> … of `count` members. */
+	function chain(count: number): MixtureDefinition {
+		const definition = linear();
+		definition.members = Array.from({ length: count }, (_, index) => ({
+			id: `m${index}`,
+			model: "fake/writer",
+			systemPrompt: "Answer.",
+			tools: false,
+		}));
+		definition.entry = "m0";
+		definition.edges = Array.from({ length: count - 1 }, (_, index) => ({
+			from: `m${index}`,
+			to: `m${index + 1}`,
+			x: { output: true },
+		}));
+		return definition;
+	}
+
+	function sizeCodes(issues: MixtureIssue[]): string[] {
+		return codes(issues).filter(code => code.startsWith("limits.") && code.endsWith("_size"));
+	}
+
+	it("refuses a chain one member over the cap with exactly one limits.graph_size error", () => {
+		const result = check(chain(MAX_MEMBERS + 1));
+		expect(result.errors.map(issue => [issue.code, issue.path])).toEqual([["limits.graph_size", "members"]]);
+		expect(result.warnings).toEqual([]);
+		expect(result.resolved.members).toEqual({});
+	});
+
+	it("validates a definition exactly at the member and edge caps with no size error", () => {
+		const definition = chain(MAX_MEMBERS);
+		for (let index = definition.edges.length; index < MAX_EDGES; index++) {
+			definition.edges.push({ id: `extra-${index}`, from: "m0", to: "m1", x: { output: true } });
+		}
+		expect(definition.edges).toHaveLength(MAX_EDGES);
+		expect(sizeCodes(check(definition).errors)).toEqual([]);
+	});
+
+	it("refuses a fan-out edge whose targets push the sum over the cap, at that edge", () => {
+		const definition = linear();
+		const to = Array.from({ length: MAX_EDGE_TARGETS }, (_, index) => `b${index}`);
+		definition.edges.push({ from: "writer", to, join: "editor", x: { output: true } });
+		expect(check(definition).errors.map(issue => [issue.code, issue.path])).toEqual([
+			["limits.graph_size", "edges[1]"],
+		]);
+	});
+
+	it("refuses a system prompt over the text cap at that member", () => {
+		const definition = linear();
+		Object.assign(definition.members[0]!, { systemPrompt: "x".repeat(MAX_TEXT_CHARS + 1) });
+		expect(check(definition).errors.map(issue => [issue.code, issue.path])).toEqual([
+			["limits.text_size", "members[0].system_prompt"],
+		]);
+	});
+
+	it("walks a 100 000-node chain for cycles without recursion, and still finds a back-edge", () => {
+		const successors = new Map<string, string[]>();
+		const count = 100_000;
+		for (let index = 0; index < count; index++) {
+			successors.set(`n${index}`, index + 1 < count ? [`n${index + 1}`] : []);
+		}
+		expect(hasCycle(successors)).toBe(false);
+		successors.set(`n${count - 1}`, ["n0"]);
+		expect(hasCycle(successors)).toBe(true);
 	});
 });
