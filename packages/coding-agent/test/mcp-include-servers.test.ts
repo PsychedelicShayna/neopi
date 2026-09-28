@@ -40,9 +40,11 @@ async function spawnedServers(dir: string): Promise<string[]> {
 		.sort();
 }
 
-async function startSession(cwd: string, includeServers: string[]): Promise<AgentSession> {
-	const settings = Settings.isolated();
-	if (includeServers.length > 0) cfgMcpIncludeServers.override(settings, includeServers);
+async function startSession(cwd: string, includeServers: readonly unknown[]): Promise<AgentSession> {
+	// Wait for every connection instead of the default 250 ms startup window, so
+	// slow CI spawns cannot race the tool assertions.
+	const settings = Settings.isolated({ "mcp.startupTimeoutMs": 0 });
+	if (includeServers.length > 0) cfgMcpIncludeServers.override(settings, includeServers as string[]);
 	const { session } = await createAgentSession({
 		cwd,
 		agentDir: path.join(cwd, "agent"),
@@ -160,6 +162,22 @@ describe("mcp.includeServers allowlist", () => {
 		}
 	});
 
+	test("a malformed non-string allowlist entry fails closed instead of admitting everything", async () => {
+		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "npi-mcp-malformed-"));
+		try {
+			await writeMarkerProject(cwd);
+			const failure = await startSession(cwd, [1]).then(
+				() => undefined,
+				(error: unknown) => error,
+			);
+			expect(failure).toBeInstanceOf(MCPUnknownServerError);
+			expect((failure as MCPUnknownServerError).serverNames).toEqual(["1"]);
+			expect(await spawnedServers(cwd)).toEqual([]);
+		} finally {
+			await removeWithRetries(cwd);
+		}
+	});
+
 	test("concurrent SDK sessions keep independent allowlists and never spawn excluded servers", async () => {
 		const [cwdA, cwdB, cwdC] = await Promise.all(
 			["a", "b", "c"].map(label => fs.mkdtemp(path.join(os.tmpdir(), `npi-mcp-session-${label}-`))),
@@ -167,13 +185,14 @@ describe("mcp.includeServers allowlist", () => {
 		const sessions: AgentSession[] = [];
 		try {
 			await Promise.all([writeMarkerProject(cwdA), writeMarkerProject(cwdB), writeMarkerProject(cwdC)]);
-			sessions.push(
-				...(await Promise.all([
-					startSession(cwdA, ["github", "linear-*"]),
-					startSession(cwdB, ["oth*"]),
-					startSession(cwdC, []),
-				])),
-			);
+			// allSettled: a rejected start must not orphan the sessions that did start.
+			const started = await Promise.allSettled([
+				startSession(cwdA, ["github", "linear-*"]),
+				startSession(cwdB, ["oth*"]),
+				startSession(cwdC, []),
+			]);
+			for (const outcome of started) if (outcome.status === "fulfilled") sessions.push(outcome.value);
+			for (const outcome of started) if (outcome.status === "rejected") throw outcome.reason;
 			const [toolsA, toolsB, toolsC] = await Promise.all([
 				mcpToolNamesWhenSettled(sessions[0]!, 2),
 				mcpToolNamesWhenSettled(sessions[1]!, 1),

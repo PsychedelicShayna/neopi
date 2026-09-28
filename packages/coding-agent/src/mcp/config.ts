@@ -48,6 +48,33 @@ export function isMCPGlobPattern(entry: string): boolean {
 	return MCP_GLOB_METACHARACTERS.test(entry);
 }
 
+/** A compiled `mcp.includeServers` allowlist. */
+export interface MCPAllowlist {
+	/** String entries, in order. */
+	readonly patterns: readonly string[];
+	/** Non-string entries (malformed settings), rendered for error messages. */
+	readonly invalid: readonly string[];
+	/** Whether a server with this name may be spawned. */
+	admits(serverName: string): boolean;
+}
+
+/**
+ * Compile allowlist entries. Settings files are not type-checked per entry,
+ * so non-string entries are reported as invalid and fail closed: a non-empty
+ * list never degrades to unrestricted.
+ */
+export function compileMCPAllowlist(entries: readonly unknown[] | undefined): MCPAllowlist {
+	const list = entries ?? [];
+	const patterns = list.filter((entry): entry is string => typeof entry === "string");
+	const invalid = list.filter(entry => typeof entry !== "string").map(entry => JSON.stringify(entry) ?? String(entry));
+	const globs = patterns.map(pattern => new Bun.Glob(pattern));
+	return {
+		patterns,
+		invalid,
+		admits: serverName => list.length === 0 || globs.some(glob => glob.match(serverName)),
+	};
+}
+
 /**
  * A literal `--mcp` / `mcp.includeServers` entry names no available server.
  * Thrown before any server starts, so a typo cannot leave a run with an
@@ -172,11 +199,11 @@ export async function loadAllMCPConfigs(cwd: string, options?: LoadMCPConfigsOpt
 	// removed downstream and starve the surviving connection.
 	// Allowlist misses are suppressed like disabled servers, for the same
 	// dedupe reason: they keep their name but never shadow an admitted server.
-	const includeGlobs = (options?.includeServers ?? []).map(pattern => new Bun.Glob(pattern));
+	const allowlist = compileMCPAllowlist(options?.includeServers);
 	const suppressServer = (server: MCPServer & { _source: SourceMeta }): boolean => {
 		if (disabledServers.has(server.name)) return true;
 		if (server.enabled === false && !forcedEnabled.has(server.name)) return true;
-		if (includeGlobs.length > 0 && !includeGlobs.some(glob => glob.match(server.name))) return true;
+		if (!allowlist.admits(server.name)) return true;
 		return false;
 	};
 
@@ -197,8 +224,8 @@ export async function loadAllMCPConfigs(cwd: string, options?: LoadMCPConfigsOpt
 
 	// Checked before the Exa/browser filters: those servers exist, NeoPi just
 	// replaces them natively, so naming one is not a typo.
-	const unmatchedIncludes: string[] = [];
-	for (const pattern of options?.includeServers ?? []) {
+	const unmatchedIncludes: string[] = [...allowlist.invalid];
+	for (const pattern of allowlist.patterns) {
 		if (configs[pattern]) continue;
 		if (!isMCPGlobPattern(pattern)) {
 			unmatchedIncludes.push(pattern);

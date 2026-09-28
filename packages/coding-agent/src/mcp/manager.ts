@@ -28,6 +28,7 @@ import {
 	unsubscribeFromResources,
 } from "./client";
 import {
+	compileMCPAllowlist,
 	isBrowserMCPServer,
 	type LoadMCPConfigsOptions,
 	type LoadMCPConfigsResult,
@@ -700,9 +701,9 @@ export class MCPManager {
 
 		// Direct connects (`/mcp enable`, `/mcp add`, the extensions dashboard)
 		// bypass config loading, so the session allowlist is enforced here too.
-		const includeGlobs = (this.#discoverOptions?.includeServers ?? []).map(pattern => new Bun.Glob(pattern));
+		const allowlist = compileMCPAllowlist(this.#discoverOptions?.includeServers);
 		for (const [name, config] of Object.entries(configs)) {
-			if (includeGlobs.length > 0 && !includeGlobs.some(glob => glob.match(name))) {
+			if (!allowlist.admits(name)) {
 				errors.set(name, "excluded by the session MCP allowlist (--mcp / mcp.includeServers)");
 				continue;
 			}
