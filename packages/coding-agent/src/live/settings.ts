@@ -18,3 +18,39 @@ export const cfgLiveVoice = register({
 		options: LIVE_VOICE_OPTIONS,
 	},
 });
+
+export const cfgLiveForceDelegateKeyword = register({
+	id: "live.forceDelegateKeyword",
+	type: "string",
+	default: "",
+	ui: {
+		tab: "providers",
+		group: "Services",
+		label: "Live Force-Delegate Keyword",
+		description: "Finalized speech containing this phrase sends accumulated speech to the main agent (empty disables)",
+	},
+});
+
+export const cfgLiveBlockDelegateKeyword = register({
+	id: "live.blockDelegateKeyword",
+	type: "string",
+	default: "",
+	ui: {
+		tab: "providers",
+		group: "Services",
+		label: "Live Block-Delegate Keyword",
+		description: "Finalized speech containing this phrase stays with the voice agent (empty disables)",
+	},
+});
+
+export const cfgLiveSubmitKeyword = register({
+	id: "live.submitKeyword",
+	type: "string",
+	default: "",
+	ui: {
+		tab: "providers",
+		group: "Services",
+		label: "Live Submit Keyword",
+		description: "Phrase at the end of finalized speech that submits the composer to its selected destination",
+	},
+});

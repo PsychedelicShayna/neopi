@@ -1078,12 +1078,15 @@ export class InputController {
 			const queueBody = parseQueueShorthand(text);
 			if (queueBody !== undefined) {
 				const accepted = await this.#queueForYield(queueBody, {
-					historyText: text,
+					historyText: this.ctx.liveCallActive ? undefined : text,
 					images: inputImages,
 					imageLinks: inputImageLinks,
 				});
-				// A queued prompt still reaches the main agent; `both` shares what was accepted.
-				if (accepted.length > 0 && this.ctx.liveCallActive) this.ctx.shareLiveSubmit(accepted.join("\n\n"));
+				if (accepted.length > 0 && this.ctx.liveCallActive) {
+					const delivered = accepted.join("\n\n");
+					this.ctx.editor.addToHistory(delivered);
+					this.ctx.shareLiveSubmit(delivered);
+				}
 				return;
 			}
 
@@ -1306,7 +1309,7 @@ export class InputController {
 			// If streaming, use prompt() with steer behavior
 			// This handles extension commands (execute immediately), prompt template expansion, and queueing
 			if (this.ctx.session.isStreaming) {
-				this.ctx.editor.addToHistory(typedText);
+				this.ctx.editor.addToHistory(this.ctx.liveCallActive ? text : typedText);
 				this.ctx.editor.setText("");
 				this.ctx.editor.imageLinks = undefined;
 				const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
@@ -1427,7 +1430,7 @@ export class InputController {
 				this.ctx.updatePendingMessagesDisplay();
 				this.ctx.ui.requestRender();
 			}
-			this.ctx.editor.addToHistory(typedText);
+			this.ctx.editor.addToHistory(this.ctx.liveCallActive ? text : typedText);
 		};
 	}
 
