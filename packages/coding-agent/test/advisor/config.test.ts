@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { YAML } from "bun";
 import {
 	advisorConfigFilePath,
 	discoverAdvisorConfigs,
@@ -351,6 +352,45 @@ describe("WATCHDOG.yml file round-trip", () => {
 			undefined,
 			undefined,
 		]);
+	});
+
+	it("preserves comments and unknown fields when saving an edited document", async () => {
+		const file = path.join(tmp, "WATCHDOG.yml");
+		await Bun.write(
+			file,
+			[
+				"# roster owner: Captain",
+				"instructions: Keep the baseline. # shared note",
+				"futureTopLevel:",
+				"  policy: strict # future note",
+				"advisors:",
+				"  - name: Architecture # advisor identity",
+				"    model: x-ai/grok-code-fast:high",
+				"    futureAdvisorField: retain-me # advisor future note",
+				"",
+			].join("\n"),
+		);
+		const loaded = await loadWatchdogConfigFile(file);
+		await Bun.write(file, `${await Bun.file(file).text()}externalAfterLoad: survive # external edit\n`);
+		loaded.advisors[0].enabled = false;
+		await saveWatchdogConfigFile(file, loaded);
+
+		const saved = await Bun.file(file).text();
+		expect(saved).toContain("# roster owner: Captain");
+		expect(saved).toContain("# shared note");
+		expect(saved).toContain("# future note");
+		expect(saved).toContain("# advisor identity");
+		expect(saved).toContain("# advisor future note");
+		expect(saved).toContain("futureTopLevel:");
+		expect(saved).toContain("futureAdvisorField: retain-me");
+		expect(saved).toContain("instructions: Keep the baseline. # shared note");
+		expect(saved).toContain("futureTopLevel:\n  policy: strict # future note");
+		expect(saved).toContain("externalAfterLoad: survive # external edit");
+		expect(YAML.parse(saved)).toMatchObject({
+			futureTopLevel: { policy: "strict" },
+			externalAfterLoad: "survive",
+			advisors: [{ name: "Architecture", enabled: false, futureAdvisorField: "retain-me" }],
+		});
 	});
 
 	it("removes the file when the doc is empty so legacy discovery resumes", async () => {

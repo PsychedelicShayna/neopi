@@ -85,6 +85,12 @@ import { cfgShellPath } from "@oh-my-pi/pi-coding-agent/exec/settings";
 import { cfgEvalJs } from "@oh-my-pi/pi-coding-agent/eval/settings";
 import { cfgChroniclerEnabled } from "@oh-my-pi/pi-coding-agent/chronicler/settings";
 
+import {
+	cfgAdvisorEnabled,
+	cfgAdvisorEvictStaleResults,
+	cfgAdvisorMaxNotesPerUpdate,
+	cfgAdvisorSyncBacklog,
+} from "@oh-my-pi/pi-coding-agent/advisor/settings";
 /** Lets microtask-coalesced setting listeners run. */
 const tick = () => Promise.resolve();
 
@@ -256,6 +262,89 @@ describe("Settings", () => {
 			const content = await Bun.file(getConfigPath()).text();
 			expect(content).not.toMatch(/: +$/m);
 			expect(YAML.parse(content)).toEqual({ custom, theme: { dark: "titanium" } });
+		});
+	});
+
+	describe("comment-preserving writes", () => {
+		it("keeps comments, layout, and unrelated keys while creating advisor settings", async () => {
+			const source = [
+				"# Captain comment",
+				"theme: # theme note",
+				"  dark: titanium # inline dark",
+				"modelRoles:",
+				"  smol: openrouter/openai/gpt-4o-mini # nested role",
+				"futureFeature:",
+				"  mode: careful # unknown field",
+				"",
+			].join("\n");
+			await Bun.write(getConfigPath(), source);
+			const settings = await Settings.loadIsolated({ cwd: projectDir, agentDir });
+
+			settings.setModelRole("advisor", "openrouter/openai/gpt-4o-mini");
+			cfgAdvisorEnabled.set(settings, true);
+			cfgAdvisorSyncBacklog.set(settings, "off");
+			cfgAdvisorMaxNotesPerUpdate.set(settings, 7);
+			cfgAdvisorEvictStaleResults.set(settings, false);
+			await settings.flush();
+
+			const saved = await Bun.file(getConfigPath()).text();
+			expect(saved).toContain("# Captain comment");
+			expect(saved).toContain("# theme note");
+			expect(saved).toContain("# inline dark");
+			expect(saved).toContain("# nested role");
+			expect(saved).toContain("# unknown field");
+			expect(saved).toContain("futureFeature:");
+			expect(saved).toContain("  mode: careful");
+			expect(await readSettings()).toMatchObject({
+				advisor: {
+					enabled: true,
+					syncBacklog: "off",
+					maxNotesPerUpdate: 7,
+					evictStaleResults: false,
+				},
+				modelRoles: { advisor: "openrouter/openai/gpt-4o-mini" },
+			});
+
+			settings.setModelRole("advisor", undefined);
+			cfgAdvisorEvictStaleResults.unset(settings);
+			await settings.flush();
+			const afterRemoval = await readSettings();
+			expect((afterRemoval.modelRoles as Record<string, unknown>).advisor).toBeUndefined();
+			expect((afterRemoval.advisor as Record<string, unknown>).evictStaleResults).toBeUndefined();
+			expect(await Bun.file(getConfigPath()).text()).toContain("# Captain comment");
+		});
+
+		it("merges disjoint Settings writes and preserves the existing same-key conflict winner", async () => {
+			await Bun.write(
+				getConfigPath(),
+				"# concurrent editors\ntheme:\n  dark: titanium\nmodelRoles:\n  smol: openrouter/openai/gpt-4o-mini\n",
+			);
+			const first = await Settings.loadIsolated({ cwd: projectDir, agentDir });
+			const second = await Settings.loadIsolated({ cwd: projectDir, agentDir });
+
+			first.setModelRole("advisor", "openrouter/openai/gpt-4o-mini");
+			cfgAdvisorEnabled.set(second, true);
+			await Promise.all([first.flush(), second.flush()]);
+
+			let saved = await readSettings();
+			expect(saved).toMatchObject({
+				advisor: { enabled: true },
+				modelRoles: { advisor: "openrouter/openai/gpt-4o-mini" },
+			});
+			expect(await Bun.file(getConfigPath()).text()).toContain("# concurrent editors");
+
+			const seed = await Settings.loadIsolated({ cwd: projectDir, agentDir });
+			cfgDefaultThinkingLevel.set(seed, Effort.Low);
+			await seed.flush();
+			const stale = await Settings.loadIsolated({ cwd: projectDir, agentDir });
+			const winner = await Settings.loadIsolated({ cwd: projectDir, agentDir });
+			cfgDefaultThinkingLevel.set(stale, Effort.High);
+			cfgDefaultThinkingLevel.set(winner, Effort.Medium);
+			await winner.flush();
+			await stale.flush();
+
+			saved = await readSettings();
+			expect(saved.defaultThinkingLevel).toBe(Effort.Medium);
 		});
 	});
 

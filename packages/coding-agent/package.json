@@ -558,7 +558,8 @@
 		"@opentelemetry/sdk-trace-base": "catalog:",
 		"@opentelemetry/sdk-trace-node": "catalog:",
 		"axe-core": "4.13.0",
-		"puppeteer-core": "catalog:"
+		"puppeteer-core": "catalog:",
+		"yaml": "catalog:"
 	},
 	"devDependencies": {
 		"@types/bun": "catalog:"

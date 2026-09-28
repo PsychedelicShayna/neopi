@@ -38,6 +38,7 @@ import { type CompactionMethod, DEFAULT_COMPACTION_METHOD_ORDER } from "../sessi
 import MODEL_PRIO from "../priority.json" with { type: "json" };
 import { replaceFileAtomically } from "../utils/atomic-file";
 import { stringifyYamlConfig } from "@oh-my-pi/pi-utils/yaml-config";
+import { patchYamlDocument, type YamlPathMutation } from "./yaml-document";
 import {
 	type AnySetting,
 	all as allSettings,
@@ -161,6 +162,16 @@ function yamlGenerationsMatch(left: YamlGeneration, right: YamlGeneration): bool
 			);
 		case "unreadable":
 			return false;
+	}
+}
+
+function yamlSourceMatchesSettings(source: string, settings: RawSettings): boolean {
+	try {
+		const parsed: unknown = YAML.parse(source);
+		if (parsed === null || parsed === undefined) return Object.keys(settings).length === 0;
+		return isRecord(parsed) && Bun.deepEquals(parsed, settings);
+	} catch {
+		return false;
 	}
 }
 
@@ -3389,14 +3400,23 @@ export class Settings {
 	// Saving
 	// ─────────────────────────────────────────────────────────────────────────
 
-	async #writeYamlAtomically(filePath: string, settings: RawSettings): Promise<void> {
+	async #writeYamlAtomically(
+		filePath: string,
+		settings: RawSettings,
+		source?: string,
+		mutations?: readonly YamlPathMutation[],
+	): Promise<void> {
 		const tempPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
 		let removeTemp = false;
 		try {
 			const handle = await fs.promises.open(tempPath, "wx", 0o600);
 			removeTemp = true;
 			try {
-				await handle.writeFile(stringifyYamlConfig(settings), "utf8");
+				const content =
+					source !== undefined && mutations !== undefined
+						? patchYamlDocument(source, mutations)
+						: stringifyYamlConfig(settings);
+				await handle.writeFile(content, "utf8");
 				await handle.sync();
 			} finally {
 				await handle.close();
@@ -3459,6 +3479,12 @@ export class Settings {
 				// malformed file aside, recover from its last in-memory state
 				// rather than recreating the config from only the pending path.
 				const loaded = await this.#loadYamlIfPresentForWriteLocked(configPath, writePath);
+				const canPatchLoadedDocument =
+					!this.#quarantinedYamlTargets.has(configPath) &&
+					(loaded.generation.kind === "missing" ||
+						(loaded.settings !== null &&
+							loaded.generation.kind === "content" &&
+							yamlSourceMatchesSettings(loaded.generation.source, loaded.settings)));
 				const current =
 					loaded.settings ?? (this.#quarantinedYamlTargets.has(configPath) ? structuredClone(this.#global) : {});
 				let shouldWrite = false;
@@ -3540,7 +3566,22 @@ export class Settings {
 				}
 
 				if (shouldWrite) {
-					await this.#writeYamlAtomically(writePath, current);
+					const changedPaths = [
+						...appliedPaths.map(path => path.split(".")),
+						...[...new Set([...rolesToApply, ...rolesToPreserve])].map(role => ["modelRoles", role]),
+					];
+					const mutations: YamlPathMutation[] = changedPaths.map(path => {
+						const value = getByPath(current, path);
+						return value === undefined ? { path, operation: "delete" } : { path, operation: "set", value };
+					});
+					const canPatchDocument = canPatchLoadedDocument;
+					const source = loaded.generation.kind === "content" ? loaded.generation.source : "";
+					await this.#writeYamlAtomically(
+						writePath,
+						current,
+						canPatchDocument ? source : undefined,
+						canPatchDocument ? mutations : undefined,
+					);
 				}
 				this.#quarantinedYamlTargets.delete(configPath);
 				// A path written again after this save's snapshot was merged at its newer live value.
@@ -3665,17 +3706,38 @@ export class Settings {
 			await fs.promises.mkdir(path.dirname(projectConfigPath), { recursive: true });
 			await this.#withYamlWriteLock(projectConfigPath, async writePath => {
 				const loaded = await this.#loadYamlIfPresentForWriteLocked(projectConfigPath, writePath);
+				const canPatchLoadedDocument =
+					!this.#quarantinedYamlTargets.has(projectConfigPath) &&
+					(loaded.generation.kind === "missing" ||
+						(loaded.settings !== null &&
+							loaded.generation.kind === "content" &&
+							yamlSourceMatchesSettings(loaded.generation.source, loaded.settings)));
 				const projectSettings =
 					loaded.settings ??
 					(this.#quarantinedYamlTargets.has(projectConfigPath) ? structuredClone(this.#projectFileSettings) : {});
 
 				const projectRoles = getByPath(this.#project, ["modelRoles"]);
+				const mutations: YamlPathMutation[] = [];
 				for (const role of modifiedModelRoles) {
+					const path = ["modelRoles", role];
 					const value = isRecord(projectRoles) ? projectRoles[role] : undefined;
-					setByPath(projectSettings, ["modelRoles", role], value);
+					if (value === undefined) {
+						deleteByPath(projectSettings, path);
+						mutations.push({ path, operation: "delete" });
+					} else {
+						setByPath(projectSettings, path, value);
+						mutations.push({ path, operation: "set", value });
+					}
 				}
 
-				await this.#writeYamlAtomically(writePath, projectSettings);
+				const canPatchDocument = canPatchLoadedDocument;
+				const source = loaded.generation.kind === "content" ? loaded.generation.source : "";
+				await this.#writeYamlAtomically(
+					writePath,
+					projectSettings,
+					canPatchDocument ? source : undefined,
+					canPatchDocument ? mutations : undefined,
+				);
 				this.#projectFileSettings = structuredClone(projectSettings);
 				this.#quarantinedYamlTargets.delete(projectConfigPath);
 			});
