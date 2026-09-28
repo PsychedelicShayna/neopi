@@ -110,7 +110,7 @@ Reusing one tab name across browser kinds is rejected until the existing tab is 
 
 ## Screenshots and output
 
-`tab.screenshot()` saves the original capture beneath `browser.screenshotDir` when configured; otherwise it saves the resized image to the OS temporary directory. Unless `silent: true`, it also emits an Eval image. It never accepts an output path.
+`tab.screenshot()` saves the original capture beneath `browser.screenshotDir` when configured; without that setting, it saves a resized image to the OS temporary directory (Chromium captures with an explicit `format` retain the original resolution). Unless `silent: true`, it also emits an Eval image. It never accepts an output path.
 
 `browser.screenshotMaxWidth` and `browser.screenshotMaxHeight` set the pixel limits for browser, frame, diff, and cmux screenshots sent to the model (both default to 1024). The existing 150 KiB byte budget and JPEG-quality behavior still apply, so an image may be smaller than the configured dimensions. Runtime setting changes take effect on the next browser call; captures saved to a configured screenshot directory retain their original resolution.
 

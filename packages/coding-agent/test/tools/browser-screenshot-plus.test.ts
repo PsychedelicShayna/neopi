@@ -220,16 +220,18 @@ button { margin: 80px; width: 180px; height: 60px; }
 			url: "data:text/html,<body style='margin:0;background:white'></body>",
 			viewport: { width: 1600, height: 1200 },
 		});
+		let savedPath: string | undefined;
 		try {
 			const result = await invoke({
 				action: "call",
 				name,
 				chain: [{ method: "screenshot", args: [{ silent: true }] }],
 			});
-			const savedPath = valueFrom<string>(result);
+			savedPath = valueFrom<string>(result);
 			const image = await new Bun.Image(await fs.readFile(savedPath)).metadata();
 			expect({ width: image.width, height: image.height }).toEqual({ width: 600, height: 450 });
 		} finally {
+			if (savedPath) await fs.rm(savedPath, { force: true });
 			await invoke({ action: "close", name, kill: true }).catch(() => undefined);
 		}
 	}, 30_000);
