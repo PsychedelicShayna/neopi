@@ -109,12 +109,21 @@ limitation).
 TOML keys are `snake_case` (decided), matching the proxy's draft TOML; the
 TypeScript types are camelCase and the loader maps between them.
 
-The loader refuses a file larger than `MAX_FILE_BYTES` (4 MiB, a code
-constant in `moa/validate.ts`) before parsing it: the file is skipped with
-the warning `file.too_large` naming the path, the size, and the cap, and
-discovery continues with the other files. A definition file is read at
-startup by every session, so its cost must be bounded before any parser or
-compiler sees it (E23, §11).
+The loader reads every candidate through `readBoundedText(path, MAX_FILE_BYTES)`
+(`packages/coding-agent/src/advisor/watchdog.ts`, shared with the other
+config loaders through `collectConfigCandidates`'s `maxBytes` and
+`onRejected` options): the file is opened once, non-blocking, the open
+handle is `stat`ed, and anything that is not a regular file (a symlink to a
+device, a FIFO) is refused before any read with the warning
+`file.not_regular`; a regular file is read from that same handle and never
+beyond `MAX_FILE_BYTES + 1` bytes (4 MiB, a code constant in
+`moa/validate.ts`), whatever the stat reported, so a file that grows
+between the stat and the read is still bounded; over the cap it is refused
+with the warning `file.too_large` naming the path, the bytes, and the cap.
+A refused candidate is skipped and discovery continues with the other
+files; the configurator's loader reports the same two warnings. A
+definition file is read at startup by every session, so its cost must be
+bounded before any parser or compiler sees it (E23, §11).
 
 ### 1.2 Document shape
 
@@ -2477,8 +2486,14 @@ before any pass that scales with it. `resolveMixture` and `validateMixture`
 both begin with the E23 check against the code constants of `moa/validate.ts`
 (`MAX_MEMBERS = 32`, `MAX_EDGES = 128`, `MAX_EDGE_TARGETS = 256` for the sum
 over edges of the target count plus one per `join`, `MAX_STATE_PARTS = 8`
-for every `state` and `slices` array, `MAX_TEXT_CHARS = 65 536` for every
-string handed to a model or a template compiler; the loader's
+for every `state` and `slices` array, `MAX_TEXT_CHARS = 65 536` for **every
+string in the definition and its document presets**, found by one
+iterative walk (`definitionStrings`, `moa/validate.ts`): every string
+value and every key of a keyed table (choice-criteria labels, preset
+names), each reported at its TOML path, so selectors, role and preset
+names, tool names, endpoints, and rubrics are bounded before any of them
+reaches the model resolver, a judgment prompt, or the compiler, and a
+field added later is bounded without being listed; the loader's
 `MAX_FILE_BYTES = 4 MiB` is §1.1). Constants, not settings: a project file
 must not be able to raise them. An oversized definition yields exactly one
 error, `limits.graph_size` (arrays) or `limits.text_size` (strings), at the
@@ -2874,6 +2889,34 @@ None open. Every question raised in rounds 1 to 3 is answered in §15.
 - No task board; the `task` tool and hub messaging are untouched.
 
 ## 19. Revision log
+
+### Amendment 6.9.1 (Codex P2s 4119258534 and 4119259646 on PR #126: bounded reads, every string)
+
+- A stat-then-read is not a bound: a `MIXTURES.toml` symlinked to
+  `/dev/zero` stats as 0 bytes and reads forever, a FIFO blocks the open,
+  and a regular file can grow between the stat and the read. The loader
+  now reads through `readBoundedText` (`advisor/watchdog.ts`): one
+  non-blocking open, a stat of that handle, `file.not_regular` for
+  anything but a regular file before any read, and never more than
+  `MAX_FILE_BYTES + 1` bytes read from the handle, with `file.too_large`
+  over the cap. `collectConfigCandidates` gained `maxBytes` and
+  `onRejected` (a `ConfigRejection` of kind `too_large` or `not_regular`)
+  for every config loader.
+- The E23 text cap covered a hand-written field list and missed member
+  model and role selectors, choice-criteria labels, tool names, and edge
+  endpoints, so an oversized selector was resolved before anything refused
+  it. `definitionStrings` walks the definition and its document presets
+  iteratively and yields every string value and every keyed-table key
+  with its path; `definitionSizeIssue` applies `MAX_TEXT_CHARS` to all of
+  them before resolution. The array caps are unchanged.
+- Tests (`moa-config.test.ts`, `moa-validate.test.ts`): a `MIXTURES.toml`
+  that is a symlink to `/dev/zero`, and one that is a FIFO with no writer,
+  each get `file.not_regular` while the sibling project file loads (both
+  hung to the timeout before the fix); the oversized sparse file stays
+  readable and gets `file.too_large`; a model selector, a role selector, a
+  tool name, a choice-criteria label, and an edge endpoint over the cap
+  each get exactly one `limits.text_size` error at their path with no
+  member resolved.
 
 ### Amendment 6.10 (Codex security P2 r4117097073, post-merge: roster scoped per workspace)
 
