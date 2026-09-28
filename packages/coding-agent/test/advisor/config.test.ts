@@ -592,6 +592,47 @@ describe("WATCHDOG.yml file round-trip", () => {
 		expect(saved).toContain("# model owner");
 	});
 
+	it("keeps newer shared fields when a stale editor changes the same fields", async () => {
+		const file = path.join(tmp, "WATCHDOG.yml");
+		await Bun.write(
+			file,
+			"instructions: original # shared owner\nmaxNotesPerUpdate: 3\nadvisors:\n  - name: Reviewer\n",
+		);
+		const stale = await loadWatchdogConfigFile(file);
+		const winner = await loadWatchdogConfigFile(file);
+		winner.instructions = "winner";
+		winner.maxNotesPerUpdate = 7;
+		await saveWatchdogConfigFile(file, winner);
+		stale.instructions = "stale";
+		stale.maxNotesPerUpdate = 9;
+		await saveWatchdogConfigFile(file, stale);
+
+		const saved = await Bun.file(file).text();
+		expect(YAML.parse(saved)).toEqual({
+			instructions: "winner",
+			maxNotesPerUpdate: 7,
+			advisors: [{ name: "Reviewer" }],
+		});
+		expect(saved).toContain("# shared owner");
+	});
+
+	it("preserves a concurrently changed advisor when a stale editor removes it", async () => {
+		const file = path.join(tmp, "WATCHDOG.yml");
+		await Bun.write(file, "advisors:\n  - name: Reviewer\n    model: test/original # row owner\n");
+		const stale = await loadWatchdogConfigFile(file);
+		const winner = await loadWatchdogConfigFile(file);
+		winner.advisors[0].model = "test/winner";
+		await saveWatchdogConfigFile(file, winner);
+		stale.advisors.splice(0, 1);
+		await saveWatchdogConfigFile(file, stale);
+
+		const saved = await Bun.file(file).text();
+		expect(YAML.parse(saved)).toEqual({
+			advisors: [{ name: "Reviewer", model: "test/winner" }],
+		});
+		expect(saved).toContain("# row owner");
+	});
+
 	it("does not resurrect an advisor renamed or deleted by a newer editor", async () => {
 		const file = path.join(tmp, "WATCHDOG.yml");
 		await Bun.write(file, "advisors:\n  - name: Original\n    futureId: keep\n");

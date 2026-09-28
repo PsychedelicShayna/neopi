@@ -563,14 +563,24 @@ function resolveWatchdogAdvisorOrigin(
 	return candidates[origin.occurrence];
 }
 
+function watchdogAdvisorMapValues(
+	map: YAMLMap<unknown, unknown>,
+): Record<(typeof WATCHDOG_ADVISOR_KEYS)[number], unknown> | undefined {
+	const parsed = advisorEntrySchema(map.toJSON());
+	return parsed instanceof type.errors ? undefined : watchdogAdvisorValues(editableAdvisorConfig(parsed));
+}
+
+function watchdogAdvisorKnownValuesMatch(map: YAMLMap<unknown, unknown>, advisor: AdvisorConfig): boolean {
+	const currentValues = watchdogAdvisorMapValues(map);
+	if (!currentValues) return false;
+	const expectedValues = watchdogAdvisorValues(advisor);
+	return WATCHDOG_ADVISOR_KEYS.every(key => Bun.deepEquals(currentValues[key], expectedValues[key]));
+}
+
 function patchWatchdogAdvisor(map: YAMLMap<unknown, unknown>, advisor: AdvisorConfig, base?: AdvisorConfig): void {
 	const values = watchdogAdvisorValues(advisor);
 	const baseValues = base ? watchdogAdvisorValues(base) : undefined;
-	const parsedCurrent = advisorEntrySchema(map.toJSON());
-	const currentValues =
-		baseValues && !(parsedCurrent instanceof type.errors)
-			? watchdogAdvisorValues(editableAdvisorConfig(parsedCurrent))
-			: undefined;
+	const currentValues = baseValues ? watchdogAdvisorMapValues(map) : undefined;
 	for (const key of WATCHDOG_ADVISOR_KEYS) {
 		if (baseValues && Bun.deepEquals(values[key], baseValues[key])) continue;
 		if (baseValues && currentValues && !Bun.deepEquals(currentValues[key], baseValues[key])) continue;
@@ -599,8 +609,23 @@ function patchWatchdogDocument(source: string, doc: WatchdogConfigDoc, baseline?
 				maxNotesPerUpdate: baseline.doc.maxNotesPerUpdate,
 			}
 		: undefined;
+	const currentInstructions = root.get("instructions");
+	const currentMaxNotesPerUpdate = root.get("maxNotesPerUpdate");
+	const currentTopLevelValues = {
+		instructions:
+			typeof currentInstructions === "string" && currentInstructions.trim() ? currentInstructions : undefined,
+		maxNotesPerUpdate:
+			typeof currentMaxNotesPerUpdate === "number" &&
+			Number.isFinite(currentMaxNotesPerUpdate) &&
+			currentMaxNotesPerUpdate >= 1
+				? Math.trunc(currentMaxNotesPerUpdate)
+				: undefined,
+	};
 	for (const key of ["instructions", "maxNotesPerUpdate"] as const) {
 		if (baseTopLevelValues && Bun.deepEquals(topLevelValues[key], baseTopLevelValues[key])) continue;
+		if (baseTopLevelValues && !Bun.deepEquals(currentTopLevelValues[key], baseTopLevelValues[key])) {
+			continue;
+		}
 		const value = topLevelValues[key];
 		if (value === undefined) root.delete(key);
 		else root.set(key, value);
@@ -688,7 +713,12 @@ function patchWatchdogDocument(source: string, doc: WatchdogConfigDoc, baseline?
 	}
 
 	const removals = resolvedOrigins
-		.filter(resolved => !claimedOrigins.has(resolved.origin) && resolved.existing)
+		.filter(
+			resolved =>
+				!claimedOrigins.has(resolved.origin) &&
+				resolved.existing &&
+				watchdogAdvisorKnownValuesMatch(resolved.existing.map, resolved.origin.base),
+		)
 		.map(resolved => resolved.existing!)
 		.sort((left, right) => right.index - left.index);
 	for (const removal of removals) sequence.delete(removal.index);
