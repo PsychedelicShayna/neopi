@@ -181,6 +181,10 @@ async function createSandbox(): Promise<Sandbox> {
 			XDG_DATA_HOME: path.join(home, ".local/share"),
 			XDG_STATE_HOME: path.join(home, ".local/state"),
 			XDG_CACHE_HOME: path.join(home, ".cache"),
+			// CI test runners export PI_TEST_RUNTIME=1, which makes the run behave
+			// as a test process (for example it suppresses the piped-stdin notice
+			// the stdin case waits for). These runs are real CLI processes.
+			PI_TEST_RUNTIME: undefined,
 		},
 	};
 }
