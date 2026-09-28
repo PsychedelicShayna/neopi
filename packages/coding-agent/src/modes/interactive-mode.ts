@@ -13,6 +13,8 @@ import {
 } from "@oh-my-pi/pi-agent-core";
 import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, ImageContent, Model, Usage, UsageReport } from "@oh-my-pi/pi-ai";
+import { controlHostFor } from "../control/host";
+import { attachTuiPresenter } from "../control/tui-presenter";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { execReplace } from "@oh-my-pi/pi-natives";
 import type {
@@ -2118,6 +2120,15 @@ export class InteractiveMode implements InteractiveModeContext {
 		// `streamingBehavior: "steer"`, so whichever lands second queues into the
 		// other's turn instead of dying.
 		this.editor.disableSubmit = false;
+		const controlHost = controlHostFor(this.session);
+		if (controlHost) {
+			attachTuiPresenter(controlHost, {
+				editor: this.editor,
+				ui: this.ui,
+				runAction: id => this.#inputController.runAppAction(id),
+				notify: text => this.showStatus(text),
+			});
+		}
 	}
 
 	/** Reload the title-generation system prompt override for the provided working
@@ -6127,6 +6138,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// pending input callback against a session that is already disposing.
 		this.#abortLoopCondition();
 		this.#cancelLoopAutoSubmit();
+		await controlHostFor(this.session)?.close("shutdown");
 
 		// Surface progress before any asynchronous cleanup, including live commands
 		// and BTW history writes, so the user sees a reason for the pause.

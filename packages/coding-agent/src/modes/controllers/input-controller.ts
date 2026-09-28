@@ -770,6 +770,126 @@ export class InputController {
 		};
 	}
 
+	/**
+	 * Run one `app.*` keybinding by id, through the same handlers the keyboard
+	 * uses (#171). Returns false when the id is unknown or not applicable.
+	 */
+	runAppAction(id: string): boolean {
+		const editor = this.ctx.editor;
+		switch (id) {
+			case "app.interrupt":
+				editor.onEscape?.();
+				return true;
+			case "app.clear":
+				this.handleCtrlC();
+				return true;
+			case "app.exit":
+				this.handleCtrlD();
+				return true;
+			case "app.suspend":
+				return false;
+			case "app.display.reset":
+				editor.onDisplayReset?.();
+				return true;
+			case "app.thinking.cycle":
+				this.ctx.cycleThinkingLevel();
+				return true;
+			case "app.thinking.toggle":
+				this.ctx.toggleThinkingBlockVisibility();
+				return true;
+			case "app.model.cycleForward":
+				void this.ctx.cycleRoleModel("forward");
+				return true;
+			case "app.model.cycleBackward":
+				void this.ctx.cycleRoleModel("backward");
+				return true;
+			case "app.model.select":
+				void this.ctx.showModelSelector();
+				return true;
+			case "app.model.selectTemporary":
+				void this.ctx.showModelSelector({ temporaryOnly: true });
+				return true;
+			case "app.tools.expand":
+				this.ctx.toggleToolOutputExpansion();
+				return true;
+			case "app.tools.toggleVisibility":
+				this.toggleToolActivityVisibility();
+				return true;
+			case "app.message.followUp":
+				void this.handleFollowUp();
+				return true;
+			case "app.message.chain":
+				editor.onSubmit?.(editor.getText());
+				return true;
+			case "app.message.dequeue":
+				this.handleDequeue();
+				return true;
+			case "app.retry":
+				void this.handleRetry();
+				return true;
+			case "app.clipboard.pasteImage":
+				void this.handleImagePaste();
+				return true;
+			case "app.clipboard.pasteTextRaw":
+				void this.handleClipboardTextRawPaste();
+				return true;
+			case "app.clipboard.copyPrompt":
+				this.handleCopyPrompt();
+				return true;
+			case "app.clipboard.copyLine":
+				this.handleCopyCurrentLine();
+				return true;
+			case "app.plan.toggle":
+				void this.ctx.handlePlanModeCommand("");
+				return true;
+			case "app.session.new":
+				void this.ctx.handleClearCommand();
+				return true;
+			case "app.session.tree":
+				void this.ctx.showTreeSelector();
+				return true;
+			case "app.session.fork":
+				void this.ctx.showUserMessageSelector();
+				return true;
+			case "app.session.resume":
+				void this.ctx.showSessionSelector();
+				return true;
+			case "app.agents.hub":
+			case "app.session.observe":
+				void this.ctx.showAgentHub();
+				return true;
+			case "app.history.search":
+				void this.ctx.showHistorySearch();
+				return true;
+			case "app.stt.toggle":
+				void this.ctx.handleSTTToggle();
+				return true;
+			case "app.dictation.toggle":
+				void this.ctx.handleDictationToggle();
+				return true;
+			case "app.live.toggle":
+				void this.ctx.handleLiveCommand();
+				return true;
+			case "app.live.mute":
+				void this.ctx.handleLiveMute();
+				return true;
+			case "app.live.destination.cycle":
+				void this.ctx.handleLiveDestinationCycle();
+				return true;
+			case "app.sidebar.toggle":
+				this.ctx.sidePanel.toggle();
+				return true;
+			case "app.sidebar.scrollUp":
+				this.ctx.sidePanel.scrollBy(-3);
+				return true;
+			case "app.sidebar.scrollDown":
+				this.ctx.sidePanel.scrollBy(3);
+				return true;
+			default:
+				return false;
+		}
+	}
+
 	#handleFocusedLeftTap(): void {
 		if (this.#detectLeftDoubleTap()) {
 			void this.ctx.unfocusSession();
