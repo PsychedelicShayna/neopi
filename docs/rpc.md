@@ -34,6 +34,7 @@ Behavior notes:
 
 | String | Feature |
 | --- | --- |
+| `get_roles` | `get_roles` / `set_role` commands and `get_state.activeRole` ([payloads](#get_roles-and-set_role-payloads)) |
 
 ## Transport and Framing
 
@@ -155,6 +156,8 @@ Important edge behavior from runtime:
 - `{ id?, type: "set_model", provider: string, modelId: string }`
 - `{ id?, type: "cycle_model" }`
 - `{ id?, type: "get_available_models" }`
+- `{ id?, type: "get_roles" }`
+- `{ id?, type: "set_role", role: string }`
 
 ### Thinking
 
@@ -337,8 +340,88 @@ is re-armed.
     "tokens": 1100,
     "contextWindow": 200000,
     "percent": 0.55
-  }
+  },
+  "activeRole": "smol"
 }
+```
+
+`activeRole` is the model role the current model was selected through, and is
+absent when the model was chosen directly. `set_role` sets it, and so does a
+launch through a role selector (`--model @smol`, or a bare configured role
+name) when that selector produced the session's model. `--smol`, `--slow` and
+`--plan` only reassign those roles, so they set nothing on their own. Any later
+direct model change (`set_model`, `cycle_model`, `/model`, switching session or
+branch to a different model) clears it. A retry fallback does not: the fallback
+model is part of the role's chain. A resumed session reports the role recorded
+with its last model change, except `default`, which is also what a direct model
+pick records.
+
+### `get_roles` and `set_role` payloads
+
+Advertised by the `get_roles` capability. `get_roles` lists every known model
+role:
+
+```json
+{
+  "roles": [
+    {
+      "id": "smol",
+      "alias": "@smol",
+      "name": "Fast",
+      "tag": "SMOL",
+      "section": "chat",
+      "source": "builtin",
+      "configured": "openai/gpt-5.6-luna:low, anthropic/claude-haiku",
+      "patterns": ["openai/gpt-5.6-luna:low", "anthropic/claude-haiku"],
+      "resolved": { "provider": "openai", "modelId": "gpt-5.6-luna", "thinkingLevel": "low" },
+      "hidden": false
+    }
+  ],
+  "activeRole": "smol"
+}
+```
+
+- `roles` follows the carousel order: non-hidden built-ins in their fixed
+  order, then roles introduced by `cycleOrder`, `modelRoles` and `modelTags`.
+- `section` is `"chat"`, or `"kind"` for the non-chat model-kind roles
+  (`image`, `web`, `speech`, `dictation`, `judge`); hosts that only pick chat
+  models filter on it.
+- `source` is `"builtin"` for built-in role ids and `"configured"` for roles
+  that exist only through configuration.
+- `tag` is absent for custom roles, which have no built-in tag.
+- `configured` is the raw `modelRoles` selector (lists joined with `", "`),
+  absent when the role is not configured.
+- `patterns` is the effective pattern chain for `@<id>`: nested role aliases
+  expanded, `:thinking` suffixes kept, built-in fallbacks and priority
+  defaults applied. It is empty when the role has nothing to try.
+- `resolved` is the first pattern that matches an available (authenticated,
+  provider not disabled) model, trying chat models first and then models of
+  any kind. `thinkingLevel` is present when the pattern carries a suffix.
+  `resolved` is absent when no pattern matches.
+- `hidden` reflects `modelTags.<id>.hidden`.
+
+`set_role { role }` switches the primary session model to the role, resolving
+it the way `--model @<role>` does at launch: same resolver, same fallback
+chain, and the pattern's thinking suffix is applied. Without a suffix the
+current thinking level carries over, as with `set_model`. It writes no
+configuration and does not affect the models subagents or the advisor use.
+Success data:
+
+```json
+{ "role": "smol", "model": { "provider": "openai", "id": "gpt-5.6-luna" }, "thinkingLevel": "low" }
+```
+
+`model` is the full `Model` object, as in `set_model`. `model_changed` (when
+the model differs), `thinking_level_changed` (when the level differs) and
+`config_update { model, thinkingLevel }` are emitted before the response.
+
+Failures carry a `code`, and none of them change the model:
+
+| `code` | When |
+| --- | --- |
+| `unknown_role` | `role` is not an id listed by `get_roles`. |
+| `session_busy` | The session is streaming or compacting. |
+| `role_unresolved` | No pattern in the role's chain matches an available model. |
 ```
 
 ### `set_fast_mode` payload
