@@ -113,8 +113,9 @@ gh api --paginate --slurp "repos/$REPO/issues/$PR/comments?per_page=100" | jq '
   | map({pass: .[0], status: .[1], commit: .[2]})'
 
 # Every review thread, resolved or not, with the fields used for triage and
-# for the gate audit in step 8. `replied` is true when someone other than
-# the thread's first author has answered in it. --paginate
+# for the gate audit in step 8. `maintainerReplied` is true only when the
+# repository owner's account posted a factual reply; acknowledgments from
+# contributors or comments from other bots do not satisfy the gate. --paginate
 # follows the first pageInfo in the response, so reviewThreads' pageInfo
 # must come before its nodes. --jq runs once per page, so a failure after
 # the first page leaves partial output: it goes to a .part file that replaces
@@ -122,12 +123,13 @@ gh api --paginate --slurp "repos/$REPO/issues/$PR/comments?per_page=100" | jq '
 rm -f "$THREADS"
 gh api graphql --paginate -F owner=$OWNER -F name=$NAME -F pr=$PR -f query='
   query($owner:String!,$name:String!,$pr:Int!,$endCursor:String){
-    repository(owner:$owner,name:$name){pullRequest(number:$pr){
+    repository(owner:$owner,name:$name){owner{login} pullRequest(number:$pr){
       reviewThreads(first:100,after:$endCursor){
         pageInfo{hasNextPage endCursor}
         nodes{id isResolved isOutdated path line
           comments(first:100){totalCount nodes{databaseId author{login} createdAt body}}}}}}}' --jq '
-  .data.repository.pullRequest.reviewThreads.nodes[]
+  .data.repository.owner.login as $maintainer
+  | .data.repository.pullRequest.reviewThreads.nodes[]
   | .comments.nodes as $c
   | {thread: .id, resolved: .isResolved, comment: $c[0].databaseId, author: $c[0].author.login,
      outdated: .isOutdated, path, line,
@@ -135,7 +137,7 @@ gh api graphql --paginate -F owner=$OWNER -F name=$NAME -F pr=$PR -f query='
      security: ($c[0].body | contains("codex-security-review-finding")),
      replies: (.comments.totalCount - 1),
      truncated: (.comments.totalCount > ($c | length)),
-     replied: any($c[1:][]; .author.login != $c[0].author.login)}' > "$THREADS.part" &&
+     maintainerReplied: any($c[1:][]; .author.login == $maintainer)}' > "$THREADS.part" &&
   mv "$THREADS.part" "$THREADS" && cat "$THREADS"
 ```
 
@@ -146,8 +148,8 @@ Before you triage a thread, fetch all of it through the thread's `comments`
 connection with the command below. The snapshot keeps only fields derived
 from the first comment, and later comments may hold the bot's follow-up, a
 concession, or an earlier reply. When a thread shows `truncated: true`, the
-snapshot's `replied` saw only its first 100 comments; recheck it from this
-output.
+snapshot's `maintainerReplied` saw only its first 100 comments; recheck it
+from this output.
 
 ```sh
 gh api graphql --paginate -f id=<thread> -f query='
@@ -285,14 +287,14 @@ gate failed; take a new snapshot and start over. If the authorization does not
 include merging, stop here and report that the PR is ready to merge.
 
 Audit **every** bot thread first, including resolved ones. List the threads
-in the fresh step 1 output whose `author` is in `$BOTS` and whose `replied`
-is false:
+in the fresh step 1 output whose `author` is in `$BOTS` and whose
+`maintainerReplied` is false:
 
 ```sh
 if [ ! -e "$THREADS" ]; then echo "GATE FAILS: no complete thread snapshot"
 elif [ "$BOTS" = "[]" ]; then echo "GATE FAILS: no configured bots read from $BASE"
 else jq -c --argjson bots "$BOTS" \
-  'select(.author as $a | ($bots | index($a)) and (.replied | not))' "$THREADS"
+  'select(.author as $a | ($bots | index($a)) and (.maintainerReplied | not))' "$THREADS"
 fi
 ```
 

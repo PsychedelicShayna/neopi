@@ -66,10 +66,12 @@ commit:
    review of the head commit MUST have completed. Merging on a clean code
    review alone is how PR #113 shipped with a security thread that arrived
    four minutes after the merge.
-4. **Every bot thread has a reply** (see below), and every resolved thread
-   was resolved only after its reply was posted. The audit covers resolved
-   threads as well as open ones: a bot thread that was resolved without a
-   reply fails the gate until it is reopened, answered, and resolved again.
+4. **Every bot thread has a factual reply from the owner's account** (see
+   below), and every resolved thread was resolved only after that reply was
+   posted. The audit covers resolved threads as well as open ones: a bot
+   thread resolved without that reply fails the gate until it is reopened,
+   answered, and resolved again. A contributor acknowledgment or another
+   bot's comment does not satisfy this requirement.
 5. **The branch is mergeable**, with no conflicts against `neopi`.
 
 `P2` findings that are not fixed MUST be listed in the merge note, each with
@@ -113,10 +115,11 @@ re-read the head after the gate to fill that flag.
   fix and pass after it. Several threads with one root cause MAY share a
   commit. The reply to each thread names it. Where that test may run is
   governed by Running PR code below.
-- **Reply once, factually, then resolve.** Every bot thread gets exactly one
-  reply, and the thread is resolved only after that reply is posted. NEVER
-  resolve a thread without a reply. If posting fails, leave the thread open.
-  Reply shapes, based on the replies on PRs #95 and #99:
+- **Reply factually, then resolve.** Every bot thread gets one factual reply
+  from the owner's account, and the thread is resolved only after that reply
+  is posted. Comments from contributors or other bots do not count. NEVER
+  resolve a thread without the factual owner reply. If posting fails, leave
+  the thread open.
   - Fixed: `Fixed in <sha> (<commit subject>). Regression test: <file> › <test name>.`
   - Deferred `P2`: `Not fixed in this PR; <follow-up PR link or reason>. Listed in the merge note.`
   - Judged wrong: the evidence (file and line, a failing counter-example, or
