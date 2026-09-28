@@ -36,13 +36,19 @@ process.stdin.on("data", chunk => {
 process.stdin.on("end", () => {});
 `;
 
-/** Host stand-in: spawns the run with piped stdio, as an orchestrator would. */
+/**
+ * Host stand-in: spawns the run with piped stdout, stderr to a file, as an
+ * orchestrator would. HOST_STDIN=<path> opens that file as the run's stdin.
+ */
 const HOST = `
-const [cli, pidFile, ...args] = process.argv.slice(2);
-const run = Bun.spawn([process.execPath, cli, ...args], { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+const [cli, pidFile, stderrFile, ...args] = process.argv.slice(2);
+const run = Bun.spawn([process.execPath, cli, ...args], {
+	stdin: process.env.HOST_STDIN ? Bun.file(process.env.HOST_STDIN) : "ignore",
+	stdout: "pipe",
+	stderr: Bun.file(stderrFile),
+});
 await Bun.write(pidFile, String(run.pid));
 void new Response(run.stdout).text();
-void new Response(run.stderr).text();
 await run.exited;
 `;
 
@@ -90,18 +96,52 @@ afterEach(async () => {
 	for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
+interface Sandbox {
+	dir: string;
+	agentDir: string;
+	work: string;
+	hostFile: string;
+	runPidFile: string;
+	stderrFile: string;
+	env: Record<string, string | undefined>;
+}
+
+/** Temp agent dir, HOME and XDG dirs, plus the host script, so runs never touch the user's config. */
+async function createSandbox(): Promise<Sandbox> {
+	const root = await TempDir.create("@omp-exit-with-parent-");
+	cleanups.push(() => root.remove());
+	const dir = root.path();
+	const agentDir = path.join(dir, "agent");
+	const home = path.join(dir, "home");
+	const work = path.join(dir, "work");
+	for (const d of [agentDir, home, work]) fs.mkdirSync(d, { recursive: true });
+	const hostFile = path.join(dir, "host.ts");
+	await Bun.write(hostFile, HOST);
+	return {
+		dir,
+		agentDir,
+		work,
+		hostFile,
+		runPidFile: path.join(dir, "run.pid"),
+		stderrFile: path.join(dir, "run.stderr"),
+		env: {
+			...process.env,
+			HOME: home,
+			PI_CODING_AGENT_DIR: agentDir,
+			FAKEAI_KEY: "test",
+			XDG_CONFIG_HOME: path.join(home, ".config"),
+			XDG_DATA_HOME: path.join(home, ".local/share"),
+			XDG_STATE_HOME: path.join(home, ".local/state"),
+			XDG_CACHE_HOME: path.join(home, ".cache"),
+		},
+	};
+}
+
 describe.skipIf(process.platform !== "linux")("print mode exit-with-parent", () => {
 	it("tears down the bash command and the MCP process group when the host is SIGKILLed", async () => {
-		const root = await TempDir.create("@omp-exit-with-parent-");
-		cleanups.push(() => root.remove());
-		const dir = root.path();
-		const agentDir = path.join(dir, "agent");
-		const home = path.join(dir, "home");
-		const work = path.join(dir, "work");
-		for (const d of [agentDir, home, work]) fs.mkdirSync(d, { recursive: true });
+		const { dir, agentDir, work, hostFile, runPidFile, stderrFile, env } = await createSandbox();
 		const bashPidFile = path.join(dir, "bash.pid");
 		const mcpPidFile = path.join(dir, "mcp.pid");
-		const runPidFile = path.join(dir, "run.pid");
 
 		// Deterministic OpenAI-compatible model: always asks for one long bash command.
 		const bashCommand = `sh -c 'echo $$ > ${bashPidFile}; exec sleep 300'`;
@@ -167,8 +207,6 @@ describe.skipIf(process.platform !== "linux")("print mode exit-with-parent", () 
 				},
 			}),
 		);
-		const hostFile = path.join(dir, "host.ts");
-		await Bun.write(hostFile, HOST);
 
 		const host = Bun.spawn(
 			[
@@ -176,6 +214,7 @@ describe.skipIf(process.platform !== "linux")("print mode exit-with-parent", () 
 				hostFile,
 				CLI,
 				runPidFile,
+				stderrFile,
 				"-p",
 				"--mode",
 				"json",
@@ -190,16 +229,7 @@ describe.skipIf(process.platform !== "linux")("print mode exit-with-parent", () 
 			],
 			{
 				cwd: work,
-				env: {
-					...process.env,
-					HOME: home,
-					PI_CODING_AGENT_DIR: agentDir,
-					FAKEAI_KEY: "test",
-					XDG_CONFIG_HOME: path.join(home, ".config"),
-					XDG_DATA_HOME: path.join(home, ".local/share"),
-					XDG_STATE_HOME: path.join(home, ".local/state"),
-					XDG_CACHE_HOME: path.join(home, ".cache"),
-				},
+				env,
 				stdio: ["ignore", "ignore", "ignore"],
 			},
 		);
@@ -236,5 +266,52 @@ describe.skipIf(process.platform !== "linux")("print mode exit-with-parent", () 
 			bash: isAlive(bashPid!),
 			mcpGroup: groupAlive(mcpPgid!),
 		}).toEqual({ run: false, bash: false, mcpGroup: false });
+	}, 90_000);
+
+	it("exits while blocked reading a prompt from a stdin pipe that outlives the host", async () => {
+		// Another process holds the stdin write end, so EOF never arrives and the
+		// run would wait for its prompt forever after the host is gone.
+		const { dir, work, hostFile, runPidFile, stderrFile, env } = await createSandbox();
+		const fifo = path.join(dir, "stdin.fifo");
+		expect(Bun.spawnSync(["mkfifo", fifo]).exitCode).toBe(0);
+		const writer = Bun.spawn(["sh", "-c", 'exec sleep 300 > "$0"', fifo], { stdio: ["ignore", "ignore", "ignore"] });
+		const host = Bun.spawn(
+			[
+				process.execPath,
+				hostFile,
+				CLI,
+				runPidFile,
+				stderrFile,
+				"-p",
+				"--mode",
+				"json",
+				"--no-session",
+				"--no-title",
+			],
+			{ cwd: work, env: { ...env, HOST_STDIN: fifo }, stdio: ["ignore", "ignore", "ignore"] },
+		);
+		let runPid: number | undefined;
+		cleanups.push(() => {
+			for (const pid of [host.pid, runPid, writer.pid]) {
+				if (pid === undefined) continue;
+				try {
+					process.kill(pid, "SIGKILL");
+				} catch {}
+			}
+		});
+
+		// The run announces the blocking read on stderr after 1 s.
+		const blocked = await waitUntil(async () => {
+			runPid ??= await readPid(runPidFile);
+			return (
+				fs.existsSync(stderrFile) && (await Bun.file(stderrFile).text()).includes("Reading prompt from piped stdin")
+			);
+		}, 60_000);
+		expect({ blocked, runPid }).toMatchObject({ blocked: true });
+
+		process.kill(host.pid, "SIGKILL");
+
+		await waitUntil(() => !isAlive(runPid!), 5_000);
+		expect(isAlive(runPid!)).toBe(false);
 	}, 90_000);
 });

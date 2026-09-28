@@ -1926,22 +1926,29 @@ export async function runRootCommand(
 		// session-critical database connection picks the right busy timeout.
 		// See getDbBusyTimeoutMs().
 		const isProtocolMode = mode === "rpc" || mode === "rpc-ui" || mode === "acp";
+		// Headless print/json runs die with the host that spawned them, even when
+		// it is SIGKILLed. Interactive and protocol modes own their own lifecycle
+		// (the terminal, or RPC/ACP stdin EOF). Watch before reading piped stdin:
+		// a writer that outlives the host would otherwise block the read forever.
+		const mayRunHeadless = parsedArgs.print === true || parsedArgs.mode !== undefined || !process.stdin.isTTY;
+		if (!isProtocolMode && mayRunHeadless && !parsedArgs.noExitWithParent) {
+			parentExit = exitWithParent({ parentPid: LAUNCH_PARENT_PID });
+		}
 		// Protocol modes own stdin; treating it as prompt text would consume JSON-RPC frames before their transports start.
 		const pipedInput = isProtocolMode ? undefined : await logger.time("readPipedInput", readPipedInput);
 		const autoPrint = pipedInput !== undefined && !parsedArgs.print && parsedArgs.mode === undefined;
 		const isInteractive = !parsedArgs.print && !autoPrint && parsedArgs.mode === undefined;
+		// An empty stdin pipe leaves the launch interactive after all.
+		if (isInteractive) {
+			parentExit?.stop();
+			parentExit = undefined;
+		}
 		// Only the interactive host renders a focusable Agent Hub / subagent session
 		// tree; declare it so headless subagent optimizations (e.g. skipping replan
 		// title refresh) can tell a focusable process from a print/RPC/eval one.
 		setInteractiveHost(isInteractive);
 		if (!isInteractive) {
 			stopPendingStartupComposer();
-		}
-		// Headless print/json runs die with the host that spawned them, even when
-		// it is SIGKILLed. Interactive and protocol modes own their own lifecycle
-		// (the terminal, or RPC/ACP stdin EOF).
-		if (!isInteractive && !isProtocolMode && !parsedArgs.noExitWithParent) {
-			parentExit = exitWithParent({ parentPid: LAUNCH_PARENT_PID });
 		}
 		// Account routing must use the effective settings, including `--config` and
 		// `PI_CONFIG_FILES` overlays, rather than independently re-reading only the
