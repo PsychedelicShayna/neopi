@@ -6867,10 +6867,6 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/** Ctrl+Space owns an independent, whole-recording xAI path. */
 	async handleSTTToggle(): Promise<void> {
-		if (this.#liveCommandController.active) {
-			this.showWarning("End live mode before recording xAI speech input.");
-			return;
-		}
 		if (this.#sttController && this.#sttController.state !== "idle") {
 			this.showWarning("Finish configured dictation before recording xAI speech input.");
 			return;
@@ -6900,21 +6896,17 @@ export class InteractiveMode implements InteractiveModeContext {
 	 *  latches the recording past the space bar's release. */
 	dictationSpaceHold(target: DictationTarget): SpaceHoldHandler {
 		return {
-			// Live mode owns the microphone; a held space bar stays plain spaces during a call.
-			enabled: () => cfgSttEnabled.get(settings) && this.sttIdle && !this.#liveCommandController.active,
+			// A held capture shares the live microphone; neither consumer stops the other.
+			enabled: () => cfgSttEnabled.get(settings) && this.sttIdle,
 			onStart: () => void this.#readySTTController()?.holdStart(target, this.#dictationCallbacks(target)),
 			onEnd: () => void this.#sttController?.holdEnd(),
 			onLatch: () => this.showStatus("Dictation latched: release Space, then tap Space or Backspace to stop"),
 		};
 	}
 
-	/** The speech-to-text controller, created on first use; undefined (after a warning) while live mode,
-	 *  an xAI recording, or a disabled STT rules dictation out. */
+	/** The speech-to-text controller, created on first use; undefined (after a warning) while
+	 *  an xAI recording or disabled STT rules dictation out. */
 	#readySTTController(): STTController | undefined {
-		if (this.#liveCommandController.active) {
-			this.showWarning("End live mode before using speech-to-text input.");
-			return undefined;
-		}
 		if (this.#xaiSttController && this.#xaiSttController.state !== "idle") {
 			this.showWarning("Finish the xAI recording before using configured dictation.");
 			return undefined;
@@ -6990,10 +6982,6 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/** Start or stop the Codex-backed realtime voice surface. */
 	async handleLiveCommand(): Promise<void> {
-		if (!this.sttIdle) {
-			this.showWarning("Finish the current speech-to-text capture before starting live mode.");
-			return;
-		}
 		await this.#liveCommandController.handleCommand();
 	}
 
