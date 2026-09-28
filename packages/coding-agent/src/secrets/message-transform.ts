@@ -10,6 +10,7 @@ import type {
 } from "@oh-my-pi/pi-ai";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import type { SessionContext } from "../session/session-context";
+import { getMessageEntryId, setMessageEntryId } from "../session/message-entry-ids";
 import type { JsonValue, SecretObfuscator } from "./obfuscator";
 import { collectJsonRegexSecretValues, mapJsonStrings } from "./placeholder-scan";
 
@@ -36,19 +37,24 @@ export function deobfuscateSessionContext(
 export function deobfuscateAgentMessages(obfuscator: SecretObfuscator, messages: AgentMessage[]): AgentMessage[] {
 	const deob = (text: string): string => obfuscator.deobfuscate(text);
 	let changed = false;
+	const preserveEntryId = (original: AgentMessage, rewritten: AgentMessage): AgentMessage => {
+		const entryId = getMessageEntryId(original);
+		if (entryId !== undefined) setMessageEntryId(rewritten, entryId);
+		return rewritten;
+	};
 	const result = messages.map((message): AgentMessage => {
 		switch (message.role) {
 			case "assistant": {
 				const content = deobfuscateAssistantContent(obfuscator, message.content);
 				if (content === message.content) return message;
 				changed = true;
-				return { ...message, content };
+				return preserveEntryId(message, { ...message, content });
 			}
 			case "branchSummary": {
 				const summary = deob(message.summary);
 				if (summary === message.summary) return message;
 				changed = true;
-				return { ...message, summary };
+				return preserveEntryId(message, { ...message, summary });
 			}
 			case "compactionSummary": {
 				const summary = deob(message.summary);
@@ -58,7 +64,7 @@ export function deobfuscateAgentMessages(obfuscator: SecretObfuscator, messages:
 					return message;
 				}
 				changed = true;
-				return { ...message, summary, shortSummary, blocks };
+				return preserveEntryId(message, { ...message, summary, shortSummary, blocks });
 			}
 			default:
 				return message;

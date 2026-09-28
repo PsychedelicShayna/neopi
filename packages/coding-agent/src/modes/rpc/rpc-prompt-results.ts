@@ -270,14 +270,19 @@ export function reportPromptResult(input: {
 	onError: (error: Error) => void;
 	hasExtensionAgentMessageTask?: () => boolean;
 	waitForExtensionAgentMessageTasks?: () => Promise<void>;
+	releaseReservation?: () => void;
 }): void {
 	void input.prompt
 		.then(async agentInvoked => {
-			if (!agentInvoked) await input.waitForExtensionAgentMessageTasks?.();
+			if (!agentInvoked) {
+				input.releaseReservation?.();
+				await input.waitForExtensionAgentMessageTasks?.();
+			}
 			if (agentInvoked || input.hasExtensionAgentMessageTask?.()) input.results.settle(input.ticket);
 			else input.results.completeLocal(input.ticket);
 		})
 		.catch(cause => {
+			input.releaseReservation?.();
 			const error = cause instanceof Error ? cause : new Error(String(cause));
 			input.onError(error);
 			input.results.fail(input.ticket, error.message);
@@ -291,12 +296,14 @@ export function watchAndReportPromptResult(input: {
 	results: RpcPromptResults;
 	onError: (error: Error) => void;
 	extensionUserMessageTracker: RpcExtensionUserMessageTracker;
+	releaseReservation?: () => void;
 }): void {
 	const trackedPrompt = input.extensionUserMessageTracker.watchPrompt(input.startPrompt);
 	reportPromptResult({
 		ticket: input.ticket,
 		prompt: trackedPrompt.prompt,
 		results: input.results,
+		releaseReservation: input.releaseReservation,
 		onError: input.onError,
 		hasExtensionAgentMessageTask: trackedPrompt.hasAgentMessageTask,
 		waitForExtensionAgentMessageTasks: trackedPrompt.waitForAgentMessageTasks,

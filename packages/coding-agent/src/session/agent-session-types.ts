@@ -379,6 +379,8 @@ export interface PromptOptions {
 	 * Only the user message (or the prompt's custom message) takes it.
 	 */
 	entryId?: string;
+	/** Pre-executed custom slash command result from RPC command classification. */
+	customCommandResult?: string;
 }
 
 /** Payload for {@link AgentSession.setPromptDropped}: a user prompt cancelled

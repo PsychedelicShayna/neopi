@@ -7,9 +7,15 @@
  * run streaming while steer/follow-up commands are queued.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { pageRpcMessages } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-messages";
+import { deobfuscateSessionContext } from "@oh-my-pi/pi-coding-agent/secrets/message-transform";
+import { SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets/obfuscator";
+import { setMessageEntryId } from "@oh-my-pi/pi-coding-agent/session/message-entry-ids";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import * as path from "node:path";
 import { isRecord, TempDir } from "@oh-my-pi/pi-utils";
 import { type RpcFrame, RpcChild } from "./helpers/rpc-child";
+import { createTestSession } from "./utilities";
 
 type SseEvent = Record<string, unknown> & { type: string };
 
@@ -91,16 +97,30 @@ afterEach(async () => {
 });
 
 /** Spawn an RPC child; `configYaml` becomes its agent `config.yml` before startup. */
-async function spawnChild(configYaml?: string): Promise<RpcChild> {
+async function spawnChild(
+	configYaml?: string,
+	options?: { command?: string; frozenClock?: boolean },
+): Promise<RpcChild> {
 	let root: string | undefined;
-	if (configYaml) {
+	if (configYaml || options) {
 		const dir = await TempDir.create("@rpc-prompt-entry-ids-");
 		roots.push(dir);
 		root = dir.path();
-		await Bun.write(path.join(root, "agent", "config.yml"), configYaml);
+		if (configYaml) await Bun.write(path.join(root, "agent", "config.yml"), configYaml);
+		if (options?.command) {
+			await Bun.write(path.join(root, "agent", "commands", "local", "index.ts"), options.command);
+		}
+		if (options?.frozenClock) {
+			await Bun.write(
+				path.join(root, "frozen-clock.ts"),
+				"const realNow = Date.now.bind(Date); Date.now = () => Math.floor(realNow() / 1000) * 1000;\n",
+			);
+		}
 	}
 	const child = await RpcChild.spawn({
 		root,
+		bunArgs: options?.frozenClock ? ["--preload", path.join(root!, "frozen-clock.ts")] : undefined,
+		enableExtensions: options?.command !== undefined,
 		args: ["--model", "anthropic/claude-sonnet-4-5"],
 		env: { ANTHROPIC_BASE_URL: `http://127.0.0.1:${server.port}` },
 	});
@@ -242,6 +262,121 @@ describe("RPC prompt entry ids (#117)", () => {
 		expect(typeof queuedId).toBe("string");
 		expect(entryMessageText(entries.get(queuedId as string))).toBe("queued behind the turn");
 		expect(textOf(messages.find(message => message.entryId === queuedId))).toBe("queued behind the turn");
+	}, 60_000);
+
+	test("identical queued submissions in one millisecond persist distinct entry ids", async () => {
+		const child = await spawnChild(undefined, { frozenClock: true });
+		hold = { received: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() };
+		const { received, release } = hold;
+		const settled = child.waitFor(frame => frame.type === "prompt_result" && frame.id === "held", 30_000);
+		await child.request({ id: "held", type: "prompt", message: "HOLD the first turn" });
+		await received.promise;
+
+		const ids: Array<[string, string, string]> = [];
+		for (const type of ["steer", "follow_up"] as const) {
+			const first = dataOf(await child.request({ type, message: `repeat ${type}` })).userEntryId as string;
+			const second = dataOf(await child.request({ type, message: `repeat ${type}` })).userEntryId as string;
+			expect(first).not.toBe(second);
+			ids.push([first, second, `repeat ${type}`]);
+		}
+		release.resolve();
+		await settled;
+		const entries = await entriesById(child);
+		for (const [first, second, text] of ids) {
+			expect(entryMessageText(entries.get(first))).toBe(text);
+			expect(entryMessageText(entries.get(second))).toBe(text);
+		}
+	}, 60_000);
+
+	test("locally handled TypeScript commands omit ids, while commands returning prompts keep them", async () => {
+		const child = await spawnChild(undefined, {
+			command: `export default () => [
+				{ name: "local-only", description: "Local command", execute: () => undefined },
+				{ name: "local-error", description: "Failing local command", execute: () => { throw Error("handled failure"); } },
+				{ name: "local-prompt", description: "Prompt-producing command", execute: () => "prompt from custom" },
+			];`,
+		});
+		for (const message of ["/local-only", "/local-error"]) {
+			const response = dataOf(await child.request({ type: "prompt", message }));
+			expect(response.userEntryId).toBeUndefined();
+			const entries = await entriesById(child);
+			expect([...entries.values()].filter(entry => entry.type === "message")).toEqual([]);
+		}
+		const settled = child.waitFor(frame => frame.type === "prompt_result" && frame.id === "custom-prompt", 30_000);
+		const userEntryId = dataOf(await child.request({ id: "custom-prompt", type: "prompt", message: "/local-prompt" }))
+			.userEntryId as string;
+		await settled;
+		expect(entryMessageText((await entriesById(child)).get(userEntryId))).toBe("prompt from custom");
+	}, 60_000);
+
+	test("deobfuscated persisted assistant messages retain their page entry id", () => {
+		const secret = "sensitive-value-12345";
+		const obfuscator = new SecretObfuscator([{ type: "plain", content: secret }]);
+		const manager = SessionManager.inMemory();
+		const entryId = manager.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: `received ${obfuscator.obfuscate(secret)}` }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-sonnet-4-5",
+			usage: {
+				input: 1,
+				output: 1,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 2,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: 1,
+		});
+		const context = deobfuscateSessionContext(manager.buildSessionContext({ transcript: true }), obfuscator);
+		const page = pageRpcMessages(context.messages, {
+			sessionId: manager.getSessionId(),
+			leafId: manager.getLeafId(),
+			messageCount: context.messages.length,
+		});
+		expect(page.messages.find(message => message.role === "assistant")).toMatchObject({
+			entryId,
+			content: [{ type: "text", text: `received ${secret}` }],
+		});
+	}, 60_000);
+
+	test("discarding a queued submission releases its reservation", async () => {
+		const { session, sessionManager, cleanup } = await createTestSession({ inMemory: true });
+		try {
+			const reservedId = sessionManager.reserveEntryId();
+			const queued = { role: "user" as const, content: "discarded", timestamp: 1 };
+			setMessageEntryId(queued, reservedId);
+			session.agent.followUp(queued);
+			expect(session.clearQueue().followUp).toMatchObject([{ text: "discarded" }]);
+			const written = sessionManager.appendMessage(
+				{ role: "user", content: "replacement", timestamp: 2 },
+				reservedId,
+			);
+			expect(written).not.toBe(reservedId);
+		} finally {
+			await cleanup();
+		}
+	}, 60_000);
+
+	test("an abandoned reservation cannot claim an entry in a later session", async () => {
+		const manager = SessionManager.inMemory();
+		try {
+			const abandoned = manager.reserveEntryId();
+			await manager.newSession();
+			const written = manager.appendMessage({ role: "user", content: "new session", timestamp: 1 }, abandoned);
+			expect(written).not.toBe(abandoned);
+			const abandonedBeforeBranch = manager.reserveEntryId();
+			manager.createBranchedSession(written);
+			const branched = manager.appendMessage(
+				{ role: "user", content: "branched session", timestamp: 2 },
+				abandonedBeforeBranch,
+			);
+			expect(branched).not.toBe(abandonedBeforeBranch);
+		} finally {
+			await manager.close();
+		}
 	}, 60_000);
 
 	test("after compaction the summary message carries the compaction entry id", async () => {

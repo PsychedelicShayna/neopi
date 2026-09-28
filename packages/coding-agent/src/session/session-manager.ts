@@ -1577,6 +1577,7 @@ export class SessionManager {
 
 		this.#entries = [];
 		this.#index.clear();
+		this.#reservedEntryIds.clear();
 		this.#fileIsCurrent = false;
 		this.#rewriteRequired = false;
 		this.#forceFileCreation = false;
@@ -1612,6 +1613,7 @@ export class SessionManager {
 		this.#titleSource = header.titleSource;
 		this.#titleUpdatedAt = header.timestamp;
 		this.#index.rebuild(entries);
+		this.#reservedEntryIds.clear();
 	}
 
 	#freshEntryFields(reservedId?: string): { id: string; parentId: string | null; timestamp: string } {
@@ -1626,12 +1628,16 @@ export class SessionManager {
 	 * Allocate the id a not-yet-written entry will carry, so a caller can report
 	 * it before the write happens (RPC `prompt` answers with the user entry id
 	 * before the turn persists anything). Pass the id to the append that writes
-	 * the entry; an id that is never used stays reserved and is simply skipped.
+	 * the entry; release it if the submission does not reach persistence.
 	 */
 	reserveEntryId(): string {
 		const id = generateId(this.#takenEntryIds);
 		this.#reservedEntryIds.add(id);
 		return id;
+	}
+	/** Release an id when its submission is rejected, cancelled, or dropped. */
+	releaseEntryId(id: string | undefined): void {
+		if (id !== undefined) this.#reservedEntryIds.delete(id);
 	}
 
 	/** Consume a reservation: only ids from {@link reserveEntryId} that are still free are honored. */
@@ -2022,6 +2028,7 @@ export class SessionManager {
 		this.#reconcileSessionDirForFallback();
 
 		const timestamp = nowIso();
+		this.#reservedEntryIds.clear();
 		this.#sessionId = mintSessionId();
 		this.#sessionFile = path.join(this.#sessionDir, `${fileSafeTimestamp(timestamp)}_${this.#sessionId}.jsonl`);
 		this.#syncLease();
@@ -3407,6 +3414,7 @@ export class SessionManager {
 		this.#titleUpdatedAt = timestamp;
 		this.#hasTitleSlot = true;
 		this.#index.rebuild(this.#entries);
+		this.#reservedEntryIds.clear();
 		this.#artifactManager = null;
 		this.#artifactManagerSessionFile = null;
 		this.#forceFileCreation = this.#persist;

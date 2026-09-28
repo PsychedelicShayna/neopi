@@ -3,8 +3,12 @@ import * as path from "node:path";
 import { isRecord, readJsonl, TempDir } from "@oh-my-pi/pi-utils";
 
 export interface RpcChildOptions {
+	/** Bun runtime arguments (e.g. a test-only preload), before the CLI entrypoint. */
+	bunArgs?: string[];
 	/** Extra CLI arguments appended after `--mode <mode>`. */
 	args?: string[];
+	/** Include discovered extensions and custom commands in the child. */
+	enableExtensions?: boolean;
 	mode?: "rpc" | "rpc-ui";
 	/** Extra environment; merged over the isolated defaults. */
 	env?: Record<string, string>;
@@ -40,10 +44,11 @@ export class RpcChild {
 		this.process = Bun.spawn(
 			[
 				"bun",
+				...(options.bunArgs ?? []),
 				path.join(packageRoot, "src", "cli.ts"),
 				"--mode",
 				options.mode ?? "rpc",
-				"--no-extensions",
+				...(options.enableExtensions ? [] : ["--no-extensions"]),
 				"--no-skills",
 				"--no-rules",
 				...(options.args ?? []),
