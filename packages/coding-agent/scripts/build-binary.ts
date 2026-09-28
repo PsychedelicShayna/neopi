@@ -9,6 +9,7 @@ import {
 	formatNeopiExtensionsResult,
 	installNeopiExtensions,
 } from "../../../scripts/install-neopi-extensions";
+import { resolveGitBuildInfo } from "../src/build-info";
 import { compileCodingAgent } from "./compile-binary";
 
 const packageDir = path.join(import.meta.dir, "..");
@@ -100,6 +101,9 @@ async function runCommand(
 }
 
 async function main(): Promise<void> {
+	// Before the generators below rewrite checked-in placeholders, which would
+	// otherwise mark every build dirty.
+	const buildInfo = await resolveGitBuildInfo(repoRoot);
 	const crossBuild = resolveCrossBuild(Bun.env.CROSS_TARGET);
 	const shouldAdhocSign =
 		process.platform === "darwin" &&
@@ -129,6 +133,7 @@ async function main(): Promise<void> {
 				target: crossBuild?.target,
 				executablePath: Bun.env.BUN_COMPILE_EXECUTABLE_PATH || undefined,
 				skipBuiltinCodesign: shouldAdhocSign,
+				buildInfo,
 			});
 
 			if (shouldAdhocSign) {
