@@ -109,6 +109,22 @@ limitation).
 TOML keys are `snake_case` (decided), matching the proxy's draft TOML; the
 TypeScript types are camelCase and the loader maps between them.
 
+The loader reads every candidate through `readBoundedText(path, MAX_FILE_BYTES)`
+(`packages/coding-agent/src/advisor/watchdog.ts`, shared with the other
+config loaders through `collectConfigCandidates`'s `maxBytes` and
+`onRejected` options): the file is opened once, non-blocking, the open
+handle is `stat`ed, and anything that is not a regular file (a symlink to a
+device, a FIFO) is refused before any read with the warning
+`file.not_regular`; a regular file is read from that same handle and never
+beyond `MAX_FILE_BYTES + 1` bytes (4 MiB, a code constant in
+`moa/validate.ts`), whatever the stat reported, so a file that grows
+between the stat and the read is still bounded; over the cap it is refused
+with the warning `file.too_large` naming the path, the bytes, and the cap.
+A refused candidate is skipped and discovery continues with the other
+files; the configurator's loader reports the same two warnings. A
+definition file is read at startup by every session, so its cost must be
+bounded before any parser or compiler sees it (E23, §11).
+
 ### 1.2 Document shape
 
 ```toml
@@ -2279,14 +2295,27 @@ export const MIXTURE_API = "mixture";
 /** Process-wide, once, beside registerLocalInferenceApi(): main.ts:2486, sdk.ts:1498. */
 export function registerMixtureApi(): void;
 
-/** One catalog per ModelRegistry (WeakMap<ModelRegistry, MixtureCatalog>). */
+/** One catalog per ModelRegistry (WeakMap<ModelRegistry, MixtureCatalog>); rosters inside it are per workspace scope. */
 export class MixtureCatalog {
   static for(registry: ModelRegistry): MixtureCatalog;
   readonly id: string;                         // baseUrl = `mixture://catalog/${id}`
-  retain(owner: string): void;                 // a session or gateway holds the catalog
-  release(owner: string): void;                // last release unregisters the provider
-  setRoster(mixtures: ResolvedMixture[]): void;   // empty roster → unregisterProvider; otherwise registerProvider(replace)
+  /** A scope is the ordered list of resolved candidate paths `collectConfigCandidates` returns for (cwd, agentDir): the user file, then project ancestors root→leaf. */
+  scope(cwd: string, agentDir: string): MixtureScope;
+  /** Every registered definition across live scopes, one per name (§9.2 "one name, one definition"). */
   roster(): readonly ResolvedMixture[];
+}
+
+export interface MixtureScope {
+  readonly key: string;                        // the serialized candidate-path list
+  retain(owner: string): void;                 // a session or gateway holds this scope
+  initializeRoster(owner: string, load: () => Promise<readonly ResolvedMixture[]>, restoredRoster?: readonly ResolvedMixture[]): Promise<void>;
+  release(owner: string): void;                // the last owner of a scope drops its roster and re-registers the union
+  setRoster(mixtures: ResolvedMixture[]): void;   // this scope's definitions; the provider registers the union over live scopes
+  roster(): readonly ResolvedMixture[];        // this scope's registered definitions only
+  find(name: string): ResolvedMixture | undefined;   // this scope only; the host resolves through it
+  resolution(owner: string): readonly ResolvedMixture[] | undefined; // this owner's resolved members, not the canonical shared roster
+  observe(owner: string, listener: () => void): void; // notify a retained owner after shared metadata changes
+  hasRoster: boolean;
 }
 
 /** Headless dispatch only. Sessions never install one. */
@@ -2309,7 +2338,7 @@ export function isMixtureModel(model: Model<Api>): boolean;
   headless host yields an error stream
   (`"mixture/<name> can only run inside a session or a gateway"`), which is
   the loud failure §4.9 relies on for stray side calls.
-- **Catalog per registry.** `MixtureCatalog.for(registry).setRoster(resolved)`
+- **Catalog per registry.** `MixtureCatalog.for(registry).scope(cwd, agentDir).setRoster(resolved)`
   calls `registry.registerProvider(MIXTURE_PROVIDER, { baseUrl, api: MIXTURE_API, auth: "none", models })`
   with **no `sourceId`** (never enrolled in extension ownership) and no
   `streamSimple`. An empty roster calls `registry.unregisterProvider(MIXTURE_PROVIDER)`
@@ -2317,16 +2346,85 @@ export function isMixtureModel(model: Model<Api>): boolean;
   non-empty (`:3042`); `one → zero → one` is a tested transition. Overlays
   survive `refresh()` (`#runtimeModelOverlays`, `:3063-3065`, plus the
   keyless bit of §9.1).
-- **Session identity is not in the registry.** A session's `MixtureHost`
-  lives in the primary wrapper's closure (§4.9). `createAgentSession` calls
-  `MixtureCatalog.for(registry).retain(sessionId)` and, when the catalog has
-  no roster yet, `setRoster(resolveMixtures(discoverMixtures(cwd, agentDir)))`
-  after extension provider registrations and runtime-provider hydration
-  (`sdk.ts:2497-2512` and the following block). A child that borrows the
-  registry finds a roster and only retains. Session teardown calls
-  `release(sessionId)`; the provider is unregistered when the last owner
-  releases. The configurator's `apply` calls `setRoster` on the session's
-  registry catalog, which every session sharing that registry sees.
+- **Session identity is not in the registry; workspace identity is.** A
+  session's `MixtureHost` lives in the primary wrapper's closure (§4.9).
+  `MixtureWorkspace.retain` holds
+  `MixtureCatalog.for(registry).scope(cwd, agentDir)` and starts roster
+  discovery through `scope.initializeRoster(owner, load)` after extension
+  provider registrations and runtime-provider hydration. Every new holder
+  discovers under its own settings; discovery is serialized and adds newly
+  permitted names without removing the first holder's roster. The catalog
+  retains each live owner's resolution to bound shared-model metadata (§9.2);
+  observers refresh the selected model of every live session after a shared
+  provider registration changes it. An explicit `setRoster` replaces that
+  discovered roster and supersedes pending file discovery. A scope retired
+  while discovery is in flight cannot install a stale result into a later scope
+  with the same key. Run start re-resolves and validates members under the
+  session's settings, so a more permissive holder cannot bypass another
+  holder's enabled-model restrictions.
+  Session teardown calls `scope.release(sessionId)`; the last owner of a scope drops
+  that scope's roster, and the provider is unregistered when no live scope
+  has a roster. The configurator's `apply` calls `setRoster` on the
+  session's own scope. The session host resolves **only through its own
+  scope**: `resolveRun(name)` uses `scope.find(name)`, and a name absent
+  there is the run-start error `mixture/X is not defined in this workspace`,
+  so a definition from another workspace can never execute in a session,
+  receive its conversation, or inherit its system prompt (Codex security P2
+  r4117097073 on PR #113: with one roster per registry, the first session's
+  cwd decided the roster for every later session on a shared registry).
+  **The binding follows the session's cwd.** A live session that relocates
+  (`/move`, or a cross-project resume through
+  `InteractiveMode.applyCwdChange`, `packages/coding-agent/src/modes/interactive-mode.ts:2286-2357`)
+  rebinds: `AgentSession.rebindMixturesForCwd(cwd)`, a sibling of
+  `rebindMemoryBackendForCwd`, is called by `applyCwdChange` after
+  `settings.reloadForCwd` on the forward path and on both rollback paths
+  (`previousCwd`, then `actual`). It computes the destination scope key
+  for `(cwd, agentDir)`; when the key equals the bound one it does nothing.
+  Otherwise it **releases** the source scope for this owner, then
+  **retains** the destination scope for the same owner (discovering it
+  under the reloaded settings when it has no roster yet); release before
+  retain, because while the source is still held a destination that
+  defines a shared name with a different revision would be refused by the
+  first-registrant rule above. An identical definition shared by both
+  scopes therefore leaves the registry only for the duration of that
+  awaited transition, during which no prompt can run. Before release,
+  retain the source's canonical roster and this owner's resolved variant;
+  if destination retention fails, restore both without rediscovering against
+  destination Settings, then propagate the error. A direct `/move` defers
+  destructive host state
+  changes until every fallible cwd rescope has succeeded. A cross-project
+  `/resume` also defers its mixture move commit and conversation reset until
+  `AgentSession.switchSession` succeeds: target context/model restoration
+  remains fallible after `applyCwdChange` returns. Rollback to the source
+  leaves held runs and per-member credential memory untouched, without a
+  reset notice. When a move commits to a different scope, the host drops
+  held runs and credential memory (`runs.clear()` as in `resetConversation`)
+  and, when runs were held, warns
+  `<n> mixture run(s) from the previous workspace were reset; the next message starts a new run`
+  (`onEvent` persists nothing for a dropped run). The selected model id is
+  unchanged, but a refreshed registered model supplies its destination
+  metadata. A destination that does not define the name yields the run-start
+  error `mixture/X is not defined in this workspace` on the next prompt;
+  nothing is reselected silently (Codex P2 4119569942 on PR #126,
+  `sdk.ts:2538`: a relocated session kept the scope it retained at
+  startup, ran the source workspace's mixtures against the destination's
+  conversation, and never saw the destination's `MIXTURES.toml`).
+- **One name, one definition.** The registry's `mixture` provider registers
+  the union of names across live scopes, and a name is registered from
+  exactly one definition. Two scopes that define the same name with the
+  same `revision` (§1.4: the hash of the definition, presets, and resolved
+  models) share it. Two scopes whose definitions of a name differ in
+  revision conflict: the scope that registered the name first holds it, and
+  the later scope's definition is refused at that scope's registration with
+  `name.scope_conflict` (logged with both scope keys; absent from that
+  scope's roster, so that session's host does not have it). A refused
+  definition stays refused until its scope is discovered again (the scope's
+  last owner releases and a new owner retains, or save→apply on that
+  scope); the holding scope's release re-registers the union of the
+  remaining rosters and promotes nothing. Because the registry is shared,
+  `getAvailable()` lists the union: a session can select a mixture its own
+  scope does not define and gets the run-start error above; filtering the
+  picker per scope is M7 polish, not part of this rule.
 - **What is registered.** One model per definition that passes
   `resolveMixture` and `validateMixture` with no errors and no capability-gate
   rejection (§11.1):
@@ -2336,11 +2434,11 @@ export function isMixtureModel(model: Model<Api>): boolean;
 | `id` | `definition.name` |
 | `name` | `definition.description ?? definition.name` |
 | `reasoning` | `true` |
-| `input` | the entry member model's `input` (the entry is a model member, E5) |
+| `input` | the entry member's input modalities; intersect across live owners' resolutions of the same name |
 | `cost` | zeros; real cost is on each response's `usage` |
-| `contextWindow` | the entry member model's `contextWindow` |
-| `maxTokens` | max over model members' `maxTokens` |
-| `supportsTools` | `true` when any model member's effective tools are not `false` |
+| `contextWindow` | the entry member's context window; minimum across live resolutions |
+| `maxTokens` | max over model members' output limits per resolution; minimum across live resolutions |
+| `supportsTools` | true if any member permits tools per resolution; true only if every live resolution does |
 
 `ModelRegistry.find("mixture", name)` and every selector surface
 (`resolveModelFromString`, `parseModelPattern`,
@@ -2429,6 +2527,37 @@ run on the `ResolvedMixture` (so model and preset resolution has already
 happened) at registration and at save. Errors make the mixture
 unregisterable and block save.
 
+**Size bounds come first.** Registration bounds each discovered definition
+before model resolution or graph passes. `resolveMixture` and
+`validateMixture` enforce E23 with code constants in `moa/validate.ts`:
+`MAX_MEMBERS = 32`, `MAX_EDGES = 128`, `MAX_EDGE_TARGETS = 256` (sum of
+edge targets plus one per `join`), `MAX_STATE_PARTS = 8` for every `state`
+and `slices` array, and `MAX_TEXT_CHARS = 65 536` for every definition
+string and document preset name/value. The iterative `definitionStrings`
+walk visits all definition string values and keyed-table keys (including
+criteria labels, selectors, tool names and rubrics). Each parsed document
+prepares one immutable snapshot of its shared envelope and role maps and
+records its first preset size issue once; all its mixtures reuse it without
+copying or rescanning the maps. A direct API call with raw preset maps
+prepares a fresh validated snapshot rather than trusting mutable inputs.
+Definition-local graph and text issues take precedence over the prepared
+document issue. An oversized document preset refuses **every** mixture in
+that document even when unused; sibling documents retain their own bounds.
+The loader's `MAX_FILE_BYTES = 4 MiB` is §1.1. Constants, not settings:
+a project file cannot raise them. A refused mixture yields exactly one
+`limits.graph_size` or `limits.text_size` error at the offending TOML path
+with count and cap; resolution (including model lookup) and graph passes
+are skipped. `resolveMixture` returns no members or envelopes, `uses` all
+false and that one issue; `validateMixture` returns only that error, no
+warnings, regardless of `resolved.issues`. Every later graph pass is
+bounded by the caps and iterative: adjacency is
+built once per validation as `Map<memberId, MixtureEdge[]>` beside a
+`Map<memberId, MixtureMember>`, cycle detection is a three-colour walk on an
+explicit stack, reachability is an index-pointer breadth-first walk, and
+`effectiveToolPolicy` (`moa/resolve.ts`) and the E6–E9 edge checks read the
+maps instead of scanning the arrays per member. `moa.hard_max_hops` bounds
+execution only, never validation.
+
 | Code | Level | Rule |
 |---|---|---|
 | E1 `name.invalid` / `name.duplicate` | error | `name` matches `[a-z0-9][a-z0-9._-]*`, unique in the merged roster. Two declarations of one name **in the same file** are both kept by the loader and both refused (`name.duplicate` logged for each); a later file on the search path that declares the name once still shadows an earlier file's single declaration cleanly (§1.1) |
@@ -2453,6 +2582,7 @@ unregisterable and block save.
 | E20 `fanout.join` / `fanout.branches` / `fanout.branch.tools` / `fanout.slices` / `fanout.quorum` / `fanout.branch.verdict` | error | `join` present and names a member not in `to`; ≥ 2 branches; branch tools ⊆ read-only set; explicit `slices` length equals branch count; `1 ≤ quorum ≤ branches`; no verdict branches |
 | E21 `helper.unresolved` | error | `moa.summary_model` / `moa.slicer_model` / an explicitly configured judge role needed by the definition but unresolvable, recursive, or outside the `enabledModels` allowed pool (§1.4, §5) |
 | E22 `fanout.branch.controls` | warning | a branch member has `route`, `terminate`, or outgoing edges; they are ignored in the branch role |
+| E23 `limits.graph_size` / `limits.text_size` | error | checked first, alone: `members`, `edges`, the edge-target sum, every `state`/`slices` array, and every model- or compiler-bound string are within the code constants above; an oversized definition gets this one error and no other pass runs |
 
 ### 11.1 Capability gate
 
@@ -2515,6 +2645,15 @@ the judge with a scripted candidate plan; no `mock.module`.
 | `packages/ai/test/auth-gateway-keyless.test.ts` | a `resolveModel` returning an `allowsMissingApiKey` custom-API model is served with no credential on `/v1/chat/completions` **and** `/v1/pi/stream`; `prepareStreamOptions` sees the resolved model and the explicit client key on both paths, and a derived key is not reported as explicit; `/v1/models` lists it; the encoder's `onComplete` fires after the terminal SSE frame is enqueued and does not fire when the request is cancelled before it |
 | `packages/coding-agent/test/moa-gateway.test.ts` | with `gateway.serve = []` the catalog is empty and a credentialed physical model is 404; `gateway.serve = ["mixture/draft-then-edit"]` serves the mixture while its members stay unlisted; `serve = false` keeps a mixture out even when listed; a tool round continues with the same explicit key; a request retransmitted with the same explicit key after its tool-call response was lost receives the same outer tool-call ids again (zero results applied), and after a partial result batch receives the remaining ids; a request with no key and a diverging history starts a new run; two concurrent requests on one running key get the busy error; cancelling a streamed response before its terminal frame is consumed (no `onComplete`, no commit), then repeating with the same explicit key on each route, replays the same response and reporting range, records every member attempt exactly once in the broker ledger, and once the replay completes its commit advances the watermark; an errored non-streaming response commits, and the client's retry reports only later settlements |
 | `packages/tui/test/mixture-config.test.ts` | save with a validation error keeps the overlay dirty and shows the error; save with warnings writes the doc; the `x` editor cannot produce an empty `x`; a branch member's tool editor refuses a non-read-only tool |
+
+Bounded-document tests cover an unused oversized preset across multiple
+mixtures (one `limits.text_size` at the same TOML path each), an unaffected
+sibling document, and definition-local error precedence. An input-visitation
+seam proves that a prepared preset table is copied/read once rather than
+per mixture; mutation of a raw direct-call map between resolutions must
+trigger a fresh bound check. Relocation tests cover source roster preservation
+under differing Settings and failed destination registration, and an actual
+move that fails after binding with no run/credential reset or notice.
 
 Run the whole `packages/tui` suite after touching the hub or the overlay.
 
@@ -2807,6 +2946,179 @@ None open. Every question raised in rounds 1 to 3 is answered in §15.
 - No task board; the `task` tool and hub messaging are untouched.
 
 ## 19. Revision log
+
+### Amendment 6.9.1 (Codex P2s 4119258534 and 4119259646 on PR #126: bounded reads, every string)
+
+- A stat-then-read is not a bound: a `MIXTURES.toml` symlinked to
+  `/dev/zero` stats as 0 bytes and reads forever, a FIFO blocks the open,
+  and a regular file can grow between the stat and the read. The loader
+  now reads through `readBoundedText` (`advisor/watchdog.ts`): one
+  non-blocking open, a stat of that handle, `file.not_regular` for
+  anything but a regular file before any read, and never more than
+  `MAX_FILE_BYTES + 1` bytes read from the handle, with `file.too_large`
+  over the cap. `collectConfigCandidates` gained `maxBytes` and
+  `onRejected` (a `ConfigRejection` of kind `too_large` or `not_regular`)
+  for every config loader.
+- The E23 text cap covered a hand-written field list and missed member
+  model and role selectors, choice-criteria labels, tool names, and edge
+  endpoints, so an oversized selector was resolved before anything refused
+  it. `definitionStrings` walks the definition and its document presets
+  iteratively and yields every string value and every keyed-table key
+  with its path; `definitionSizeIssue` applies `MAX_TEXT_CHARS` to all of
+  them before resolution. The array caps are unchanged.
+- Tests (`moa-config.test.ts`, `moa-validate.test.ts`): a `MIXTURES.toml`
+  that is a symlink to `/dev/zero`, and one that is a FIFO with no writer,
+  each get `file.not_regular` while the sibling project file loads (both
+  hung to the timeout before the fix); the oversized sparse file stays
+  readable and gets `file.too_large`; a model selector, a role selector, a
+  tool name, a choice-criteria label, and an edge endpoint over the cap
+  each get exactly one `limits.text_size` error at their path with no
+  member resolved.
+
+### Amendment 6.9.2 (Codex P2 4119569942 on PR #126: the scope binding follows the cwd)
+
+- A relocated live session (`/move`, cross-project resume through
+  `applyCwdChange`) kept its startup scope and ran the source workspace's
+  mixtures against the destination's conversation.
+- `AgentSession.rebindMixturesForCwd(cwd)` follows the session cwd after
+  Settings reload. It releases the source scope before retaining the
+  destination to honor §6.10's first-registrant rule, but on a failed
+  destination bind restores the **saved resolved source roster**, not a
+  fresh resolution under destination-scoped Settings. An outer rollback
+  restores Settings; the source remains selectable and runnable.
+- A relocation transaction defers run and credential resets until all
+  fallible cwd rescope work completes. `applyCwdChange` and headless
+  relocation rebind without reset, restore on failure, and commit the reset
+  only once relocation succeeds (or an irrecoverable rollback leaves the
+  session at the destination). A failed move that restores the source
+  preserves held runs and credential memory and emits no reset notice.
+  No request runs during a partial workspace transition.
+- The selected model is not reselected; an undefined name fails at run
+  start as before. Provider tests cover differing source/destination
+  enabledModels and failed registration; actual headless relocation
+  exercises a failure *after* binding, restoring the source run with
+  no notice, then a committed move resetting it with one notice.
+
+### Amendment 6.9.3 (Codex P2 4119737136: bounded document preset preparation)
+
+- A document with many mixtures must not copy and walk its complete
+  preset tables per mixture. Preparation snapshots and freezes the maps
+  once per parsed document, recording its first oversized preset name or
+  value. Resolution and validation still check each definition's local
+  graph/text caps first, then reuse the shared preset issue. Raw API
+  inputs cannot bypass this check: they receive their own fresh validated
+  snapshot. An unused oversized preset refuses every mixture in its
+  document at the same `limits.text_size` path, without resolving models;
+  unrelated documents are unaffected. Revision hashes still include
+  effective role prompts, rendered verdicts and referenced envelopes,
+  not unrelated unused presets.
+
+### Amendment 6.10 (Codex security P2 r4117097073, post-merge: roster scoped per workspace)
+
+- `MixtureCatalog` keeps one roster per **scope** (the ordered candidate
+  path list of `collectConfigCandidates(cwd, agentDir)`), each with its own
+  owner set; `scope(cwd, agentDir)` returns the handle sessions retain,
+  release, `setRoster`, and `find` through. The session host resolves only
+  through its own scope; a foreign name is `mixture/X is not defined in this
+  workspace` at run start.
+- The provider registers the union of names over live scopes, one
+  definition per name: equal revisions share, differing revisions conflict,
+  the first registrant holds the name and the later scope's definition is
+  refused with `name.scope_conflict` until its scope is rediscovered.
+  Releasing the last owner of a scope drops its roster and re-registers the
+  union; the provider unregisters when no live scope has a roster.
+- The picker still lists the union (shared registry); per-scope filtering is
+  M7 polish.
+- Tests (`moa-provider.test.ts`): two sessions on different cwds over one
+  registry each run only their own workspace's definition and neither can
+  run the other's (the foreign name yields the run-start error and zero
+  member calls); the same name defined identically in both scopes is shared
+  and survives either session's release; the same name defined differently
+  is refused for the second scope with `name.scope_conflict`, the first
+  scope's definition keeps running, and after the first scope's last
+  release the name is gone until the second scope is rediscovered; the
+  provider unregisters only when the last live scope releases.
+
+### Amendment 6.11 (Codex P2 r4126653591: holders with different model filters)
+
+- An empty first-holder roster is not authoritative for later holders of the
+  same workspace. Each new holder discovers under its settings; serialized
+  discovery merges newly permitted names without replacing existing names or
+  re-registering an unchanged provider. Both empty-first and partially allowed
+  rosters permit later sessions to select and run their additional mixtures.
+- Explicit scope saves supersede pending discovery. The existing workspace
+  conflict check still applies when a newly permitted name belongs to another
+  scope. The picker lists the shared registry union (§6.10); run start validates
+  member permissions using the current session's settings.
+
+### Amendment 6.12 (Codex P2 r4126969897: resume transaction rollback)
+
+- `InteractiveMode.applyCwdChange` refreshes cwd state during cross-project
+  `/resume` but defers `commitMixtureWorkspaceMove`; a standalone `/move`
+  still commits after its own rescope finishes. `AgentSession.switchSession`
+  commits the workspace move and resets the replaced conversation's mixture
+  runs only after its remaining fallible target initialization succeeds.
+- A failed target model restoration after cwd adoption rolls the session and
+  workspace back with the original mixture run still held. Retrying a
+  successful resume drops that run once the switch commits.
+
+### Amendment 6.13 (Codex P2 r4127257683: safe shared-model metadata)
+
+- A shared registry has one synthetic model per name even when two sessions in
+  one workspace resolve a role such as `@default` to different member models.
+  Discovery records each live owner's resolved mixtures. For names in the
+  scope roster, the registered model intersects input modalities and tool
+  support, and uses the smallest context and output limits over live
+  resolutions. The host still re-resolves under each session's settings at
+  run start; the synthetic model cannot overstate another owner's limits.
+- Releasing an owner drops its resolution and recomputes the shared metadata;
+  an explicit `setRoster` supersedes discovered variants. Re-registration
+  skips unchanged metadata, but a provider registration that mutates state and
+  then throws invalidates its cached metadata so cleanup retries correctly.
+
+### Amendment 6.14 (Codex P2 r4127557851: refresh active sessions)
+
+- Catalog registration notifies each live scope owner after publishing a new
+  provider model. If that session has a mixture selected, it replaces its
+  retained `Model` object synchronously before another prompt or compaction
+  can read stale context, modality, or tool metadata; model-dependent state
+  and subscribers are reconciled afterward. Listeners are dropped with the
+  owner, including on a workspace move.
+
+### Amendment 6.15 (Codex P2 r4127557854: retain owner variant during rollback)
+
+- A workspace move snapshots both the scope's canonical roster and the
+  moving owner's resolved mixture variants before releasing ownership. On
+  failure the original roster seeds a newly recreated scope, while the
+  owner's own resolution restores its metadata contribution without reading
+  a file under the wrong project's settings. A subsequent retry uses the
+  same snapshots if immediate restoration also fails.
+
+### Amendment 6.9 (Codex security P2 r4118194866, post-merge: unbounded validation work)
+
+- `hasCycle` was a recursive DFS with no cap (a 50k-member linear graph
+  threw `RangeError` after seconds at startup), `outgoing()` scanned every
+  edge per member, and the E17 walk used `queue.shift`; `effectiveToolPolicy`
+  and the per-edge `members.find` did quadratic work before validation.
+- E23: size caps as code constants in `moa/validate.ts` (`MAX_MEMBERS = 32`,
+  `MAX_EDGES = 128`, `MAX_EDGE_TARGETS = 256`, `MAX_STATE_PARTS = 8`,
+  `MAX_TEXT_CHARS = 65 536`) checked first in both `resolveMixture` and
+  `validateMixture`; one error (`limits.graph_size` / `limits.text_size`),
+  every other pass skipped. The loader refuses a file over
+  `MAX_FILE_BYTES = 4 MiB` with `file.too_large` before parsing (§1.1).
+- Every graph pass iterative over adjacency maps built once per validation
+  (explicit-stack three-colour cycle detection, index-pointer BFS); the
+  detector is exported so a test can prove it on a chain far above the cap.
+- Tests (`moa-validate.test.ts`, `moa-config.test.ts`): `MAX_MEMBERS + 1`
+  members in a chain yield exactly one `limits.graph_size` error at `members`
+  without throwing; exactly `MAX_MEMBERS` members and `MAX_EDGES` edges
+  validate with no size error; a fan-out edge whose target sum exceeds
+  `MAX_EDGE_TARGETS` yields `limits.graph_size` at that edge; a 70 000-char
+  `system_prompt` yields `limits.text_size` at that member; the exported
+  cycle detector on a 100 000-node chain returns false without throwing (the
+  test runner's default timeout is the bound; no wall-clock assertion); a
+  5 MiB `MIXTURES.toml` is skipped with `file.too_large` and a sibling file
+  still loads.
 
 ### Amendment 6.8 (Codex security P2 on PR #113: `enabledModels` not enforced)
 

@@ -753,7 +753,9 @@ export class AgentSession implements SettingsScope {
 	/** Last (enable, providerId) tuple resolved by `#syncAppendOnlyContext` — used to skip no-op invalidations. */
 	#lastAppendOnlyResolution?: { enable: boolean; providerId: string | undefined };
 	#eventListeners: AgentSessionEventListener[] = [];
-	#mixtureHost: Pick<SessionMixtureHost, "commitPersisted" | "resetConversation"> | undefined;
+	#mixtureHost:
+		| Pick<SessionMixtureHost, "commitPersisted" | "resetConversation" | "rebindWorkspace" | "commitWorkspaceMove">
+		| undefined;
 	#activeToolExecutionUpdates = new Map<string, Extract<AgentSessionEvent, { type: "tool_execution_update" }>>();
 	#runStateListeners = new Set<(state: "running" | "idle") => void>();
 	#commandMetadataChangedListeners: CommandMetadataChangedListener[] = [];
@@ -2965,8 +2967,48 @@ export class AgentSession implements SettingsScope {
 	 * Bind the session's mixture host: it commits mixture responses once they are persisted,
 	 * and drops its runs whenever the conversation is replaced.
 	 */
-	attachMixtureHost(host: Pick<SessionMixtureHost, "commitPersisted" | "resetConversation">): void {
+	attachMixtureHost(
+		host: Pick<
+			SessionMixtureHost,
+			"commitPersisted" | "resetConversation" | "rebindWorkspace" | "commitWorkspaceMove" | "observeCatalog"
+		>,
+	): void {
 		this.#mixtureHost = host;
+		host.observeCatalog(() => {
+			// Set the newly conservative model synchronously, before another
+			// session can submit a prompt using stale context/image limits.
+			void this.#refreshSelectedMixture().catch(error => {
+				logger.warn("Failed to reconcile mixture metadata after catalog change", { error: String(error) });
+			});
+		});
+	}
+
+	/**
+	 * Rebind to `cwd`'s mixtures; move transactions defer dropping source runs
+	 * until all cwd-derived state has refreshed successfully.
+	 * Refresh the selected mixture's metadata from the destination roster.
+	 */
+	async rebindMixturesForCwd(cwd: string, deferReset = false): Promise<void> {
+		const host = this.#mixtureHost;
+		if (!host) return;
+		await host.rebindWorkspace(cwd, deferReset);
+		await this.#refreshSelectedMixture();
+	}
+
+	/** Registry metadata may narrow when a different holder joins the workspace. */
+	async #refreshSelectedMixture(): Promise<void> {
+		const current = this.model;
+		if (!current || !isMixtureModel(current)) return;
+		const refreshed = this.#modelRegistry.find(current.provider, current.id);
+		if (!refreshed || !isMixtureModel(refreshed) || refreshed === current) return;
+		this.agent.setModel(refreshed);
+		await this.#reconcileModelDependentState(current, refreshed);
+		if (!this.#isDisposed && this.model === refreshed) this.#emit({ type: "model_changed" });
+	}
+
+	/** Commit the mixture workspace change once a move has succeeded. */
+	commitMixtureWorkspaceMove(): void {
+		this.#mixtureHost?.commitWorkspaceMove();
 	}
 
 	#recordToolExecutionStart(event: Extract<AgentEvent, { type: "tool_execution_start" }>): void {
@@ -10766,7 +10808,6 @@ export class AgentSession implements SettingsScope {
 			}
 
 			this.agent.replaceMessages(sessionContext.messages);
-			this.#mixtureHost?.resetConversation();
 			this.#reseedTokenRate();
 			this.#advisors.resetSessionState({ preserveCost: true });
 			this.#todo.syncFromBranch();
@@ -10898,7 +10939,6 @@ export class AgentSession implements SettingsScope {
 			}
 			generationSettled.resolve();
 			this.#sessionGenerationSettled = previousSessionGenerationSettled;
-			return true;
 		} catch (error) {
 			this.sessionManager.restoreState(previousSessionState);
 			this.#freshProviderSessionId = previousFreshProviderSessionId;
@@ -10981,6 +11021,13 @@ export class AgentSession implements SettingsScope {
 			if (error === SESSION_CWD_CHANGE_REJECTED) return false;
 			throw error;
 		}
+		// Only now is a cross-project resume committed. The cwd callback ran
+		// before fallible target initialization; rolling back it must preserve
+		// source runs and credential state. A successful session replacement
+		// discards the old conversation's runs regardless of its workspace.
+		this.commitMixtureWorkspaceMove();
+		this.#mixtureHost?.resetConversation();
+		return true;
 	}
 
 	/**

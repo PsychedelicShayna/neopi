@@ -9,6 +9,7 @@ import {
 	isFanoutEdge,
 	type MixtureDefinition,
 	type MixtureEdge,
+	type MixtureMember,
 	mixtureEdgeId,
 	TRANSIT_PART_NAMES,
 } from "@oh-my-pi/pi-tui/overlays/mixture-types";
@@ -22,6 +23,20 @@ const MEMBER_ID_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
 const KNOWN_PARTS = new Set<string>(TRANSIT_PART_NAMES);
 /** The milestone this build implements; the gate names the one that adds a feature. */
 const IMPLEMENTED_MILESTONE = "M1";
+
+// E23 size bounds (spec §11). Code constants, never settings: a project file must not be able to
+// raise them. Registration validates every discovered definition at startup, so the work a
+// definition can cause is bounded here before any pass that scales with it.
+export const MAX_MEMBERS = 32;
+export const MAX_EDGES = 128;
+/** Sum over edges of the target count (a fan-out's `to` list, else 1) plus one per `join`. */
+export const MAX_EDGE_TARGETS = 256;
+/** Every `state` array and every fan-out `slices` list. */
+export const MAX_STATE_PARTS = 8;
+/** Every string the definition hands to a model or a template compiler. */
+export const MAX_TEXT_CHARS = 65_536;
+/** A `MIXTURES.toml` file, checked by the loader before parsing. */
+export const MAX_FILE_BYTES = 4 * 1024 * 1024;
 
 export interface ValidateMixtureContext {
 	/** The settings the mixture runs under: `moa.hard_max_hops` bounds `limits.max_hops`. */
@@ -61,31 +76,230 @@ function declaredParts(edge: MixtureEdge): string[] {
 	return Object.keys(edge.x).filter(part => KNOWN_PARTS.has(part));
 }
 
-function outgoing(definition: MixtureDefinition, memberId: string): MixtureEdge[] {
-	return definition.edges.filter(edge => edge.from === memberId);
-}
-
 function edgeTargets(edge: MixtureEdge): string[] {
 	return isFanoutEdge(edge) ? [...edge.to, edge.join].filter(Boolean) : [edge.to];
 }
 
-function hasCycle(definition: MixtureDefinition): boolean {
-	const state = new Map<string, "visiting" | "done">();
-	const visit = (id: string): boolean => {
-		const current = state.get(id);
-		if (current === "visiting") return true;
-		if (current === "done") return false;
-		state.set(id, "visiting");
-		for (const edge of outgoing(definition, id)) {
-			for (const target of edgeTargets(edge)) if (visit(target)) return true;
-		}
-		state.set(id, "done");
-		return false;
-	};
-	return definition.members.some(member => visit(member.id));
+function sizeIssue(code: "limits.graph_size" | "limits.text_size", path: string, count: number, cap: number) {
+	const unit = code === "limits.text_size" ? "characters" : "entries";
+	return { code, path, message: `${path} has ${count} ${unit}; the cap is ${cap}` };
 }
 
-function capabilityGate(resolved: ResolvedMixture, errors: MixtureIssue[]): void {
+const preparedBundles = new WeakSet<object>();
+
+/** Immutable snapshot of a document's presets, checked once before its mixtures are resolved. */
+export interface PreparedDocumentPresets {
+	readonly envelopes: Readonly<Record<string, string>>;
+	readonly roles: Readonly<Record<string, string>>;
+	readonly sizeIssue: MixtureIssue | undefined;
+}
+
+export function prepareDocumentPresets(
+	envelopes?: Readonly<Record<string, string>>,
+	roles?: Readonly<Record<string, string>>,
+): PreparedDocumentPresets {
+	const envelopeSnapshot = Object.freeze({ ...envelopes });
+	const roleSnapshot = Object.freeze({ ...roles });
+	const issue = firstTextSizeIssue({ envelopes: envelopeSnapshot, roles: roleSnapshot });
+	const snapshot = Object.freeze({
+		envelopes: envelopeSnapshot,
+		roles: roleSnapshot,
+		sizeIssue: issue ? Object.freeze(issue) : undefined,
+	});
+	preparedBundles.add(snapshot);
+	return snapshot;
+}
+
+/** Raw API inputs are snapshotted anew; only module-created immutable bundles skip the scan. */
+export function documentPresets(
+	value?: PreparedDocumentPresets,
+	envelopes?: Readonly<Record<string, string>>,
+	roles?: Readonly<Record<string, string>>,
+): PreparedDocumentPresets {
+	if (
+		value &&
+		preparedBundles.has(value) &&
+		(envelopes === undefined || envelopes === value.envelopes) &&
+		(roles === undefined || roles === value.roles)
+	)
+		return value;
+	return prepareDocumentPresets(envelopes, roles);
+}
+
+/** A TypeScript field name as the TOML key it was read from (`systemPrompt` → `system_prompt`). */
+function tomlKey(key: string): string {
+	return key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
+}
+
+/**
+ * Every string a definition and its document presets carry, with its TOML path: each
+ * string value, and each key of a keyed table (criteria labels, preset names), as
+ * `<table> (key)`. One walk over the data rather than a field list, so a field added
+ * later is bounded without anyone remembering to list it: selectors reach the model
+ * resolver, labels and prompts reach judgment and member requests, templates reach the
+ * compiler. Iterative, and linear in the definition's size.
+ */
+export function* definitionStrings(
+	definition: MixtureDefinition,
+	presets: { envelopes?: Readonly<Record<string, string>>; roles?: Readonly<Record<string, string>> } = {},
+): Generator<[path: string, text: string]> {
+	const stack: [path: string, value: unknown][] = [
+		["envelopes", presets.envelopes],
+		["roles", presets.roles],
+		["", definition],
+	];
+	while (stack.length > 0) {
+		const [path, value] = stack.pop()!;
+		if (typeof value === "string") {
+			yield [path, value];
+		} else if (Array.isArray(value)) {
+			for (let index = value.length - 1; index >= 0; index--) stack.push([`${path}[${index}]`, value[index]]);
+		} else if (value !== null && typeof value === "object") {
+			const entries = Object.entries(value);
+			for (const [key] of entries) yield [`${path || "definition"} (key)`, key];
+			for (let index = entries.length - 1; index >= 0; index--) {
+				const [key, child] = entries[index]!;
+				stack.push([path ? `${path}.${tomlKey(key)}` : tomlKey(key), child]);
+			}
+		}
+	}
+}
+
+function firstTextSizeIssue(presets: {
+	envelopes?: Readonly<Record<string, string>>;
+	roles?: Readonly<Record<string, string>>;
+}): MixtureIssue | undefined {
+	for (const [table, entries] of [
+		["roles", presets.roles],
+		["envelopes", presets.envelopes],
+	] as const) {
+		if (!entries) continue;
+		for (const key of Object.keys(entries)) {
+			if (key.length > MAX_TEXT_CHARS)
+				return sizeIssue("limits.text_size", `${table} (key)`, key.length, MAX_TEXT_CHARS);
+		}
+		for (const [key, text] of Object.entries(entries)) {
+			if (text.length > MAX_TEXT_CHARS)
+				return sizeIssue("limits.text_size", `${table}.${tomlKey(key)}`, text.length, MAX_TEXT_CHARS);
+		}
+	}
+	return undefined;
+}
+
+/**
+ * E23: the first size bound a definition breaks, checked before any other pass so an
+ * oversized definition costs time linear in its size and gets exactly one error.
+ */
+export function definitionSizeIssue(
+	definition: MixtureDefinition,
+	presets: { envelopes?: Readonly<Record<string, string>>; roles?: Readonly<Record<string, string>> } = {},
+	prepared?: PreparedDocumentPresets,
+): MixtureIssue | undefined {
+	if (definition.members.length > MAX_MEMBERS) {
+		return sizeIssue("limits.graph_size", "members", definition.members.length, MAX_MEMBERS);
+	}
+	if (definition.edges.length > MAX_EDGES) {
+		return sizeIssue("limits.graph_size", "edges", definition.edges.length, MAX_EDGES);
+	}
+	let targets = 0;
+	for (const [index, edge] of definition.edges.entries()) {
+		targets += isFanoutEdge(edge) ? edge.to.length + (edge.join ? 1 : 0) : 1;
+		if (targets > MAX_EDGE_TARGETS) {
+			return sizeIssue("limits.graph_size", `edges[${index}]`, targets, MAX_EDGE_TARGETS);
+		}
+	}
+	const parts: [path: string, parts: readonly unknown[] | undefined][] = [];
+	for (const [index, member] of definition.members.entries()) {
+		const path = `members[${index}]`;
+		if (member.kind === "verdict") {
+			parts.push([`${path}.state`, member.state]);
+			continue;
+		}
+		parts.push([`${path}.route.state`, member.route?.state], [`${path}.terminate.state`, member.terminate?.state]);
+	}
+	for (const [index, edge] of definition.edges.entries()) {
+		if (isFanoutEdge(edge) && Array.isArray(edge.slices)) parts.push([`edges[${index}].slices`, edge.slices]);
+	}
+	for (const [path, list] of parts) {
+		if (list && list.length > MAX_STATE_PARTS) {
+			return sizeIssue("limits.graph_size", path, list.length, MAX_STATE_PARTS);
+		}
+	}
+	for (const [path, text] of definitionStrings(definition)) {
+		if (text.length > MAX_TEXT_CHARS) return sizeIssue("limits.text_size", path, text.length, MAX_TEXT_CHARS);
+	}
+	return documentPresets(prepared, presets.envelopes, presets.roles).sizeIssue;
+}
+
+/** Adjacency built once per validation; every graph pass reads these maps. */
+interface MixtureGraph {
+	/** The first member declared under each id. */
+	members: Map<string, MixtureMember>;
+	outgoing: Map<string, MixtureEdge[]>;
+	/** Every member id, and every edge source, to its edge targets. */
+	successors: Map<string, string[]>;
+}
+
+function graphOf(definition: MixtureDefinition): MixtureGraph {
+	const members = new Map<string, MixtureMember>();
+	const outgoing = new Map<string, MixtureEdge[]>();
+	const successors = new Map<string, string[]>();
+	for (const member of definition.members) {
+		if (!members.has(member.id)) members.set(member.id, member);
+		successors.set(member.id, []);
+	}
+	for (const edge of definition.edges) {
+		const edges = outgoing.get(edge.from);
+		if (edges) edges.push(edge);
+		else outgoing.set(edge.from, [edge]);
+		const targets = successors.get(edge.from);
+		if (targets) targets.push(...edgeTargets(edge));
+		else successors.set(edge.from, edgeTargets(edge));
+	}
+	return { members, outgoing, successors };
+}
+
+/**
+ * Whether the directed graph has a cycle: a three-colour walk on an explicit stack, so
+ * its depth is bounded by memory, not the call stack. Targets that are not keys have no
+ * successors.
+ */
+export function hasCycle(successors: ReadonlyMap<string, readonly string[]>): boolean {
+	const VISITING = 1;
+	const DONE = 2;
+	const state = new Map<string, number>();
+	const stack: string[] = [];
+	const cursors: number[] = [];
+	for (const root of successors.keys()) {
+		if (state.has(root)) continue;
+		state.set(root, VISITING);
+		stack.push(root);
+		cursors.push(0);
+		while (stack.length > 0) {
+			const top = stack.length - 1;
+			const next = successors.get(stack[top]!) ?? [];
+			const cursor = cursors[top]!;
+			if (cursor === next.length) {
+				state.set(stack[top]!, DONE);
+				stack.pop();
+				cursors.pop();
+				continue;
+			}
+			cursors[top] = cursor + 1;
+			const target = next[cursor]!;
+			const seen = state.get(target);
+			if (seen === VISITING) return true;
+			if (seen === undefined) {
+				state.set(target, VISITING);
+				stack.push(target);
+				cursors.push(0);
+			}
+		}
+	}
+	return false;
+}
+
+function capabilityGate(resolved: ResolvedMixture, graph: MixtureGraph, errors: MixtureIssue[]): void {
 	const definition = resolved.definition;
 	const gate = (path: string, feature: string, milestone: string) =>
 		errors.push({
@@ -105,7 +319,7 @@ function capabilityGate(resolved: ResolvedMixture, errors: MixtureIssue[]): void
 		if (resolvedMember?.kind === "model" && resolvedMember.toolPolicy !== false) {
 			gate(`${path}.tools`, `tools on member ${member.id} (set tools = false)`, "M3");
 		}
-		if (outgoing(definition, member.id).length > 1) {
+		if ((graph.outgoing.get(member.id)?.length ?? 0) > 1) {
 			gate(path, `more than one outgoing edge from ${member.id} (routing)`, "M2");
 		}
 	});
@@ -117,7 +331,7 @@ function capabilityGate(resolved: ResolvedMixture, errors: MixtureIssue[]): void
 		if (edge.x.toolTrace) gate(`${path}.x.tool_trace`, `x.tool_trace on edge ${id}`, "M2");
 		if (edge.maxTraversals !== undefined) gate(`${path}.max_traversals`, `max_traversals on edge ${id}`, "M2");
 	});
-	if (hasCycle(definition)) gate("edges", "back-edges (cycles)", "M2");
+	if (hasCycle(graph.successors)) gate("edges", "back-edges (cycles)", "M2");
 	if (definition.steering) gate("steering", "steering targets", "M3");
 	const limits = definition.limits;
 	if (limits) {
@@ -145,9 +359,13 @@ function templateIssues(template: string, path: string, errors: MixtureIssue[]):
 
 export function validateMixture(resolved: ResolvedMixture, ctx: ValidateMixtureContext): MixtureValidation {
 	const definition = resolved.definition;
+	// E23 first and alone: nothing else runs over an oversized definition.
+	const oversized = definitionSizeIssue(definition, resolved.presets, resolved.presets);
+	if (oversized) return { errors: [oversized], warnings: [] };
 	const errors: MixtureIssue[] = [...resolved.issues];
 	const warnings: MixtureIssue[] = [];
-	const memberIds = new Set(definition.members.map(member => member.id));
+	const graph = graphOf(definition);
+	const memberIds = graph.members;
 
 	// E1
 	if (!NAME_PATTERN.test(definition.name)) {
@@ -178,7 +396,7 @@ export function validateMixture(resolved: ResolvedMixture, ctx: ValidateMixtureC
 	});
 
 	// E5
-	const entry = definition.members.find(member => member.id === definition.entry);
+	const entry = graph.members.get(definition.entry);
 	if (!entry) {
 		errors.push({
 			code: "entry.unresolved",
@@ -207,7 +425,7 @@ export function validateMixture(resolved: ResolvedMixture, ctx: ValidateMixtureC
 				});
 			}
 		}
-		if (definition.members.find(member => member.id === edge.from)?.kind === "verdict") {
+		if (graph.members.get(edge.from)?.kind === "verdict") {
 			errors.push({
 				code: "edge.from_verdict",
 				path: `${path}.from`,
@@ -250,14 +468,15 @@ export function validateMixture(resolved: ResolvedMixture, ctx: ValidateMixtureC
 		}
 		edgeIds.add(id);
 	});
+	const edgeEnvelopes = new Set(definition.edges.map(edge => edge.envelope ?? DEFAULT_EDGE_ENVELOPE));
 	for (const [name, template] of Object.entries(resolved.envelopes)) {
-		if (definition.edges.some(edge => (edge.envelope ?? DEFAULT_EDGE_ENVELOPE) === name)) continue;
+		if (edgeEnvelopes.has(name)) continue;
 		templateIssues(template, `envelopes.${name}`, errors);
 	}
 
 	// E10, E19 terminate.terminal
 	definition.members.forEach((member, index) => {
-		const terminal = outgoing(definition, member.id).length === 0;
+		const terminal = !graph.outgoing.has(member.id);
 		if (terminal && member.show === "never") {
 			warnings.push({
 				code: "member.show.final",
@@ -301,15 +520,12 @@ export function validateMixture(resolved: ResolvedMixture, ctx: ValidateMixtureC
 	// E17
 	if (entry) {
 		const reachable = new Set<string>([entry.id]);
-		const queue = [entry.id];
-		while (queue.length > 0) {
-			const id = queue.shift()!;
-			for (const edge of outgoing(definition, id)) {
-				for (const target of edgeTargets(edge)) {
-					if (reachable.has(target)) continue;
-					reachable.add(target);
-					queue.push(target);
-				}
+		const order = [entry.id];
+		for (let index = 0; index < order.length; index++) {
+			for (const target of graph.successors.get(order[index]!) ?? []) {
+				if (reachable.has(target)) continue;
+				reachable.add(target);
+				order.push(target);
 			}
 		}
 		definition.members.forEach((member, index) => {
@@ -338,7 +554,7 @@ export function validateMixture(resolved: ResolvedMixture, ctx: ValidateMixtureC
 	definition.members.forEach((member, index) => {
 		if (!branches.has(member.id)) return;
 		const controls = member.kind !== "verdict" && (member.route || member.terminate);
-		if (controls || outgoing(definition, member.id).length > 0) {
+		if (controls || graph.outgoing.has(member.id)) {
 			warnings.push({
 				code: "fanout.branch.controls",
 				path: `members[${index}]`,
@@ -347,6 +563,6 @@ export function validateMixture(resolved: ResolvedMixture, ctx: ValidateMixtureC
 		}
 	});
 
-	capabilityGate(resolved, errors);
+	capabilityGate(resolved, graph, errors);
 	return { errors, warnings };
 }
