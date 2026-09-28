@@ -9,10 +9,10 @@ import ctlDescription from "../prompts/tools/ctl.md" with { type: "text" };
 import { ctlList, ctlRpc, ctlSend, ctlState, withCtlIo } from "../cli/ctl-cli";
 
 const ctlSchema = type({
-	op: type("string", { enum: ["list", "state", "send", "steer", "follow_up", "abort", "slash", "rpc"] }),
-	target: type("string", { optional: true }),
-	text: type("string", { optional: true }),
-	rpcType: type("string", { optional: true }),
+	op: type("'list' | 'state' | 'send' | 'steer' | 'follow_up' | 'abort' | 'slash' | 'rpc'"),
+	"target?": "string",
+	"text?": "string",
+	"rpcType?": "string",
 });
 
 export class CtlTool implements AgentTool<typeof ctlSchema> {

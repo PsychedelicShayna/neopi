@@ -26,7 +26,14 @@ import {
 } from "./registry";
 import { ControlServer, type ControlConnection } from "./server";
 import { APPROVAL_GATED_SETTINGS, cfgControlApprovals } from "./settings";
-import { executeSessionCommand } from "./session-commands";
+import { RpcPlanModeController } from "../modes/rpc/rpc-plan-mode";
+import { RpcSessionSettleWatcher } from "../modes/rpc/rpc-session-settle";
+import { RpcSessionEventForwarder } from "../modes/rpc/rpc-session-events";
+import { RpcHostToolBridge } from "../modes/rpc/host-tools";
+import { RpcHostUriBridge } from "../modes/rpc/host-uris";
+import { RpcToolApprovalBridge } from "../modes/rpc/rpc-tool-approval";
+import { RpcExtensionUserMessageTracker } from "../modes/rpc/rpc-prompt-results";
+import type { RpcResponse } from "../modes/rpc/rpc-types";
 import { CtlTool } from "../tools/ctl";
 import {
 	CONTROL_EXEMPTIONS,
@@ -75,6 +82,12 @@ export class ControlHost {
 	readonly #options: ControlHostOptions;
 	readonly #connections = new Set<ControlConnection>();
 	readonly #subscribed = new Set<ControlConnection>();
+	readonly #handlers = new Map<ControlConnection, (command: RpcCommand) => Promise<RpcResponse>>();
+	readonly #forwarders = new Map<ControlConnection, RpcSessionEventForwarder>();
+	#planMode: RpcPlanModeController | undefined;
+	#settleWatcher: RpcSessionSettleWatcher | undefined;
+	readonly #extensionTracker = new RpcExtensionUserMessageTracker();
+	#runOwnerSeq = 0;
 	#server: ControlServer | undefined;
 	#revisions: Revisions = {
 		generation: 1,
@@ -179,10 +192,12 @@ export class ControlHost {
 		this.#mountCtlTool(session);
 		session.subscribe(event => {
 			this.promptResults.observe(event);
+			this.#planMode?.observe(event);
+			this.#settleWatcher?.observe(event);
 			if (event.type === "model_changed") {
 				this.#revisions.model = session.model ? `${session.model.provider}/${session.model.id}` : null;
 			}
-			for (const connection of this.#subscribed) connection.write(event);
+			for (const forwarder of this.#forwarders.values()) forwarder.forward(event);
 		});
 	}
 
@@ -303,20 +318,95 @@ export class ControlHost {
 		return undefined;
 	}
 
-	async #rpc(connection: ControlConnection, frame: Record<string, unknown>): Promise<void> {
-		const command = frame as unknown as RpcCommand;
-		const handle = `r-${this.instanceId.slice(0, 8)}-${++this.#requestSeq}`;
-		const result = await executeSessionCommand(command, {
-			session: this.#options.session,
-			roles: this.roles,
-			origin: connection.origin,
-			runOwner: handle,
-			output: frame => connection.write(frame),
+
+	async #handlerFor(connection: ControlConnection): Promise<(command: RpcCommand) => Promise<RpcResponse>> {
+		const existing = this.#handlers.get(connection);
+		if (existing) return existing;
+		const session = this.#options.session;
+		const output = (frame: object) => connection.write(frame);
+		const forwarder = new RpcSessionEventForwarder(output);
+		this.#forwarders.set(connection, forwarder);
+		if (!this.#planMode) this.#planMode = new RpcPlanModeController(session, frame => {
+			for (const subscriber of this.#subscribed) subscriber.write(frame);
 		});
-		this.#reply(connection, frame, result);
-		if (result.agentInvoked) {
-			connection.write({ type: "turn_origin", requestHandle: handle, connectionId: connection.id, label: connection.label });
-		}
+		if (!this.#settleWatcher) this.#settleWatcher = new RpcSessionSettleWatcher(session, frame => {
+			for (const subscriber of this.#subscribed) subscriber.write(frame);
+		});
+		const planMode = this.#planMode;
+		const settleWatcher = this.#settleWatcher;
+		const success = (id: string | undefined, command: string, data?: object | null): RpcResponse =>
+			(data === undefined
+				? { id, type: "response", command, success: true }
+				: { id, type: "response", command, success: true, data }) as RpcResponse;
+		const error = (id: string | undefined, command: string, message: string, code?: string): RpcResponse =>
+			({
+				id, type: "response", command, success: false, error: message, ...(code ? { code } : {}),
+			}) as RpcResponse;
+		const { createRpcCommandHandler, RpcPendingExtensionRequests } = await import("../modes/rpc/rpc-mode");
+		const pending = new RpcPendingExtensionRequests();
+		const handler = createRpcCommandHandler({
+			session,
+			output,
+			success,
+			error,
+			promptResults: this.promptResults,
+			ownPrompt: ticket => {
+				ticket.route = frame => connection.write(frame);
+				const owner = ticket.requestHandle ?? `r-${this.instanceId.slice(0, 8)}-${++this.#runOwnerSeq}`;
+				ticket.requestHandle = owner;
+				this.promptResults.bindOwner(ticket, owner);
+				return owner;
+			},
+			reservePromptEntryId: message =>
+				session.isExtensionCommand(message) ? undefined : session.sessionManager.reserveEntryId(),
+			executeCustomPromptCommand: async message => {
+				if (!message.startsWith("/") || session.isExtensionCommand(message)) return null;
+				const space = message.indexOf(" ");
+				const name = message.slice(1, space < 0 ? undefined : space);
+				if (!session.customCommands.some(loaded => loaded.command.name === name)) return null;
+				return session.executeCustomCommand(message);
+			},
+			emitAvailableCommandsUpdate: async () => {
+				const { buildAvailableSlashCommands } = await import("../slash-commands/available-commands");
+				output({ type: "available_commands_update", commands: await buildAvailableSlashCommands(session) });
+			},
+			reloadPluginState: async () => {},
+			getAvailableCommands: async () => {
+				const { buildAvailableSlashCommands } = await import("../slash-commands/available-commands");
+				return buildAvailableSlashCommands(session);
+			},
+			onPromptError: (id, command) => promptError => output(error(id, command, promptError.message)),
+			extensionUserMessageTracker: this.#extensionTracker,
+			trackBackground: () => {},
+			subagentRegistry: undefined,
+			planMode,
+			settleWatcher,
+			rpcRoles: this.roles,
+			sessionEvents: forwarder,
+			hostToolBridge: new RpcHostToolBridge(output),
+			hostUriBridge: new RpcHostUriBridge(output),
+			toolApprovalBridge: new RpcToolApprovalBridge({
+				output,
+				runner: session.extensionRunner,
+				settings: session.settings,
+			}),
+			pendingExtensionRequests: pending,
+			createUiContext: () => {
+				throw new Error("control login uses the pane dialog");
+			},
+			origin: connection.origin,
+		});
+		this.#handlers.set(connection, handler);
+		return handler;
+	}
+
+	async #rpc(connection: ControlConnection, frame: Record<string, unknown>): Promise<void> {
+		const command = {
+			...frame,
+			id: typeof frame.id === "string" ? frame.id : typeof frame.requestId === "string" ? frame.requestId : undefined,
+		} as RpcCommand;
+		const response = await (await this.#handlerFor(connection))(command);
+		connection.write({ ...response, requestId: command.id });
 	}
 
 	async #control(connection: ControlConnection, frame: Record<string, unknown>): Promise<void> {
