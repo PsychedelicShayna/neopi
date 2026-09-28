@@ -683,6 +683,16 @@ export function cleanup(): Promise<void> {
 	return runCleanup(Reason.MANUAL, true);
 }
 
+/**
+ * Runs a terminal cleanup pass without selecting or invoking an exit primitive.
+ * Unlike {@link cleanup}, this includes exit-only registrations and leaves the
+ * cleanup system complete. Callers that enforce their own hard-exit deadline
+ * can await this pass, then use {@link exitProcess}.
+ */
+export function cleanupForExit(reason: Reason): Promise<void> {
+	return runCleanup(reason);
+}
+
 /** Controls how manual process shutdown handles terminal output. */
 export interface QuitOptions {
 	/** Wait for buffered stdout before exiting; disable after the terminal has disconnected. */

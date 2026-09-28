@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { createInterruptedTurnAbortMessage } from "@oh-my-pi/pi-coding-agent/session/exit-diagnostics";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 // Contract (neopi#127): a headless `-p --mode json` run dies with the host that
@@ -8,6 +10,7 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 // and its stdio MCP servers' process groups with it.
 
 const CLI = path.join(import.meta.dir, "../src/cli.ts");
+const REPO_ROOT = path.join(import.meta.dir, "../../..");
 
 /** Stdio MCP server that ignores stdin EOF and SIGTERM and keeps a grandchild in its process group. */
 const STUBBORN_MCP_SERVER = `
@@ -100,6 +103,121 @@ fs.writeFileSync(readyFile, "ready");
 setInterval(() => {}, 1 << 30);
 `;
 
+/** SDK worker with a model-only user tail awaiting a response when its parent dies. */
+const INTERRUPTED_TURN_WORKER = `
+import * as path from "node:path";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { ModelRegistry } from "${SRC}/config/model-registry";
+import { Settings } from "${SRC}/config/settings";
+import { exitWithParent } from "${SRC}/exit-with-parent";
+import { createAgentSession } from "${SRC}/sdk";
+import { AuthStorage } from "${SRC}/session/auth-storage";
+import { SessionManager } from "${SRC}/session/session-manager";
+
+const [dir, sessionPathFile, readyFile] = process.argv.slice(2);
+const parentExit = exitWithParent();
+const authStorage = await AuthStorage.create(path.join(dir, "auth.db"));
+authStorage.keys.setRuntime("anthropic", "test-key");
+const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+if (!model) throw new Error("Expected bundled model");
+const sessionManager = SessionManager.create(dir, dir);
+const { session } = await createAgentSession({
+	cwd: dir,
+	agentDir: dir,
+	sessionManager,
+	authStorage,
+	modelRegistry: new ModelRegistry(authStorage, path.join(dir, "models.yml")),
+	model,
+	settings: Settings.isolated(),
+	enableLsp: false,
+	enableMCP: false,
+	skipPythonPreflight: true,
+	skills: [],
+	rules: [],
+	contextFiles: [],
+	promptTemplates: [],
+	slashCommands: [],
+	toolNames: ["read"],
+});
+sessionManager.appendMessage({ role: "user", content: "first turn", timestamp: Date.now() - 2 });
+sessionManager.appendMessage({
+	role: "assistant",
+	content: [{ type: "text", text: "first complete" }],
+	api: model.api,
+	provider: model.provider,
+	model: model.id,
+	usage: {
+		input: 0,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 0,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	},
+	stopReason: "stop",
+	timestamp: Date.now() - 1,
+});
+sessionManager.appendMessage({ role: "user", content: "second model-only turn", timestamp: Date.now() });
+sessionManager.flushSync();
+parentExit.attach({ session });
+await Bun.write(sessionPathFile, sessionManager.getSessionFile());
+await Bun.write(readyFile, "ready");
+setInterval(() => {}, 1 << 30);
+`;
+
+/**
+ * SDK worker that deliberately attaches a target from another asynchronous
+ * postmortem callback, after parent-death cleanup has already started.
+ */
+const LATE_ATTACH_WORKER = `
+import * as fs from "node:fs";
+import { postmortem } from "@oh-my-pi/pi-utils";
+import { exitWithParent } from "${SRC}/exit-with-parent";
+
+const [readyFile, cleanupFile, childPidFile, targetFile] = process.argv.slice(2);
+const parentExit = exitWithParent({ teardownMs: 4_000 });
+postmortem.register("late-owner", async () => {
+	await Bun.write(cleanupFile, "cleanup");
+	await Bun.sleep(100);
+	const child = Bun.spawn(["sleep", "300"], { stdio: ["ignore", "ignore", "ignore"] });
+	await Bun.write(childPidFile, String(child.pid));
+	parentExit.attach({
+		session: {
+			abort: async () => {
+				fs.appendFileSync(targetFile, "abort\\n");
+			},
+			dispose: async () => {
+				fs.appendFileSync(targetFile, "dispose\\n");
+			},
+		},
+		mcpManager: {
+			disconnectAll: async () => {
+				child.kill("SIGKILL");
+				await child.exited;
+				fs.appendFileSync(targetFile, "disconnect\\n");
+			},
+		},
+	});
+});
+await Bun.write(readyFile, "ready");
+setInterval(() => {}, 1 << 30);
+`;
+
+/** SDK worker with an exit-only owner whose final flush must precede hard exit. */
+const EXIT_ONLY_WORKER = `
+import { postmortem } from "@oh-my-pi/pi-utils";
+import { exitWithParent } from "${SRC}/exit-with-parent";
+
+const [readyFile, exitOnlyFile] = process.argv.slice(2);
+exitWithParent();
+postmortem.register("exit-only-owner", async () => {
+	await Bun.sleep(100);
+	await Bun.write(exitOnlyFile, "flushed");
+}, { exitOnly: true });
+await Bun.write(readyFile, "ready");
+setInterval(() => {}, 1 << 30);
+`;
+
 /** `[state, pgrp]` from /proc/<pid>/stat; zombies count as gone (their reaper may lag). */
 function procStat(pid: string): [string, number] | undefined {
 	try {
@@ -143,6 +261,13 @@ const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
 	for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
+
+async function writeRepoWorker(name: string, source: string): Promise<string> {
+	const file = path.join(import.meta.dir, `.${name}-${crypto.randomUUID()}.ts`);
+	await Bun.write(file, source);
+	cleanups.push(() => fs.rmSync(file, { force: true }));
+	return file;
+}
 
 interface Sandbox {
 	dir: string;
@@ -370,12 +495,11 @@ describe.skipIf(process.platform !== "linux")("print mode exit-with-parent", () 
 	it("disposes an SDK embedder's attached session when the host is SIGKILLed", async () => {
 		// Abort alone leaves resources only dispose() releases (browser tabs,
 		// provider state, persistence flush); session_shutdown proves dispose ran.
-		const { dir, work, env } = await createSandbox();
-		const workerFile = path.join(dir, "worker.ts");
+		const { dir, env } = await createSandbox();
+		const workerFile = await writeRepoWorker("exit-parent-sdk-worker", SDK_WORKER);
 		const shutdownFile = path.join(dir, "shutdown");
 		const readyFile = path.join(dir, "ready");
 		const workerPidFile = path.join(dir, "worker.pid");
-		await Bun.write(workerFile, SDK_WORKER);
 		const hostFile = path.join(dir, "sdk-host.ts");
 		await Bun.write(
 			hostFile,
@@ -384,7 +508,7 @@ describe.skipIf(process.platform !== "linux")("print mode exit-with-parent", () 
 			await worker.exited;`,
 		);
 		const host = Bun.spawn([process.execPath, hostFile, workerPidFile, workerFile, dir, shutdownFile, readyFile], {
-			cwd: work,
+			cwd: REPO_ROOT,
 			env,
 			stdio: ["ignore", "ignore", "inherit"],
 		});
@@ -411,5 +535,165 @@ describe.skipIf(process.platform !== "linux")("print mode exit-with-parent", () 
 			alive: false,
 			shutdownSeen: true,
 		});
+	}, 90_000);
+
+	it("tears down a target attached after parent-death cleanup has started", async () => {
+		const { dir, env } = await createSandbox();
+		const workerFile = await writeRepoWorker("exit-parent-late-worker", LATE_ATTACH_WORKER);
+		const hostFile = path.join(dir, "late-host.ts");
+		const workerPidFile = path.join(dir, "late-worker.pid");
+		const readyFile = path.join(dir, "late-ready");
+		const cleanupFile = path.join(dir, "cleanup-started");
+		const childPidFile = path.join(dir, "late-child.pid");
+		const targetFile = path.join(dir, "late-target");
+		await Bun.write(
+			hostFile,
+			`const worker = Bun.spawn([process.execPath, ...process.argv.slice(3)], { stdio: ["ignore", "ignore", "inherit"] });
+			await Bun.write(process.argv[2], String(worker.pid));
+			await worker.exited;`,
+		);
+		const host = Bun.spawn(
+			[
+				process.execPath,
+				hostFile,
+				workerPidFile,
+				workerFile,
+				readyFile,
+				cleanupFile,
+				childPidFile,
+				targetFile,
+			],
+			{ cwd: REPO_ROOT, env, stdio: ["ignore", "ignore", "inherit"] },
+		);
+		let workerPid: number | undefined;
+		let childPid: number | undefined;
+		cleanups.push(() => {
+			for (const pid of [host.pid, workerPid, childPid]) {
+				if (pid === undefined) continue;
+				try {
+					process.kill(pid, "SIGKILL");
+				} catch {}
+			}
+		});
+
+		const ready = await waitUntil(async () => {
+			workerPid ??= await readPid(workerPidFile);
+			return fs.existsSync(readyFile);
+		}, 60_000);
+		expect({ ready, workerPid }).toMatchObject({ ready: true });
+		process.kill(host.pid, "SIGKILL");
+
+		const attached = await waitUntil(async () => {
+			childPid ??= await readPid(childPidFile);
+			return childPid !== undefined;
+		}, 5_000);
+		expect({ attached, cleanupStarted: fs.existsSync(cleanupFile), childPid }).toMatchObject({
+			attached: true,
+			cleanupStarted: true,
+		});
+		await waitUntil(() => !isAlive(workerPid!) && !isAlive(childPid!), 5_000);
+		expect({
+			workerAlive: isAlive(workerPid!),
+			childAlive: isAlive(childPid!),
+			targetEvents: fs.existsSync(targetFile) ? fs.readFileSync(targetFile, "utf8").trim().split("\n").sort() : [],
+		}).toEqual({
+			workerAlive: false,
+			childAlive: false,
+			targetEvents: ["abort", "disconnect", "dispose"],
+		});
+	}, 90_000);
+
+	it("runs exit-only postmortem callbacks before the parent-death hard exit", async () => {
+		const { dir, env } = await createSandbox();
+		const workerFile = await writeRepoWorker("exit-parent-exit-only-worker", EXIT_ONLY_WORKER);
+		const hostFile = path.join(dir, "exit-only-host.ts");
+		const workerPidFile = path.join(dir, "exit-only-worker.pid");
+		const readyFile = path.join(dir, "exit-only-ready");
+		const exitOnlyFile = path.join(dir, "exit-only-flush");
+		await Bun.write(
+			hostFile,
+			`const worker = Bun.spawn([process.execPath, ...process.argv.slice(3)], { stdio: ["ignore", "ignore", "inherit"] });
+			await Bun.write(process.argv[2], String(worker.pid));
+			await worker.exited;`,
+		);
+		const host = Bun.spawn(
+			[process.execPath, hostFile, workerPidFile, workerFile, readyFile, exitOnlyFile],
+			{ cwd: REPO_ROOT, env, stdio: ["ignore", "ignore", "inherit"] },
+		);
+		let workerPid: number | undefined;
+		cleanups.push(() => {
+			for (const pid of [host.pid, workerPid]) {
+				if (pid === undefined) continue;
+				try {
+					process.kill(pid, "SIGKILL");
+				} catch {}
+			}
+		});
+
+		const ready = await waitUntil(async () => {
+			workerPid ??= await readPid(workerPidFile);
+			return fs.existsSync(readyFile);
+		}, 60_000);
+		expect({ ready, workerPid }).toMatchObject({ ready: true });
+		process.kill(host.pid, "SIGKILL");
+
+		await waitUntil(() => !isAlive(workerPid!), 5_000);
+		expect({
+			workerAlive: isAlive(workerPid!),
+			exitOnlyFlush: fs.existsSync(exitOnlyFile) ? fs.readFileSync(exitOnlyFile, "utf8") : undefined,
+		}).toEqual({ workerAlive: false, exitOnlyFlush: "flushed" });
+	}, 90_000);
+
+	it("records parent death so a model-only user tail resumes as aborted", async () => {
+		const { dir, env } = await createSandbox();
+		const workerFile = await writeRepoWorker("exit-parent-interrupted-turn-worker", INTERRUPTED_TURN_WORKER);
+		const hostFile = path.join(dir, "interrupted-turn-host.ts");
+		const workerPidFile = path.join(dir, "interrupted-turn-worker.pid");
+		const sessionPathFile = path.join(dir, "session-path");
+		const readyFile = path.join(dir, "interrupted-turn-ready");
+		await Bun.write(
+			hostFile,
+			`const worker = Bun.spawn([process.execPath, ...process.argv.slice(3)], { stdio: ["ignore", "ignore", "inherit"] });
+			await Bun.write(process.argv[2], String(worker.pid));
+			await worker.exited;`,
+		);
+		const host = Bun.spawn(
+			[process.execPath, hostFile, workerPidFile, workerFile, dir, sessionPathFile, readyFile],
+			{ cwd: REPO_ROOT, env, stdio: ["ignore", "ignore", "inherit"] },
+		);
+		let workerPid: number | undefined;
+		cleanups.push(() => {
+			for (const pid of [host.pid, workerPid]) {
+				if (pid === undefined) continue;
+				try {
+					process.kill(pid, "SIGKILL");
+				} catch {}
+			}
+		});
+
+		const ready = await waitUntil(async () => {
+			workerPid ??= await readPid(workerPidFile);
+			return fs.existsSync(readyFile);
+		}, 60_000);
+		expect({ ready, workerPid }).toMatchObject({ ready: true });
+		process.kill(host.pid, "SIGKILL");
+		await waitUntil(() => !isAlive(workerPid!), 5_000);
+		expect(isAlive(workerPid!)).toBe(false);
+
+		const sessionFile = (await Bun.file(sessionPathFile).text()).trim();
+		const reopened = await SessionManager.open(sessionFile, dir);
+		try {
+			const exitEntry = reopened
+				.getEntries()
+				.find(entry => entry.type === "custom" && entry.customType === "session_exit");
+			if (exitEntry?.type !== "custom") throw new Error("Expected session exit marker");
+			expect(exitEntry.data).toMatchObject({ reason: "sighup", kind: "signal" });
+			expect(createInterruptedTurnAbortMessage(reopened.getBranch())).toMatchObject({
+				role: "assistant",
+				stopReason: "aborted",
+			});
+		} finally {
+			await reopened.close();
+		}
 	}, 90_000);
 });
