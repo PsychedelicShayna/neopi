@@ -7,6 +7,13 @@ import { hostHasInheritableConsole } from "../eval/py/spawn-options";
 import { resolveWorkerSpawnCmd, workerEnvFromParent } from "../subprocess/worker-client";
 import { canonicalProjectDir, daemonBrokerEndpoint, daemonRuntimeDir } from "./paths";
 import {
+	brokerScopeSettings,
+	brokerScopeUnit,
+	type LaunchedBroker,
+	launchBroker,
+	resolveBrokerPlacement,
+} from "./broker-placement";
+import {
 	DAEMON_BROKER_WORKER_ARG,
 	DAEMON_IDLE_GRACE_ENV,
 	DAEMON_PROJECT_DIR_ENV,
@@ -291,17 +298,21 @@ class SocketDaemonClient implements DaemonBrokerClient {
 			// process-owned lease selects one winner before any candidate touches
 			// the socket.
 		}
-		this.#spawnBroker();
+		const launched = await this.#spawnBroker();
 		const deadline = Date.now() + CONNECT_TIMEOUT_MS;
 		let lastError: Error | undefined;
-		while (Date.now() < deadline) {
-			try {
-				this.#bindSocket(await openSocket(this.#endpoint, 250));
-				return;
-			} catch (error) {
-				lastError = error instanceof Error ? error : new Error(String(error));
-				await Bun.sleep(CONNECT_RETRY_MS);
+		try {
+			while (Date.now() < deadline) {
+				try {
+					this.#bindSocket(await openSocket(this.#endpoint, 250));
+					return;
+				} catch (error) {
+					lastError = error instanceof Error ? error : new Error(String(error));
+					await Bun.sleep(CONNECT_RETRY_MS);
+				}
 			}
+		} finally {
+			launched.settle();
 		}
 		throw new Error(
 			`Failed to start daemon broker at ${this.#endpoint} after ${CONNECT_TIMEOUT_MS / 1000}s: ` +
@@ -310,22 +321,28 @@ class SocketDaemonClient implements DaemonBrokerClient {
 		);
 	}
 
-	#spawnBroker(): void {
+	async #spawnBroker(): Promise<LaunchedBroker> {
 		const spawn = resolveWorkerSpawnCmd(DAEMON_BROKER_WORKER_ARG);
 		const overlay: Record<string, string> = {
 			[DAEMON_PROJECT_DIR_ENV]: this.projectDir,
 			[DAEMON_RUNTIME_DIR_ENV]: this.#runtimeDir,
 		};
 		if (this.#idleGraceMs !== undefined) overlay[DAEMON_IDLE_GRACE_ENV] = String(this.#idleGraceMs);
-		const child = Bun.spawn(spawn.cmd, {
-			cwd: spawn.cwd,
-			env: workerEnvFromParent(overlay),
-			stdin: "ignore",
-			stdout: "ignore",
-			stderr: "ignore",
-			...BROKER_SPAWN_OPTIONS,
+		const env = workerEnvFromParent(overlay);
+		const { enabled, slice } = brokerScopeSettings();
+		const placement = await resolveBrokerPlacement({
+			platform: process.platform,
+			enabled,
+			slice,
+			unit: brokerScopeUnit(this.projectDir),
+			description: `${APP_NAME} daemon broker for ${this.projectDir}`,
+			env,
 		});
-		child.unref();
+		return launchBroker(
+			{ cmd: spawn.cmd, cwd: spawn.cwd, env, spawnOptions: BROKER_SPAWN_OPTIONS },
+			placement,
+			this.#runtimeDir,
+		);
 	}
 
 	#bindSocket(socket: net.Socket): void {
