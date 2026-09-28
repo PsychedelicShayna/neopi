@@ -30,7 +30,7 @@ import {
 } from "../../plan-mode/session-plan-mode";
 import { cfgPlanEnabled } from "../../plan-mode/settings";
 import type { PlanModeState } from "../../plan-mode/state";
-import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
+import type { AgentSession, AgentSessionEvent, SessionChangeOrigin } from "../../session/agent-session";
 import type {
 	RpcMode,
 	RpcModeChangedFrame,
@@ -110,7 +110,7 @@ export class RpcPlanModeController {
 		this.#unsubscribe = session.subscribePlanModeChanged(() => {
 			if (this.#emitHold === 0) this.#emitModeIfChanged();
 		});
-		this.#unregisterSessionChange = session.registerSessionChangeCallback(() => this.#onSessionChanged());
+		this.#unregisterSessionChange = session.registerSessionChangeCallback(source => this.#onSessionChanged(source));
 	}
 
 	/** `get_state` fields: the session mode and, in plan mode, its details. */
@@ -351,15 +351,12 @@ export class RpcPlanModeController {
 	}
 
 	/**
-	 * A session transition (new, switch, open, branch, handoff, whichever path
-	 * ran it) ends the plan mode `set_mode` entered: the plan belongs to the
-	 * conversation that was left, and the entry snapshot must never be applied
-	 * to another one. Plan state and the proposal handler clear now; the
-	 * pre-plan tools return once the transition settles, and the pre-plan model
-	 * only when the session still runs the plan model (the target session keeps
-	 * the model it loaded).
+	 * A session transition ends the plan mode `set_mode` entered: the plan
+	 * belongs to the conversation that was left. The pre-plan tools return
+	 * after the transition; the model returns only if the next conversation
+	 * carried the live plan model, not if a session loaded its own model.
 	 */
-	#onSessionChanged(): void {
+	#onSessionChanged(origin: SessionChangeOrigin): void {
 		const owned = this.#owned;
 		const deferred = this.#deferredModelRestore;
 		if (!owned && !deferred) return;
@@ -375,7 +372,7 @@ export class RpcPlanModeController {
 		this.#track(async () => {
 			await session.waitForSessionTransition();
 			if (owned) await session.restoreNonMCPToolPresentation(owned.tools.enabled, owned.tools.mounted);
-			if (model) await this.#restorePrePlanModel(model);
+			if (model && origin === "carried") await this.#restorePrePlanModel(model);
 		});
 	}
 
@@ -385,10 +382,9 @@ export class RpcPlanModeController {
 	}
 
 	/**
-	 * Restore the pre-plan model, but only while the session still runs the
-	 * model and thinking level plan mode applied. A model the host chose while
-	 * planning (`set_model`, `cycle_model`, `set_role`, `set_thinking_level`,
-	 * `/model`), or the model a switched-to session loaded, is kept.
+	 * Restore the pre-plan model only while the session still runs the model
+	 * and thinking level plan mode applied. The caller skips this for loaded
+	 * sessions, whose coincidentally equal model belongs to that session.
 	 */
 	async #restorePrePlanModel(change: PlanModelSwitch): Promise<void> {
 		const live = this.#liveModel();
