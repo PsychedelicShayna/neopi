@@ -82,6 +82,10 @@
 			"types": "./src/auth-broker/*.ts",
 			"import": "./src/auth-broker/*.ts"
 		},
+		"./switch/wire": {
+			"types": "./src/switch/wire.ts",
+			"import": "./src/switch/wire.ts"
+		},
 		"./auth-gateway": {
 			"types": "./src/auth-gateway/index.ts",
 			"import": "./src/auth-gateway/index.ts"
