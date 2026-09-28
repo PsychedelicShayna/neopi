@@ -34,6 +34,8 @@ export interface CredentialRowStore {
 	/** Record the current auth revision after a local mutation already notified consumers. */
 	acknowledgeLocalChanges?(): void;
 	listAuthCredentials(provider?: string): StoredAuthCredential[];
+	/** Run one pinned-ingest read/merge callback under the authoritative local SQLite transaction. */
+	withPinnedUsageTransaction?<T>(id: number, apply: (row: StoredAuthCredential | undefined) => T): T;
 	/**
 	 * Optional store hook to re-hydrate the credential snapshot from its
 	 * backing source. Remote broker stores re-fetch `GET /v1/snapshot` so a
@@ -88,6 +90,8 @@ export interface CredentialRowStore {
 export interface CredentialCacheStore {
 	getCache(key: string, options?: { includeExpired?: boolean }): string | null;
 	setCache(key: string, value: string, expiresAtSec: number): void;
+	/** Unlike best-effort ordinary cache writes, pinned ingestion must surface persistence failure. */
+	setCacheStrict?(key: string, value: string, expiresAtSec: number): void;
 	/** Drop all cache rows whose keys start with the supplied prefix. */
 	deleteCachePrefix?(prefix: string): void;
 	cleanExpiredCache(): void;

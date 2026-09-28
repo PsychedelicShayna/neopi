@@ -101,6 +101,10 @@ export interface CredentialBinding {
 	readonly credentialId: number;
 	readonly fingerprint: string;
 }
+export type BoundHeaderIngestResult =
+	| { status: "applied" }
+	| { status: "ignored"; reason: "unsupported" | "unparseable" | "throttled" }
+	| { status: "binding_mismatch"; reason: "missing" | "provider" | "fingerprint" | "visibility" };
 
 /** One persisted rate-limit block: credential row id + provider-type key + optional scope. */
 export interface StoredCredentialBlock {
@@ -1089,12 +1093,12 @@ export interface UsageApi {
 		headers: Record<string, string>,
 		options?: { sessionId?: string; baseUrl?: string; responseStatus?: number },
 	): boolean;
-	/** Exact local row attribution; broker-backed stores return false, never an overlay. */
+	/** Exact credential-row attribution; broker-backed stores explicitly report unsupported. */
 	ingestHeadersPinned(
 		binding: CredentialBinding,
 		headers: Record<string, string>,
-		options?: { baseUrl?: string; responseStatus?: number },
-	): boolean;
+		options?: { sessionId?: string; baseUrl?: string; responseStatus?: number },
+	): Promise<BoundHeaderIngestResult>;
 	/**
 	 * Discard cached usage reports before a user-requested refresh. The next
 	 * read probes upstream serially per provider; a failure reports no fresh

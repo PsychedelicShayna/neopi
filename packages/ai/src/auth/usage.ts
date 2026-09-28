@@ -39,7 +39,7 @@ import { OAUTH_REFRESH_SKEW_MS } from "./refresh";
 import type { OAuthRefresher } from "./refresh";
 import { USAGE_REPORT_TTL_MS } from "./sqlite-credential-store";
 import type { AuthCredentialStore } from "./store";
-import type { AuthCredential, CredentialBinding, OAuthCredential, ObservedUsageInput, UsageApi } from "./types";
+import type { AuthCredential, BoundHeaderIngestResult, CredentialBinding, OAuthCredential, ObservedUsageInput, UsageApi } from "./types";
 import {
 	dedupeUsageReports,
 	isUsageLimitExhausted,
@@ -462,7 +462,7 @@ export class UsageService implements UsageApi {
 		options?: { sessionId?: string; baseUrl?: string; responseStatus?: number },
 	): boolean {
 		const credential = this.#deps.affinity.activeOAuth(provider, options?.sessionId);
-		return credential ? this.#ingestHeadersForCredential(provider, credential, headers, options) : false;
+		return credential ? this.#ingestHeadersForCredential(provider, credential, headers, options).status === "applied" : false;
 	}
 
 	/**
@@ -470,16 +470,25 @@ export class UsageService implements UsageApi {
 	 * Remote/broker-backed stores cannot persist this report authoritatively and
 	 * must never overlay their local cache or guess an account from affinity.
 	 */
-	ingestHeadersPinned(
+	async ingestHeadersPinned(
 		binding: CredentialBinding,
 		headers: Record<string, string>,
-		options?: { baseUrl?: string; responseStatus?: number },
-	): boolean {
-		if (this.#deps.store.refreshSnapshot || this.#deps.store.fetchUsageReports) return false;
-		const row = this.#deps.store.listAuthCredentials(binding.provider).find(entry => entry.id === binding.credentialId);
-		if (!row || row.disabledCause !== null || row.credential.type !== "oauth") return false;
-		if (fingerprintCredential(row) !== binding.fingerprint) return false;
-		return this.#ingestHeadersForCredential(binding.provider, row.credential, headers, options);
+		options?: { sessionId?: string; baseUrl?: string; responseStatus?: number },
+	): Promise<BoundHeaderIngestResult> {
+		const store = this.#deps.store;
+		if (!store.withPinnedUsageTransaction || !store.setCacheStrict || store.refreshSnapshot || store.fetchUsageReports) {
+			return { status: "ignored", reason: "unsupported" };
+		}
+		// The callback is synchronous: SQLite fences the exact row identity and
+		// commits its cache merge before any other process can replace the row.
+		return store.withPinnedUsageTransaction<BoundHeaderIngestResult>(binding.credentialId, row => {
+			if (!row) return { status: "binding_mismatch", reason: "missing" };
+			if (row.provider !== binding.provider) return { status: "binding_mismatch", reason: "provider" };
+			if (row.credential.type !== "oauth" || fingerprintCredential(row) !== binding.fingerprint) {
+				return { status: "binding_mismatch", reason: "fingerprint" };
+			}
+			return this.#ingestHeadersForCredential(binding.provider, row.credential, headers, options, true);
+		});
 	}
 
 	#ingestHeadersForCredential(
@@ -487,21 +496,22 @@ export class UsageService implements UsageApi {
 		credential: OAuthCredential,
 		headers: Record<string, string>,
 		options?: { baseUrl?: string; responseStatus?: number },
-	): boolean {
+		strict = false,
+	): BoundHeaderIngestResult {
 		const parseHeaders = this.providerFor(provider)?.parseRateLimitHeaders;
-		if (!parseHeaders) return false;
+		if (!parseHeaders) return { status: "ignored", reason: "unsupported" };
 
 		const cacheKey = this.#deps.cache.reportKey(oauthUsageRequest(provider, credential, options?.baseUrl));
 		const now = Date.now();
 		const parsedReport = parseHeaders(headers, now, { responseStatus: options?.responseStatus });
-		if (!parsedReport) return false;
+		if (!parsedReport) return { status: "ignored", reason: "unparseable" };
 		// Throttled to one ingest per interval — except when a window reads
 		// exhausted: persist that snapshot immediately. A full-backed cache can
 		// then block the next getApiKey; a cold header-only snapshot first probes
 		// the usage endpoint.
 		const exhausted = parsedReport.limits.some(limit => isUsageLimitExhausted(limit));
 		const last = this.#usageHeaderIngestAt.get(cacheKey);
-		if (!exhausted && last !== undefined && now - last < USAGE_HEADER_INGEST_INTERVAL_MS) return false;
+		if (!exhausted && last !== undefined && now - last < USAGE_HEADER_INGEST_INTERVAL_MS) return { status: "ignored", reason: "throttled" };
 		const metadata: Record<string, unknown> = { ...parsedReport.metadata };
 		if (credential.accountId && metadata.accountId === undefined) metadata.accountId = credential.accountId;
 		if (credential.email && metadata.email === undefined) metadata.email = credential.email;
@@ -511,13 +521,14 @@ export class UsageService implements UsageApi {
 		const report: UsageReport = { ...parsedReport, metadata };
 
 		const storeIngest = this.#deps.store.ingestUsageReport?.bind(this.#deps.store);
+		if (strict && storeIngest) return { status: "ignored", reason: "unsupported" };
 		if (storeIngest) {
 			const ingested = storeIngest(provider, credential, report);
 			if (ingested) this.#usageHeaderIngestAt.set(cacheKey, now);
-			return ingested;
+			return ingested ? { status: "applied" } : { status: "ignored", reason: "unsupported" };
 		}
 
-		if (this.#deps.store.fetchUsageReports) return false;
+		if (this.#deps.store.fetchUsageReports) return { status: "ignored", reason: "unsupported" };
 		const priorEntry = this.#deps.cache.getStale<UsageReport | null>(cacheKey);
 		const prior = priorEntry?.value;
 		let merged = report;
@@ -555,9 +566,9 @@ export class UsageService implements UsageApi {
 		// rows such as extra usage stay current; headers only refresh window rows
 		// between fetches. A newly minted header-only report is durable but stale.
 		const expiresAt = Math.max(priorEntry?.expiresAt ?? now - 1, now - 1);
-		this.#deps.cache.set(cacheKey, { value: merged, expiresAt });
+		this.#deps.cache.set(cacheKey, { value: merged, expiresAt }, strict);
 		this.#usageHeaderIngestAt.set(cacheKey, now);
-		return true;
+		return { status: "applied" };
 	}
 
 	/** Collect resolved account requests for all configured usage providers. */

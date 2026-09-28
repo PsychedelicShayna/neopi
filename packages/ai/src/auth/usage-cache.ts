@@ -162,14 +162,16 @@ export class UsageCache {
 		return parseUsageCacheEntry<T>(raw);
 	}
 
-	set<T>(key: string, entry: UsageCacheEntry<T>): void {
+	set<T>(key: string, entry: UsageCacheEntry<T>, strict = false): void {
 		const payload = JSON.stringify({
 			value: entry.value,
 			expiresAt: entry.expiresAt,
 		});
 		const durableExpiresAt =
 			entry.value === null ? entry.expiresAt : Math.max(entry.expiresAt, Date.now() + USAGE_LAST_GOOD_RETENTION_MS);
-		this.#store.setCache(`${USAGE_CACHE_PREFIX}${key}`, payload, Math.floor(durableExpiresAt / 1000));
+		const write = strict ? this.#store.setCacheStrict : this.#store.setCache;
+		if (!write) throw new Error("Authoritative pinned usage cache writes are unsupported");
+		write.call(this.#store, `${USAGE_CACHE_PREFIX}${key}`, payload, Math.floor(durableExpiresAt / 1000));
 	}
 
 	deletePrefix(prefix: string): boolean {
