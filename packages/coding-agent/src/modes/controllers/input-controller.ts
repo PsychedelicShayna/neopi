@@ -1140,6 +1140,7 @@ export class InputController {
 			// submitting the same text again sends it unchanged.
 			const unknownSlash =
 				text !== this.#unknownSlashWarned &&
+				text.startsWith("/") &&
 				!this.ctx.isKnownSlashCommand(text) &&
 				!isKnownSkillCommand(this.ctx, text)
 					? findUnknownSlashCommand(text, this.ctx.slashCommandNames)

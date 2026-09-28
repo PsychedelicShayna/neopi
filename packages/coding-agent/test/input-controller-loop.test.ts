@@ -10,6 +10,7 @@ function createLoopContext(options: {
 	onInputCallback?: (...args: never[]) => void;
 }) {
 	const extensionCommandNames = options.extensionCommandNames ?? [];
+	const slashCommandNames = new Set([...extensionCommandNames, "void-cmd"]);
 	const extensionRunner =
 		extensionCommandNames.length > 0
 			? {
@@ -40,6 +41,8 @@ function createLoopContext(options: {
 	} as unknown as InteractiveModeContext["editor"];
 	const ctx = {
 		editor,
+		slashCommandNames,
+		isKnownSlashCommand: (text: string) => slashCommandNames.has(text.slice(1).split(/\s+/, 1)[0]!),
 		ui: { requestRender: vi.fn() },
 		session: {
 			isStreaming: options.isStreaming,

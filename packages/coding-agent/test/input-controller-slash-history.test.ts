@@ -27,6 +27,8 @@ function makeCtx(isStreaming = false) {
 		setCollapsedText: (t: string) => {
 			text = t;
 		},
+		restoreSubmittedDraft: () => false,
+		clearSubmittedDraft: vi.fn(),
 		composerChips: () => [],
 		addToHistory,
 		pendingImages: [] as ImageContent[],
@@ -42,6 +44,9 @@ function makeCtx(isStreaming = false) {
 	};
 	const ctx = {
 		editor,
+		slashCommandNames: new Set(["rename"]),
+		isKnownSlashCommand: (command: string) =>
+			Boolean(ctx.session.extensionRunner?.getCommand(command.slice(1).split(/\s+/, 1)[0]!)),
 		session: {
 			isStreaming,
 			isCompacting: false,
@@ -198,6 +203,24 @@ describe("input controller — slash command history (#3148)", () => {
 		]);
 		expect(addToHistory).toHaveBeenCalledWith(input);
 		expect(showStatus).toHaveBeenCalledWith("Queued 3 messages for when the agent yields");
+	});
+	it("warns on an unknown slash command before allowing an intentional second submit", async () => {
+		const { ctx, editor, prompt } = makeCtx(true);
+		controllerFor(ctx);
+		editor.setText("/reename session");
+
+		await editor.onSubmit?.("/reename session");
+
+		expect(ctx.showWarning).toHaveBeenCalledWith(expect.stringContaining("Did you mean /rename?"));
+		expect(editor.getText()).toBe("/reename session");
+		expect(prompt).not.toHaveBeenCalled();
+
+		await editor.onSubmit?.("/reename session");
+
+		expect(prompt).toHaveBeenCalledWith("/reename session", {
+			streamingBehavior: "steer",
+			images: undefined,
+		});
 	});
 });
 
