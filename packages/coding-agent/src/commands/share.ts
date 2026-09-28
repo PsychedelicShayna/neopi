@@ -47,7 +47,8 @@ export default class Share extends Command {
 		let sm: SessionManager | undefined;
 		if (sessionPath) {
 			try {
-				sm = await SessionManager.open(sessionPath, undefined, undefined, { throwIfMissing: true });
+				// Read-only: sharing must work on a session another process holds.
+				sm = await SessionManager.openReadOnly(sessionPath);
 			} catch (err) {
 				if (!isEnoent(err)) throw err;
 			}
