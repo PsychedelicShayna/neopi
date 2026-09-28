@@ -1,4 +1,4 @@
-import { Document, isAlias, isMap, isNode, isScalar, parseDocument, type ParsedNode, type YAMLMap } from "yaml";
+import { Document, isAlias, isMap, isNode, isScalar, isSeq, parseDocument, type ParsedNode, type YAMLMap } from "yaml";
 
 /** One path-level change to apply without rebuilding the surrounding YAML document. */
 export type YamlPathMutation =
@@ -29,6 +29,13 @@ function preserveDeletedComments(document: Document.Parsed<ParsedNode>, path: re
 	else appendComment(parent, comments);
 }
 
+function copyNodePresentation(source: unknown, target: unknown): void {
+	if (!isNode(source) || !isNode(target)) return;
+	target.commentBefore = source.commentBefore;
+	target.comment = source.comment;
+	target.spaceBefore = source.spaceBefore;
+}
+
 /** Replace an alias at one path with an independent node containing its resolved value. */
 export function materializeYamlAlias(
 	document: Document.Parsed<ParsedNode>,
@@ -39,21 +46,25 @@ export function materializeYamlAlias(
 	const resolved = node.resolve(document);
 	if (!resolved) throw new Error(`YAML alias at ${path.join(".")} does not resolve`);
 	const materialized = document.createNode(resolved.toJS(document));
-	materialized.commentBefore = node.commentBefore;
-	materialized.comment = node.comment;
-	materialized.spaceBefore = node.spaceBefore;
+	copyNodePresentation(node, materialized);
 	document.setIn(path, materialized);
 	return materialized;
 }
 
-function materializeAliasParents(document: Document.Parsed<ParsedNode>, path: readonly (string | number)[]): void {
+function prepareMutationParents(document: Document.Parsed<ParsedNode>, path: readonly (string | number)[]): void {
 	for (let length = 1; length < path.length; length++) {
-		materializeYamlAlias(document, path.slice(0, length));
+		const parentPath = path.slice(0, length);
+		const parent = materializeYamlAlias(document, parentPath);
+		const requiresSequence = typeof path[length] === "number";
+		if (requiresSequence ? isSeq(parent) : isMap(parent)) continue;
+		const replacement = document.createNode(requiresSequence ? [] : {});
+		copyNodePresentation(parent, replacement);
+		document.setIn(parentPath, replacement);
 	}
 }
 
 function deleteYamlPath(document: Document.Parsed<ParsedNode>, path: readonly (string | number)[]): void {
-	materializeAliasParents(document, path);
+	prepareMutationParents(document, path);
 	preserveDeletedComments(document, path);
 	document.deleteIn(path);
 	for (let length = path.length - 1; length > 0; length--) {
@@ -75,7 +86,7 @@ export function patchYamlDocument(source: string, mutations: readonly YamlPathMu
 		if (mutation.operation === "delete") {
 			deleteYamlPath(document, mutation.path);
 		} else {
-			materializeAliasParents(document, mutation.path);
+			prepareMutationParents(document, mutation.path);
 			document.setIn(mutation.path, mutation.value);
 		}
 	}

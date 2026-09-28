@@ -339,6 +339,37 @@ describe("Settings", () => {
 			});
 		});
 
+		it("replaces scalar advisor parents before saving nested settings", async () => {
+			const cases: { source: string; expectedExtra: Record<string, unknown>; expectedComment: string }[] = [
+				{
+					source: "advisor: null # null advisor\nfutureFeature: keep # unrelated\n",
+					expectedExtra: {},
+					expectedComment: "# null advisor",
+				},
+				{
+					source:
+						"disabledAdvisor: &disabledAdvisor false # scalar anchor\nadvisor: *disabledAdvisor # scalar alias\nfutureFeature: keep # unrelated\n",
+					expectedExtra: { disabledAdvisor: false },
+					expectedComment: "# scalar alias",
+				},
+			];
+			for (const testCase of cases) {
+				await Bun.write(getConfigPath(), testCase.source);
+				const settings = await Settings.loadIsolated({ cwd: projectDir, agentDir });
+				cfgAdvisorEnabled.set(settings, true);
+				await settings.flush();
+
+				const saved = await Bun.file(getConfigPath()).text();
+				expect(saved).toContain("# unrelated");
+				expect(saved).toContain(testCase.expectedComment);
+				expect(YAML.parse(saved)).toEqual({
+					...testCase.expectedExtra,
+					advisor: { enabled: true },
+					futureFeature: "keep",
+				});
+			}
+		});
+
 		it("preserves comments while persisting legacy-key migrations", async () => {
 			await Bun.write(
 				getConfigPath(),

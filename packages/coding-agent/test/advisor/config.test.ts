@@ -519,6 +519,35 @@ describe("WATCHDOG.yml file round-trip", () => {
 		});
 	});
 
+	it("matches a stale edit to the original row after a duplicate is inserted ahead of it", async () => {
+		const file = path.join(tmp, "WATCHDOG.yml");
+		await Bun.write(file, "advisors:\n  - name: Reviewer\n    futureId: original # original row\n");
+		const stale = await loadWatchdogConfigFile(file);
+		await Bun.write(
+			file,
+			[
+				"advisors:",
+				"  - name: Reviewer",
+				"    futureId: inserted # inserted row",
+				"  - name: Reviewer",
+				"    futureId: original # original row",
+				"",
+			].join("\n"),
+		);
+		stale.advisors[0].enabled = false;
+		await saveWatchdogConfigFile(file, stale);
+
+		const saved = await Bun.file(file).text();
+		expect(YAML.parse(saved)).toEqual({
+			advisors: [
+				{ name: "Reviewer", futureId: "inserted" },
+				{ name: "Reviewer", futureId: "original", enabled: false },
+			],
+		});
+		expect(saved).toContain("# inserted row");
+		expect(saved).toContain("# original row");
+	});
+
 	it("does not resurrect an advisor renamed or deleted by a newer editor", async () => {
 		const file = path.join(tmp, "WATCHDOG.yml");
 		await Bun.write(file, "advisors:\n  - name: Original\n    futureId: keep\n");

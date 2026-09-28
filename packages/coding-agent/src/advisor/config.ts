@@ -28,6 +28,7 @@ interface WatchdogAdvisorOrigin {
 	base: AdvisorConfig;
 	name: string;
 	occurrence: number;
+	fingerprint: string | undefined;
 }
 
 interface WatchdogBaseline {
@@ -309,12 +310,49 @@ export async function resolveAdvisorConfigEditPath(
 	return yml;
 }
 
-function rememberWatchdogBaseline(doc: WatchdogConfigDoc, filePath: string, sourceWasPresent = true): void {
+function watchdogAdvisorFingerprint(value: unknown): string | undefined {
+	try {
+		return JSON.stringify(value);
+	} catch {
+		return undefined;
+	}
+}
+
+function watchdogAdvisorFingerprints(source: string): (string | undefined)[] {
+	try {
+		const parsed: unknown = YAML.parse(source);
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [];
+		const rawAdvisors = (parsed as Record<string, unknown>).advisors;
+		if (!Array.isArray(rawAdvisors)) return [];
+		const fingerprints: (string | undefined)[] = [];
+		for (const rawAdvisor of rawAdvisors) {
+			if (advisorEntrySchema(rawAdvisor) instanceof type.errors) continue;
+			fingerprints.push(watchdogAdvisorFingerprint(rawAdvisor));
+		}
+		return fingerprints;
+	} catch {
+		return [];
+	}
+}
+
+function rememberWatchdogBaseline(
+	doc: WatchdogConfigDoc,
+	filePath: string,
+	sourceWasPresent = true,
+	source = "",
+): void {
 	const occurrences = new Map<string, number>();
-	const origins = doc.advisors.map(advisor => {
+	const fingerprints = watchdogAdvisorFingerprints(source);
+	const origins = doc.advisors.map((advisor, index) => {
 		const occurrence = occurrences.get(advisor.name) ?? 0;
 		occurrences.set(advisor.name, occurrence + 1);
-		return { advisor, base: structuredClone(advisor), name: advisor.name, occurrence };
+		return {
+			advisor,
+			base: structuredClone(advisor),
+			name: advisor.name,
+			occurrence,
+			fingerprint: fingerprints[index],
+		};
 	});
 	watchdogBaselines.set(doc, { doc: structuredClone(doc), origins, filePath, sourceWasPresent });
 }
@@ -380,7 +418,7 @@ export async function loadWatchdogConfigFile(filePath: string): Promise<Watchdog
 	if (instructions?.trim()) doc.instructions = instructions;
 	if (sharedMaxNotesPerUpdate !== undefined) doc.maxNotesPerUpdate = sharedMaxNotesPerUpdate;
 	if (warnings.length > 0) doc.warnings = warnings;
-	rememberWatchdogBaseline(doc, filePath);
+	rememberWatchdogBaseline(doc, filePath, true, text);
 	return doc;
 }
 
@@ -498,6 +536,27 @@ function removeMalformedWatchdogAdvisors(sequence: YAMLSeq<unknown>): void {
 	}
 }
 
+function resolveWatchdogAdvisorOrigin(
+	sequence: YAMLSeq<unknown>,
+	origin: WatchdogAdvisorOrigin,
+	origins: readonly WatchdogAdvisorOrigin[],
+): { index: number; map: YAMLMap<unknown, unknown> } | undefined {
+	const candidates: { index: number; map: YAMLMap<unknown, unknown> }[] = [];
+	for (const [index, item] of sequence.items.entries()) {
+		if (isMap(item) && item.get("name") === origin.name) candidates.push({ index, map: item });
+	}
+	if (origin.fingerprint !== undefined) {
+		const exact = candidates.filter(
+			candidate => watchdogAdvisorFingerprint(candidate.map.toJSON()) === origin.fingerprint,
+		);
+		if (exact.length === 1) return exact[0];
+		if (exact.length > 1) return undefined;
+	}
+	const baselineCount = origins.filter(candidate => candidate.name === origin.name).length;
+	if (candidates.length !== baselineCount) return undefined;
+	return candidates[origin.occurrence];
+}
+
 function patchWatchdogAdvisor(map: YAMLMap<unknown, unknown>, advisor: AdvisorConfig, base?: AdvisorConfig): void {
 	const values = watchdogAdvisorValues(advisor);
 	const baseValues = base ? watchdogAdvisorValues(base) : undefined;
@@ -576,7 +635,7 @@ function patchWatchdogDocument(source: string, doc: WatchdogConfigDoc, baseline?
 
 	const resolvedOrigins = baseline.origins.map(origin => ({
 		origin,
-		existing: findWatchdogAdvisor(sequence, origin.name, origin.occurrence),
+		existing: resolveWatchdogAdvisorOrigin(sequence, origin, baseline.origins),
 	}));
 	const matches = new Map<AdvisorConfig, (typeof resolvedOrigins)[number]>();
 	const claimedOrigins = new Set<WatchdogAdvisorOrigin>();
@@ -658,6 +717,6 @@ export async function saveWatchdogConfigFile(filePath: string, doc: WatchdogConf
 			await fs.rm(filePath, { force: true });
 		}
 		watchdogRepairDocs.delete(doc);
-		rememberWatchdogBaseline(doc, filePath, wroteFile);
+		rememberWatchdogBaseline(doc, filePath, wroteFile, content);
 	});
 }
