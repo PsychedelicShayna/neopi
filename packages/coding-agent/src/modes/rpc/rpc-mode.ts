@@ -62,6 +62,7 @@ import { RpcSessionEventForwarder } from "./rpc-session-events";
 import { isRpcSessionSettled, RpcSessionSettleWatcher } from "./rpc-session-settle";
 import { RpcSubagentRegistry, readRpcSubagentTranscript } from "./rpc-subagents";
 import { getRpcUsage, RpcUsageUnavailableError } from "./rpc-usage";
+import { isRpcApprovalHandler, isRpcToolApprovalResponse, RpcToolApprovalBridge } from "./rpc-tool-approval";
 import type {
 	RpcCommand,
 	RpcExtensionUIRequest,
@@ -80,6 +81,7 @@ import type {
 	RpcResponse,
 	RpcSessionState,
 	RpcSubagentSubscriptionLevel,
+	RpcToolApprovalResponse,
 } from "./rpc-types";
 
 // Re-export types for consumers
@@ -247,6 +249,7 @@ export interface RpcInputFrameDeps {
 	onHostToolResult: (frame: RpcHostToolResult) => void;
 	onHostToolUpdate: (frame: RpcHostToolUpdate) => void;
 	onHostUriResult: (frame: RpcHostUriResult) => void;
+	onToolApprovalResponse: (frame: RpcToolApprovalResponse) => void;
 }
 
 /**
@@ -280,6 +283,11 @@ export function dispatchRpcControlFrame(parsed: unknown, deps: RpcInputFrameDeps
 
 	if (isRpcHostUriResult(parsed)) {
 		deps.onHostUriResult(parsed);
+		return true;
+	}
+
+	if (isRpcToolApprovalResponse(parsed)) {
+		deps.onToolApprovalResponse(parsed);
 		return true;
 	}
 
@@ -870,6 +878,11 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	const pendingExtensionRequests = new RpcPendingExtensionRequests();
 	const hostToolBridge = new RpcHostToolBridge(output);
 	const hostUriBridge = new RpcHostUriBridge(output);
+	const toolApprovalBridge = new RpcToolApprovalBridge({
+		output,
+		runner: session.extensionRunner,
+		settings: session.settings,
+	});
 	const subagentRegistry = subagentEventBus ? new RpcSubagentRegistry(subagentEventBus, output) : undefined;
 	const rpcRoles = new RpcRoles(session, launchModel);
 
@@ -1085,6 +1098,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		onHostToolResult: frame => hostToolBridge.handleResult(frame),
 		onHostToolUpdate: frame => hostToolBridge.handleUpdate(frame),
 		onHostUriResult: frame => hostUriBridge.handleResult(frame),
+		onToolApprovalResponse: frame => toolApprovalBridge.handleResponse(frame),
 	};
 	const inputDispatcher = new RpcInputDispatcher({
 		deps: dispatchFrameDeps,
@@ -1486,6 +1500,17 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				return success(id, "set_event_filter", { events: sessionEvents.setFilter(events) });
 			}
 
+			case "set_approval_handler": {
+				if (!isRpcApprovalHandler(command.handler)) {
+					return error(
+						id,
+						"set_approval_handler",
+						`handler must be "host" or "ui", got ${JSON.stringify(command.handler)}`,
+					);
+				}
+				return success(id, "set_approval_handler", { handler: toolApprovalBridge.setHandler(command.handler) });
+			}
+
 			case "get_subagents": {
 				if (!subagentRegistry) {
 					return error(id, "get_subagents", "Subagent event bus is unavailable");
@@ -1849,6 +1874,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	pendingExtensionRequests.rejectAll("RPC client disconnected before extension UI response completed");
 	hostToolBridge.close("RPC client disconnected before host tool execution completed");
 	hostUriBridge.clear("RPC client disconnected before host URI request completed");
+	toolApprovalBridge.close("RPC client disconnected before tool approval response completed");
 	await inputDispatcher.drain();
 	await shutdownCoordinator.drain();
 	subagentRegistry?.dispose();

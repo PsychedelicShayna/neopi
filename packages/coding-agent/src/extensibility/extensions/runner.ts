@@ -33,6 +33,7 @@ import type { BranchHandler, NavigateTreeHandler, NewSessionHandler } from "../s
 import { accumulateToolCallResult, buildAggregatedToolCallResult } from "../shared-events";
 import { ManagedTimers } from "./managed-timers";
 import { createExtensionModelQuery } from "./model-api";
+import type { ToolApprovalRequester } from "./tool-approval-requester";
 import type { ComposerShapeDefinition } from "@oh-my-pi/pi-tui/overlays/composer-shape-registry";
 import type {
 	AfterProviderResponseEvent,
@@ -462,6 +463,7 @@ export class ExtensionRunner {
 	#chatMode = false;
 	#mode: ExtensionMode = "print";
 	#toolApprovalPreviewWaiter?: (toolCallId: string) => Promise<void>;
+	#toolApprovalRequester?: ToolApprovalRequester;
 	#errorListeners: Set<ExtensionErrorListener> = new Set();
 	#getModel: () => Model | undefined = () => undefined;
 	#isIdleFn: () => boolean = () => true;
@@ -961,6 +963,22 @@ export class ExtensionRunner {
 	/** Waits until the interactive transcript can show the tool call being approved. */
 	async waitForToolApprovalPreview(toolCallId: string): Promise<void> {
 		await this.#toolApprovalPreviewWaiter?.(toolCallId);
+	}
+
+	/**
+	 * Routes prompt-required tool approvals to a host-rendered approver instead
+	 * of the UI select dialog. Returns a detach function.
+	 */
+	setToolApprovalRequester(requester: ToolApprovalRequester): () => void {
+		this.#toolApprovalRequester = requester;
+		return () => {
+			if (this.#toolApprovalRequester === requester) this.#toolApprovalRequester = undefined;
+		};
+	}
+
+	/** The host approver registered by {@link setToolApprovalRequester}, if any. */
+	getToolApprovalRequester(): ToolApprovalRequester | undefined {
+		return this.#toolApprovalRequester;
 	}
 
 	getUIContext(): ExtensionUIContext {
