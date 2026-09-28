@@ -242,6 +242,24 @@ export interface RpcPromptError {
 	retryable: boolean;
 }
 
+/** `prompt` success-response data. */
+export interface RpcPromptResponseData {
+	/**
+	 * Set only by a slash command that was consumed on the spot. `false` is the
+	 * completion signal (no `prompt_result` follows); `true` means the command
+	 * scheduled an agent turn of its own (e.g. `/retry`).
+	 */
+	agentInvoked?: boolean;
+	/**
+	 * Id of the session entry the prompt's message is written as (a `message`
+	 * entry, or a `custom_message` entry for a `/skill:` prompt). Allocated when
+	 * the prompt is accepted, so it is known before the turn persists anything;
+	 * it matches `get_entries`/`get_messages_page` ids once the message reaches
+	 * the session. Absent when the prompt writes no entry of its own.
+	 */
+	userEntryId?: string;
+}
+
 /**
  * Terminal frame emitted exactly once per accepted `prompt`/`abort_and_prompt`,
  * after all work the prompt caused has settled. Correlate on `id`.
@@ -356,11 +374,11 @@ export type RpcResponse =
 	  }
 
 	// Prompting (async - events follow)
-	| { id?: string; type: "response"; command: "prompt"; success: true; data?: { agentInvoked: boolean } }
-	| { id?: string; type: "response"; command: "steer"; success: true }
-	| { id?: string; type: "response"; command: "follow_up"; success: true }
+	| { id?: string; type: "response"; command: "prompt"; success: true; data?: RpcPromptResponseData }
+	| { id?: string; type: "response"; command: "steer"; success: true; data: { userEntryId: string } }
+	| { id?: string; type: "response"; command: "follow_up"; success: true; data: { userEntryId: string } }
 	| { id?: string; type: "response"; command: "abort"; success: true }
-	| { id?: string; type: "response"; command: "abort_and_prompt"; success: true }
+	| { id?: string; type: "response"; command: "abort_and_prompt"; success: true; data?: { userEntryId: string } }
 	| { id?: string; type: "response"; command: "new_session"; success: true; data: { cancelled: boolean } }
 	| { id?: string; type: "response"; command: "open_session"; success: true; data: RpcOpenSessionResult }
 
