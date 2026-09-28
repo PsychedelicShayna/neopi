@@ -524,12 +524,14 @@ export async function loadMixturesConfigFile(filePath: string): Promise<Mixtures
 	return parseMixturesText(read.content, filePath);
 }
 
-/** Write a doc to `MIXTURES.toml`; an empty doc removes the file. */
+/** Write a bounded doc; oversized output preserves the file, and an empty doc removes it. */
 export async function saveMixturesConfigFile(filePath: string, doc: MixturesConfigDoc): Promise<void> {
 	const content = serializeMixturesConfig(doc);
 	if (!content) {
 		await fs.rm(filePath, { force: true });
 		return;
 	}
+	const bytes = Buffer.byteLength(content, "utf8");
+	if (bytes > MAX_FILE_BYTES) throw new Error(rejectionWarning(filePath, { kind: "too_large", bytes }));
 	await Bun.write(filePath, content);
 }

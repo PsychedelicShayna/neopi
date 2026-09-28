@@ -276,6 +276,22 @@ describe("MIXTURES.toml serialization", () => {
 		expect(await Bun.file(file).exists()).toBe(false);
 		expect(await loadMixturesConfigFile(file)).toEqual({ mixtures: [] });
 	});
+
+	it("rejects oversized UTF-8 output without replacing the saved configuration", async () => {
+		using dir = TempDir.createSync("@moa-config-save-bound-");
+		const file = dir.join("MIXTURES.toml");
+		const original = parse(DRAFT_THEN_EDIT);
+		await saveMixturesConfigFile(file, original);
+		const saved = await Bun.file(file).text();
+		const oversized = {
+			...original,
+			roles: Object.fromEntries(Array.from({ length: 100 }, (_, index) => [`role${index}`, "é".repeat(22_000)])),
+		};
+
+		await expect(saveMixturesConfigFile(file, oversized)).rejects.toThrow("file.too_large");
+		expect(await Bun.file(file).text()).toBe(saved);
+		expect(await loadMixturesConfigFile(file)).toEqual(original);
+	});
 });
 
 describe("discoverMixtures", () => {
