@@ -345,17 +345,18 @@ export function computeNonMessageBreakdown(
 	const tools = session.agent?.state?.tools ?? EMPTY_TOOLS;
 	const systemPromptParts = session.systemPrompt ?? EMPTY_STRING_PARTS;
 	const systemPrompt = systemPromptParts[0] ?? "";
-	const skillsStart = systemPrompt.indexOf("<skills>");
-	const skillsEnd = skillsStart < 0 ? -1 : systemPrompt.indexOf("</skills>", skillsStart);
 	const promptTokens = tokenizer.countTokens(systemPrompt);
-	// The skill inventory is frozen in the provider-facing prompt, unlike the live session list.
-	const skillsTokens =
-		skillsEnd < 0
-			? 0
-			: Math.min(
-					promptTokens,
-					tokenizer.countTokens(systemPrompt.slice(skillsStart, skillsEnd + "</skills>".length)),
-				);
+	// Count every provider-facing skills block; a literal custom prompt can contain
+	// an example before the generated inventory. The live skill list can differ.
+	let skillsTokens = 0;
+	for (let start = systemPrompt.indexOf("<skills>"); start >= 0;) {
+		const end = systemPrompt.indexOf("</skills>", start);
+		if (end < 0) break;
+		const next = end + "</skills>".length;
+		skillsTokens += tokenizer.countTokens(systemPrompt.slice(start, next));
+		start = systemPrompt.indexOf("<skills>", next);
+	}
+	skillsTokens = Math.min(promptTokens, skillsTokens);
 	const toolsTokens = estimateToolSchemaTokens(tools, tokenizer, sourceRevision);
 	const systemContextTokens = tokenizer.countTokens(Array.from(systemPromptParts.slice(1), part => part ?? ""));
 	const systemPromptTokens = promptTokens - skillsTokens;

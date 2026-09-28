@@ -76,4 +76,32 @@ describe("Skills context accounting", () => {
 		session.skills = [];
 		expect(computeNonMessageBreakdown(session as never, tokenizer).skillsTokens).toBe(withSkills.skillsTokens);
 	});
+	it("counts the generated inventory after a custom prompt's literal skills example", async () => {
+		const options = {
+			cwd: process.cwd(),
+			contextFiles: [],
+			rules: [],
+			toolNames: ["read"],
+			customPrompt: "Example markup:\n<skills>\n- sample: explanatory text\n</skills>",
+			workspaceTree: { rootPath: process.cwd(), rendered: "", truncated: false, totalLines: 0, agentsMdFiles: [] },
+		};
+		const skill = {
+			name: "agent-vfb",
+			description: "Use the virtual framebuffer for interactive graphics",
+			filePath: "/tmp/skills/agent-vfb/SKILL.md",
+			baseDir: "/tmp/skills/agent-vfb",
+			source: "test",
+		};
+		const withoutInventory = (await buildSystemPrompt({ ...options, skills: [] })).systemPrompt;
+		const withInventory = (await buildSystemPrompt({ ...options, skills: [skill] })).systemPrompt;
+		const session = { systemPrompt: withoutInventory, agent: { state: { tools: [] } } };
+		const exampleOnly = computeNonMessageBreakdown(session, tokenizer);
+		session.systemPrompt = withInventory;
+		const bothBlocks = computeNonMessageBreakdown(session, tokenizer);
+
+		expect(bothBlocks.skillsTokens).toBeGreaterThan(exampleOnly.skillsTokens);
+		expect(bothBlocks.systemPromptTokens + bothBlocks.skillsTokens).toBe(
+			tokenizer.countTokens(withInventory[0] ?? ""),
+		);
+	});
 });
