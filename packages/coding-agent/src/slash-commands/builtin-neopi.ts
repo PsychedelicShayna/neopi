@@ -1,19 +1,111 @@
 /**
  * NeoPi operator commands: `/persona`, `/loadout`, `/repl`, `/kernel`.
  */
+import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
 import type { InteractiveModeContext } from "../modes/types";
 import { type LoadoutHost, loadoutFeature } from "../neopi/loadout";
 import {
 	PERSONA_SUBCOMMANDS,
 	PERSONA_USAGE,
+	type PersonaNameItem,
+	personaNameItems,
 	parsePersonaCommand,
 	runPersonaCommand,
 	sessionPersonaHost,
 } from "../neopi/persona-config";
 import { parseReplTarget, REPL_TARGETS, type ReplTarget, replTargetLabel } from "../neopi/repl";
 import type { AgentSession } from "../session/agent-session";
+import { buildArgumentCompletions, buildSubcommandInlineHint, ghostHint } from "./builtin-completions";
 import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers/parse";
-import type { SlashCommandSpec } from "./types";
+import type { SlashCommandSpec, SubcommandDef, TuiSlashCommandRuntime } from "./types";
+
+const PERSONA_DEFS: SubcommandDef[] = PERSONA_SUBCOMMANDS.map(item => ({ ...item }));
+const LIVE_PERSONA_DEFS = PERSONA_DEFS.filter(item => item.name !== "live");
+const LOADOUT_DEFS: SubcommandDef[] = [
+	{ name: "set", description: "Apply a loadout", usage: "<name>" },
+	{ name: "off", description: "Restore the configured models" },
+	{ name: "list", description: "List loadouts; * marks the active one" },
+	{ name: "show", description: "Print a loadout definition", usage: "<name>" },
+	{ name: "status", description: "Show the active loadout" },
+];
+const KERNEL_DEFS: SubcommandDef[] = [
+	{ name: "status", description: "Show which kernels are running" },
+	{ name: "reset", description: "Start the next cell in a fresh kernel", usage: "<py|js>" },
+	{ name: "interrupt", description: "Cancel running eval and bash cells" },
+];
+
+interface NamedArgument {
+	name: string;
+	description?: string;
+	active?: boolean;
+}
+
+/**
+ * Completion for `<subcommand> <name>` commands: the declarative subcommand
+ * list while the verb is typed, then names for the verbs in `nameVerbs`.
+ * A name completes the command unless the verb takes a second argument
+ * (`needsMore`), in which case the popup stays for it.
+ */
+async function subcommandThenNameCompletions(
+	prefix: string,
+	lead: string,
+	defs: SubcommandDef[],
+	nameVerbs: ReadonlySet<string>,
+	names: () => Promise<NamedArgument[]>,
+	needsMore: ReadonlySet<string> = new Set(),
+): Promise<AutocompleteItem[] | null> {
+	const space = prefix.indexOf(" ");
+	if (space === -1) {
+		const items = buildArgumentCompletions(defs)(prefix);
+		return items?.map(item => ({ ...item, value: `${lead}${item.value}` })) ?? null;
+	}
+	const verb = prefix.slice(0, space).toLowerCase();
+	const typed = prefix.slice(space + 1);
+	if (!nameVerbs.has(verb) || typed.includes(" ")) return null;
+	const lower = typed.toLowerCase();
+	const more = needsMore.has(verb);
+	const matches = (await names())
+		.filter(item => item.name.toLowerCase().startsWith(lower))
+		.map(item => ({
+			value: `${lead}${verb} ${item.name}${more ? " " : ""}`,
+			label: `${item.active ? "● " : ""}${item.name}`,
+			description: item.description,
+			hint: ghostHint(item.name.slice(typed.length), more ? "<new-name>" : undefined),
+			submitsCommand: !more,
+		}));
+	return matches.length > 0 ? matches : null;
+}
+
+const PERSONA_NAME_VERBS = new Set(["set", "show", "delete", "clone"]);
+
+function personaArgumentCompletions(
+	prefix: string,
+	runtime: TuiSlashCommandRuntime | undefined,
+): Promise<AutocompleteItem[] | null> {
+	const lead = /^live\s+/i.exec(prefix)?.[0] ?? "";
+	const scope = lead ? "live" : "persona";
+	const names = (): Promise<PersonaNameItem[]> => personaNameItems(scope, runtime?.ctx.sessionManager.getSessionId());
+	return subcommandThenNameCompletions(
+		prefix.slice(lead.length),
+		lead,
+		lead ? LIVE_PERSONA_DEFS : PERSONA_DEFS,
+		PERSONA_NAME_VERBS,
+		names,
+		new Set(["clone"]),
+	).then(
+		items =>
+			// Bare `/persona live` opens the live editor, so accepting it runs it.
+			items?.map(item => (item.value === "live " ? { ...item, submitsCommand: true } : item)) ?? null,
+	);
+}
+
+const personaSubcommandHint = buildSubcommandInlineHint(PERSONA_DEFS);
+const livePersonaSubcommandHint = buildSubcommandInlineHint(LIVE_PERSONA_DEFS);
+
+function personaInlineHint(argumentText: string): string | null {
+	const lead = /^\s*live\s+/i.exec(argumentText)?.[0];
+	return lead ? livePersonaSubcommandHint(argumentText.slice(lead.length)) : personaSubcommandHint(argumentText);
+}
 
 const LOADOUT_USAGE = "Usage: /loadout [set <name>|off|list|show <name>|status]";
 const REPL_USAGE = "Usage: /repl [agent|js|py|bash]";
@@ -121,7 +213,9 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Edit and switch system-prompt personas; `/persona live` does the same for the voice model",
 		acpDescription: "Switch or inspect system-prompt and live-voice personas",
 		acpInputHint: "[live] [set <name>|off|list|show <name>|status|clone <source> <name>|delete <name>]",
-		subcommands: PERSONA_SUBCOMMANDS.map(item => ({ ...item })),
+		subcommands: PERSONA_DEFS,
+		getTuiArgumentCompletions: personaArgumentCompletions,
+		getTuiInlineHint: personaInlineHint,
 		allowArgs: true,
 		handle: async (command, runtime) => {
 			try {
@@ -158,13 +252,15 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		icon: "swap",
 		description: "Switch runtime model loadouts (model roles, fallback chains, task-agent models)",
 		acpInputHint: "[set <name>|off|list|show <name>|status]",
-		subcommands: [
-			{ name: "set", description: "Apply a loadout", usage: "<name>" },
-			{ name: "off", description: "Restore the configured models" },
-			{ name: "list", description: "List loadouts; * marks the active one" },
-			{ name: "show", description: "Print a loadout definition", usage: "<name>" },
-			{ name: "status", description: "Show the active loadout" },
-		],
+		subcommands: LOADOUT_DEFS,
+		getTuiArgumentCompletions: prefix =>
+			subcommandThenNameCompletions(prefix, "", LOADOUT_DEFS, new Set(["set", "show"]), async () =>
+				(await loadoutFeature().data()).items.map(item => ({
+					name: item.name,
+					description: item.loadout.mainModel,
+					active: item.active,
+				})),
+			),
 		allowArgs: true,
 		handle: async (command, runtime) => {
 			try {
@@ -227,11 +323,12 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		icon: "restart",
 		description: "Show, reset, or interrupt the REPL kernels",
 		acpInputHint: "[status|interrupt]",
-		subcommands: [
-			{ name: "status", description: "Show which kernels are running" },
-			{ name: "reset", description: "Start the next cell in a fresh kernel", usage: "<py|js>" },
-			{ name: "interrupt", description: "Cancel running eval and bash cells" },
-		],
+		subcommands: KERNEL_DEFS,
+		getTuiArgumentCompletions: prefix =>
+			subcommandThenNameCompletions(prefix, "", KERNEL_DEFS, new Set(["reset"]), async () => [
+				{ name: "js", description: "JavaScript kernel" },
+				{ name: "py", description: "Python kernel" },
+			]),
 		allowArgs: true,
 		handle: async (command, runtime) => {
 			const { verb } = parseSubcommand(command.args);

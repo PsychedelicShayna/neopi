@@ -29,8 +29,38 @@ export const PERSONA_SUBCOMMANDS = [
 	{ name: "status", description: "Show the active persona" },
 	{ name: "clone", description: "Copy a persona under a new name", usage: "<source> <name>" },
 	{ name: "delete", description: "Delete a persona", usage: "<name>" },
-	{ name: "live", description: "Same commands for the live voice persona; bare opens its editor" },
+	{ name: "live", description: "Live voice personas: alone opens their editor, or add a subcommand" },
 ] as const;
+
+/** A persona name offered by autocomplete. */
+export interface PersonaNameItem {
+	name: string;
+	description: string;
+	active: boolean;
+}
+
+function firstLine(text: string): string {
+	const line = text.trim().split("\n", 1)[0] ?? "";
+	return line.length > 60 ? `${line.slice(0, 59)}…` : line;
+}
+
+/** Personas of `scope` for completion; `sessionId` marks the session's active persona. */
+export async function personaNameItems(scope: PersonaScope, sessionId: string | undefined): Promise<PersonaNameItem[]> {
+	if (scope === "live") {
+		const data = await liveFeature().data();
+		return data.items.map(item => ({
+			name: item.name,
+			description: item.builtin ? "built-in default" : firstLine(item.instructions),
+			active: item.active,
+		}));
+	}
+	const data = await personaFeature().data(sessionId ?? "");
+	return data.items.map(item => ({
+		name: item.name,
+		description: `${item.definition.mode} · ${item.definition.source.kind === "file" ? item.definition.source.path : firstLine(item.definition.source.content)}`,
+		active: item.active,
+	}));
+}
 
 const liveFeature = () => createLivePersonaFeature();
 

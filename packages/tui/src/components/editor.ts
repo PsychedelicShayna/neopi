@@ -1779,8 +1779,16 @@ export class Editor implements Component, Focusable {
 						// Autocomplete is stale - cancel and fall through to normal submission
 						this.#cancelAutocomplete();
 					} else {
+						let submitCommand = false;
 						if (selected && this.#autocompleteProvider) {
 							const shouldChainSlashCommandAutocomplete = this.#isSlashCommandNameAutocompleteSelection();
+							// A slash-command argument that completes the command runs on this
+							// Enter; one that still needs an argument reopens the popup for it.
+							const inSlashArgument =
+								this.#isInSubmittedSlashCommandContext() && !this.#autocompletePrefix.startsWith("@");
+							// The list holds the provider's AutocompleteItem objects as-is.
+							submitCommand = inSlashArgument && (selected as AutocompleteItem).submitsCommand === true;
+							const chainSlashArgument = inSlashArgument && !submitCommand && selected.value.endsWith(" ");
 							// Directory chaining exists so an @ mention can be browsed deeper
 							// without retyping the path. It must not apply to a slash
 							// command's directory argument: there the accepted value is the
@@ -1807,13 +1815,18 @@ export class Editor implements Component, Focusable {
 							this.#notifyChange();
 
 							result.onApplied?.();
-							if (shouldChainDirectoryCompletion) {
+							if (submitCommand) {
+								// Fall through to the plain-Enter submission below.
+							} else if (shouldChainDirectoryCompletion) {
 								queueMicrotask(() => void this.#tryTriggerAutocomplete());
-							} else if (shouldChainSlashCommandAutocomplete && this.#isCompletedSlashCommandAtCursor()) {
+							} else if (
+								(shouldChainSlashCommandAutocomplete && this.#isCompletedSlashCommandAtCursor()) ||
+								chainSlashArgument
+							) {
 								void this.#tryTriggerAutocomplete();
 							}
 						}
-						return;
+						if (!submitCommand) return;
 					}
 				}
 			}
