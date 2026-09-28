@@ -551,21 +551,53 @@ function patchWatchdogDocument(source: string, doc: WatchdogConfigDoc, baseline?
 	if (!isSeq(advisorNode)) throw new Error("WATCHDOG.yml advisors must be a sequence");
 	const sequence = advisorNode as YAMLSeq<unknown>;
 
-	for (const origin of baseline.origins) {
-		if (doc.advisors.includes(origin.advisor)) continue;
-		const existing = findWatchdogAdvisor(sequence, origin.name, origin.occurrence);
-		if (existing) sequence.delete(existing.index);
+	const resolvedOrigins = baseline.origins.map(origin => ({
+		origin,
+		existing: findWatchdogAdvisor(sequence, origin.name, origin.occurrence),
+	}));
+	const matches = new Map<AdvisorConfig, (typeof resolvedOrigins)[number]>();
+	const claimedOrigins = new Set<WatchdogAdvisorOrigin>();
+
+	// Preserve object identity when the editor mutates the loaded doc in place.
+	for (const advisor of doc.advisors) {
+		const resolved = resolvedOrigins.find(candidate => candidate.origin.advisor === advisor);
+		if (!resolved) continue;
+		matches.set(advisor, resolved);
+		claimedOrigins.add(resolved.origin);
+	}
+	// Editors may clone rows. Match those copies by stable name/occurrence order,
+	// then by unchanged position for a renamed clone.
+	for (const [index, advisor] of doc.advisors.entries()) {
+		if (matches.has(advisor)) continue;
+		const resolved =
+			resolvedOrigins.find(
+				candidate => !claimedOrigins.has(candidate.origin) && candidate.origin.name === advisor.name,
+			) ??
+			(() => {
+				const positional = resolvedOrigins[index];
+				return positional && !claimedOrigins.has(positional.origin) ? positional : undefined;
+			})();
+		if (!resolved) continue;
+		matches.set(advisor, resolved);
+		claimedOrigins.add(resolved.origin);
 	}
 
+	const advisorsToAppend: AdvisorConfig[] = [];
 	for (const advisor of doc.advisors) {
-		const origin = baseline.origins.find(candidate => candidate.advisor === advisor);
-		if (origin) {
-			const existing = findWatchdogAdvisor(sequence, origin.name, origin.occurrence);
-			if (existing) {
-				patchWatchdogAdvisor(existing.map, advisor, origin.base);
-				continue;
-			}
+		const resolved = matches.get(advisor);
+		if (!resolved?.existing) {
+			advisorsToAppend.push(advisor);
+			continue;
 		}
+		patchWatchdogAdvisor(resolved.existing.map, advisor, resolved.origin.base);
+	}
+
+	const removals = resolvedOrigins
+		.filter(resolved => !claimedOrigins.has(resolved.origin) && resolved.existing)
+		.map(resolved => resolved.existing!)
+		.sort((left, right) => right.index - left.index);
+	for (const removal of removals) sequence.delete(removal.index);
+	for (const advisor of advisorsToAppend) {
 		sequence.add(document.createNode(watchdogAdvisorValues(advisor)));
 	}
 	if (sequence.items.length === 0) root.delete("advisors");

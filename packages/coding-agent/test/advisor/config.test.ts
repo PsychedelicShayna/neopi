@@ -393,6 +393,47 @@ describe("WATCHDOG.yml file round-trip", () => {
 		});
 	});
 
+	it("keeps the surviving duplicate advisor node when deleting the first duplicate", async () => {
+		const file = path.join(tmp, "WATCHDOG.yml");
+		await Bun.write(
+			file,
+			[
+				"advisors:",
+				"  - name: Reviewer",
+				"    futureId: first # first duplicate",
+				"  - name: Reviewer",
+				"    futureId: second # second duplicate",
+				"",
+			].join("\n"),
+		);
+		const loaded = await loadWatchdogConfigFile(file);
+		loaded.advisors.splice(0, 1);
+		loaded.advisors[0].enabled = false;
+		await saveWatchdogConfigFile(file, loaded);
+
+		const saved = await Bun.file(file).text();
+		expect(YAML.parse(saved)).toEqual({
+			advisors: [{ name: "Reviewer", futureId: "second", enabled: false }],
+		});
+		expect(saved).toContain("# second duplicate");
+		expect(saved).not.toContain("# first duplicate");
+	});
+
+	it("matches cloned loaded advisors back to their existing YAML nodes", async () => {
+		const file = path.join(tmp, "WATCHDOG.yml");
+		await Bun.write(file, "advisors:\n  - name: Reviewer\n    model: test/old\n    futureId: keep # cloned\n");
+		const loaded = await loadWatchdogConfigFile(file);
+		loaded.advisors = loaded.advisors.map(advisor => structuredClone(advisor));
+		loaded.advisors[0].model = "test/new";
+		await saveWatchdogConfigFile(file, loaded);
+
+		const saved = await Bun.file(file).text();
+		expect(YAML.parse(saved)).toEqual({
+			advisors: [{ name: "Reviewer", model: "test/new", futureId: "keep" }],
+		});
+		expect(saved).toContain("# cloned");
+	});
+
 	it("removes the file when the doc is empty so legacy discovery resumes", async () => {
 		const file = path.join(tmp, "WATCHDOG.yml");
 		await saveWatchdogConfigFile(file, doc);
