@@ -5,6 +5,7 @@ import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-
 import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { registerPersistedSubagents } from "@oh-my-pi/pi-coding-agent/registry/persisted-agents";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { finalizeSubagentLifecycle } from "@oh-my-pi/pi-coding-agent/task/executor";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 interface SessionStub {
@@ -958,4 +959,56 @@ describe("AgentLifecycleManager", () => {
 		expect(registry.get("Next-Owner")).toMatchObject({ status: "idle", session: revived.session });
 		expect(revived.disposeCalls()).toBe(0);
 	});
+});
+
+describe("late subagent finalization after its root was disposed", () => {
+	beforeEach(() => {
+		AgentRegistry.resetGlobalForTests();
+		AgentLifecycleManager.resetGlobalForTests();
+	});
+	afterEach(() => {
+		AgentLifecycleManager.resetGlobalForTests();
+		AgentRegistry.resetGlobalForTests();
+	});
+
+	function finishingChild(registry: AgentRegistry, id: string, parentId: string) {
+		let disposeCalls = 0;
+		const session = {
+			dispose: async () => {
+				disposeCalls++;
+			},
+			prepareForHeadlessAdvisorDrain: () => {},
+			waitForAdvisorCatchup: async () => {},
+		} as unknown as AgentSession;
+		registry.register({ id, displayName: "task", kind: "sub", parentId, session, status: "running" });
+		return { session, disposeCalls: () => disposeCalls };
+	}
+
+	for (const otherRootLive of [true, false]) {
+		it(`disposes and unregisters instead of adopting (${otherRootLive ? "another root live" : "last root"})`, async () => {
+			const registry = AgentRegistry.global();
+			const root = registry.register({ id: "DeckA", displayName: "main", kind: "main", session: null });
+			if (otherRootLive) registry.register({ id: "DeckB", displayName: "main", kind: "main", session: null });
+			const child = finishingChild(registry, "DeckA.Research", "DeckA");
+
+			// The root tears down while its child is still finalizing a finished turn.
+			await AgentLifecycleManager.global().disposeRoot(root);
+			registry.unregister("DeckA", root);
+
+			await finalizeSubagentLifecycle({
+				id: "DeckA.Research",
+				session: child.session,
+				aborted: false,
+				keepAlive: true,
+				isolated: false,
+				agentIdleTtlMs: 0,
+				reviveSession: null,
+				root,
+			});
+
+			expect(registry.get("DeckA.Research")).toBeUndefined();
+			expect(child.disposeCalls()).toBe(1);
+			expect(AgentLifecycleManager.global().has("DeckA.Research")).toBe(false);
+		});
+	}
 });

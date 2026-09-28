@@ -66,7 +66,17 @@ export interface AdoptOptions {
 	revive?: AgentReviver;
 	/** Releases resources that must survive parking but end with the agent lifecycle. */
 	onRelease?: () => Promise<void>;
+	/** Root generation that spawned this agent; defaults to resolving its registered parent chain. */
+	root?: AgentRef;
 }
+
+/**
+ * Root generations torn down by {@link AgentLifecycleManager.disposeRoot}.
+ * Module-level so the record survives the global manager being replaced when
+ * the last root disposes; refs are per-generation objects, so a recreated root
+ * with the same id is never mistaken for its disposed predecessor.
+ */
+const disposedRoots = new WeakSet<AgentRef>();
 
 interface AdoptedAgent {
 	ref: AgentRef;
@@ -157,8 +167,6 @@ export class AgentLifecycleManager {
 	#persistedReviveTtlMs: () => number = () => 0;
 	/** Set once {@link dispose} runs; blocks late revivals from adopting into a torn-down manager. */
 	#disposed = false;
-	/** Root generations torn down by {@link disposeRoot}; their late revivals are rejected like {@link #disposed}. */
-	readonly #disposedRoots = new WeakSet<AgentRef>();
 
 	constructor(registry: AgentRegistry = AgentRegistry.global()) {
 		this.#registry = registry;
@@ -192,27 +200,40 @@ export class AgentLifecycleManager {
 	 * status to "idle". Arms the TTL timer (idleTtlMs <= 0 adopts without one).
 	 * When `expected` is given, the adoption is refused if the id no longer
 	 * resolves to that ref (or that ref's session).
+	 *
+	 * Adoption is also refused once the owning root generation was disposed
+	 * ({@link disposeRoot}): a child that finishes its turn after its root tore
+	 * down must not become a live idle agent nobody owns. `opts.root` is the
+	 * root captured when the child was spawned, which still identifies it after
+	 * the root's ref was unregistered. Returns true only when adopted; on false
+	 * the caller still owns the session and must dispose it.
 	 */
-	adopt(id: string, opts: AdoptOptions, expected?: AgentRefExpectation): void {
-		if (id === MAIN_AGENT_ID) return;
+	adopt(id: string, opts: AdoptOptions, expected?: AgentRefExpectation): boolean {
+		if (id === MAIN_AGENT_ID) return false;
 		const ref = this.#registry.get(id);
 		// Top-level roots own their own teardown; only descendants are adopted.
-		if (ref?.kind === "main") return;
+		if (ref?.kind === "main") return false;
 		if (!ref || (expected !== undefined && ref !== expected && ref.session !== expected)) {
 			logger.warn("AgentLifecycleManager.adopt: unknown or replaced agent id", { id });
-			return;
+			return false;
+		}
+		const root = opts.root ?? this.#registry.rootOf(id);
+		if (root && disposedRoots.has(root)) {
+			logger.debug("AgentLifecycleManager.adopt: owning root already disposed", { id, root: root.id });
+			return false;
 		}
 		const existing = this.#adopted.get(id);
 		clearTimeout(existing?.timer);
 		const adopted: AdoptedAgent = {
 			ref,
-			root: this.#registry.rootOf(id),
+			root,
 			idleTtlMs: opts.idleTtlMs,
 			revive: opts.revive,
 			onRelease: opts.onRelease,
 		};
 		this.#adopted.set(id, adopted);
 		this.#armTimer(id, adopted);
+		return true;
 	}
 
 	/** True if the id is adopted (parked or live) — and, when `expected` is given, still bound to that ref. */
@@ -421,7 +442,7 @@ export class AgentLifecycleManager {
 			// not cold-adopt (and later attach a live session + TTL) into a disposed
 			// manager — reject deterministically before creating any session.
 			const root = this.#registry.rootOf(id);
-			if (this.#disposed || (root && this.#disposedRoots.has(root))) {
+			if (this.#disposed || (root && disposedRoots.has(root))) {
 				throw new Error(
 					`Agent "${id}" revival aborted: its lifecycle was disposed while its persisted session was being prepared.`,
 				);
@@ -558,8 +579,10 @@ export class AgentLifecycleManager {
 		const otherRootLive = this.#registry
 			.list()
 			.some(ref => ref !== root && ref.kind === "main" && ref.status !== "parked" && ref.status !== "aborted");
+		// Recorded first and synchronously: any adoption after this point is
+		// refused, and every earlier one is in the release snapshot below.
+		disposedRoots.add(root);
 		if (!otherRootLive) return this.dispose(deadlineAt);
-		this.#disposedRoots.add(root);
 		if (this.#persistedReviverOwner === root) {
 			this.#persistedReviverFactory = undefined;
 			this.#persistedReviverOwner = undefined;
@@ -603,7 +626,7 @@ export class AgentLifecycleManager {
 
 	async #revive(id: string, revive: AgentReviver, ref: AgentRef, adopted: AdoptedAgent): Promise<AgentSession> {
 		const session = await revive(ref);
-		if (this.#disposed || (adopted.root && this.#disposedRoots.has(adopted.root))) {
+		if (this.#disposed || (adopted.root && disposedRoots.has(adopted.root))) {
 			// The owning lifecycle tore down while the reviver was in flight; dispose
 			// the freshly built session instead of attaching it, and fail the waiter.
 			await session.dispose();

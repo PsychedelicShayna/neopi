@@ -56,7 +56,7 @@ import subagentAsyncPendingTemplate from "../prompts/system/subagent-async-pendi
 import subagentSystemPromptTemplate from "../prompts/system/subagent-system-prompt.md" with { type: "text" };
 import submitReminderTemplate from "../prompts/system/subagent-yield-reminder.md" with { type: "text" };
 import { AgentLifecycleManager, type AgentReviver } from "../registry/agent-lifecycle";
-import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
+import { type AgentRef, AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import { ensurePersistedRoster, isCurrentSessionRosterRef } from "../registry/persisted-agents";
 import { type CreateAgentSessionOptions, createAgentSession, discoverAuthStorage } from "../sdk";
 import type { AgentSession, AgentSessionEvent, Prewalk } from "../session/agent-session";
@@ -3095,6 +3095,8 @@ export async function finalizeSubagentLifecycle(args: {
 	cleanupDeadlineAt?: number;
 	onCleanupDeferred?: (completion: Promise<void>) => void;
 	onRelease?: () => Promise<void>;
+	/** Root generation that spawned this agent, captured at spawn; refuses adoption once it is disposed. */
+	root?: AgentRef;
 }): Promise<void> {
 	const registry = AgentRegistry.global();
 	const ref = registry.get(args.id);
@@ -3186,15 +3188,24 @@ export async function finalizeSubagentLifecycle(args: {
 		await releaseOwnedResources();
 		return;
 	}
-	AgentLifecycleManager.global().adopt(
+	const adopted = AgentLifecycleManager.global().adopt(
 		args.id,
 		{
 			idleTtlMs: args.agentIdleTtlMs,
 			revive: args.reviveSession ?? undefined,
 			onRelease: args.onRelease,
+			root: args.root,
 		},
 		ref,
 	);
+	if (!adopted) {
+		// Refused (typically: the owning root was disposed while this run was
+		// finalizing). Nobody will park or release it, so end it here rather
+		// than leave a live idle agent registered under a torn-down root.
+		await disposeSession();
+		registry.unregister(args.id, ref);
+		await releaseOwnedResources();
+	}
 }
 
 /** Options for {@link runSubagentFollowUpTurn}. */
@@ -3413,6 +3424,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		signal,
 		onProgress,
 	} = options;
+	// The root generation that owns this spawn, captured now: by the time the
+	// run finalizes, a disposed root may already be unregistered.
+	const ownerRoot = options.parentAgentId ? AgentRegistry.global().rootOf(options.parentAgentId) : undefined;
 	const providedSettings = options.settings;
 	const modelOverride =
 		explicitModelOverride ??
@@ -4459,6 +4473,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					reviveSession,
 					cleanupDeadlineAt,
 					onRelease: options.onRelease,
+					root: ownerRoot,
 					onCleanupDeferred: completion => {
 						deferredSessionShutdown = completion;
 						deferCleanup(completion);
