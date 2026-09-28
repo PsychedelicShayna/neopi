@@ -28,7 +28,7 @@ Behavior notes:
 - RPC/ACP host defaults cover task isolation/execution, memory, advisor, tier, async-job, and bash auto-background settings. They are applied only when a path is not explicitly configured; project/global config, `--config`, and isolated settings remain authoritative. Todo settings are not host-defaulted.
 - The process claims stdin before extension discovery, then parses it one non-empty JSONL line at a time. Malformed JSON emits a recoverable `command: "parse"` failure and does not terminate the loop.
 - At startup it writes a `ready` frame, then starts reading stdin while extensions initialize. Control frames (`extension_ui_response`, `tool_approval_response`, `plan_proposal_response`, `host_tool_result`, `host_tool_update`, `host_uri_result`) are dispatched on arrival, so an extension that asks a dialog question during `session_start` receives the host's answer. Commands, `bash` included, are queued and processed in arrival order once initialization completes. Hosts that send no startup dialog answers observe no change in frame order.
-- When stdin closes, pending extension UI, tool approval, host-tool, and host-URI requests are rejected and a pending plan proposal resolves as `refine`; accepted commands are drained, the session is disposed, pending stdout is delivered, and the process exits with code `0`.
+- When stdin closes, pending extension UI, tool approval, host-tool, and host-URI requests are rejected and a pending plan proposal resolves as `refine` (announced with `plan_proposal_cancel`, `reason: "shutdown"`); accepted commands are drained, the session is disposed, pending stdout is delivered, and the process exits with code `0`.
 - Responses/events are written as one JSON object per line.
 
 ### Capabilities
@@ -42,6 +42,7 @@ Behavior notes:
 | `set_mode` | `set_mode` command, `get_state` `mode`/`planMode`, `mode_changed` event, and the `plan_proposal_request`/`plan_proposal_response` round trip. See [Plan Mode Sub-Protocol](#plan-mode-sub-protocol). |
 | `new_session` | `--new-session` is accepted, and a flagless protocol launch never auto-resumes: the process starts a fresh session in the default per-cwd session directory regardless of `autoResume` (see [Startup](#startup)). |
 | `session_lease` | A process holds an exclusive lifetime lease on every session file it writes, so two processes never append to one transcript. `--session <file>` onto a file another process holds fails at startup with a `startup_error` stderr line; `switch_session` and `branch` onto one fail with `code: "session_in_use"` (see [Session lease](#session-lease)). |
+| `plan_proposal_cancel` | A pending plan proposal that resolves without a host answer is announced with a `plan_proposal_cancel` frame, and a later `plan_proposal_response` for it fails with `code: "proposal_cancelled"`. See [`plan_proposal_cancel`](#plan_proposal_cancel). |
 
 ### Session lease
 
@@ -119,7 +120,7 @@ Clients MUST continue reading stdout after closing stdin. Normal EOF and extensi
 11. Subagent frames (`subagent_lifecycle`, `subagent_progress`, `subagent_event`), gated by `set_subagent_subscription`
 12. Builtin slash-command side channels (`command_output`, `session_info_update`, `config_update`)
 13. Tool approval requests/cancellations (`tool_approval_request`, `tool_approval_cancel`), only after `set_approval_handler` with `handler: "host"`
-14. Plan mode frames (`mode_changed`, `plan_proposal_request`); see [Plan Mode Sub-Protocol](#plan-mode-sub-protocol)
+14. Plan mode frames (`mode_changed`, `plan_proposal_request`, `plan_proposal_cancel`); see [Plan Mode Sub-Protocol](#plan-mode-sub-protocol)
 
 ### Inbound frame categories (stdin)
 
@@ -1124,7 +1125,7 @@ Capability: `set_mode`. It mirrors ACP `session/set_mode`: a host switches the s
 Response data: `{ "mode": "plan" | "default", "planFilePath"?: string }`. `planFilePath` is present only for `plan`.
 
 - `mode: "plan"` enters plan mode like the interactive `/plan`: the session gets a plan-mode state with `planFilePath` (the supplied path, else the path of the plan state being re-entered, else `local://PLAN.md`) and `workflow` (carried over, else `"parallel"`); the built-in `write` tool joins the active tools so the agent can draft the plan and submit it; the session switches to the `plan` model role when one is configured; and a `mode_change` entry is appended to the session. Sending `plan` while already in plan mode only retargets the plan file when `planFilePath` differs.
-- `mode: "default"` leaves plan mode: plan state and the proposal handler are cleared, the pre-plan tools and model are restored, and a `mode_change` entry is appended. If a plan proposal is pending, it is first resolved as `refine` without feedback. Sending `default` outside plan mode succeeds without changes.
+- `mode: "default"` leaves plan mode: plan state and the proposal handler are cleared, the pre-plan tools and model are restored, and a `mode_change` entry is appended. If a plan proposal is pending, it is first resolved as `refine` without feedback and cancelled with `reason: "mode_change"` (before `mode_changed`). Sending `default` outside plan mode succeeds without changes.
 - Only `"default"` and `"plan"` are accepted; any other value, or a non-string or empty `planFilePath`, fails without a `code`.
 
 Failures leave the session unchanged and carry a machine-readable `code`:
@@ -1166,10 +1167,31 @@ The host answers on stdin. The answer is a control frame: it is dispatched on ar
 
 - `approve`: the approved file becomes the plan reference for the next turn, plan mode is cleared (`mode_changed { mode: "default" }`), the pre-plan tools and model are restored (a model switch waits for the turn to end), the plan is autosaved when `plan.autosave` is on, and the agent is told to proceed with the implementation.
 - `refine`: plan mode stays on, the reviewed file becomes the plan-mode target, and the agent is asked to revise and resubmit. Non-empty `feedback` is appended to that tool result under `Reviewer feedback:`, so the agent sees the note.
-- Any `decision` other than `approve` counts as `refine`. A proposal the host never answers resolves as `refine` without feedback when the turn is aborted (`abort`, `abort_and_prompt`), when `set_mode { mode: "default" }` arrives, or when stdin closes; it never resolves as `approve`. No further frame is written for a proposal resolved this way; hosts should dismiss an open approval prompt on the turn's `agent_end`. There is no proposal timeout.
-- Responses with an unknown or already-resolved `id` are ignored.
+- Any `decision` other than `approve` counts as `refine`. A proposal the host never answers resolves as `refine` without feedback, never as `approve`, and RPC mode announces it with one `plan_proposal_cancel` frame (see below). There is no proposal timeout.
+- Responses with an unknown or already-answered `id` are ignored.
 
 A host that never sends `set_mode` keeps the previous behavior in both `--mode rpc` and `--mode rpc-ui`: no proposal handler is installed, so an `xd://propose` write fails with "No plan is awaiting approval", and no tools or models change.
+
+### `plan_proposal_cancel`
+
+Capability: `plan_proposal_cancel`. Written exactly once when a pending proposal resolves without a host answer; `id` is the `plan_proposal_request` id:
+
+```json
+{ "type": "plan_proposal_cancel", "id": "7342", "reason": "abort" }
+```
+
+| `reason` | When |
+| --- | --- |
+| `abort` | The proposing turn was aborted (`abort`, `abort_and_prompt`). |
+| `mode_change` | `set_mode { mode: "default" }` arrived; the frame precedes that command's `mode_changed` and response. |
+| `agent_end` | The run ended with the proposal still pending; the frame follows that `agent_end`. |
+| `shutdown` | stdin closed. |
+
+Hosts should dismiss the matching plan card on this frame. A proposal that was answered is never cancelled. A `plan_proposal_response` sent for a cancelled `id` fails with a response frame correlated by that `id`:
+
+```json
+{ "id": "7342", "type": "response", "command": "plan_proposal_response", "success": false, "error": "Plan proposal 7342 was cancelled (abort)", "code": "proposal_cancelled" }
+```
 
 ## Error Model and Recoverability
 

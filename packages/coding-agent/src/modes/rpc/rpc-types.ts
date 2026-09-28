@@ -185,6 +185,20 @@ export interface RpcPlanProposalResponse {
 	feedback?: string;
 }
 
+/** Why a pending plan proposal resolved without a host answer. */
+export type RpcPlanProposalCancelReason = "abort" | "mode_change" | "agent_end" | "shutdown";
+
+/**
+ * Emitted when a pending {@link RpcPlanProposalRequest} resolves as `refine`
+ * without a host answer; `id` is the request's id. A later
+ * `plan_proposal_response` for that id fails with `code: "proposal_cancelled"`.
+ */
+export interface RpcPlanProposalCancel {
+	type: "plan_proposal_cancel";
+	id: string;
+	reason: RpcPlanProposalCancelReason;
+}
+
 /**
  * Switch chat mode live. `include` lists the re-enabled context categories,
  * comma-separated (`"date,cwd"`) or as an array; omitted keeps the current or
