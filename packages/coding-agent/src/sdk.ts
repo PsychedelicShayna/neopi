@@ -4571,16 +4571,26 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 							const lateRefs = reap.pendingJobIds.flatMap(jobId => {
 								const job = asyncJobManager.getJob(jobId);
 								const ref = agentRegistry.get(job?.agentId ?? jobId);
-								return ref &&
-									ref.kind !== "main" &&
-									rootAgentGenerations?.has(ref) &&
-									rootAgentGenerations.get(ref) === agentRegistry.runGeneration(ref)
-									? [ref]
-									: [];
+								const generation = ref ? rootAgentGenerations?.get(ref) : undefined;
+								if (
+									!ref ||
+									ref.kind === "main" ||
+									generation === undefined ||
+									generation !== agentRegistry.runGeneration(ref)
+								) {
+									return [];
+								}
+								return [{ ref, generation }];
 							});
 							trackLateCleanup(
 								reap.completion.then(async () => {
-									await Promise.all(lateRefs.map(ref => lifecycle.release(ref.id, ref)));
+									await Promise.all(
+										lateRefs.map(({ ref, generation }) =>
+											agentRegistry.runGeneration(ref) === generation
+												? lifecycle.release(ref.id, ref)
+												: Promise.resolve(false),
+										),
+									);
 								}),
 								{ id: resolvedAgentId, resource: "root-cancel-late-release" },
 							);

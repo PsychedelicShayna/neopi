@@ -599,6 +599,56 @@ describe("two simultaneous top-level roots (issue #121)", () => {
 		expect(AgentLifecycleManager.global().has("DeckA.Late")).toBe(false);
 	}, 60000);
 
+	it("cancelRootWork preserves a snapshotted child reused during late reap completion", async () => {
+		const a = await createRoot("DeckA");
+		const registry = AgentRegistry.global();
+		const lifecycle = AgentLifecycleManager.global();
+		const reused = registry.register({
+			id: "DeckA.ReusedLate",
+			displayName: "task",
+			kind: "sub",
+			parentId: "DeckA",
+			session: { dispose: async () => {} } as unknown as AgentSession,
+		});
+		const finishOldJob = Promise.withResolvers<void>();
+		a.session.asyncJobManager!.register(
+			"task",
+			"late old turn",
+			async () => {
+				await finishOldJob.promise;
+				return "old done";
+			},
+			{ id: "late-old-turn", agentId: reused.id, ownerId: "DeckA" },
+		);
+
+		const result = await a.session.cancelRootWork({ timeoutMs: 20 });
+		expect(result).toEqual({ settled: false, pendingJobIds: ["late-old-turn"] });
+
+		expect(registry.setStatus(reused.id, "idle", reused)).toBe(true);
+		expect(lifecycle.adopt(reused.id, { idleTtlMs: 0 }, reused)).toBe(true);
+		expect(registry.setStatus(reused.id, "running", reused)).toBe(true);
+		a.session.asyncJobManager!.register(
+			"task",
+			"new turn",
+			async ({ signal }) => {
+				const aborted = Promise.withResolvers<void>();
+				signal.addEventListener("abort", () => aborted.resolve(), { once: true });
+				await Promise.race([gate("late-reused-agent").promise, aborted.promise]);
+				return signal.aborted ? "aborted" : "new done";
+			},
+			{ id: "late-new-turn", agentId: reused.id, ownerId: "DeckA" },
+		);
+
+		finishOldJob.resolve();
+		await a.session.asyncJobManager!.getJob("late-old-turn")!.promise;
+		await Bun.sleep(10);
+
+		expect(registry.get(reused.id)).toBe(reused);
+		expect(reused.status).toBe("running");
+		expect(lifecycle.has(reused.id)).toBe(true);
+		expect(a.session.asyncJobManager!.getJob("late-new-turn")?.status).toBe("running");
+	}, 60000);
+
 	it("cancelRootWork releases a running workpool batch instead of tombstoning it", async () => {
 		const a = await createRoot("DeckA");
 		const registry = AgentRegistry.global();
