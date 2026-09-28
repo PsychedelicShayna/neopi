@@ -7,7 +7,7 @@ import { logger } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
 import { discoverMixtures } from "./config";
-import { MixtureCatalog } from "./provider";
+import { MixtureCatalog, type MixtureScope } from "./provider";
 import { resolveMixture } from "./resolve";
 import type { ResolvedMixture } from "./types";
 import { validateMixture } from "./validate";
@@ -47,10 +47,13 @@ export async function discoverRegistrableMixtures(ctx: MixtureRegistrationContex
 	return registrable;
 }
 
-/** Hold the registry's catalog for `owner`; the first holder discovers and registers the roster. */
-export async function retainMixtureCatalog(owner: string, ctx: MixtureRegistrationContext): Promise<MixtureCatalog> {
-	const catalog = MixtureCatalog.for(ctx.registry);
-	catalog.retain(owner);
-	if (!catalog.hasRoster) catalog.setRoster(await discoverRegistrableMixtures(ctx));
-	return catalog;
+/**
+ * Hold the workspace's scope of the registry's catalog for `owner`; the scope's first
+ * holder discovers and registers that workspace's roster.
+ */
+export async function retainMixtureCatalog(owner: string, ctx: MixtureRegistrationContext): Promise<MixtureScope> {
+	const scope = MixtureCatalog.for(ctx.registry).scope(ctx.cwd, ctx.agentDir);
+	scope.retain(owner);
+	if (!scope.hasRoster) scope.setRoster(await discoverRegistrableMixtures(ctx));
+	return scope;
 }

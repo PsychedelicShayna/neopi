@@ -14,7 +14,7 @@ import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
 import type { SessionManager } from "../session/session-manager";
 import { commitMixtureResponse } from "./engine";
-import { isMixtureModel, MixtureCatalog } from "./provider";
+import { isMixtureModel, type MixtureScope } from "./provider";
 import { resolveMixture } from "./resolve";
 import { MixtureRunStore } from "./run-store";
 import {
@@ -37,6 +37,8 @@ export type MixtureSessionEvent =
 export interface SessionMixtureHostDeps {
 	sessionManager: SessionManager;
 	modelRegistry: ModelRegistry;
+	/** The session's workspace scope of the catalog: the only definitions it may run. */
+	mixtures: MixtureScope;
 	settings: Settings;
 	/** The session's settings-aware stream function. */
 	stream: StreamFn;
@@ -154,9 +156,10 @@ export function createSessionMixtureHost(deps: SessionMixtureHostDeps): SessionM
 		settings,
 		stream: deps.stream,
 		resolveRun(name: string): ResolvedMixture | string {
-			const catalog = MixtureCatalog.for(modelRegistry);
-			const registered = catalog.find(name);
-			if (!registered) return `mixture/${name} is not registered`;
+			// Only this workspace's definitions: a same-named mixture another workspace
+			// registered on the shared registry never runs here.
+			const registered = deps.mixtures.find(name);
+			if (!registered) return `mixture/${name} is not defined in this workspace`;
 			const fresh = resolveMixture(registered.definition, {
 				registry: modelRegistry,
 				settings,
@@ -165,7 +168,7 @@ export function createSessionMixtureHost(deps: SessionMixtureHostDeps): SessionM
 			});
 			const { errors } = validateMixture(fresh, {
 				settings,
-				names: catalog.roster().map(mixture => mixture.definition.name),
+				names: deps.mixtures.roster().map(mixture => mixture.definition.name),
 			});
 			if (errors.length > 0) {
 				return `mixture/${name} no longer validates: ${errors.map(issue => `${issue.code} (${issue.message})`).join("; ")}`;

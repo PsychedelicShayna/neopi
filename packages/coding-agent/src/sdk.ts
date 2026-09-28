@@ -2530,13 +2530,14 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		await modelRegistry.refreshRuntimeProviders("offline");
 		// Mixtures register after extension providers and runtime hydration, so member
 		// selectors resolve against the full catalog and session-model restore below sees
-		// `mixture/<name>`. The catalog belongs to the registry: a subagent sharing it only
-		// retains, and the provider is unregistered when the last holder releases.
+		// `mixture/<name>`. The catalog belongs to the registry and keeps one roster per
+		// workspace scope: a subagent sharing the registry and cwd only retains, and a
+		// scope's roster is dropped when its last holder releases.
 		const mixtureOwner = `session:${sessionManager.getSessionId()}:${Bun.randomUUIDv7()}`;
-		const mixtureCatalog = await logger.time("retainMixtureCatalog", () =>
+		const mixtureScope = await logger.time("retainMixtureCatalog", () =>
 			retainMixtureCatalog(mixtureOwner, { cwd, agentDir, registry: modelRegistry, settings }),
 		);
-		const releaseMixtureCatalog = () => mixtureCatalog.release(mixtureOwner);
+		const releaseMixtureCatalog = () => mixtureScope.release(mixtureOwner);
 		startupCleanup.defer(releaseMixtureCatalog);
 		disposeCallbacks.add(releaseMixtureCatalog);
 		// Online runtime discovery must not steal the event loop from the first UI
@@ -4145,6 +4146,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		const sessionMixtureHost = createSessionMixtureHost({
 			sessionManager,
 			modelRegistry,
+			mixtures: mixtureScope,
 			settings,
 			stream: primaryStreamFn,
 			prepareContext: transformMemberContext,

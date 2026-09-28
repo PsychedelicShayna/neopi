@@ -55,19 +55,15 @@ export interface ConfigCandidate {
 }
 
 /**
- * Walk the watchdog/advisor config search path — the user agent dir plus every
- * directory from `cwd` up to the repo root (or home), probing both `<F>` and
- * `.omp/<F>` for each given filename — and return the readable candidates with
- * their raw content, sorted user-first then project ancestor→leaf (depth
- * descending, so the leaf directory is most specific/last). Shared by
- * {@link discoverWatchdogFiles} and `discoverAdvisorConfigs`. Content is returned
- * verbatim (no `@import` expansion); callers expand what they need.
+ * The watchdog/advisor config search path for the given filenames: the user
+ * agent dir, then every directory from `cwd` up to the repo root (or home),
+ * probing both `<F>` and `.omp/<F>`. Paths only, readable or not, in probe order.
  */
-export async function collectConfigCandidates(
+export function configCandidatePaths(
 	cwd: string,
 	agentDir: string | undefined,
 	filenames: string[],
-): Promise<ConfigCandidate[]> {
+): { candidates: string[]; userPaths: ReadonlySet<string> } {
 	const home = os.homedir();
 	const resolvedAgentDir = agentDir ?? getAgentDir();
 	const userPaths = new Set<string>();
@@ -101,7 +97,23 @@ export async function collectConfigCandidates(
 		if (parent === current) break;
 		current = parent;
 	}
+	return { candidates: [...candidates], userPaths };
+}
 
+/**
+ * Walk the config search path ({@link configCandidatePaths}) and return the
+ * readable candidates with their raw content, sorted user-first then project
+ * ancestor→leaf (depth descending, so the leaf directory is most
+ * specific/last). Shared by {@link discoverWatchdogFiles} and
+ * `discoverAdvisorConfigs`. Content is returned verbatim (no `@import`
+ * expansion); callers expand what they need.
+ */
+export async function collectConfigCandidates(
+	cwd: string,
+	agentDir: string | undefined,
+	filenames: string[],
+): Promise<ConfigCandidate[]> {
+	const { candidates, userPaths } = configCandidatePaths(cwd, agentDir, filenames);
 	const items: ConfigCandidate[] = [];
 	for (const candidate of candidates) {
 		try {

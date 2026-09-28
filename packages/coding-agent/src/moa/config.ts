@@ -25,7 +25,7 @@ import type {
 	TransitPartName,
 	TransitSpec,
 } from "@oh-my-pi/pi-tui/overlays/mixture-types";
-import { collectConfigCandidates } from "../advisor/watchdog";
+import { collectConfigCandidates, configCandidatePaths } from "../advisor/watchdog";
 import { serializeMixturesConfig } from "./toml";
 import { MAX_FILE_BYTES } from "./validate";
 
@@ -443,6 +443,15 @@ export interface DiscoveredMixtures {
 	 */
 	mixtures: DiscoveredMixture[];
 	warnings: string[];
+}
+
+/**
+ * The workspace scope a roster belongs to: every `MIXTURES.toml` path the search
+ * path probes for (cwd, agentDir), readable or not, in order. Two sessions share a
+ * roster only when they would discover from the same files.
+ */
+export function mixtureScopeKey(cwd: string, agentDir?: string): string {
+	return JSON.stringify(configCandidatePaths(cwd, agentDir, [MIXTURES_FILE_NAME]).candidates);
 }
 
 /** Discover mixtures from every `MIXTURES.toml` on the user + project search path. */

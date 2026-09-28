@@ -232,14 +232,16 @@ describe("linear mixture in a session", () => {
 		);
 		const overridden = await createMoaSession(fixture, { settings: Settings.isolated(SETTINGS) });
 		sessions.push(overridden);
-		MixtureCatalog.for(fixture.registry).setRoster(
-			await discoverRegistrableMixtures({
-				cwd: fixture.cwd,
-				agentDir: fixture.agentDir,
-				registry: fixture.registry,
-				settings: Settings.isolated(),
-			}),
-		);
+		MixtureCatalog.for(fixture.registry)
+			.scope(fixture.cwd, fixture.agentDir)
+			.setRoster(
+				await discoverRegistrableMixtures({
+					cwd: fixture.cwd,
+					agentDir: fixture.agentDir,
+					registry: fixture.registry,
+					settings: Settings.isolated(),
+				}),
+			);
 		await overridden.setModel(mixtureModel());
 		members.script("writer", { text: "shown draft" });
 		await overridden.sendUserMessage("go");
@@ -802,7 +804,7 @@ describe("engine contract through a session host", () => {
 	beforeEach(async () => {
 		await ensureFixture();
 		manager = SessionManager.inMemory(fixture.cwd);
-		await retainMixtureCatalog("engine", {
+		const mixtures = await retainMixtureCatalog("engine", {
 			cwd: fixture.cwd,
 			agentDir: fixture.agentDir,
 			registry: fixture.registry,
@@ -811,6 +813,7 @@ describe("engine contract through a session host", () => {
 		host = createSessionMixtureHost({
 			sessionManager: manager,
 			modelRegistry: fixture.registry,
+			mixtures,
 			settings: Settings.isolated(),
 			stream: streamSimple,
 			prepareContext: async context => context,
