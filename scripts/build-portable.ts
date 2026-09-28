@@ -5,6 +5,7 @@ import { createReadStream } from "node:fs";
 import * as fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import * as path from "node:path";
+import { resolveBuildIdentity } from "../packages/coding-agent/scripts/build-identity";
 
 const repoRoot = path.join(import.meta.dir, "..");
 const packageDir = path.join(repoRoot, "packages/coding-agent");
@@ -92,6 +93,8 @@ async function publishPortable(stagingDir: string, portableDir: string): Promise
 }
 
 export async function buildPortable(): Promise<PortableManifest> {
+	// Before any native or bundle generator touches tracked placeholders.
+	const buildInfo = await resolveBuildIdentity(repoRoot);
 	const codingManifest = (await Bun.file(path.join(packageDir, "package.json")).json()) as { version: string };
 	const nativesManifest = (await Bun.file(path.join(repoRoot, "packages/natives/package.json")).json()) as {
 		version: string;
@@ -143,6 +146,7 @@ export async function buildPortable(): Promise<PortableManifest> {
 			transformersVersion: transformersManifest.version,
 			target: compileTarget,
 			compileTarget,
+			buildInfo,
 		});
 		await fs.chmod(binaryPath, 0o755);
 		await fs.copyFile(nativePath, path.join(stagingDir, baselineNativeName));
