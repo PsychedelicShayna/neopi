@@ -45,9 +45,10 @@ gh pr view $PR --json state,isDraft,headRefName,headRefOid,mergeable,mergeStateS
 # CI on the head commit
 gh pr checks $PR --json name,bucket,state,workflow,link
 
-# Codex rounds: one entry per pass, with its status and the commit it reviewed
-gh api "repos/$REPO/issues/$PR/comments?per_page=100" --jq '
-  [.[] | select(.user.login == "chatgpt-codex-connector[bot]"
+# Codex rounds: one entry per pass, with its status and the commit it reviewed.
+# --slurp gathers every page into one array; gh cannot combine it with --jq.
+gh api --paginate --slurp "repos/$REPO/issues/$PR/comments?per_page=100" | jq '
+  [add[] | select(.user.login == "chatgpt-codex-connector[bot]"
      and (.body | contains("codex-pull-request-review-summary")))] | last | .body
   | [scan("\\*\\*(Code|Security) Review\\*\\* \\| [^*]*\\*\\*([A-Za-z ]+)\\*\\*[^|]*\\| `([0-9a-f]+)`")]
   | map({pass: .[0], status: .[1], commit: .[2]})'
