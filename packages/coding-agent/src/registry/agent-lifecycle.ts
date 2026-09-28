@@ -547,8 +547,7 @@ export class AgentLifecycleManager {
 		// same ref, and start a new turn while release is suspended.
 		if (
 			options?.expectedRunGeneration !== undefined &&
-			(this.#registry.get(id) !== ref ||
-				this.#registry.runGeneration(ref) !== options.expectedRunGeneration)
+			(this.#registry.get(id) !== ref || this.#registry.runGeneration(ref) !== options.expectedRunGeneration)
 		) {
 			return false;
 		}
