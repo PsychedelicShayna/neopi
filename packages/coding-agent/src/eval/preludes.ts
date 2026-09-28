@@ -1,7 +1,13 @@
 import type { AgentToolContext, AgentToolResult, AgentToolUpdateCallback, ToolApproval } from "@oh-my-pi/pi-agent-core";
 import { untilAborted } from "@oh-my-pi/pi-utils";
 import type { ToolSession } from "../tools";
-import { denyError, formatApprovalPrompt, resolveApproval, resolveApprovalFromContext } from "../tools/approval";
+import {
+	denyError,
+	formatApprovalDetailLines,
+	formatApprovalPrompt,
+	resolveApproval,
+	resolveApprovalFromContext,
+} from "../tools/approval";
 
 /** Host context supplied when an eval prelude calls back out of its language VM. */
 export interface EvalPreludeContext {
@@ -87,6 +93,30 @@ async function approvePreludeInvocation(
 	const resolved = resolveApproval(subject, parameters, mode, policies);
 	if (resolved.policy === "deny") throw denyError(resolved, definition.name);
 	if (resolved.policy !== "prompt") return;
+
+	// A host-rendered approver (RPC `set_approval_handler: host`) replaces the
+	// select dialog and needs no interactive UI, as in `ExtensionToolWrapper`.
+	const hostApprover = context.session.getToolApprovalRequester?.();
+	if (hostApprover) {
+		const verdict = await hostApprover({
+			toolCallId: context.toolCallId,
+			toolName: definition.name,
+			args: parameters,
+			tier: resolved.tier,
+			approvalMode: mode,
+			...(resolved.reason ? { reason: resolved.reason } : {}),
+			details: formatApprovalDetailLines(subject, parameters),
+			safetyChecks: [],
+			signal: context.signal,
+		});
+		if (verdict.approved) return;
+		context.signal?.throwIfAborted();
+		throw new Error(
+			verdict.reason
+				? `Eval prelude call denied by user: ${definition.name}\nReason: ${verdict.reason}`
+				: `Eval prelude call denied by user: ${definition.name}`,
+		);
+	}
 
 	const ui = context.context?.ui;
 	if (!ui || context.context?.hasUI === false) {

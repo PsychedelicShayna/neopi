@@ -928,7 +928,7 @@ A tool call that needs approval (its policy resolves to `prompt`, or it carries 
 { "id": "req_1", "type": "set_approval_handler", "handler": "host" }
 ```
 
-The response payload is `{ "handler": "host" }`. `handler: "ui"` switches back; any other value fails with `success: false`. The setting works in `--mode rpc`, `--mode rpc-ui`, and with `--no-ui`. Hosts that never send the command see the `select` dialog exactly as before. Which calls require approval does not change: a configured `tools.approval.<name>: deny` still denies without a request, and only calls that would have shown the dialog emit one.
+The response payload is `{ "handler": "host" }`. `handler: "ui"` switches back; any other value fails with `success: false`. The setting works in `--mode rpc`, `--mode rpc-ui`, and with `--no-ui`. Hosts that never send the command see the `select` dialog exactly as before. Which calls require approval does not change: a configured `tools.approval.<name>: deny` still denies without a request, and only calls that would have shown the dialog emit one. This covers approvals raised from inside an `eval` cell as well: tools called through the eval bridge and eval prelude host calls (such as `browser.*` or `computer.*`) emit `tool_approval_request` under the host handler, so no `Allow tool:` select appears while it is active.
 
 ### Outbound request
 
@@ -947,7 +947,8 @@ The response payload is `{ "handler": "host" }`. `handler: "ui"` switches back; 
 }
 ```
 
-- `toolCallId` matches the `tool_execution_start` event of the same call. Approval runs inside tool execution, so the request is always written after that `tool_execution_start` frame; hosts can attach it to the in-flight tool item.
+- `toolCallId` matches the `tool_execution_start` event of the same call. Approval runs inside tool execution, so the request is always written after that `tool_execution_start` frame; hosts can attach it to the in-flight tool item. Calls made from inside an `eval` cell have no agent tool call of their own: they carry a synthetic id (`prelude-<name>-<uuid>` for an eval prelude host call such as `browser`, `js-<tool>-<uuid>` for a bridged tool) that matches no `tool_execution_start`. Their request is written while the enclosing `eval` call is executing, between its `tool_execution_start` and `tool_execution_end`.
+- For an eval prelude call, `toolName` is the prelude name (`browser`, `computer`), `args` are the prelude call's parameters (for example `{ "action": "tabs" }`), and `details` is `[]`. A denial fails the prelude call inside the cell with `Eval prelude call denied by user: <name>`, followed by `Reason: <reason>` when the host gave one.
 - `args` is the exact input that runs when approved, including any revision a `tool_call` extension handler made.
 - `tier` is the resolved tool tier (`read | write | exec`); `approvalMode` is the session approval mode (`always-ask | write | yolo`).
 - `reason` is present only when the policy gave one. `details` are the tool's own approval detail lines, without the `Allow tool:` header.
