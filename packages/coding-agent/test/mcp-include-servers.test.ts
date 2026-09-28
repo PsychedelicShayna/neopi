@@ -10,6 +10,7 @@ import * as path from "node:path";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { initializeWithSettings, reset as resetDiscoveryCache } from "@oh-my-pi/pi-coding-agent/discovery";
 import { loadAllMCPConfigs } from "@oh-my-pi/pi-coding-agent/mcp/config";
+import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
 import { __resetDirsFromEnvForTests, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
 
 describe("mcp.includeServers allowlist", () => {
@@ -62,5 +63,18 @@ describe("mcp.includeServers allowlist", () => {
 	test("an empty allowlist admits every enabled server", async () => {
 		const { configs } = await loadAllMCPConfigs(projectDir, { includeServers: [] });
 		expect(Object.keys(configs).sort()).toEqual(["github", "linear-work", "unrelated"]);
+	});
+
+	test("a direct connect (/mcp enable, /mcp add) of an excluded server never spawns it", async () => {
+		const marker = path.join(projectDir, "spawned");
+		const manager = new MCPManager(projectDir, null, async () => ({ configs: {}, sources: {}, exaApiKeys: [] }));
+		await manager.discoverAndConnect({ includeServers: ["github"] });
+		const result = await manager.connectServers(
+			{ unrelated: { command: "/bin/sh", args: ["-c", `touch '${marker}'`] } },
+			{},
+		);
+		await manager.disconnectAll();
+		expect(result.errors.get("unrelated")).toContain("allowlist");
+		expect(await Bun.file(marker).exists()).toBe(false);
 	});
 });

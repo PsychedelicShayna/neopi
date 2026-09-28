@@ -693,7 +693,14 @@ export class MCPManager {
 		// Prepare connection tasks
 		const connectionTasks: ConnectionTask[] = [];
 
+		// Direct connects (`/mcp enable`, `/mcp add`, the extensions dashboard)
+		// bypass config loading, so the session allowlist is enforced here too.
+		const includeGlobs = (this.#discoverOptions?.includeServers ?? []).map(pattern => new Bun.Glob(pattern));
 		for (const [name, config] of Object.entries(configs)) {
+			if (includeGlobs.length > 0 && !includeGlobs.some(glob => glob.match(name))) {
+				errors.set(name, "excluded by the session MCP allowlist (--mcp / mcp.includeServers)");
+				continue;
+			}
 			this.#startupServers.add(name);
 			if (sources[name]) {
 				this.#sources.set(name, sources[name]);
