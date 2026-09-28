@@ -557,6 +557,14 @@ export function __resetDirsFromEnvForTests(): void {
 	refreshDirsFromEnv();
 }
 
+if (process.env.NPI_TEST_ALLOWED_STORAGE_ROOT) {
+	(
+		globalThis as typeof globalThis & {
+			__npiTestResetDirsFromEnv?: () => void;
+		}
+	).__npiTestResetDirsFromEnv = __resetDirsFromEnvForTests;
+}
+
 /** Activate a named profile. Passing undefined or "default" returns to the default profile. */
 export function setProfile(profile: string | undefined): void {
 	const next = normalizeProfileName(profile);

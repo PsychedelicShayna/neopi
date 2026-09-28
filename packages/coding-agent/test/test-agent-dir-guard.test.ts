@@ -3,11 +3,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { getAgentDir, getSessionsDir, setAgentDir, setProfile } from "@oh-my-pi/pi-utils/dirs";
 
-test("named profiles remain inside temporary test storage", () => {
+test("rejects named profiles that escape temporary test storage", () => {
+	delete process.env.PI_CONFIG_DIR;
 	setProfile("work");
 
-	expect(path.resolve(getAgentDir()).startsWith(`${path.resolve(os.tmpdir())}${path.sep}`)).toBe(true);
-	expect(path.resolve(getSessionsDir()).startsWith(`${path.resolve(os.tmpdir())}${path.sep}`)).toBe(true);
+	expect(() => getAgentDir()).toThrow("outside its isolated temporary storage");
+	expect(() => getSessionsDir()).toThrow("outside its isolated temporary storage");
 });
 
 test("rejects agent and session directories outside temporary test storage", () => {
