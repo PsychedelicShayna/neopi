@@ -17,7 +17,8 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { VibeSessionRegistry } from "@oh-my-pi/pi-coding-agent/vibe/runtime";
 import { getSessionsDir, removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
-import { getActiveProfile, getConfigRootDir, setProfile } from "@oh-my-pi/pi-utils/dirs";
+import { getActiveProfile, getConfigRootDir, setAgentDir, setProfile } from "@oh-my-pi/pi-utils/dirs";
+import { createTempConfigRoot } from "./helpers/temp-config-root";
 
 function createTtsrRule(name: string): Rule {
 	return {
@@ -58,11 +59,11 @@ async function withTempConfigRoot<T>(run: () => Promise<T>): Promise<T> {
 	const originalProfile = getActiveProfile();
 	const originalConfigDir = process.env.PI_CONFIG_DIR;
 	const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
-	const configDirName = `.omp-sdk-session-${Snowflake.next()}`;
-	const configRoot = path.join(os.homedir(), configDirName);
+	const configRoot = createTempConfigRoot("omp-sdk-session-");
+	const configDirName = configRoot.configDir;
 	try {
 		process.env.PI_CONFIG_DIR = configDirName;
-		setProfile(undefined);
+		setAgentDir(path.join(configRoot.path, "agent"));
 		return await run();
 	} finally {
 		setProfile(undefined);
@@ -71,13 +72,15 @@ async function withTempConfigRoot<T>(run: () => Promise<T>): Promise<T> {
 		} else {
 			process.env.PI_CONFIG_DIR = originalConfigDir;
 		}
-		if (originalAgentDir === undefined) {
+		if (originalProfile) {
+			setProfile(originalProfile);
+		} else if (originalAgentDir === undefined) {
 			delete process.env.PI_CODING_AGENT_DIR;
+			setProfile(undefined);
 		} else {
-			process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+			setAgentDir(originalAgentDir);
 		}
-		setProfile(originalProfile);
-		fs.rmSync(configRoot, { recursive: true, force: true });
+		configRoot.remove();
 	}
 }
 
@@ -667,6 +670,7 @@ describe("createAgentSession session storage isolation", () => {
 				tempDirs.push(tempDir);
 				const cwd = path.join(tempDir, "project");
 				const agentDir = path.join(tempDir, "agent");
+				setAgentDir(agentDir);
 				fs.mkdirSync(path.join(cwd, ".omp"), { recursive: true });
 				fs.writeFileSync(
 					path.join(cwd, ".omp", "secrets.yml"),

@@ -714,7 +714,7 @@ describe("MemoryProtocolHandler — mnemopi bridge (issue #4443)", () => {
 
 	it("keeps peer banks unreachable when a cwd names two live sessions", async () => {
 		await withMnemopiSession(async ({ state, dbDir }) => {
-			const twinDir = TempDir.createSync("memory-protocol-mnemopi-twin-");
+			const twinDir = TempDir.createSync("@memory-protocol-mnemopi-twin-");
 			const previousAgentDir = getAgentDir();
 			let twinState: MnemopiSessionState | undefined;
 			try {

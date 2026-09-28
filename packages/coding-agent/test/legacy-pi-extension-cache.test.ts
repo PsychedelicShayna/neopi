@@ -3,6 +3,7 @@ import { afterEach, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { createTempConfigRoot } from "./helpers/temp-config-root";
 
 const probePath = path.resolve(import.meta.dir, "fixtures", "legacy-pi-extension-cache-probe.ts");
 const healthProbePath = path.resolve(import.meta.dir, "fixtures", "legacy-pi-extension-cache-health-probe.ts");
@@ -10,23 +11,32 @@ const cjsProbePath = path.resolve(import.meta.dir, "fixtures", "legacy-pi-extens
 const tempDirs: TempDir[] = [];
 
 async function runProbe(cacheRoot: string, script: string = probePath, args: string[] = []): Promise<string> {
-	const env: Record<string, string | undefined> = { ...process.env, XDG_CACHE_HOME: cacheRoot };
-	for (const key of ["PI_CODING_AGENT_DIR", "OMP_PROFILE", "PI_PROFILE", "PI_CONFIG_DIR"]) {
-		delete env[key];
+	const configRoot = createTempConfigRoot("omp-legacy-cache-probe-");
+	try {
+		const env: Record<string, string | undefined> = {
+			...process.env,
+			PI_CONFIG_DIR: configRoot.configDir,
+			XDG_CACHE_HOME: cacheRoot,
+		};
+		for (const key of ["PI_CODING_AGENT_DIR", "OMP_PROFILE", "PI_PROFILE"]) {
+			delete env[key];
+		}
+		const proc = Bun.spawn([process.execPath, script, ...args], {
+			cwd: path.resolve(import.meta.dir, "../.."),
+			env,
+			stderr: "pipe",
+			stdout: "pipe",
+		});
+		const [stdout, stderr, exitCode] = await Promise.all([
+			new Response(proc.stdout).text(),
+			new Response(proc.stderr).text(),
+			proc.exited,
+		]);
+		expect(exitCode, stderr).toBe(0);
+		return stdout;
+	} finally {
+		configRoot.remove();
 	}
-	const proc = Bun.spawn([process.execPath, script, ...args], {
-		cwd: path.resolve(import.meta.dir, "../.."),
-		env,
-		stderr: "pipe",
-		stdout: "pipe",
-	});
-	const [stdout, stderr, exitCode] = await Promise.all([
-		new Response(proc.stdout).text(),
-		new Response(proc.stderr).text(),
-		proc.exited,
-	]);
-	expect(exitCode, stderr).toBe(0);
-	return stdout;
 }
 
 afterEach(async () => {

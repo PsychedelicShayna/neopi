@@ -14,7 +14,7 @@ import {
 	setProfile,
 	VERSION,
 } from "@oh-my-pi/pi-utils/dirs";
-import { Snowflake } from "@oh-my-pi/pi-utils/snowflake";
+import { createTempConfigRoot, type TempConfigRoot } from "./helpers/temp-config-root";
 import { runCli } from "../src/cli";
 import * as profileAliasCli from "../src/cli/profile-alias";
 
@@ -39,6 +39,7 @@ async function readStream(stream: ReadableStream<Uint8Array>): Promise<string> {
 
 describe("global --profile flag", () => {
 	let configDir = "";
+	let configRoot: TempConfigRoot | undefined;
 	let originalProfile: string | undefined;
 	let originalAgentDir = "";
 	let originalAgentDirEnv: string | undefined;
@@ -53,7 +54,8 @@ describe("global --profile flag", () => {
 		originalOmpProfileEnv = process.env.OMP_PROFILE;
 		originalPiProfileEnv = process.env.PI_PROFILE;
 		originalConfigDir = process.env.PI_CONFIG_DIR;
-		configDir = `.omp-profile-cli-test-${Snowflake.next()}`;
+		configRoot = createTempConfigRoot("omp-profile-cli-test-");
+		configDir = configRoot.configDir;
 		process.env.PI_CONFIG_DIR = configDir;
 		process.exitCode = 0;
 	});
@@ -90,7 +92,8 @@ describe("global --profile flag", () => {
 		}
 		__resetProfileSnapshotForTests();
 		process.exitCode = 0;
-		await removeWithRetries(path.join(os.homedir(), configDir));
+		configRoot?.remove();
+		configRoot = undefined;
 	});
 
 	it("activates a profile before dispatching root flags", async () => {
@@ -243,6 +246,7 @@ describe("global --profile flag", () => {
 			const childEnv: Record<string, string | undefined> = {
 				...process.env,
 				HOME: home,
+				NPI_TEST_ALLOWED_STORAGE_ROOT: root,
 				PI_CONFIG_DIR: configDir,
 				PI_NO_TITLE: "1",
 				NO_COLOR: "1",
@@ -296,6 +300,7 @@ describe("global --profile flag", () => {
 			const childEnv: Record<string, string | undefined> = {
 				...process.env,
 				HOME: home,
+				NPI_TEST_ALLOWED_STORAGE_ROOT: root,
 				PI_CONFIG_DIR: ".omp-profile-cli-env-bad",
 				OMP_PROFILE: "..",
 				NO_COLOR: "1",

@@ -1,7 +1,7 @@
 import { describe, expect, it, spyOn } from "bun:test";
 import * as os from "node:os";
 import * as path from "node:path";
-import { __resetDirsFromEnvForTests, CONFIG_DIR_NAME, getConfigAgentDirName, TempDir } from "@oh-my-pi/pi-utils";
+import { __resetDirsFromEnvForTests, CONFIG_DIR_NAME, getAgentDir, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 import {
 	buildSystemPrompt,
 	discoverSystemPromptOverride,
@@ -31,16 +31,20 @@ async function withDiscoveryHome<T>(fn: (paths: DiscoveryPaths) => Promise<T>): 
 	using tempDir = TempDir.createSync("@omp-system-prompt-template-discovery-");
 	const home = tempDir.join("home");
 	const homedirSpy = spyOn(os, "homedir").mockReturnValue(home);
+	const previousAgentDir = getAgentDir();
 	const previousHome = process.env.HOME;
 	const previousUserProfile = process.env.USERPROFILE;
+	const previousConfigDir = process.env.PI_CONFIG_DIR;
 	process.env.HOME = home;
 	process.env.USERPROFILE = home;
+	delete process.env.PI_CONFIG_DIR;
+	setAgentDir(path.join(home, CONFIG_DIR_NAME, "agent"));
 	__resetDirsFromEnvForTests();
 	try {
 		return await fn({
 			cwd: tempDir.join("project"),
 			projectConfig: tempDir.join("project", CONFIG_DIR_NAME),
-			userConfig: path.join(home, getConfigAgentDirName()),
+			userConfig: path.join(home, CONFIG_DIR_NAME, "agent"),
 		});
 	} finally {
 		homedirSpy.mockRestore();
@@ -48,6 +52,9 @@ async function withDiscoveryHome<T>(fn: (paths: DiscoveryPaths) => Promise<T>): 
 		else process.env.HOME = previousHome;
 		if (previousUserProfile === undefined) delete process.env.USERPROFILE;
 		else process.env.USERPROFILE = previousUserProfile;
+		if (previousConfigDir === undefined) delete process.env.PI_CONFIG_DIR;
+		else process.env.PI_CONFIG_DIR = previousConfigDir;
+		setAgentDir(previousAgentDir);
 		__resetDirsFromEnvForTests();
 	}
 }
