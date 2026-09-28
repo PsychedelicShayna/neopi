@@ -410,6 +410,22 @@ Use these when you want partial control without recreating internal discovery lo
 - `discoverMCPServers(cwd?)`
 - `buildSystemPrompt(options?)`
 
+## Build identity (`BUILD_INFO`)
+
+The package version stays the same across many NeoPi commits, so embedders that need to know which source tree they loaded read `BUILD_INFO`:
+
+```ts
+import { BUILD_INFO } from "@oh-my-pi/pi-coding-agent";
+// { version: "18.3.2", gitSha: "955b7b385f986e01906f1fb178e01583f147543f", dirty: false }
+```
+
+- `gitSha` is the full commit. A source tree resolves it when the module first loads, from the checkout that contains `packages/coding-agent/src/build-info.ts`, never from `process.cwd()`. Later cwd or HEAD changes do not alter it. Linked worktrees (a `.git` file) work like any checkout. A copy that is not the root of its own checkout, for example one under an application's `node_modules`, reports `null` instead of the enclosing repository.
+- `dirty` is `true` when tracked files have staged or unstaged changes. Untracked and ignored files (generated bundles, native addons, dependencies) never count.
+- Unknown state, such as a non-git source or a failed status query, reports `gitSha: null` and `dirty: null`. Unknown is never reported as clean.
+- Compiled binaries report the source identity they were built from, baked in at build time and resolved before any generator touches tracked files. They never look at the runtime directory's checkout.
+
+`BUILD_INFO` identifies source only. It does not certify API compatibility with a given host, or which native addon build is loaded.
+
 ## Subagent-oriented options
 
 For SDK consumers building orchestrators (similar to task executor flow):

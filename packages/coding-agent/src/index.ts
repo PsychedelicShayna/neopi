@@ -10,6 +10,7 @@ export { Container, Markdown, Spacer, Text } from "@oh-my-pi/pi-tui";
 export { getAgentDir, logger, VERSION } from "@oh-my-pi/pi-utils";
 export * from "@oh-my-pi/pi-tui/app-keybindings";
 export * from "./config/model-registry";
+export * from "./build-info";
 // Prompt templates
 export type * from "./config/prompt-templates";
 export * from "./config/prompt-templates";

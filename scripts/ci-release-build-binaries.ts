@@ -3,6 +3,7 @@
 import * as fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import * as path from "node:path";
+import { resolveBuildIdentity, type BuildIdentity } from "../packages/coding-agent/scripts/build-identity";
 import { COMPILED_EXTERNAL_DEPENDENCIES, compileCodingAgent } from "../packages/coding-agent/scripts/compile-binary";
 
 interface BinaryTarget {
@@ -136,7 +137,7 @@ async function embedNative(target: BinaryTarget): Promise<void> {
 	});
 }
 
-async function buildBinary(target: BinaryTarget): Promise<void> {
+async function buildBinary(target: BinaryTarget, buildInfo: BuildIdentity): Promise<void> {
 	console.log(`Building ${target.outfile}...`);
 	await embedNative(target);
 	if (isDryRun) {
@@ -154,6 +155,7 @@ async function buildBinary(target: BinaryTarget): Promise<void> {
 		target: target.target,
 		minifyIdentifiers: true,
 		skipBuiltinCodesign: shouldAdhocSignDarwinBinary(target),
+		buildInfo,
 	});
 	// Bun 1.3.12 emits a truncated Mach-O signature on darwin builds.
 	if (shouldAdhocSignDarwinBinary(target)) {
@@ -210,12 +212,14 @@ async function main(): Promise<void> {
 	}
 
 	await fs.mkdir(binariesDir, { recursive: true });
+	// Before generateBundle/embedNative rewrite tracked placeholders.
+	const buildInfo = await resolveBuildIdentity(repoRoot);
 	// Generate inside the try so resetArtifacts() always restores the empty
 	// checked-in placeholders, even if a generate or build step throws.
 	try {
 		await generateBundle();
 		for (const target of selectedTargets) {
-			await buildBinary(target);
+			await buildBinary(target, buildInfo);
 		}
 	} finally {
 		await resetArtifacts();
