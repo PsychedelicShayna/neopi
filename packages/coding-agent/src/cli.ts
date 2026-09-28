@@ -79,6 +79,7 @@ function getWorkerParentPort(): MessagePort | null {
  */
 const PREPAINT_SAFE_FLAGS: Record<string, true> = {
 	"--no-session": true,
+	"--new-session": true,
 	"--no-extensions": true,
 	"--no-skills": true,
 	"--no-rules": true,

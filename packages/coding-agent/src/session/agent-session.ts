@@ -10496,6 +10496,9 @@ export class AgentSession implements SettingsScope {
 		const switchingToDifferentSession = previousSessionFile
 			? path.resolve(previousSessionFile) !== path.resolve(sessionPath)
 			: true;
+		// A file another process owns fails before anything is torn down, so the
+		// current session (and any running turn) stays exactly as it was.
+		if (switchingToDifferentSession) this.sessionManager.assertSessionNotInUse(sessionPath);
 		// Emit session_before_switch event (can be cancelled)
 		if (this.#extensionRunner?.hasHandlers("session_before_switch")) {
 			const result = (await this.#extensionRunner.emit({

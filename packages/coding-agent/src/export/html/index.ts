@@ -295,10 +295,8 @@ export async function exportFromFile(inputPath: string, options?: ExportOptions 
 
 	let sm: SessionManager;
 	try {
-		sm = await SessionManager.open(inputPath, undefined, undefined, {
-			suppressBreadcrumb: true,
-			throwIfMissing: true,
-		});
+		// Read-only: exporting must work on a session another process holds.
+		sm = await SessionManager.openReadOnly(inputPath);
 	} catch (err) {
 		if (isEnoent(err)) throw new Error(`File not found: ${inputPath}`);
 		throw err;

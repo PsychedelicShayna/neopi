@@ -24,6 +24,7 @@ Behavior notes:
 - `@file` CLI arguments are rejected in RPC mode.
 - `--no-ui` (only with `--mode rpc`) runs extensions headless: `ctx.hasUI` is `false`, dialogs resolve to their defaults, and no `extension_ui_request` frames are emitted except for a host-issued `login`. Use it when the host has no interactive surface and must not be left owing dialog answers.
 - RPC mode disables automatic session title generation by default to avoid an extra model call.
+- A flagless RPC launch (`--mode rpc` or `--mode rpc-ui` with no session flags) always starts a new session in the default per-cwd session directory. Protocol modes (`rpc`, `rpc-ui`, `acp`) ignore the user's `autoResume` setting. `--new-session` makes that explicit (and applies it in every mode); it combines with `--session-dir <dir>` to create the session in `<dir>`, and is rejected at argument parsing together with `--continue`, `--resume`/`--session`, or `--fork`.
 - RPC/ACP host defaults cover task isolation/execution, memory, advisor, tier, async-job, and bash auto-background settings. They are applied only when a path is not explicitly configured; project/global config, `--config`, and isolated settings remain authoritative. Todo settings are not host-defaulted.
 - The process claims stdin before extension discovery, then parses it one non-empty JSONL line at a time. Malformed JSON emits a recoverable `command: "parse"` failure and does not terminate the loop.
 - At startup it writes a `ready` frame, then starts reading stdin while extensions initialize. Control frames (`extension_ui_response`, `tool_approval_response`, `plan_proposal_response`, `host_tool_result`, `host_tool_update`, `host_uri_result`) are dispatched on arrival, so an extension that asks a dialog question during `session_start` receives the host's answer. Commands, `bash` included, are queued and processed in arrival order once initialization completes. Hosts that send no startup dialog answers observe no change in frame order.
@@ -39,6 +40,23 @@ Behavior notes:
 | `set_chat_mode` | Live chat-mode switching: the `set_chat_mode` command, `get_state.chatMode`, the `chat_mode_changed` event, and the `/chat` builtin in `get_available_commands`. |
 | `tool_approval_request` | `set_approval_handler` and the typed `tool_approval_request` / `tool_approval_response` / `tool_approval_cancel` frames; see [Tool Approval Sub-Protocol](#tool-approval-sub-protocol) |
 | `set_mode` | `set_mode` command, `get_state` `mode`/`planMode`, `mode_changed` event, and the `plan_proposal_request`/`plan_proposal_response` round trip. See [Plan Mode Sub-Protocol](#plan-mode-sub-protocol). |
+| `new_session` | `--new-session` is accepted, and a flagless protocol launch never auto-resumes: the process starts a fresh session in the default per-cwd session directory regardless of `autoResume` (see [Startup](#startup)). |
+| `session_lease` | A process holds an exclusive lifetime lease on every session file it writes, so two processes never append to one transcript. `--session <file>` onto a file another process holds fails at startup with a `startup_error` stderr line; `switch_session` and `branch` onto one fail with `code: "session_in_use"` (see [Session lease](#session-lease)). |
+
+### Session lease
+
+A process that writes a session file holds an exclusive OS-level lease on it from open to close (`.{basename}.lease` beside the file, plus a kernel-owned gate). The kernel releases it when the process exits, including SIGKILL, so a crashed holder never needs manual cleanup. Managers inside one process share the lease; only other processes are excluded. Leases are local to one machine: a session directory on a network filesystem shared between hosts is unsupported.
+
+- **Startup.** `--mode rpc --session <file>` (or `--resume <file>`) when another live process holds `<file>` writes exactly one JSON line to **stderr** and exits non-zero before any `ready` frame:
+
+  ```json
+  { "type": "startup_error", "code": "session_in_use", "pid": 4242, "sessionFile": "/home/u/.omp/agent/sessions/.../2026-...jsonl" }
+  ```
+
+  `pid` is the holder's process id (`0` in the rare case the holder had not recorded itself yet).
+- **Commands.** `switch_session` (and `branch`) targeting a file another process holds return `success: false` with `code: "session_in_use"`; the current session, including a running turn, is left unchanged. `open_session` skips leased sessions when picking the newest one in `sessionDir`, as `--continue` does.
+- **Flagless launches** create a new file and hold its lease, so a later `--resume` of that file from another process is refused while this process lives.
+- Read-only consumers (`get_subagent_messages`, `export_html`, `npi render`, transcript readers) never take the lease and work on leased files.
 
 ## Transport and Framing
 
@@ -209,8 +227,8 @@ correlate it via `id`. Ordering across concurrent commands is not guaranteed
 - `{ id?, type: "get_session_stats" }`
 - `{ id?, type: "get_usage", provider?: string, refresh?: boolean, redact?: boolean }`
 - `{ id?, type: "export_html", outputPath?: string }`
-- `{ id?, type: "switch_session", sessionPath: string }`
-- `{ id?, type: "branch", entryId: string }`
+- `{ id?, type: "switch_session", sessionPath: string }` — fails with `code: "session_in_use"` when another process holds the file (see [Session lease](#session-lease))
+- `{ id?, type: "branch", entryId: string }` — same `session_in_use` code if the branch file is held elsewhere
 - `{ id?, type: "get_branch_messages" }`
 - `{ id?, type: "get_last_assistant_text" }`
 - `{ id?, type: "set_session_name", name: string }`
@@ -1158,6 +1176,8 @@ A host that never sends `set_mode` keeps the previous behavior in both `--mode r
 ### Command-level failures
 
 Failures are `success: false` with string `error`.
+
+`code` is an optional machine-readable reason on some failures, for example `session_in_use` from `switch_session`/`branch` (see [Session lease](#session-lease)).
 
 ```json
 {

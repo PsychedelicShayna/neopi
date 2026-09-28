@@ -15,4 +15,6 @@ export const RPC_CAPABILITIES: readonly string[] = [
 	"set_chat_mode", // #109
 	"tool_approval_request", // #102
 	"set_mode", // #103
+	"new_session", // #107
+	"session_lease", // #106
 ];

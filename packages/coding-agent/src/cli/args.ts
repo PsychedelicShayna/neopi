@@ -64,6 +64,8 @@ export interface Args {
 	mode?: Mode;
 	noSession?: boolean;
 	sessionDir?: string;
+	/** `--new-session`: always start a fresh session, ignoring `autoResume`. */
+	newSession?: boolean;
 	providerSessionId?: string;
 	providerPromptCacheKey?: string;
 	fork?: string;
@@ -254,6 +256,8 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			result.fromCodex = true;
 		} else if (arg === "--no-session") {
 			result.noSession = true;
+		} else if (arg === "--new-session") {
+			result.newSession = true;
 		} else if (arg === "--no-tools") {
 			result.noTools = true;
 		} else if (arg === "--no-lsp") {
@@ -341,6 +345,16 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 
 	if (result.systemPrompt !== undefined && result.systemPromptTemplate !== undefined) {
 		throw new CliUsageError("--system-prompt and --system-prompt-template cannot be combined");
+	}
+	if (result.newSession) {
+		const conflicts = [
+			result.continue ? "--continue" : undefined,
+			result.resume !== undefined ? "--resume/--session" : undefined,
+			result.fork !== undefined ? "--fork" : undefined,
+		].filter(flag => flag !== undefined);
+		if (conflicts.length > 0) {
+			throw new CliUsageError(`--new-session cannot be combined with ${conflicts.join(", ")}`);
+		}
 	}
 	if (result.chat !== undefined) {
 		const chatMode = parseChatModeArg(result.chat);

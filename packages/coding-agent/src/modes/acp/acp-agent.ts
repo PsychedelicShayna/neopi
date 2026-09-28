@@ -1970,6 +1970,7 @@ export class AcpAgent implements Agent {
 			_meta: {
 				messageCount: session.messageCount,
 				size: session.size,
+				...(session.inUse ? { inUse: session.inUse } : {}),
 			},
 		};
 	}
