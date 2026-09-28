@@ -3,6 +3,8 @@
  * interactive tool adjustments, `mode_changed` reports every transition, and
  * an `xd://propose` submission round-trips through
  * `plan_proposal_request`/`plan_proposal_response` (a control frame).
+ * Issue #118: a proposal resolved without the host ends in exactly one
+ * `plan_proposal_cancel`, and a late answer to it fails.
  *
  * The propose write needs a model turn, so these tests dispatch the device
  * directly against a real session in plan mode and capture the RPC output.
@@ -17,7 +19,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { dispatchRpcControlFrame, type RpcInputFrameDeps } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-mode";
 import { RpcPlanModeController, RpcSetModeError } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-plan-mode";
-import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { dispatchResolutionDevice } from "@oh-my-pi/pi-coding-agent/tools/resolve";
@@ -146,7 +148,34 @@ describe("RPC plan mode", () => {
 			}
 			throw new Error("plan_proposal_request was not emitted");
 		};
-		return { session: created, planMode, frames, deps, writePlan, propose, modeEntries, waitForRequest };
+		const cancels = () => frames.filter(frame => frame.type === "plan_proposal_cancel");
+		/** Answer a proposal as a host would; returns the frames that answer produced. */
+		const respond = (id: unknown, decision: "approve" | "refine"): Frame[] => {
+			const before = frames.length;
+			expect(dispatchRpcControlFrame({ type: "plan_proposal_response", id, decision }, deps)).toBe(true);
+			return frames.slice(before);
+		};
+		const cancelledError = (id: unknown) => ({
+			id,
+			type: "response",
+			command: "plan_proposal_response",
+			success: false,
+			error: expect.any(String),
+			code: "proposal_cancelled",
+		});
+		return {
+			session: created,
+			planMode,
+			frames,
+			deps,
+			writePlan,
+			propose,
+			modeEntries,
+			waitForRequest,
+			cancels,
+			respond,
+			cancelledError,
+		};
 	}
 
 	it("enters plan mode with the plan tools and leaves it restoring the previous tools", async () => {
@@ -215,7 +244,8 @@ describe("RPC plan mode", () => {
 	});
 
 	it("approve: one proposal request with the plan markdown, then plan mode clears", async () => {
-		const { session, planMode, frames, deps, writePlan, propose, modeEntries, waitForRequest } = setup();
+		const { session, planMode, frames, deps, writePlan, propose, modeEntries, waitForRequest, cancels, respond } =
+			setup();
 		await planMode.setMode("plan", undefined);
 		await writePlan("demo", "# Demo plan\n\n1. Do it.\n");
 
@@ -242,10 +272,16 @@ describe("RPC plan mode", () => {
 		expect(frames.filter(frame => frame.type === "plan_proposal_request")).toHaveLength(1);
 		expect(frames.at(-1)).toEqual({ type: "mode_changed", mode: "default" });
 		expect(modeEntries()).toEqual(["plan", "none"]);
+
+		// An answered proposal is never cancelled, and a repeated answer is ignored.
+		planMode.observe({ type: "agent_end", messages: [] } as AgentSessionEvent);
+		planMode.close();
+		expect(respond(request.id, "approve")).toEqual([]);
+		expect(cancels()).toEqual([]);
 	});
 
 	it("refine: feedback reaches the tool result and plan mode stays on", async () => {
-		const { planMode, frames, deps, writePlan, propose, waitForRequest } = setup();
+		const { planMode, frames, deps, writePlan, propose, waitForRequest, cancels } = setup();
 		await planMode.setMode("plan", undefined);
 		await writePlan("demo", "# Demo plan\n");
 
@@ -270,38 +306,52 @@ describe("RPC plan mode", () => {
 			planMode: { planFilePath: "local://demo-plan.md", workflow: "parallel" },
 		});
 		expect(frames.some(frame => frame.type === "mode_changed" && frame.mode === "default")).toBe(false);
+
+		await planMode.setMode("default", undefined);
+		expect(cancels()).toEqual([]);
 	});
 
-	it("abort during the proposing turn resolves the proposal as refine; a late answer cannot approve it", async () => {
-		const { session, planMode, deps, writePlan, waitForRequest } = setup({
-			responses: [
-				{ content: [{ type: "toolCall", name: "write", arguments: { path: "xd://propose", content: "demo" } }] },
-				{ content: ["done"] },
-			],
+	for (const path of ["abort", "abort_and_prompt"] as const) {
+		it(`${path} during the proposing turn cancels the proposal once; a late answer errors`, async () => {
+			const { session, planMode, writePlan, waitForRequest, cancels, respond, cancelledError } = setup({
+				responses: [
+					{ content: [{ type: "toolCall", name: "write", arguments: { path: "xd://propose", content: "demo" } }] },
+					{ content: ["done"] },
+				],
+			});
+			await planMode.setMode("plan", undefined);
+			await writePlan("demo", "# Demo plan\n");
+
+			const turn = session.prompt("make a plan");
+			const request = await waitForRequest();
+			// `abort_and_prompt` is `abort` followed by a fresh prompt.
+			await session.abort();
+			await turn.catch(() => {});
+			if (path === "abort_and_prompt") await session.prompt("never mind");
+
+			expect(cancels()).toEqual([{ type: "plan_proposal_cancel", id: request.id, reason: "abort" }]);
+			const toolResults = session.messages.filter(message => message.role === "toolResult");
+			expect(toolResults).toHaveLength(1);
+			expect(JSON.stringify(toolResults[0])).toContain("Plan refinement requested");
+			expect(respond(request.id, "approve")).toEqual([cancelledError(request.id)]);
+			expect(planMode.state.mode).toBe("plan");
+			expect(session.peekPlanProposalHandler()).toBeDefined();
+
+			planMode.observe({ type: "agent_end", messages: [] } as AgentSessionEvent);
+			await planMode.setMode("default", undefined);
+			planMode.close();
+			expect(cancels()).toHaveLength(1);
 		});
-		await planMode.setMode("plan", undefined);
-		await writePlan("demo", "# Demo plan\n");
+	}
 
-		const turn = session.prompt("make a plan");
-		const request = await waitForRequest();
-		await session.abort();
-		await turn.catch(() => {});
-
-		const toolResults = session.messages.filter(message => message.role === "toolResult");
-		expect(toolResults).toHaveLength(1);
-		expect(JSON.stringify(toolResults[0])).toContain("Plan refinement requested");
-		dispatchRpcControlFrame({ type: "plan_proposal_response", id: request.id, decision: "approve" }, deps);
-		expect(planMode.state.mode).toBe("plan");
-		expect(session.peekPlanProposalHandler()).toBeDefined();
-	});
-
-	it("set_mode default while a proposal is pending refines it first and leaves plan mode", async () => {
-		const { planMode, frames, writePlan, propose, waitForRequest, modeEntries } = setup();
+	it("set_mode default while a proposal is pending cancels it first and leaves plan mode", async () => {
+		const { planMode, frames, writePlan, propose, waitForRequest, modeEntries, cancels, respond, cancelledError } =
+			setup();
 		await planMode.setMode("plan", undefined);
 		await writePlan("demo", "# Demo plan\n");
 
 		const submission = propose("demo");
-		await waitForRequest();
+		const request = await waitForRequest();
 		expect(await planMode.setMode("default", undefined)).toEqual({ mode: "default" });
 		const result = await submission;
 
@@ -309,18 +359,53 @@ describe("RPC plan mode", () => {
 		expect(planMode.state).toEqual({ mode: "default" });
 		expect(frames.at(-1)).toEqual({ type: "mode_changed", mode: "default" });
 		expect(modeEntries()).toEqual(["plan", "none"]);
+		const cancel = { type: "plan_proposal_cancel", id: request.id, reason: "mode_change" };
+		expect(cancels()).toEqual([cancel]);
+		// The host learns the proposal is gone before the mode change it caused.
+		expect(frames.slice(-2)).toEqual([cancel, { type: "mode_changed", mode: "default" }]);
+		expect(respond(request.id, "approve")).toEqual([cancelledError(request.id)]);
+		planMode.close();
+		expect(cancels()).toHaveLength(1);
 	});
 
-	it("EOF resolves a pending proposal as refine", async () => {
-		const { planMode, writePlan, propose, waitForRequest } = setup();
+	it("EOF cancels a pending proposal as shutdown", async () => {
+		const { planMode, writePlan, propose, waitForRequest, cancels, respond, cancelledError } = setup();
 		await planMode.setMode("plan", undefined);
 		await writePlan("demo", "# Demo plan\n");
 
 		const submission = propose("demo");
-		await waitForRequest();
+		const request = await waitForRequest();
 		planMode.close();
 
 		expect(resultText(await submission)).toContain("Plan refinement requested");
+		expect(cancels()).toEqual([{ type: "plan_proposal_cancel", id: request.id, reason: "shutdown" }]);
+		expect(respond(request.id, "refine")).toEqual([cancelledError(request.id)]);
+		planMode.close();
+		expect(cancels()).toHaveLength(1);
+	});
+
+	it("a proposal still pending when the run ends is cancelled as agent_end", async () => {
+		const { planMode, writePlan, propose, waitForRequest, cancels, respond, cancelledError } = setup();
+		await planMode.setMode("plan", undefined);
+		await writePlan("demo", "# Demo plan\n");
+
+		const submission = propose("demo");
+		const request = await waitForRequest();
+		planMode.observe({ type: "agent_start" } as AgentSessionEvent);
+		expect(cancels()).toEqual([]);
+		planMode.observe({ type: "agent_end", messages: [] } as AgentSessionEvent);
+
+		expect(resultText(await submission)).toContain("Plan refinement requested");
+		expect(cancels()).toEqual([{ type: "plan_proposal_cancel", id: request.id, reason: "agent_end" }]);
+		expect(respond(request.id, "approve")).toEqual([cancelledError(request.id)]);
+		planMode.observe({ type: "agent_end", messages: [] } as AgentSessionEvent);
+		planMode.close();
+		expect(cancels()).toHaveLength(1);
+	});
+
+	it("a response to an id that was never requested is ignored", () => {
+		const { respond } = setup();
+		expect(respond("unknown", "approve")).toEqual([]);
 	});
 
 	it("without set_mode, reports plan transitions from other paths but installs no proposal handler", async () => {
