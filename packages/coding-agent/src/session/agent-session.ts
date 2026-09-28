@@ -261,6 +261,7 @@ import { PROPOSE_DEVICE_NAME } from "@oh-my-pi/pi-tui/tools/resolve";
 import { supportsExternalThinking } from "../tools/think";
 import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
+import { isMountableUnderXdev } from "../tools/xdev";
 import type { WorkPoolYieldItem } from "../task/workpool-yield";
 import type { AgentDefinition } from "../task/types";
 import type { ModelMention } from "@oh-my-pi/pi-tui/prompt/model-mention-syntax";
@@ -6092,13 +6093,21 @@ export class AgentSession implements SettingsScope {
 		await this.#tools.refreshRpcHostTools(rpcTools, !this.#chatMode);
 		if (this.#chatMode && stash && this.#chatModeStashedTools === stash) {
 			const registered = new Set(rpcTools.map(tool => tool.name));
+			const mountable = new Set(rpcTools.filter(isMountableUnderXdev).map(tool => tool.name));
 			const retained = [...previousHostNames].filter(name => registered.has(name));
 			this.#chatModeStashedTools = {
 				enabled: [
 					...stash.enabled.filter(name => !previousHostNames.has(name)),
 					...new Set([...retained, ...rpcTools.filter(tool => !tool.hidden).map(tool => tool.name)]),
 				],
-				mounted: stash.mounted.filter(name => !previousHostNames.has(name) || registered.has(name)),
+				mounted: [
+					...stash.mounted.filter(
+						name => !previousHostNames.has(name) || (registered.has(name) && mountable.has(name)),
+					),
+					...rpcTools
+						.filter(tool => !previousHostNames.has(tool.name) && !tool.hidden && mountable.has(tool.name))
+						.map(tool => tool.name),
+				],
 			};
 		}
 	}
