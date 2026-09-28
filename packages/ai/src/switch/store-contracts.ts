@@ -15,6 +15,16 @@ export interface StoreOptions {
 	now?: () => number;
 }
 
+export interface HistoryQuery {
+	since?: number;
+	key?: string;
+	plan?: string;
+	status?: number;
+	kind?: string;
+	limit?: number;
+	cursor?: string;
+}
+
 export interface AdmissionInput {
 	id: string;
 	decisionId: string;
@@ -40,9 +50,9 @@ export interface AdmissionDenial {
 	code: string;
 	status: number;
 	constraint: { kind: "key" | "plan" | "gate" | "budget"; id: string; key?: string; plan?: string; meter?: string };
-	used: number;
-	limit: number;
-	unit: "requests" | "tokens" | "usd" | "plan_pct";
+	used?: number;
+	limit?: number;
+	unit?: "requests" | "tokens" | "usd" | "plan_pct";
 	resetsAt?: number;
 	retryAfterS?: number;
 }

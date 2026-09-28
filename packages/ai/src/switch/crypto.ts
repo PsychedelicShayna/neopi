@@ -49,24 +49,34 @@ export interface ImportBasis {
 	expiresAt: number;
 }
 
+export interface PageBasis {
+	schema: 1;
+	table: "decisions" | "events" | "audit";
+	filtersHash: string;
+	at: number;
+	id: string;
+}
+
 /** Keys are derived once, while preview and job signatures use separate domains. */
 export class SwitchSignatures {
 	readonly #previewKey: Uint8Array;
 	readonly #importKey: Uint8Array;
 	readonly #jobKey: Uint8Array;
+	readonly #pageKey: Uint8Array;
 
 	constructor(rootKey: string) {
 		const root = Buffer.from(rootKey, "hex");
 		this.#previewKey = new Bun.CryptoHasher("sha256", root).update("switch-preview-v1").digest();
 		this.#importKey = new Bun.CryptoHasher("sha256", root).update("switch-import-v1").digest();
 		this.#jobKey = new Bun.CryptoHasher("sha256", root).update("switch-job-v1").digest();
+		this.#pageKey = new Bun.CryptoHasher("sha256", root).update("switch-page-v1").digest();
 	}
 
 	#signature(payload: string, key: Uint8Array): string {
 		return new Bun.CryptoHasher("sha256", key).update(payload).digest("base64url");
 	}
 
-	#encode(value: PreviewBasis | ImportBasis, key: Uint8Array): string {
+	#encode(value: PreviewBasis | ImportBasis | PageBasis, key: Uint8Array): string {
 		const payload = Buffer.from(stableStringifyJson(value)).toString("base64url");
 		return `${payload}.${this.#signature(payload, key)}`;
 	}
@@ -86,6 +96,11 @@ export class SwitchSignatures {
 	readPreview(token: string): PreviewBasis { return this.#decode(token, this.#previewKey) as PreviewBasis; }
 	import(value: ImportBasis): string { return this.#encode(value, this.#importKey); }
 	readImport(token: string): ImportBasis { return this.#decode(token, this.#importKey) as ImportBasis; }
+	page(value: PageBasis): string { return this.#encode(value, this.#pageKey); }
+	readPage(token: string): PageBasis {
+		try { return this.#decode(token, this.#pageKey) as PageBasis; }
+		catch { throw new SwitchError(400, "invalid_cursor", "History cursor is invalid"); }
+	}
 
 	job(id: string): string { return `${id}.${this.#signature(id, this.#jobKey)}`; }
 	readJob(token: string): string {

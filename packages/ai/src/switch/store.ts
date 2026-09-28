@@ -1,15 +1,19 @@
 import { logger, stableStringifyJson } from "@oh-my-pi/pi-utils";
 import { consumptionFromUsage, evaluateGate, matchesBudget, meterPoints } from "./accounting";
+import { createBackup } from "./backup";
 import type { SwitchConfig } from "./config/types";
 import { digestMatches, mintToken, type PreviewBasis, SwitchSignatures, tokenDigest, valueHash } from "./crypto";
-import { type StoredChange, SwitchDatabase } from "./database";
+import { type RecordFilter, type StoredChange, SwitchDatabase } from "./database";
 import { notFound, SwitchError } from "./error";
+import { exportPolicy, type ImportEffect, prepareImport } from "./imports";
+import { serializeKeyDocument } from "./keys-toml";
 import type { AccountingPrincipal, AttemptRecord, DebitRecord, JobRecord, KeyRecord, KeyTokenRecord, MeterRecord, Reservation, ResolvedPlan, UsageRecord } from "./internal";
 import { applyAdjustmentDraft, computeAllocations, expirePolicies, keyPolicy, type PolicyContext, type PolicyEffect, validateAllocations } from "./policy";
-import { ReadModels, sameBinding } from "./read-models";
-import type { AdmissionInput, AdmissionResult, AttemptOutcome, JobIdentityInput, MeterObservation, OpenJobResult, SettlementResult, StoreOptions } from "./store-contracts";
-import { parseAdjustment, parseBudget, parseMintRequest, parsePatchRequest, parsePreviewRequest } from "./validation";
+import { planBindingKey, ReadModels, sameBinding } from "./read-models";
+import type { AdmissionInput, AdmissionResult, AttemptOutcome, HistoryQuery, JobIdentityInput, MeterObservation, OpenJobResult, SettlementResult, StoreOptions } from "./store-contracts";
+import { parseAdjustment, parseBudget, parseImportRequest, parseMintRequest, parsePatchRequest, parsePreviewRequest } from "./validation";
 import { budgetKey, calendarWindow, gateLimit, meterKey } from "./windows";
+import type { AttemptView, BackupResult, ConfigView, Decision, ExportView, HealthView, ImportApplyRequest, ImportChange, ImportPreview, ImportRequest, ImportResult, Issue, Overview, Page, PendingRestart, SnapshotView, UsageView } from "./wire";
 import type {
 	AdjustRequest, AdjustResult, Adjustment, AdjustmentPreviewRequest, AllocationView, ApiError, AuditView,
 	Budget, ChangeEventName, ConsumptionView, EventDetails, EventKind, GrantView, JsonValue, KeyTokenResult,
@@ -19,6 +23,10 @@ import type {
 
 interface TransactionState {
 	now: number;
+	config: SwitchConfig;
+	generation: string;
+	plans: ReadonlyMap<string, ResolvedPlan>;
+	uncertainBindings: ReadonlySet<string>;
 	keys: Map<string, KeyRecord>;
 	tokens: Map<string, KeyTokenRecord>;
 	meters: Map<string, MeterRecord>;
@@ -33,6 +41,13 @@ interface TransactionState {
 
 type ChangeListener = (change: StoredChange) => void;
 
+export interface ChangeSubscription {
+	after: number;
+	highWater: number;
+	replay(after: number, limit: number): StoredChange[];
+	close(): void;
+}
+
 /** The serving process owns this Store, its admission critical section and every financial writer. */
 export class SwitchStore {
 	readonly #database: SwitchDatabase;
@@ -42,9 +57,11 @@ export class SwitchStore {
 	readonly #listeners = new Set<ChangeListener>();
 	readonly serviceId: string;
 	readonly bootEpoch = crypto.randomUUID();
+	readonly #bootStartSequence: number;
 	#config: SwitchConfig;
 	#generation: string;
-	#plans: Map<string, ResolvedPlan>;
+	#plans: ReadonlyMap<string, ResolvedPlan>;
+	#uncertainBindings: ReadonlySet<string> = new Set();
 	#keys = new Map<string, KeyRecord>();
 	#tokens = new Map<string, KeyTokenRecord>();
 	#meters = new Map<string, MeterRecord>();
@@ -54,6 +71,7 @@ export class SwitchStore {
 	#accountingVersion: number;
 	#allocationVersion: number;
 	#ready = false;
+	#accepting = false;
 	#closed = false;
 	#maintaining = false;
 	#readAt?: number;
@@ -61,6 +79,7 @@ export class SwitchStore {
 	constructor(database: SwitchDatabase, options: StoreOptions) {
 		this.#database = database;
 		this.#options = options;
+		this.#bootStartSequence = database.changeSequence();
 		const clock = options.now ?? Date.now;
 		this.#clock = () => this.#readAt ?? clock();
 		this.#config = options.config;
@@ -79,11 +98,14 @@ export class SwitchStore {
 		});
 		for (const key of database.all("keys")) this.#keys.set(key.name, key);
 		for (const token of database.all("key_tokens")) this.#tokens.set(token.digest, token);
-		for (const meter of database.all("meter_snapshots")) this.#meters.set(this.#meterStorageId(meter), meter);
-		for (const [id, instance] of database.entries("instances")) this.#instances.set(id, instance);
+		for (const meter of database.currentMeters()) this.#meters.set(this.#meterStorageId(meter), meter);
+		for (const [id, instance] of database.budgetInstances()) this.#instances.set(id, instance);
 		for (const attempt of database.unfinished()) this.#holds.set(attempt.id, attempt);
 		// No public read/admission readiness exists until every unfinished owner is recovered.
 		for (const attempt of [...this.#holds.values()]) this.#settle(attempt.id, { kind: "forced", reason: "recovery", status: 499 });
+		for (const decision of database.runningDecisions()) {
+			this.recordDecision({ ...decision, state: "interrupted", outcome: "failed", status: 499, error: "interrupted", elapsedMs: Math.max(0, this.#clock() - decision.at) });
+		}
 		this.#maintain();
 		validateAllocations(this.#keys, this.#plans, this.#allocationVersion);
 	}
@@ -107,6 +129,41 @@ export class SwitchStore {
 		if (this.#database.unfinished().length) throw new Error("Cannot expose an unrecovered Store");
 		this.#maintain();
 		this.#ready = true;
+		this.#accepting = true;
+	}
+
+	stopAdmissions(): void { this.#accepting = false; }
+
+	publishGeneration(actor: string, config: SwitchConfig, generation: string, plans: readonly ResolvedPlan[], issues: Issue[], pendingRestart: PendingRestart[]): void {
+		this.#assertReady();
+		const nextPlans = new Map(plans.map(plan => [plan.config.id, plan]));
+		for (const key of this.#keys.values()) for (const budget of key.budgets) {
+			if (budget.unit === "plan_pct" && budget.scope.plan && nextPlans.get(budget.scope.plan)?.config.attribution === "tokens") throw new SwitchError(422, "attribution_tokens", "A token-attribution Plan cannot retain percentage-point Budgets");
+		}
+		// Capacity changes never rescue unsupported transfer debits by silently unwinding them.
+		validateAllocations(this.#keys, nextPlans, this.#allocationVersion + 1);
+		this.#transaction(stage => {
+			const previous = stage.generation;
+			stage.config = config; stage.generation = generation; stage.plans = nextPlans;
+			stage.policyVersion++; stage.allocationVersion++;
+			this.#database.setMeta("generation", generation);
+			const auditId = this.#audit(stage, actor, "config.reload", [], { generation: previous }, { generation });
+			this.#event(stage, "config_applied", { generation, issues, pendingRestart }, [
+				...this.#policyResources(stage, [...stage.keys.keys()]),
+				{ kind: "config", version: generation }, { kind: "health", version: generation },
+				{ kind: "plan", version: generation }, { kind: "audit", version: auditId },
+			]);
+		});
+		this.#maintain();
+	}
+
+	rejectConfiguration(actor: string, issues: Issue[], pendingRestart: PendingRestart[]): void {
+		this.#transaction(stage => {
+			const auditId = this.#audit(stage, actor, "config.reload", [], { generation: stage.generation }, { generation: stage.generation }, "failed");
+			this.#event(stage, "config_rejected", { generation: stage.generation, issues, pendingRestart }, [
+				{ kind: "config", version: auditId }, { kind: "health", version: auditId }, { kind: "audit", version: auditId },
+			], {}, "warn");
+		});
 	}
 
 	#assertReady(): void {
@@ -118,11 +175,12 @@ export class SwitchStore {
 		return JSON.stringify([meter.plan, meter.meter, meter.binding?.provider ?? "http", meter.binding?.credentialId ?? null, meter.binding?.fingerprint ?? null]);
 	}
 
-	#models(now: number, keys: ReadonlyMap<string, KeyRecord> = this.#keys, stage?: TransactionState, plans: ReadonlyMap<string, ResolvedPlan> = this.#plans): ReadModels {
+	#models(now: number, keys: ReadonlyMap<string, KeyRecord> = this.#keys, stage?: TransactionState, plans: ReadonlyMap<string, ResolvedPlan> = stage?.plans ?? this.#plans): ReadModels {
 		return new ReadModels({
-			now, keys, plans, config: this.#config, generation: this.#generation,
+			now, keys, plans, config: stage?.config ?? this.#config, generation: stage?.generation ?? this.#generation,
 			accountingVersion: stage?.accountingVersion ?? this.#accountingVersion, allocationVersion: stage?.allocationVersion ?? this.#allocationVersion,
 			meters: stage?.meters ?? this.#meters, instances: stage?.instances ?? this.#instances, holds: stage?.holds ?? this.#holds,
+			uncertainBindings: stage?.uncertainBindings ?? this.#uncertainBindings,
 			database: this.#database, modelReferenceKnown: this.#options.modelReferenceKnown,
 		});
 	}
@@ -131,6 +189,8 @@ export class SwitchStore {
 		if (this.#closed) throw new Error("Store is closed");
 		const stage: TransactionState = {
 			now: this.#clock(), keys: new Map(this.#keys), tokens: new Map(this.#tokens), meters: new Map(this.#meters), instances: new Map(this.#instances), holds: new Map(this.#holds),
+			config: this.#config, generation: this.#generation, plans: this.#plans,
+			uncertainBindings: this.#uncertainBindings,
 			policyVersion: this.#policyVersion, accountingVersion: this.#accountingVersion, allocationVersion: this.#allocationVersion, changes: [], observations: [],
 		};
 		const result = this.#database.transaction(() => {
@@ -143,6 +203,8 @@ export class SwitchStore {
 		});
 		this.#keys = stage.keys; this.#tokens = stage.tokens; this.#meters = stage.meters; this.#instances = stage.instances; this.#holds = stage.holds;
 		this.#policyVersion = stage.policyVersion; this.#accountingVersion = stage.accountingVersion; this.#allocationVersion = stage.allocationVersion;
+		this.#config = stage.config; this.#generation = stage.generation; this.#plans = stage.plans;
+		this.#uncertainBindings = stage.uncertainBindings;
 		for (const change of stage.changes) {
 			for (const listener of this.#listeners) {
 				try { listener(change); }
@@ -157,7 +219,7 @@ export class SwitchStore {
 	}
 
 	#invalidate(stage: TransactionState, kind: ChangeEventName, resources: ResourceInvalidation[], event?: SwitchEvent): void {
-		stage.changes.push(this.#database.appendChange(kind, { cursor: `${this.bootEpoch}:0`, at: stage.now, generation: this.#generation, resources, ...(event ? { event } : {}) }));
+		stage.changes.push(this.#database.appendChange(kind, { cursor: `${this.bootEpoch}:0`, at: stage.now, generation: stage.generation, resources, ...(event ? { event } : {}) }));
 	}
 
 	#audit(stage: TransactionState, actor: string, operation: string, targets: string[], before: JsonValue, after: JsonValue, result: "ok" | "failed" = "ok"): string {
@@ -175,10 +237,15 @@ export class SwitchStore {
 	}
 
 	#policyResources(stage: TransactionState, names: string[]): ResourceInvalidation[] {
+		const plans = new Set(names.flatMap(name => [...(this.#keys.get(name)?.plans ?? []), ...(stage.keys.get(name)?.plans ?? [])].map(plan => plan.plan)));
+		const affected = new Set(names);
+		for (const key of stage.keys.values()) if (key.plans.some(plan => plans.has(plan.plan))) affected.add(key.name);
 		return [
-			...names.map(name => ({ kind: "key" as const, id: name, version: String(stage.keys.get(name)!.rev) })),
+			...[...affected].map(name => ({ kind: "key" as const, id: name, version: `${stage.keys.get(name)!.rev}:${stage.allocationVersion}` })),
+			...[...plans].map(id => ({ kind: "plan" as const, id, version: `${stage.generation}:${stage.allocationVersion}` })),
+			...names.map(id => ({ kind: "usage" as const, id, version: String(stage.allocationVersion) })),
 			{ kind: "overview", version: String(stage.policyVersion) }, { kind: "allocation", version: String(stage.allocationVersion) },
-			{ kind: "events", version: String(stage.policyVersion) }, { kind: "audit", version: String(stage.policyVersion) },
+			{ kind: "events", version: String(stage.policyVersion) }, { kind: "audit", version: String(stage.policyVersion) }, { kind: "health", version: String(stage.policyVersion) },
 		];
 	}
 
@@ -219,7 +286,8 @@ export class SwitchStore {
 			parseBudget(budget);
 			if (!budget.scope.plan) continue;
 			const plan = this.#plans.get(budget.scope.plan);
-			if ((!plan || !key.plans.some(row => row.plan === budget.scope.plan)) && !previous?.budgets.some(row => row.id === budget.id && stableStringifyJson(row.scope) === stableStringifyJson(budget.scope))) issues.push({ code: "budget_scope", path: `budgets.${budget.id}.scope`, message: "Budget Plan must be in the configured Key Plan List" });
+			if (!key.plans.some(row => row.plan === budget.scope.plan)) issues.push({ code: "budget_scope", path: `budgets.${budget.id}.scope`, message: "Budget Plan must remain in the Key Plan List" });
+			if (!plan && !previous?.budgets.some(row => row.id === budget.id && stableStringifyJson(row.scope) === stableStringifyJson(budget.scope))) issues.push({ code: "budget_scope", path: `budgets.${budget.id}.scope`, message: "Budget Plan is not configured" });
 			if (plan?.config.attribution === "tokens" && budget.unit === "plan_pct") issues.push({ code: "attribution_tokens", path: `budgets.${budget.id}.unit`, message: "Token-attribution Plans use token Shares, not percentage points" });
 		}
 		if (issues.length) throw new SwitchError(422, "validation", "Key policy contains unresolved references", { issues });
@@ -254,11 +322,12 @@ export class SwitchStore {
 	maintenance(): void { this.#assertReady(); }
 
 	envelope<T>(read: () => T): ReadEnvelope<T> {
-		this.#assertReady();
 		const previous = this.#readAt;
 		const observedAt = this.#clock();
 		this.#readAt = observedAt;
 		try {
+			this.#assertReady();
+			if (previous === undefined) this.#maintain();
 			const data = read();
 			if (data instanceof Promise) throw new Error("A read envelope may not yield");
 			return { apiVersion: 1, serviceId: this.serviceId, bootEpoch: this.bootEpoch, generation: this.#generation, observedAt, cursor: `${this.bootEpoch}:${this.#database.changeSequence()}`, policyVersion: this.#policyVersion, data };
@@ -282,9 +351,101 @@ export class SwitchStore {
 		return [...this.#plans.values()].map(plan => views.plan(plan, identity));
 	}
 
+	usage(name: string, window: string): UsageView {
+		this.#assertReady();
+		return this.#models(this.#clock()).usage(this.#keys.get(name) ?? notFound("Key"), window);
+	}
+
+	overview(config: ConfigView, health: HealthView): Overview {
+		this.#assertReady();
+		const day = calendarWindow(this.#clock(), "day", this.#config.switch.timezone);
+		return {
+			plans: this.plans(), keys: this.keys().map(({ name, state, reasons }) => ({ name, state, reasons })),
+			denialsToday: { count: this.#database.denials(day.startedAt, day.resetsAt!), timezone: this.#config.switch.timezone, from: day.startedAt, to: day.resetsAt! },
+			config, health,
+		};
+	}
+
+	snapshot(config: ConfigView, health: HealthView): SnapshotView {
+		const overview = this.overview(config, health);
+		return { overview, keys: this.keys(), plans: overview.plans, config, health };
+	}
+
+	#attemptView(attempt: AttemptRecord): AttemptView {
+		const meter = attempt.frozenMeters.length === 1 ? attempt.frozenMeters[0] : undefined;
+		return {
+			id: attempt.id, ...(attempt.parentCallId ? { parentCallId: attempt.parentCallId } : {}), ...(attempt.purpose ? { purpose: attempt.purpose } : {}),
+			...(attempt.plan ? { plan: attempt.plan } : {}), provider: attempt.provider, model: attempt.model, estimate: attempt.estimate,
+			...(attempt.actual ? { actual: attempt.actual } : {}), ...(attempt.actualSource ? { actualSource: attempt.actualSource } : {}),
+			billed: attempt.billed, ...(attempt.cause ? { cause: attempt.cause } : {}), status: attempt.status,
+			elapsedMs: Math.max(0, (attempt.settledAt ?? attempt.transportSettledAt ?? this.#clock()) - attempt.startedAt), committed: attempt.committed,
+			...(meter ? { admissionInstance: meter.instance, ...(attempt.settlementInstances?.[meterKey(attempt.plan!, meter.meter)] ? { settlementInstance: attempt.settlementInstances[meterKey(attempt.plan!, meter.meter)] } : {}) } : {}),
+			stale: attempt.stale,
+		};
+	}
+
+	recordDecision(decision: Decision): void {
+		this.#transaction(stage => {
+			const attempts = this.#database.attemptsForDecision(decision.id).map(attempt => this.#attemptView(attempt));
+			this.#database.put("decisions", decision.id, { ...decision, attempts });
+			this.#invalidate(stage, "state", [{ kind: "decisions", id: decision.id, version: `${decision.state}:${stage.now}` }, { kind: "overview", version: String(stage.now) }]);
+		});
+	}
+
+	history(table: "decisions", query: HistoryQuery): Page<Decision>;
+	history(table: "events", query: HistoryQuery): Page<SwitchEvent>;
+	history(table: "audit", query: HistoryQuery): Page<AuditView>;
+	history(table: "decisions" | "events" | "audit", query: HistoryQuery): Page<Decision | SwitchEvent | AuditView> {
+		this.#assertReady();
+		const limit = query.limit ?? 50;
+		if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new SwitchError(422, "validation", "Page limit must be between 1 and 500");
+		const filters: RecordFilter[] = [];
+		if (query.since !== undefined) filters.push({ field: "at", value: query.since, comparison: ">=" });
+		if (query.key !== undefined) filters.push({ field: "key", value: query.key });
+		if (query.plan !== undefined) filters.push({ field: "plan", value: query.plan });
+		if (query.status !== undefined) filters.push({ field: "status", value: query.status });
+		if (query.kind !== undefined) filters.push({ field: "kind", value: query.kind });
+		const filtersHash = valueHash(filters);
+		const boundary = query.cursor ? this.#signatures.readPage(query.cursor) : undefined;
+		if (boundary && (boundary.schema !== 1 || boundary.table !== table || boundary.filtersHash !== filtersHash || !Number.isFinite(boundary.at) || typeof boundary.id !== "string")) throw new SwitchError(400, "invalid_cursor", "History cursor does not match these filters");
+		const rows = this.#database.page(table, filters, limit + 1, boundary);
+		const items = rows.slice(0, limit).map(row => table === "decisions" ? { ...row as Decision, attempts: this.#database.attemptsForDecision(row.id).map(attempt => this.#attemptView(attempt)) } : row);
+		const last = items.at(-1);
+		return { items, ...(rows.length > limit && last ? { nextCursor: this.#signatures.page({ schema: 1, table, filtersHash, at: last.at, id: last.id }) } : {}) };
+	}
+
+	emit<K extends EventKind>(kind: K, detail: EventDetails[K], subject: { key?: string; plan?: string; meter?: string } = {}, severity: "info" | "warn" | "error" = "info"): void {
+		this.#transaction(stage => { this.#event(stage, kind, detail, [{ kind: "events", version: String(stage.now) }], subject, severity); });
+	}
+
+	subscribe(cursor: string, listener: ChangeListener): ChangeSubscription {
+		this.#assertReady();
+		const match = /^([^:]+):(0|[1-9]\d*)$/.exec(cursor);
+		const after = match ? Number(match[2]) : Number.NaN;
+		const highWater = this.#database.changeSequence();
+		const oldest = this.#database.oldestChange();
+		if (!match || match[1] !== this.bootEpoch || !Number.isSafeInteger(after) || after < this.#bootStartSequence || after > highWater || (oldest > 0 && after < oldest - 1)) throw new SwitchError(409, "resync_required", "Obtain a new snapshot before subscribing");
+		this.#listeners.add(listener);
+		return {
+			after, highWater,
+			replay: (position, limit) => {
+				if (position < this.#database.oldestChange() - 1) throw new SwitchError(409, "resync_required", "Replay fell behind retained history");
+				return this.#database.changes(position, highWater, limit);
+			},
+			close: () => { this.#listeners.delete(listener); },
+		};
+	}
+
 	plan(id: string, identity = false): PlanView {
 		this.#assertReady();
 		return this.#models(this.#clock()).plan(this.#plans.get(id) ?? notFound("Plan"), identity);
+	}
+
+	#freshToken(stage: TransactionState): { token: string; digest: string } {
+		const token = mintToken();
+		const digest = tokenDigest(token);
+		if (stage.tokens.has(digest) || this.#tokens.has(digest)) throw new SwitchError(503, "token_generation_failed", "Could not generate a distinct credential");
+		return { token, digest };
 	}
 
 	#checkKeyMatch(name: string, etag: string | null): KeyRecord {
@@ -327,14 +488,14 @@ export class SwitchStore {
 				name: request.name, rev: 0, enabled: true, revoked: false, sealed: request.sealed ?? false, createdAt: stage.now, updatedAt: stage.now,
 				...(request.expires_at !== undefined ? { expiresAt: request.expires_at } : {}), ...(request.note !== undefined ? { note: request.note } : {}),
 				scope: structuredClone(source?.scope ?? request.scope), planOrder: source?.planOrder ?? "priority", plans: structuredClone(source?.plans ?? request.plans ?? []),
-				budgets: structuredClone(source?.budgets ?? request.budgets ?? []), grants: [], suspensions: {},
+				budgets: structuredClone(source?.budgets ?? (request.budgets ?? []).map(parseBudget)), grants: [], suspensions: {},
 			};
 			this.#validateKey(key);
 			const draft = new Map(stage.keys); draft.set(key.name, key);
 			validateAllocations(draft, this.#plans, stage.allocationVersion);
 			this.#commitKeys(stage, draft, [key.name]);
-			const token = mintToken();
-			const row: KeyTokenRecord = { key: key.name, digest: tokenDigest(token), current: true, ...(!key.sealed ? { plaintext: token } : {}) };
+			const { token, digest } = this.#freshToken(stage);
+			const row: KeyTokenRecord = { key: key.name, digest, current: true, ...(!key.sealed ? { plaintext: token } : {}) };
 			stage.tokens.set(row.digest, row); this.#database.put("key_tokens", row.digest, row);
 			const auditId = this.#audit(stage, actor, "key.mint", [`key:${key.name}`], null, keyPolicy(key));
 			const eventId = this.#event(stage, "key_minted", { key: key.name, rev: key.rev, policyVersion: stage.policyVersion, auditId }, this.#policyResources(stage, [key.name]), { key: key.name });
@@ -396,13 +557,116 @@ export class SwitchStore {
 					stage.tokens.set(row.digest, prior); this.#database.put("key_tokens", row.digest, prior);
 				} else { stage.tokens.delete(row.digest); this.#database.remove("key_tokens", row.digest); }
 			}
-			const token = mintToken();
-			const row: KeyTokenRecord = { key: name, digest: tokenDigest(token), current: true, ...(!key.sealed ? { plaintext: token } : {}) };
+			const { token, digest } = this.#freshToken(stage);
+			const row: KeyTokenRecord = { key: name, digest, current: true, ...(!key.sealed ? { plaintext: token } : {}) };
 			stage.tokens.set(row.digest, row); this.#database.put("key_tokens", row.digest, row);
 			const draft = new Map(stage.keys); draft.set(name, key); this.#commitKeys(stage, draft, [name]);
 			const auditId = this.#audit(stage, actor, "key.rotate", [`key:${name}`], { rev: original.rev }, { rev: key.rev, graceUntil: graceUntil ?? null });
 			const eventId = this.#event(stage, "key_rotated", { key: name, rev: key.rev, policyVersion: stage.policyVersion, auditId, ...(graceUntil !== undefined ? { graceUntil } : {}) }, this.#policyResources(stage, [name]), { key: name });
 			return { applied: true, current: { key: this.#models(stage.now, stage.keys, stage).key(key), token }, policyVersion: stage.policyVersion, auditIds: [auditId], eventIds: [eventId] };
+		});
+	}
+
+	async backup(actor: string, requested: string, etag: string | null, authorize: () => void): Promise<ReadEnvelope<MutationResult<BackupResult>>> {
+		this.#assertReady();
+		this.checkPolicyMatch(etag);
+		const root = this.#config.admin?.backupDir;
+		if (!root) throw new SwitchError(503, "unavailable", "Admin backup storage is not configured");
+		const capturedPolicyVersion = this.#policyVersion;
+		const snapshot = await createBackup(this.#database, root, requested, () => { authorize(); this.checkPolicyMatch(etag); });
+		return this.envelope(() => this.#transaction(stage => {
+			const backupId = crypto.randomUUID();
+			const auditId = this.#audit(stage, actor, "backup", [], null, { backupId, bytes: snapshot.bytes, snapshotPolicyVersion: capturedPolicyVersion });
+			const eventId = this.#event(stage, "backup_created", { backupId, auditId }, [{ kind: "audit", version: auditId }, { kind: "events", version: auditId }]);
+			return { applied: true, current: { backupId, ...snapshot }, policyVersion: stage.policyVersion, auditIds: [auditId], eventIds: [eventId] };
+		}));
+	}
+
+	exportKeys(actor: string, includeTokens: boolean): ExportView {
+		this.#assertReady();
+		const keys = [...this.#keys.values()].filter(key => !key.revoked).sort((a, b) => a.name.localeCompare(b.name)).map(key => {
+			const policy = exportPolicy(key);
+			if (includeTokens) {
+				const token = [...this.#tokens.values()].find(row => row.key === key.name && row.current);
+				if (!token) throw new SwitchError(409, "sealed", "The Key has no exportable current credential");
+				if (key.sealed) policy.digest = token.digest;
+				else if (token.plaintext !== undefined) policy.token = token.plaintext;
+				else throw new SwitchError(409, "sealed", "The Key plaintext is unavailable; explicitly rotate before token export");
+			}
+			return policy;
+		});
+		const content = serializeKeyDocument(keys);
+		if (includeTokens) this.#transaction(stage => {
+			const auditId = this.#audit(stage, actor, "keys.export", keys.map(key => `key:${key.name}`), null, { secretsIncluded: true, keys: keys.map(key => key.name) });
+			this.#event(stage, "admin_action", { action: "export", auditId, result: "ok" }, [{ kind: "audit", version: auditId }, { kind: "events", version: auditId }]);
+		});
+		return { format: "toml", content, policyEtag: this.policyEtag, secretsIncluded: includeTokens };
+	}
+
+	#importChanges(effect: ImportEffect, now: number, stage?: TransactionState): ImportChange[] {
+		const before = this.#models(now);
+		const after = this.#models(now, effect.keys, stage);
+		return effect.changes.map(change => ({
+			...change, ...(this.#keys.has(change.name) ? { before: before.key(this.#keys.get(change.name)!) } : {}), after: after.key(effect.keys.get(change.name)!),
+		}));
+	}
+
+	importPreview(actor: string, input: ImportRequest): ImportPreview {
+		this.#assertReady();
+		const request = parseImportRequest(input);
+		const now = this.#clock();
+		const effect = prepareImport(this.#context(now, actor), this.#tokens, request);
+		if (effect.issues.length) return { changes: [], issues: effect.issues, policyEtag: this.policyEtag };
+		return {
+			changes: this.#importChanges(effect, now), issues: [], policyEtag: this.policyEtag,
+			preview: this.#signatures.import({
+				schema: 1, bootEpoch: this.bootEpoch, actor, generation: this.#generation, policyVersion: this.#policyVersion,
+				contentHash: effect.contentHash, mode: request.mode, effectHash: valueHash(effect.effect), issuedAt: now, expiresAt: now + 300_000,
+			}),
+		};
+	}
+
+	importKeys(actor: string, input: ImportApplyRequest, etag: string | null): MutationResult<ImportResult> {
+		this.#assertReady();
+		this.checkPolicyMatch(etag);
+		const request = parseImportRequest(input, true);
+		const basis = this.#signatures.readImport(request.preview);
+		if (basis.schema !== 1 || basis.bootEpoch !== this.bootEpoch || basis.actor !== actor || basis.generation !== this.#generation || basis.policyVersion !== this.#policyVersion || basis.mode !== request.mode || basis.expiresAt <= this.#clock()) throw new SwitchError(409, "stale_preview", "Import preview no longer matches current policy");
+		return this.#transaction(stage => {
+			const effect = prepareImport(this.#context(stage.now, actor), stage.tokens, request);
+			if (effect.issues.length) throw new SwitchError(422, "validation", "Import policy is invalid", { issues: effect.issues, current: { policyEtag: this.policyEtag } });
+			if (basis.contentHash !== effect.contentHash || basis.effectHash !== valueHash(effect.effect)) throw new SwitchError(409, "stale_preview", "Import no longer has the reviewed effect", { current: { policyEtag: this.policyEtag } });
+			if (!effect.changes.length) return { applied: false, current: { keys: [], createdTokens: [], changes: [] }, policyVersion: stage.policyVersion, auditIds: [], eventIds: [] };
+			const replacing = new Set(effect.credentials.map(row => row.name));
+			for (const change of effect.changes) if (change.operation === "revoke") replacing.add(change.name);
+			for (const row of [...stage.tokens.values()]) if (replacing.has(row.key)) { stage.tokens.delete(row.digest); this.#database.remove("key_tokens", row.digest); }
+			const createdTokens: ImportResult["createdTokens"] = [];
+			for (const credential of effect.credentials) {
+				const key = effect.keys.get(credential.name)!;
+				const material = credential.generate ? this.#freshToken(stage) : { token: credential.token, digest: credential.token !== undefined ? tokenDigest(credential.token) : credential.digest! };
+				if (stage.tokens.has(material.digest)) throw new SwitchError(422, "validation", "Import contains a duplicate credential");
+				const row: KeyTokenRecord = { key: key.name, digest: material.digest, current: true, ...(!key.sealed && material.token !== undefined ? { plaintext: material.token } : {}) };
+				stage.tokens.set(row.digest, row); this.#database.put("key_tokens", row.digest, row);
+				if (credential.generate) createdTokens.push({ name: key.name, token: material.token! });
+			}
+			for (const row of stage.tokens.values()) if (effect.keys.get(row.key)?.sealed && row.plaintext !== undefined) {
+				const { plaintext: _plaintext, ...sealed } = row;
+				stage.tokens.set(row.digest, sealed); this.#database.put("key_tokens", row.digest, sealed);
+			}
+			const names = effect.changes.map(change => change.name);
+			this.#commitKeys(stage, effect.keys, names);
+			const changes = this.#importChanges(effect, stage.now, stage);
+			const auditId = this.#audit(stage, actor, "keys.import", names.map(name => `key:${name}`),
+				names.map(name => this.#keys.has(name) ? keyPolicy(this.#keys.get(name)!) : null),
+				effect.changes.map(change => ({ policy: keyPolicy(effect.keys.get(change.name)!), credentialChanged: change.credentialChanged, operation: change.operation })));
+			const eventId = this.#event(stage, "import_applied", {
+				mode: request.mode, created: effect.changes.filter(change => change.operation === "create").map(change => change.name),
+				updated: effect.changes.filter(change => change.operation === "update").map(change => change.name),
+				revoked: effect.changes.filter(change => change.operation === "revoke").map(change => change.name), policyVersion: stage.policyVersion, auditId,
+			}, this.#policyResources(stage, names));
+			const views = this.#models(stage.now, stage.keys, stage);
+			const affected = [...new Set([...names, ...views.allocations().flatMap(allocation => allocation.keys.map(key => key.key))])].sort();
+			return { applied: true, current: { keys: affected.map(name => views.key(stage.keys.get(name)!)), createdTokens, changes }, policyVersion: stage.policyVersion, auditIds: [auditId], eventIds: [eventId] };
 		});
 	}
 
@@ -512,26 +776,27 @@ export class SwitchStore {
 		const frozenMeters: AttemptRecord["frozenMeters"] = [];
 		const projections = new Map<string, number>();
 		let stale = false;
-		const denied = (status: number, code: string, kind: "plan" | "gate" | "budget", id: string, used: number, limit: number, unit: Budget["unit"], plan?: string, meter?: string, resetsAt?: number) => ({
+		const denied = (status: number, code: string, kind: "plan" | "gate" | "budget", id: string, used?: number, limit?: number, unit?: Budget["unit"], plan?: string, meter?: string, resetsAt?: number) => ({
 			result: {
 				admitted: false, stale,
 				denial: {
 					status, code, constraint: { kind, id, ...(key ? { key: key.name } : {}), ...(plan ? { plan } : {}), ...(meter ? { meter } : {}) },
-					used, limit, unit, ...(resetsAt !== undefined ? { resetsAt, retryAfterS: Math.max(0, Math.ceil((resetsAt - now) / 1000)) } : {}),
+					...(used !== undefined ? { used } : {}), ...(limit !== undefined ? { limit } : {}), ...(unit ? { unit } : {}), ...(resetsAt !== undefined ? { resetsAt, retryAfterS: Math.max(0, Math.ceil((resetsAt - now) / 1000)) } : {}),
 				},
 			},
 		});
 		if (input.plan) {
 			const plan = input.plan;
-			if (plan.resolution !== "resolved") return denied(503, "plan_unresolved", "plan", plan.config.id, 0, 100, "plan_pct", plan.config.id);
+			if (plan.resolution !== "resolved" || this.#uncertainBindings.has(planBindingKey(input.generation, plan))) return denied(503, "plan_unresolved", "plan", plan.config.id, undefined, undefined, undefined, plan.config.id);
+			if (!sameBinding(plan.binding, input.binding)) throw new Error("Prepared credential does not match the Plan binding");
 			const entry = key?.plans.find(row => row.plan === plan.config.id);
-			if (key && !entry) return denied(403, "plan_not_allotted", "plan", plan.config.id, 0, 100, "plan_pct", plan.config.id);
+			if (key && !entry) return denied(403, "plan_not_allotted", "plan", plan.config.id, undefined, undefined, undefined, plan.config.id);
 			const meters = views.meters(plan);
-			if (!meters.length || plan.config.meters?.some(id => !meters.some(meter => meter.meter === id))) return denied(503, "meter_unavailable", "plan", plan.config.id, 0, 100, "plan_pct", plan.config.id);
+			const gates = key ? entry!.gates : input.anonymousGates ?? [];
+			if ((!meters.length && (plan.binding || gates.length)) || plan.config.meters?.some(id => !meters.some(meter => meter.meter === id))) return denied(503, "meter_unavailable", "plan", plan.config.id, undefined, undefined, undefined, plan.config.id);
 			for (const meter of meters) {
-				const gates = key ? entry!.gates : input.anonymousGates ?? [];
 				const gate = gates.find(row => row.meter === meter.meter) ?? gates.find(row => row.meter === "*");
-				if (!key && !gate) return denied(403, "anonymous_gate_required", "gate", meter.meter, 0, 100, "plan_pct", plan.config.id, meter.meter);
+				if (!key && !gate) return denied(403, "anonymous_gate_required", "gate", meter.meter, undefined, undefined, undefined, plan.config.id, meter.meter);
 				const frozen = {
 					meter: meter.meter, instance: meter.instance.id, mode: plan.config.attribution,
 					...(meter.pointsPerWeight !== undefined ? { pointsPerWeight: meter.pointsPerWeight } : {}),
@@ -578,6 +843,7 @@ export class SwitchStore {
 
 	admit(input: AdmissionInput, dry = false): AdmissionResult {
 		this.#assertReady();
+		if (!dry && !this.#accepting) throw new SwitchError(503, "draining", "Switch is not accepting new Attempts");
 		if (dry) return this.#evaluate(input, this.#clock()).result;
 		return this.#transaction(stage => {
 			const evaluated = this.#evaluate(input, stage.now);
@@ -594,6 +860,7 @@ export class SwitchStore {
 	/** Commit launch evidence and immediately invoke the runner without an intervening await. */
 	launch<T>(attemptId: string, preparedFingerprint: string, runner: () => T, signal?: AbortSignal): T {
 		this.#assertReady();
+		if (!this.#accepting) throw new SwitchError(503, "draining", "Switch is not accepting new Attempts");
 		if (signal?.aborted) throw new SwitchError(499, "request_aborted", "Request was cancelled before launch");
 		this.#transaction(stage => {
 			const attempt = this.#database.get("attempts", attemptId) ?? notFound("Attempt");
@@ -676,7 +943,7 @@ export class SwitchStore {
 
 	#bookUsage(stage: TransactionState, attempt: AttemptRecord, phase: "request" | "final", consumption: ConsumptionView, source: UsageRecord["source"]): void {
 		const record: UsageRecord = {
-			id: `${attempt.id}:${phase}`, attemptId: attempt.id, principal: attempt.principal, provider: attempt.provider, model: attempt.model,
+			id: `${attempt.id}:${phase}`, phase, attemptId: attempt.id, principal: attempt.principal, provider: attempt.provider, model: attempt.model,
 			...(attempt.plan ? { plan: attempt.plan } : {}), at: stage.now, minute: Math.floor(stage.now / 60_000) * 60_000,
 			instances: this.#chargeInstances(stage, attempt, phase, consumption), consumption, source, unpriced: attempt.unpriced,
 		};
@@ -717,6 +984,7 @@ export class SwitchStore {
 			const billed = attempt.upstreamCalled && (attempt.requestCounted || outcome.kind !== "terminal" || committed || (status >= 200 && status < 300) || (reported !== undefined && (reported.tokens > 0 || reported.usd > 0)));
 			const source: UsageRecord["source"] = reported ? "reported" : outcome.kind === "forced" ? "interrupted-estimate" : "estimate";
 			const consumption: ConsumptionView = billed ? reported ?? { requests: 1, tokens: attempt.estimate.tokens, usd: attempt.estimate.usd, weight: attempt.estimate.weight } : { requests: 0, tokens: 0, usd: 0, weight: 0 };
+			if (reported && (reported.usd > 0 || ((outcome.kind === "terminal" || outcome.kind === "job-terminal") && outcome.costUsd !== undefined))) attempt.unpriced = false;
 			if (billed) {
 				const requestDelta = attempt.requestCounted ? 0 : 1;
 				this.#bookUsage(stage, attempt, "final", { ...consumption, requests: requestDelta }, source);
@@ -727,6 +995,7 @@ export class SwitchStore {
 					const debit: DebitRecord = {
 						attemptId: attempt.id, principal: attempt.principal, plan: attempt.plan!, meter: frozen.meter, instance: meter?.instance.id ?? frozen.instance,
 						mode: frozen.mode, weight: consumption.weight, tokens: consumption.tokens, points, remainingUnobserved: points,
+						precision: source !== "reported" || frozen.mode === "proportional" || (frozen.mode === "declared" && frozen.size !== undefined && "usd" in frozen.size && attempt.unpriced) ? "estimated" : frozen.mode === "declared" ? "declared" : "measured",
 						confirmedPct: 0, provisionalRemainingPct: frozen.mode === "proportional" ? points : 0,
 						...(frozen.mode === "declared" ? { declaredPct: points } : {}), settledAt: stage.now,
 					};
@@ -804,6 +1073,7 @@ export class SwitchStore {
 	shutdown(): void {
 		if (this.#closed) return;
 		this.#ready = false;
+		this.#accepting = false;
 		// The request controller has quiesced/forced live transports; detached Jobs still have financial owners.
 		for (const attempt of this.#database.unfinished()) this.#settle(attempt.id, { kind: "forced", reason: "shutdown", status: 503 });
 		this.#listeners.clear();
@@ -811,10 +1081,45 @@ export class SwitchStore {
 		this.#database.close();
 	}
 
+	#failMeters(stage: TransactionState, owner: ResolvedPlan): void {
+		for (const [id, previous] of stage.meters) {
+			if (previous.plan !== owner.config.id || !sameBinding(previous.binding, owner.binding) || previous.source === "failed") continue;
+			const meter: MeterRecord = { ...previous, source: "failed", version: previous.version + 1 };
+			stage.meters.set(id, meter);
+			this.#database.put("meter_snapshots", JSON.stringify([id, meter.fetchedAt]), meter);
+		}
+	}
+
+	markMetersFailed(owner: ResolvedPlan): void {
+		this.#transaction(stage => {
+			this.#failMeters(stage, owner);
+			stage.accountingVersion++;
+			this.#event(stage, "meter_unavailable", { reason: "Provider usage refresh failed; any last successful observation is retained" }, [
+				{ kind: "plan", id: owner.config.id, version: String(stage.accountingVersion) },
+				{ kind: "key", version: String(stage.accountingVersion) }, { kind: "overview", version: String(stage.accountingVersion) },
+			], { plan: owner.config.id }, "warn");
+		});
+	}
+
+	markBindingUncertain(generation: string, owner: ResolvedPlan): void {
+		const id = planBindingKey(generation, owner);
+		if (this.#uncertainBindings.has(id)) return;
+		this.#transaction(stage => {
+			stage.uncertainBindings = new Set(stage.uncertainBindings).add(id);
+			this.#failMeters(stage, owner);
+			stage.accountingVersion++;
+			this.#event(stage, "plan_unresolved", { reason: "The retained credential binding requires a new Generation" }, [
+				{ kind: "plan", id: owner.config.id, version: String(stage.accountingVersion) },
+				{ kind: "key", version: String(stage.accountingVersion) }, { kind: "health", version: String(stage.accountingVersion) },
+			], { plan: owner.config.id }, "warn");
+		});
+	}
+
 	/** Only identity-bound samples enter this synchronous reconciliation owner. */
-	observeMeter(observation: MeterObservation, owner = this.#plans.get(observation.plan)): boolean {
+	observeMeter(observation: MeterObservation, owner = this.#plans.get(observation.plan), generation = this.#generation): boolean {
 		if (this.#closed) throw new Error("Store is closed");
 		if (!owner || owner.config.id !== observation.plan || !sameBinding(owner.binding, observation.binding)) throw new SwitchError(409, "plan_unresolved", "Meter observation does not match its retained Plan binding");
+		if (this.#uncertainBindings.has(planBindingKey(generation, owner))) return false;
 		if (![observation.providerUsedPct, observation.fetchedAt, observation.observationCutoff].every(value => Number.isFinite(value) && value >= 0) || observation.observationCutoff > observation.fetchedAt) throw new SwitchError(502, "invalid_meter", "Meter observation has invalid values");
 		const id = this.#meterStorageId(observation);
 		const previous = this.#meters.get(id);
@@ -894,9 +1199,9 @@ export class SwitchStore {
 				}
 			}
 			stage.meters.set(id, meter);
-			stage.instances.set(`meter:${instance.id}`, instance);
-			this.#database.put("meter_snapshots", id, meter);
-			this.#database.put("instances", `meter:${instance.id}`, instance);
+			this.#database.put("meter_snapshots", JSON.stringify([id, meter.fetchedAt]), meter);
+			this.#database.put("instances", `meter:${instance.id}`, { ...instance, plan: meter.plan, meter: meter.meter });
+			if (reset && previous) this.#database.put("instances", `meter:${previous.instance.id}`, { ...previous.instance, plan: previous.plan, meter: previous.meter, closedAt: observation.fetchedAt });
 			stage.accountingVersion++;
 			this.#invalidate(stage, "meter", [
 				{ kind: "plan", id: meter.plan, version: String(meter.version) },

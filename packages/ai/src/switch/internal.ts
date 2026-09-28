@@ -1,7 +1,7 @@
 import type { PlanConfig, SwitchConfig } from "./config/types";
 import type {
 	AttributionMode, AttemptView, Budget, ConsumptionView, Decision, EstimateView, GrantExpiry,
-	GrantView, PlanEntry, Scope, WindowInstanceView,
+	GrantView, PlanEntry, Precision, Scope, WindowInstanceView,
 } from "./wire";
 
 export type AccountingPrincipal = { kind: "key"; id: string } | { kind: "anonymous"; id: string };
@@ -50,6 +50,11 @@ export interface KeyTokenRecord {
 	plaintext?: string;
 	validUntil?: number;
 	current: boolean;
+}
+export interface InstanceRecord extends WindowInstanceView {
+	plan?: string;
+	meter?: string;
+	closedAt?: number;
 }
 export interface MeterRecord {
 	plan: string;
@@ -158,6 +163,7 @@ export interface DebitRecord {
 	meter: string;
 	instance: string;
 	mode: AttributionMode;
+	precision: Precision;
 	weight: number;
 	tokens: number;
 	points: number;
@@ -171,6 +177,7 @@ export interface DebitRecord {
 }
 export interface UsageRecord {
 	id: string;
+	phase: "request" | "final";
 	attemptId: string;
 	principal: AccountingPrincipal;
 	provider: string;

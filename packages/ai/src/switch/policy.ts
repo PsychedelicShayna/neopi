@@ -125,7 +125,7 @@ export function validateAllocations(keys: ReadonlyMap<string, KeyRecord>, plans:
 	return state;
 }
 
-function removeGroup(keys: Map<string, KeyRecord>, group: string): void {
+export function removeGroup(keys: Map<string, KeyRecord>, group: string): void {
 	for (const key of keys.values()) key.grants = key.grants.filter(grant => grant.transferGroup !== group);
 }
 
@@ -232,11 +232,11 @@ export function applyAdjustmentDraft(context: PolicyContext, target: string, inp
 		case "gate.raise": {
 			const owner = entry(adjustment.plan);
 			const index = owner.gates.findIndex(row => row.meter === adjustment.meter);
-			if (index < 0) notFound("Gate");
-			const old = owner.gates[index];
-			const ceiling = Math.min(100, roundOperatorAmount(gateLimit(old) + adjustment.by, "plan_pct"));
+			const old = owner.gates[index] ?? owner.gates.find(row => row.meter === "*");
+			const ceiling = Math.min(100, roundOperatorAmount(gateLimit(old ?? {}) + adjustment.by, "plan_pct"));
 			if (ceiling <= 0) throw new SwitchError(422, "gate_limit", "Gate limit must remain positive");
-			owner.gates[index] = { meter: old.meter, ceiling, ...(old.warnAt ? { warnAt: old.warnAt } : {}) };
+			const raised = { meter: adjustment.meter, ceiling, ...(old?.warnAt ? { warnAt: old.warnAt } : {}) };
+			if (index < 0) owner.gates.push(raised); else owner.gates[index] = raised;
 			break;
 		}
 		case "gate.remove": {
@@ -245,10 +245,13 @@ export function applyAdjustmentDraft(context: PolicyContext, target: string, inp
 			owner.gates = owner.gates.filter(row => row.meter !== adjustment.meter);
 			break;
 		}
-		case "budget.add":
+		case "budget.add": {
 			if (key.budgets.some(row => row.id === adjustment.budget.id)) throw new SwitchError(422, "validation", "Budget id already exists");
-			key.budgets.push(parseBudget({ ...adjustment.budget, cap: roundOperatorAmount(adjustment.budget.cap, adjustment.budget.unit) }));
+			const added = parseBudget(adjustment.budget);
+			key.budgets.push(added);
+			canonicalAdjustment = { ...adjustment, budget: added };
 			break;
+		}
 		case "budget.remove": {
 			budget(adjustment.budget);
 			const removed = key.grants.filter(grant => grant.budget === adjustment.budget);

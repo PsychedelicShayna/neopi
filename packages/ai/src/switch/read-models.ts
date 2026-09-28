@@ -1,11 +1,12 @@
 import { stableStringifyJson } from "@oh-my-pi/pi-utils";
 import { evaluateGate, matchesBudget } from "./accounting";
+import { SwitchError } from "./error";
 import type { SwitchConfig } from "./config/types";
 import type { SwitchDatabase } from "./database";
 import type { AttemptRecord, DebitRecord, KeyRecord, MeterRecord, ResolvedPlan } from "./internal";
 import { type AllocationState, computeAllocations } from "./policy";
-import { budgetKey, calendarWindow, gateLimit, rollingStart } from "./windows";
-import type { AllocationView, AttributionAmounts, AttributionMode, Budget, BudgetView, Gate, GateView, GrantView, KeyView, MeterView, PlanView, WindowInstanceView } from "./wire";
+import { budgetKey, calendarWindow, gateLimit, parseDuration, rollingStart } from "./windows";
+import type { AllocationView, AttributionAmounts, AttributionMode, Budget, BudgetView, Gate, GateView, GrantView, KeyView, MeterView, PlanView, UsageView, WindowInstanceView } from "./wire";
 
 export interface ReadModelContext {
 	now: number;
@@ -19,11 +20,16 @@ export interface ReadModelContext {
 	instances: ReadonlyMap<string, WindowInstanceView>;
 	holds: ReadonlyMap<string, AttemptRecord>;
 	database: SwitchDatabase;
+	uncertainBindings: ReadonlySet<string>;
 	modelReferenceKnown(reference: string): boolean;
 }
 
 export function sameBinding(a: MeterRecord["binding"], b: MeterRecord["binding"]): boolean {
 	return a === undefined ? b === undefined : b !== undefined && a.provider === b.provider && a.credentialId === b.credentialId && a.fingerprint === b.fingerprint;
+}
+
+export function planBindingKey(generation: string, plan: ResolvedPlan): string {
+	return JSON.stringify([generation, plan.config.id, plan.binding?.provider ?? null, plan.binding?.credentialId ?? null, plan.binding?.fingerprint ?? null]);
 }
 
 /** Calculations are server-only and use one captured instant and committed state. */
@@ -165,7 +171,19 @@ export class ReadModels {
 		for (const reference of dangling) reasons.push({ constraint: reference, condition: "dangling", scope: {} });
 		const disabled = !key.enabled || key.revoked || (key.expiresAt !== undefined && key.expiresAt <= context.now);
 		if (disabled) reasons.push({ constraint: "key", condition: key.revoked ? "revoked" : !key.enabled ? "disabled" : "expired", scope: {} });
-		for (const entry of key.plans) if (context.plans.get(entry.plan)?.resolution === "unresolved") reasons.push({ constraint: `plan:${entry.plan}`, condition: "unresolved", scope: { plan: entry.plan } });
+		for (const entry of key.plans) {
+			const plan = context.plans.get(entry.plan);
+			if (!plan) continue;
+			if (plan.resolution === "unresolved" || context.uncertainBindings.has(planBindingKey(context.generation, plan))) { reasons.push({ constraint: `plan:${entry.plan}`, condition: "unresolved", scope: { plan: entry.plan } }); continue; }
+			const meters = this.meters(plan);
+			if (!meters.length) reasons.push({ constraint: `plan:${entry.plan}`, condition: "unavailable", scope: { plan: entry.plan } });
+			for (const id of plan.config.meters ?? []) if (!meters.some(meter => meter.meter === id)) reasons.push({ constraint: `meter:${entry.plan}:${id}`, condition: "unavailable", scope: { plan: entry.plan, meter: id } });
+			for (const meter of meters) {
+				const projection = evaluateGate(plan.config, meter, undefined, this.debt(meter).total, this.inflight(meter), 0, context.now);
+				const warned = plan.config.warnAt.some(threshold => projection.projected >= threshold);
+				if (projection.denial || projection.stale || warned) reasons.push({ constraint: `meter:${entry.plan}:${meter.meter}`, condition: projection.denial ?? (projection.stale ? "stale" : "warn"), scope: { plan: entry.plan, meter: meter.meter }, unit: "plan_pct", used: projection.projected, limit: 100, ...(meter.resetsAt !== undefined ? { resetsAt: meter.resetsAt } : {}) });
+			}
+		}
 		const state = disabled ? "disabled" : budgets.some(row => row.state === "exhausted") || plans.some(row => row.gates.some(gate => gate.state === "exhausted")) ? "exhausted" : reasons.length ? "warn" : "ok";
 		const grants: GrantView[] = key.grants.map(({ createdAt: _createdAt, ...grant }) => grant);
 		return {
@@ -214,11 +232,11 @@ export class ReadModels {
 			attribution: {
 				keys: [...keyed.values()].map(row => ({ key: row.key, ...attributionAmounts(row, plan.config.attribution) })),
 				anonymous: [...anonymous.values()].map(row => ({ endpoint: row.endpoint, ...attributionAmounts(row, plan.config.attribution) })),
-				externalPct: meter.externalPct, precision: plan.config.attribution === "declared" ? "declared" : "estimated",
+				externalPct: meter.externalPct, precision: plan.config.attribution === "proportional" || debt.records.some(row => row.precision === "estimated") ? "estimated" : plan.config.attribution === "declared" ? "declared" : "measured",
 			},
 			...(plan.config.attribution === "declared" ? { declaredPct, providerPct: meter.providerUsedPct, drift: declaredPct - meter.providerUsedPct } : {}),
 			calibration: {
-				state: plan.config.attribution === "declared" || meter.pointsPerWeight !== undefined || meter.pointsPerToken !== undefined ? "calibrated" : "cold",
+				state: plan.config.attribution === "declared" || (plan.config.attribution === "tokens" ? meter.pointsPerToken !== undefined : meter.pointsPerWeight !== undefined) ? "calibrated" : "cold",
 				...(meter.pointsPerWeight !== undefined ? { pointsPerWeight: meter.pointsPerWeight } : {}), ...(meter.pointsPerToken !== undefined ? { pointsPerToken: meter.pointsPerToken } : {}),
 			},
 			gates, shares, allocation,
@@ -226,13 +244,71 @@ export class ReadModels {
 	}
 
 	plan(plan: ResolvedPlan, identity = false): PlanView {
+		const meters = this.meters(plan);
+		const uncertain = this.#context.uncertainBindings.has(planBindingKey(this.#context.generation, plan));
+		const reason = uncertain ? "The retained credential binding requires a new Generation" : plan.reason;
+		const warnings = reason ? [reason] : [];
+		if (!meters.length) warnings.push("No provider Meter observation is available");
+		for (const id of plan.config.meters ?? []) if (!meters.some(meter => meter.meter === id)) warnings.push(`Meter ${id} is unavailable`);
+		for (const meter of meters) if (meter.source === "failed") warnings.push(`Meter ${meter.meter} refresh failed; its last observation is retained`);
 		return {
-			id: plan.config.id, provider: plan.config.provider, name: plan.config.name, resolution: plan.resolution,
-			...(plan.reason !== undefined ? { reason: plan.reason } : {}), accountLabel: plan.accountLabel,
+			id: plan.config.id, provider: plan.config.provider, name: plan.config.name, resolution: uncertain ? "unresolved" : plan.resolution,
+			...(reason !== undefined ? { reason } : {}),
 			...(identity && plan.identity ? { identity: plan.identity } : {}), etag: `"plan:${plan.config.id}:${this.#context.generation}"`,
-			attributionMode: plan.config.attribution, meters: this.meters(plan).map(meter => this.meterView(plan, meter)),
-			allocationVersion: this.#context.allocationVersion, warnings: plan.reason ? [plan.reason] : [],
+			attributionMode: plan.config.attribution, meters: meters.map(meter => this.meterView(plan, meter)),
+			allocationVersion: this.#context.allocationVersion, warnings,
 		};
+	}
+
+	usage(key: KeyRecord, window: string): UsageView {
+		const ms = parseDuration(window);
+		if (ms === undefined) throw new SwitchError(422, "validation", "Usage window must be a positive m/h/d/w duration");
+		const context = this.#context;
+		const from = rollingStart(context.now, ms);
+		const to = context.now;
+		const usage = context.database.usage("key", key.name, from, to + 1);
+		const debits = context.database.keyDebits(key.name, from, to + 1);
+		let precision: UsageView["precision"] = usage.some(row => row.source !== "reported") || debits.some(row => row.precision === "estimated") ? "estimated" : "measured";
+		const unitSeries = key.budgets.map(budget => {
+			const points = new Map<number, UsageView["unitSeries"][number]["points"][number]>();
+			const add = (at: number, used: number, source: string) => {
+				const minute = Math.floor(at / 60_000) * 60_000;
+				const row = points.get(minute);
+				if (row) { row.used += used; if (row.source !== source) row.source = "mixed"; }
+				else points.set(minute, { from: minute, to: Math.min(minute + 60_000, to), used, source });
+			};
+			if (budget.unit === "plan_pct") {
+				const meter = budget.scope.meter ?? (budget.window.kind === "plan" ? budget.window.meter : undefined);
+				if (budget.scope.plan && meter) for (const row of context.database.debitUsage(key.name, budget.scope.plan, meter, from, to + 1)) {
+					if (matchesBudget(budget, { provider: row.provider, model: row.model, plan: row.debit.plan })) add(row.debit.settledAt, row.debit.mode === "declared" ? row.debit.declaredPct ?? 0 : row.debit.confirmedPct + row.debit.provisionalRemainingPct, row.debit.precision);
+				}
+			} else {
+				for (const row of usage) {
+					if (!matchesBudget(budget, row) || (row.phase === "request" && budget.unit !== "requests") || (budget.unit === "requests" && row.consumption.requests === 0)) continue;
+					const source = budget.unit === "usd" && row.unpriced ? "unpriced" : row.source;
+					if (source === "unpriced") precision = "estimated";
+					add(row.at, row.consumption[budget.unit], source);
+				}
+			}
+			const reserved = this.budget(key, budget).reserved;
+			if (reserved > 0) {
+				const minute = Math.floor(to / 60_000) * 60_000;
+				const point = points.get(minute);
+				if (point) point.reserved = reserved;
+				else points.set(minute, { from: minute, to, used: 0, reserved, source: "reservation" });
+			}
+			return { budget: budget.id, unit: budget.unit, points: [...points.values()].sort((a, b) => a.from - b.from) };
+		});
+		const attribution = new Map<string, UsageView["attributionSeries"][number]>();
+		for (const debit of debits) {
+			const id = JSON.stringify([debit.instance, debit.mode]);
+			const row: UsageView["attributionSeries"][number] = attribution.get(id) ?? { instance: debit.instance, principal: { kind: "key", id: key.name }, confirmed: 0, provisional: 0, mode: debit.mode, precision: debit.precision };
+			row.confirmed += debit.mode === "declared" ? debit.declaredPct ?? 0 : debit.mode === "tokens" ? debit.tokens : debit.confirmedPct;
+			row.provisional += debit.mode === "proportional" ? debit.provisionalRemainingPct : 0;
+			if (debit.precision === "estimated") row.precision = "estimated";
+			attribution.set(id, row);
+		}
+		return { window, unitSeries, attributionSeries: [...attribution.values()], precision, from, to };
 	}
 }
 

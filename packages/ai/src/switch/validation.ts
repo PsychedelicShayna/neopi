@@ -1,7 +1,8 @@
 import { BlockList, isIP } from "node:net";
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
 import { invalid, SwitchError } from "./error";
-import type { Adjustment, AdjustmentPreviewRequest, Budget, Gate, Issue, MintKeyRequest, PatchKeyRequest, Scope } from "./wire";
+import { roundOperatorAmount } from "./windows";
+import type { Adjustment, AdjustmentPreviewRequest, Budget, Gate, ImportApplyRequest, ImportRequest, Issue, MintKeyRequest, PatchKeyRequest, Scope } from "./wire";
 
 export const KEY_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const DIAL_NAMES = ["effort", "temp", "top_p", "top_k", "min_p", "max_tokens", "budget", "verbosity", "tier"];
@@ -135,7 +136,7 @@ export function checkBudget(fields: Fields, value: unknown, path: string): void 
 	const row = fields.object(value, path, ["id", "unit", "cap", "window", "scope", "policy", "burstBelow", "warnAt"]);
 	fields.name(row.id, `${path}.id`);
 	fields.oneOf(row.unit, `${path}.unit`, UNITS);
-	fields.number(row.cap, `${path}.cap`, { min: 0, exclusiveMin: true, integer: row.unit === "requests" || row.unit === "tokens" });
+	fields.number(row.cap, `${path}.cap`, { min: 0, exclusiveMin: true });
 	fields.oneOf(row.policy, `${path}.policy`, POLICIES);
 	fields.number(row.burstBelow, `${path}.burstBelow`, { optional: row.policy !== "burst", min: 0, exclusiveMin: true, max: 100 });
 	fields.thresholds(row.warnAt, `${path}.warnAt`);
@@ -160,7 +161,7 @@ export function checkBudget(fields: Fields, value: unknown, path: string): void 
 		if (typeof window.ms === "number" && window.ms % 60_000 !== 0) fields.issue(`${path}.window.ms`, "Window duration must be a whole number of minutes");
 	}
 	if (row.unit === "plan_pct" && (scope.plan === undefined || (scope.meter === undefined && window.kind !== "plan"))) fields.issue(`${path}.scope`, "Percentage points require a Plan and Meter", "budget_scope");
-	if (row.policy === "burst" && scope.plan === undefined) fields.issue(`${path}.policy`, "Burst requires a Plan and a Meter", "budget_scope");
+	if (row.policy === "burst" && (scope.plan === undefined || (scope.meter === undefined && window.kind !== "plan"))) fields.issue(`${path}.policy`, "Burst requires a Plan and a Meter", "budget_scope");
 }
 
 export function parseScope(value: unknown): Scope {
@@ -173,7 +174,10 @@ export function parseBudget(value: unknown): Budget {
 	const fields = new Fields();
 	checkBudget(fields, value, "budget");
 	fields.finish();
-	return value as Budget;
+	const budget = value as Budget;
+	const cap = roundOperatorAmount(budget.cap, budget.unit);
+	if (!Number.isFinite(cap) || cap <= 0) invalid([{ code: "validation", path: "budget.cap", message: "Rounded cap must be finite and positive" }]);
+	return cap === budget.cap ? budget : { ...budget, cap };
 }
 export function parseGate(value: unknown): Gate {
 	const fields = new Fields();
@@ -270,12 +274,14 @@ export function parseMintRequest(value: unknown): MintKeyRequest {
 	const fields = new Fields();
 	const row = fields.object(value, "key", ["name", "note", "expires_at", "sealed", "from_key", "scope", "plans", "budgets", "sourceEtag"]);
 	fields.name(row.name, "key.name");
-	fields.reason(row.note, "key.note");
+	if (row.note !== undefined && typeof row.note !== "string") fields.issue("key.note", "Expected text");
 	fields.number(row.expires_at, "key.expires_at", { optional: true, min: 0 });
 	fields.boolean(row.sealed, "key.sealed", true);
 	fields.string(row.from_key, "key.from_key", true);
 	fields.string(row.sourceEtag, "key.sourceEtag", true);
-	checkScope(fields, row.scope, "key.scope");
+	const scope = row.scope && typeof row.scope === "object" && !Array.isArray(row.scope)
+		? { network: ["0.0.0.0/0", "::/0"], endpoints: ["*"], dials: {}, ...row.scope } : row.scope;
+	checkScope(fields, scope, "key.scope");
 	for (const [i, item] of fields.array(row.plans, "key.plans", true).entries()) {
 		const entry = fields.object(item, `key.plans[${i}]`, ["plan", "gates"]);
 		fields.string(entry.plan, `key.plans[${i}].plan`);
@@ -283,7 +289,7 @@ export function parseMintRequest(value: unknown): MintKeyRequest {
 	}
 	for (const [i, budget] of fields.array(row.budgets, "key.budgets", true).entries()) checkBudget(fields, budget, `key.budgets[${i}]`);
 	fields.finish();
-	return value as MintKeyRequest;
+	return { ...value as MintKeyRequest, scope: scope as Scope };
 }
 
 export function parsePatchRequest(value: unknown): PatchKeyRequest {
@@ -291,12 +297,25 @@ export function parsePatchRequest(value: unknown): PatchKeyRequest {
 	const row = fields.object(value, "key", ["enabled", "note", "expires_at", "scope", "plan_order"]);
 	if (Object.keys(row).length === 0) fields.issue("key", "An empty patch is not an operation");
 	fields.boolean(row.enabled, "key.enabled", true);
-	if (row.note !== null) fields.reason(row.note, "key.note");
+	if (row.note !== undefined && row.note !== null && typeof row.note !== "string") fields.issue("key.note", "Expected text or null");
 	if (row.expires_at !== null) fields.number(row.expires_at, "key.expires_at", { optional: true, min: 0 });
 	if (row.scope !== undefined) checkScope(fields, row.scope, "key.scope");
 	fields.oneOf(row.plan_order, "key.plan_order", ["priority", "headroom"], true);
 	fields.finish();
 	return value as PatchKeyRequest;
+}
+
+export function parseImportRequest(value: unknown, apply: true): ImportApplyRequest;
+export function parseImportRequest(value: unknown, apply?: false): ImportRequest;
+export function parseImportRequest(value: unknown, apply = false): ImportRequest | ImportApplyRequest {
+	const fields = new Fields();
+	const row = fields.object(value, "import", apply ? ["format", "content", "mode", "preview"] : ["format", "content", "mode"]);
+	fields.oneOf(row.format, "import.format", ["toml"]);
+	if (typeof row.content !== "string") fields.issue("import.content", "Expected TOML text");
+	fields.oneOf(row.mode, "import.mode", ["merge", "replace"]);
+	if (apply) fields.string(row.preview, "import.preview");
+	fields.finish();
+	return value as ImportRequest | ImportApplyRequest;
 }
 
 export async function readJsonBody(request: Request): Promise<unknown> {

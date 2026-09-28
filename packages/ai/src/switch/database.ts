@@ -2,13 +2,13 @@ import type { Database } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { acquireFileLock, type FileLockHandle, openSqliteDatabase } from "@oh-my-pi/pi-utils";
-import type { AttemptRecord, DebitRecord, JobRecord, KeyRecord, KeyTokenRecord, MeterRecord, UsageRecord } from "./internal";
-import type { AuditView, ChangeEventName, ChangeFrame, Decision, SwitchEvent, WindowInstanceView } from "./wire";
+import type { AttemptRecord, DebitRecord, InstanceRecord, JobRecord, KeyRecord, KeyTokenRecord, MeterRecord, UsageRecord } from "./internal";
+import type { AuditView, ChangeEventName, ChangeFrame, Decision, SwitchEvent } from "./wire";
 
 interface TableRows {
 	keys: KeyRecord;
 	key_tokens: KeyTokenRecord;
-	instances: WindowInstanceView;
+	instances: InstanceRecord;
 	meter_snapshots: MeterRecord;
 	meter_debits: DebitRecord;
 	attempts: AttemptRecord;
@@ -44,7 +44,7 @@ export class SwitchDatabase {
 		if (schema === 0) db.transaction(() => {
 		db.run("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);");
 		for (const table of TABLES) {
-			const jobLink = table === "jobs" ? ", origin_attempt_id TEXT GENERATED ALWAYS AS (json_extract(payload, '$.originAttemptId')) STORED UNIQUE NOT NULL REFERENCES attempts(id)" : "";
+			const jobLink = table === "jobs" ? ", origin_attempt_id TEXT GENERATED ALWAYS AS (json_extract(payload, '$.originAttemptId')) STORED UNIQUE NOT NULL REFERENCES attempts(id)" : table === "meter_debits" || table === "usage_buckets" ? ", attempt_id TEXT GENERATED ALWAYS AS (json_extract(payload, '$.attemptId')) STORED NOT NULL REFERENCES attempts(id)" : "";
 			db.run(`CREATE TABLE IF NOT EXISTS ${table} (id TEXT PRIMARY KEY, payload TEXT NOT NULL CHECK(json_valid(payload))${jobLink});`);
 		}
 		db.run(`
@@ -54,6 +54,7 @@ export class SwitchDatabase {
 			CREATE INDEX IF NOT EXISTS debits_meter_instance ON meter_debits(json_extract(payload,'$.plan'),json_extract(payload,'$.meter'),json_extract(payload,'$.instance'));
 			CREATE INDEX IF NOT EXISTS debits_owner_time ON meter_debits(json_extract(payload,'$.principal.kind'),json_extract(payload,'$.principal.id'),json_extract(payload,'$.plan'),json_extract(payload,'$.meter'),json_extract(payload,'$.settledAt'));
 			CREATE INDEX IF NOT EXISTS attempts_decision ON attempts(json_extract(payload,'$.decisionId'));
+			CREATE INDEX IF NOT EXISTS meter_latest ON meter_snapshots(json_extract(payload,'$.plan'),json_extract(payload,'$.meter'),json_extract(payload,'$.binding.provider'),json_extract(payload,'$.binding.credentialId'),json_extract(payload,'$.binding.fingerprint'),json_extract(payload,'$.fetchedAt') DESC);
 			CREATE INDEX IF NOT EXISTS decisions_at ON decisions(json_extract(payload,'$.at') DESC,id DESC);
 			CREATE INDEX IF NOT EXISTS events_at ON events(json_extract(payload,'$.at') DESC,id DESC);
 			CREATE INDEX IF NOT EXISTS audit_at ON audit(json_extract(payload,'$.at') DESC,id DESC);
@@ -145,6 +146,31 @@ export class SwitchDatabase {
 		return this.#db.query<PayloadRow, [string, string, string]>("SELECT payload FROM meter_debits WHERE json_extract(payload,'$.plan')=? AND json_extract(payload,'$.meter')=? AND json_extract(payload,'$.instance')=? ORDER BY id").all(plan, meter, instance).map(row => JSON.parse(row.payload) as DebitRecord);
 	}
 
+	currentMeters(): MeterRecord[] {
+		const sql = "SELECT payload FROM (SELECT payload,row_number() OVER (PARTITION BY json_extract(payload,'$.plan'),json_extract(payload,'$.meter'),json_extract(payload,'$.binding.provider'),json_extract(payload,'$.binding.credentialId'),json_extract(payload,'$.binding.fingerprint') ORDER BY json_extract(payload,'$.fetchedAt') DESC,json_extract(payload,'$.version') DESC) AS position FROM meter_snapshots) WHERE position=1";
+		return this.#db.query<PayloadRow, []>(sql).all().map(row => JSON.parse(row.payload) as MeterRecord);
+	}
+
+	budgetInstances(): [string, InstanceRecord][] {
+		return this.#db.query<{ id: string; payload: string }, []>("SELECT id,payload FROM instances WHERE id NOT LIKE 'meter:%' ORDER BY id").all().map<[string, InstanceRecord]>(row => [row.id, JSON.parse(row.payload) as InstanceRecord]);
+	}
+
+	attemptsForDecision(id: string): AttemptRecord[] {
+		return this.#db.query<PayloadRow, [string]>("SELECT payload FROM attempts WHERE json_extract(payload,'$.decisionId')=? ORDER BY json_extract(payload,'$.startedAt'),id").all(id).map(row => JSON.parse(row.payload) as AttemptRecord);
+	}
+
+	runningDecisions(): Decision[] {
+		return this.#db.query<PayloadRow, []>("SELECT payload FROM decisions WHERE json_extract(payload,'$.state')='running' ORDER BY id").all().map(row => JSON.parse(row.payload) as Decision);
+	}
+
+	denials(from: number, to: number): number {
+		return this.#db.query<{ count: number }, [number, number]>("SELECT count(*) AS count FROM decisions WHERE json_extract(payload,'$.outcome')='denied' AND json_extract(payload,'$.state')<>'running' AND json_extract(payload,'$.at')>=? AND json_extract(payload,'$.at')<?").get(from, to)!.count;
+	}
+
+	keyDebits(key: string, from: number, to: number): DebitRecord[] {
+		return this.#db.query<PayloadRow, [string, number, number]>("SELECT payload FROM meter_debits WHERE json_extract(payload,'$.principal.kind')='key' AND json_extract(payload,'$.principal.id')=? AND json_extract(payload,'$.settledAt')>=? AND json_extract(payload,'$.settledAt')<? ORDER BY id").all(key, from, to).map(row => JSON.parse(row.payload) as DebitRecord);
+	}
+
 	page<T extends "decisions" | "events" | "audit">(table: T, filters: RecordFilter[], limit: number, boundary?: { at: number; id: string }): TableRows[T][] {
 		const clauses: string[] = [];
 		const parameters: (string | number)[] = [];
@@ -162,7 +188,7 @@ export class SwitchDatabase {
 	}
 
 	changeSequence(): number {
-		return this.#db.query<{ seq: number | null }, []>("SELECT max(seq) AS seq FROM change_log").get()?.seq ?? 0;
+		return this.meta<number>("changeSequence") ?? this.#db.query<{ seq: number | null }, []>("SELECT max(seq) AS seq FROM change_log").get()?.seq ?? 0;
 	}
 
 	oldestChange(): number {
@@ -175,11 +201,25 @@ export class SwitchDatabase {
 		const boot = frame.cursor.slice(0, frame.cursor.lastIndexOf(":"));
 		frame.cursor = `${boot}:${seq}`;
 		this.#db.query("UPDATE change_log SET payload=? WHERE seq=?").run(JSON.stringify(frame), seq);
+		this.setMeta("changeSequence", seq);
 		return { seq, kind, frame };
 	}
 
 	changes(after: number, through: number, limit: number): StoredChange[] {
 		return this.#db.query<{ seq: number; kind: ChangeEventName; payload: string }, [number, number, number]>("SELECT seq,kind,payload FROM change_log WHERE seq>? AND seq<=? ORDER BY seq LIMIT ?").all(after, through, limit).map(row => ({ seq: row.seq, kind: row.kind, frame: JSON.parse(row.payload) as ChangeFrame }));
+	}
+
+	prune(now: number, historyCutoff: number, usageCutoff: number): void {
+		this.transaction(() => {
+			this.#db.query("DELETE FROM usage_buckets WHERE json_extract(payload,'$.at')<?").run(usageCutoff);
+			this.#db.query("DELETE FROM meter_debits WHERE json_extract(payload,'$.settledAt')<? AND EXISTS (SELECT 1 FROM instances AS i WHERE i.id='meter:' || json_extract(meter_debits.payload,'$.instance') AND json_extract(i.payload,'$.closedAt')<?)").run(usageCutoff, now - 7 * 86_400_000);
+			this.#db.query("DELETE FROM jobs WHERE json_extract(payload,'$.createdAt')<? AND EXISTS (SELECT 1 FROM attempts AS a WHERE a.id=jobs.origin_attempt_id AND json_extract(a.payload,'$.settled')=1 AND json_extract(a.payload,'$.settledAt')<?) AND NOT EXISTS (SELECT 1 FROM usage_buckets WHERE attempt_id=jobs.origin_attempt_id) AND NOT EXISTS (SELECT 1 FROM meter_debits WHERE attempt_id=jobs.origin_attempt_id)").run(now - 86_400_000, historyCutoff);
+			this.#db.query("DELETE FROM attempts WHERE json_extract(payload,'$.settled')=1 AND json_extract(payload,'$.settledAt')<? AND NOT EXISTS (SELECT 1 FROM jobs WHERE origin_attempt_id=attempts.id) AND NOT EXISTS (SELECT 1 FROM usage_buckets WHERE attempt_id=attempts.id) AND NOT EXISTS (SELECT 1 FROM meter_debits WHERE attempt_id=attempts.id)").run(historyCutoff);
+			this.#db.query("DELETE FROM decisions WHERE json_extract(payload,'$.at')<? AND json_extract(payload,'$.state')<>'running' AND NOT EXISTS (SELECT 1 FROM attempts AS a WHERE json_extract(a.payload,'$.decisionId')=decisions.id AND json_extract(a.payload,'$.settled')=0)").run(historyCutoff);
+			this.#db.query("DELETE FROM events WHERE json_extract(payload,'$.at')<?").run(historyCutoff);
+			this.#db.query("DELETE FROM change_log WHERE seq<coalesce((SELECT min(seq) FROM change_log WHERE json_extract(payload,'$.at')>=?),(SELECT max(seq) FROM change_log))").run(historyCutoff);
+			this.#db.query("DELETE FROM meter_snapshots WHERE json_extract(payload,'$.fetchedAt')<? AND EXISTS (SELECT 1 FROM instances AS i WHERE i.id='meter:' || json_extract(meter_snapshots.payload,'$.instance.id') AND json_extract(i.payload,'$.closedAt')<?) AND NOT EXISTS (SELECT 1 FROM meter_debits AS d WHERE json_extract(d.payload,'$.instance')=json_extract(meter_snapshots.payload,'$.instance.id'))").run(now - 48 * 3_600_000, usageCutoff);
+		});
 	}
 
 	backup(destination: string): void {
