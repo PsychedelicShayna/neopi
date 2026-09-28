@@ -165,8 +165,17 @@ export function launchBroker(
 		logger.info("Daemon broker placed in the spawning client's cgroup", { runtimeDir, reason: placement.reason });
 		return { settle() {} };
 	}
+	// A shared scope outlives the worker that first opened it. The deck's
+	// generation sweep must not claim its broker or daemon children; retain
+	// the marker in the original launch for direct and failed-scope fallback.
+	let scopedLaunch = launch;
+	if ("NPI_DECK_GEN" in launch.env) {
+		const env = { ...launch.env };
+		delete env.NPI_DECK_GEN;
+		scopedLaunch = { ...launch, env };
+	}
 	let settled = false;
-	const child = spawnDetachedBroker(launch, [...placement.launcher, ...launch.cmd]);
+	const child = spawnDetachedBroker(scopedLaunch, [...placement.launcher, ...launch.cmd]);
 	logger.info("Daemon broker placed in its own systemd user scope", {
 		runtimeDir,
 		unit: placement.unit,
