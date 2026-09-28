@@ -623,13 +623,18 @@ export class AdvisorConfigOverlayComponent implements Component {
 
 	/** Write the current scope's doc to disk without touching the live advisors. */
 	async #saveDoc(): Promise<void> {
-		const doc = this.#hasSyntheticDefaultAdvisor(this.#doc) ? { ...this.#doc, advisors: [] } : this.#doc;
-		await this.#cb.save(this.#scope, doc);
-		// The saved file contains only the normalized entries, so the load-time
-		// warnings no longer apply to it. (On failure the throw skips this.)
-		this.#doc.warnings = undefined;
-		this.#dirty = false;
-		this.#pendingApply = true;
+		const syntheticAdvisors = this.#hasSyntheticDefaultAdvisor(this.#doc) ? this.#doc.advisors : undefined;
+		if (syntheticAdvisors) this.#doc.advisors = [];
+		try {
+			await this.#cb.save(this.#scope, this.#doc);
+			// The saved file contains only the normalized entries, so the load-time
+			// warnings no longer apply to it.
+			this.#doc.warnings = undefined;
+			this.#dirty = false;
+			this.#pendingApply = true;
+		} finally {
+			if (syntheticAdvisors) this.#doc.advisors = syntheticAdvisors;
+		}
 	}
 
 	#showDetail(index: number, selectedField?: string): void {

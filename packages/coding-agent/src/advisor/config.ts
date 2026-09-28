@@ -2,13 +2,45 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import { YAML } from "bun";
+import { isMap, isNode, isSeq, type YAMLMap, type YAMLSeq } from "yaml";
 import { expandAtImports } from "../discovery/at-imports";
 import { BUILTIN_TOOL_NAMES, normalizeToolNames } from "../tools/builtin-names";
 import { ADVISOR_DEFAULT_BUDGET_PER_UPDATE, ADVISOR_MAX_BUDGET_PER_UPDATE } from "./emission-guard";
 import { collectConfigCandidates } from "./watchdog";
+import { materializeYamlAlias, parseYamlMappingDocument, yamlDocumentRoot } from "../config/yaml-document";
 
 import type { AdvisorConfig, AdvisorConfigScope, WatchdogConfigDoc } from "@oh-my-pi/pi-tui/overlays/advisor-config";
+
+const WATCHDOG_ADVISOR_KEYS = [
+	"name",
+	"model",
+	"tools",
+	"instructions",
+	"systemPrompt",
+	"enabled",
+	"maxNotesPerUpdate",
+] as const;
+
+interface WatchdogAdvisorOrigin {
+	advisor: AdvisorConfig;
+	base: AdvisorConfig;
+	name: string;
+	occurrence: number;
+	fingerprint: string | undefined;
+}
+
+interface WatchdogBaseline {
+	doc: WatchdogConfigDoc;
+	origins: WatchdogAdvisorOrigin[];
+	filePath: string;
+	sourceWasPresent: boolean;
+}
+
+/** Load snapshots stay out of the public editor shape while saves compute path-level changes. */
+const watchdogBaselines = new WeakMap<WatchdogConfigDoc, WatchdogBaseline>();
+const watchdogRepairDocs = new WeakSet<WatchdogConfigDoc>();
 
 /**
  * Runtime health of a single advisor, surfaced in stats and the status line.
@@ -49,6 +81,23 @@ const advisorEntrySchema = type({
 });
 
 type AdvisorYamlEntry = typeof advisorEntrySchema.infer;
+
+function editableAdvisorConfig(entry: AdvisorYamlEntry): AdvisorConfig {
+	const advisor: AdvisorConfig = { name: entry.name };
+	if (entry.model?.trim()) advisor.model = entry.model;
+	if (entry.tools !== undefined) advisor.tools = [...entry.tools];
+	if (entry.instructions?.trim()) advisor.instructions = entry.instructions;
+	if (entry.systemPrompt !== undefined) advisor.systemPrompt = entry.systemPrompt;
+	if (entry.enabled !== undefined) advisor.enabled = entry.enabled;
+	if (
+		typeof entry.maxNotesPerUpdate === "number" &&
+		Number.isFinite(entry.maxNotesPerUpdate) &&
+		entry.maxNotesPerUpdate >= 1
+	) {
+		advisor.maxNotesPerUpdate = Math.trunc(entry.maxNotesPerUpdate);
+	}
+	return advisor;
+}
 
 /**
  * Validate one parsed `WATCHDOG.yml` document per entry instead of as a whole:
@@ -278,6 +327,53 @@ export async function resolveAdvisorConfigEditPath(
 	return yml;
 }
 
+function watchdogAdvisorFingerprint(value: unknown): string | undefined {
+	try {
+		return JSON.stringify(value);
+	} catch {
+		return undefined;
+	}
+}
+
+function watchdogAdvisorFingerprints(source: string): (string | undefined)[] {
+	try {
+		const parsed: unknown = YAML.parse(source);
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [];
+		const rawAdvisors = (parsed as Record<string, unknown>).advisors;
+		if (!Array.isArray(rawAdvisors)) return [];
+		const fingerprints: (string | undefined)[] = [];
+		for (const rawAdvisor of rawAdvisors) {
+			if (advisorEntrySchema(rawAdvisor) instanceof type.errors) continue;
+			fingerprints.push(watchdogAdvisorFingerprint(rawAdvisor));
+		}
+		return fingerprints;
+	} catch {
+		return [];
+	}
+}
+
+function rememberWatchdogBaseline(
+	doc: WatchdogConfigDoc,
+	filePath: string,
+	sourceWasPresent = true,
+	source = "",
+): void {
+	const occurrences = new Map<string, number>();
+	const fingerprints = watchdogAdvisorFingerprints(source);
+	const origins = doc.advisors.map((advisor, index) => {
+		const occurrence = occurrences.get(advisor.name) ?? 0;
+		occurrences.set(advisor.name, occurrence + 1);
+		return {
+			advisor,
+			base: structuredClone(advisor),
+			name: advisor.name,
+			occurrence,
+			fingerprint: fingerprints[index],
+		};
+	});
+	watchdogBaselines.set(doc, { doc: structuredClone(doc), origins, filePath, sourceWasPresent });
+}
+
 /**
  * Load one `WATCHDOG.yml` file for editing — raw, un-merged, un-expanded. Missing
  * or unparseable files yield an empty doc (never throws) so the editor opens
@@ -290,44 +386,45 @@ export async function loadWatchdogConfigFile(filePath: string): Promise<Watchdog
 	try {
 		text = await Bun.file(filePath).text();
 	} catch (err) {
-		if (!isEnoent(err))
+		if (!isEnoent(err)) {
 			logger.warn("Advisor config: failed to read for edit", { path: filePath, error: String(err) });
-		return { advisors: [] };
+			return { advisors: [] };
+		}
+		const doc: WatchdogConfigDoc = { advisors: [] };
+		rememberWatchdogBaseline(doc, filePath, false);
+		return doc;
 	}
 	let parsed: unknown;
 	try {
 		parsed = YAML.parse(text);
 	} catch (err) {
 		logger.warn("Advisor config: failed to parse for edit", { path: filePath, error: String(err) });
-		return { advisors: [], warnings: [`${filePath}: failed to parse YAML (${String(err)})`] };
+		const doc: WatchdogConfigDoc = {
+			advisors: [],
+			warnings: [`${filePath}: failed to parse YAML (${String(err)})`],
+		};
+		watchdogRepairDocs.add(doc);
+		return doc;
 	}
 	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
 		// Parity with discovery: a non-mapping document is reported, not silently blanked.
 		const message = `${filePath}: expected a YAML mapping — file skipped`;
 		logger.warn("Advisor config", { path: filePath, error: message });
-		return { advisors: [], warnings: [message] };
+		const doc: WatchdogConfigDoc = { advisors: [], warnings: [message] };
+		watchdogRepairDocs.add(doc);
+		return doc;
 	}
 	const { instructions, entries, sharedMaxNotesPerUpdate, warnings } = parseWatchdogDoc(
 		parsed as Record<string, unknown>,
 		filePath,
 	);
 	for (const message of warnings) logger.warn("Advisor config", { path: filePath, error: message });
-	const advisors = entries.map(a => {
-		const advisor: AdvisorConfig = { name: a.name };
-		if (a.model?.trim()) advisor.model = a.model;
-		if (a.tools !== undefined) advisor.tools = [...a.tools];
-		if (a.instructions?.trim()) advisor.instructions = a.instructions;
-		if (a.systemPrompt !== undefined) advisor.systemPrompt = a.systemPrompt;
-		if (a.enabled !== undefined) advisor.enabled = a.enabled;
-		if (typeof a.maxNotesPerUpdate === "number" && Number.isFinite(a.maxNotesPerUpdate) && a.maxNotesPerUpdate >= 1) {
-			advisor.maxNotesPerUpdate = Math.trunc(a.maxNotesPerUpdate);
-		}
-		return advisor;
-	});
+	const advisors = entries.map(editableAdvisorConfig);
 	const doc: WatchdogConfigDoc = { advisors };
 	if (instructions?.trim()) doc.instructions = instructions;
 	if (sharedMaxNotesPerUpdate !== undefined) doc.maxNotesPerUpdate = sharedMaxNotesPerUpdate;
 	if (warnings.length > 0) doc.warnings = warnings;
+	rememberWatchdogBaseline(doc, filePath, true, text);
 	return doc;
 }
 
@@ -405,20 +502,266 @@ export function serializeWatchdogConfig(doc: WatchdogConfigDoc): string {
 	return lines.length === 0 ? "" : `${lines.join("\n")}\n`;
 }
 
+function watchdogAdvisorValues(advisor: AdvisorConfig): Record<(typeof WATCHDOG_ADVISOR_KEYS)[number], unknown> {
+	return {
+		name: advisor.name,
+		model: advisor.model?.trim() ? advisor.model : undefined,
+		tools: advisor.tools === undefined ? undefined : [...advisor.tools],
+		instructions: advisor.instructions?.trim() ? advisor.instructions : undefined,
+		systemPrompt: advisor.systemPrompt,
+		enabled: advisor.enabled,
+		maxNotesPerUpdate:
+			typeof advisor.maxNotesPerUpdate === "number" &&
+			Number.isFinite(advisor.maxNotesPerUpdate) &&
+			advisor.maxNotesPerUpdate >= 1
+				? Math.trunc(advisor.maxNotesPerUpdate)
+				: undefined,
+	};
+}
+
+function findWatchdogAdvisor(
+	sequence: YAMLSeq<unknown>,
+	name: string,
+	occurrence: number,
+): { index: number; map: YAMLMap<unknown, unknown> } | undefined {
+	let seen = 0;
+	for (const [index, item] of sequence.items.entries()) {
+		if (!isMap(item) || item.get("name") !== name) continue;
+		if (seen === occurrence) return { index, map: item };
+		seen++;
+	}
+	return undefined;
+}
+
+function removeMalformedWatchdogAdvisors(sequence: YAMLSeq<unknown>): void {
+	for (let index = sequence.items.length - 1; index >= 0; index--) {
+		const item = sequence.items[index];
+		const value: unknown = isNode(item) ? item.toJSON() : item;
+		if (!(advisorEntrySchema(value) instanceof type.errors)) continue;
+		sequence.delete(index);
+	}
+}
+
+function resolveWatchdogAdvisorOrigin(
+	sequence: YAMLSeq<unknown>,
+	origin: WatchdogAdvisorOrigin,
+	origins: readonly WatchdogAdvisorOrigin[],
+): { index: number; map: YAMLMap<unknown, unknown> } | undefined {
+	const candidates: { index: number; map: YAMLMap<unknown, unknown> }[] = [];
+	for (const [index, item] of sequence.items.entries()) {
+		if (isMap(item) && item.get("name") === origin.name) candidates.push({ index, map: item });
+	}
+	if (origin.fingerprint !== undefined) {
+		const exact = candidates.filter(
+			candidate => watchdogAdvisorFingerprint(candidate.map.toJSON()) === origin.fingerprint,
+		);
+		if (exact.length === 1) return exact[0];
+		if (exact.length > 1) return undefined;
+	}
+	const baselineCount = origins.filter(candidate => candidate.name === origin.name).length;
+	if (candidates.length !== baselineCount) return undefined;
+	return candidates[origin.occurrence];
+}
+
+function watchdogAdvisorMapValues(
+	map: YAMLMap<unknown, unknown>,
+): Record<(typeof WATCHDOG_ADVISOR_KEYS)[number], unknown> | undefined {
+	const parsed = advisorEntrySchema(map.toJSON());
+	return parsed instanceof type.errors ? undefined : watchdogAdvisorValues(editableAdvisorConfig(parsed));
+}
+
+function watchdogAdvisorOriginUnchanged(map: YAMLMap<unknown, unknown>, origin: WatchdogAdvisorOrigin): boolean {
+	if (origin.fingerprint !== undefined) {
+		return watchdogAdvisorFingerprint(map.toJSON()) === origin.fingerprint;
+	}
+	const currentValues = watchdogAdvisorMapValues(map);
+	if (!currentValues) return false;
+	const expectedValues = watchdogAdvisorValues(origin.base);
+	return WATCHDOG_ADVISOR_KEYS.every(key => Bun.deepEquals(currentValues[key], expectedValues[key]));
+}
+
+function patchWatchdogAdvisor(map: YAMLMap<unknown, unknown>, advisor: AdvisorConfig, base?: AdvisorConfig): void {
+	const values = watchdogAdvisorValues(advisor);
+	const baseValues = base ? watchdogAdvisorValues(base) : undefined;
+	const currentValues = baseValues ? watchdogAdvisorMapValues(map) : undefined;
+	for (const key of WATCHDOG_ADVISOR_KEYS) {
+		if (baseValues && Bun.deepEquals(values[key], baseValues[key])) continue;
+		if (baseValues && currentValues && !Bun.deepEquals(currentValues[key], baseValues[key])) continue;
+		const value = values[key];
+		if (value === undefined) map.delete(key);
+		else map.set(key, value);
+	}
+}
+
+function patchWatchdogDocument(source: string, doc: WatchdogConfigDoc, baseline?: WatchdogBaseline): string {
+	if (!source.trim() && (!baseline || !baseline.sourceWasPresent)) return serializeWatchdogConfig(doc);
+	const document = parseYamlMappingDocument(source);
+	const root = yamlDocumentRoot(document);
+	const topLevelValues = {
+		instructions: doc.instructions?.trim() ? doc.instructions : undefined,
+		maxNotesPerUpdate:
+			typeof doc.maxNotesPerUpdate === "number" &&
+			Number.isFinite(doc.maxNotesPerUpdate) &&
+			doc.maxNotesPerUpdate >= 1
+				? Math.trunc(doc.maxNotesPerUpdate)
+				: undefined,
+	};
+	const baseTopLevelValues = baseline
+		? {
+				instructions: baseline.doc.instructions?.trim() ? baseline.doc.instructions : undefined,
+				maxNotesPerUpdate: baseline.doc.maxNotesPerUpdate,
+			}
+		: undefined;
+	const currentInstructions = root.get("instructions");
+	const currentMaxNotesPerUpdate = root.get("maxNotesPerUpdate");
+	const currentTopLevelValues = {
+		instructions:
+			typeof currentInstructions === "string" && currentInstructions.trim() ? currentInstructions : undefined,
+		maxNotesPerUpdate:
+			typeof currentMaxNotesPerUpdate === "number" &&
+			Number.isFinite(currentMaxNotesPerUpdate) &&
+			currentMaxNotesPerUpdate >= 1
+				? Math.trunc(currentMaxNotesPerUpdate)
+				: undefined,
+	};
+	for (const key of ["instructions", "maxNotesPerUpdate"] as const) {
+		if (baseTopLevelValues && Bun.deepEquals(topLevelValues[key], baseTopLevelValues[key])) continue;
+		if (baseTopLevelValues && !Bun.deepEquals(currentTopLevelValues[key], baseTopLevelValues[key])) {
+			continue;
+		}
+		const value = topLevelValues[key];
+		if (value === undefined) root.delete(key);
+		else root.set(key, value);
+	}
+
+	if (!baseline) {
+		if (doc.advisors.length === 0) {
+			root.delete("advisors");
+		} else {
+			let existingNode = materializeYamlAlias(document, ["advisors"]);
+			if (!isSeq(existingNode)) existingNode = document.createNode([]);
+			if (!isSeq(existingNode)) throw new Error("WATCHDOG.yml advisors must be a sequence");
+			const existingSequence = existingNode as YAMLSeq<unknown>;
+			const occurrences = new Map<string, number>();
+			const items: unknown[] = [];
+			for (const advisor of doc.advisors) {
+				const occurrence = occurrences.get(advisor.name) ?? 0;
+				occurrences.set(advisor.name, occurrence + 1);
+				const existing = findWatchdogAdvisor(existingSequence, advisor.name, occurrence);
+				if (existing) {
+					patchWatchdogAdvisor(existing.map, advisor);
+					items.push(existing.map);
+				} else {
+					items.push(document.createNode(watchdogAdvisorValues(advisor)));
+				}
+			}
+			existingSequence.items = items;
+			root.set("advisors", existingSequence);
+		}
+		return document.toString({ lineWidth: 0 });
+	}
+
+	let advisorNode = materializeYamlAlias(document, ["advisors"]);
+	if (!isSeq(advisorNode)) {
+		root.set("advisors", document.createNode([]));
+		advisorNode = root.get("advisors");
+	}
+	if (!isSeq(advisorNode)) throw new Error("WATCHDOG.yml advisors must be a sequence");
+	const sequence = advisorNode as YAMLSeq<unknown>;
+	for (let index = 0; index < sequence.items.length; index++) {
+		materializeYamlAlias(document, ["advisors", index]);
+	}
+	removeMalformedWatchdogAdvisors(sequence);
+
+	const resolvedOrigins = baseline.origins.map(origin => ({
+		origin,
+		existing: resolveWatchdogAdvisorOrigin(sequence, origin, baseline.origins),
+	}));
+	const matches = new Map<AdvisorConfig, (typeof resolvedOrigins)[number]>();
+	const claimedOrigins = new Set<WatchdogAdvisorOrigin>();
+
+	// Preserve object identity when the editor mutates the loaded doc in place.
+	for (const advisor of doc.advisors) {
+		const resolved = resolvedOrigins.find(candidate => candidate.origin.advisor === advisor);
+		if (!resolved) continue;
+		matches.set(advisor, resolved);
+		claimedOrigins.add(resolved.origin);
+	}
+	// Editors may clone rows. Match those copies by stable name/occurrence order,
+	// then by unchanged position for a renamed clone.
+	for (const [index, advisor] of doc.advisors.entries()) {
+		if (matches.has(advisor)) continue;
+		const resolved =
+			resolvedOrigins.find(
+				candidate => !claimedOrigins.has(candidate.origin) && candidate.origin.name === advisor.name,
+			) ??
+			(() => {
+				const positional = resolvedOrigins[index];
+				return positional && !claimedOrigins.has(positional.origin) ? positional : undefined;
+			})();
+		if (!resolved) continue;
+		matches.set(advisor, resolved);
+		claimedOrigins.add(resolved.origin);
+	}
+
+	const advisorsToAppend: AdvisorConfig[] = [];
+	for (const advisor of doc.advisors) {
+		const resolved = matches.get(advisor);
+		if (!resolved) {
+			advisorsToAppend.push(advisor);
+			continue;
+		}
+		if (!resolved.existing) continue;
+		patchWatchdogAdvisor(resolved.existing.map, advisor, resolved.origin.base);
+	}
+
+	const removals = resolvedOrigins
+		.filter(
+			resolved =>
+				!claimedOrigins.has(resolved.origin) &&
+				resolved.existing &&
+				watchdogAdvisorOriginUnchanged(resolved.existing.map, resolved.origin),
+		)
+		.map(resolved => resolved.existing!)
+		.sort((left, right) => right.index - left.index);
+	for (const removal of removals) sequence.delete(removal.index);
+	for (const advisor of advisorsToAppend) {
+		sequence.add(document.createNode(watchdogAdvisorValues(advisor)));
+	}
+	if (sequence.items.length === 0) root.delete("advisors");
+	return document.toString({ lineWidth: 0 });
+}
+
 /**
- * Write an editable doc to `WATCHDOG.yml`. An empty doc removes the file so
- * discovery falls back to the legacy single-advisor path rather than leaving an
- * empty config behind.
+ * Write an editable doc under the file lock. Known fields are patched into the
+ * latest document so comments, future fields, and disjoint edits survive. The
+ * file is removed only when the resulting document is empty.
  */
 export async function saveWatchdogConfigFile(filePath: string, doc: WatchdogConfigDoc): Promise<void> {
-	const content = serializeWatchdogConfig(doc);
-	if (!content.trim()) {
+	const storedBaseline = watchdogBaselines.get(doc);
+	const baseline = storedBaseline?.filePath === filePath ? storedBaseline : undefined;
+	await withFileLock(filePath, async () => {
+		let source = "";
 		try {
-			await fs.rm(filePath, { force: true });
+			source = await fs.readFile(filePath, "utf8");
 		} catch (err) {
 			if (!isEnoent(err)) throw err;
 		}
-		return;
-	}
-	await Bun.write(filePath, content);
+		let content: string;
+		try {
+			content = patchWatchdogDocument(source, doc, baseline);
+		} catch (error) {
+			if (!watchdogRepairDocs.has(doc)) throw error;
+			content = serializeWatchdogConfig(doc);
+		}
+		const root = yamlDocumentRoot(parseYamlMappingDocument(content));
+		const wroteFile = root.items.length > 0;
+		if (wroteFile) {
+			await Bun.write(filePath, content);
+		} else {
+			await fs.rm(filePath, { force: true });
+		}
+		watchdogRepairDocs.delete(doc);
+		rememberWatchdogBaseline(doc, filePath, wroteFile, content);
+	});
 }
