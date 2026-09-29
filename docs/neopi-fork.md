@@ -61,13 +61,13 @@ Provenance: `c7bb908557`, `7a87cfe115`, `3b4dd762b6`, `6fa90d9a09`, `14c6e4406f`
 
 ### Live composer (issue #41)
 
-`/live` no longer replaces the composer. The ordinary composer stays mounted and focused, and speech types into it like hold-space dictation: a volatile preview while speaking, committed as one undoable edit when the utterance ends. Typing or moving the cursor around a preview keeps it as ordinary text. When the main agent accepts a voice handoff, those utterances leave the draft as one undo step.
+`/live` leaves the ordinary composer mounted and focused. Speech appears as a volatile preview while speaking, then the final transcript replaces it. A sent speech batch clears the entire draft and saves the exact delivered text in composer history; Up recalls it even when Iris answered without delegating.
 
 - Keys: `Ctrl+L` starts and ends the call; `Alt+Shift+M` (`app.live.mute`) mutes; `Ctrl+Alt+L` (`app.live.destination.cycle`) cycles where Enter sends plain text: main agent, voice agent only, or both. Esc and Ctrl+C keep their composer meanings.
 - Status: the model segment shows a mic colored by call phase, slashed while muted, labelled `voice` or `both` when Enter does not target the main agent, and red after a call ends in an error.
 - Enter is the operator's handoff: submitting (or clearing the draft with Ctrl+C) drops unclaimed spoken turns and cancels a handoff not yet accepted, so the voice agent cannot relay them again. If a handoff of that speech is landing at that moment, Enter holds the draft instead. Voice-only text reaches the voice model as an `"Operator Typed Message"`; `both` also sends the final prompt, after input hooks and any post-processing chain, as silent commentary, and the voice agent speaks that turn's final answer.
 - Crew reports, reasoning narration, and final answers wait while the operator speaks or edits the composer (10-second quiet window), releasing early when the voice agent speaks or delegates.
-- Assistant turn completion no longer deletes unclaimed operator speech (issue #39).
+- Set `live.forceDelegateKeyword` (for example `send it now`) to send accumulated finalized speech directly to the main agent, without an Iris delegation; Iris receives only the silent sent-to-main notice. Set `live.blockDelegateKeyword` (for example `iris only`) to keep that turn with Iris and reject her delegation. Set `live.submitKeyword` (for example `submit`) to make a phrase **at the end** of a finalized turn press Enter on the full composer, using the selected main/voice/both destination. An earlier mention does not submit. Empty phrases disable their respective features. Matching lowercases and ignores punctuation, collapsed whitespace, and even missing whitespace; each keyword is stripped from delivered text. Iris still hears live microphone audio before the finalized transcript is available.
 
 ## Model selectors on `task`
 

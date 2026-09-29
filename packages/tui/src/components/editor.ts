@@ -2792,7 +2792,6 @@ export class Editor implements Component, Focusable {
 		return offset;
 	}
 
-
 	/** Show or replace a volatile speech-to-text preview at the cursor. `text` is the whole
 	 *  utterance so far. The preview is inserted with undo suspended so a long live dictation
 	 *  never floods the undo stack; finalize it with {@link commitVolatileText} or drop it with
