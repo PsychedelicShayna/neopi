@@ -216,7 +216,6 @@ export class LiveSessionController {
 	#userTurns = new Map<number, UserLedgerTurn>();
 	/** Insertion-order tail of {@link #userTurns}. Partial updates land here. */
 	#tailTurnNumber: number | undefined;
-	#lastTurnBlocked = false;
 	/** Ledger turns already final and unclaimed when the voice agent began its current response:
 	 *  the turns that response answers. Undefined while no response is under way. */
 	#answeredTurns: number[] | undefined;
@@ -236,7 +235,14 @@ export class LiveSessionController {
 	#userLedgerTurn = 0;
 	readonly #seenDelegationIds = new Set<string>();
 	#pendingDelegation:
-		| { id: string; generation: number; turns: number[]; forced: boolean; dispatchEnabled: boolean; dispatching: boolean }
+		| {
+				id: string;
+				generation: number;
+				turns: number[];
+				forced: boolean;
+				dispatchEnabled: boolean;
+				dispatching: boolean;
+		  }
 		| undefined;
 	#pendingDelivery: CustomMessageDelivery | undefined;
 	/** Coalesced in-flight live abort, so rapid handoffs never overlap AgentSession.abort(). */
@@ -410,7 +416,13 @@ export class LiveSessionController {
 		const pending = this.#pendingDelegation;
 		if (pending?.dispatching && this.#pendingDelivery && !this.#pendingDelivery.cancel()) {
 			const turns = this.#turnsWhere(turn => turn.claim === pending.generation);
-			this.#acceptSpeech(turns.map(turn => turn.text).join("\n\n").trim(), pending.forced);
+			this.#acceptSpeech(
+				turns
+					.map(turn => turn.text)
+					.join("\n\n")
+					.trim(),
+				pending.forced,
+			);
 		} else {
 			this.#pendingDelivery?.cancel();
 		}
@@ -521,10 +533,12 @@ export class LiveSessionController {
 	 * unaccepted claims move to the newest routing id, while accepted turns are
 	 * retired and later speech barges into the active work as a new handoff.
 	 */
-	async #handleDelegation(event: Extract<LiveServerEvent, { type: "delegation.created" }>, forced = false): Promise<void> {
+	async #handleDelegation(
+		event: Extract<LiveServerEvent, { type: "delegation.created" }>,
+		forced = false,
+	): Promise<void> {
 		if (this.#seenDelegationIds.has(event.item.id)) return;
 		this.#seenDelegationIds.add(event.item.id);
-		if (!forced && this.#lastTurnBlocked) return;
 
 		const generation = ++this.#delegationGeneration;
 		const previousPending = this.#pendingDelegation;
@@ -537,7 +551,13 @@ export class LiveSessionController {
 			// continuation stops at the generation check, so retire their speech
 			// from the composer here.
 			const accepted = this.#deleteTurns(turn => turn.claim === previousGeneration);
-			this.#acceptSpeech(accepted.map(turn => turn.text).join("\n\n").trim(), previousPending?.forced ?? false);
+			this.#acceptSpeech(
+				accepted
+					.map(turn => turn.text)
+					.join("\n\n")
+					.trim(),
+				previousPending?.forced ?? false,
+			);
 		}
 		this.#pendingDelivery = undefined;
 		if (cancelledPrevious) {
@@ -1132,16 +1152,16 @@ export class LiveSessionController {
 		}
 		if (final) {
 			const block = stripLiveKeyword(current.text, this.#blockDelegateKeyword);
-			this.#lastTurnBlocked = block.matched;
 			if (block.matched) {
 				current.text = block.text;
 				current.blocked = true;
+
 			}
 		}
 		this.#emitUserSpeech({ role: "user", turn: current.turn, text: current.text, final: current.final });
 		if (current.blocked) {
 			const pending = this.#pendingDelegation;
-			if (pending) {
+			if (pending && current.claim === pending.generation) {
 				this.#pendingDelivery?.cancel();
 				this.#delegationGeneration += 1;
 				this.#pendingDelegation = undefined;
@@ -1158,6 +1178,7 @@ export class LiveSessionController {
 			}
 			return;
 		}
+
 		const pendingGeneration = this.#pendingDelegation?.generation;
 		if (final && pendingGeneration !== undefined) {
 			void this.#dispatchPendingDelegation(pendingGeneration).catch(cause => this.#reportFailure(errorFrom(cause)));
