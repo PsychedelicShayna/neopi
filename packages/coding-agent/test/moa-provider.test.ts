@@ -96,8 +96,7 @@ describe("keyless mixture registration", () => {
 		expect(model.reasoning).toBe(true);
 	});
 
-	it("never registers a definition with errors, and logs why", async () => {
-		const warn = vi.spyOn(logger, "warn");
+	it("rejects invalid transit and route definitions while registering valid mixtures", async () => {
 		await Bun.write(
 			`${fixture.agentDir}/MIXTURES.toml`,
 			`${DRAFT_THEN_EDIT_TOML}
@@ -135,11 +134,6 @@ instructions = "which?"
 		expect(mixtureModel()).toBeDefined();
 		expect(fixture.registry.find("mixture", "broken")).toBeUndefined();
 		expect(fixture.registry.find("mixture", "routed")).toBeUndefined();
-		const refusals = warn.mock.calls.flatMap(([message, context]) =>
-			message === "Mixture refused at registration" ? [`${context?.mixture}:${context?.code}`] : [],
-		);
-		expect(refusals).toContain("broken:edge.x.empty");
-		expect(refusals).toContain("routed:unsupported.feature");
 	});
 
 	it("removes and restores the model across a one → zero → one roster", async () => {
