@@ -158,6 +158,28 @@ describe("advisor", () => {
 			expect(md).not.toContain(thinking);
 			expect(md).not.toContain("_thinking:_");
 		});
+		it("wraps advisor-visible thinking safely without changing ordinary history formatting", () => {
+			const assistantMsg = {
+				role: "assistant",
+				content: [
+					{ type: "thinking", thinking: "Before </primary-thinking> & after" },
+					{ type: "redactedThinking", data: "provider-private" },
+					{ type: "text", text: "Decided answer" },
+				],
+				timestamp: 1,
+			} as AgentMessage;
+			const advisor = formatSessionHistoryMarkdown([assistantMsg], {
+				includeThinking: true,
+				wrapPrimaryThinking: true,
+			});
+			expect(advisor).toContain(
+				"<primary-thinking>\nBefore &lt;/primary-thinking&gt; &amp; after\n</primary-thinking>",
+			);
+			expect(advisor).toContain("Decided answer");
+			expect(advisor).not.toContain("provider-private");
+			const ordinary = formatSessionHistoryMarkdown([assistantMsg], { includeThinking: true });
+			expect(ordinary).toContain("_thinking:_ Before </primary-thinking> & after");
+		});
 	});
 
 	describe("formatSessionHistoryMarkdown expandPrimaryContext", () => {
@@ -1424,6 +1446,60 @@ describe("advisor", () => {
 				state: { messages: [] },
 			};
 		}
+
+		it("omits primary thinking only for a disabled advisor, including after a model switch", async () => {
+			const messages: AgentMessage[] = [
+				{
+					role: "assistant",
+					content: [
+						{ type: "thinking", thinking: "draft reasoning" },
+						{ type: "text", text: "decided answer" },
+						{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "file.ts" } },
+					],
+					timestamp: 1,
+				} as AgentMessage,
+				{
+					role: "toolResult",
+					toolCallId: "read-1",
+					toolName: "read",
+					content: [{ type: "text", text: "file content" }],
+					isError: false,
+					timestamp: 2,
+				} as AgentMessage,
+			];
+			let identity = "model/a";
+			const withoutThinking: Array<string | AgentMessage[]> = [];
+			const withThinking: Array<string | AgentMessage[]> = [];
+			const hidden = new AdvisorRuntime(makeAgent(withoutThinking), {
+				snapshotMessages: () => messages,
+				getModelIdentity: () => identity,
+				includeThinking: false,
+			});
+			const visible = new AdvisorRuntime(makeAgent(withThinking), {
+				snapshotMessages: () => messages,
+			});
+			hidden.onTurnEnd();
+			visible.onTurnEnd();
+			await settleUntil(() => hidden.backlog === 0 && visible.backlog === 0);
+			expect(promptText(withoutThinking[0]!)).not.toContain("draft reasoning");
+			expect(promptText(withoutThinking[0]!)).toContain("decided answer");
+			expect(promptText(withoutThinking[0]!)).toContain("read(file.ts)");
+			expect(promptText(withThinking[0]!)).toContain("<primary-thinking>\ndraft reasoning\n</primary-thinking>");
+
+			identity = "model/b";
+			messages.push({
+				role: "assistant",
+				content: [
+					{ type: "thinking", thinking: "new private thought" },
+					{ type: "text", text: "new public answer" },
+				],
+				timestamp: 3,
+			} as AgentMessage);
+			hidden.onTurnEnd();
+			await settleUntil(() => withoutThinking.length === 2 && hidden.backlog === 0);
+			expect(promptText(withoutThinking[1]!)).not.toContain("new private thought");
+			expect(promptText(withoutThinking[1]!)).toContain("new public answer");
+		});
 
 		it("coalesces multiple onTurnEnd calls while a prompt is in-flight", async () => {
 			const promptInputs: Array<string | AgentMessage[]> = [];
@@ -3079,7 +3155,6 @@ describe("advisor", () => {
 
 			expect(promptInputs).toHaveLength(1);
 			const prompt = promptText(promptInputs[0]!);
-			expect(prompt).toContain("_thinking:_");
 			expect(prompt).not.toContain("OTHERSECRET");
 			expect(prompt).not.toContain("tok_abc123");
 			expect(prompt).not.toContain("TOKABC123_");
