@@ -37,7 +37,6 @@ import { RpcHostUriBridge } from "../modes/rpc/host-uris";
 import { RpcToolApprovalBridge } from "../modes/rpc/rpc-tool-approval";
 import { RpcExtensionUserMessageTracker } from "../modes/rpc/rpc-prompt-results";
 import type { RpcResponse } from "../modes/rpc/rpc-types";
-import { CtlTool } from "../tools/ctl";
 import {
 	CONTROL_EXEMPTIONS,
 	type ControlResponse,
@@ -192,7 +191,6 @@ export class ControlHost {
 			await this.close("owner_closed");
 			return dispose();
 		};
-		this.#mountCtlTool(session);
 		session.subscribe(event => {
 			this.promptResults.observe(event);
 			this.#planMode?.observe(event);
@@ -204,15 +202,6 @@ export class ControlHost {
 		});
 	}
 
-	#mountCtlTool(session: AgentSession): void {
-		try {
-			const tools = session.agent.state.tools;
-			if (tools.some(tool => tool.name === "ctl")) return;
-			session.agent.setTools([...tools, new CtlTool()]);
-		} catch (error) {
-			logger.warn("control: ctl tool was not mounted", { error: String(error) });
-		}
-	}
 
 	#refreshIdentity(): void {
 		const session = this.#options.session;

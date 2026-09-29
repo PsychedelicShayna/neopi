@@ -27,7 +27,7 @@ describe("control revisions", () => {
 	});
 
 	test("a control draft write does not land on the human composer", () => {
-		let human = "keep me";
+		const human = "keep me";
 		runWithDetachedDraft(() => {
 			const detached = currentDetachedDraft();
 			expect(detached).toBeDefined();

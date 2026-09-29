@@ -66,7 +66,7 @@ describe("control socket", () => {
 			},
 			onClosed: () => {},
 		};
-		let server!: ControlServer;
+		const serverBox: { current?: ControlServer } = {};
 		const publication = await publishControlEndpoint({
 			dir,
 			role: "tui",
@@ -83,10 +83,10 @@ describe("control socket", () => {
 			tmuxSession: null,
 			tmuxWindow: null,
 			tty: null,
-			onConnection: socket => server.accept(socket),
+			onConnection: socket => serverBox.current!.accept(socket),
 		});
 		host.token = publication.token;
-		server = new ControlServer({ metadata: { instanceId: host.instanceId }, host: host as never });
+		serverBox.current = new ControlServer({ metadata: { instanceId: host.instanceId }, host: host as never });
 
 		const client = new ControlClient({ metadata: publication.metadata(), label: "orch", kind: "cli" });
 		const hello = await client.connect();

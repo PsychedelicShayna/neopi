@@ -131,7 +131,7 @@ export class ControlClient {
 			type: "hello",
 			requestId: "h1",
 			token: metadata.token,
-			protocolVersion: CONTROL_PROTOCOL_VERSION,
+			protocolVersion: 2,
 			client: {
 				label,
 				kind: kind ?? "cli",

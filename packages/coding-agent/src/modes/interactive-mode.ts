@@ -6168,11 +6168,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		// pending input callback against a session that is already disposing.
 		this.#abortLoopCondition();
 		this.#cancelLoopAutoSubmit();
-		await controlHostFor(this.session)?.close("shutdown");
-
-		// Surface progress before any asynchronous cleanup, including live commands
-		// and BTW history writes, so the user sees a reason for the pause.
+		// Surface progress before any await, including control-socket close, so a
+		// caller that starts shutdown sees the notice before the first yield.
 		this.showStatus("Closing session…");
+		await controlHostFor(this.session)?.close("shutdown");
 
 		const stillClosingTimer = setTimeout(() => {
 			this.showStatus("Still closing… (flushing memory backend / network)");
