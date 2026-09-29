@@ -66,6 +66,8 @@ export interface SessionMixtureHost extends MixtureHost {
 	resetConversation(): void;
 	/** Restore the newest resumable checkpoint on the active session branch. */
 	restoreConversation(): void;
+	/** Record reset lifecycles for the held runs and discard their execution state. */
+	resetRuns(): { mixture: string; runId: string }[];
 	/**
 	 * Rebind to `cwd`'s mixtures. A move can defer dropping source runs until
 	 * its other cwd-derived state commits; a rollback to the source keeps them.
@@ -260,6 +262,16 @@ export function createSessionMixtureHost(deps: SessionMixtureHostDeps): SessionM
 		resetConversation(): void {
 			runs.clear();
 			credentials.clear();
+		},
+		resetRuns(): { mixture: string; runId: string }[] {
+			const reset = runs.runs().map(run => {
+				const record: MixtureLifecycleRecord = { kind: "run_reset", runId: run.id, at: Date.now() };
+				sessionManager.appendCustomEntry(MIXTURE_RUN_ENTRY_TYPE, record);
+				return { mixture: run.key.mixture, runId: run.id };
+			});
+			runs.clear();
+			credentials.clear();
+			return reset;
 		},
 		restoreConversation(): void {
 			const found = restoreMixtureRun(sessionManager.getBranch());

@@ -3,6 +3,7 @@ import { APP_NAME, formatAge, getAgentDir } from "@oh-my-pi/pi-utils";
 import { discoverChains } from "../chains/config";
 import { discoverMixtures } from "../moa/config";
 import { checkMixture } from "../moa/registration";
+import { formatMixtureReset, formatMixtureStatus } from "../moa/status";
 import { CollabGuestLink } from "../collab/guest";
 import type { CollabHost } from "../collab/host";
 import { type CollabHostSnapshot, listCollabHosts } from "../collab/registry";
@@ -101,7 +102,7 @@ async function applyChainingVerb(verb: string, rest: string, cwd: string): Promi
 
 const CHAINING_USAGE = "Usage: /chaining [on|off|status|use [name]|configure]";
 
-const MIXTURE_USAGE = "Usage: /mixture [configure|list|use <name>]";
+const MIXTURE_USAGE = "Usage: /mixture [configure|list|use <name>|reset|status]";
 
 async function mixtureList(runtime: Pick<SlashCommandRuntime, "session" | "settings" | "cwd">): Promise<string> {
 	const agentDir = runtime.session.getMixtureAgentDir() ?? getAgentDir();
@@ -319,17 +320,27 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		name: "mixture",
 		aliases: ["moa"],
 		icon: "advisor",
-		description: "Configure, list, and select Mixture of Agents models",
-		acpDescription: "Manage and select Mixture of Agents models",
-		acpInputHint: "[list|use <name>|configure [name]]",
+		description: "Configure, select, reset, and inspect Mixture of Agents models and runs",
+		acpDescription: "Manage Mixture of Agents models and runs",
+		acpInputHint: "[list|use <name>|configure [name]|reset|status]",
 		subcommands: [
 			{ name: "configure", description: "Open the fullscreen graph configurator (TUI)", usage: "[name]" },
 			{ name: "list", description: "List discovered mixtures and validation state" },
 			{ name: "use", description: "Select a registered mixture model", usage: "<name>" },
+			{ name: "reset", description: "Drop the current mixture run so the next message starts fresh" },
+			{ name: "status", description: "Show the current mixture run's hop, member, and spend" },
 		],
 		allowArgs: true,
 		handle: async (command, runtime) => {
 			const { verb, rest } = parseSubcommand(command.args);
+			if (verb === "reset") {
+				await runtime.output(formatMixtureReset(runtime.session.resetMixtureRuns()));
+				return commandConsumed();
+			}
+			if (verb === "status") {
+				await runtime.output(formatMixtureStatus(runtime.session.mixtureRuns(), runtime.settings));
+				return commandConsumed();
+			}
 			if (verb === "configure") {
 				await runtime.output("/mixture configure requires the interactive TUI.");
 				return commandConsumed();
@@ -347,6 +358,14 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		handleTui: async (command, runtime) => {
 			const { verb, rest } = parseSubcommand(command.args);
 			runtime.ctx.editor.setText("");
+			if (verb === "reset") {
+				runtime.ctx.showStatus(formatMixtureReset(runtime.ctx.session.resetMixtureRuns()));
+				return;
+			}
+			if (verb === "status") {
+				runtime.ctx.showStatus(formatMixtureStatus(runtime.ctx.session.mixtureRuns(), runtime.ctx.settings));
+				return;
+			}
 			if (!verb || verb === "configure") {
 				runtime.ctx.showMixtureConfigure(rest.trim() || undefined);
 				return;

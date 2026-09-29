@@ -763,6 +763,7 @@ export class AgentSession implements SettingsScope {
 				| "resetConversation"
 				| "rebindWorkspace"
 				| "restoreConversation"
+				| "resetRuns"
 				| "runs"
 				| "commitWorkspaceMove"
 				| "resolveRun"
@@ -2990,6 +2991,11 @@ export class AgentSession implements SettingsScope {
 		return this.#mixtureHost?.runs.runs() ?? [];
 	}
 
+	/** Reset all held runs and persist a lifecycle boundary for each. */
+	resetMixtureRuns(): { mixture: string; runId: string }[] {
+		return this.#mixtureHost?.resetRuns() ?? [];
+	}
+
 	/**
 	 * Bind the session's mixture host: it commits mixture responses once they are persisted,
 	 * and drops its runs whenever the conversation is replaced.
@@ -3001,6 +3007,7 @@ export class AgentSession implements SettingsScope {
 			| "resetConversation"
 			| "restoreConversation"
 			| "runs"
+			| "resetRuns"
 			| "rebindWorkspace"
 			| "commitWorkspaceMove"
 			| "observeCatalog"

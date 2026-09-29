@@ -8,6 +8,7 @@ import { zeroUsage } from "@oh-my-pi/pi-coding-agent/moa/outer-stream";
 import { registerMixtureApi } from "@oh-my-pi/pi-coding-agent/moa/provider";
 import { MixtureWorkspace } from "@oh-my-pi/pi-coding-agent/moa/registration";
 import { completedMixtureRun, isMixtureRunComplete, restoreMixtureRun } from "@oh-my-pi/pi-coding-agent/moa/restore";
+import { formatMixtureReset, formatMixtureStatus } from "@oh-my-pi/pi-coding-agent/moa/status";
 import { MIXTURE_RUN_ENTRY_TYPE, type MixtureCheckpoint } from "@oh-my-pi/pi-coding-agent/moa/types";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
@@ -233,6 +234,45 @@ describe("restoring a persisted mixture session", () => {
 		expect(session.mixtureRuns()).toEqual([]);
 		await session.newSession();
 		expect(session.mixtureRuns()).toEqual([]);
+	});
+
+	it("persists reset lifecycle and shows live hop and spend before dropping the run", async () => {
+		fixture = await createMoaFixture(temp, limitsToml('max_hops = 2\non_limit = "pause"'));
+		const sessionDir = temp.join("sessions");
+		const manager = SessionManager.create(fixture.cwd, sessionDir);
+		const session = await makeSession(manager);
+		members.script("jev", { text: "no" }, { text: "rebut" });
+		await session.sendUserMessage("go");
+		const runId = session.mixtureRuns()[0]?.id;
+		if (!runId) throw new Error("paused run missing");
+		expect(formatMixtureStatus(session.mixtureRuns(), session.settings)).toContain(
+			"mixture/courtroom: paused · phase hop_ready · member prosecution · hops 2 (window 2/2)",
+		);
+		expect(formatMixtureStatus(session.mixtureRuns(), session.settings)).toMatch(
+			/spent \$\d+\.\d\d \(window \$\d+\.\d\d\)/,
+		);
+		const reset = session.resetMixtureRuns();
+		expect(reset).toEqual([{ mixture: "courtroom", runId }]);
+		expect(formatMixtureReset(reset)).toContain("reset 1 mixture run(s): mixture/courtroom");
+		expect(
+			manager
+				.getBranch()
+				.filter(
+					entry =>
+						entry.type === "custom" &&
+						entry.customType === MIXTURE_RUN_ENTRY_TYPE &&
+						(entry.data as { kind?: string }).kind === "run_reset",
+				),
+		).toHaveLength(1);
+		expect(formatMixtureStatus(session.mixtureRuns(), session.settings)).toBe("no active mixture run");
+		expect(formatMixtureReset(session.resetMixtureRuns())).toBe("no active mixture run");
+		const file = manager.getSessionFile()!;
+		await session.dispose();
+		sessions.splice(0);
+		const reopened = await makeSession(await SessionManager.open(file, sessionDir));
+		expect(reopened.mixtureRuns()).toEqual([]);
+		await reopened.sendUserMessage("go");
+		expect(members.callsTo("writer")).toHaveLength(2);
 	});
 
 	it("does not restore a completed run on session reload", async () => {
