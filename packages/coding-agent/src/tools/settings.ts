@@ -1,6 +1,7 @@
 import { PRODUCT_NAME } from "@oh-my-pi/pi-utils";
 import { combine, register } from "../config/registry";
 import { cfgAutolearnEnabled } from "../autolearn/settings";
+import { cfgChroniclerRecallEnabled } from "../chronicler/settings";
 import { cfgBashEnabled } from "../exec/settings";
 import { cfgCompactionExperimentalContextManagement } from "../session/context-settings";
 import { cfgEvalJs, cfgEvalPy } from "../eval/settings";
@@ -974,6 +975,7 @@ export const cfgBuiltinToolGates = combine({
 	autolearn: cfgAutolearnEnabled,
 	bash: cfgBashEnabled,
 	checkpoint: cfgCheckpointEnabled,
+	chronicleRecall: cfgChroniclerRecallEnabled,
 	contextManagement: cfgCompactionExperimentalContextManagement,
 	debug: cfgDebugEnabled,
 	evalJs: cfgEvalJs,
