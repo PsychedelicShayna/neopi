@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
-import { resolveChroniclerRoleSelection } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
+import {
+	resolveChronicleSummaryRoleSelection,
+	resolveChroniclerRoleSelection,
+} from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getRoleInfo } from "@oh-my-pi/pi-coding-agent/config/model-roles";
@@ -94,4 +97,23 @@ test("chronicler selection is independent and unset capture uses the slow priori
 	});
 	expect(resolveChroniclerRoleSelection(explicit, available)?.model).toBe(luna);
 	expect(resolveChroniclerRoleSelection(unset, available)?.model).toBe(sol);
+});
+
+test("chronicler-summary selection wins when set and otherwise follows the configured chronicler role", () => {
+	const luna = createMockModel({ provider: "openai-codex", id: "gpt-5.6-luna" }).model;
+	const sol = createMockModel({ provider: "openai-codex", id: "gpt-5.6-sol" }).model;
+	const terra = createMockModel({ provider: "openai-codex", id: "gpt-5.6-terra" }).model;
+	const available = [luna, sol, terra];
+	const explicit = Settings.isolated({
+		modelRoles: {
+			"chronicler-summary": "openai-codex/gpt-5.6-terra",
+			chronicler: "openai-codex/gpt-5.6-luna",
+			slow: "openai-codex/gpt-5.6-sol",
+		},
+	});
+	const inherited = Settings.isolated({
+		modelRoles: { chronicler: "openai-codex/gpt-5.6-luna", slow: "openai-codex/gpt-5.6-sol" },
+	});
+	expect(resolveChronicleSummaryRoleSelection(explicit, available)?.model).toBe(terra);
+	expect(resolveChronicleSummaryRoleSelection(inherited, available)?.model).toBe(luna);
 });

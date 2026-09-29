@@ -1094,6 +1094,7 @@ function shouldInheritDefaultBeforePriority(role: ModelRole): boolean {
 const ROLE_PRIORITY_ALIAS: Partial<Record<ModelRole, keyof typeof MODEL_PRIO>> = {
 	advisor: "slow",
 	chronicler: "slow",
+	"chronicler-summary": "slow",
 	prose: "smol",
 	memory: "smol",
 	tiny: "smol",
@@ -1108,6 +1109,8 @@ interface ConfiguredRoleFallback {
 const ROLE_CONFIGURED_FALLBACK: Partial<Record<ModelRole, ConfiguredRoleFallback>> = {
 	advisor: { role: "slow", configuredOnly: true },
 	memory: { role: "tiny", configuredOnly: false },
+	// Temporal summaries and recall ranking follow the capture role unless configured.
+	"chronicler-summary": { role: "chronicler", configuredOnly: false },
 	tiny: { role: "smol", configuredOnly: false },
 	// Chain steps default to @prose; unset, it follows the user's own fast model.
 	prose: { role: "smol", configuredOnly: false },
@@ -1742,6 +1745,18 @@ export function resolveChroniclerRoleSelection(
 	availableModels: Model<Api>[],
 ): { model: Model<Api>; thinkingLevel?: ConfiguredThinkingLevel } | undefined {
 	const resolved = resolveModelRoleValue(formatModelRoleAlias("chronicler"), availableModels, {
+		settings,
+		matchPreferences: getModelMatchPreferences(settings),
+	});
+	return resolved.model ? { model: resolved.model, thinkingLevel: resolved.thinkingLevel } : undefined;
+}
+
+/** Resolve the temporal summary/ranking role; unset, it follows the `chronicler` role. */
+export function resolveChronicleSummaryRoleSelection(
+	settings: Settings,
+	availableModels: Model<Api>[],
+): { model: Model<Api>; thinkingLevel?: ConfiguredThinkingLevel } | undefined {
+	const resolved = resolveModelRoleValue(formatModelRoleAlias("chronicler-summary"), availableModels, {
 		settings,
 		matchPreferences: getModelMatchPreferences(settings),
 	});
