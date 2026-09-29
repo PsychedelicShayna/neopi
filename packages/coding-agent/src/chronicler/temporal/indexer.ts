@@ -12,7 +12,7 @@ import { getSessionsDir } from "@oh-my-pi/pi-utils";
 import { spanWithin, type TimeBound } from "./calendar";
 import { type CorpusDiagnostic, hashText, loadChronicleCorpus } from "./corpus";
 import { type ChronicleSummarizer, SUMMARY_PROMPT_VERSION, type SummaryChildInput } from "./summarize";
-import { buildPlan, estimateTokens, type IndexConfig, overviewTokens, type PlanNode, walkPlan } from "./tree";
+import { buildPlan, clipText, estimateTokens, type IndexConfig, overviewTokens, type PlanNode, walkPlan } from "./tree";
 import {
 	computeContentHash,
 	findOrphanDirs,
@@ -435,15 +435,24 @@ async function generateInterior(
 		}));
 
 	if (current.length === 1) {
+		// A single child's whole routing text is reused verbatim when it fits
+		// the description budget; otherwise a non-terminal child's own overview
+		// (already within budget) stands in. Only an oversized terminal child
+		// needs the model.
 		const only = current[0]!;
-		// A non-terminal child's own overview is already within its budget; a
-		// terminal child's enumeration is reused verbatim only when it fits.
-		const reuse = only.atoms ? routingText(only) : (only.overview ?? "");
-		if (estimateTokens(reuse) <= childBudget) {
+		const whole = routingText(only);
+		const reuse = estimateTokens(whole) <= childBudget ? whole : only.atoms ? undefined : (only.overview ?? "");
+		if (reuse !== undefined) {
+			const titles = only.atoms
+				? clipText(
+						`${only.atomCount} atom(s): ${only.atoms.map(atom => atom.title).join("; ")}`,
+						overviewBudget * 4,
+					)
+				: undefined;
 			const node: ViewNode = {
 				...base,
 				contentHash: "",
-				overview: only.atoms ? `${only.label}: ${only.atomCount} atom(s).` : (only.overview ?? ""),
+				overview: titles ? `${titles.text}${titles.remainder > 0 ? "…" : ""}` : (only.overview ?? ""),
 				children: refs([reuse]),
 				provenance: { kind: "single-child", generatedAt: new Date().toISOString(), truncated: false },
 			};

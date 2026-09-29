@@ -309,7 +309,9 @@ function splitMinutes(parentKey: string, items: Placed[], lo: number, hi: number
 					join(parentKey, segment),
 					segment,
 					"span",
-					from === to ? `${prefix}:${pad2(from)}` : `${prefix}:${pad2(from)}–${pad2(to)}`,
+					from === to
+						? `${prefix}:${pad2(from)}`
+						: `${prefix}:${pad2(from)}–${pad2(half[0]!.parts.hour)}:${pad2(to)}`,
 					half,
 				),
 			);
