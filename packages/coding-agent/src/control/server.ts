@@ -8,7 +8,7 @@
  * frames immediately, everything else under the host budget.
  */
 import * as net from "node:net";
-import { logger } from "@oh-my-pi/pi-utils";
+import { isRecord, logger } from "@oh-my-pi/pi-utils";
 import { RpcFrameDecoder, RpcFrameEncoder, MAX_RPC_FRAME_BYTES } from "../modes/rpc/rpc-frame";
 import { ADMISSIONS_PER_SECOND, HANDSHAKE_TIMEOUT_MS, HostBudget, MAX_CONNECTIONS, workClass } from "./budget";
 import { isSameUserPeer, peerCredentials, peerCredentialsSupported, type PeerCredentials } from "./peercred";
@@ -377,7 +377,18 @@ export class ControlServer {
 		let parsed: unknown;
 		try {
 			parsed = JSON.parse(line);
-			parsed = connection.decoder.push(parsed);
+			if (isRecord(parsed) && parsed.type === "rpc_chunk") {
+				const bytes = typeof parsed.byteLength === "number" ? parsed.byteLength : Buffer.byteLength(line);
+				if (!connection.noteInbound(bytes)) {
+					connection.close("rate_limited");
+					return;
+				}
+			}
+			const assembled = connection.decoder.push(parsed);
+			if (assembled && isRecord(parsed) && parsed.type === "rpc_chunk" && typeof parsed.byteLength === "number") {
+				connection.releaseInbound(parsed.byteLength * (typeof parsed.count === "number" ? parsed.count : 1));
+			}
+			parsed = assembled;
 		} catch (error) {
 			connection.respond({
 				type: "response",

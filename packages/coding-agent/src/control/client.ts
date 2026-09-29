@@ -37,7 +37,7 @@ export class ControlClientError extends Error {
 interface PendingRequest {
 	resolve: (response: ControlResponse) => void;
 	reject: (error: Error) => void;
-	timer: ReturnType<typeof setTimeout> | undefined;
+	timer: NodeJS.Timeout | undefined;
 }
 
 /** One authenticated connection. */
@@ -63,7 +63,10 @@ export class ControlClient {
 		const socket = net.createConnection({ path: metadata.endpoint });
 		this.#socket = socket;
 		const { promise, resolve, reject } = Promise.withResolvers<ControlSnapshot>();
-		const timer = setTimeout(() => reject(new ControlClientError("timeout", "handshake timed out")), 5_000);
+		const timer = setTimeout(() => {
+			socket.destroy();
+			reject(new ControlClientError("timeout", "handshake timed out"));
+		}, 5_000);
 		let challenged = false;
 		socket.once("error", error => reject(new ControlClientError("unreachable", error.message)));
 		socket.setEncoding("utf8");

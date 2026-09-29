@@ -1,4 +1,5 @@
 import { trackMountedDialog } from "../../control/dialogs";
+import { cfgControlSecretInput } from "../../control/settings";
 import * as fs from "node:fs";
 import advisorSystemPrompt from "../../prompts/advisor/system.md" with { type: "text" };
 import { renderChatAdvisorPrompt } from "../../chat/chat-system-prompt";
@@ -1991,6 +1992,7 @@ export class SelectorController {
 							? String((value as { code: unknown }).code)
 							: undefined;
 				if (code === undefined) return false;
+				if (dialog.isSecretPrompt() && cfgControlSecretInput.get(this.ctx.session.settings) !== true) return false;
 				return dialog.submitValue(code);
 			},
 			cancel: () => dialog.handleInput("\x1b"),

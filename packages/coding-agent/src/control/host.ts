@@ -18,13 +18,14 @@ import type { AgentSession } from "../session/agent-session";
 import { AgentRegistry } from "../registry/agent-registry";
 import { executeSend } from "../irc/messaging";
 import { IrcBus } from "../irc/bus";
+import { runAsControlActor } from "./actor";
 import { HostBudget, workClass } from "./budget";
 import { RPC_COMMAND_TYPES } from "./parity";
 import { encodeKeyId, encodeSgrMouse } from "./keys";
 import type { ControlPresenter } from "./presenter";
 import { newControlInstanceId, publishControlEndpoint, type ControlPublication } from "./registry";
 import { ControlServer, type ControlConnection } from "./server";
-import { APPROVAL_GATED_SETTINGS, cfgControlApprovals } from "./settings";
+import { APPROVAL_GATED_SETTINGS, cfgControlApprovals, cfgControlSecretInput } from "./settings";
 import { RpcPlanModeController } from "../modes/rpc/rpc-plan-mode";
 import { RpcSessionSettleWatcher } from "../modes/rpc/rpc-session-settle";
 import { RpcSessionEventForwarder } from "../modes/rpc/rpc-session-events";
@@ -100,6 +101,7 @@ export class ControlHost {
 	};
 	#ready = false;
 	#closed = false;
+	#seenSessionId: string | undefined;
 
 	constructor(options: ControlHostOptions) {
 		this.#options = options;
@@ -156,6 +158,8 @@ export class ControlHost {
 			onClosed: (connection: ControlConnection) => {
 				this.#connections.delete(connection);
 				this.#subscribed.delete(connection);
+				this.#handlers.delete(connection);
+				this.#forwarders.delete(connection);
 			},
 		};
 		const server = new ControlServer({ metadata: { instanceId: this.instanceId }, host: connectionHost });
@@ -188,6 +192,7 @@ export class ControlHost {
 			return dispose();
 		};
 		session.subscribe(event => {
+			this.#noteSessionIdentity();
 			this.promptResults.observe(event);
 			this.#planMode?.observe(event);
 			this.#settleWatcher?.observe(event);
@@ -271,7 +276,6 @@ export class ControlHost {
 	}
 
 	async #dispatch(connection: ControlConnection, frame: Record<string, unknown>): Promise<void> {
-		const { runAsControlActor } = await import("./actor");
 		return runAsControlActor(
 			{
 				connectionId: connection.id,
@@ -495,6 +499,14 @@ export class ControlHost {
 			}
 			case "keys": {
 				if (needTui()) return;
+				if (this.#paneOwnsOpenApproval()) {
+					this.#reply(connection, frame, {
+						success: false,
+						error: "approvals belong to the pane",
+						code: "approval_owner_only",
+					});
+					return;
+				}
 				const tokens = Array.isArray(frame.keys) ? frame.keys : [];
 				let injected = 0;
 				for (const token of tokens) {
@@ -516,11 +528,27 @@ export class ControlHost {
 			}
 			case "paste":
 				if (needTui()) return;
+				if (this.#paneOwnsOpenApproval()) {
+					this.#reply(connection, frame, {
+						success: false,
+						error: "approvals belong to the pane",
+						code: "approval_owner_only",
+					});
+					return;
+				}
 				presenter!.inject(`\x1b[200~${String(frame.text ?? "")}\x1b[201~`);
 				this.#reply(connection, frame, { success: true });
 				return;
 			case "mouse": {
 				if (needTui()) return;
+				if (this.#paneOwnsOpenApproval()) {
+					this.#reply(connection, frame, {
+						success: false,
+						error: "approvals belong to the pane",
+						code: "approval_owner_only",
+					});
+					return;
+				}
 				const action =
 					frame.action === "release" ||
 					frame.action === "scrollUp" ||
@@ -659,7 +687,7 @@ export class ControlHost {
 			return !session.isStreaming && session.queuedMessageCount === 0 && !session.isCompacting;
 		};
 		while (!ready() && Date.now() - started < timeoutMs) {
-			await new Promise(resolve => setTimeout(resolve, 50));
+			await Bun.sleep(50);
 		}
 		const settled = ready();
 		this.#reply(
@@ -707,6 +735,23 @@ export class ControlHost {
 		);
 	}
 
+	#noteSessionIdentity(): void {
+		const id = this.#options.session.sessionId;
+		if (this.#seenSessionId === undefined) {
+			this.#seenSessionId = id;
+			return;
+		}
+		if (id !== this.#seenSessionId) {
+			this.#seenSessionId = id;
+			this.bumpGeneration();
+		}
+	}
+
+	#paneOwnsOpenApproval(): boolean {
+		if (cfgControlApprovals.get(this.#options.session.settings) === true) return false;
+		return (this.presenter?.dialogs() ?? []).some(dialog => dialog.family === "approval");
+	}
+
 	#settings(connection: ControlConnection, frame: Record<string, unknown>): void {
 		const session = this.#options.session;
 		const path = typeof frame.path === "string" ? frame.path : "";
@@ -724,6 +769,14 @@ export class ControlHost {
 			return;
 		}
 		if (type === "settings_get") {
+			if (setting.isCredential && cfgControlSecretInput.get(session.settings) !== true) {
+				this.#reply(connection, frame, {
+					success: false,
+					error: "credential settings stay in the pane",
+					code: "secret_input_disabled",
+				});
+				return;
+			}
 			const member = typeof frame.member === "string" ? frame.member : undefined;
 			this.#reply(connection, frame, {
 				success: true,

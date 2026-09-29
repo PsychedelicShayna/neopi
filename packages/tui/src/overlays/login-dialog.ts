@@ -213,6 +213,10 @@ export class LoginDialogComponent extends OverlayPanel {
 	}
 
 	/** Submit the active prompt from a control answer. False when no prompt is waiting. */
+	isSecretPrompt(): boolean {
+		return this.#input.input.mask === true;
+	}
+
 	submitValue(value: string): boolean {
 		const resolve = this.#inputResolver;
 		if (!resolve) return false;
