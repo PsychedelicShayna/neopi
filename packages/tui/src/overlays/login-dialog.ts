@@ -17,6 +17,9 @@ export class LoginDialogComponent extends OverlayPanel {
 	#onComplete: (success: boolean, message?: string) => void;
 	#openUrl: (url: string) => void;
 	#abortController = new AbortController();
+	#secretPrompt = false;
+	/** Control sets this so a masked prompt cannot be answered while secret input is off. */
+	secretInputAllowed?: () => boolean;
 	#inputResolver?: (value: string) => void;
 	#inputRejecter?: (error: Error) => void;
 	#inputAbortCleanup?: () => void;
@@ -168,7 +171,8 @@ export class LoginDialogComponent extends OverlayPanel {
 			this.#contentContainer.children.splice(mounted, 0, answer);
 		}
 		// A new prompt must not recover a previous secret through undo or yank.
-		this.#input = this.#createInput(prompt.secret === true);
+		this.#secretPrompt = prompt.secret === true;
+		this.#input = this.#createInput(this.#secretPrompt);
 		this.#contentContainer.addChild(new Spacer(1));
 		this.#contentContainer.addChild(new Text(theme.fg("text", prompt.message), 0, 0));
 		if (prompt.placeholder) {
@@ -210,6 +214,20 @@ export class LoginDialogComponent extends OverlayPanel {
 	showProgress(message: string): void {
 		this.#contentContainer.addChild(new Text(theme.fg("dim", message), 0, 0));
 		this.#tui.requestRender();
+	}
+
+	/** Submit the active prompt from a control answer. False when no prompt is waiting. */
+	isSecretPrompt(): boolean {
+		return this.#secretPrompt;
+	}
+
+	submitValue(value: string): boolean {
+		if (this.#secretPrompt && this.secretInputAllowed && !this.secretInputAllowed()) return false;
+		const resolve = this.#inputResolver;
+		if (!resolve) return false;
+		this.#clearInputHandlers();
+		resolve(value);
+		return true;
 	}
 
 	/** Route non-bracketed paste transports into the active login input. */

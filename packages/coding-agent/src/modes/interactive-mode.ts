@@ -15,6 +15,9 @@ import {
 } from "@oh-my-pi/pi-agent-core";
 import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, ImageContent, Model, Usage, UsageReport } from "@oh-my-pi/pi-ai";
+import { controlHostFor } from "../control/host";
+import { attachTuiPresenter } from "../control/tui-presenter";
+import { trackMountedDialog } from "../control/dialogs";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { execReplace } from "@oh-my-pi/pi-natives";
 import type {
@@ -1216,6 +1219,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#planReviewOverlay: PlanReviewOverlay | undefined;
 	#planReviewOverlayHandle: OverlayHandle | undefined;
 	#sessionInfoOverlayHandle: OverlayHandle | undefined;
+	#closePlanDialog: (() => void) | undefined;
 	#planReviewCancel: (() => void) | undefined;
 	/** Serializable review annotations keyed by the resolved plan file path. */
 	#planReviewAnnotationState = new Map<string, PlanReviewAnnotationState>();
@@ -2121,6 +2125,26 @@ export class InteractiveMode implements InteractiveModeContext {
 		// `streamingBehavior: "steer"`, so whichever lands second queues into the
 		// other's turn instead of dying.
 		this.editor.disableSubmit = false;
+		const controlHost = controlHostFor(this.session);
+		if (controlHost) {
+			attachTuiPresenter(controlHost, {
+				session: this.session,
+				editor: this.editor,
+				ui: this.ui,
+				runAction: id => this.#inputController.runAppAction(id),
+				rewind: (entryId, prefillDraft) => this.#selectorController.rewindToEntry(entryId, { prefillDraft }),
+				notify: text => this.showStatus(text),
+			});
+			if (controlHost.presenter) {
+				const bindings = this.keybindings;
+				controlHost.presenter.keybindings = {
+					get: id => bindings.getKeys(id as never).map(String),
+					all: () => bindings.getResolvedBindings() as Record<string, string[]>,
+					set: (id, keys) => "setPersisted" in bindings && bindings.setPersisted(id, keys),
+					reload: () => bindings.reload(),
+				};
+			}
+		}
 	}
 
 	/** Reload the title-generation system prompt override for the provided working
@@ -4534,12 +4558,30 @@ export class InteractiveMode implements InteractiveModeContext {
 			margin: 0,
 			fullscreen: true,
 		});
+		this.#closePlanDialog = trackMountedDialog({
+			family: "plan_review",
+			kind: "plan_review",
+			title,
+			schema: { options },
+			answer: value => {
+				if (typeof value !== "string" || !options.includes(value)) return false;
+				finish(value);
+				this.#hidePlanReview();
+				return true;
+			},
+			cancel: () => {
+				finish(undefined);
+				this.#hidePlanReview();
+			},
+		});
 		this.ui.setFocus(overlay);
 		this.ui.requestRender();
 		return promise;
 	}
 
 	#hidePlanReview(): void {
+		this.#closePlanDialog?.();
+		this.#closePlanDialog = undefined;
 		this.#planReviewCancel = undefined;
 		this.#planReviewOverlayHandle?.hide();
 		this.#planReviewOverlayHandle = undefined;
@@ -6136,10 +6178,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		// pending input callback against a session that is already disposing.
 		this.#abortLoopCondition();
 		this.#cancelLoopAutoSubmit();
-
-		// Surface progress before any asynchronous cleanup, including live commands
-		// and BTW history writes, so the user sees a reason for the pause.
+		// Surface progress before any await, including control-socket close, so a
+		// caller that starts shutdown sees the notice before the first yield.
 		this.showStatus("Closing session…");
+		await controlHostFor(this.session)?.close("shutdown");
 
 		const stillClosingTimer = setTimeout(() => {
 			this.showStatus("Still closing… (flushing memory backend / network)");

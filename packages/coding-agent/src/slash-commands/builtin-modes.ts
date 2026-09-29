@@ -39,7 +39,7 @@ export function refreshStatusLine(ctx: InteractiveModeContext): void {
  * and `:level` thinking suffixes. Unqualified selectors prefer the session's
  * `--models` scope, else the authenticated set, before the full catalog.
  */
-function resolveSessionModelSelector(
+export function resolveSessionModelSelector(
 	selector: string,
 	session: AgentSession,
 	settings: Settings,

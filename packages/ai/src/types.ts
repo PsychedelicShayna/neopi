@@ -108,6 +108,27 @@ export interface TokenTaskBudget {
 
 export type MessageAttribution = "user" | "agent";
 
+/**
+ * Who drove a message into the session when it did not come from the local
+ * keyboard: a live control-socket connection (issue #171). Display and audit
+ * only; never sent to a provider.
+ */
+export interface MessageOrigin {
+	kind: "control";
+	/** Server-assigned connection id (`c3`). */
+	connectionId: string;
+	/** Display label chosen by the client. */
+	label: string;
+	/** Peer process id from the socket credentials. */
+	peerPid?: number;
+	/** Validated caller session publication, when the caller is an npi session. */
+	callerInstanceId?: string;
+	/** Request handle that produced the message. */
+	requestHandle?: string;
+	/** Control ancestry: instance ids controlling the caller, oldest first, then the caller. */
+	controlChain?: string[];
+}
+
 export type NativeToolMarker = { type: "computer" };
 
 export type ToolChoice =
@@ -1040,6 +1061,8 @@ export interface UserMessage {
 	attribution?: MessageAttribution;
 	/** Provider-specific opaque payload used to reconstruct transport-native history. */
 	providerPayload?: ProviderPayload;
+	/** Control-socket provenance (#171). Display/audit only; never sent. */
+	origin?: MessageOrigin;
 	timestamp: number; // Unix timestamp in milliseconds
 }
 

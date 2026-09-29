@@ -76,6 +76,11 @@ export const commands: CommandEntry[] = [
 		help: commandHelp.collabHelp,
 	},
 	{
+		name: "ctl",
+		load: () => import("./commands/ctl").then(m => m.default),
+		help: commandHelp.ctlHelp,
+	},
+	{
 		name: "commit",
 		load: () => import("./commands/commit").then(m => m.default),
 		help: commandHelp.commitHelp,

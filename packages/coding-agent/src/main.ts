@@ -51,6 +51,8 @@ import { ModelsConfigFile } from "./config/models-config";
 import { serviceTierSettingToTier } from "./config/service-tier";
 import { all, combine, type ProtocolHost, type SettingValueOf } from "./config/registry";
 import { Settings, settings } from "./config/settings";
+import { startControlHost } from "./control/host";
+import { cfgControlEnabled } from "./control/settings";
 import { initializeWithSettings } from "./discovery";
 import {
 	clearPluginRootsAndCaches,
@@ -2540,6 +2542,20 @@ export async function runRootCommand(
 				mcpManager,
 				startBackgroundModelDiscovery,
 			} = created;
+			const controlRole =
+				parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui"
+					? "rpc"
+					: parsedArgs.mode === "acp"
+						? "acp"
+						: parsedArgs.print
+							? "print"
+							: "tui";
+			const controlHost = await startControlHost({
+				session,
+				role: controlRole,
+				enabled: parsedArgs.noControlSocket !== true && cfgControlEnabled.get(settingsInstance) === true,
+			});
+			if (controlHost && controlRole !== "tui") controlHost.markReady();
 
 			try {
 				validateToolNames(initialArgs.tools, session.getAllToolNames());

@@ -175,6 +175,8 @@ const sessionEventTypes = new Set<AgentSessionEvent["type"]>([
 	"todo_auto_clear",
 	"irc_message",
 	"notice",
+	"run_owners_joined",
+	"run_owners_skipped",
 	"mixture_hop_end",
 	"mixture_limit",
 	"mixture_checkpoint",

@@ -2,6 +2,7 @@ import type {
 	ImageContent,
 	Message,
 	MessageAttribution,
+	MessageOrigin,
 	ProviderPayload,
 	TextContent,
 	ToolResultMessage,
@@ -24,6 +25,8 @@ export interface CustomMessage<T = unknown> {
 	details?: T;
 	/** Who initiated this message for billing/attribution semantics. */
 	attribution?: MessageAttribution;
+	/** Control-socket provenance (#171). Display/audit only; never sent. */
+	origin?: MessageOrigin;
 	timestamp: number;
 }
 

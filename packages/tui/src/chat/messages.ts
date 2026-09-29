@@ -1,4 +1,4 @@
-import type { AssistantMessage, ImageContent, MessageAttribution, TextContent } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ImageContent, MessageAttribution, MessageOrigin, TextContent } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { COLLAB_PROMPT_MESSAGE_TYPE } from "@oh-my-pi/pi-wire";
 import type { OutputMeta } from "../tools/output-meta";
@@ -235,6 +235,8 @@ export interface CustomMessage<T = unknown> {
 	details?: T;
 	/** Who initiated this message for billing/attribution semantics. */
 	attribution?: MessageAttribution;
+	/** Control-socket provenance (#171). Display/audit only; never sent. */
+	origin?: MessageOrigin;
 	timestamp: number;
 }
 

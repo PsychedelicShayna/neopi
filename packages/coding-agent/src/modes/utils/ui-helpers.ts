@@ -302,7 +302,9 @@ export class UiHelpers {
 			}
 			case "user":
 			case "developer": {
-				const userText = message.role === "user" ? textContent(message.content) : "";
+				const rawText = message.role === "user" ? textContent(message.content) : "";
+				const origin = message.role === "user" ? message.origin : undefined;
+				const userText = origin ? `⌁ ${origin.label} › ${rawText}` : rawText;
 				if (userText) {
 					const isSynthetic = message.role === "developer" ? true : (message.synthetic ?? false);
 					const cached = options?.reuseSettledComponent

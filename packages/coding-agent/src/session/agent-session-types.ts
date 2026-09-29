@@ -13,6 +13,7 @@ import type {
 	ImageContent,
 	Message,
 	MessageAttribution,
+	MessageOrigin,
 	Model,
 	OAuthAccountSummary,
 	ServiceTierByFamily,
@@ -401,6 +402,13 @@ export interface PromptOptions {
 	entryId?: string;
 	/** Pre-executed custom slash command result from RPC command classification. */
 	customCommandResult?: string;
+	/** Control-socket provenance persisted on the user message (#171). */
+	origin?: MessageOrigin;
+	/**
+	 * Request handle that owns any agent run this prompt launches or schedules;
+	 * reported on the run's enriched `agent_start.runOwners` (#171).
+	 */
+	runOwner?: string;
 }
 
 /** Payload for {@link AgentSession.setPromptDropped}: a user prompt cancelled
@@ -423,6 +431,8 @@ export interface FollowUpOptions {
 	attribution?: MessageAttribution;
 	/** Reserved session entry id for the queued user message; see {@link PromptOptions.entryId}. */
 	entryId?: string;
+	/** Control-socket provenance persisted on the user message (#171). */
+	origin?: MessageOrigin;
 }
 
 /** Options for AgentSession.steer(). */
@@ -431,6 +441,8 @@ export interface SteerOptions {
 	attribution?: MessageAttribution;
 	/** Reserved session entry id for the queued user message; see {@link PromptOptions.entryId}. */
 	entryId?: string;
+	/** Control-socket provenance persisted on the user message (#171). */
+	origin?: MessageOrigin;
 }
 
 /** Options for AgentSession.sendUserMessage(). */

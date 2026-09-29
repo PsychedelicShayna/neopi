@@ -13,7 +13,16 @@ import type { CustomMessage } from "./messages";
 
 /** Session-specific events that extend the core AgentEvent. */
 export type AgentSessionEvent =
-	| Exclude<AgentEvent, { type: "agent_end" }>
+	| Exclude<AgentEvent, { type: "agent_end" } | { type: "agent_start" }>
+	| (Extract<AgentEvent, { type: "agent_start" }> & {
+			/**
+			 * Request handles whose work launched or scheduled this run (#171).
+			 * Absent on runs nobody owns (keyboard prompts, autonomous turns).
+			 */
+			runOwners?: string[];
+			/** 1-based count of runs this session has started, this one included. */
+			agentStarts?: number;
+	  })
 	| (Extract<AgentEvent, { type: "agent_end" }> & {
 			/** False when an async delivery will resume the session before its true final settle. */
 			isTerminal?: boolean;
@@ -72,6 +81,10 @@ export type AgentSessionEvent =
 	| { type: "todo_auto_clear" }
 	| { type: "irc_message"; message: CustomMessage }
 	| { type: "notice"; level: "info" | "warning" | "error"; message: string; source?: string }
+	/** Owners joined a run already streaming (a coalesced continuation) (#171). */
+	| { type: "run_owners_joined"; owners: string[]; agentStarts: number }
+	/** Scheduled work for these owners ended before any run consumed it (#171). */
+	| { type: "run_owners_skipped"; owners: string[]; reason: string }
 	| MixtureSessionEvent
 	| {
 			type: "thinking_level_changed";

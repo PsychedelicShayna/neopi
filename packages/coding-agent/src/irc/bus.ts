@@ -110,6 +110,16 @@ export class IrcBus {
 				error: `Agent "${message.to}" was hard-aborted and cannot be messaged or revived. Its transcript remains readable at history://${message.to}.`,
 			};
 		}
+		// A control mailbox has no session. Buffer the message for a later wait/inbox.
+		if (ref.kind === "mailbox") {
+			const waiter = this.#takeMatchingWaiter(message.to, message.from);
+			if (waiter) {
+				waiter.resolve(message);
+				return { to: message.to, outcome: "injected" };
+			}
+			this.#enqueue(message);
+			return { to: message.to, outcome: "queued" };
+		}
 		// Advisor refs are observability-only transcripts, never messageable peers.
 		if (ref.kind === "advisor") {
 			return {
@@ -294,6 +304,12 @@ export class IrcBus {
 	 */
 	take(agentId: string, from?: string): IrcMessage | undefined {
 		return this.#takeFromMailbox(agentId, from);
+	}
+
+	/** Copy pending mail without consuming it. */
+	peek(agentId: string, from?: string): IrcMessage[] {
+		const mailbox = this.#mailboxes.get(agentId) ?? [];
+		return mailbox.filter(message => !from || message.from === from).map(message => ({ ...message }));
 	}
 
 	/** Unread count for the local Agent Hub overlay. */
