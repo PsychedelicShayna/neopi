@@ -53,7 +53,11 @@ describe("dictation during a live call", () => {
 			opens++;
 			if (opens - closes !== 1) throw new Error("Microphone already open");
 			receive = callback;
-			return { stop: () => { closes++; } };
+			return {
+				stop: () => {
+					closes++;
+				},
+			};
 		});
 		const liveAudio: Float32Array[] = [];
 		const session = {
@@ -66,13 +70,24 @@ describe("dictation during a live call", () => {
 			callbacks: { onPhase() {}, onLevels() {}, onTranscript() {}, onTerminal() {} },
 			extractAssistantText: () => "",
 			createTransport: () => ({
-				connect: async () => {}, send: async () => {}, close: async () => {},
-				setMuted: async () => {}, pushAudio: samples => { liveAudio.push(samples); return true; },
+				connect: async () => {},
+				send: async () => {},
+				close: async () => {},
+				setMuted: async () => {},
+				pushAudio: samples => {
+					liveAudio.push(samples);
+					return true;
+				},
 			}),
 			createRecorder: capture,
 		});
 		let text = "Draft: ";
-		const editor = { insertText: (value: string) => { text += value; }, submit: vi.fn() };
+		const editor = {
+			insertText: (value: string) => {
+				text += value;
+			},
+			submit: vi.fn(),
+		};
 		const warning = vi.fn();
 		const dictation = new XaiSTTController({
 			settings,
