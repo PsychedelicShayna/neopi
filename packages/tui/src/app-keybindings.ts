@@ -41,6 +41,8 @@ interface AppKeybindings {
 	"app.editor.external": true;
 	"app.message.followUp": true;
 	"app.message.chain": true;
+	"app.repl.toggle": true;
+	"app.repl.execute": true;
 	"app.retry": true;
 	"app.message.dequeue": true;
 	"app.clipboard.pasteImage": true;
@@ -161,6 +163,18 @@ export const KEYBINDINGS = {
 		// the same bytes many terminals map Shift+Enter (newline) to.
 		defaultKeys: "alt+c",
 		description: "Send through the active post-processing chain",
+	},
+	"app.repl.toggle": {
+		// Alt+R is app.retry; the shifted chord keeps REPL on the same letter.
+		defaultKeys: "alt+shift+r",
+		description: "Toggle REPL mode between the agent and the last kernel",
+	},
+	"app.repl.execute": {
+		// Shares the follow-up chords on purpose: in REPL mode Enter inserts a
+		// newline and there is no follow-up to send, so the "send" keys run the
+		// buffer instead. Ctrl+Q leads for terminals that cannot deliver Ctrl+Enter.
+		defaultKeys: ["ctrl+q", "ctrl+enter"],
+		description: "Run the composer in the REPL kernel (REPL mode only)",
 	},
 	"app.retry": {
 		// F5 leads: it is delivered verbatim by every terminal, unlike modified

@@ -696,6 +696,13 @@ export class Editor implements Component, Focusable {
 	onLargePaste?: (text: string, lineCount: number, options: PasteOptions) => boolean;
 	onAutocompleteCancel?: () => void;
 	disableSubmit: boolean = false;
+	/**
+	 * When true, Enter inserts a newline (Vim Normal mode: moves down a line)
+	 * instead of submitting; the host submits through its own key binding.
+	 * A one-line draft starting with `/` still submits, so slash commands stay
+	 * reachable.
+	 */
+	enterInsertsNewline: boolean = false;
 
 	// Custom top border (for status line integration). Either an eager `content`
 	// (set once, reused every frame) or a `provider` that recomputes lazily just
@@ -1781,8 +1788,16 @@ export class Editor implements Component, Focusable {
 						// Autocomplete is stale - cancel and fall through to normal submission
 						this.#cancelAutocomplete();
 					} else {
+						let submitCommand = false;
 						if (selected && this.#autocompleteProvider) {
 							const shouldChainSlashCommandAutocomplete = this.#isSlashCommandNameAutocompleteSelection();
+							// A slash-command argument that completes the command runs on this
+							// Enter; one that still needs an argument reopens the popup for it.
+							const inSlashArgument =
+								this.#isInSubmittedSlashCommandContext() && !this.#autocompletePrefix.startsWith("@");
+							// The list holds the provider's AutocompleteItem objects as-is.
+							submitCommand = inSlashArgument && (selected as AutocompleteItem).submitsCommand === true;
+							const chainSlashArgument = inSlashArgument && !submitCommand && selected.value.endsWith(" ");
 							// Directory chaining exists so an @ mention can be browsed deeper
 							// without retyping the path. It must not apply to a slash
 							// command's directory argument: there the accepted value is the
@@ -1809,13 +1824,18 @@ export class Editor implements Component, Focusable {
 							this.#notifyChange();
 
 							result.onApplied?.();
-							if (shouldChainDirectoryCompletion) {
+							if (submitCommand) {
+								// Fall through to the plain-Enter submission below.
+							} else if (shouldChainDirectoryCompletion) {
 								queueMicrotask(() => void this.#tryTriggerAutocomplete());
-							} else if (shouldChainSlashCommandAutocomplete && this.#isCompletedSlashCommandAtCursor()) {
+							} else if (
+								(shouldChainSlashCommandAutocomplete && this.#isCompletedSlashCommandAtCursor()) ||
+								chainSlashArgument
+							) {
 								void this.#tryTriggerAutocomplete();
 							}
 						}
-						return;
+						if (!submitCommand) return;
 					}
 				}
 			}
@@ -1902,6 +1922,13 @@ export class Editor implements Component, Focusable {
 		}
 		// Plain Enter - submit (handles both legacy \r and Kitty protocol with lock bits)
 		else if (kb.matchesCanonical(canonical, "tui.input.submit") || data === "\n") {
+			// Code-entry mode: Enter edits instead of submitting. Vim Normal/Visual
+			// mode moves down a line, as Enter does in Vim.
+			if (this.enterInsertsNewline && !this.#isSlashCommandDraft()) {
+				if (this.#vim !== null && this.#vim.mode !== "insert") this.#runVimKey("j", this.#vim);
+				else this.#addNewLine();
+				return;
+			}
 			// If submit is disabled, do nothing
 			if (this.disableSubmit) {
 				return;
@@ -3369,6 +3396,10 @@ export class Editor implements Component, Focusable {
 		this.#setCursorCol(0);
 
 		this.#notifyChange();
+	}
+
+	#isSlashCommandDraft(): boolean {
+		return this.#state.lines.length === 1 && (this.#state.lines[0] ?? "").startsWith("/");
 	}
 
 	#shouldSubmitOnBackslashEnter(data: string, kb: KeybindingsManager): boolean {

@@ -38,18 +38,40 @@ Landed 11 Aug 2026 in `cc3819def5`, `2407c059ba`, and `c9ca7ae0a5`.
 
 Agent frontmatter may select the inherited `omp`, `claude`, or `codex` harness identifiers. Claude has an adapter and sidecar. Codex adapter code exists under `task/external-harness/codex.ts`, but `assertExternalHarnessCapabilities` rejects that route because its tool and containment contract cannot be represented exactly. Codex dispatch is present but disabled, not a working feature.
 
-## Fork extensions
+## Operator commands
 
-The extensions were introduced on 11 Aug 2026 and received their first fork-specific names in `a176f94a08` on 22 Aug. Overlay dashboards were removed in `4aea05b2fb`; current menus use `ctx.ui.select`, `input`, `editor`, and `confirm`.
+Introduced as extensions on 11 Aug 2026 and made built-in commands on 28 Sep 2026. The `extensions/` directory, its installer, and the build and install deployment hooks are gone; state files are unchanged.
 
-| Command | Directory | State file |
-| --- | --- | --- |
-| `/persona` | `extensions/neopi-persona/` | `neopi-persona.json` |
-| `/loadout` | `extensions/neopi-loadout/` | `neopi-loadout.json` |
-| `/repl`, `/kernel` | `extensions/neopi-repl/` | `neopi-repl.json` |
-| `/live-persona` | `extensions/neopi-live-persona/` | `neopi-live-personas.json` |
+| Command | State file (agent dir) |
+| --- | --- |
+| `/persona` | `neopi-persona.json` |
+| `/persona live` | `neopi-live-personas.json` |
+| `/loadout` | `neopi-loadout.json` |
+| `/repl`, `/kernel` | none (per TUI session) |
 
-`/persona` swaps session system-prompt personas in replace, prepend, append, or literal-substitute mode. `/repl` selects agent chat or a built-in eval backend and may register additional backends when `registerEvalBackend` is available. `/live-persona` is command UX over `packages/coding-agent/src/live/personas.ts`.
+Each store is schema-v1 JSON written atomically with a `.bak` of the previous file. A missing `neopi-*` file falls back to the pre-rename `omomp-*` file.
+
+### Personas
+
+`/persona` opens a fullscreen editor in the style of `/chaining configure`: personas on the left, the highlighted definition on the right. Keys are listed in the footer: Enter edits, Space makes the highlighted persona active (again to turn it off), Delete twice removes, `s` saves and applies, and Esc closes (it asks once before discarding unsaved changes). A persona has a mode (replace, prepend, append, or literal-substitute), an inline text or a file path inside the agent directory, and an inherit-to-tasks flag.
+
+`/persona live` opens the same editor for the live voice model. The bundled default is read-only; clone it to customize. A new live persona starts from the default instructions.
+
+Both scopes take the same subcommands: `set <name>`, `off` (live: back to the default), `list`, `show <name>`, `status`, `clone <source> <name>`, and `delete <name>`. For example, `/persona set reviewer` or `/persona live set iris`. Changing the active persona invalidates the prompt cache, so switch deliberately.
+
+The session persona is selected per session id. `AgentSession` applies it while preparing each turn, before extension `before_agent_start` handlers, so extensions see and may further change the persona prompt. A persona that cannot apply (missing file, literal not found) leaves the base prompt in place and shows a warning.
+
+### Loadouts
+
+`/loadout` lists loadouts; picking one applies it, and "Turn loadout off" restores the configured models. `/loadout set|off|list|show|status` do the same from the command line. `AgentSession.applyRuntimeModelLoadout` swaps model roles, retry fallback chains, and task-agent model overrides as one volatile overlay, and only while the session is idle.
+
+### REPL mode
+
+`/repl` points the composer at a kernel: JavaScript, Python, Bash, or back at the agent (`/repl js`, `/repl py`, `/repl bash`, `/repl agent`). `Alt+Shift+R` (`app.repl.toggle`) toggles between the agent and the last kernel.
+
+In REPL mode, Enter inserts a newline so multi-line code is written as in an editor; with Vim mode on, Normal-mode Enter moves down a line. `Ctrl+Q` or `Ctrl+Enter` (`app.repl.execute`, the follow-up chords) runs the whole buffer in the kernel. A one-line draft starting with `/` still submits on Enter, so `/repl agent` and other commands work from REPL mode. JavaScript and Python cells use the built-in eval kernels; Bash cells use the bash executor. The status line shows the target and keys.
+
+`/kernel` shows which kernels are running, `/kernel reset <py|js>` starts the next cell in a fresh kernel, and `/kernel interrupt` cancels running cells.
 
 ## Iris live voice
 
@@ -75,13 +97,9 @@ Landed 23 Aug 2026 in `e4fadf1299` and `7039de1ad4`.
 
 An unregistered `agent` value shaped like `provider/model[:effort]` or `@role[:effort]` crews the generic task agent. Registered agent names take precedence. Invalid selectors fail during preflight.
 
-## Binary, extension deployment, and update
+## Binary and update
 
-NeoPi builds `packages/coding-agent/dist/npi` and installs only as `npi`. `scripts/install-neopi-extensions.ts` manages the fork extension links without deleting unrelated user extensions. Exact argv `npi update` launches the fork-specific interactive update request from `packages/coding-agent/src/prompts/npi-update.md`; extra update flags retain ordinary updater behavior.
-
-The installer and post-build hook honor a hidden `.<extension-name>.quarantined` marker in the destination extensions directory (by default `~/.omp/agent/extensions`). A marked extension is not linked or refreshed, and its legacy counterpart is not retired. The installer reports quarantined names without removing their markers.
-
-To quarantine an active extension, move its link out of the extensions directory and create the corresponding marker, for example `.neopi-repl.quarantined`. The marker prevents reinstallation; it does not disable an already-present link. Remove the marker and rerun `bun scripts/install-neopi-extensions.ts` to restore deployment.
+NeoPi builds `packages/coding-agent/dist/npi` and installs only as `npi`. Exact argv `npi update` launches the fork-specific interactive update request from `packages/coding-agent/src/prompts/npi-update.md`; extra update flags retain ordinary updater behavior.
 
 Early binary and deployment work is recorded by `da8bb86645`, `e795702ff4`, `64380829e2`, `05380db554`, and `bc1c74703d`. Current policy supersedes their historical command names; follow `AGENTS.md` and `docs/agents/upstream-sync.md`.
 

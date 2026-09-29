@@ -89,6 +89,14 @@ import { openPath } from "../../utils/open";
 import { setSessionTerminalTitle } from "../../utils/title-generator";
 import { getAssistantMessageLinkTargets } from "@oh-my-pi/pi-tui/prompt/interactive-context-helpers";
 import { type AdvisorConfigDeps, AdvisorConfigOverlayComponent } from "@oh-my-pi/pi-tui/overlays/advisor-config";
+import { PersonaConfigOverlayComponent, type PersonaConfigDoc } from "@oh-my-pi/pi-tui/overlays/persona-config";
+import {
+	loadPersonaConfigDoc,
+	newPersonaContent,
+	type PersonaScope,
+	savePersonaConfigDoc,
+	sessionPersonaHost,
+} from "../../neopi/persona-config";
 import { createAgentsHubDeps } from "../agents-hub-deps";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { collapseSharedUsageReports } from "@oh-my-pi/pi-tui/overlays/usage-display";
@@ -554,6 +562,53 @@ export class SelectorController {
 				notify: message => this.ctx.showStatus(message),
 				warn: message => this.ctx.showWarning(message),
 			});
+			const overlayHandle = this.ctx.ui.showOverlay(overlay, {
+				anchor: "bottom-center",
+				width: "100%",
+				maxHeight: "100%",
+				margin: 0,
+				fullscreen: true,
+			});
+			this.ctx.ui.setFocus(overlay);
+			this.ctx.ui.requestRender();
+		})();
+	}
+
+	showPersonaConfigure(scope: PersonaScope): void {
+		void (async () => {
+			const host = sessionPersonaHost(this.ctx.session, {
+				setStatus: (key, text) => this.ctx.setHookStatus(key, text),
+				setWidget: (key, lines) => this.ctx.setHookWidget(key, lines),
+			});
+			let doc: PersonaConfigDoc;
+			try {
+				doc = await loadPersonaConfigDoc(scope, host.sessionId);
+			} catch (error) {
+				this.ctx.showError(error instanceof Error ? error.message : String(error));
+				return;
+			}
+			const done = () => {
+				overlayHandle?.hide();
+				this.focusActiveEditorArea();
+				this.ctx.ui.requestRender();
+			};
+			const overlay = new PersonaConfigOverlayComponent(
+				this.ctx.ui,
+				{
+					variant: scope,
+					newEntryContent: newPersonaContent(scope),
+					externalEditor: text => {
+						const command = getEditorCommand();
+						return command ? openInEditor(command, text) : Promise.resolve(null);
+					},
+				},
+				doc,
+				{
+					save: next => savePersonaConfigDoc(scope, next, host),
+					close: done,
+					requestRender: () => this.ctx.ui.requestRender(),
+				},
+			);
 			const overlayHandle = this.ctx.ui.showOverlay(overlay, {
 				anchor: "bottom-center",
 				width: "100%",

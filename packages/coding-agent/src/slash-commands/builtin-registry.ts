@@ -13,6 +13,7 @@ import { BUILTIN_CONTROL_SLASH_COMMANDS } from "./builtin-control";
 import { BUILTIN_LIFECYCLE_SLASH_COMMANDS } from "./builtin-lifecycle";
 import { BUILTIN_MARKETPLACE_SLASH_COMMANDS, reloadTuiPluginState } from "./builtin-marketplace";
 import { BUILTIN_MODE_SLASH_COMMANDS } from "./builtin-modes";
+import { BUILTIN_NEOPI_SLASH_COMMANDS } from "./builtin-neopi";
 import { BUILTIN_SESSION_SLASH_COMMANDS } from "./builtin-session";
 import { BUILTIN_SKILLS_SLASH_COMMANDS } from "./builtin-skills";
 import { parseSlashCommand } from "./helpers/parse";
@@ -44,6 +45,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	...BUILTIN_MARKETPLACE_SLASH_COMMANDS,
 	...BUILTIN_SKILLS_SLASH_COMMANDS,
 	...BUILTIN_CONTROL_SLASH_COMMANDS,
+	...BUILTIN_NEOPI_SLASH_COMMANDS,
 ];
 
 const BUILTIN_SLASH_COMMAND_LOOKUP = new Map<string, SlashCommandSpec>();
@@ -67,6 +69,8 @@ export const BUILTIN_SLASH_COMMAND_DEFS: ReadonlyArray<BuiltinSlashCommand> = BU
 		subcommands: command.subcommands,
 		inlineHint: command.inlineHint,
 		getTuiAutocompleteDescription: command.getTuiAutocompleteDescription,
+		getTuiArgumentCompletions: command.getTuiArgumentCompletions,
+		getTuiInlineHint: command.getTuiInlineHint,
 	}),
 );
 
@@ -75,7 +79,12 @@ function materializeTuiBuiltinSlashCommand(
 	runtime?: TuiSlashCommandRuntime,
 ): TuiBuiltinSlashCommand {
 	const materialized: TuiBuiltinSlashCommand = { ...cmd };
-	if (cmd.subcommands) {
+	const customCompletions = cmd.getTuiArgumentCompletions;
+	if (customCompletions) {
+		materialized.getArgumentCompletions = prefix => customCompletions(prefix, runtime);
+		materialized.getInlineHint =
+			cmd.getTuiInlineHint ?? (cmd.subcommands ? buildSubcommandInlineHint(cmd.subcommands) : undefined);
+	} else if (cmd.subcommands) {
 		materialized.getArgumentCompletions =
 			cmd.name === "mcp" && runtime
 				? buildMcpArgumentCompletions(cmd.subcommands, runtime)
