@@ -525,6 +525,7 @@ export class ControlHost {
 			case "subscribe":
 				this.#subscribed.add(connection);
 				await this.#handlerFor(connection);
+				this.#applySubscription(connection, frame);
 				this.#reply(connection, frame, { success: true, data: { cursor: 0 } });
 				return;
 			case "input":
@@ -840,6 +841,33 @@ export class ControlHost {
 		if (cfgControlApprovals.get(this.#options.session.settings) === true) return false;
 		if (this.#approvalUiOpen) return true;
 		return (this.presenter?.dialogs() ?? []).some(dialog => dialog.family === "approval");
+	}
+
+	#applySubscription(connection: ControlConnection, frame: Record<string, unknown>): void {
+		const forwarder = this.#forwarders.get(connection);
+		if (!forwarder) return;
+		if (Array.isArray(frame.filter)) {
+			forwarder.setFilter(frame.filter.filter((item): item is string => typeof item === "string"));
+			return;
+		}
+		if (frame.events === "none") {
+			forwarder.setFilter([]);
+			return;
+		}
+		if (frame.events === "lifecycle") {
+			forwarder.setFilter([
+				"agent_start",
+				"agent_end",
+				"turn_end",
+				"auto_compaction_start",
+				"auto_compaction_end",
+				"auto_retry_start",
+				"auto_retry_end",
+				"queue_update",
+			]);
+			return;
+		}
+		forwarder.setFilter(null);
 	}
 
 	#notePromptResult(frame: object): void {
