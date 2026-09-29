@@ -3,8 +3,26 @@
  */
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
+import { stripVTControlCharacters } from "node:util";
 import * as path from "node:path";
 import { $env, $which, Snowflake } from "@oh-my-pi/pi-utils";
+import { normalizeStreamRow } from "../stream/paint-encoder";
+
+const MESSAGE_DELIMITER = "\n-->\n<!-- omp:message starts here -->\n";
+
+/** Snapshot only the rows painted on the operator's screen, not unrendered session/tool payloads. */
+export function formatExternalEditorDraft(visibleRows: readonly string[], message: string): string {
+	const context = visibleRows
+		.map(row => stripVTControlCharacters(normalizeStreamRow(row)).replaceAll("-->", "--&gt;"))
+		.join("\n");
+	return `<!-- omp:context\n${context}${MESSAGE_DELIMITER}${message}`;
+}
+
+/** A removed delimiter cannot safely become a user message containing the reference transcript. */
+export function extractExternalEditorMessage(content: string): string | null {
+	const marker = content.indexOf(MESSAGE_DELIMITER);
+	return marker < 0 ? null : content.slice(marker + MESSAGE_DELIMITER.length);
+}
 
 /**
  * Returns the user's preferred editor command, or a platform default.
