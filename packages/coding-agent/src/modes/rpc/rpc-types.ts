@@ -17,6 +17,7 @@ import type { AgentProgress } from "@oh-my-pi/pi-tui/tools/task";
 import type { SubagentEventPayload, SubagentLifecyclePayload, SubagentProgressPayload } from "../../task";
 import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import type { ApprovalMode } from "../../tools/approval";
+import type { MixtureConfigScope, MixtureDefinition } from "@oh-my-pi/pi-tui/overlays/mixture-types";
 import type { RpcMessagesPage } from "./rpc-messages";
 import type { RpcRolesResult, RpcSetRoleResult } from "./rpc-roles";
 import type { RpcUsageResult } from "./rpc-usage";
@@ -59,6 +60,9 @@ export type RpcCommand =
 	| { id?: string; type: "set_model"; provider: string; modelId: string }
 	| { id?: string; type: "cycle_model" }
 	| { id?: string; type: "get_available_models" }
+	| { id?: string; type: "create_mixture"; scope: MixtureConfigScope; definition: MixtureDefinition }
+	| { id?: string; type: "list_mixtures" }
+	| { id?: string; type: "select_mixture"; name: string }
 	| { id?: string; type: "get_roles" }
 	| { id?: string; type: "set_role"; role: string }
 
