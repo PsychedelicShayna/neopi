@@ -2525,6 +2525,28 @@ prints discovered definitions with their validation state, `/mixture use
 cannot be restored or re-hydrated, `/mixture status` prints the active run's
 hop, member, and spend.
 
+### M2 operator workflow
+
+Open **Mixture of Agents → + Define mixture model…** in the model hub, or
+run `/mixture configure` (`/moa configure`). The fullscreen editor displays
+the definition list and a graph preview. Enter opens the selected mixture;
+edit members, verdict questions and rubrics, directed edges, transit parts,
+route/termination judges, budgets, and local role/envelope presets from their
+respective menus. A new mixture begins with an unassigned `writer` model;
+choose a real model before saving. Fan-out edges from existing files remain
+visible in the graph; their editing controls arrive with M4.
+
+Use `s` to validate and save the selected project/user configuration, then
+`a` to apply the saved roster to the active session. Save without apply does
+not change registered models. The status line reports validation errors;
+closing a dirty editor requires explicit discard confirmation. Space on a
+saved mixture in the list activates it. During a run,
+`/mixture status` shows the current member, hop, and spend;
+`/mixture reset` discards the resumable run without clearing the conversation.
+Opening or navigating a persisted session restores the latest committed,
+unfinished checkpoint on the active branch; a completed or reset run does
+not resume.
+
 ## 11. Validation rules
 
 `validateMixture(resolved, ctx): { errors: Issue[]; warnings: Issue[] }` in
