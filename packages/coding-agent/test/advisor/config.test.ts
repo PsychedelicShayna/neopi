@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -261,6 +262,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 		await fsp.mkdir(path.join(tmp, ".git"));
 	});
 	afterEach(async () => {
+		vi.restoreAllMocks();
 		await fsp.rm(tmp, { recursive: true, force: true });
 	});
 
@@ -281,6 +283,49 @@ describe("WATCHDOG.yml file round-trip", () => {
 		await saveWatchdogConfigFile(file, doc);
 		const loaded = await loadWatchdogConfigFile(file);
 		expect(loaded).toEqual(doc);
+	});
+
+	it("keeps the previous complete WATCHDOG file visible until the replacement is published", async () => {
+		const file = path.join(tmp, "WATCHDOG.yml");
+		const original = "instructions: Existing\n";
+		await Bun.write(file, original);
+		const staged = Promise.withResolvers<void>();
+		const publish = Promise.withResolvers<void>();
+		const rename = fs.promises.rename.bind(fs.promises);
+		vi.spyOn(fs.promises, "rename").mockImplementation(async (from, to) => {
+			if (to === file) {
+				staged.resolve();
+				await publish.promise;
+			}
+			return rename(from, to);
+		});
+
+		const save = saveWatchdogConfigFile(file, { instructions: "Replacement", advisors: [] });
+		try {
+			const ready = await Promise.race([staged.promise.then(() => true), Bun.sleep(500).then(() => false)]);
+			expect(ready).toBe(true);
+			expect(await Bun.file(file).text()).toBe(original);
+		} finally {
+			publish.resolve();
+			await save;
+		}
+		expect(await Bun.file(file).text()).toContain("instructions: Replacement");
+	});
+
+	it("creates an absent project configuration directory for a new WATCHDOG file", async () => {
+		const file = path.join(tmp, ".omp", "WATCHDOG.yml");
+		await saveWatchdogConfigFile(file, { advisors: [{ name: "New" }] });
+		expect((await loadWatchdogConfigFile(file)).advisors).toEqual([{ name: "New" }]);
+	});
+
+	it("updates the target of a WATCHDOG symlink without replacing the link", async () => {
+		const target = path.join(tmp, "shared.yml");
+		const link = path.join(tmp, "WATCHDOG.yml");
+		await Bun.write(target, "instructions: Existing\n");
+		await fsp.symlink("shared.yml", link);
+		await saveWatchdogConfigFile(link, { instructions: "Replacement", advisors: [] });
+		expect(await fsp.readlink(link)).toBe("shared.yml");
+		expect(await Bun.file(target).text()).toContain("instructions: Replacement");
 	});
 
 	it("serializes block-style YAML that the discovery path also parses", async () => {

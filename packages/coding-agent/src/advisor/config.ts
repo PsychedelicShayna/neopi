@@ -7,6 +7,7 @@ import { YAML } from "bun";
 import { isMap, isNode, isSeq, type YAMLMap, type YAMLSeq } from "yaml";
 import { expandAtImports } from "../discovery/at-imports";
 import { BUILTIN_TOOL_NAMES, normalizeToolNames } from "../tools/builtin-names";
+import { writeFileAtomically } from "../utils/atomic-file";
 import { ADVISOR_DEFAULT_BUDGET_PER_UPDATE, ADVISOR_MAX_BUDGET_PER_UPDATE } from "./emission-guard";
 import { collectConfigCandidates } from "./watchdog";
 import { materializeYamlAlias, parseYamlMappingDocument, yamlDocumentRoot } from "../config/yaml-document";
@@ -757,7 +758,7 @@ export async function saveWatchdogConfigFile(filePath: string, doc: WatchdogConf
 		const root = yamlDocumentRoot(parseYamlMappingDocument(content));
 		const wroteFile = root.items.length > 0;
 		if (wroteFile) {
-			await Bun.write(filePath, content);
+			await writeFileAtomically(filePath, content);
 		} else {
 			await fs.rm(filePath, { force: true });
 		}
