@@ -1954,11 +1954,11 @@ export class SelectorController {
 		const { LoginDialogComponent, PASTE_CODE_LOGIN_PROVIDERS } = loadProviderAuthUi();
 		const useManualInput = PASTE_CODE_LOGIN_PROVIDERS.has(providerId);
 		let restored = false;
-		let closeLogin: (() => void) | undefined;
+		const loginDialog = { close: () => {} };
 		const restoreEditor = () => {
 			if (restored) return;
 			restored = true;
-			closeLogin?.();
+			loginDialog.close();
 			this.ctx.editorContainer.clear();
 			this.ctx.editorContainer.addChild(this.ctx.editor);
 			this.ctx.ui.setFocus(this.ctx.editor);
@@ -1979,7 +1979,7 @@ export class SelectorController {
 		this.ctx.editorContainer.addChild(dialog);
 		this.ctx.ui.setFocus(dialog);
 		this.ctx.ui.requestRender();
-		closeLogin = trackMountedDialog({
+		loginDialog.close = trackMountedDialog({
 			family: "login",
 			kind: "login",
 			title: providerId,
@@ -1990,7 +1990,6 @@ export class SelectorController {
 			},
 			cancel: () => dialog.handleInput("\x1b"),
 		});
-		void closeLogin;
 		try {
 			const identity = await this.ctx.session.modelRegistry.authStorage.oauth.login(providerId as OAuthProvider, {
 				signal: dialog.signal,
