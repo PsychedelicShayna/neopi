@@ -7,6 +7,7 @@
  */
 import { afterEach, beforeAll, afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
+import * as net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
@@ -19,7 +20,7 @@ import { ctlList, ctlState, withCtlCaller, withCtlIo } from "../../src/cli/ctl-c
 import { ControlClient } from "../../src/control/client";
 import type { ControlPresenter } from "../../src/control/presenter";
 import { ControlHost } from "../../src/control/host";
-import { readControlEntries } from "../../src/control/registry";
+import { type ControlMetadata, readControlEntries } from "../../src/control/registry";
 import { InternalUrlRouter } from "../../src/internal-urls/router";
 import { AgentSession } from "../../src/session/agent-session";
 import type { AuthStorage } from "../../src/session/auth-storage";
@@ -84,6 +85,14 @@ describe("control host", () => {
 		const verdict = await client.request({ type: "tool_approval_response", id: "t1", approved: true });
 		expect(verdict.success).toBe(false);
 		expect(verdict.code).toBe("approval_owner_only");
+	});
+
+	test("credential settings are unreadable over control while control.secretInput is off", async () => {
+		const { client } = await start({ "auth.broker.token": "hunter2" });
+		const reply = await client.request({ type: "settings_get", path: "auth.broker.token" });
+		expect(reply.success).toBe(false);
+		expect(reply.code).toBe("secret_input_disabled");
+		expect(JSON.stringify(reply)).not.toContain("hunter2");
 	});
 
 	test("a session replaced outside RPC bumps generation and republishes its registry entry", async () => {
@@ -245,6 +254,28 @@ describe("control host", () => {
 		expect(seen.drafts).toEqual([{ text: "restored", images: [image] }]);
 		await client.request({ type: "input", text: "look", images: [image] });
 		expect(seen.submitted).toEqual([{ text: "look", images: [image] }]);
+	});
+});
+
+describe("control client handshake", () => {
+	test("a server that never challenges times out and the client closes its socket", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "omp-ctl-silent-"));
+		const endpoint = join(dir, "silent.sock");
+		const closed = Promise.withResolvers<void>();
+		const server = net.createServer(socket => socket.once("close", () => closed.resolve()));
+		await new Promise<void>(resolve => server.listen(endpoint, resolve));
+		try {
+			const client = new ControlClient({
+				metadata: { instanceId: "silentsilent", endpoint, token: "t" } as ControlMetadata,
+				label: "test",
+				kind: "cli",
+				timeoutMs: 100,
+			});
+			await expect(client.connect()).rejects.toMatchObject({ code: "timeout" });
+			await closed.promise;
+		} finally {
+			server.close();
+		}
 	});
 });
 

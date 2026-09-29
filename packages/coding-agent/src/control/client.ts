@@ -68,7 +68,7 @@ export class ControlClient {
 		const timer = setTimeout(() => {
 			socket.destroy();
 			reject(new ControlClientError("timeout", "handshake timed out"));
-		}, 5_000);
+		}, this.#options.timeoutMs ?? 5_000);
 		let challenged = false;
 		socket.once("error", error => reject(new ControlClientError("unreachable", error.message)));
 		socket.setEncoding("utf8");
