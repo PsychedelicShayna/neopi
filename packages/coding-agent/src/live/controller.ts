@@ -31,6 +31,24 @@ const OUTPUT_ECHO_RATIO = 0.65;
 const OUTPUT_SILENCE_MS = 250;
 /** Quiet time after operator activity (speech or composer edits) before held voice-triggering context is delivered. */
 const DEFAULT_SPEAKABLE_IDLE_MS = 10_000;
+/** Minimum gap between reasoning narrations. Tests may shorten it. */
+const DEFAULT_THINKING_FLUSH_MS = 3_000;
+/** Voice-triggering items retained while the operator is active. Thinking and progress collapse to one slot each. */
+const HELD_CONTEXT_CAP = 8;
+
+interface UserLedgerTurn {
+	turn: number;
+	text: string;
+	final: boolean;
+	claim?: number;
+}
+
+type HeldContextKind = "report" | "thinking" | "progress";
+
+interface HeldContextItem {
+	kind: HeldContextKind;
+	send: () => void;
+}
 
 /** Distinct states of a realtime call connection. */
 export type LivePhase = "connecting" | "listening" | "working" | "speaking" | "muted" | "error";
@@ -64,7 +82,9 @@ export interface LiveSessionCallbacks {
 }
 
 /** Structural transport surface the controller needs (test seam). */
-export type LiveTransportLike = Pick<CodexLiveTransport, "connect" | "send" | "close" | "setMuted" | "pushAudio">;
+export type LiveTransportLike = Pick<CodexLiveTransport, "connect" | "send" | "close" | "setMuted" | "pushAudio"> & {
+	playbackQueueStats?(): { queuedMs: number; droppedMs: number };
+};
 
 /** Structural recorder surface the controller needs (test seam). */
 export interface LiveRecorderLike {
@@ -83,6 +103,8 @@ export interface LiveSessionControllerOptions {
 	voice?: string;
 	/** Test seam: quiet time after operator activity before held context sends; defaults to 10000 ms. */
 	speakableIdleMs?: number;
+	/** Test seam: minimum gap between reasoning narrations; defaults to 3000 ms. */
+	thinkingFlushMs?: number;
 	/** Test seam: builds the realtime transport; defaults to CodexLiveTransport. */
 	createTransport?(options: ConstructorParameters<typeof CodexLiveTransport>[0]): LiveTransportLike;
 	/** Test seam: builds the microphone recorder; defaults to the native AudioCapture. */
@@ -188,7 +210,9 @@ export class LiveSessionController {
 	/** Monotonic voice-handoff generation; the newest survivor owns dispatch. */
 	#delegationGeneration = 0;
 	/** Canonical controller-owned user turns awaiting or undergoing a handoff. */
-	#userTurnLedger: Array<{ turn: number; text: string; final: boolean; claim?: number }> = [];
+	#userTurns = new Map<number, UserLedgerTurn>();
+	/** Insertion-order tail of {@link #userTurns}. Partial updates land here. */
+	#tailTurnNumber: number | undefined;
 	/** Ledger turns already final and unclaimed when the voice agent began its current response:
 	 *  the turns that response answers. Undefined while no response is under way. */
 	#answeredTurns: number[] | undefined;
@@ -223,14 +247,14 @@ export class LiveSessionController {
 	#expectedAbortedSettles = 0;
 	/** Chars of the current assistant message's thinking already narrated to the voice surface. */
 	#thinkingRelayedLength = 0;
-	/** Last reasoning-narration send, for rate-capping the speakable feed. */
 	#lastThinkingFlushAt = 0;
+	#thinkingFlushMs = DEFAULT_THINKING_FLUSH_MS;
 	/**
 	 * Voice-triggering context (crew reports, reasoning narration, final answers) held while the
 	 * operator is speaking or editing the composer, in arrival order. Anything delivered then
 	 * would make the voice agent talk over the operator and lose the in-progress utterance.
 	 */
-	#heldContext: Array<() => void> = [];
+	#heldContext: HeldContextItem[] = [];
 	#speakableIdleDeadline = 0;
 	#speakableIdleTimer: NodeJS.Timeout | undefined;
 	/** Serialized persistence tail for the live-transcript artifact (order + no double allocation). */
@@ -255,6 +279,11 @@ export class LiveSessionController {
 			typeof speakableIdleMs === "number" && Number.isFinite(speakableIdleMs) && speakableIdleMs >= 0
 				? speakableIdleMs
 				: DEFAULT_SPEAKABLE_IDLE_MS;
+		const thinkingFlushMs = options.thinkingFlushMs;
+		this.#thinkingFlushMs =
+			typeof thinkingFlushMs === "number" && Number.isFinite(thinkingFlushMs) && thinkingFlushMs >= 0
+				? thinkingFlushMs
+				: DEFAULT_THINKING_FLUSH_MS;
 		this.#createTransport = options.createTransport ?? (transportOptions => new CodexLiveTransport(transportOptions));
 		this.#createRecorder =
 			options.createRecorder ?? ((sampleRate, callback) => new AudioCapture(sampleRate, callback));
@@ -268,6 +297,16 @@ export class LiveSessionController {
 	/** Whether microphone input is currently muted. */
 	get muted(): boolean {
 		return this.#muted;
+	}
+
+	/** Canonical user turns still awaiting a handoff or an answer. */
+	pendingUserTurnCount(): number {
+		return this.#userTurns.size;
+	}
+
+	/** Voice-triggering items held while the operator is active. */
+	heldContextCount(): number {
+		return this.#heldContext.length;
 	}
 
 	/** Connects the realtime surface and starts microphone streaming. */
@@ -365,7 +404,7 @@ export class LiveSessionController {
 		// that case retire its speech from the composer now, while the caller still listens.
 		const pending = this.#pendingDelegation;
 		if (pending?.dispatching && this.#pendingDelivery && !this.#pendingDelivery.cancel()) {
-			const turns = this.#userTurnLedger.filter(turn => turn.claim === pending.generation).map(turn => turn.turn);
+			const turns = this.#turnsWhere(turn => turn.claim === pending.generation).map(turn => turn.turn);
 			if (turns.length > 0) this.#emitDelegated(turns);
 		} else {
 			this.#pendingDelivery?.cancel();
@@ -487,8 +526,7 @@ export class LiveSessionController {
 			// agent turn and must never be folded into this handoff. The old
 			// continuation stops at the generation check, so retire their speech
 			// from the composer here.
-			const accepted = this.#userTurnLedger.filter(turn => turn.claim === previousGeneration);
-			this.#userTurnLedger = this.#userTurnLedger.filter(turn => turn.claim !== previousGeneration);
+			const accepted = this.#deleteTurns(turn => turn.claim === previousGeneration);
 			if (accepted.length > 0) this.#emitDelegated(accepted.map(turn => turn.turn));
 		}
 		this.#pendingDelivery = undefined;
@@ -496,7 +534,7 @@ export class LiveSessionController {
 			await previousDelivery.completed.catch(() => false);
 		}
 		if (generation !== this.#delegationGeneration) return;
-		const claimed = this.#userTurnLedger.filter(
+		const claimed = this.#turnsWhere(
 			turn => turn.claim === undefined || turn.claim === this.#pendingDelegation?.generation,
 		);
 		if (claimed.length === 0) return;
@@ -540,8 +578,8 @@ export class LiveSessionController {
 			return;
 		}
 		const turns = pending.turns
-			.map(turnNumber => this.#userTurnLedger.find(turn => turn.turn === turnNumber && turn.claim === generation))
-			.filter((turn): turn is NonNullable<typeof turn> => turn !== undefined);
+			.map(turnNumber => this.#userTurns.get(turnNumber))
+			.filter((turn): turn is UserLedgerTurn => turn !== undefined && turn.claim === generation);
 		if (turns.length === 0 || turns.some(turn => !turn.final)) return;
 		const merged = turns
 			.map(turn => turn.text)
@@ -565,7 +603,7 @@ export class LiveSessionController {
 			await delivery.accepted;
 			accepted = true;
 			if (generation !== this.#delegationGeneration) return;
-			this.#userTurnLedger = this.#userTurnLedger.filter(turn => turn.claim !== generation);
+			this.#deleteTurns(turn => turn.claim === generation);
 			this.#pendingDelegation = undefined;
 			this.#pendingDelivery = undefined;
 			this.#activeDelegationId = pending.id;
@@ -581,7 +619,7 @@ export class LiveSessionController {
 				// Normalization/preflight/drop failures occur before ownership.
 				// Release the claim but retain the canonical transcript so a
 				// later, distinct delegation trigger can retry it.
-				for (const turn of this.#userTurnLedger) {
+				for (const turn of this.#userTurns.values()) {
 					if (turn.claim === generation) turn.claim = undefined;
 				}
 				this.#pendingDelegation = undefined;
@@ -632,9 +670,12 @@ export class LiveSessionController {
 		if (!delegationId) return;
 		const progress = this.#extractAssistantText(message).trim();
 		if (!progress) return;
-		for (const chunk of chunkLiveContext(progress)) {
-			this.#queueSend(buildDelegationContextAppend(delegationId, chunk, "commentary"));
-		}
+		const chunks = chunkLiveContext(progress);
+		this.#deliverOrHold("progress", () => {
+			for (const chunk of chunks) {
+				this.#queueSend(buildDelegationContextAppend(delegationId, chunk, "commentary"));
+			}
+		});
 	}
 
 	/**
@@ -649,9 +690,7 @@ export class LiveSessionController {
 		const fromContext = this.#contextSinceResponse;
 		this.#contextSinceResponse = false;
 		if (this.#answeredTurns || fromContext) return;
-		this.#answeredTurns = this.#userTurnLedger
-			.filter(turn => turn.final && turn.claim === undefined)
-			.map(turn => turn.turn);
+		this.#answeredTurns = this.#turnsWhere(turn => turn.final && turn.claim === undefined).map(turn => turn.turn);
 	}
 
 	/** A main-agent turn the operator started from the composer with the destination `both`:
@@ -751,7 +790,7 @@ export class LiveSessionController {
 	 */
 	retireComposerSpeech(): boolean {
 		const pending = this.#pendingDelegation;
-		const last = this.#userTurnLedger[this.#userTurnLedger.length - 1];
+		const last = this.#tailTurn();
 		let settled = true;
 		if (pending && !(this.#pendingDelivery?.cancel() ?? true)) {
 			settled = false;
@@ -760,12 +799,12 @@ export class LiveSessionController {
 			this.#delegationGeneration += 1;
 			this.#pendingDelegation = undefined;
 			this.#pendingDelivery = undefined;
-			this.#userTurnLedger = this.#userTurnLedger.filter(turn => turn.claim !== pending.generation);
+			this.#deleteTurns(turn => turn.claim === pending.generation);
 			this.#refreshAudioPhase();
 		}
-		this.#userTurnLedger = this.#userTurnLedger.filter(turn => turn.claim !== undefined);
+		this.#deleteTurns(turn => turn.claim === undefined);
 		// A partial turn retired mid-utterance: the rest of it, final included, is already handled.
-		if (last && !last.final && !this.#userTurnLedger.includes(last)) this.#retiredPartialTurn = last.turn;
+		if (last && !last.final && !this.#userTurns.has(last.turn)) this.#retiredPartialTurn = last.turn;
 		this.#answeredTurns = undefined;
 		return settled;
 	}
@@ -777,9 +816,7 @@ export class LiveSessionController {
 		const answered = this.#answeredTurns;
 		this.#answeredTurns = undefined;
 		if (!answered?.length) return;
-		this.#userTurnLedger = this.#userTurnLedger.filter(
-			turn => turn.claim !== undefined || !answered.includes(turn.turn),
-		);
+		this.#deleteTurns(turn => turn.claim === undefined && answered.includes(turn.turn));
 	}
 
 	/** Fleet feed: relay a crew IRC message onto the speakable channel for background awareness. */
@@ -807,14 +844,14 @@ export class LiveSessionController {
 		if (thinking.length <= this.#thinkingRelayedLength) return;
 		const unsent = thinking.slice(this.#thinkingRelayedLength);
 		if (unsent.length < 280) return;
-		if (Date.now() - this.#lastThinkingFlushAt < 3000) return;
+		if (Date.now() - this.#lastThinkingFlushAt < this.#thinkingFlushMs) return;
 		const boundary = Math.max(unsent.lastIndexOf(". "), unsent.lastIndexOf("\n"));
 		if (boundary < 120) return;
 		const cut = unsent.slice(0, boundary + 1).trim();
 		if (!cut) return;
 		this.#thinkingRelayedLength += boundary + 1;
 		this.#lastThinkingFlushAt = Date.now();
-		this.#appendSpeakable(`Main agent reasoning (live, provisional): ${cut}`);
+		this.#appendSpeakable(`Main agent reasoning (live, provisional): ${cut}`, "thinking");
 	}
 
 	/**
@@ -824,7 +861,7 @@ export class LiveSessionController {
 	 * mid-assembly (the exact failure that killed voicing final-answer chunks),
 	 * so overflow is truncated at the byte cap, never split.
 	 */
-	#appendSpeakable(text: string): void {
+	#appendSpeakable(text: string, kind: HeldContextKind = "report"): void {
 		const chunks = chunkLiveContext(text);
 		let item = chunks[0] ?? "";
 		if (!item) return;
@@ -837,7 +874,7 @@ export class LiveSessionController {
 			}
 			item = `${units.join("").trimEnd()}…`;
 		}
-		this.#deliverOrHold(() => this.#sendSpeakable(item));
+		this.#deliverOrHold(kind, () => this.#sendSpeakable(item));
 	}
 
 	/**
@@ -845,13 +882,30 @@ export class LiveSessionController {
 	 * Held items release in order on the quiet deadline, when the voice agent starts
 	 * speaking anyway, or when it delegates.
 	 */
-	#deliverOrHold(send: () => void): void {
+	#deliverOrHold(kind: HeldContextKind, send: () => void): void {
 		if (Date.now() < this.#speakableIdleDeadline) {
-			this.#heldContext.push(send);
+			if (kind === "thinking" || kind === "progress") {
+				const existing = this.#heldContext.findIndex(item => item.kind === kind);
+				if (existing >= 0) {
+					this.#heldContext[existing] = { kind, send };
+					return;
+				}
+			}
+			this.#heldContext.push({ kind, send });
+			this.#trimHeldContext();
 			return;
 		}
 		this.#releaseHeldContext();
 		send();
+	}
+
+	/** Drop the oldest crew reports first so the latest thinking and progress survive the cap. */
+	#trimHeldContext(): void {
+		while (this.#heldContext.length > HELD_CONTEXT_CAP) {
+			const oldestReport = this.#heldContext.findIndex(item => item.kind === "report");
+			if (oldestReport >= 0) this.#heldContext.splice(oldestReport, 1);
+			else this.#heldContext.shift();
+		}
 	}
 
 	/** Record composer edits as operator activity, holding voice-triggering context meanwhile. */
@@ -893,7 +947,7 @@ export class LiveSessionController {
 		if (this.#stopped) return;
 		const held = this.#heldContext;
 		this.#heldContext = [];
-		for (const send of held) send();
+		for (const item of held) item.send();
 	}
 
 	#handleOutputLevel(level: number): void {
@@ -1022,7 +1076,7 @@ export class LiveSessionController {
 			this.#emitUserSpeech({ role: "user", turn: retired, text: normalized, final });
 			return;
 		}
-		let current = this.#userTurnLedger[this.#userTurnLedger.length - 1];
+		let current = this.#tailTurn();
 		if (!normalized) {
 			// An empty authoritative final retracts the partial it closes.
 			if (final && current && !current.final) this.#retractPartialTurn(current);
@@ -1030,7 +1084,7 @@ export class LiveSessionController {
 		}
 		if (!current || current.final) {
 			current = { turn: ++this.#userLedgerTurn, text: normalized, final };
-			this.#userTurnLedger.push(current);
+			this.#putTurn(current);
 		} else if (final) {
 			// turn.done is authoritative, including contractions of a partial.
 			current.text = normalized;
@@ -1052,7 +1106,7 @@ export class LiveSessionController {
 	/** Drop a partial turn the recognizer withdrew, clearing its composer preview. A pending handoff
 	 *  that claimed it either dispatches its remaining turns or, with none left, ends. */
 	#retractPartialTurn(turn: { turn: number; claim?: number }): void {
-		this.#userTurnLedger = this.#userTurnLedger.filter(entry => entry !== turn);
+		this.#deleteTurns(entry => entry.turn === turn.turn);
 		this.#emitUserSpeech({ role: "user", turn: turn.turn, text: "", final: true });
 		const pending = this.#pendingDelegation;
 		if (!pending || turn.claim !== pending.generation) return;
@@ -1068,17 +1122,59 @@ export class LiveSessionController {
 	}
 
 	#recordAudioDropSummary(): void {
-		if (this.#framesDroppedAtGate === 0 && this.#framesDroppedAtNativeQueue === 0) return;
+		const playback = this.#transport?.playbackQueueStats?.() ?? { queuedMs: 0, droppedMs: 0 };
+		if (
+			this.#framesDroppedAtGate === 0 &&
+			this.#framesDroppedAtNativeQueue === 0 &&
+			playback.droppedMs === 0 &&
+			playback.queuedMs === 0
+		) {
+			return;
+		}
 		const summary = {
 			captured: this.#microphoneFrames,
 			sent: this.#framesSent,
 			droppedAtGate: this.#framesDroppedAtGate,
 			droppedAtNativeQueue: this.#framesDroppedAtNativeQueue,
+			playbackQueuedMs: playback.queuedMs,
+			playbackDroppedMs: playback.droppedMs,
 		};
 		logger.warn("Live microphone frame drops", summary);
 		this.#queueTranscriptLine(
 			JSON.stringify({ ts: new Date().toISOString(), type: "audio-frame-summary", ...summary }),
 		);
+	}
+
+	#tailTurn(): UserLedgerTurn | undefined {
+		if (this.#tailTurnNumber === undefined) return undefined;
+		return this.#userTurns.get(this.#tailTurnNumber);
+	}
+
+	#putTurn(turn: UserLedgerTurn): void {
+		this.#userTurns.set(turn.turn, turn);
+		this.#tailTurnNumber = turn.turn;
+	}
+
+	#turnsWhere(predicate: (turn: UserLedgerTurn) => boolean): UserLedgerTurn[] {
+		const matched: UserLedgerTurn[] = [];
+		for (const turn of this.#userTurns.values()) {
+			if (predicate(turn)) matched.push(turn);
+		}
+		return matched;
+	}
+
+	/** Delete matching turns and keep the tail pointing at the newest survivor. */
+	#deleteTurns(predicate: (turn: UserLedgerTurn) => boolean): UserLedgerTurn[] {
+		const removed: UserLedgerTurn[] = [];
+		for (const turn of this.#userTurns.values()) {
+			if (predicate(turn)) removed.push(turn);
+		}
+		for (const turn of removed) this.#userTurns.delete(turn.turn);
+		if (this.#tailTurnNumber !== undefined && !this.#userTurns.has(this.#tailTurnNumber)) {
+			this.#tailTurnNumber = undefined;
+			for (const number of this.#userTurns.keys()) this.#tailTurnNumber = number;
+		}
+		return removed;
 	}
 
 	/**

@@ -43,7 +43,7 @@ use webrtc::{
 
 use crate::{
 	VoiceResult,
-	audio::{PlaybackStream, PlaybackWriter},
+	audio::{PlaybackQueueStats, PlaybackStream, PlaybackWriter},
 };
 
 const DATA_CHANNEL_LABEL: &str = "oai-events";
@@ -324,6 +324,17 @@ impl LivePeerCore {
 	/// redundant close task.
 	pub fn is_closing(&self) -> bool {
 		self.closing.load(Ordering::Acquire)
+	}
+
+	/// Speaker backlog still queued, and audio dropped to keep that backlog
+	/// near two seconds. Zero before the peer has started.
+	pub fn playback_queue_stats(&self) -> PlaybackQueueStats {
+		self
+			.resources
+			.lock()
+			.as_ref()
+			.map(|resources| resources.playback.queue_stats())
+			.unwrap_or_default()
 	}
 
 	fn report_event(&self, payload: String) {

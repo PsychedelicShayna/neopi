@@ -537,6 +537,15 @@ function diffRegion(before: string, after: string): { start: number; oldEnd: num
 	return { start, oldEnd: before.length - suffix, newEnd: after.length - suffix };
 }
 
+/** A draft edit whose region is already known, so span tracking need not rescan both strings. */
+interface DraftEdit {
+	text: string;
+	cursorOffset: number;
+	region: { start: number; oldEnd: number; newEnd: number };
+	/** Draft the region was measured against. Used only when it still matches the span base. */
+	base: string;
+}
+
 /** Where `span` sits after the edit `region`, or undefined when the edit touched it. */
 function mapSpan(span: SpeechSpan, region: { start: number; oldEnd: number; newEnd: number }): SpeechSpan | undefined {
 	if (span.end <= region.start) return span;
@@ -2444,7 +2453,7 @@ export class Editor implements Component, Focusable {
 	}
 
 	getText(): string {
-		return this.#state.lines.join("\n");
+		return this.#draft();
 	}
 
 	/** Host-registered atomic chip labels mapped to their submit-time expansions. */
@@ -2457,10 +2466,17 @@ export class Editor implements Component, Focusable {
 		return this.#textRevision;
 	}
 
-	#notifyChange(text?: string): void {
+	#notifyChange(text?: string, edit?: DraftEdit): void {
 		this.#textRevision++;
-		if (this.#speechSpans.length > 0) this.#reconcileSpans();
-		this.onChange?.(text ?? this.getText());
+		if (edit) {
+			this.#draftText = edit.text;
+			this.#rememberCursorOffset(edit.cursorOffset);
+		} else {
+			this.#invalidateDraft();
+		}
+		const current = edit?.text ?? this.#draft();
+		if (this.#speechSpans.length > 0) this.#reconcileSpans(current, edit);
+		this.onChange?.(text ?? current);
 	}
 
 	/** Whether the buffer text equals `value`, without `getText()`'s full join —
@@ -2740,6 +2756,42 @@ export class Editor implements Component, Focusable {
 	#speechSpans: SpeechSpan[] = [];
 	/** Draft text the {@link #speechSpans} offsets refer to. */
 	#spanBase = "";
+	/** Joined draft. Undefined after an edit that did not publish a replacement string. */
+	#draftText: string | undefined;
+	/** Cursor offset in {@link #draftText}, valid only while line and column still match. */
+	#cursorOffsetCache: number | undefined;
+	#cursorOffsetLine = 0;
+	#cursorOffsetCol = 0;
+
+	#invalidateDraft(): void {
+		this.#draftText = undefined;
+		this.#cursorOffsetCache = undefined;
+	}
+
+	#draft(): string {
+		if (this.#draftText === undefined) this.#draftText = this.#state.lines.join("\n");
+		return this.#draftText;
+	}
+
+	#rememberCursorOffset(offset: number): void {
+		this.#cursorOffsetCache = offset;
+		this.#cursorOffsetLine = this.#state.cursorLine;
+		this.#cursorOffsetCol = this.#state.cursorCol;
+	}
+
+	#cursorOffset(): number {
+		if (
+			this.#cursorOffsetCache !== undefined &&
+			this.#cursorOffsetLine === this.#state.cursorLine &&
+			this.#cursorOffsetCol === this.#state.cursorCol
+		) {
+			return this.#cursorOffsetCache;
+		}
+		const offset = this.#offsetOf(this.#state.cursorLine, this.#state.cursorCol);
+		this.#rememberCursorOffset(offset);
+		return offset;
+	}
+
 
 	/** Show or replace a volatile speech-to-text preview at the cursor. `text` is the whole
 	 *  utterance so far. The preview is inserted with undo suspended so a long live dictation
@@ -2757,14 +2809,32 @@ export class Editor implements Component, Focusable {
 		const shown = this.#unadoptedPart(text);
 		if (shown === undefined) return;
 		this.#exitHistoryForEditing();
+		const before = this.#draft();
+		const cursor = this.#cursorOffset();
+		const deleteCount = this.#volatileTextLen;
+		const start = Math.max(0, cursor - deleteCount);
 		this.#withUndoSuspended(() => {
-			this.#deleteCharsBeforeCursor(this.#volatileTextLen);
-			if (shown) this.#insertTextAtCursor(shown);
+			this.#deleteCharsBeforeCursor(deleteCount);
+			if (shown) this.#insertTextAtCursor(shown, false);
 		});
+		const next = before.slice(0, start) + shown + before.slice(cursor);
+		const edit: DraftEdit = {
+			text: next,
+			cursorOffset: start + shown.length,
+			region: { start, oldEnd: cursor, newEnd: start + shown.length },
+			base: before,
+		};
+		// Publish the cached draft before notifying so the partial does not re-join the buffer.
+		this.#draftText = next;
+		this.#rememberCursorOffset(edit.cursorOffset);
+		if (shown) {
+			this.#notifyChange(undefined, edit);
+			this.#retriggerAutocompleteAtCursor();
+		}
 		this.#volatileUtterance = text;
 		this.#volatileTextLen = shown.length;
 		this.#snapshotVolatile();
-		if (!shown) this.#notifyChange();
+		if (!shown) this.#notifyChange(undefined, edit);
 	}
 
 	/** Remove the current volatile preview without committing it and end the utterance. */
@@ -2900,6 +2970,7 @@ export class Editor implements Component, Focusable {
 		this.#state.cursorLine = line;
 		this.#setCursorCol(cursor);
 		this.#lastAction = null;
+		this.#invalidateDraft();
 		this.#snapshotVolatile();
 		this.#notifyChange();
 		return targets.length;
@@ -2931,7 +3002,7 @@ export class Editor implements Component, Focusable {
 	#snapshotVolatile(): void {
 		this.#volatileSnapshot =
 			this.#volatileTextLen > 0
-				? { text: this.#state.lines.join("\n"), line: this.#state.cursorLine, col: this.#state.cursorCol }
+				? { text: this.#draft(), line: this.#state.cursorLine, col: this.#state.cursorCol }
 				: undefined;
 	}
 
@@ -2942,7 +3013,7 @@ export class Editor implements Component, Focusable {
 	#reconcileVolatile(): void {
 		const snapshot = this.#volatileSnapshot;
 		if (this.#volatileTextLen === 0 || !snapshot) return;
-		const current = this.#state.lines.join("\n");
+		const current = this.#draft();
 		if (
 			snapshot.line === this.#state.cursorLine &&
 			snapshot.col === this.#state.cursorCol &&
@@ -2977,10 +3048,10 @@ export class Editor implements Component, Focusable {
 
 	/** Carry speech spans across draft edits since {@link #spanBase}; spans an edit touched are
 	 *  forgotten, so later removal can only ever delete untouched spoken text. */
-	#reconcileSpans(current = this.#state.lines.join("\n")): void {
+	#reconcileSpans(current = this.#state.lines.join("\n"), edit?: DraftEdit): void {
 		if (this.#spanBase === current) return;
 		if (this.#speechSpans.length > 0) {
-			const region = diffRegion(this.#spanBase, current);
+			const region = edit && edit.base === this.#spanBase ? edit.region : diffRegion(this.#spanBase, current);
 			this.#speechSpans = this.#speechSpans.flatMap(span => mapSpan(span, region) ?? []);
 		}
 		this.#spanBase = current;
@@ -3670,7 +3741,7 @@ export class Editor implements Component, Focusable {
 		this.#lastAction = "kill";
 	}
 
-	#insertTextAtCursor(text: string): void {
+	#insertTextAtCursor(text: string, notify = true): void {
 		this.#historyIndex = -1;
 		this.#resetKillSequence();
 		this.#recordUndoState();
@@ -3709,6 +3780,7 @@ export class Editor implements Component, Focusable {
 			this.#setCursorCol((lines[lines.length - 1] || "").length);
 		}
 
+		if (!notify) return;
 		this.#notifyChange();
 		this.#retriggerAutocompleteAtCursor();
 	}

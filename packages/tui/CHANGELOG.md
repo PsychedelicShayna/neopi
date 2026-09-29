@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Volatile speech updates reuse a cached draft and cursor offset, and apply a known edit region, instead of rejoining and diffing the whole buffer on every partial.
+
 ## [18.3.1] - 2026-09-25
 
 ### Breaking Changes
