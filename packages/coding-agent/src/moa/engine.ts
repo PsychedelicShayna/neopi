@@ -22,6 +22,7 @@ import type {
 	UserMessage,
 } from "@oh-my-pi/pi-ai";
 import { Tokenizer } from "@oh-my-pi/pi-agent-core";
+import { providerImageBudget } from "@oh-my-pi/snapcompact";
 import type {
 	MixtureCheckpointReason,
 	MixtureEdge,
@@ -475,18 +476,23 @@ class MixtureCall {
 				conversation: parts.conversation ?? "",
 				x: { output: parts.output, input: parts.input, reasoning: parts.reasoning, tool_trace: parts.toolTrace },
 			});
+		// The member context transform drops oldest images above this provider's
+		// cap. Fit against the surviving tail, not attachments it will discard.
+		const entryImages = edgeInId === undefined ? this.#entry.topicImages : [];
+		const imageLimit = member.model.input.includes("image")
+			? providerImageBudget(member.model.provider)
+			: Number.POSITIVE_INFINITY;
+		const fittedImages =
+			entryImages.length > imageLimit ? entryImages.slice(entryImages.length - imageLimit) : entryImages;
 		const fitted = fitHopRequest({
 			target: member.model,
 			maxTokens: member.maxTokens,
 			systemPrompt,
 			assemble,
 			parts: { ...partsOf(envelopeContext.x), conversation: envelopeContext.conversation },
-			// Entry images join the envelope after fitting. Count their irreducible
-			// tokens now, without counting the envelope's text twice.
-			hopMessages:
-				edgeInId === undefined && this.#entry.topicImages.length > 0
-					? [{ role: "user", content: this.#entry.topicImages, timestamp: 0 }]
-					: [],
+			// The entry images join the envelope after fitting. Count the images
+			// that reach the member without counting envelope text twice.
+			hopMessages: fittedImages.length > 0 ? [{ role: "user", content: fittedImages, timestamp: 0 }] : [],
 			partBudgetTokens: cfgMoaPartBudgetTokens.get(settings),
 		});
 		if (!fitted.ok) {

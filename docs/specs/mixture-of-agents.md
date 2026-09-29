@@ -1352,9 +1352,10 @@ keeping head and tail with an `[… truncated N tokens]` marker:
 
 Tokens are counted with `Tokenizer` for the target model. The entry hop's
 operator images are irreducible even though they join the fitted text envelope
-only when the member request is assembled; charge them before fitting using
-the tokenizer's image estimate (`packages/agent/src/tokenizer.ts`,
-`IMAGE_TOKEN_ESTIMATE`). Frames use `FRAME_TOKEN_ESTIMATE`.
+only when the member request is assembled. Charge the images that survive the
+member provider's image cap before fitting, using the tokenizer's image estimate
+(`packages/agent/src/tokenizer.ts`, `IMAGE_TOKEN_ESTIMATE`); the later member
+context transform drops the same oldest images. Frames use `FRAME_TOKEN_ESTIMATE`.
 
 ### 4.7 Limits, settlement, and the limit state machine
 

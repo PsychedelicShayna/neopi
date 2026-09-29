@@ -805,6 +805,41 @@ describe("provider context for members", () => {
 		expect(members.callsTo("tight")).toHaveLength(0);
 	});
 
+	it("fits only the entry images that the member provider will retain", async () => {
+		const definition = DRAFT_THEN_EDIT_TOML.replace('model = "fake/writer"', 'model = "vision/limited"');
+		await ensureFixture(definition);
+		fixture.registry.registerProvider("vision", {
+			baseUrl: "http://127.0.0.1:1/v1",
+			apiKey: "k",
+			api: "moa-fake",
+			models: [
+				{
+					id: "limited",
+					name: "limited",
+					reasoning: true,
+					input: ["text", "image"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 7_000,
+					maxTokens: 100,
+				},
+			],
+		});
+		const session = await mixtureSession(definition);
+		const image: ImageContent = {
+			type: "image",
+			data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
+			mimeType: "image/png",
+		};
+		await session.prompt("describe", { images: Array.from({ length: 7 }, () => image) });
+		expect(lastAssistant(session).stopReason).toBe("stop");
+		const sent = members.callsTo("limited")[0]?.context.messages[0];
+		expect(
+			sent?.role === "user" && Array.isArray(sent.content)
+				? sent.content.filter(block => block.type === "image").length
+				: 0,
+		).toBe(5);
+	});
+
 	it("gives every member call the session's per-request provider options, as a native model gets them", async () => {
 		const settings = Settings.isolated({
 			...SETTINGS,
