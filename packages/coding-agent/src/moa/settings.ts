@@ -64,3 +64,100 @@ export const cfgMoaConversationBudgetTokens = register({
 		description: "Token budget for the earlier conversation shown to the entry member",
 	},
 });
+
+export const cfgMoaBudgetUsd = register({
+	id: "moa.budget_usd",
+	type: "number",
+	default: 0,
+	ui: {
+		tab: "model",
+		group: "Mixture of Agents",
+		label: "Mixture Budget (USD)",
+		description: "Default spend limit per run window; zero disables this limit",
+	},
+});
+
+export const cfgMoaHardBudgetUsd = register({
+	id: "moa.hard_budget_usd",
+	type: "number",
+	default: 0,
+	ui: {
+		tab: "model",
+		group: "Mixture of Agents",
+		label: "Mixture Hard Budget (USD)",
+		description: "Lifetime spend cap; zero disables this cap",
+	},
+});
+
+export const cfgMoaWallClockMinutes = register({
+	id: "moa.wall_clock_minutes",
+	type: "number",
+	default: 240,
+	ui: {
+		tab: "model",
+		group: "Mixture of Agents",
+		label: "Mixture Time Limit",
+		description: "Default wall-clock minutes per run window",
+	},
+});
+
+export const cfgMoaOnLimit = register({
+	id: "moa.on_limit",
+	type: "enum",
+	values: ["stop", "pause", "judge"] as const,
+	default: "pause",
+	ui: {
+		tab: "model",
+		group: "Mixture of Agents",
+		label: "Mixture Limit Action",
+		description: "Stop, pause, or ask a final member when a soft limit is reached",
+	},
+});
+
+export const cfgMoaJudgeMinConfidence = register({
+	id: "moa.judge_min_confidence",
+	type: "number",
+	default: 0.55,
+	ui: {
+		tab: "model",
+		group: "Mixture of Agents",
+		label: "Route Confidence Floor",
+		description: "Default minimum confidence for a native route judgment",
+	},
+});
+
+export const cfgMoaDecisionStateTokens = register({
+	id: "moa.decision_state_tokens",
+	type: "number",
+	default: 4_000,
+	ui: {
+		tab: "model",
+		group: "Mixture of Agents",
+		label: "Decision State Budget",
+		description: "Token cap per state part supplied to a route, termination, or verdict judgment",
+	},
+});
+
+export const cfgMoaTranscriptBudgetTokens = register({
+	id: "moa.transcript_budget_tokens",
+	type: "number",
+	default: 24_000,
+	ui: {
+		tab: "model",
+		group: "Mixture of Agents",
+		label: "Mixture Transcript Budget",
+		description: "Default token budget for transcript transit",
+	},
+});
+
+export const cfgMoaSummaryModel = register({
+	id: "moa.summary_model",
+	type: "string",
+	default: "@smol",
+	ui: {
+		tab: "model",
+		group: "Mixture of Agents",
+		label: "Mixture Summary Model",
+		description: "Model role used when compacting transit transcripts",
+	},
+});

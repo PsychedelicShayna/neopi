@@ -68,6 +68,8 @@ export interface JudgeDeps {
 	registry: ModelRegistry;
 	/** The session's active model, appended when the judge role does not already route to it. */
 	sessionModel?: Model;
+	/** Pinned judge candidates for a mixture; bypass the live role-chain refresh. */
+	candidates?: RoleChainCandidate[];
 	sessionId?: string;
 	metadataResolver?: (provider: string) => Record<string, unknown> | undefined;
 	onUsage?: (usage: JudgmentUsage) => void;
@@ -269,6 +271,7 @@ export class ChainJudge implements Judge {
 	}
 
 	#resolveCandidates(): RoleChainCandidate[] {
+		if (this.#deps.candidates) return this.#deps.candidates;
 		const now = Date.now();
 		if (this.#candidates && now < this.#candidates.expiresAt) return this.#candidates.list;
 		const list = this.#buildCandidates();

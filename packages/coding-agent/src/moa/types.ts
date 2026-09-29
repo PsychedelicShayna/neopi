@@ -16,7 +16,7 @@ import type {
 	StopReason,
 	Usage,
 } from "@oh-my-pi/pi-ai";
-import type { Question } from "@oh-my-pi/pi-ai/judgment";
+import type { Judge, JudgeOptions, Question } from "@oh-my-pi/pi-ai/judgment";
 import type {
 	MixtureCheckpointReason,
 	MixtureDecision,
@@ -30,6 +30,7 @@ import type {
 } from "@oh-my-pi/pi-tui/overlays/mixture-types";
 import type { RoleChainCandidate } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
+import type { JudgeKind, JudgmentUsage } from "../judgment";
 import type { MixtureRunStore } from "./run-store";
 import type { PreparedDocumentPresets } from "./validate";
 
@@ -84,6 +85,8 @@ export interface ResolvedMixture {
 	/** What the graph can actually reach. */
 	uses: { judge: boolean; summary: boolean; slicer: boolean };
 	judgePlan?: RoleChainCandidate[];
+	/** Summary dependency pinned only when an edge uses compact transcript transit. */
+	summaryModel?: Model<Api>;
 	readOnlyTools: ReadonlySet<string>;
 	/** Resolution failures (unresolved models, roles, presets, helpers); `validateMixture` reports them. */
 	issues: MixtureIssue[];
@@ -212,6 +215,7 @@ export interface MixtureRun {
 	hops: HopRecord[];
 	activeMemberId?: string;
 	traversals: Record<string, number>;
+	summaries: Record<string, { text?: string; preserveData?: Record<string, unknown>; throughHop: number }>;
 	settlements: Settlement[];
 	/** `settlements[0, reportedThrough)` were reported on a committed outer response. */
 	reportedThrough: number;
@@ -220,6 +224,8 @@ export interface MixtureRun {
 	lifetime: { hops: number; usd: number; startedAt: number };
 	outerResponses: OuterResponseRecord[];
 	final?: { text: string; hop: number };
+	/** Pending final limit-hop cause when on_limit = judge. */
+	limitHop?: { kind: "hops" | "budget" | "wall_clock"; value: string };
 	toolRequirement?: ToolRequirement;
 	endReason?: MixtureEndReason;
 	/** Monotonic trace sequence. */
@@ -271,6 +277,7 @@ export type MixtureEvent =
 	| { type: "decision"; run: MixtureRun; hop: HopRecord; trace: Extract<MixtureTraceDetails, { kind: "decision" }> }
 	| { type: "steering"; run: MixtureRun; trace: Extract<MixtureTraceDetails, { kind: "steering" }> }
 	| { type: "limit"; run: MixtureRun; trace: Extract<MixtureTraceDetails, { kind: "limit" }> }
+	| { type: "resume"; run: MixtureRun; note: string }
 	| {
 			type: "checkpoint";
 			run: MixtureRun;
@@ -285,6 +292,11 @@ export type MixtureEvent =
 /** Options the caller's loop passes to a stream function beyond `SimpleStreamOptions` (the loop spreads its config). */
 export interface OuterStreamOptions extends SimpleStreamOptions {
 	metadataResolver?: (provider: string) => Record<string, unknown> | undefined;
+}
+
+/** Judgment chain bound to the mixture's pinned candidate plan. */
+export interface MixtureJudge {
+	withCandidate<T>(run: (judge: Judge, kind: JudgeKind) => Promise<T>, options?: JudgeOptions): Promise<T>;
 }
 
 /** Everything a mixture run needs from where it executes. */
@@ -306,6 +318,8 @@ export interface MixtureHost {
 	/** Provider-specific context preparation for a member model. */
 	prepareContext(context: Context, model: Model<Api>): Promise<Context>;
 	conversationKey(context: Context, options: SimpleStreamOptions): string;
+	/** A judge over the run's pinned candidates; every billed attempt is settled by the caller. */
+	judge(plan: RoleChainCandidate[], onAttempt: (attempt: JudgmentUsage) => void): MixtureJudge;
 	/** Upstream billed-attempt accounting, once per settlement, when it settles; late settlements too. */
 	onSettlement?(run: MixtureRun, settlement: Settlement): void;
 	/**

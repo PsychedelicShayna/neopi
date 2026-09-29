@@ -389,6 +389,7 @@ class MixtureCall {
 			hops: [],
 			activeMemberId: resolved.definition.entry,
 			traversals: {},
+			summaries: {},
 			settlements: [],
 			reportedThrough: 0,
 			appliedToolResultIds: [],

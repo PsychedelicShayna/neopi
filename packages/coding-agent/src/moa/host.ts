@@ -12,6 +12,7 @@ import type { Api, ApiKey, AssistantMessage, Context, Model } from "@oh-my-pi/pi
 import { MIXTURE_TRACE_MESSAGE_TYPE, type MixtureTraceDetails } from "@oh-my-pi/pi-tui/overlays/mixture-types";
 import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
+import { resolveJudge } from "../judgment";
 import type { SessionManager } from "../session/session-manager";
 import { commitMixtureResponse } from "./engine";
 import { isMixtureModel } from "./provider";
@@ -196,6 +197,15 @@ export function createSessionMixtureHost(deps: SessionMixtureHostDeps): SessionM
 		},
 		prepareContext: deps.prepareContext,
 		conversationKey: () => sessionManager.getSessionId(),
+		judge(plan, onAttempt) {
+			return resolveJudge({
+				settings,
+				registry: modelRegistry,
+				sessionId: sessionManager.getSessionId(),
+				candidates: plan,
+				onUsage: onAttempt,
+			});
+		},
 		onSettlement(_run, settlement) {
 			// Each billed member attempt is observed once, here; the session skips the
 			// per-message observation for mixture responses.
