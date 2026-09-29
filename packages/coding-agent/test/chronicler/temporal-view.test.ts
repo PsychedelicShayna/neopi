@@ -437,4 +437,62 @@ describe("chronicle temporal view", () => {
 		expect(seen.length).toBeGreaterThan(6);
 		expect(seen.every(complete => complete === false)).toBe(true);
 	});
+
+	it("refuses invalid or foreign VIEW.json markers, symlink aliases, and symlinked node directories", async () => {
+		await writeSessionAtoms(sessionsDir, {
+			cwd: "/work/alpha",
+			sessionId: "a1a1a1a1-0000-7000-8000-00000000000f",
+			batches: [[atom("Kept", "2026-09-08T09:00:00.000Z"), atom("Later", "2026-09-20T09:00:00.000Z")]],
+		});
+		const foreign = path.join(agentDir, "foreign");
+		await Bun.write(path.join(foreign, "keep.txt"), "mine");
+		await Bun.write(path.join(foreign, "2026", "keep.txt"), "mine too");
+		const alias = path.join(agentDir, "alias-of-sessions");
+		await fs.symlink(sessionsDir, alias);
+		const before = await snapshot(agentDir);
+		for (const marker of ["not json", "{}", JSON.stringify({ format: "chronicle-view", version: 99 })]) {
+			await Bun.write(path.join(foreign, "VIEW.json"), marker);
+			await expect(index({ root: foreign })).rejects.toThrow(/Refusing/);
+		}
+		await fs.rm(path.join(foreign, "VIEW.json"));
+		await expect(index({ root: alias })).rejects.toThrow(/overlaps/);
+		await expect(index({ root: path.join(alias, "view") })).rejects.toThrow(/overlaps/);
+		expect(await snapshot(agentDir)).toEqual(before);
+
+		await index();
+		const outside = path.join(agentDir, "outside");
+		await Bun.write(path.join(outside, "keep.txt"), "mine");
+		await fs.rm(path.join(root, "2026", "09"), { recursive: true });
+		await fs.symlink(outside, path.join(root, "2026", "09"));
+		await expect(index()).rejects.toThrow(/symbolic link/);
+		expect(await fs.readdir(outside)).toEqual(["keep.txt"]);
+	});
+
+	it("discloses edited scope metadata even when the node keeps its old hash", async () => {
+		await writeSessionAtoms(sessionsDir, {
+			cwd: "/work/alpha",
+			sessionId: "a1a1a1a1-0000-7000-8000-000000000010",
+			batches: [[atom("Monday note", "2026-09-08T09:00:00.000Z"), atom("Tuesday note", "2026-09-09T11:00:00.000Z")]],
+		});
+		await index();
+		const weekFile = path.join(nodeDir(root, "2026/09/w2"), "node.json");
+		const week = await Bun.file(weekFile).json();
+		week.children[1].projects = [];
+		await Bun.write(weekFile, JSON.stringify(week));
+		expect((await readViewNode(root, "2026/09/w2")).state).toBe("corrupt");
+
+		const scoped = await recallChronicle({
+			root,
+			query: "tuesday note",
+			project: "alpha",
+			budget: 1,
+			beam: 2,
+			neighborhoodMinutes: 90,
+			ranker: lexicalRanker,
+		});
+		expect(scoped.view.viewStale).toBe(true);
+		expect(scoped.trace.some(step => step.action === "view-drift" && step.node === "2026/09/w2")).toBe(true);
+		const repaired = await index();
+		expect(repaired.changes.find(change => change.key === "2026/09/w2")?.reason).toBe("corrupt");
+	});
 });

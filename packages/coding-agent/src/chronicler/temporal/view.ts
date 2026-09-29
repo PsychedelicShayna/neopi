@@ -189,16 +189,27 @@ export function isTerminal(node: Pick<ViewNode, "atoms">): boolean {
 	return node.atoms !== undefined;
 }
 
-/** Hash of the node's routing content: what a parent consumes and a ranker reads. */
-export function computeContentHash(node: Pick<ViewNode, "overview" | "children" | "atoms" | "key">): string {
-	return hashText(
-		JSON.stringify([
-			node.key,
-			node.overview ?? null,
-			node.children.map(child => [child.key, child.identity, child.contentHash, child.description]),
-			node.atoms?.map(atom => [atom.id, atom.fingerprint, atom.stub, atom.route]) ?? null,
-		]),
-	);
+/** JSON with object keys sorted, so the hash does not depend on property order. */
+function canonicalJson(value: unknown): string {
+	if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+	if (value !== null && typeof value === "object") {
+		const entries = Object.entries(value as Record<string, unknown>)
+			.filter(([, item]) => item !== undefined)
+			.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+		return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`).join(",")}}`;
+	}
+	return JSON.stringify(value) ?? "null";
+}
+
+/**
+ * Hash of everything a node carries except the hash itself: routing text,
+ * scope metadata (periods, projects, sessions, counts), child references,
+ * atom locators, and provenance. Any edit to node.json that a reader could
+ * act on changes it.
+ */
+export function computeContentHash(node: ViewNode): string {
+	const { contentHash: _omit, ...content } = node;
+	return hashText(canonicalJson(content));
 }
 
 export function routeLinePrefix(child: Pick<ViewChildRef, "label" | "key">): string {
@@ -354,6 +365,7 @@ export async function writeViewNode(
 	keepChildSegments: ReadonlySet<string>,
 ): Promise<string[]> {
 	const dir = nodeDir(root, node.key);
+	await assertNoSymlinkedNodeDir(root, node.key);
 	await fs.mkdir(dir, { recursive: true });
 	const keep = new Set<string>([NODE_FILE, NODE_MARKDOWN, ...keepChildSegments]);
 	if (!node.key) keep.add(VIEW_FILE);
@@ -414,6 +426,7 @@ export async function findOrphanDirs(root: string, wanted: ReadonlySet<string>):
 }
 
 export async function removeNodeDir(root: string, key: string): Promise<void> {
+	await assertNoSymlinkedNodeDir(root, key);
 	await fs.rm(nodeDir(root, key), { recursive: true, force: true });
 }
 
@@ -422,21 +435,82 @@ function isWithin(child: string, parent: string): boolean {
 	return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+/** Real path of `target`: its nearest existing ancestor resolved through symlinks, plus the missing remainder. */
+async function realPathOf(target: string): Promise<string> {
+	const absolute = path.resolve(target);
+	let existing = absolute;
+	const missing: string[] = [];
+	for (;;) {
+		try {
+			return path.join(await fs.realpath(existing), ...missing.reverse());
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+			const parent = path.dirname(existing);
+			if (parent === existing) return absolute;
+			missing.push(path.basename(existing));
+			existing = parent;
+		}
+	}
+}
+
+function isOwnershipManifest(value: unknown): boolean {
+	if (typeof value !== "object" || value === null) return false;
+	const manifest = value as Partial<ViewManifest>;
+	return (
+		manifest.format === "chronicle-view" &&
+		manifest.version === VIEW_FORMAT_VERSION &&
+		typeof manifest.timeZone === "string" &&
+		typeof manifest.complete === "boolean" &&
+		typeof manifest.startedAt === "string" &&
+		typeof manifest.config === "object" &&
+		manifest.config !== null
+	);
+}
+
 /**
- * Refuse to manage a directory the view does not own. The root may not be,
- * contain, or sit inside the sessions directory, nor be or contain the agent
- * directory; an existing non-empty root must already carry VIEW.json.
- * Pruning deletes unrecognized entries, so this is what keeps it inside the view.
+ * Refuse to manage a directory the view does not own. Compared by real
+ * filesystem path (symlinks resolved, including ancestors), the root may not
+ * be, contain, or sit inside the sessions directory, nor be or contain the
+ * agent directory; an existing non-empty root must carry a valid, versioned
+ * VIEW.json. Pruning deletes unrecognized entries, so this is what keeps it
+ * inside the view.
  */
 export async function assertOwnedViewRoot(root: string, agentDir: string, sessionsDir: string): Promise<void> {
-	const target = path.resolve(root);
-	const sessions = path.resolve(sessionsDir);
-	const agent = path.resolve(agentDir);
+	const [target, sessions, agent] = await Promise.all([
+		realPathOf(root),
+		realPathOf(sessionsDir),
+		realPathOf(agentDir),
+	]);
 	if (isWithin(sessions, target) || isWithin(target, sessions) || isWithin(agent, target)) {
 		throw new Error(`Refusing to use ${root} as the chronicle view: it overlaps the agent or sessions directory`);
 	}
 	const entries = await listDir(target);
-	if (entries.length > 0 && !entries.includes(VIEW_FILE)) {
-		throw new Error(`Refusing to use ${root} as the chronicle view: it is not empty and has no ${VIEW_FILE}`);
+	if (entries.length === 0) return;
+	let manifest: unknown;
+	try {
+		manifest = await Bun.file(path.join(target, VIEW_FILE)).json();
+	} catch {
+		manifest = undefined;
+	}
+	if (!isOwnershipManifest(manifest)) {
+		throw new Error(
+			`Refusing to use ${root} as the chronicle view: it is not empty and has no valid chronicle ${VIEW_FILE}`,
+		);
+	}
+}
+
+/** Refuse to write or prune through a symlinked directory between the root and `key`'s node directory. */
+async function assertNoSymlinkedNodeDir(root: string, key: string): Promise<void> {
+	let dir = root;
+	for (const segment of key ? key.split("/") : []) {
+		dir = path.join(dir, segment);
+		try {
+			if ((await fs.lstat(dir)).isSymbolicLink()) {
+				throw new Error(`Refusing to write through the symbolic link ${dir} in the chronicle view`);
+			}
+		} catch (error) {
+			if (isEnoent(error)) return;
+			throw error;
+		}
 	}
 }

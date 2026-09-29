@@ -41,7 +41,7 @@ Regenerates only stale nodes, children first. A node is stale when it is missing
 - `--rebuild`: regenerate every node.
 - `--since`/`--until` (`YYYY`, `YYYY-MM`, `YYYY-MM-DD`, or an ISO instant): regenerate only nodes overlapping the window. Ancestors of a stale node left outside the window are reported **blocked** and stay stale; the view is then marked incomplete.
 
-The view root must be dedicated to the view: index refuses a root that is, contains, or sits inside the sessions directory, contains the agent directory, or is a non-empty directory without `VIEW.json`, because refreshing removes entries the view does not recognize.
+The view root must be dedicated to the view: index refuses a root that is, contains, or sits inside the sessions directory, contains the agent directory (compared by real path, so symlink aliases count), or is a non-empty directory without a valid chronicle `VIEW.json`; it also refuses to write through a symlinked node directory. Refreshing removes entries the view does not recognize, so these checks keep it inside the view. Every `node.json` is hashed over all of its content, so a hand edit to any field — including periods, projects, or sessions — is reported as drift and regenerated.
 
 The report also lists canonical problems without touching atoms: malformed batches (other batches of the session are still indexed), duplicate atom ids, entries committed twice, beats citing uncommitted or missing transcript entries, missing transcripts, and `related`/`supersedes` ids that match no atom. `VIEW.json` is marked incomplete before the first write and complete only when every node settled. Exit status is 1 when a summary failed.
 
