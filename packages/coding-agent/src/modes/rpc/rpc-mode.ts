@@ -1312,7 +1312,10 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 			}
 
 			case "get_subagents": {
-				return success(id, "get_subagents", { subagents: subagentRegistry?.getSubagents() ?? [] });
+				if (!subagentRegistry) {
+					return error(id, "get_subagents", "Subagent event bus is unavailable", "subagent_bus_unavailable");
+				}
+				return success(id, "get_subagents", { subagents: subagentRegistry.getSubagents() });
 			}
 
 			case "get_subagent_messages": {

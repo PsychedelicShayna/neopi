@@ -6,7 +6,9 @@
  * resolves by pane id and rejects an ambiguous prefix.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { once } from "node:events";
+import * as net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ControlClient, ControlClientError } from "../../src/control/client";
@@ -99,9 +101,49 @@ describe("control socket", () => {
 			kind: "cli",
 		});
 		await expect(intruder.connect()).rejects.toBeInstanceOf(ControlClientError);
+
+		const raw = net.connect(publication.metadata().endpoint);
+		await once(raw, "data"); // challenge
+		raw.write(`${JSON.stringify({ type: "hello", token: publication.token, client: { label: "chunk-test", kind: "cli" }, protocolVersion: 2 })}\n`);
+		await once(raw, "data"); // authenticated hello
+		const closed = once(raw, "close");
+		raw.write(`${JSON.stringify({ type: "rpc_chunk", chunkId: "interrupted", index: 0, count: 2, byteLength: 2 * 1024 * 1024, data: "e30=" })}\n${JSON.stringify({ type: "get_status" })}\n`);
+		await closed;
+		expect(host.budget.inboundBytes).toBe(0);
 		await publication.close();
 
 		const listed = await readControlEntries({ dir });
 		expect(listed).toHaveLength(0);
+	});
+
+	test("prunes a current-version publication when its live PID has different start ticks", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "omp-ctl-reused-pid-"));
+		const meta: ControlMetadata = {
+			version: 1,
+			instanceId: "abcdef0123456789",
+			imageId: "stale",
+			pid: process.pid,
+			procStartTicks: 1,
+			endpoint: join(dir, "stale.sock"),
+			createdAt: Date.now(),
+			startedAt: Date.now(),
+			token: "a".repeat(64),
+			role: "tui",
+			execPath: process.execPath,
+			gitSha: null,
+			profile: null,
+			sessionId: null,
+			sessionFile: null,
+			title: null,
+			cwd: dir,
+			tmuxPane: null,
+			tmuxSession: null,
+			tmuxWindow: null,
+			tty: null,
+		};
+		const file = join(dir, "abcdef0123456789.json");
+		writeFileSync(file, JSON.stringify(meta));
+		expect(await readControlEntries({ dir })).toHaveLength(0);
+		expect(existsSync(file)).toBe(false);
 	});
 });

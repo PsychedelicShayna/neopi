@@ -794,7 +794,10 @@ export class InputController {
 				editor.onEscape?.();
 				return true;
 			case "app.clear":
-				this.handleCtrlC();
+				// Control actions clear the composer without entering the human
+				// Ctrl-C double-press/hard-abort shutdown state.
+				this.ctx.discardLiveSpeech();
+				this.ctx.clearEditor();
 				return true;
 			case "app.exit":
 				this.handleCtrlD();

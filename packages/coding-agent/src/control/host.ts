@@ -20,7 +20,7 @@ import { AgentRegistry } from "../registry/agent-registry";
 import { executeSend } from "../irc/messaging";
 import { IrcBus } from "../irc/bus";
 import { currentControlActor, runAsControlActor } from "./actor";
-import { HostBudget, workClass } from "./budget";
+import { HostBudget, MAX_KEYS_BYTES, workClass } from "./budget";
 import { RPC_COMMAND_TYPES } from "./parity";
 import { encodeKeyId, encodeSgrMouse } from "./keys";
 import type { ControlPresenter, RewindOutcome } from "./presenter";
@@ -605,6 +605,14 @@ export class ControlHost {
 					});
 					return;
 				}
+				if (actionId === "app.exit") {
+					this.#reply(connection, frame, {
+						success: false,
+						error: "exiting this pane closes the control connection; exit from the pane itself",
+						code: "exempt_process_exit",
+					});
+					return;
+				}
 				const result = await presenter!.action(actionId);
 				if (result.exempt) {
 					this.#reply(connection, frame, { success: false, error: result.exempt, code: result.exempt });
@@ -629,7 +637,8 @@ export class ControlHost {
 					return;
 				}
 				const tokens = Array.isArray(frame.keys) ? frame.keys : [];
-				let injected = 0;
+				const encoded: string[] = [];
+				let totalBytes = 0;
 				for (const token of tokens) {
 					const record = token as { key?: string; text?: string };
 					const bytes = record.text ?? (record.key ? encodeKeyId(record.key) : undefined);
@@ -641,10 +650,19 @@ export class ControlHost {
 						});
 						return;
 					}
-					presenter!.inject(bytes);
-					injected++;
+					totalBytes += Buffer.byteLength(bytes);
+					if (totalBytes > MAX_KEYS_BYTES) {
+						this.#reply(connection, frame, {
+							success: false,
+							error: `keys payload exceeds ${MAX_KEYS_BYTES} bytes`,
+							code: "frame_too_large",
+						});
+						return;
+					}
+					encoded.push(bytes);
 				}
-				this.#reply(connection, frame, { success: true, data: { injected, revisions: this.revisions } });
+				for (const bytes of encoded) presenter!.inject(bytes);
+				this.#reply(connection, frame, { success: true, data: { injected: encoded.length, revisions: this.revisions } });
 				return;
 			}
 			case "paste":
@@ -765,16 +783,25 @@ export class ControlHost {
 			case "settings_unset":
 				this.#settings(connection, frame);
 				return;
-			case "commands":
-				this.#reply(connection, frame, {
-					success: true,
-					data: {
-						commands: await import("../slash-commands/available-commands").then(m =>
-							m.buildAvailableSlashCommands(this.#options.session),
-						),
-					},
-				});
+			case "commands": {
+				const { buildAvailableSlashCommands } = await import("../slash-commands/available-commands");
+				const commands = await buildAvailableSlashCommands(this.#options.session);
+				if (presenter) {
+					const { BUILTIN_SLASH_COMMANDS_INTERNAL } = await import("../slash-commands/builtin-registry");
+					const listed = new Set(commands.map(command => command.name));
+					for (const builtin of BUILTIN_SLASH_COMMANDS_INTERNAL) {
+						if (listed.has(builtin.name)) continue;
+						commands.push({
+							name: builtin.name,
+							aliases: builtin.aliases,
+							description: builtin.description,
+							source: "builtin",
+						});
+					}
+				}
+				this.#reply(connection, frame, { success: true, data: { commands } });
 				return;
+			}
 			case "agents":
 				await this.#agents(connection, frame);
 				return;

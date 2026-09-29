@@ -18,10 +18,9 @@ source "$HERE/fake-model.sh"
 DIR=$(mktemp -d)
 mkdir -p "$DIR/ctl" "$DIR/work"
 export PI_CONTROL_DIR=$DIR/ctl PI_CODING_AGENT_DIR=$DIR PARITY_DIR=$DIR
-SOCK=ctl-parity
+SOCK=ctl-parity-$$
 start_fake_model "$DIR"
 trap 'kill $FAKE_PID 2>/dev/null || true; tmux -L $SOCK kill-server 2>/dev/null || true' EXIT
-tmux -L "$SOCK" kill-server 2>/dev/null || true
 tmux -f /dev/null -L "$SOCK" new-session -d -x 200 -y 50 -s ctl -c "$DIR/work"
 tmux -L "$SOCK" send-keys -t ctl:0.0 "env PI_CONTROL_DIR=$PI_CONTROL_DIR PI_CODING_AGENT_DIR=$DIR $NPI --model fake/echo" Enter
 target=""

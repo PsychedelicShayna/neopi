@@ -396,7 +396,7 @@ export async function readControlEntries(options?: ControlRegistryOptions): Prom
 			if (publicationProcessGone(meta)) await pruneControlEntry(dir, name, meta);
 			continue;
 		}
-		if (pidState(meta.pid) === "dead") {
+		if (publicationProcessGone(meta)) {
 			await pruneControlEntry(dir, name, meta);
 			continue;
 		}

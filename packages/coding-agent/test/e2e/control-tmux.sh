@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Real-pane control-socket check (#171). Private tmux socket only.
-# Skips unless dist/npi (or $NPI) and tmux exist.
+# Real-pane control-socket check (#171). A private registry and private tmux
+# socket contain two sessions on the local fake model.
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 NPI=${NPI:-$ROOT/dist/npi}
@@ -9,16 +9,21 @@ if [[ ! -x $NPI ]] || ! command -v tmux >/dev/null; then
 	echo "skip: need an executable NPI and tmux" | tee "$LOG"
 	exit 0
 fi
-SOCK=ctl-e2e
-tmux -L "$SOCK" kill-server 2>/dev/null || true
+source "$(dirname "$0")/fake-model.sh"
+DIR=$(mktemp -d)
+mkdir -p "$DIR/ctl"
+export PI_CONTROL_DIR=$DIR/ctl PI_CODING_AGENT_DIR=$DIR
+start_fake_model "$DIR"
+SOCK=ctl-e2e-$$
+trap 'kill $FAKE_PID 2>/dev/null || true; tmux -L "$SOCK" kill-server 2>/dev/null || true' EXIT
 tmux -f /dev/null -L "$SOCK" new-session -d -x 200 -y 50 -s ctl
 tmux -L "$SOCK" split-window -h
-tmux -L "$SOCK" send-keys -t ctl:0.0 "$NPI" Enter
-tmux -L "$SOCK" send-keys -t ctl:0.1 "$NPI" Enter
+tmux -L "$SOCK" send-keys -t ctl:0.0 "env PI_CONTROL_DIR=$PI_CONTROL_DIR PI_CODING_AGENT_DIR=$DIR $NPI --model fake/echo" Enter
+tmux -L "$SOCK" send-keys -t ctl:0.1 "env PI_CONTROL_DIR=$PI_CONTROL_DIR PI_CODING_AGENT_DIR=$DIR $NPI --model fake/echo" Enter
 
 ready=0
 for _ in $(seq 1 80); do
-	if "$NPI" ctl list --json 2>/dev/null | grep -q instanceId; then
+	if "$NPI" ctl list --json 2>/dev/null | grep -q '"ready": true'; then
 		ready=1
 		break
 	fi
@@ -29,6 +34,8 @@ if [[ $ready -ne 1 ]]; then
 	tmux -L "$SOCK" kill-server || true
 	exit 1
 fi
+"$NPI" ctl %1 rpc get_state '{}' >"$LOG.pre"
+require_fake_provider "$LOG.pre"
 
 # Type into pane 1's composer. The same on-screen draft must show the letters.
 "$NPI" ctl %1 keys h u m a n >/dev/null

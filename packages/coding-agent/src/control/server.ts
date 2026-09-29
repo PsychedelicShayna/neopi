@@ -422,9 +422,12 @@ export class ControlServer {
 			let assembled: unknown;
 			try {
 				assembled = connection.decoder.push(parsed);
-			} catch (error) {
-				if (reservedChunk) connection.releaseChunk(reservedChunk);
-				throw error;
+			} catch {
+				// An interrupted chunk has no reservation on the interrupting frame.
+				// Closing releases the decoder's active sequence and every inbound
+				// reservation, rather than leaving a 64 MiB budget hold on a live socket.
+				connection.close("invalid chunk sequence");
+				return;
 			}
 			if (assembled && reservedChunk) connection.releaseChunk(reservedChunk);
 			parsed = assembled;

@@ -4,33 +4,57 @@
 # No real model is ever contacted: every pane launched with
 # PI_CODING_AGENT_DIR=DIR and --model fake/echo talks to this server.
 #
-# The fake answers a message containing DRIVE with one streamed `ctl keys` tool
-# call per target in FAKE_DRIVE_TARGETS (comma-separated selectors, default %1):
-# x into the first, y into the second. Anything else gets the text PONG.
+# The fake responds to DRIVE with `ctl keys` calls for two composers,
+# SUBMIT with `ctl action`, ANSWER with `ctl dialog_answer`, and STATE
+# with `ctl state`. CHOOSE opens a real `ask` multiple-choice UI in the
+# target pane. All other inputs receive PONG.
 
 start_fake_model() {
 	local dir=$1
 	FAKE_PORT=$((18000 + RANDOM % 1000))
 	cat >"$dir/fake.mjs" <<'JS'
-// Each DRIVE turn types one letter into each target pane: x into the first, y into the second.
 const targets = (process.env.FAKE_DRIVE_TARGETS || "%1").split(",");
 const server = Bun.serve({
 	port: Number(process.env.PORT),
 	async fetch(req) {
 		const body = await req.json().catch(() => ({}));
 		const messages = Array.isArray(body.messages) ? body.messages : [];
-		const asked = JSON.stringify(messages.at(-1) ?? "");
-		const toolCall = asked.includes("DRIVE");
-		console.log("request", req.url, "stream", body.stream, "tool", toolCall);
-		const calls = targets.map((target, index) => ({
+		const last = messages.at(-1) ?? {};
+		const asked = JSON.stringify(last);
+		const choice = asked.includes("CHOOSE");
+		const answer = asked.match(/ANSWER\s+(d\d+)/);
+		const operation = asked.includes("DRIVE")
+			? targets.map((target, index) => ({ op: "keys", target, text: String.fromCharCode(120 + index) }))
+			: asked.includes("SUBMIT")
+				? [{ op: "action", target: targets[0], actionId: "tui.input.submit" }]
+				: answer
+					? [{ op: "dialog_answer", target: targets[0], dialogId: answer[1], answer: 1 }]
+					: asked.includes("STATE")
+						? [{ op: "state", target: targets[0] }]
+						: [];
+		const calls = operation.map((args, index) => ({
 			index,
 			id: `call_ctl_${index}`,
-			args: JSON.stringify({ op: "keys", target, text: String.fromCharCode(120 + index) }),
+			args: JSON.stringify(args),
 		}));
-		const chunks = toolCall
+		if (choice) {
+			calls.push({
+				index: 0,
+				id: "call_ask",
+				args: JSON.stringify({
+					questions: [{
+						id: "choice",
+						question: "Which pane should receive the answer?",
+						options: [{ label: "First pane" }, { label: "Second pane" }],
+					}],
+				}),
+			});
+		}
+		console.log("request", req.url, "stream", body.stream, "tools", calls.map(call => call.id), "choice", choice);
+		const chunks = calls.length
 			? [
 					...calls.flatMap(call => [
-						{ choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: call.index, id: call.id, type: "function", function: { name: "ctl", arguments: "" } }] } }] },
+						{ choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: call.index, id: call.id, type: "function", function: { name: choice ? "ask" : "ctl", arguments: "" } }] } }] },
 						{ choices: [{ index: 0, delta: { tool_calls: [{ index: call.index, function: { arguments: call.args } }] } }] },
 					]),
 					{ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] },
@@ -45,10 +69,10 @@ const server = Bun.serve({
 				"data: [DONE]\n\n";
 			return new Response(lines, { headers: { "content-type": "text/event-stream" } });
 		}
-		const message = toolCall
-			? { role: "assistant", content: null, tool_calls: calls.map(call => ({ id: call.id, type: "function", function: { name: "ctl", arguments: call.args } })) }
+		const message = calls.length
+			? { role: "assistant", content: null, tool_calls: calls.map(call => ({ id: call.id, type: "function", function: { name: choice ? "ask" : "ctl", arguments: call.args } })) }
 			: { role: "assistant", content: "PONG" };
-		return Response.json({ id: "chatcmpl-fake", object: "chat.completion", choices: [{ index: 0, finish_reason: toolCall ? "tool_calls" : "stop", message }] });
+		return Response.json({ id: "chatcmpl-fake", object: "chat.completion", choices: [{ index: 0, finish_reason: calls.length ? "tool_calls" : "stop", message }] });
 	},
 });
 console.log(`fake listening ${server.port}`);

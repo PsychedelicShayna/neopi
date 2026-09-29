@@ -64,9 +64,13 @@ if (state?.model?.provider !== "fake") throw new Error("pane is not on the fake 
 /** Documented refusals: the command routed and answered with its specified code or error. */
 const refusal: Record<string, RegExp> = {
 	set_approval_handler: /approval_owner_only/,
+	set_subagent_subscription: /Subagent event bus is unavailable/i,
+	get_subagents: /subagent_bus_unavailable/,
+	get_subagent_messages: /Subagent event bus is unavailable/i,
+	compact: /Nothing to compact/i,
+	handoff: /Nothing to hand off/i,
 	login: /provider|unknown|not/i,
 	open_session: /session|not found|no such|ENOENT/i,
-	get_subagent_messages: /subagent|required|not found/i,
 };
 
 const fixtures: Record<string, () => Promise<Record<string, unknown>>> = {
@@ -106,13 +110,13 @@ const fixtures: Record<string, () => Promise<Record<string, unknown>>> = {
 	set_session_name: async () => ({ name: "parity" }),
 	handoff: async () => ({}),
 	get_messages_page: async () => ({ limit: 5 }),
-	open_session: async () => ({ sessionDir: "/nonexistent/parity" }),
+	open_session: async () => ({ sessionDir: `${process.env.PARITY_DIR}/missing-session` }),
 	login: async () => ({ providerId: "parity-no-such-provider" }),
 };
 
-// Session-replacing and session-reading commands run last so earlier fixtures see one session.
+// Replace sessions only after all operations that read the active transcript.
 const late = new Set(["branch", "switch_session", "new_session", "open_session", "login"]);
-const ordered = [...RPC_COMMAND_TYPES.filter(type => !late.has(type)), ...RPC_COMMAND_TYPES.filter(type => late.has(type))];
+const ordered = [...RPC_COMMAND_TYPES.filter(type => !late.has(type)), "branch", "switch_session", "new_session", "open_session", "login"];
 let rpcPassed = 0;
 for (const type of ordered) {
 	const params = (await fixtures[type]?.()) ?? {};
