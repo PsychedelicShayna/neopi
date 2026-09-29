@@ -41,3 +41,16 @@ export function encodeKeyId(id: string): string | undefined {
 	// CSI-u modifier is bits+1 (the encoding parseKey accepts).
 	return `\x1b[${code};${bits + 1}u`;
 }
+
+/** Encode one SGR mouse report. Coordinates are 0-based, matching the parser. */
+export function encodeSgrMouse(
+	x: number,
+	y: number,
+	action: "click" | "press" | "release" | "scrollUp" | "scrollDown" | "move" = "click",
+): string {
+	const col = Math.max(0, Math.trunc(x)) + 1;
+	const row = Math.max(0, Math.trunc(y)) + 1;
+	const button = action === "scrollUp" ? 64 : action === "scrollDown" ? 65 : action === "move" ? 35 : 0;
+	const suffix = action === "release" ? "m" : "M";
+	return `\x1b[<${button};${col};${row}${suffix}`;
+}

@@ -17,9 +17,10 @@ import type { RpcCommand } from "../modes/rpc/rpc-types";
 import type { AgentSession } from "../session/agent-session";
 import { AgentRegistry } from "../registry/agent-registry";
 import { executeSend } from "../irc/messaging";
+import { IrcBus } from "../irc/bus";
 import { HostBudget, workClass } from "./budget";
 import { RPC_COMMAND_TYPES } from "./parity";
-import { encodeKeyId } from "./keys";
+import { encodeKeyId, encodeSgrMouse } from "./keys";
 import type { ControlPresenter } from "./presenter";
 import {
 	newControlInstanceId,
@@ -273,6 +274,7 @@ export class ControlHost {
 			connection.write({ type: "host_shutdown", reason });
 			connection.close(reason);
 		}
+		AgentRegistry.global().unregister(this.#mailboxId());
 		await this.publication?.close();
 		hosts.delete(this.#options.session);
 	}
@@ -489,6 +491,31 @@ export class ControlHost {
 				presenter!.inject(`\x1b[200~${String(frame.text ?? "")}\x1b[201~`);
 				this.#reply(connection, frame, { success: true });
 				return;
+			case "mouse": {
+				if (needTui()) return;
+				const action = frame.action === "release" || frame.action === "scrollUp" || frame.action === "scrollDown" || frame.action === "move" || frame.action === "press"
+					? frame.action
+					: "click";
+				presenter!.inject(encodeSgrMouse(Number(frame.x ?? 0), Number(frame.y ?? 0), action));
+				this.#reply(connection, frame, { success: true, data: { revisions: this.revisions } });
+				return;
+			}
+			case "repl_execute": {
+				const language = typeof frame.target === "string" && frame.target ? frame.target : "py";
+				const result = await this.#options.session.executeEval(language, String(frame.code ?? ""));
+				this.#reply(connection, frame, { success: result.exitCode === 0, data: { output: result.output, exitCode: result.exitCode, language } });
+				return;
+			}
+			case "serve":
+				if (Array.isArray(frame.tools)) await this.#rpc(connection, { ...frame, type: "set_host_tools", tools: frame.tools });
+				if (Array.isArray(frame.schemes)) await this.#rpc(connection, { ...frame, type: "set_host_uri_schemes", schemes: frame.schemes });
+				if (!Array.isArray(frame.tools) && !Array.isArray(frame.schemes)) {
+					this.#reply(connection, frame, { success: false, error: "serve requires tools or schemes", code: "invalid_value" });
+				}
+				return;
+			case "unserve":
+				await this.#rpc(connection, { ...frame, type: "set_host_tools", tools: [] });
+				return;
 			case "esc":
 				if (needTui()) return;
 				this.#reply(connection, frame, { success: true, data: await presenter!.esc() });
@@ -650,23 +677,79 @@ export class ControlHost {
 		}
 	}
 
+	#mailboxId(): string {
+		return `ctl:${this.instanceId.slice(0, 8)}`;
+	}
+
+	#ensureMailbox(): string {
+		const id = this.#mailboxId();
+		const registry = AgentRegistry.global();
+		if (!registry.get(id)) {
+			const root = this.#options.session.getAgentId();
+			registry.register({
+				id,
+				displayName: "⌁ control",
+				kind: "mailbox",
+				parentId: root,
+				session: null,
+				status: "idle",
+			});
+		}
+		return id;
+	}
+
 	async #agents(connection: ControlConnection, frame: Record<string, unknown>): Promise<void> {
 		const op = String(frame.op ?? "list");
 		const registry = AgentRegistry.global();
+		const mailboxId = this.#ensureMailbox();
 		if (op === "list") {
 			this.#reply(connection, frame, {
 				success: true,
-				data: { agents: registry.list().map(ref => ({ id: ref.id, status: ref.status, kind: ref.kind })) },
+				data: {
+					mailboxId,
+					inboxHandle: `${this.instanceId}:${mailboxId}`,
+					agents: registry.list().map(ref => ({ id: ref.id, status: ref.status, kind: ref.kind })),
+				},
 			});
 			return;
 		}
+		if (op === "describe") {
+			const ref = registry.get(String(frame.agentId ?? frame.to ?? ""));
+			this.#reply(connection, frame, ref
+				? { success: true, data: { id: ref.id, status: ref.status, kind: ref.kind, displayName: ref.displayName } }
+				: { success: false, error: "unknown agent", code: "unknown_agent" });
+			return;
+		}
 		if (op === "send") {
-			const senderId = this.#options.session.getAgentId() ?? this.instanceId;
 			const result = await executeSend(
-				{ registry, senderId, sessionFileHint: this.#options.session.sessionFile },
+				{ registry, senderId: mailboxId, sessionFileHint: this.#options.session.sessionFile },
 				{ to: String(frame.to ?? ""), message: String(frame.message ?? "") },
 			);
-			this.#reply(connection, frame, { success: true, data: result.details });
+			this.#reply(connection, frame, {
+				success: result.isError !== true,
+				data: { ...result.details, inboxHandle: `${this.instanceId}:${mailboxId}`, from: mailboxId },
+				error: result.isError ? result.content.map(part => part.type === "text" ? part.text : "").join("") : undefined,
+			});
+			return;
+		}
+		if (op === "inbox" || op === "wait") {
+			const bus = IrcBus.global();
+			const from = typeof frame.from === "string" ? frame.from : undefined;
+			if (op === "inbox") {
+				const messages = frame.peek === true ? bus.peek(mailboxId, from) : [];
+				if (frame.peek !== true) {
+					const taken = bus.take(mailboxId, from);
+					this.#reply(connection, frame, { success: true, data: { inboxHandle: `${this.instanceId}:${mailboxId}`, messages: taken ? [taken] : [] } });
+					return;
+				}
+				this.#reply(connection, frame, { success: true, data: { inboxHandle: `${this.instanceId}:${mailboxId}`, messages } });
+				return;
+			}
+			const timeoutMs = Math.min(Math.max(Number(frame.timeoutMs ?? 1000) || 1000, 0), 120_000);
+			const waited = await bus.wait(mailboxId, { from }, timeoutMs);
+			this.#reply(connection, frame, waited
+				? { success: true, data: { inboxHandle: `${this.instanceId}:${mailboxId}`, message: waited } }
+				: { success: false, error: "timed out waiting for mail", code: "timeout" });
 			return;
 		}
 		this.#reply(connection, frame, { success: false, error: `unsupported agents op ${op}` });

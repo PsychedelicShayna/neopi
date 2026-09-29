@@ -30,7 +30,7 @@ export function getAgentTombstonePath(sessionFile: string): string {
  *   attribution and Agent Hub observability, but never a peer — hidden from
  *   agent-facing rosters (`proc://`, `history://`) and not messageable/revivable.
  */
-export type AgentKind = "main" | "sub" | "advisor";
+export type AgentKind = "main" | "sub" | "advisor" | "mailbox";
 
 /**
  * Run lifecycle milestones, stamped as they happen and scoped to the CURRENT
@@ -365,7 +365,7 @@ export class AgentRegistry {
 	 */
 	listVisibleTo(id: string): AgentRef[] {
 		return this.list().filter(
-			ref => ref.id !== id && ref.kind !== "advisor" && (ref.status === "running" || ref.status === "idle"),
+			ref => ref.id !== id && ref.kind !== "advisor" && ref.kind !== "mailbox" && (ref.status === "running" || ref.status === "idle"),
 		);
 	}
 

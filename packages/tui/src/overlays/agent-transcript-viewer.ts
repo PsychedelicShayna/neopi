@@ -199,7 +199,7 @@ export class AgentTranscriptViewer implements Component {
 	/** Advisor and aborted-agent transcripts are read-only. */
 	get #sendable(): boolean {
 		const ref = this.#deps.registry.get(this.#deps.agentId);
-		if (!ref || ref.kind === "advisor" || ref.status === "aborted") return false;
+		if (!ref || ref.kind === "advisor" || ref.kind === "mailbox" || ref.status === "aborted") return false;
 		return Boolean(this.#deps.remote || this.#deps.lifecycle);
 	}
 

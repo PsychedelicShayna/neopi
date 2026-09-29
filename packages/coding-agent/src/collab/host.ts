@@ -1024,7 +1024,7 @@ export class CollabHost {
 				// Advisor transcripts are local observability only; never mirror them to
 				// guests (the wire AgentSnapshot kind has no `advisor`, and guests must not
 				// be able to chat/kill/revive them).
-				.filter((ref): ref is AgentRef & { kind: "main" | "sub" } => ref.kind !== "advisor")
+				.filter((ref): ref is AgentRef & { kind: "main" | "sub" } => ref.kind !== "advisor" && ref.kind !== "mailbox")
 				.map(ref => ({
 					id: ref.id,
 					displayName: ref.displayName,
@@ -1102,7 +1102,7 @@ export class CollabHost {
 		const reply = (text: string, newSize: number, error?: string) =>
 			this.#send({ t: "transcript", reqId, text, newSize, error }, fromPeer);
 		const ref = AgentRegistry.global().get(agentId);
-		if (!ref?.sessionFile || ref.kind === "advisor") {
+		if (!ref?.sessionFile || ref.kind === "advisor" || ref.kind === "mailbox") {
 			reply("", fromByte, "no transcript available");
 			return;
 		}
