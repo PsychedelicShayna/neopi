@@ -1084,9 +1084,11 @@ describe("live voice backlog bounds", () => {
 		expect(reports.some(text => text.endsWith("report 0"))).toBe(false);
 		expect(reasoning).toHaveLength(1);
 		expect(reasoning[0]).toContain("Reasoning pass 19");
-		const progress = h.sent
-			.filter(message => message.channel === "commentary")
-			.map(message => message.content.map(item => item.text).join(""));
+		const progress = h.sent.flatMap(message =>
+			message.type !== "session.close" && message.channel === "commentary"
+				? [message.content.map(item => item.text).join("")]
+				: [],
+		);
 		expect(progress).toEqual(["progress 19"]);
 		expect(h.controller.heldContextCount()).toBe(0);
 	});
