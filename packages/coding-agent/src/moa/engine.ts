@@ -21,6 +21,7 @@ import type {
 	UsageBreakdownEntry,
 	UserMessage,
 } from "@oh-my-pi/pi-ai";
+import { NON_VISION_IMAGE_PLACEHOLDER, sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
 import { Tokenizer } from "@oh-my-pi/pi-agent-core";
 import type {
 	MixtureCheckpointReason,
@@ -477,19 +478,30 @@ class MixtureCall {
 				x: { output: parts.output, input: parts.input, reasoning: parts.reasoning, tool_trace: parts.toolTrace },
 			});
 		// Match the member's outbound image transforms before fitting. Reuse their
-		// surviving blocks in the request, so discarded images are neither billed
-		// to the fit nor sent a second time.
+		// surviving blocks in the request, so discarded or wire-stripped images
+		// are neither charged nor sent a second time.
 		const entryImages = edgeInId === undefined ? this.#entry.topicImages : [];
-		const entryContext =
-			entryImages.length > 0
+		let entryContext: Context | undefined;
+		if (entryImages.length > 0) {
+			const imageMessage: UserMessage = { role: "user", content: entryImages, timestamp: 0 };
+			entryContext = sendsImageInputOnWire(member.model)
 				? await dropUnreadableContextImages(
-						clampProviderContextImages(
-							{ systemPrompt: [], messages: [{ role: "user", content: entryImages, timestamp: 0 }] },
-							member.model,
-						),
+						clampProviderContextImages({ systemPrompt: [], messages: [imageMessage] }, member.model),
 						member.model,
 					)
-				: undefined;
+				: {
+						systemPrompt: [],
+						messages: [
+							{
+								...imageMessage,
+								content: [{ type: "text", text: NON_VISION_IMAGE_PLACEHOLDER }],
+							},
+						],
+					};
+		}
+		// An abort may finalize and checkpoint this run while image decoding is
+		// pending; do not append a hop after that terminal transition.
+		if (this.#finalized) return;
 		const entryMessage = entryContext?.messages[0];
 		const entryParts =
 			entryMessage?.role === "user" && Array.isArray(entryMessage.content) ? entryMessage.content : [];

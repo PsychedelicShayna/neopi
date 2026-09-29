@@ -11,6 +11,7 @@ import {
 	type ToolChoice,
 } from "@oh-my-pi/pi-ai";
 import { streamSimple } from "@oh-my-pi/pi-ai/stream";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { fitHopRequest, type HopParts, truncateToTokens } from "@oh-my-pi/pi-coding-agent/moa/budget";
 import { streamMixture } from "@oh-my-pi/pi-coding-agent/moa/engine";
@@ -22,6 +23,7 @@ import { MIXTURE_RUN_ENTRY_TYPE, type MixtureCheckpoint, type MixtureRun } from 
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
+import * as imageBudget from "@oh-my-pi/pi-coding-agent/session/provider-image-budget";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { MIXTURE_TRACE_MESSAGE_TYPE, type MixtureTraceDetails } from "@oh-my-pi/pi-tui/overlays/mixture-types";
 import { TempDir } from "@oh-my-pi/pi-utils";
@@ -934,6 +936,88 @@ describe("engine contract through a session host", () => {
 	async function call(messages: Message[], toolChoice?: ToolChoice): Promise<AssistantMessage> {
 		return streamMixture(mixtureModel(), { systemPrompt: ["outer"], messages }, { toolChoice }, host).result();
 	}
+
+	it("keeps the live run at hop_ready after aborting during entry-image preparation", async () => {
+		const reached = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const original = imageBudget.dropUnreadableContextImages;
+		vi.spyOn(imageBudget, "dropUnreadableContextImages").mockImplementation(async (context, model) => {
+			reached.resolve();
+			await release.promise;
+			return original(context, model);
+		});
+		const controller = new AbortController();
+		streamMixture(
+			mixtureModel(),
+			{
+				systemPrompt: ["outer"],
+				messages: [
+					{
+						role: "user",
+						content: [
+							{ type: "text", text: "describe" },
+							{
+								type: "image",
+								data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
+								mimeType: "image/png",
+							},
+						],
+						timestamp: 0,
+					},
+				],
+			},
+			{ signal: controller.signal },
+			host,
+		);
+		await reached.promise;
+		controller.abort();
+		release.resolve();
+		await Bun.sleep(20);
+		expect(currentRun().status).toBe("checkpoint");
+		expect(currentRun().phase).toEqual({ kind: "hop_ready", memberId: "writer" });
+		expect(currentRun().hops).toHaveLength(0);
+	});
+
+	it("fits omission text instead of images stripped by the member transport", async () => {
+		const resolve = host.resolveRun.bind(host);
+		vi.spyOn(host, "resolveRun").mockImplementation(name => {
+			const resolved = resolve(name);
+			if (typeof resolved === "string") return resolved;
+			const writer = resolved.members.writer;
+			if (writer?.kind !== "model") throw new Error("writer model missing");
+			return {
+				...resolved,
+				members: {
+					...resolved.members,
+					writer: {
+						...writer,
+						model: buildModel({
+							...writer.model,
+							api: "openai-completions",
+							compat: { stripImageInput: true },
+							contextWindow: 1_300,
+							maxTokens: 100,
+						}),
+					},
+				},
+			};
+		});
+		host.stream = (model, context, options) => streamSimple({ ...model, api: FAKE_API }, context, options);
+		const image: ImageContent = {
+			type: "image",
+			data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
+			mimeType: "image/png",
+		};
+		const result = await call([{ role: "user", content: [{ type: "text", text: "describe" }, image], timestamp: 0 }]);
+		expect(result.stopReason).toBe("stop");
+		const sent = members.callsTo("writer")[0]?.context.messages[0];
+		expect(userText(sent)).toContain("image omitted");
+		expect(
+			sent?.role === "user" && Array.isArray(sent.content)
+				? sent.content.some(block => block.type === "image")
+				: false,
+		).toBe(false);
+	});
 
 	it.each<[ToolChoice, string]>([
 		["required", "toolchoice.unsatisfiable"],
