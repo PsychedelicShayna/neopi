@@ -232,9 +232,7 @@ describe("LiveCommandController", () => {
 			h.callbacks().onSubmitKeyword?.("ship the corrected code");
 			expect(h.editor.getText()).toBe("");
 			expect(sentToMain).toEqual(destination === "voice" ? [] : ["ship the corrected code"]);
-			expect(h.sentToVoice).toEqual(
-				destination === "primary" ? [] : [["ship the corrected code", destination]],
-			);
+			expect(h.sentToVoice).toEqual(destination === "primary" ? [] : [["ship the corrected code", destination]]);
 			h.editor.handleInput("\x1b[A");
 			expect(h.editor.getText()).toBe("ship the corrected code");
 			await h.controller.stop();

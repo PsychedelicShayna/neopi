@@ -26,17 +26,17 @@ describe("live keyword normalization", () => {
 
 	it("matches punctuation and collapsed or missing whitespace, stripping exactly the spoken keyword", () => {
 		expect(stripLiveKeyword("please Send... it, now — thanks", "send it now")).toEqual({
-		matched: true,
-		text: "please thanks",
-	});
+			matched: true,
+			text: "please thanks",
+		});
 		expect(stripLiveKeyword("please sendit now thanks", "SEND IT NOW")).toEqual({
-		matched: true,
-		text: "please thanks",
-	});
+			matched: true,
+			text: "please thanks",
+		});
 		expect(stripLiveKeyword("Iris—only tell me a joke", "iris only")).toEqual({
-		matched: true,
-		text: "tell me a joke",
-	});
+			matched: true,
+			text: "tell me a joke",
+		});
 		expect(stripLiveKeyword("Stay here.", "")).toEqual({ matched: false, text: "Stay here." });
 		expect(stripLiveKeyword("don't send it", "send it now")).toEqual({
 			matched: false,
@@ -46,28 +46,35 @@ describe("live keyword normalization", () => {
 	it("ignores embedded keywords and keeps formatting outside the matched span", () => {
 		expect(stripLiveKeyword("sender", "send")).toEqual({ matched: false, text: "sender" });
 		expect(stripLiveKeyword("run git log -- send it now", "send it now")).toEqual({
-			matched: true, text: "run git log --",
+			matched: true,
+			text: "run git log --",
 		});
 		expect(stripLiveKeyword("first\n\nsecond send off", "send off", true)).toEqual({
-			matched: true, text: "first\n\nsecond",
+			matched: true,
+			text: "first\n\nsecond",
 		});
 		expect(stripLiveKeyword("𐐀 please submit", "submit", true)).toEqual({
-			matched: true, text: "𐐀 please",
+			matched: true,
+			text: "𐐀 please",
 		});
 	});
 
 	it("requires submit at the end of a final turn, with punctuation and whitespace variants", () => {
 		expect(stripLiveKeyword("send off was mentioned earlier", "send off", true)).toEqual({
-			matched: false, text: "send off was mentioned earlier",
+			matched: false,
+			text: "send off was mentioned earlier",
 		});
 		expect(stripLiveKeyword("sendoffthen", "send off", true)).toEqual({
-			matched: false, text: "sendoffthen",
+			matched: false,
+			text: "sendoffthen",
 		});
 		expect(stripLiveKeyword("please send... off!", "send off", true)).toEqual({
-			matched: true, text: "please",
+			matched: true,
+			text: "please",
 		});
 		expect(stripLiveKeyword("please sendoff", "send off", true)).toEqual({
-			matched: true, text: "please",
+			matched: true,
+			text: "please",
 		});
 	});
 });

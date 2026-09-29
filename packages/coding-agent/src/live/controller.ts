@@ -242,7 +242,14 @@ export class LiveSessionController {
 	#userLedgerTurn = 0;
 	readonly #seenDelegationIds = new Set<string>();
 	#pendingDelegation:
-		| { id: string; generation: number; turns: number[]; forced: boolean; dispatchEnabled: boolean; dispatching: boolean }
+		| {
+				id: string;
+				generation: number;
+				turns: number[];
+				forced: boolean;
+				dispatchEnabled: boolean;
+				dispatching: boolean;
+		  }
 		| undefined;
 	#pendingDelivery: CustomMessageDelivery | undefined;
 	/** Coalesced in-flight live abort, so rapid handoffs never overlap AgentSession.abort(). */
@@ -418,7 +425,13 @@ export class LiveSessionController {
 		const pending = this.#pendingDelegation;
 		if (pending?.dispatching && this.#pendingDelivery && !this.#pendingDelivery.cancel()) {
 			const turns = this.#turnsWhere(turn => turn.claim === pending.generation);
-			this.#acceptSpeech(turns.map(turn => turn.text).join("\n\n").trim(), pending.forced);
+			this.#acceptSpeech(
+				turns
+					.map(turn => turn.text)
+					.join("\n\n")
+					.trim(),
+				pending.forced,
+			);
 		} else {
 			this.#pendingDelivery?.cancel();
 		}
@@ -529,7 +542,10 @@ export class LiveSessionController {
 	 * unaccepted claims move to the newest routing id, while accepted turns are
 	 * retired and later speech barges into the active work as a new handoff.
 	 */
-	async #handleDelegation(event: Extract<LiveServerEvent, { type: "delegation.created" }>, forced = false): Promise<void> {
+	async #handleDelegation(
+		event: Extract<LiveServerEvent, { type: "delegation.created" }>,
+		forced = false,
+	): Promise<void> {
 		if (this.#seenDelegationIds.has(event.item.id)) return;
 		this.#seenDelegationIds.add(event.item.id);
 
@@ -544,7 +560,13 @@ export class LiveSessionController {
 			// continuation stops at the generation check, so retire their speech
 			// from the composer here.
 			const accepted = this.#deleteTurns(turn => turn.claim === previousGeneration);
-			this.#acceptSpeech(accepted.map(turn => turn.text).join("\n\n").trim(), previousPending?.forced ?? false);
+			this.#acceptSpeech(
+				accepted
+					.map(turn => turn.text)
+					.join("\n\n")
+					.trim(),
+				previousPending?.forced ?? false,
+			);
 		}
 		this.#pendingDelivery = undefined;
 		if (cancelledPrevious) {
@@ -843,7 +865,10 @@ export class LiveSessionController {
 		const turns = this.#turnsWhere(
 			turn => turn.claim === undefined && !turn.reported && answered.includes(turn.turn),
 		);
-		const text = turns.map(turn => turn.text).join("\n\n").trim();
+		const text = turns
+			.map(turn => turn.text)
+			.join("\n\n")
+			.trim();
 		if (text) this.#callbacks.onSpeechSent?.(text);
 		for (const turn of turns) turn.reported = true;
 		// Keep answered speech available until the operator uses the force keyword.
@@ -1138,7 +1163,8 @@ export class LiveSessionController {
 				current.blocked = true;
 			} else {
 				const unsent = this.#turnsWhere(
-					turn => !turn.blocked && (turn.claim === undefined || turn.claim === this.#pendingDelegation?.generation),
+					turn =>
+						!turn.blocked && (turn.claim === undefined || turn.claim === this.#pendingDelegation?.generation),
 				);
 				const candidate = unsent.map(turn => turn.text).join("\n\n");
 				const match = stripLiveKeyword(candidate, this.#forceDelegateKeyword);
@@ -1178,10 +1204,13 @@ export class LiveSessionController {
 			return;
 		}
 		if (forced) {
-			void this.#handleDelegation({
-				type: "delegation.created",
-				item: { type: "delegation", target: "client", id: `forced-${crypto.randomUUID()}`, content: [] },
-			}, true).catch(cause => this.#reportFailure(errorFrom(cause)));
+			void this.#handleDelegation(
+				{
+					type: "delegation.created",
+					item: { type: "delegation", target: "client", id: `forced-${crypto.randomUUID()}`, content: [] },
+				},
+				true,
+			).catch(cause => this.#reportFailure(errorFrom(cause)));
 			return;
 		}
 		if (submitRequested) {

@@ -27,7 +27,8 @@ export const cfgLiveForceDelegateKeyword = register({
 		tab: "providers",
 		group: "Services",
 		label: "Live Force-Delegate Keyword",
-		description: "Finalized speech containing this phrase sends accumulated speech to the main agent (empty disables)",
+		description:
+			"Finalized speech containing this phrase sends accumulated speech to the main agent (empty disables)",
 	},
 });
 

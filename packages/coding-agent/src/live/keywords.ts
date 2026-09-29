@@ -2,14 +2,10 @@ type NormalizedChar = { char: string; start: number; end: number };
 
 /** Find a spoken keyword in finalized speech and remove its original text span.
  * With `endOnly`, punctuation after the phrase is allowed but words are not. */
-export function stripLiveKeyword(
-	speech: string,
-	keyword: string,
-	endOnly = false,
-): { matched: boolean; text: string } {
+export function stripLiveKeyword(speech: string, keyword: string, endOnly = false): { matched: boolean; text: string } {
 	const normalize = (text: string): NormalizedChar[] => {
 		const chars: NormalizedChar[] = [];
-		for (let index = 0; index < text.length; ) {
+		for (let index = 0; index < text.length;) {
 			const original = String.fromCodePoint(text.codePointAt(index)!);
 			const end = index + original.length;
 			if (/\s/u.test(original)) {
@@ -30,7 +26,10 @@ export function stripLiveKeyword(
 		}
 		return result;
 	};
-	const target = collapse(normalize(keyword)).map(entry => entry.char).join("").trim();
+	const target = collapse(normalize(keyword))
+		.map(entry => entry.char)
+		.join("")
+		.trim();
 	if (!target) return { matched: false, text: speech };
 	const spaced = collapse(normalize(speech));
 	const compactTarget = target.replaceAll(" ", "");
@@ -56,7 +55,8 @@ export function stripLiveKeyword(
 	}
 	if (!span) return { matched: false, text: speech };
 	const before = speech.slice(0, span.begin).trimEnd();
-	const after = speech.slice(span.end)
+	const after = speech
+		.slice(span.end)
 		.replace(/^[ \t]*[\p{P}\p{S}]+(?=\s|$)/u, "")
 		.trimStart();
 	return { matched: true, text: before && after ? `${before} ${after}` : before || after };
