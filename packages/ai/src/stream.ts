@@ -2558,6 +2558,14 @@ function mapOptionsForApi<TApi extends Api>(
 	}
 }
 
+/** Provider output cap after simple-stream reasoning budgets and model limits are applied. */
+export function getSimpleStreamMaxTokens<TApi extends Api>(
+	model: Model<TApi>,
+	options: SimpleStreamOptions,
+): number | undefined {
+	return mapOptionsForApi(model, options).maxTokens;
+}
+
 function getGoogleBudget(
 	model: Model<"google-generative-ai">,
 	effort: Effort,

@@ -5,7 +5,13 @@
  * (the composer text for the first step). The last output is returned.
  */
 import { Agent, type AgentMessage, type AgentTool, ThinkingLevel, Tokenizer } from "@oh-my-pi/pi-agent-core";
-import { type Message, type Model, streamSimple } from "@oh-my-pi/pi-ai";
+import {
+	getSimpleStreamMaxTokens,
+	type Message,
+	type Model,
+	type SimpleStreamOptions,
+	streamSimple,
+} from "@oh-my-pi/pi-ai";
 import { classifyDifficulty } from "../auto-thinking/classifier";
 import { cfgEffortPolicyMode, resolveImplicitEffort } from "../config/effort-policy";
 import * as prompt from "@oh-my-pi/pi-utils/prompt";
@@ -135,25 +141,28 @@ function blockBoundary(texts: readonly string[]): string {
 /**
  * The user message for a step: the draft, wrapped with the transcript when the step ingests
  * context. With a model, the transcript keeps only the newest messages that fit its context
- * window after the system prompt, the granted tools' schemas, the draft, output, and framing
- * are reserved.
+ * window after the system prompt, the granted tools' schemas, the draft, the provider's
+ * output cap (including reasoning), and framing are reserved.
  */
 export function renderChainInput(
 	step: ChainStep,
 	input: string,
 	messages: readonly AgentMessage[] | undefined,
-	model?: Pick<Model, "contextWindow" | "maxTokens" | "tokenizer">,
+	model?: Model,
 	tools: readonly AgentTool[] = [],
+	streamOptions?: Pick<SimpleStreamOptions, "reasoning" | "disableReasoning">,
 ): string {
 	if (!step.context || !messages?.length) return input;
 	let transcript: string;
 	if (model?.contextWindow) {
 		const tokenizer = new Tokenizer(model);
 		const system = step.systemPrompt ?? CHAIN_SYSTEM_PROMPT;
+		const answerTokens = chainOutputReserve(model);
+		const providerOutputTokens = getSimpleStreamMaxTokens(model, { ...streamOptions, maxTokens: answerTokens });
 		const reserved =
 			tokenizer.countTokens([system, step.prompt, input]) +
 			estimateToolSchemaTokens(tools, tokenizer) +
-			chainOutputReserve(model) +
+			(providerOutputTokens ?? answerTokens) +
 			CHAIN_FRAMING_RESERVE;
 		transcript = fitTranscript(messages, Math.max(0, model.contextWindow - reserved), tokenizer);
 	} else {
@@ -263,11 +272,13 @@ export async function runChainStep(
 	const providerSessionId = Bun.randomUUIDv7();
 	const obfuscator = options.obfuscator;
 	const hidesSecrets = obfuscator?.obfuscates() === true;
+	const reasoning = toReasoningEffort(thinkingLevel);
+	const disableReasoning = shouldDisableReasoning(thinkingLevel);
 	const agent = new Agent({
 		initialState: {
 			systemPrompt: [step.systemPrompt ?? CHAIN_SYSTEM_PROMPT, step.prompt],
 			model: resolved.model,
-			thinkingLevel: toReasoningEffort(thinkingLevel),
+			thinkingLevel: reasoning,
 			tools,
 		},
 		sessionId: providerSessionId,
@@ -291,7 +302,7 @@ export async function runChainStep(
 		// through a granted egress tool (web_search needs no approval).
 		intentTracing: false,
 	});
-	agent.setDisableReasoning(shouldDisableReasoning(thinkingLevel));
+	agent.setDisableReasoning(disableReasoning);
 
 	const onAbort = () => agent.abort("chain cancelled");
 	signal?.addEventListener("abort", onAbort, { once: true });
@@ -302,7 +313,9 @@ export async function runChainStep(
 			hidesSecrets && obfuscator && options.messages
 				? options.messages.map(message => redactMessageText(obfuscator, message))
 				: options.messages;
-		await agent.prompt(renderChainInput(step, input, messages, resolved.model, tools));
+		await agent.prompt(
+			renderChainInput(step, input, messages, resolved.model, tools, { reasoning, disableReasoning }),
+		);
 	} finally {
 		signal?.removeEventListener("abort", onAbort);
 	}
