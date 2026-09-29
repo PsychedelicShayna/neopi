@@ -55,6 +55,18 @@ export default class Ctl extends Command {
 				process.exitCode = await ctlRpc(head, type, params, true);
 				return;
 			}
+			if (op === "action") {
+				process.exitCode = await ctlRpc(head, "action", { actionId: rest[0] ?? "" }, flags.json);
+				return;
+			}
+			if (op === "keys") {
+				process.exitCode = await ctlRpc(head, "keys", { keys: rest.map(key => ({ key })) }, flags.json);
+				return;
+			}
+			if (op === "dialog-answer" || op === "dialog_answer") {
+				process.exitCode = await ctlRpc(head, "dialog_answer", { dialogId: rest[0] ?? "", answer: rest[1] ? JSON.parse(rest[1]) : rest[1] }, flags.json);
+				return;
+			}
 			process.exitCode = await ctlRpc(head, op.replaceAll("-", "_"), {}, flags.json);
 		} catch (error) {
 			process.exitCode = ctlFail(error);

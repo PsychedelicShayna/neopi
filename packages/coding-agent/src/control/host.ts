@@ -55,6 +55,17 @@ export interface ControlHostOptions {
 	tmuxPane?: string | null;
 }
 
+
+/** Field that failed an optimistic revision check, if any. */
+export function revisionConflict(expected: unknown, revisions: Revisions): "generation" | "human" | "focus" | "draft" | "dialogs" | undefined {
+	if (!expected || typeof expected !== "object") return undefined;
+	const check = expected as Record<string, unknown>;
+	for (const field of ["generation", "human", "focus", "draft", "dialogs"] as const) {
+		if (typeof check[field] === "number" && check[field] !== revisions[field]) return field;
+	}
+	return undefined;
+}
+
 const hosts = new WeakMap<AgentSession, ControlHost>();
 
 /** The control host for a session, once published. */
@@ -286,7 +297,7 @@ export class ControlHost {
 			connection.close("bye");
 			return;
 		}
-		const conflict = this.#precondition(frame);
+		const conflict = this.#precondition(connection, frame);
 		if (conflict) {
 			this.#reply(connection, frame, conflict);
 			return;
@@ -306,17 +317,13 @@ export class ControlHost {
 		}
 	}
 
-	#precondition(frame: Record<string, unknown>): { success: false; error: string; code: string } | undefined {
-		const expected = frame.if;
-		if (!expected || typeof expected !== "object") return undefined;
-		const rev = this.#revisions;
-		const check = expected as Record<string, unknown>;
-		for (const field of ["generation", "human", "focus", "draft", "dialogs"] as const) {
-			if (typeof check[field] === "number" && check[field] !== rev[field]) {
-				return { success: false, error: `⌁ ${"label"} backed off (${field} changed)`, code: "conflict" };
-			}
-		}
-		return undefined;
+	#precondition(connection: ControlConnection, frame: Record<string, unknown>): { success: false; error: string; code: string } | undefined {
+		const field = revisionConflict(frame.if, this.#revisions);
+		if (!field) return undefined;
+		const text = `⌁ ${connection.label}#${connection.id} backed off (${field} changed)`;
+		this.presenter?.notify(text);
+		this.#options.session.emitNotice("info", text, "control");
+		return { success: false, error: text, code: "conflict" };
 	}
 
 
@@ -530,8 +537,22 @@ export class ControlHost {
 			case "agents":
 				await this.#agents(connection, frame);
 				return;
+			case "cycle_role_model": {
+				if (needTui()) return;
+				const direction = frame.direction === "backward" ? "app.model.cycleBackward" : "app.model.cycleForward";
+				const result = await presenter!.action(direction);
+				this.#reply(connection, frame, { success: result.handled, data: result });
+				return;
+			}
+			case "rewind":
+				if (needTui()) return;
+				this.#reply(connection, frame, { success: true, data: await presenter!.action("app.session.tree") });
+				return;
+			case "todo_set":
+				await this.#rpc(connection, { ...frame, type: "set_todos" });
+				return;
 			case "wait":
-				this.#reply(connection, frame, { success: true, data: { waited: frame.for } });
+				await this.#wait(connection, frame);
 				return;
 			case "keybindings_get":
 			case "keybindings_set":
@@ -543,6 +564,26 @@ export class ControlHost {
 		}
 	}
 
+
+
+	async #wait(connection: ControlConnection, frame: Record<string, unknown>): Promise<void> {
+		const timeoutMs = Math.min(Math.max(Number(frame.timeoutMs ?? 30_000) || 30_000, 0), 120_000);
+		const want = String(frame.for ?? "settled");
+		const started = Date.now();
+		const ready = (): boolean => {
+			const session = this.#options.session;
+			if (want === "dialog" || want === "approval") return (this.presenter?.dialogs().length ?? 0) > 0;
+			if (want === "paint") return this.#revisions.paint > Number(frame.after ?? this.#revisions.paint);
+			return !session.isStreaming && session.queuedMessageCount === 0 && !session.isCompacting;
+		};
+		while (!ready() && Date.now() - started < timeoutMs) {
+			await new Promise(resolve => setTimeout(resolve, 50));
+		}
+		const settled = ready();
+		this.#reply(connection, frame, settled
+			? { success: true, data: { waited: want, revisions: this.revisions, snapshot: this.snapshot() } }
+			: { success: false, error: `timed out waiting for ${want}`, code: "timeout" });
+	}
 
 	#keybindings(connection: ControlConnection, frame: Record<string, unknown>): void {
 		const bindings = this.presenter?.keybindings;

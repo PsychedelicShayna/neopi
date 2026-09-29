@@ -1111,6 +1111,8 @@ export class TUI extends Container {
 	 */
 	inputOrigin: "keyboard" | "control" = "keyboard";
 	onHumanInput?: () => void;
+	/** Fires when an overlay is mounted. The returned disposer runs on hide. */
+	onOverlayShown?: (component: Component, hide: () => void) => (() => void) | void;
 
 	injectInput(data: string, origin: "keyboard" | "control" = "control"): void {
 		const previous = this.inputOrigin;
@@ -1138,24 +1140,32 @@ export class TUI extends Container {
 		this.#recordHardwareCursorHidden();
 		this.requestRender();
 
-		// Return handle for controlling this overlay
-		return {
-			hide: () => {
-				const index = this.overlayStack.indexOf(entry);
-				if (index !== -1) {
-					this.overlayStack.splice(index, 1);
-					// Restore focus if this overlay or one of its owned targets had focus
-					if (isOverlayFocusTarget(component, this.#focusedComponent)) {
-						const topVisible = this.#getTopmostVisibleOverlay();
-						this.setFocus(topVisible?.component ?? entry.preFocus);
-					}
-					if (this.overlayStack.length === 0) {
-						this.terminal.hideCursor();
-						this.#recordHardwareCursorHidden();
-					}
-					this.requestRender();
+		// Return handle for controlling this overlay. onOverlayShown lets the
+		// control socket list and answer the surface for as long as it is mounted.
+		let disposed = false;
+		let dispose: (() => void) | undefined;
+		const hide = (): void => {
+			if (disposed) return;
+			disposed = true;
+			const index = this.overlayStack.indexOf(entry);
+			if (index !== -1) {
+				this.overlayStack.splice(index, 1);
+				if (isOverlayFocusTarget(component, this.#focusedComponent)) {
+					const topVisible = this.#getTopmostVisibleOverlay();
+					this.setFocus(topVisible?.component ?? entry.preFocus);
 				}
-			},
+				if (this.overlayStack.length === 0) {
+					this.terminal.hideCursor();
+					this.#recordHardwareCursorHidden();
+				}
+				this.requestRender();
+			}
+			dispose?.();
+		};
+		const shown = this.onOverlayShown?.(component, hide);
+		if (typeof shown === "function") dispose = shown;
+		return {
+			hide,
 			setHidden: (hidden: boolean) => {
 				if (entry.hidden === hidden) return;
 				entry.hidden = hidden;
