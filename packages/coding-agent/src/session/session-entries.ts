@@ -8,6 +8,7 @@ import type {
 	Usage,
 } from "@oh-my-pi/pi-ai";
 import type { StructuredSubagentSchemaMode } from "@oh-my-pi/pi-tui/tools/task";
+import type { EffortOrigin, EffortSelection } from "../config/effort-policy";
 import type { CompactionMethod } from "./compaction-methods";
 
 export const CURRENT_SESSION_VERSION = 3;
@@ -100,6 +101,10 @@ export interface ThinkingLevelChangeEntry extends SessionEntryBase {
 	 * before auto-mode persistence existed; readers fall back to `thinkingLevel`.
 	 */
 	configured?: string | null;
+	/** Provenance of this selector; restored defaults remain implicit, not manual overrides. */
+	effortOrigin?: EffortOrigin;
+	/** Auto candidates captured at selection time for reliable branch resume. */
+	autoSelection?: EffortSelection;
 }
 
 export interface ModelChangeEntry extends SessionEntryBase {

@@ -38,18 +38,40 @@ Landed 11 Aug 2026 in `cc3819def5`, `2407c059ba`, and `c9ca7ae0a5`.
 
 Agent frontmatter may select the inherited `omp`, `claude`, or `codex` harness identifiers. Claude has an adapter and sidecar. Codex adapter code exists under `task/external-harness/codex.ts`, but `assertExternalHarnessCapabilities` rejects that route because its tool and containment contract cannot be represented exactly. Codex dispatch is present but disabled, not a working feature.
 
-## Fork extensions
+## Operator commands
 
-The extensions were introduced on 11 Aug 2026 and received their first fork-specific names in `a176f94a08` on 22 Aug. Overlay dashboards were removed in `4aea05b2fb`; current menus use `ctx.ui.select`, `input`, `editor`, and `confirm`.
+Introduced as extensions on 11 Aug 2026 and made built-in commands on 28 Sep 2026. The `extensions/` directory, its installer, and the build and install deployment hooks are gone; state files are unchanged.
 
-| Command | Directory | State file |
-| --- | --- | --- |
-| `/persona` | `extensions/neopi-persona/` | `neopi-persona.json` |
-| `/loadout` | `extensions/neopi-loadout/` | `neopi-loadout.json` |
-| `/repl`, `/kernel` | `extensions/neopi-repl/` | `neopi-repl.json` |
-| `/live-persona` | `extensions/neopi-live-persona/` | `neopi-live-personas.json` |
+| Command | State file (agent dir) |
+| --- | --- |
+| `/persona` | `neopi-persona.json` |
+| `/persona live` | `neopi-live-personas.json` |
+| `/loadout` | `neopi-loadout.json` |
+| `/repl`, `/kernel` | none (per TUI session) |
 
-`/persona` swaps session system-prompt personas in replace, prepend, append, or literal-substitute mode. `/repl` selects agent chat or a built-in eval backend and may register additional backends when `registerEvalBackend` is available. `/live-persona` is command UX over `packages/coding-agent/src/live/personas.ts`.
+Each store is schema-v1 JSON written atomically with a `.bak` of the previous file. A missing `neopi-*` file falls back to the pre-rename `omomp-*` file.
+
+### Personas
+
+`/persona` opens a fullscreen editor in the style of `/chaining configure`: personas on the left, the highlighted definition on the right. Keys are listed in the footer: Enter edits, Space makes the highlighted persona active (again to turn it off), Delete twice removes, `s` saves and applies, and Esc closes (it asks once before discarding unsaved changes). A persona has a mode (replace, prepend, append, or literal-substitute), an inline text or a file path inside the agent directory, and an inherit-to-tasks flag.
+
+`/persona live` opens the same editor for the live voice model. The bundled default is read-only; clone it to customize. A new live persona starts from the default instructions.
+
+Both scopes take the same subcommands: `set <name>`, `off` (live: back to the default), `list`, `show <name>`, `status`, `clone <source> <name>`, and `delete <name>`. For example, `/persona set reviewer` or `/persona live set iris`. Changing the active persona invalidates the prompt cache, so switch deliberately.
+
+The session persona is selected per session id. `AgentSession` applies it while preparing each turn, before extension `before_agent_start` handlers, so extensions see and may further change the persona prompt. A persona that cannot apply (missing file, literal not found) leaves the base prompt in place and shows a warning.
+
+### Loadouts
+
+`/loadout` lists loadouts; picking one applies it, and "Turn loadout off" restores the configured models. `/loadout set|off|list|show|status` do the same from the command line. `AgentSession.applyRuntimeModelLoadout` swaps model roles, retry fallback chains, and task-agent model overrides as one volatile overlay, and only while the session is idle.
+
+### REPL mode
+
+`/repl` points the composer at a kernel: JavaScript, Python, Bash, or back at the agent (`/repl js`, `/repl py`, `/repl bash`, `/repl agent`). `Alt+Shift+R` (`app.repl.toggle`) toggles between the agent and the last kernel.
+
+In REPL mode, Enter inserts a newline so multi-line code is written as in an editor; with Vim mode on, Normal-mode Enter moves down a line. `Ctrl+Q` or `Ctrl+Enter` (`app.repl.execute`, the follow-up chords) runs the whole buffer in the kernel. A one-line draft starting with `/` still submits on Enter, so `/repl agent` and other commands work from REPL mode. JavaScript and Python cells use the built-in eval kernels; Bash cells use the bash executor. The status line shows the target and keys.
+
+`/kernel` shows which kernels are running, `/kernel reset <py|js>` starts the next cell in a fresh kernel, and `/kernel interrupt` cancels running cells.
 
 ## Iris live voice
 
@@ -61,13 +83,13 @@ Provenance: `c7bb908557`, `7a87cfe115`, `3b4dd762b6`, `6fa90d9a09`, `14c6e4406f`
 
 ### Live composer (issue #41)
 
-`/live` no longer replaces the composer. The ordinary composer stays mounted and focused, and speech types into it like hold-space dictation: a volatile preview while speaking, committed as one undoable edit when the utterance ends. Typing or moving the cursor around a preview keeps it as ordinary text. When the main agent accepts a voice handoff, those utterances leave the draft as one undo step.
+`/live` leaves the ordinary composer mounted and focused. Speech appears as a volatile preview while speaking, then the final transcript replaces it. A sent speech batch clears the entire draft and saves the exact delivered text in composer history; Up recalls it even when Iris answered without delegating.
 
 - Keys: `Ctrl+L` starts and ends the call; `Alt+Shift+M` (`app.live.mute`) mutes; `Ctrl+Alt+L` (`app.live.destination.cycle`) cycles where Enter sends plain text: main agent, voice agent only, or both. Esc and Ctrl+C keep their composer meanings.
 - Status: the model segment shows a mic colored by call phase, slashed while muted, labelled `voice` or `both` when Enter does not target the main agent, and red after a call ends in an error.
 - Enter is the operator's handoff: submitting (or clearing the draft with Ctrl+C) drops unclaimed spoken turns and cancels a handoff not yet accepted, so the voice agent cannot relay them again. If a handoff of that speech is landing at that moment, Enter holds the draft instead. Voice-only text reaches the voice model as an `"Operator Typed Message"`; `both` also sends the final prompt, after input hooks and any post-processing chain, as silent commentary, and the voice agent speaks that turn's final answer.
 - Crew reports, reasoning narration, and final answers wait while the operator speaks or edits the composer (10-second quiet window), releasing early when the voice agent speaks or delegates.
-- Assistant turn completion no longer deletes unclaimed operator speech (issue #39).
+- `live.submitKeyword` and `live.forceDelegateKeyword` act on the text visible in the composer, including partial speech, corrections, and typed edits. When either phrase is at the end and the composer has not changed for `live.submitSilenceMs` (default 2000 ms), submit presses Enter with the phrase removed and follows the selected main/voice/both destination; force-delegate sends the stripped composer draft directly to the main agent and silently notifies Iris. More speech or a correction removing the trailing phrase cancels the pending action. An empty phrase disables that action. Matching lowercases and ignores punctuation, collapsed whitespace, and even missing whitespace. `live.blockDelegateKeyword` remains per finalized provider turn: a turn containing its phrase stays with Iris and rejects her delegation. Iris still hears live microphone audio before the finalized transcript is available.
 
 ## Model selectors on `task`
 
@@ -75,13 +97,9 @@ Landed 23 Aug 2026 in `e4fadf1299` and `7039de1ad4`.
 
 An unregistered `agent` value shaped like `provider/model[:effort]` or `@role[:effort]` crews the generic task agent. Registered agent names take precedence. Invalid selectors fail during preflight.
 
-## Binary, extension deployment, and update
+## Binary and update
 
-NeoPi builds `packages/coding-agent/dist/npi` and installs only as `npi`. `scripts/install-neopi-extensions.ts` manages the fork extension links without deleting unrelated user extensions. Exact argv `npi update` launches the fork-specific interactive update request from `packages/coding-agent/src/prompts/npi-update.md`; extra update flags retain ordinary updater behavior.
-
-The installer and post-build hook honor a hidden `.<extension-name>.quarantined` marker in the destination extensions directory (by default `~/.omp/agent/extensions`). A marked extension is not linked or refreshed, and its legacy counterpart is not retired. The installer reports quarantined names without removing their markers.
-
-To quarantine an active extension, move its link out of the extensions directory and create the corresponding marker, for example `.neopi-repl.quarantined`. The marker prevents reinstallation; it does not disable an already-present link. Remove the marker and rerun `bun scripts/install-neopi-extensions.ts` to restore deployment.
+NeoPi builds `packages/coding-agent/dist/npi` and installs only as `npi`. Exact argv `npi update` launches the fork-specific interactive update request from `packages/coding-agent/src/prompts/npi-update.md`; extra update flags retain ordinary updater behavior.
 
 Early binary and deployment work is recorded by `da8bb86645`, `e795702ff4`, `64380829e2`, `05380db554`, and `bc1c74703d`. Current policy supersedes their historical command names; follow `AGENTS.md` and `docs/agents/upstream-sync.md`.
 
@@ -102,6 +120,8 @@ Early binary and deployment work is recorded by `da8bb86645`, `e795702ff4`, `643
 `Ctrl+Space` (`app.stt.toggle`) starts an independent xAI recording; press it again to stop and transcribe the complete WAV through native `grok-stt`. Pauses and silence remain in the recording. Nothing is segmented, streamed, or transcribed while recording. Existing xAI OAuth credentials are preferred, with xAI API-key credentials as the fallback; no Dictation model selection, `stt.enabled` setting, local speech model, or helper executable is required.
 
 Configured upstream dictation remains separate: `Ctrl+Alt+Space` (`app.dictation.toggle`) or the Space-hold gesture uses the **Dictation** model role and `stt.enabled`. The xAI models remain available there as `xai-oauth/grok-stt` and `xai/grok-stt`, but that pipeline does not own Ctrl+Space. Pressing Backspace while holding Space latches the recording so it survives releasing the bar; a later Space or Backspace tap stops it, and other keys type normally meanwhile.
+
+Live voice and both dictation shortcuts share one microphone capture. Recording into the composer does not mute or end the call: the live model continues hearing the same microphone frames, including speech spoken for dictation, and its ordinary live transcript may also appear in the composer.
 
 Ctrl+Space is system-reserved for the xAI path (`RESERVED_KEYS` in `packages/tui/src/app-keybindings.ts`). User keybinding overrides cannot remap `app.stt.toggle` or bind Ctrl+Space elsewhere, and extension shortcuts on it are refused with an extension error.
 
@@ -126,7 +146,7 @@ While a chain runs, the composer is locked: the draft stays visible with every l
 
 Chains live in `CHAINS.yml` beside advisors' `WATCHDOG.yml`: `<agent dir>/CHAINS.yml` (global) and the project root's `CHAINS.yml`; a project chain shadows a global chain with the same name. `/chaining configure` edits either scope. Each step has a name, a prompt (step instructions; the incoming text is the user message), an optional model (`provider/id`, `provider/id:level`, or `@role`), optional tools (none by default), and two optional keys:
 
-- **`context: true`** gives the step the live session transcript (thinking elided, tool calls collapsed) wrapped in `<transcript>`, with the text to rewrite in `<draft>`, so references like "remove mine" resolve against the conversation. Both tags carry a per-run boundary so tag-like text inside them cannot close a block, and the transcript keeps only the newest messages that fit the step model's context window. Off by default; the configure screen's "Transcript context" row toggles it.
+- **`context: true`** gives the step the live session transcript (thinking elided, tool calls collapsed) wrapped in `<transcript>`, with the text to rewrite in `<draft>`, so references like "remove mine" resolve against the conversation. Both tags carry a per-run boundary so tag-like text inside them cannot close a block. The transcript keeps only the newest messages that fit after the step prompt, granted tool schemas, framing, and the provider's maximum output are reserved; the output reserve includes provider-added reasoning tokens when enabled. Off by default; the configure screen's "Transcript context" row toggles it.
 - **`systemPrompt`** replaces the bundled chain system prompt, which tells the model it is rewriting a draft and to output only the rewrite, with no notes about what changed. The step `prompt` is always appended after it. In `/chaining configure` the "System prompt" row shows `(bundled default)`, Enter opens the current text, and Backspace on the row resets an override.
 
 ```yaml

@@ -272,8 +272,9 @@ export function clampAutoThinkingEffort(
 /** Coarse per-spawn effort selectors accepted by the task tool. */
 export const TASK_EFFORTS = ["lo", "med", "hi"] as const;
 
-/** Coarse task-spawn effort: the lowest, middle, or highest thinking level the target model supports. */
-export type TaskEffort = (typeof TASK_EFFORTS)[number];
+/** Replacement mode takes a concrete effort; legacy mode retains coarse hints. */
+export type LegacyTaskEffort = (typeof TASK_EFFORTS)[number];
+export type TaskEffort = LegacyTaskEffort | Effort;
 
 /**
  * Maps a coarse task effort onto the model's supported thinking range:
@@ -286,7 +287,7 @@ export type TaskEffort = (typeof TASK_EFFORTS)[number];
  */
 export function resolveTaskEffortLevel(
 	model: Model | undefined,
-	effort: TaskEffort,
+	effort: LegacyTaskEffort,
 	maxEffort?: Effort,
 ): Effort | undefined {
 	const supported = model ? getSupportedEfforts(model) : THINKING_EFFORTS;

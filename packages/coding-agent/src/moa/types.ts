@@ -31,6 +31,7 @@ import type {
 import type { RoleChainCandidate } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import type { MixtureRunStore } from "./run-store";
+import type { PreparedDocumentPresets } from "./validate";
 
 /** A validation or resolution finding. */
 export interface MixtureIssue {
@@ -79,7 +80,7 @@ export interface ResolvedMixture {
 	/** Every preset the mixture references, inlined, keyed by preset name. */
 	envelopes: Record<string, string>;
 	/** Document-level presets the definition was resolved against; run start re-resolves with them. */
-	presets: { envelopes: Record<string, string>; roles: Record<string, string> };
+	presets: PreparedDocumentPresets;
 	/** What the graph can actually reach. */
 	uses: { judge: boolean; summary: boolean; slicer: boolean };
 	judgePlan?: RoleChainCandidate[];

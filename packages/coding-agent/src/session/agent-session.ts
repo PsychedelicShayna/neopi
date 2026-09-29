@@ -130,6 +130,7 @@ import { renderChatCompactionPrompt } from "../chat/chat-system-prompt";
 import { cfgChatInclude } from "../chat/settings";
 import { SessionChronicler } from "../chronicler/session-chronicler";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
+import type { EffortOrigin, EffortSelection } from "../config/effort-policy";
 import type { ModelRegistry } from "../config/model-registry";
 import {
 	DEFAULT_PREWALK_TARGET,
@@ -175,6 +176,7 @@ import type {
 	TurnEndEvent,
 	TurnStartEvent,
 } from "../extensibility/extensions";
+import { type PersonaHost, personaFeature } from "../neopi/persona";
 import { emitSessionShutdownEvent, TOP_LEVEL_AGENT } from "../extensibility/extensions";
 import { ManagedTimers } from "../extensibility/extensions/managed-timers";
 import { createExtensionModelQuery } from "../extensibility/extensions/model-api";
@@ -758,7 +760,9 @@ export class AgentSession implements SettingsScope {
 	/** Last (enable, providerId) tuple resolved by `#syncAppendOnlyContext` — used to skip no-op invalidations. */
 	#lastAppendOnlyResolution?: { enable: boolean; providerId: string | undefined };
 	#eventListeners: AgentSessionEventListener[] = [];
-	#mixtureHost: Pick<SessionMixtureHost, "commitPersisted" | "resetConversation"> | undefined;
+	#mixtureHost:
+		| Pick<SessionMixtureHost, "commitPersisted" | "resetConversation" | "rebindWorkspace" | "commitWorkspaceMove">
+		| undefined;
 	#activeToolExecutionUpdates = new Map<string, Extract<AgentSessionEvent, { type: "tool_execution_update" }>>();
 	#runStateListeners = new Set<(state: "running" | "idle") => void>();
 	#commandMetadataChangedListeners: CommandMetadataChangedListener[] = [];
@@ -1659,6 +1663,8 @@ export class AgentSession implements SettingsScope {
 		this.#models = new ModelControls(modelControlsHost, {
 			scopedModels: config.scopedModels,
 			thinkingLevel: config.thinkingLevel,
+			thinkingOrigin: config.thinkingOrigin,
+			autoSelection: config.autoSelection,
 			thinkingLevelCeiling: config.thinkingLevelCeiling,
 			serviceTierByFamily: config.serviceTierByFamily,
 		});
@@ -1683,7 +1689,12 @@ export class AgentSession implements SettingsScope {
 			textOutputCommitted: () => this.#textOutputCommitted,
 			thinkingLevel: () => this.thinkingLevel,
 			configuredThinkingLevel: () => this.configuredThinkingLevel(),
-			setThinkingLevel: level => this.setThinkingLevel(level),
+			setThinkingLevel: (level, origin, selection) =>
+				this.#models.setThinkingLevel(level, false, origin ?? "fallback", selection),
+			autoSelection: () => this.#models.autoSelection,
+			thinkingOrigin: () => this.#models.effortOrigin,
+			thinkingRevision: () => this.#models.effortRevision,
+			emitNotice: message => this.emitNotice("warning", message, "effort-policy"),
 			thinkingLevelCeiling: () => this.#models.thinkingLevelCeiling,
 			isDisposed: () => this.#isDisposed,
 			isStreaming: () => this.isStreaming,
@@ -2882,6 +2893,8 @@ export class AgentSession implements SettingsScope {
 			sessionId: this.sessionId,
 			metadataResolver: provider => this.agent.metadataForProvider(provider),
 			onUsage: journalJudgmentUsage(this.sessionManager, "ttsr"),
+			sessionManager: this.sessionManager,
+			onEffortDisclosure: message => this.emitNotice("warning", message, "effort-policy"),
 		});
 	}
 
@@ -3033,8 +3046,48 @@ export class AgentSession implements SettingsScope {
 	 * Bind the session's mixture host: it commits mixture responses once they are persisted,
 	 * and drops its runs whenever the conversation is replaced.
 	 */
-	attachMixtureHost(host: Pick<SessionMixtureHost, "commitPersisted" | "resetConversation">): void {
+	attachMixtureHost(
+		host: Pick<
+			SessionMixtureHost,
+			"commitPersisted" | "resetConversation" | "rebindWorkspace" | "commitWorkspaceMove" | "observeCatalog"
+		>,
+	): void {
 		this.#mixtureHost = host;
+		host.observeCatalog(() => {
+			// Set the newly conservative model synchronously, before another
+			// session can submit a prompt using stale context/image limits.
+			void this.#refreshSelectedMixture().catch(error => {
+				logger.warn("Failed to reconcile mixture metadata after catalog change", { error: String(error) });
+			});
+		});
+	}
+
+	/**
+	 * Rebind to `cwd`'s mixtures; move transactions defer dropping source runs
+	 * until all cwd-derived state has refreshed successfully.
+	 * Refresh the selected mixture's metadata from the destination roster.
+	 */
+	async rebindMixturesForCwd(cwd: string, deferReset = false): Promise<void> {
+		const host = this.#mixtureHost;
+		if (!host) return;
+		await host.rebindWorkspace(cwd, deferReset);
+		await this.#refreshSelectedMixture();
+	}
+
+	/** Registry metadata may narrow when a different holder joins the workspace. */
+	async #refreshSelectedMixture(): Promise<void> {
+		const current = this.model;
+		if (!current || !isMixtureModel(current)) return;
+		const refreshed = this.#modelRegistry.find(current.provider, current.id);
+		if (!refreshed || !isMixtureModel(refreshed) || refreshed === current) return;
+		this.agent.setModel(refreshed);
+		await this.#reconcileModelDependentState(current, refreshed);
+		if (!this.#isDisposed && this.model === refreshed) this.#emit({ type: "model_changed" });
+	}
+
+	/** Commit the mixture workspace change once a move has succeeded. */
+	commitMixtureWorkspaceMove(): void {
+		this.#mixtureHost?.commitWorkspaceMove();
 	}
 
 	#recordToolExecutionStart(event: Extract<AgentEvent, { type: "tool_execution_start" }>): void {
@@ -5853,6 +5906,15 @@ export class AgentSession implements SettingsScope {
 	configuredThinkingLevel(): ConfiguredThinkingLevel | undefined {
 		return this.#models.configuredThinkingLevel();
 	}
+	/** Provenance of the active selection, not of its last classified concrete level. */
+	get effortOrigin(): EffortOrigin {
+		return this.#models.effortOrigin;
+	}
+
+	/** Model-bound Auto candidates of the active selection. */
+	get autoSelection(): EffortSelection | undefined {
+		return this.#models.autoSelection;
+	}
 
 	/** True when `auto` thinking mode is active. */
 	get isAutoThinking(): boolean {
@@ -6421,12 +6483,14 @@ export class AgentSession implements SettingsScope {
 	}
 
 	/** Scoped models for cycling (from --models flag) */
-	get scopedModels(): ReadonlyArray<{ model: Model; thinkingLevel?: ThinkingLevel }> {
+	get scopedModels(): ReadonlyArray<{ model: Model; thinkingLevel?: ThinkingLevel; explicitThinkingLevel?: boolean }> {
 		return this.#models.scopedModels;
 	}
 
 	/** Replace the Ctrl+P/`/models` cycle scope (post-discovery rebuild; see {@link ModelControls.setScopedModels}). */
-	setScopedModels(scopedModels: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>): void {
+	setScopedModels(
+		scopedModels: Array<{ model: Model; thinkingLevel?: ThinkingLevel; explicitThinkingLevel?: boolean }>,
+	): void {
 		this.#models.setScopedModels(scopedModels);
 	}
 
@@ -7411,6 +7475,22 @@ export class AgentSession implements SettingsScope {
 	 * `origin` decides the disposal contract: a direct prompt admitted before {@link beginDispose}
 	 * still runs to a settled turn, while a queued turn never starts on a disposed session.
 	 */
+	/** Persona capabilities for this session; status/warnings reach the TUI through the extension UI. */
+	#personaHost(): PersonaHost {
+		// Resolved per call: the UI context is only needed when a persona is selected.
+		return {
+			sessionId: this.sessionManager.getSessionId(),
+			ui: {
+				setStatus: (key, text) => this.#extensionRunner?.getUIContext().setStatus(key, text),
+				setWidget: (key, lines) => this.#extensionRunner?.getUIContext().setWidget(key, lines),
+			},
+			invalidatePromptCache: () => this.invalidatePromptCache(),
+			appendEntry: (customType, data) => {
+				this.sessionManager.appendCustomEntry(customType, data);
+			},
+		};
+	}
+
 	async #prepareAgentStart(
 		message: AgentMessage,
 		prompt: string,
@@ -7433,12 +7513,20 @@ export class AgentSession implements SettingsScope {
 			const sourceBase = this.#tools.baseSystemPrompt;
 			const basePreparation = await this.#tools.buildSystemPromptForAgentStart(prompt, isCurrent, signal);
 			if (!isCurrent()) return cancelled;
-			const result = await this.#extensionRunner?.emitBeforeAgentStart(prompt, images, basePreparation.systemPrompt);
+			// The session persona (`/persona`) shapes the base prompt before extensions see it.
+			const personaSystemPrompt = await personaFeature().apply(basePreparation.systemPrompt, this.#personaHost());
 			if (!isCurrent()) return cancelled;
+			const result = await this.#extensionRunner?.emitBeforeAgentStart(
+				prompt,
+				images,
+				personaSystemPrompt ?? basePreparation.systemPrompt,
+			);
+			if (!isCurrent()) return cancelled;
+			const systemPromptOverride = result?.systemPrompt ?? personaSystemPrompt;
 			// Overrides are opaque replacements, not string patches. Re-run only policy preparation
 			// against the winning base; discard this attempt's returned context and staged memory.
 			const overrideIsCurrent = () => {
-				if (result?.systemPrompt === undefined) return true;
+				if (systemPromptOverride === undefined) return true;
 				const currentBase = this.#tools.baseSystemPrompt;
 				// Refreshing an unchanged tool set may replace the array without changing policy.
 				return (
@@ -7474,13 +7562,13 @@ export class AgentSession implements SettingsScope {
 			}
 			if (!overrideIsCurrent()) continue;
 			return {
-				baseXdevCatalogDelivered: result?.systemPrompt === undefined,
+				baseXdevCatalogDelivered: systemPromptOverride === undefined,
 				commit: () => {
 					// No await may separate ownership validation from publishing memory and policy.
 					if (!isCurrent() || !overrideIsCurrent()) return undefined;
 					if (basePreparation.commit?.() === false) return undefined;
-					if (result?.systemPrompt !== undefined) {
-						this.#tools.setTurnSystemPromptOverride(result.systemPrompt);
+					if (systemPromptOverride !== undefined) {
+						this.#tools.setTurnSystemPromptOverride(systemPromptOverride);
 					} else {
 						this.#tools.clearTurnSystemPromptOverride();
 						this.agent.setSystemPrompt(this.#tools.baseSystemPrompt);
@@ -9322,7 +9410,12 @@ export class AgentSession implements SettingsScope {
 			this.#queuedMessageDrainBlocked = false;
 			this.#usagePreflightReadyForNextModelCall = false;
 
-			this.sessionManager.appendThinkingLevelChange(this.thinkingLevel, this.configuredThinkingLevel());
+			this.sessionManager.appendThinkingLevelChange(
+				this.thinkingLevel,
+				this.configuredThinkingLevel(),
+				this.effortOrigin,
+				this.autoSelection,
+			);
 			this.sessionManager.appendServiceTierChange(this.#models.serviceTierEntry());
 
 			this.#todo.resetCycle();
@@ -9545,6 +9638,7 @@ export class AgentSession implements SettingsScope {
 			selector?: string;
 			thinkingLevel?: ThinkingLevel;
 			persist?: boolean;
+			effortSelection?: EffortSelection;
 		},
 	): Promise<{ switched: boolean }> {
 		return this.#models.setModel(model, role, options);
@@ -9588,8 +9682,13 @@ export class AgentSession implements SettingsScope {
 	}
 
 	/** Selects the session thinking level and optionally persists it as the default. */
-	setThinkingLevel(level: ConfiguredThinkingLevel | undefined, persist: boolean = false): void {
-		this.#models.setThinkingLevel(level, persist);
+	setThinkingLevel(
+		level: ConfiguredThinkingLevel | undefined,
+		persist: boolean = false,
+		origin: EffortOrigin = "manual",
+		selection?: EffortSelection,
+	): void {
+		this.#models.setThinkingLevel(level, persist, origin, selection);
 	}
 
 	/** Advances through the thinking selectors supported by the active model. */
@@ -10773,6 +10872,10 @@ export class AgentSession implements SettingsScope {
 		const previousThinkingLevel = this.thinkingLevel;
 		const previousAutoThinking = this.isAutoThinking;
 		const previousAutoResolvedLevel = this.autoResolvedThinkingLevel();
+		const previousEffortOrigin = this.effortOrigin;
+		const previousAutoSelection = this.autoSelection;
+		const previousConfiguredThinkingLevel = this.configuredThinkingLevel();
+		const previousEffortRevision = this.#models.effortRevision;
 		const previousServiceTierByFamily = this.serviceTierByFamily;
 		const previousTools = [...this.agent.state.tools];
 		const previousBaseSystemPrompt = this.#tools.baseSystemPrompt;
@@ -10867,7 +10970,6 @@ export class AgentSession implements SettingsScope {
 			}
 
 			this.agent.replaceMessages(sessionContext.messages);
-			this.#mixtureHost?.resetConversation();
 			this.#reseedTokenRate();
 			this.#advisors.resetSessionState({ preserveCost: true });
 			this.#todo.syncFromBranch();
@@ -10944,11 +11046,23 @@ export class AgentSession implements SettingsScope {
 			const restoredConfigured = sessionContext.configuredThinkingLevel;
 			const restoredThinkingLevel: ConfiguredThinkingLevel | undefined =
 				hasThinkingEntry || (defaultThinkingLevel === AUTO_THINKING && sessionContext.thinkingLevel !== "off")
-					? restoredConfigured === AUTO_THINKING
-						? AUTO_THINKING
-						: (sessionContext.thinkingLevel as ThinkingLevel | undefined)
+					? (parseConfiguredThinkingLevel(restoredConfigured) ??
+						(sessionContext.thinkingLevel as ThinkingLevel | undefined))
 					: defaultThinkingLevel;
-			this.#models.restoreThinkingLevel(restoredThinkingLevel);
+			const restoredRole = this.sessionManager.getLastModelChangeRole();
+			const restoredOrigin =
+				sessionContext.effortOrigin ??
+				(restoredRole && this.settings.getModelRole(restoredRole) ? "role" : "default");
+			const restoredAutoSelection =
+				sessionContext.autoSelection ??
+				(restoredThinkingLevel === AUTO_THINKING && restoredOrigin === "role"
+					? this.settings.getRoleEffortSelection(this.sessionManager.getLastModelChangeRole() ?? "default")
+					: undefined);
+			this.#models.restoreThinkingLevel(
+				restoredThinkingLevel,
+				restoredOrigin,
+				restoredAutoSelection?.mode === "auto" ? restoredAutoSelection : undefined,
+			);
 			this.#models.restoreServiceTiers(
 				hasServiceTierEntry ? (sessionContext.serviceTier ?? {}) : configuredServiceTierByFamily,
 			);
@@ -10999,7 +11113,6 @@ export class AgentSession implements SettingsScope {
 			}
 			generationSettled.resolve();
 			this.#sessionGenerationSettled = previousSessionGenerationSettled;
-			return true;
 		} catch (error) {
 			this.sessionManager.restoreState(previousSessionState);
 			this.#freshProviderSessionId = previousFreshProviderSessionId;
@@ -11043,7 +11156,15 @@ export class AgentSession implements SettingsScope {
 				this.agent.setModel(previousModel);
 				modelRolledBack = !modelsAreEqual(rolledBackModel, previousModel);
 			}
-			this.#models.restoreThinkingSnapshot(previousThinkingLevel, previousAutoThinking, previousAutoResolvedLevel);
+			this.#models.restoreThinkingSnapshot(
+				previousThinkingLevel,
+				previousAutoThinking,
+				previousAutoResolvedLevel,
+				previousEffortOrigin,
+				previousAutoSelection,
+				previousConfiguredThinkingLevel,
+				previousEffortRevision,
+			);
 			this.#models.restoreServiceTiers(previousServiceTierByFamily);
 			if (modelRolledBack) {
 				this.#emit({ type: "model_changed" });
@@ -11082,6 +11203,13 @@ export class AgentSession implements SettingsScope {
 			if (error === SESSION_CWD_CHANGE_REJECTED) return false;
 			throw error;
 		}
+		// Only now is a cross-project resume committed. The cwd callback ran
+		// before fallible target initialization; rolling back it must preserve
+		// source runs and credential state. A successful session replacement
+		// discards the old conversation's runs regardless of its workspace.
+		this.commitMixtureWorkspaceMove();
+		this.#mixtureHost?.resetConversation();
+		return true;
 	}
 
 	/**

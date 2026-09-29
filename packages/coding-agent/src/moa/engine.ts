@@ -21,6 +21,7 @@ import type {
 	UsageBreakdownEntry,
 	UserMessage,
 } from "@oh-my-pi/pi-ai";
+import { NON_VISION_IMAGE_PLACEHOLDER, sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
 import { Tokenizer } from "@oh-my-pi/pi-agent-core";
 import type {
 	MixtureCheckpointReason,
@@ -31,6 +32,7 @@ import type {
 import { mixtureEdgeId } from "@oh-my-pi/pi-tui/overlays/mixture-types";
 import { logger } from "@oh-my-pi/pi-utils";
 import { thinkingFromContent } from "../session/messages";
+import { clampProviderContextImages, dropUnreadableContextImages } from "../session/provider-image-budget";
 import { fitHopRequest, type HopParts, truncateToTokens } from "./budget";
 import {
 	DEFAULT_EDGE_ENVELOPE,
@@ -475,13 +477,43 @@ class MixtureCall {
 				conversation: parts.conversation ?? "",
 				x: { output: parts.output, input: parts.input, reasoning: parts.reasoning, tool_trace: parts.toolTrace },
 			});
+		// Match the member's outbound image transforms before fitting. Reuse their
+		// surviving blocks in the request, so discarded or wire-stripped images
+		// are neither charged nor sent a second time.
+		const entryImages = edgeInId === undefined ? this.#entry.topicImages : [];
+		let entryContext: Context | undefined;
+		if (entryImages.length > 0) {
+			const imageMessage: UserMessage = { role: "user", content: entryImages, timestamp: 0 };
+			entryContext = sendsImageInputOnWire(member.model)
+				? await dropUnreadableContextImages(
+						clampProviderContextImages({ systemPrompt: [], messages: [imageMessage] }, member.model),
+						member.model,
+					)
+				: {
+						systemPrompt: [],
+						messages: [
+							{
+								...imageMessage,
+								content: [{ type: "text", text: NON_VISION_IMAGE_PLACEHOLDER }],
+							},
+						],
+					};
+		}
+		// An abort may finalize and checkpoint this run while image decoding is
+		// pending; do not append a hop after that terminal transition.
+		if (this.#finalized) return;
+		const entryMessage = entryContext?.messages[0];
+		const entryParts =
+			entryMessage?.role === "user" && Array.isArray(entryMessage.content) ? entryMessage.content : [];
 		const fitted = fitHopRequest({
 			target: member.model,
 			maxTokens: member.maxTokens,
 			systemPrompt,
 			assemble,
 			parts: { ...partsOf(envelopeContext.x), conversation: envelopeContext.conversation },
-			hopMessages: [],
+			// The entry blocks join the envelope after fitting. Count them now
+			// without counting the envelope's text twice.
+			hopMessages: entryContext?.messages ?? [],
 			partBudgetTokens: cfgMoaPartBudgetTokens.get(settings),
 		});
 		if (!fitted.ok) {
@@ -515,7 +547,7 @@ class MixtureCall {
 
 		const envelopeMessage: UserMessage = {
 			role: "user",
-			content: [{ type: "text", text: input }, ...(edgeInId === undefined ? this.#entry.topicImages : [])],
+			content: [{ type: "text", text: input }, ...entryParts],
 			attribution: "agent",
 			timestamp: Date.now(),
 		};

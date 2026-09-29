@@ -5,7 +5,15 @@
  * (the composer text for the first step). The last output is returned.
  */
 import { Agent, type AgentMessage, type AgentTool, ThinkingLevel, Tokenizer } from "@oh-my-pi/pi-agent-core";
-import { type Message, type Model, streamSimple } from "@oh-my-pi/pi-ai";
+import {
+	getSimpleStreamMaxTokens,
+	type Message,
+	type Model,
+	type SimpleStreamOptions,
+	streamSimple,
+} from "@oh-my-pi/pi-ai";
+import { classifyDifficulty } from "../auto-thinking/classifier";
+import { cfgEffortPolicyMode, resolveImplicitEffort } from "../config/effort-policy";
 import * as prompt from "@oh-my-pi/pi-utils/prompt";
 import type { ChainConfig, ChainStep } from "@oh-my-pi/pi-tui/overlays/chain-types";
 import {
@@ -16,7 +24,7 @@ import {
 } from "@oh-my-pi/pi-tui/thinking";
 import type { ModelRegistry } from "../config/model-registry";
 import { formatModelRoleAlias } from "../config/model-roles";
-import { getModelMatchPreferences, resolveModelRoleValue } from "../config/model-resolver";
+import { getModelMatchPreferences, resolveExplicitModelRole, resolveModelRoleValue } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import chainInputWithContext from "../prompts/chains/input-with-context.md" with { type: "text" };
 import { obfuscateMessages, obfuscateProviderContext, obfuscateToolArguments } from "../secrets/message-transform";
@@ -24,6 +32,7 @@ import type { SecretObfuscator } from "../secrets/obfuscator";
 import chainSystemPrompt from "../prompts/chains/system.md" with { type: "text" };
 import { estimateToolSchemaTokens } from "@oh-my-pi/pi-tui/status-line/context-usage";
 import { formatSessionHistoryMarkdown } from "../session/session-history-format";
+import type { SessionManager } from "../session/session-manager";
 
 /** Model role a step falls back to when it names no model. */
 export const CHAIN_DEFAULT_ROLE = "prose";
@@ -81,12 +90,14 @@ export class ChainControl {
 
 export interface RunChainOptions {
 	settings: Settings;
-	modelRegistry: Pick<ModelRegistry, "getAvailable" | "resolver">;
+	modelRegistry: ModelRegistry;
 	/** The session's tool instances; each step receives only the ones it names. */
 	tools: readonly AgentTool[];
 	cwd: string;
 	/** Live primary transcript, rendered into steps that set `context`. */
 	messages?: readonly AgentMessage[];
+	sessionManager?: SessionManager;
+	onEffortNotice?: (message: string) => void;
 	/** The session's secret obfuscator: steps send what the primary session would, never more. */
 	obfuscator?: SecretObfuscator;
 	/** Skip/abort handle; a private one is used when omitted. */
@@ -130,25 +141,28 @@ function blockBoundary(texts: readonly string[]): string {
 /**
  * The user message for a step: the draft, wrapped with the transcript when the step ingests
  * context. With a model, the transcript keeps only the newest messages that fit its context
- * window after the system prompt, the granted tools' schemas, the draft, output, and framing
- * are reserved.
+ * window after the system prompt, the granted tools' schemas, the draft, the provider's
+ * output cap (including reasoning), and framing are reserved.
  */
 export function renderChainInput(
 	step: ChainStep,
 	input: string,
 	messages: readonly AgentMessage[] | undefined,
-	model?: Pick<Model, "contextWindow" | "maxTokens" | "tokenizer">,
+	model?: Model,
 	tools: readonly AgentTool[] = [],
+	streamOptions?: Pick<SimpleStreamOptions, "reasoning" | "disableReasoning">,
 ): string {
 	if (!step.context || !messages?.length) return input;
 	let transcript: string;
 	if (model?.contextWindow) {
 		const tokenizer = new Tokenizer(model);
 		const system = step.systemPrompt ?? CHAIN_SYSTEM_PROMPT;
+		const answerTokens = chainOutputReserve(model);
+		const providerOutputTokens = getSimpleStreamMaxTokens(model, { ...streamOptions, maxTokens: answerTokens });
 		const reserved =
 			tokenizer.countTokens([system, step.prompt, input]) +
 			estimateToolSchemaTokens(tools, tokenizer) +
-			chainOutputReserve(model) +
+			(providerOutputTokens ?? answerTokens) +
 			CHAIN_FRAMING_RESERVE;
 		transcript = fitTranscript(messages, Math.max(0, model.contextWindow - reserved), tokenizer);
 	} else {
@@ -213,19 +227,58 @@ export async function runChainStep(
 	if (!resolved.model) throw new Error(`Chain step "${step.name}": no model available for ${selector}`);
 	// Without an explicit level the model's own default applies.
 	const requested = concreteThinkingLevel(resolved.thinkingLevel);
-	const thinkingLevel =
-		(requested && resolveThinkingLevelForModel(resolved.model, requested)) ?? ThinkingLevel.Inherit;
+	const role = resolveExplicitModelRole(selector, options.settings) ?? (step.model ? undefined : CHAIN_DEFAULT_ROLE);
+	const saved = role ? options.settings.getRoleEffortSelection(role) : undefined;
+	const selection =
+		saved?.mode === "inherit"
+			? undefined
+			: (saved ??
+				(resolved.thinkingLevel === "auto"
+					? { mode: "auto" as const }
+					: requested
+						? { mode: "fixed" as const, level: requested }
+						: undefined));
+	const decision =
+		cfgEffortPolicyMode.get(options.settings) === "replacement"
+			? resolveImplicitEffort(options.settings, resolved.model, selection, "role")
+			: undefined;
+	if (decision?.disclosure) options.onEffortNotice?.(decision.disclosure);
+	let thinkingLevel =
+		decision?.level ??
+		(requested && resolveThinkingLevelForModel(resolved.model, requested)) ??
+		ThinkingLevel.Inherit;
+	if (selection?.mode === "auto" && decision) {
+		try {
+			const classified = await classifyDifficulty(input, {
+				settings: options.settings,
+				registry: options.modelRegistry,
+				model: resolved.model,
+				signal,
+				allowedEfforts: decision.candidates,
+				sessionManager: options.sessionManager,
+				onContextFallback: reason => options.onEffortNotice?.(reason),
+				onEffortDisclosure: message => options.onEffortNotice?.(message),
+			});
+			if (!classified || !decision.candidates.includes(classified)) throw new Error("Invalid effort classification");
+			thinkingLevel = classified;
+		} catch {
+			thinkingLevel = decision.candidates[0];
+			options.onEffortNotice?.(`Effort classification failed; using lowest permitted effort ${thinkingLevel}.`);
+		}
+	}
 
 	const granted = new Set(step.tools ?? []);
 	const tools = options.tools.filter(tool => granted.has(tool.name));
 	const providerSessionId = Bun.randomUUIDv7();
 	const obfuscator = options.obfuscator;
 	const hidesSecrets = obfuscator?.obfuscates() === true;
+	const reasoning = toReasoningEffort(thinkingLevel);
+	const disableReasoning = shouldDisableReasoning(thinkingLevel);
 	const agent = new Agent({
 		initialState: {
 			systemPrompt: [step.systemPrompt ?? CHAIN_SYSTEM_PROMPT, step.prompt],
 			model: resolved.model,
-			thinkingLevel: toReasoningEffort(thinkingLevel),
+			thinkingLevel: reasoning,
 			tools,
 		},
 		sessionId: providerSessionId,
@@ -249,7 +302,7 @@ export async function runChainStep(
 		// through a granted egress tool (web_search needs no approval).
 		intentTracing: false,
 	});
-	agent.setDisableReasoning(shouldDisableReasoning(thinkingLevel));
+	agent.setDisableReasoning(disableReasoning);
 
 	const onAbort = () => agent.abort("chain cancelled");
 	signal?.addEventListener("abort", onAbort, { once: true });
@@ -260,7 +313,9 @@ export async function runChainStep(
 			hidesSecrets && obfuscator && options.messages
 				? options.messages.map(message => redactMessageText(obfuscator, message))
 				: options.messages;
-		await agent.prompt(renderChainInput(step, input, messages, resolved.model, tools));
+		await agent.prompt(
+			renderChainInput(step, input, messages, resolved.model, tools, { reasoning, disableReasoning }),
+		);
 	} finally {
 		signal?.removeEventListener("abort", onAbort);
 	}

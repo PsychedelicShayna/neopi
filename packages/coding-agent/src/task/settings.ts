@@ -347,9 +347,10 @@ export const cfgTaskMaxEffort = register({
 	ui: {
 		tab: "tasks",
 		group: "Subagents",
-		label: "Maximum Per-Spawn Effort",
+		label: "Legacy Per-Spawn Effort Ceiling",
 		description:
-			"Maximum reasoning effort allowed for the task tool's per-spawn effort hint. Lower values prevent callers from escalating subagents above this ceiling; the default preserves the model's full range.",
+			"Only in legacy effort mode: limit the task tool's coarse per-spawn effort hint. Replacement mode uses per-model effort rules instead.",
+		condition: "legacyEffortPolicy",
 		options: THINKING_EFFORTS.map(getThinkingLevelMetadata),
 	},
 });

@@ -41,7 +41,7 @@ describe("auto thinking classifier helpers", () => {
 		if (!judge) throw new Error(`Expected bundled local judge ${autoThinkingModel}`);
 
 		return {
-			settings: Settings.isolated({ modelRoles: { judge: `local/${autoThinkingModel}` } }),
+			settings: Settings.isolated({ "effort.mode": "legacy", modelRoles: { judge: `local/${autoThinkingModel}` } }),
 			registry: createRegistry([judge]),
 			model,
 		};
@@ -103,6 +103,7 @@ describe("auto thinking classifier helpers", () => {
 		const sparse = buildLadderModel("mock-minimal-max", [Effort.Minimal, Effort.Max]);
 		vi.spyOn(tinyModelClient, "complete").mockResolvedValue("hard");
 		const settings = Settings.isolated({
+			"effort.mode": "legacy",
 			modelRoles: { judge: "local/qwen3-1.7b" },
 			"providers.autoThinkingMaxEffort": "max",
 		});
@@ -153,6 +154,7 @@ describe("auto thinking classifier helpers", () => {
 		if (!baseModel) throw new Error("Expected bundled Claude Sonnet 4.6 model");
 		const classifierModel = { ...baseModel, reasoning: false };
 		const settings = Settings.isolated({
+			"effort.mode": "legacy",
 			modelRoles: { judge: `${classifierModel.provider}/${classifierModel.id}` },
 		});
 		const registry = createRegistry([classifierModel], { [classifierModel.provider]: "test-key" });
@@ -184,6 +186,7 @@ describe("auto thinking classifier helpers", () => {
 		const classifierModel = getBundledModel("anthropic", "claude-sonnet-4-6");
 		if (!classifierModel) throw new Error("Expected bundled Claude Sonnet 4.6 model");
 		const settings = Settings.isolated({
+			"effort.mode": "legacy",
 			modelRoles: { judge: `${classifierModel.provider}/${classifierModel.id}` },
 			"providers.autoThinkingMaxEffort": maxEffort,
 		});

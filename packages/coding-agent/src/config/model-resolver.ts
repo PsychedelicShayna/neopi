@@ -1531,6 +1531,8 @@ export function resolveModelFromSettings(options: {
 export interface RoleChainCandidate {
 	model: Model<Api>;
 	explicit: boolean;
+	/** Original chain entry, retaining its effort metadata key. */
+	selector: string;
 	thinkingLevel?: ConfiguredThinkingLevel;
 }
 
@@ -1562,7 +1564,7 @@ export function resolveRoleChain(
 			if (explicit) existing.explicit = true;
 			continue;
 		}
-		const candidate: RoleChainCandidate = { model: resolved.model, explicit };
+		const candidate: RoleChainCandidate = { model: resolved.model, explicit, selector };
 		if (resolved.thinkingLevel !== undefined) candidate.thinkingLevel = resolved.thinkingLevel;
 		candidateByRoute.set(key, candidate);
 		candidates.push(candidate);

@@ -340,7 +340,7 @@ The catalog below highlights common settings; it is not the complete schema. `om
 
 ### Models
 
-`modelRoles` assigns the primary selector for each workload. `retry.fallbackChains` supplies its ordered fallbacks; keep provider/backend choice out of service-specific settings. Chat-role values may carry a thinking suffix (`:minimal`, `:low`, `:medium`, `:high`, `:xhigh`, `:max`). Model-kind roles do not use chat thinking suffixes.
+`modelRoles` assigns the primary selector for each workload. `retry.fallbackChains` supplies its ordered fallbacks; keep provider/backend choice out of service-specific settings. Chat-role values may carry a thinking suffix (`:auto`, `:minimal`, `:low`, `:medium`, `:high`, `:xhigh`, `:max`). Model-kind roles do not use chat thinking suffixes.
 
 ```yaml
 modelRoles:
@@ -393,7 +393,7 @@ enabledModels:
   - claude-sonnet-4-5
 ```
 
-Built-in chat roles are `default`, `smol`, `slow`, `vision`, `plan`, `commit`, `tiny`, `memory`, `task`, and `advisor`. The `tiny` and `memory` roles accept both `tiny` catalog models and ordinary chat models. Built-in model-kind roles are `image`, `web`, `speech`, `dictation`, and `judge`; they select image, search/grounded-chat, TTS, STT, and judgment runners respectively. `judge` also accepts tiny and chat models, which is why aliases such as `@tiny` are valid fallbacks. Catalog kinds are `chat`, `tiny`, `image`, `tts`, `stt`, `search`, and `judge`; a custom model with no `kind` remains a chat model.
+Built-in chat roles are `default`, `smol`, `slow`, `vision`, `plan`, `commit`, `tiny`, `memory`, `task`, `advisor`, `chronicler`, `effort`, and `prose`. The `tiny` and `memory` roles accept both `tiny` catalog models and ordinary chat models. Built-in model-kind roles are `image`, `web`, `speech`, `dictation`, and `judge`; they select image, search/grounded-chat, TTS, STT, and judgment runners respectively. `judge` also accepts tiny and chat models, which is why aliases such as `@tiny` are valid fallbacks. The separate `effort` chat role classifies Auto effort and requires a concrete reasoning level; it does not use the `judge` role or the active session model as a fallback. Catalog kinds are `chat`, `tiny`, `image`, `tts`, `stt`, `search`, and `judge`; a custom model with no `kind` remains a chat model.
 
 Open `/model` and enter the **Roles** view to assign roles and edit their fallback rows. Chat roles and model-kind roles appear in separate capability sections, and the picker filters assignments to models accepted by the selected role. List the same catalog directly with `omp models --kind chat`, `omp models --kind tiny`, `omp models --kind image`, `omp models --kind tts`, `omp models --kind stt`, `omp models --kind search`, or `omp models --kind judge`; use `--kind all` for everything.
 
@@ -434,7 +434,7 @@ See [Advisor and WATCHDOG.md](./advisor-watchdog.md) for runtime behavior, `WATC
 | `advisor.maxNotesPerUpdate` | number | `4` | Non-blocker notes accepted per advisor review, from 1–32. Higher-severity notes can replace only pending notes from the same review. `WATCHDOG.yml` top-level or per-advisor values override this default. |
 | `advisor.evictStaleResults` | boolean | `true` | Before each review, replace the advisor's `read`/`grep`/`glob` output from older reviews with a short placeholder. The latest review is kept. |
 
-### Thinking
+### Thinking and effort policy
 
 ```yaml
 defaultThinkingLevel: high
@@ -446,19 +446,56 @@ thinkingBudgets:
   high: 16384
   xhigh: 32768
   max: 32768
+
+modelRoles:
+  default: openai-codex/gpt-5.6-sol
+
+effort:
+  mode: replacement # legacy opts back into coarse task hints
+  rules:
+    - selector: "openai-codex/gpt-5.6-*"
+      allowed: [low, medium, high]
+    - selector: openai-codex/gpt-5.6-sol
+      allowed: [medium, high, xhigh]
+roleEffortSelections:
+  default:
+    mode: auto
+    allowed: [medium, high, xhigh]
+    selector: openai-codex/gpt-5.6-sol
+  slow:
+    mode: fixed
+    level: high
+  smol:
+    mode: inherit
+retry:
+  fallbackChains:
+    default: [openai-codex/gpt-5.6-luna]
+  fallbackEffortSelections:
+    default:
+      openai-codex/gpt-5.6-luna:
+        mode: auto
+        allowed: [low, medium]
 ```
 
-| Key                               | Type    | Default | Values                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| --------------------------------- | ------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `defaultThinkingLevel`            | enum    | `high`  | `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `auto`. Override per run with `--thinking`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `hideThinkingBlock`               | boolean | `false` | Hide thinking blocks in output. `--hide-thinking` sets it for the run (display only).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `thinkingBudgets.minimal`         | number  | `1024`  | Token budget for the `minimal` level.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `thinkingBudgets.low`             | number  | `2048`  | Token budget for `low`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `thinkingBudgets.medium`          | number  | `8192`  | Token budget for `medium`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `thinkingBudgets.high`            | number  | `16384` | Token budget for `high`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `thinkingBudgets.xhigh`           | number  | `32768` | Token budget for `xhigh`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `thinkingBudgets.max`             | number  | `32768` | Token budget for `max`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `providers.autoThinkingMaxEffort` | enum    | `xhigh` | Highest effort `defaultThinkingLevel: auto` may resolve. `xhigh` keeps the classifier one tier below the top, so only `ultrathink` reaches `max`; `max` lets the classifier bill the top tier on models that expose it. The local on-device classifier stays capped at `xhigh` either way. This governs what `auto` _resolves_: a model whose ladder offers nothing under the ceiling gets no auto level at all, and one whose metadata requires explicit effort still receives its lowest supported effort from the transport — on a `["max"]` ladder that is `max`, because the model accepts nothing else. |
+| Key | Type | Default | Values / behavior |
+| --- | --- | --- | --- |
+| `defaultThinkingLevel` | enum | `high` | `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `auto`. Override per run with `--thinking`. |
+| `hideThinkingBlock` | boolean | `false` | Hide thinking blocks in output. `--hide-thinking` sets it for the run (display only). |
+| `thinkingBudgets.minimal` | number | `1024` | Token budget for the `minimal` level. |
+| `thinkingBudgets.low` | number | `2048` | Token budget for `low`. |
+| `thinkingBudgets.medium` | number | `8192` | Token budget for `medium`. |
+| `thinkingBudgets.high` | number | `16384` | Token budget for `high`. |
+| `thinkingBudgets.xhigh` | number | `32768` | Token budget for `xhigh`. |
+| `thinkingBudgets.max` | number | `32768` | Token budget for `max`. |
+| `effort.mode` | enum | `replacement` | `replacement` applies configurable implicit effort sets; `legacy` restores coarse task hints and their ceiling. |
+| `effort.rules` | array | `[]` | Global ordered `{ selector, allowed }` rules. Selectors use `provider/model-id` or Bun glob patterns; exact identities win regardless of order, then the first matching pattern wins. `allowed` is a nonempty, duplicate-free subset of `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. |
+| `roleEffortSelections` | record | `{}` | Role name → `{ mode: fixed, level }`, `{ mode: auto, allowed?, selector? }`, or `{ mode: inherit }`. `fixed` accepts a thinking level including `off`/`inherit`; Auto's `allowed` is an optional nonempty concrete set. Role effort metadata follows `modelRoleStorage`: global by default, project-local when set to `project`; missing project entries fall back to global. |
+| `retry.fallbackEffortSelections` | record | `{}` | Chain key → fallback selector → same fixed/Auto/Inherit selection shapes. Stored alongside `retry.fallbackChains` in global settings; key each entry by its actual configured fallback selector. |
+| `providers.autoThinkingMaxEffort` | enum | `xhigh` | Legacy Auto classifier ceiling (`xhigh` or `max`). In replacement mode, only an explicitly authored value limits an Auto selection with no saved `allowed` set; the default `xhigh` does not cap configurable Auto sets. |
+
+The winning global rule restricts **implicit** choices after intersecting the model's supported efforts; role and fallback fixed levels are lowered to the nearest permitted level at or below the request, or the lowest permitted level if none is lower (with a warning when adjusted). Auto classifies only its permitted supported levels; a saved Auto set is tied to its selector, so a different model does not silently inherit that set. `inherit` leaves provider effort unspecified. An explicit concrete caller or manual effort (for example `agent: "openai-codex/gpt-5.6-sol:max"` or `--thinking max`) bypasses implicit rules but still must be supported by the model. Explicit `:auto` **does not** bypass the rules. A model with no controllable effort surface cannot supply a concrete effort; if no permitted level exists for a controllable model, selection fails with supported/permitted levels rather than silently choosing an unrelated tier.
+
+The replacement Auto classifier uses the `@effort` chat role and its own configured fallback chain. Its built-in candidate order is `openai-codex/gpt-6-luna:xhigh`, then `openai-codex/gpt-5.6-luna:xhigh`; set `modelRoles.effort`, `roleEffortSelections.effort` (fixed concrete level), and `retry.fallbackChains.effort`/its per-entry effort selections to choose a different classifier. Without a configured level, a candidate starts at fixed `xhigh`; unsupported implicit fixed levels are adjusted against that model and any rule. There is no fallback to `judge` or the active session model. The classifier reads the committed Chronicler diary and uncovered active-branch transcript for context; if the diary is missing/unreadable it classifies from the transcript. On classification failure, replacement mode warns and uses the lowest permitted level; legacy mode retains the last resolved level or provisional fallback. In legacy mode Auto uses the old `judge` chain and ceiling. See [Models](./models.md#effort-controls-in-models) for the interactive rule/role/fallback controls and [task](./tools/task.md) for the dynamic spawn wire.
 
 ### Sampling
 
@@ -790,6 +827,8 @@ tui:
 | `tui.resizeScrollback`      | enum    | `rebuild`        | How a settled width resize refreshes transcript rows kept in terminal scrollback: `append` replays the transcript at the new width below retained history, `rebuild` erases pane scrollback then replays one current-width copy, `preserve` repaints only the viewport. |
 
 For a custom status line, set `statusLine.preset: custom` and configure `statusLine.leftSegments`, `statusLine.rightSegments`, and `statusLine.segmentOptions`. Include `status` in either segment list to render extension statuses registered through `ctx.ui.setStatus()`, ordered by key and joined inline. Set `statusLine.showHookStatus: false` to suppress the same statuses in the footer.
+
+The `live` segment shows the microphone phase, mute state, and non-primary composer destination while `/live` is active. Every built-in preset includes it, including `minimal` without a model segment. Existing custom segment lists must include `live` to keep the call visible; it is no longer attached to `model`.
 
 The `cost` segment shows recorded session costs. For an active provider/model with scheduled pricing, it appends `↑` during peak hours or `↓` off-peak, refreshing at boundaries even while idle. The arrow reflects the current tariff, not past spending; flat-price models and explicit cost overrides have no arrow. See [usage costs and time-based pricing](models.md#usage-costs-and-time-based-pricing) for the UTC schedule and estimation semantics.
 

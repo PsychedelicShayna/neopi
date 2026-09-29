@@ -53,6 +53,13 @@ import {
 // Registers every setting before any instance is read (definitions live next to their domains).
 import "./all-settings";
 import { cfgModelRoles, cfgModelRoleStorage } from "./model-settings";
+import {
+	cfgRoleEffortSelections,
+	cfgFallbackEffortSelections,
+	type EffortSelection,
+	validateEffortSelection,
+} from "./effort-policy";
+import { cfgRetryFallbackChains } from "../session/settings";
 import { cfgShellPath } from "../exec/settings";
 
 export interface RuntimeModelOverrides {
@@ -647,11 +654,18 @@ export class Settings {
 	#modified = new Set<string>();
 	/** Individual project model roles modified during this session */
 	#modifiedProjectModelRoles = new Set<string>();
+	/** Individual project role effort selections modified during this session. */
+	#modifiedProjectRoleEfforts = new Set<string>();
 	/** Individual global model roles modified during this session (for partial save) */
 	#modifiedGlobalModelRoles = new Set<string>();
+	/** Individual global role efforts changed during this session. */
+	#modifiedGlobalRoleEfforts = new Set<string>();
+	/** Roles whose model and effort must pass the same conflict check. */
+	#pairedGlobalRoleMutations = new Set<string>();
 	/** On-disk generations and prior values observed before each pending global mutation. */
 	#modifiedPathMutations = new Map<string, PendingYamlMutation>();
 	#modifiedGlobalModelRoleMutations = new Map<string, PendingYamlMutation>();
+	#modifiedGlobalRoleEffortMutations = new Map<string, PendingYamlMutation>();
 	/** Changes whenever a live API mutates a persisted layer. */
 	#persistedMutationGeneration = 0;
 	/**
@@ -1229,10 +1243,14 @@ export class Settings {
 		if (this.#projectSavePromise) {
 			await this.#projectSavePromise;
 		}
-		if (this.#modified.size > 0 || this.#modifiedGlobalModelRoles.size > 0) {
+		if (
+			this.#modified.size > 0 ||
+			this.#modifiedGlobalModelRoles.size > 0 ||
+			this.#modifiedGlobalRoleEfforts.size > 0
+		) {
 			await this.#chainSave();
 		}
-		if (this.#modifiedProjectModelRoles.size > 0) {
+		if (this.#modifiedProjectModelRoles.size > 0 || this.#modifiedProjectRoleEfforts.size > 0) {
 			await this.#saveProjectNow();
 		}
 	}
@@ -1735,6 +1753,215 @@ export class Settings {
 		this.#setProjectModelRoleValue(role, null);
 		this.#captureRuntimeModelRoleOverride(role);
 		this.#updateRuntimeModelRoleOverride(role, undefined);
+	}
+
+	/** Validate a role's selector and effort together before switching the active model. */
+	validateRoleModelAndEffort(
+		role: string,
+		selector: string | undefined,
+		selection: EffortSelection | undefined,
+		scope: "global" | "project",
+	): void {
+		this.#stageRoleModelAndEffort(role, selector, selection, scope);
+	}
+
+	#stageRoleModelAndEffort(
+		role: string,
+		selector: string | undefined,
+		selection: EffortSelection | undefined,
+		scope: "global" | "project",
+	): RawSettings {
+		if (!role.trim()) throw new Error("Model role must have a name");
+		if (selector !== undefined) assertRuntimeSelector(selector, `Model role ${role}`);
+		if (selection !== undefined) validateEffortSelection(selection);
+		const source = scope === "global" ? this.#global : this.#project;
+		const staged: RawSettings = { ...source };
+		const rawRoles = getByPath(source, ["modelRoles"]);
+		const roles: Record<string, unknown> = isRecord(rawRoles) ? { ...rawRoles } : {};
+		if (scope === "project") roles[role] = selector ?? null;
+		else if (selector === undefined) delete roles[role];
+		else roles[role] = selector;
+		setByPath(staged, ["modelRoles"], roles);
+		const rawSelections = getByPath(source, ["roleEffortSelections"]);
+		const selections: Record<string, unknown> = isRecord(rawSelections) ? { ...rawSelections } : {};
+		if (selection === undefined) delete selections[role];
+		else selections[role] = selection;
+		cfgRoleEffortSelections.assertWritable(selections);
+		setByPath(staged, ["roleEffortSelections"], selections);
+		const layers = this.#ownLayers();
+		this.#validateAll(
+			this.#mergeOverParent(
+				this.#mergeOwnLayers({
+					...layers,
+					[scope]: staged,
+				}),
+			),
+			this.#cwd,
+		);
+		return staged;
+	}
+
+	/** Commit the validated role selector and its effort metadata as one layer mutation. */
+	setRoleModelAndEffort(
+		role: string,
+		selector: string | undefined,
+		selection: EffortSelection | undefined,
+		scope: "global" | "project",
+	): void {
+		const staged = this.#stageRoleModelAndEffort(role, selector, selection, scope);
+		const previousRoles = cfgModelRoles.get(this);
+		const previousEfforts = cfgRoleEffortSelections.get(this);
+		if (scope === "project") {
+			this.#project = staged;
+			this.#modifiedProjectModelRoles.add(role);
+			this.#modifiedProjectRoleEfforts.add(role);
+			this.#persistedMutationGeneration++;
+			this.#rebuildMerged();
+			this.#captureRuntimeModelRoleOverride(role);
+			this.#updateRuntimeModelRoleOverride(role, selector);
+			this.#fireIfChanged(cfgModelRoles, previousRoles);
+			this.#fireIfChanged(cfgRoleEffortSelections, previousEfforts);
+			this.#queueProjectSave();
+			return;
+		}
+		this.#captureGlobalMutation(
+			role,
+			this.#modifiedGlobalModelRoleMutations,
+			this.#modelRolesFromLayer(this.#global)[role],
+		);
+		const currentEfforts = getByPath(this.#global, cfgRoleEffortSelections.segments);
+		this.#captureGlobalMutation(
+			role,
+			this.#modifiedGlobalRoleEffortMutations,
+			isRecord(currentEfforts) ? currentEfforts[role] : undefined,
+		);
+		this.#global = staged;
+		this.#modifiedGlobalModelRoles.add(role);
+		this.#modifiedGlobalRoleEfforts.add(role);
+		this.#pairedGlobalRoleMutations.add(role);
+		this.#releaseSoftPin(cfgRoleEffortSelections);
+		this.#persistedMutationGeneration++;
+		this.#rebuildMerged();
+		if (!this.isProjectModelRoleRuntimeOverrideActive(role)) {
+			this.#savedRuntimeModelRoleOverrides.delete(role);
+			this.#updateRuntimeModelRoleOverride(role, selector);
+		}
+		this.#fireIfChanged(cfgModelRoles, previousRoles);
+		this.#fireIfChanged(cfgRoleEffortSelections, previousEfforts);
+		this.#queueSave();
+	}
+
+	/** Validate and persist a fallback chain with all its per-entry effort selections together. */
+	setFallbackChainAndEfforts(role: string, chain: string[], selections: Record<string, EffortSelection>): void {
+		if (!role.trim()) throw new Error("Fallback chain must name a role");
+		const chains = { ...cfgRetryFallbackChains.get(this) };
+		const allSelections = { ...cfgFallbackEffortSelections.get(this) };
+		if (chain.length === 0) {
+			delete chains[role];
+			delete allSelections[role];
+		} else {
+			chains[role] = chain;
+			allSelections[role] = selections;
+		}
+		cfgRetryFallbackChains.assertWritable(chains);
+		cfgFallbackEffortSelections.assertWritable(allSelections);
+		const staged: RawSettings = structuredClone(this.#global);
+		setByPath(staged, cfgRetryFallbackChains.segments, chains);
+		setByPath(staged, cfgFallbackEffortSelections.segments, allSelections);
+		this.#validateAll(
+			this.#mergeOverParent(
+				this.#mergeOwnLayers({
+					...this.#ownLayers(),
+					global: staged,
+				}),
+			),
+			this.#cwd,
+		);
+		const previousChains = cfgRetryFallbackChains.get(this);
+		const previousEfforts = cfgFallbackEffortSelections.get(this);
+		for (const setting of [cfgRetryFallbackChains, cfgFallbackEffortSelections]) {
+			this.#captureGlobalMutation(
+				setting.id,
+				this.#modifiedPathMutations,
+				getByPath(this.#global, setting.segments),
+			);
+			this.#modified.add(setting.id);
+			this.#releaseSoftPin(setting);
+		}
+		this.#global = staged;
+		this.#persistedMutationGeneration++;
+		this.#rebuildMerged();
+		this.#fireIfChanged(cfgRetryFallbackChains, previousChains);
+		this.#fireIfChanged(cfgFallbackEffortSelections, previousEfforts);
+		this.#queueSave();
+	}
+
+	/** Persist the role's effort metadata in the global layer. */
+	setRoleEffortSelection(role: string, selection: EffortSelection | undefined): void {
+		if (selection) validateEffortSelection(selection);
+		const global = getByPath(this.#global, ["roleEffortSelections"]);
+		const current: Record<string, EffortSelection> = {};
+		if (isRecord(global)) {
+			for (const [name, value] of Object.entries(global)) {
+				validateEffortSelection(value);
+				current[name] = value;
+			}
+		}
+		if (selection) current[role] = selection;
+		else delete current[role];
+		const previous = cfgRoleEffortSelections.get(this);
+		this.#captureGlobalMutation(
+			role,
+			this.#modifiedGlobalRoleEffortMutations,
+			isRecord(global) ? global[role] : undefined,
+		);
+		setByPath(this.#global, cfgRoleEffortSelections.segments, current);
+		this.#modifiedGlobalRoleEfforts.add(role);
+		this.#releaseSoftPin(cfgRoleEffortSelections);
+		this.#persistedMutationGeneration++;
+		this.#rebuildMerged();
+		this.#fireIfChanged(cfgRoleEffortSelections, previous);
+		this.#queueSave();
+	}
+
+	/** Persist the role's effort metadata in the selected project, without changing global defaults. */
+	setProjectRoleEffortSelection(role: string, selection: EffortSelection | undefined): void {
+		if (selection) validateEffortSelection(selection);
+		const previous = cfgRoleEffortSelections.get(this);
+		const current = getByPath(this.#project, ["roleEffortSelections"]);
+		const entries: Record<string, unknown> = isRecord(current) ? { ...current } : {};
+		if (selection) entries[role] = selection;
+		else delete entries[role];
+		setByPath(this.#project, ["roleEffortSelections"], entries);
+		this.#modifiedProjectRoleEfforts.add(role);
+		this.#persistedMutationGeneration++;
+		this.#rebuildMerged();
+		this.#fireIfChanged(cfgRoleEffortSelections, previous);
+		this.#queueProjectSave();
+	}
+
+	clearProjectRoleEffortSelection(role: string): void {
+		this.setProjectRoleEffortSelection(role, undefined);
+	}
+
+	getRoleEffortSelection(role: string): EffortSelection | undefined {
+		return cfgRoleEffortSelections.get(this)[role];
+	}
+
+	getProjectRoleEffortSelection(role: string): EffortSelection | undefined {
+		const values = getByPath(this.#project, ["roleEffortSelections"]);
+		return (
+			((isRecord(values) ? values[role] : undefined) as EffortSelection | undefined) ??
+			this.#parent?.getProjectRoleEffortSelection(role)
+		);
+	}
+
+	getGlobalRoleEffortSelection(role: string): EffortSelection | undefined {
+		const values = getByPath(this.#global, ["roleEffortSelections"]);
+		return (
+			((isRecord(values) ? values[role] : undefined) as EffortSelection | undefined) ??
+			this.#parent?.getGlobalRoleEffortSelection(role)
+		);
 	}
 
 	/**
@@ -3479,7 +3706,12 @@ export class Settings {
 
 	async #saveNow(): Promise<void> {
 		if (this.#savesCancelled || !this.#persist || !this.#configPath) return;
-		if (this.#modified.size === 0 && this.#modifiedGlobalModelRoles.size === 0) return;
+		if (
+			this.#modified.size === 0 &&
+			this.#modifiedGlobalModelRoles.size === 0 &&
+			this.#modifiedGlobalRoleEfforts.size === 0
+		)
+			return;
 
 		const configPath = this.#configPath;
 		const modifiedPaths = [...this.#modified];
@@ -3487,10 +3719,20 @@ export class Settings {
 		const modifiedPathMutations = new Map(this.#modifiedPathMutations);
 		const modifiedModelRoleMutations = new Map(this.#modifiedGlobalModelRoleMutations);
 		const globalRolesAtStart = this.#modelRolesFromLayer(this.#global);
+		const modifiedRoleEfforts = [...this.#modifiedGlobalRoleEfforts];
+		const pairedRoles = new Set(this.#pairedGlobalRoleMutations);
+		const modifiedRoleEffortMutations = new Map(this.#modifiedGlobalRoleEffortMutations);
+		const globalEffortsAtStart = getByPath(this.#global, cfgRoleEffortSelections.segments);
+		const effortValuesAtStart: Record<string, unknown> = isRecord(globalEffortsAtStart)
+			? { ...globalEffortsAtStart }
+			: {};
 		this.#modified.clear();
 		this.#modifiedGlobalModelRoles.clear();
 		this.#modifiedPathMutations.clear();
 		this.#modifiedGlobalModelRoleMutations.clear();
+		this.#modifiedGlobalRoleEfforts.clear();
+		this.#pairedGlobalRoleMutations.clear();
+		this.#modifiedGlobalRoleEffortMutations.clear();
 
 		try {
 			await this.#withYamlWriteLock(configPath, async writePath => {
@@ -3551,20 +3793,50 @@ export class Settings {
 				}
 				const currentRoles = getByPath(current, ["modelRoles"]);
 				const currentRoleValues: Record<string, unknown> = isRecord(currentRoles) ? currentRoles : {};
+				const currentEfforts = getByPath(current, cfgRoleEffortSelections.segments);
+				const currentEffortValues: Record<string, unknown> = isRecord(currentEfforts) ? currentEfforts : {};
+				const canApplyMutation = (mutation: PendingYamlMutation | undefined, value: unknown): boolean =>
+					mutation !== undefined &&
+					mutation.generation.kind !== "unreadable" &&
+					(yamlGenerationsMatch(mutation.generation, loaded.generation) ||
+						Bun.deepEquals(value, mutation.baseValue));
+				const pairCanApply = (role: string): boolean =>
+					!pairedRoles.has(role) ||
+					(canApplyMutation(modifiedModelRoleMutations.get(role), currentRoleValues[role]) &&
+						canApplyMutation(modifiedRoleEffortMutations.get(role), currentEffortValues[role]));
 				const rolesToApply = modifiedModelRoles.filter(role => {
-					const mutation = modifiedModelRoleMutations.get(role);
-					const canApply =
-						mutation !== undefined &&
-						mutation.generation.kind !== "unreadable" &&
-						(yamlGenerationsMatch(mutation.generation, loaded.generation) ||
-							Bun.deepEquals(currentRoleValues[role], mutation.baseValue));
-					if (canApply) return true;
+					if (
+						pairCanApply(role) &&
+						canApplyMutation(modifiedModelRoleMutations.get(role), currentRoleValues[role])
+					) {
+						return true;
+					}
 					logger.warn("Settings: skipped stale change after external config edit", {
 						path: configPath,
 						setting: `modelRoles.${role}`,
 					});
 					return false;
 				});
+				const effortsToApply = modifiedRoleEfforts.filter(role => {
+					if (
+						pairCanApply(role) &&
+						canApplyMutation(modifiedRoleEffortMutations.get(role), currentEffortValues[role])
+					) {
+						return true;
+					}
+					logger.warn("Settings: skipped stale change after external config edit", {
+						path: configPath,
+						setting: `roleEffortSelections.${role}`,
+					});
+					return false;
+				});
+				const latestEfforts = getByPath(this.#global, cfgRoleEffortSelections.segments);
+				const latestEffortValues: Record<string, unknown> = isRecord(latestEfforts) ? latestEfforts : {};
+				const effortsToPreserve = new Set(this.#modifiedGlobalRoleEfforts);
+				for (const role of new Set([...Object.keys(effortValuesAtStart), ...Object.keys(latestEffortValues)])) {
+					if (!settingValuesEqual(effortValuesAtStart[role], latestEffortValues[role]))
+						effortsToPreserve.add(role);
+				}
 				if (rolesToApply.length > 0 || rolesToPreserve.size > 0) {
 					const mergedRoles: Record<string, unknown> = { ...currentRoleValues };
 					for (const role of rolesToApply) {
@@ -3585,10 +3857,27 @@ export class Settings {
 					shouldWrite = true;
 				}
 
+				if (effortsToApply.length > 0 || effortsToPreserve.size > 0) {
+					const mergedEfforts: Record<string, unknown> = { ...currentEffortValues };
+					for (const role of effortsToApply) {
+						if (Object.hasOwn(effortValuesAtStart, role)) mergedEfforts[role] = effortValuesAtStart[role];
+						else delete mergedEfforts[role];
+					}
+					for (const role of effortsToPreserve) {
+						if (Object.hasOwn(latestEffortValues, role)) mergedEfforts[role] = latestEffortValues[role];
+						else delete mergedEfforts[role];
+					}
+					setByPath(current, cfgRoleEffortSelections.segments, mergedEfforts);
+					shouldWrite = true;
+				}
 				if (shouldWrite) {
 					const changedPaths = [
 						...appliedPaths.map(path => path.split(".")),
 						...[...new Set([...rolesToApply, ...rolesToPreserve])].map(role => ["modelRoles", role]),
+						...[...new Set([...effortsToApply, ...effortsToPreserve])].map(role => [
+							"roleEffortSelections",
+							role,
+						]),
 					];
 					const mutations: YamlPathMutation[] = [...(migrationMutations ?? [])];
 					for (const path of changedPaths) {
@@ -3627,6 +3916,16 @@ export class Settings {
 						this.#modifiedGlobalModelRoleMutations.delete(role);
 					}
 				}
+				const globalEffortsAfterWrite = getByPath(this.#global, cfgRoleEffortSelections.segments);
+				const effortValuesAfterWrite: Record<string, unknown> = isRecord(globalEffortsAfterWrite)
+					? globalEffortsAfterWrite
+					: {};
+				for (const role of effortsToPreserve) {
+					if (!settingValuesEqual(latestEffortValues[role], effortValuesAfterWrite[role])) continue;
+					this.#modifiedGlobalRoleEfforts.delete(role);
+					this.#modifiedGlobalRoleEffortMutations.delete(role);
+					this.#pairedGlobalRoleMutations.delete(role);
+				}
 			});
 		} catch (error) {
 			logger.warn("Settings: save failed", { error: String(error) });
@@ -3662,6 +3961,20 @@ export class Settings {
 					);
 				}
 			}
+			for (const role of modifiedRoleEfforts) {
+				this.#modifiedGlobalRoleEfforts.add(role);
+				if (pairedRoles.has(role)) this.#pairedGlobalRoleMutations.add(role);
+				if (!this.#modifiedGlobalRoleEffortMutations.has(role)) {
+					const mutation = modifiedRoleEffortMutations.get(role) ?? {
+						generation: { kind: "unreadable" },
+						baseValue: undefined,
+					};
+					this.#modifiedGlobalRoleEffortMutations.set(
+						role,
+						retryGeneration ? { ...mutation, generation: retryGeneration } : mutation,
+					);
+				}
+			}
 			throw error;
 		}
 	}
@@ -3684,6 +3997,16 @@ export class Settings {
 				else delete roles[role];
 			}
 			setByPath(saved, ["modelRoles"], roles);
+		}
+		if (this.#modifiedGlobalRoleEfforts.size > 0) {
+			const liveEfforts = getByPath(this.#global, cfgRoleEffortSelections.segments);
+			const savedEfforts = getByPath(saved, cfgRoleEffortSelections.segments);
+			const efforts: Record<string, unknown> = isRecord(savedEfforts) ? savedEfforts : {};
+			for (const role of this.#modifiedGlobalRoleEfforts) {
+				if (isRecord(liveEfforts) && Object.hasOwn(liveEfforts, role)) efforts[role] = liveEfforts[role];
+				else delete efforts[role];
+			}
+			setByPath(saved, cfgRoleEffortSelections.segments, efforts);
 		}
 		for (const id of this.#modified) {
 			const segments = id.split(".");
@@ -3719,10 +4042,17 @@ export class Settings {
 	}
 
 	async #saveProjectNow(): Promise<void> {
-		if (this.#savesCancelled || !this.#persist || this.#modifiedProjectModelRoles.size === 0) return;
+		if (
+			this.#savesCancelled ||
+			!this.#persist ||
+			(this.#modifiedProjectModelRoles.size === 0 && this.#modifiedProjectRoleEfforts.size === 0)
+		)
+			return;
 
 		const projectConfigPath = path.join(getProjectAgentDir(this.#cwd), "config.yml");
 		const modifiedModelRoles = [...this.#modifiedProjectModelRoles];
+		const modifiedRoleEfforts = [...this.#modifiedProjectRoleEfforts];
+		this.#modifiedProjectRoleEfforts.clear();
 		this.#modifiedProjectModelRoles.clear();
 
 		try {
@@ -3754,6 +4084,18 @@ export class Settings {
 						mutations.push({ path, operation: "set", value });
 					}
 				}
+				const roleEfforts = getByPath(this.#project, ["roleEffortSelections"]);
+				for (const role of modifiedRoleEfforts) {
+					const path = ["roleEffortSelections", role];
+					const value = isRecord(roleEfforts) ? roleEfforts[role] : undefined;
+					if (value === undefined) {
+						deleteByPath(projectSettings, path);
+						mutations.push({ path, operation: "delete" });
+					} else {
+						setByPath(projectSettings, path, value);
+						mutations.push({ path, operation: "set", value });
+					}
+				}
 
 				const canPatchDocument = canPatchLoadedDocument;
 				const source = loaded.generation.kind === "content" ? loaded.generation.source : "";
@@ -3771,6 +4113,7 @@ export class Settings {
 			for (const role of modifiedModelRoles) {
 				this.#modifiedProjectModelRoles.add(role);
 			}
+			for (const role of modifiedRoleEfforts) this.#modifiedProjectRoleEfforts.add(role);
 			throw error;
 		}
 
@@ -3836,7 +4179,14 @@ export class Settings {
 				baseVal !== null &&
 				!Array.isArray(baseVal)
 			) {
-				result[key] = this.#deepMerge(baseVal as RawSettings, override as RawSettings);
+				// Effort selections are discriminated values: a project "fixed"
+				// must replace global "auto", not inherit its allowed/selector fields.
+				result[key] =
+					"mode" in override &&
+					(override.mode === "auto" || override.mode === "fixed" || override.mode === "inherit") &&
+					"mode" in baseVal
+						? override
+						: this.#deepMerge(baseVal as RawSettings, override as RawSettings);
 			} else {
 				result[key] = override;
 			}

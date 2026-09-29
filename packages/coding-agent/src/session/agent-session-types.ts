@@ -26,6 +26,7 @@ import type { AsyncJob, AsyncJobDeliveryState, AsyncJobManager } from "../async"
 import type { EffectiveExtensionRoots } from "../capability/types";
 import type { ChatModeConfig } from "../chat/chat-mode";
 import type { ModelRegistry } from "../config/model-registry";
+import type { EffortOrigin, EffortSelection } from "../config/effort-policy";
 import type { PromptTemplate } from "../config/prompt-templates";
 import type { Settings } from "../config/settings";
 import type { SkillsSettings } from "../extensibility/settings";
@@ -135,6 +136,9 @@ export interface InitialRetryFallbackState {
 	originalSelector: string;
 	/** Thinking selector configured for the unavailable primary. */
 	originalThinkingLevel: ConfiguredThinkingLevel | undefined;
+	/** Provenance and model-bound Auto set of the unavailable primary, not the fallback's defaults. */
+	originalEffortOrigin?: EffortOrigin;
+	originalAutoSelection?: EffortSelection;
 	/** Prevent cooldown restoration when startup selected this fallback from live usage health. */
 	pinned?: boolean;
 }
@@ -177,9 +181,11 @@ export interface AgentSessionConfig {
 	/** Whether the caller explicitly requested yolo/auto-approve behavior for this session. */
 	autoApprove?: boolean;
 	/** Models to cycle through with Ctrl+P (from --models flag). */
-	scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
+	scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel; explicitThinkingLevel?: boolean }>;
 	/** Initial session thinking selector. */
 	thinkingLevel?: ConfiguredThinkingLevel;
+	thinkingOrigin?: EffortOrigin;
+	autoSelection?: EffortSelection;
 	/** Hard ceiling on the session's thinking effort (e.g. a task spawn's `task.maxEffort`-capped hint); every later change, including retry-fallback recovery, is re-clamped to it. */
 	thinkingLevelCeiling?: Effort;
 	/** Retry chain ownership when startup selected one of its fallback entries. */

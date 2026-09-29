@@ -10,7 +10,7 @@ import {
 	filterProviderReplayMessages,
 	resolveOwnedDialectFromEnv,
 	type StreamFn,
-	type ThinkingLevel,
+	ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
 import type {
 	Context,
@@ -63,6 +63,12 @@ import type { EffectiveExtensionRoots } from "./capability/types";
 import { type ChatModeConfig, chatActiveToolNames, chatModeIncludes } from "./chat/chat-mode";
 import { buildChatSystemPrompt } from "./chat/chat-system-prompt";
 import { shouldEnableAppendOnlyContext } from "./config/append-only-context-mode";
+import {
+	cfgEffortPolicyMode,
+	resolveImplicitEffort,
+	type EffortOrigin,
+	type EffortSelection,
+} from "./config/effort-policy";
 import { shouldInlineToolDescriptors } from "./config/inline-tool-descriptors-mode";
 import { isAuthenticated, kNoAuth, ModelRegistry } from "./config/model-registry";
 import {
@@ -74,6 +80,7 @@ import {
 	resolveAllowedModels,
 	resolveCliModel,
 	resolveConfiguredModelPatterns,
+	resolveExplicitModelRole,
 	resolveModelRoleValue,
 } from "./config/model-resolver";
 import { formatModelSelectorValue, parseModelString } from "@oh-my-pi/pi-tui/overlays/model-selector";
@@ -200,6 +207,8 @@ import {
 	findRetryFallbackCandidates,
 	type RetryFallbackResolutionContext,
 	resolveRetryFallbackChainKey,
+	getFallbackEffortSelection,
+	parseRetryFallbackSelector,
 } from "./session/retry-fallback-chains";
 import { describeUsageFallback } from "./session/retry-fallback-reason";
 import { getRestorableSessionModels } from "./session/session-context";
@@ -297,7 +306,7 @@ import { registerLocalInferenceApi } from "./tiny/local-inference-api";
 import { streamMixture } from "./moa/engine";
 import { createSessionMixtureHost } from "./moa/host";
 import { isMixtureModel, registerMixtureApi } from "./moa/provider";
-import { retainMixtureCatalog } from "./moa/registration";
+import { MixtureWorkspace } from "./moa/registration";
 import { buildWorkspaceTree, type WorkspaceTree } from "./workspace-tree";
 
 import {
@@ -560,6 +569,9 @@ export interface CreateAgentSessionOptions {
 	modelPatternDefaultFallbackChain?: string[];
 	/** Thinking selector. Default: from settings, else unset */
 	thinkingLevel?: ConfiguredThinkingLevel;
+	/** Caller/manual provenance is distinct from configured role and fallback defaults. */
+	thinkingOrigin?: EffortOrigin;
+	autoSelection?: EffortSelection;
 	/** Hard ceiling on the session's thinking effort (e.g. a task spawn's `task.maxEffort`-capped hint); retry-fallback recovery re-clamps to it. */
 	thinkingLevelCeiling?: Effort;
 	/** OpenAI service-tier override for this session. `null` omits `service_tier`. */
@@ -574,7 +586,7 @@ export interface CreateAgentSessionOptions {
 	 */
 	resolveServiceTierByFamily?: (model: Model | undefined) => ServiceTierByFamily;
 	/** Models available for cycling (Ctrl+P in interactive mode) */
-	scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
+	scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel; explicitThinkingLevel?: boolean }>;
 	/** Prewalk from the starting model to a fast/cheap target at the first edit/write once the todo list exists. */
 	prewalk?: Prewalk;
 	/** Force read-only plan mode at start, auto-approve on the model's first resolve call, then switch to execute. */
@@ -1820,6 +1832,36 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	const hasExplicitModel = options.model !== undefined || deferredModelPatterns.length > 0;
 	const modelMatchPreferences = getModelMatchPreferences(settings);
 	const defaultRoleValue = settings.getModelRole("default");
+	const requestedModelRole =
+		resolveExplicitModelRole(options.modelPattern, settings) ??
+		(!hasExplicitModel ? (sessionManager.getLastModelChangeRole() ?? "default") : undefined);
+	const roleEffortSelection = requestedModelRole ? settings.getRoleEffortSelection(requestedModelRole) : undefined;
+	let thinkingOrigin: EffortOrigin =
+		options.thinkingOrigin ??
+		(options.thinkingLevel !== undefined
+			? "caller"
+			: hasThinkingEntry
+				? (existingSession.effortOrigin ?? (roleEffortSelection || defaultRoleValue ? "role" : "default"))
+				: roleEffortSelection || (!hasExplicitModel && defaultRoleValue)
+					? "role"
+					: "default");
+	let startupAutoSelection =
+		options.autoSelection ??
+		((thinkingOrigin === "caller" || thinkingOrigin === "manual") &&
+		(options.thinkingLevel !== undefined || options.thinkingOrigin !== undefined)
+			? undefined
+			: hasThinkingEntry
+				? (existingSession.autoSelection ??
+					(existingSession.effortOrigin === "role" && roleEffortSelection?.mode === "auto"
+						? roleEffortSelection
+						: undefined))
+				: roleEffortSelection?.mode === "auto"
+					? roleEffortSelection
+					: undefined);
+	let startupThinkingOverride = options.thinkingLevel;
+	let startupRoleSelection = roleEffortSelection;
+	const initialThinkingOrigin = thinkingOrigin;
+	const initialAutoSelection = startupAutoSelection;
 	let explicitDefaultProviders: Set<string> | undefined;
 	if ((cfgEnabledModels.get(settings)?.length ?? 0) === 0) {
 		const patterns = resolveConfiguredModelPatterns(defaultRoleValue, settings);
@@ -1912,12 +1954,18 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	// role reclaim so the final model's own defaults aren't masked by an earlier
 	// fallback model's.
 	const pickInitialThinkingLevel = (selectedModel: Model | undefined): ConfiguredThinkingLevel | undefined => {
-		let level = options.thinkingLevel;
+		let level = startupThinkingOverride;
 		if (level === undefined && hasExistingSession && hasThinkingEntry) {
 			level =
 				parseConfiguredThinkingLevel(existingSession.configuredThinkingLevel) ??
 				parseThinkingLevel(existingSession.thinkingLevel);
 		}
+		if (level === undefined && hasExplicitModel && restoredSessionThinkingLevel !== undefined) {
+			level = restoredSessionThinkingLevel;
+		}
+		if (level === undefined && !hasThinkingEntry && startupRoleSelection?.mode === "fixed")
+			level = startupRoleSelection.level;
+		if (level === undefined && !hasThinkingEntry && startupRoleSelection?.mode === "auto") level = AUTO_THINKING;
 		if (level === undefined && !hasThinkingEntry && restoredSessionThinkingLevel !== undefined) {
 			level = restoredSessionThinkingLevel;
 		}
@@ -2233,6 +2281,16 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			getModelString: () => (hasExplicitModel && model ? formatModelString(model) : undefined),
 			getActiveModelString,
 			getActiveModel: () => agent?.state.model ?? model,
+			getActiveEffort: () => ({
+				level: session ? session.configuredThinkingLevel() : thinkingLevel,
+				origin: session?.effortOrigin ?? thinkingOrigin,
+				selection: session
+					? session.autoSelection
+					: thinkingLevel === AUTO_THINKING
+						? startupAutoSelection
+						: undefined,
+			}),
+			onEffortDisclosure: message => session?.emitNotice("warning", message, "effort-policy"),
 			getServiceTierByFamily: () => session?.serviceTierByFamily,
 			getImageAttachments: () => session?.getImageAttachments() ?? [],
 			getPlanModeState: () => session?.getPlanModeState(),
@@ -2649,13 +2707,14 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		await modelRegistry.refreshRuntimeProviders("offline");
 		// Mixtures register after extension providers and runtime hydration, so member
 		// selectors resolve against the full catalog and session-model restore below sees
-		// `mixture/<name>`. The catalog belongs to the registry: a subagent sharing it only
-		// retains, and the provider is unregistered when the last holder releases.
+		// `mixture/<name>`. The catalog belongs to the registry and keeps one roster per
+		// workspace scope: a subagent sharing the registry and cwd only retains, and a
+		// scope's roster is dropped when its last holder releases.
 		const mixtureOwner = `session:${sessionManager.getSessionId()}:${Bun.randomUUIDv7()}`;
-		const mixtureCatalog = await logger.time("retainMixtureCatalog", () =>
-			retainMixtureCatalog(mixtureOwner, { cwd, agentDir, registry: modelRegistry, settings }),
+		const mixtureWorkspace = await logger.time("retainMixtureCatalog", () =>
+			MixtureWorkspace.retain(mixtureOwner, { cwd, agentDir, registry: modelRegistry, settings }),
 		);
-		const releaseMixtureCatalog = () => mixtureCatalog.release(mixtureOwner);
+		const releaseMixtureCatalog = () => mixtureWorkspace.release();
 		startupCleanup.defer(releaseMixtureCatalog);
 		disposeCallbacks.add(releaseMixtureCatalog);
 		// Online runtime discovery must not steal the event loop from the first UI
@@ -2814,13 +2873,29 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						settings,
 						preferences: matchPreferences,
 					});
+					const rawParsed = parseModelString(trimmedSelector, {
+						allowMaxSuffix: true,
+						allowAutoAlias: true,
+						isLiteralModelId: (provider, id) => modelRegistry.find(provider, id) !== undefined,
+					});
+					const roleSuffix =
+						!trimmedSelector.includes("/") && trimmedSelector.includes(":")
+							? parseConfiguredThinkingLevel(trimmedSelector.slice(trimmedSelector.lastIndexOf(":") + 1))
+							: undefined;
+					const callerEffort =
+						options.thinkingOrigin === undefined || options.thinkingOrigin === "caller"
+							? (rawParsed?.thinkingLevel ??
+								(resolved.model?.id.toLowerCase() === trimmedSelector.toLowerCase() ? undefined : roleSuffix))
+							: undefined;
 					if (resolved.configuredPatterns && resolved.configuredPatterns.length > 0) {
 						const primaryPatterns: Array<{
 							pattern: string;
 							retryFallback: InitialRetryFallbackState | undefined;
+							callerEffort?: ConfiguredThinkingLevel;
 						}> = resolved.configuredPatterns.map(pattern => ({
 							pattern,
 							retryFallback: undefined,
+							callerEffort,
 						}));
 						if (!resolved.configuredRole || !cfgRetryModelFallback.get(settings)) {
 							return primaryPatterns;
@@ -2850,16 +2925,33 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 							allowAutoAlias: true,
 							isLiteralModelId: (provider, id) => modelRegistry.find(provider, id) !== undefined,
 						});
+						const originalSelection = resolved.configuredRole
+							? settings.getRoleEffortSelection(resolved.configuredRole)
+							: undefined;
+						const originalLevel =
+							options.thinkingLevel ??
+							callerEffort ??
+							(originalSelection?.mode === "auto"
+								? AUTO_THINKING
+								: originalSelection?.mode === "fixed"
+									? originalSelection.level
+									: parsedOriginal?.thinkingLevel);
 						const retryFallback: InitialRetryFallbackState = {
 							role: chainKey,
 							originalSelector,
-							originalThinkingLevel: parsedOriginal?.thinkingLevel,
+							originalThinkingLevel: originalLevel,
+							originalEffortOrigin: callerEffort ? "caller" : thinkingOrigin,
+							originalAutoSelection:
+								originalLevel === AUTO_THINKING
+									? (options.autoSelection ??
+										(callerEffort ? undefined : thinkingOrigin === "role" ? originalSelection : undefined))
+									: undefined,
 						};
 						return [
 							...primaryPatterns,
 							...findRetryFallbackCandidates(fallbackContext, chainKey, originalSelector, originalModel, {
 								allowMissingPrimary: true,
-							}).map(candidate => ({ pattern: candidate.raw, retryFallback })),
+							}).map(candidate => ({ pattern: candidate.raw, retryFallback, callerEffort })),
 						];
 					}
 					if (resolved.model) {
@@ -2870,12 +2962,14 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 									resolved.thinkingLevel,
 								),
 								retryFallback: undefined,
+								callerEffort,
 							},
 						];
 					}
 					return resolveConfiguredModelPatterns([trimmedSelector], settings).map(pattern => ({
 						pattern,
 						retryFallback: undefined,
+						callerEffort,
 					}));
 				}),
 			);
@@ -2886,10 +2980,21 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				: allEnabledModels;
 			let usageFallbackTriggered = false;
 			let usageFallbackReason: { from: string; reason: string } | undefined;
+			const startupFallbackNotices: string[] = [];
 			for (let patternIndex = 0; patternIndex < expandedModelPatterns.length; patternIndex += 1) {
-				const { pattern, retryFallback } = expandedModelPatterns[patternIndex];
+				const { pattern, retryFallback, callerEffort } = expandedModelPatterns[patternIndex];
 				const primary = parseModelPattern(pattern, resolutionModels, matchPreferences);
 				if (!primary.model || (retryFallback && !hasModelAuth(primary.model))) continue;
+				thinkingOrigin = initialThinkingOrigin;
+				startupAutoSelection = initialAutoSelection;
+				startupThinkingOverride = options.thinkingLevel;
+				startupRoleSelection = roleEffortSelection;
+				if (callerEffort !== undefined && !retryFallback && options.thinkingLevel === undefined) {
+					thinkingOrigin = "caller";
+					startupThinkingOverride = callerEffort;
+					startupAutoSelection = callerEffort === AUTO_THINKING ? options.autoSelection : undefined;
+					startupRoleSelection = undefined;
+				}
 				let hasUsageFallbackCandidate = false;
 				for (
 					let candidateIndex = patternIndex + 1;
@@ -2970,6 +3075,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				let selectedModel = primary.model;
 				let selectedThinkingLevel = primary.thinkingLevel;
 				let selectedExplicitThinkingLevel = primary.explicitThinkingLevel;
+				const entryHasEffortSuffix = selectedExplicitThinkingLevel;
 				// A chain entry without its own `:level` suffix inherits the
 				// unavailable primary's configured thinking level, matching
 				// runtime fallback-chain semantics.
@@ -2996,6 +3102,47 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 							}
 						}
 					}
+				}
+				if (retryFallback) {
+					const entry = parseRetryFallbackSelector(pattern, modelRegistry);
+					const selection = entry ? getFallbackEffortSelection(settings, retryFallback.role, entry) : undefined;
+					startupRoleSelection = undefined;
+					if (selection?.mode === "fixed") {
+						startupThinkingOverride = selection.level;
+						startupAutoSelection = undefined;
+						thinkingOrigin = "fallback";
+					} else if (selection?.mode === "auto") {
+						startupThinkingOverride = AUTO_THINKING;
+						startupAutoSelection = selection;
+						thinkingOrigin = "fallback";
+					} else if (selection?.mode === "inherit" || !entryHasEffortSuffix) {
+						startupThinkingOverride = retryFallback.originalThinkingLevel;
+						startupAutoSelection = retryFallback.originalAutoSelection;
+						thinkingOrigin = retryFallback.originalEffortOrigin ?? "inherited";
+					} else {
+						startupThinkingOverride = selectedThinkingLevel;
+						startupAutoSelection = undefined;
+						thinkingOrigin = "fallback";
+					}
+					if (cfgEffortPolicyMode.get(settings) === "replacement" && selectedModel.reasoning) {
+						const effortSelection =
+							startupThinkingOverride === AUTO_THINKING
+								? (startupAutoSelection ?? { mode: "auto" as const })
+								: { mode: "fixed" as const, level: startupThinkingOverride ?? ThinkingLevel.Inherit };
+						try {
+							resolveImplicitEffort(settings, selectedModel, effortSelection, thinkingOrigin);
+						} catch (error) {
+							startupFallbackNotices.push(`Skipped startup fallback ${pattern}: ${String(error)}`);
+							continue;
+						}
+					}
+				} else if (
+					selectedExplicitThinkingLevel &&
+					options.thinkingLevel === undefined &&
+					(thinkingOrigin === "caller" || !startupRoleSelection)
+				) {
+					startupThinkingOverride = callerEffort ?? selectedThinkingLevel;
+					startupAutoSelection = startupThinkingOverride === AUTO_THINKING ? startupAutoSelection : undefined;
 				}
 				if (!authFallbackUsed && options.modelPatternFallbackRole) {
 					const primarySelector = formatModelSelectorValue(
@@ -3048,7 +3195,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				model = selectedModel;
 				initialRetryFallback =
 					retryFallback && usageFallbackTriggered ? { ...retryFallback, pinned: true } : retryFallback;
-				modelFallbackMessage = undefined;
+				modelFallbackMessage = startupFallbackNotices.length ? startupFallbackNotices.join("\n") : undefined;
 				if (selectedExplicitThinkingLevel) {
 					restoredSessionThinkingLevel = selectedThinkingLevel;
 				}
@@ -3065,7 +3212,12 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						formatModelStringWithRouting(selectedModel),
 						effectiveThinkingLevel,
 					);
-					modelFallbackMessage = `Fallback: ${usageFallbackReason.from} -> ${target}\n${usageFallbackReason.reason}`;
+					modelFallbackMessage = [
+						modelFallbackMessage,
+						`Fallback: ${usageFallbackReason.from} -> ${target}\n${usageFallbackReason.reason}`,
+					]
+						.filter(Boolean)
+						.join("\n");
 				}
 				preconnectModelHost(selectedModel.baseUrl);
 				break;
@@ -4258,6 +4410,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		const sessionMixtureHost = createSessionMixtureHost({
 			sessionManager,
 			modelRegistry,
+			workspace: mixtureWorkspace,
 			settings,
 			stream: primaryStreamFn,
 			prepareContext: transformMemberContext,
@@ -4399,11 +4552,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			if (model) {
 				sessionManager.appendModelChange(`${model.provider}/${model.id}`);
 			}
-			if (!autoThinking) {
-				// Do not write the `auto` selector before the first turn resolves; auto
-				// classification persists its concrete effort once a real user turn runs.
-				sessionManager.appendThinkingLevelChange(effectiveThinkingLevel);
-			}
+			// AgentSession resolves policy against the final model. Persist its
+			// configured selector and provenance after construction, not this
+			// pre-policy provisional provider effort.
 			if (persistInitialServiceTier || Object.keys(initialServiceTierByFamily).length > 0) {
 				sessionManager.appendServiceTierChange(
 					Object.keys(initialServiceTierByFamily).length > 0 ? initialServiceTierByFamily : null,
@@ -4495,7 +4646,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			advisorConfigs: discoveredAdvisors.advisors,
 			advisorConfigWarnings: discoveredAdvisors.warnings,
 			agent,
-			thinkingLevel: autoThinking ? AUTO_THINKING : effectiveThinkingLevel,
+			thinkingLevel,
+			thinkingOrigin,
+			autoSelection: thinkingLevel === AUTO_THINKING ? startupAutoSelection : undefined,
 			thinkingLevelCeiling: options.thinkingLevelCeiling,
 			initialRetryFallback,
 			prewalk: options.prewalk,
@@ -4691,6 +4844,14 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			advisorMcpResources: cursorMcpResources,
 			titleSystemPrompt: options.titleSystemPrompt,
 		});
+		if (!hasExistingSession) {
+			sessionManager.appendThinkingLevelChange(
+				session.thinkingLevel,
+				session.configuredThinkingLevel(),
+				session.effortOrigin,
+				session.autoSelection,
+			);
+		}
 		hasSession = true;
 		credentialNoticeSession = session;
 		session.attachMixtureHost(sessionMixtureHost);

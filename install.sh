@@ -1,13 +1,10 @@
 #!/usr/bin/env bash
-# Install packages/coding-agent/dist/npi (built by ./build.sh) and deploy the
-# NeoPi extensions from this checkout.
+# Install packages/coding-agent/dist/npi (built by ./build.sh).
 #
 # Environment:
 #   NPI_DEST              install path; its file name must be npi (default ~/.local/bin/npi)
-#   PI_CODING_AGENT_DIR   agent dir whose extensions/ receives the links (default: the active profile's).
-#                         Setting it makes this a staged install: OMP_PROFILE and PI_PROFILE are
-#                         ignored for the extension links, the smoke tests run under a throwaway
-#                         HOME, and the live native cache is left alone.
+#   PI_CODING_AGENT_DIR   setting it makes this a staged install: the smoke tests run under a
+#                         throwaway HOME, and the live native cache is left alone.
 set -euo pipefail
 
 cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
@@ -42,16 +39,14 @@ staging=0
 smoke_home=""
 mkdir -p -- "$(dirname -- "$dest")"
 staged=$(mktemp "$dest.new.XXXXXX")
-# The previous binary, kept (as a hard link to its inode) until the extensions deploy and the
-# installed binary passes its smoke test; any failure after the rename puts it back.
+# The previous binary, kept (as a hard link to its inode) until the installed binary passes
+# its smoke test; any failure after the rename puts it back.
 previous=""
 moved=0
 installed=0
-ext_touched=0
 cleanup() {
 	rm -f -- "$staged"
 	[[ -z $smoke_home ]] || rm -rf -- "$smoke_home"
-	((!ext_touched || installed)) || restore_extensions
 	if [[ -n $previous ]]; then
 		if ((installed)); then
 			rm -f -- "$previous"
@@ -59,7 +54,7 @@ cleanup() {
 			mv -f -- "$previous" "$dest" && say "restored the previous $dest"
 		fi
 	elif ((moved && !installed)); then
-		# A first install that failed after the rename: no npi without its extensions.
+		# A first install that failed after the rename: no unverified npi.
 		rm -f -- "$dest" && say "removed the incomplete $dest"
 	fi
 }
@@ -91,52 +86,6 @@ fi
 mv -f -- "$staged" "$dest"
 moved=1
 say "installed $dest"
-
-# A named profile would otherwise win over PI_CODING_AGENT_DIR in getAgentDir().
-ext_env=()
-((staging)) && ext_env=(env -u OMP_PROFILE -u PI_PROFILE)
-ext_dir=$("${ext_env[@]}" bun -e 'import { defaultNeopiExtensionsDestDir } from "./scripts/install-neopi-extensions.ts"; process.stdout.write(defaultNeopiExtensionsDestDir())')
-# The managed entries as they were, so a failed install puts them back with the binary.
-ext_names=(omomp-persona omomp-loadout omomp-repl omomp-live-persona)
-for source in extensions/*/; do ext_names+=("$(basename -- "$source")"); done
-declare -A ext_before=()
-for name in "${ext_names[@]}"; do
-	entry="$ext_dir/$name"
-	if [[ -L $entry ]]; then
-		ext_before[$name]="link:$(readlink -- "$entry")"
-	elif [[ -e $entry ]]; then
-		ext_before[$name]=kept
-	else
-		ext_before[$name]=absent
-	fi
-done
-restore_extensions() {
-	local name entry before backup
-	for name in "${ext_names[@]}"; do
-		entry="$ext_dir/$name"
-		before=${ext_before[$name]}
-		case $before in
-		link:*)
-			rm -f -- "$entry"
-			ln -s -- "${before#link:}" "$entry"
-			;;
-		absent)
-			[[ ! -L $entry ]] || rm -f -- "$entry"
-			;;
-		kept)
-			# A real directory the installer renamed aside to .<name>.pre-symlink.<time>.
-			if [[ -L $entry ]]; then
-				backup=$(find "$ext_dir" -maxdepth 1 -name ".$name.pre-symlink.*" | sort | tail -n 1)
-				rm -f -- "$entry"
-				[[ -z $backup ]] || mv -- "$backup" "$entry"
-			fi
-			;;
-		esac
-	done
-	say "restored the previous extension links in $ext_dir"
-}
-ext_touched=1
-"${ext_env[@]}" bun scripts/install-neopi-extensions.ts --dest "$ext_dir"
 
 smoke "$dest"
 installed=1

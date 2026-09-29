@@ -14,17 +14,9 @@ This repo contains multiple packages, but **`packages/coding-agent/`** is the pr
 - The allowed compiled artifact is `packages/coding-agent/dist/npi`. Source
   runs may use `bun run dev` or
   `bun --cwd=packages/coding-agent src/cli.ts`.
-- Installing `npi` includes the fork extensions. After placing the binary, run
-  `bun scripts/install-neopi-extensions.ts` so each managed
-  `extensions/neopi-*` directory is linked into the active profile's agent
-  extension directory (`getAgentDir()`; default
-  `~/.omp/agent/extensions`). The installer honors `PI_CONFIG_DIR`,
-  `OMP_PROFILE`, and, on the default profile, `PI_CODING_AGENT_DIR`.
-  Same-named destination directories are renamed aside, not deleted; unrelated
-  user extensions remain untouched.
-- Local coding-agent builds deploy extensions automatically unless
-  `NPI_SKIP_EXTENSION_INSTALL=1`. An automatic post-build deployment failure
-  warns and leaves the binary in place; the explicit installer still fails.
+- The fork's operator commands (`/persona`, `/loadout`, `/repl`, `/kernel`)
+  are built into `packages/coding-agent`; installing `npi` needs no extension
+  deployment step.
 - NEVER use a remote installer, a global package-manager install, `bun setup`,
   or `scripts/link-omp.sh` to install this fork. Build from the reviewed
   checkout and copy `dist/npi` to the dedicated `npi` path.
@@ -52,9 +44,8 @@ checks. Before synchronizing an upstream release, read and follow
   NEVER commit or push directly to the default branch. After merge, fast-forward
   only an ancestor checkout; preserve divergent work through topic/recovery
   refs and follow the documented safe realignment procedure instead.
-- Install only `packages/coding-agent/dist/npi` at the dedicated `npi` path,
-  run `bun scripts/install-neopi-extensions.ts`, and smoke-test the installed
-  executable. NEVER use the upstream installer for this source fork.
+- Install only `packages/coding-agent/dist/npi` at the dedicated `npi` path
+  and smoke-test the installed executable. NEVER use the upstream installer for this source fork.
 
 
 

@@ -14,6 +14,16 @@ use napi::{
 use napi_derive::napi;
 use pi_voice::live::{DEFAULT_OPEN_TIMEOUT_MS, LiveCallbacks, LivePeerCore};
 
+/// Speaker backlog still waiting to play, and audio already dropped to keep it
+/// near two seconds.
+#[napi(object)]
+pub struct PlaybackQueueStats {
+	/// Milliseconds of audio still queued for the speaker.
+	pub queued_ms:  u32,
+	/// Milliseconds of audio dropped so playback could catch up to live.
+	pub dropped_ms: u32,
+}
+
 type StringCallback = ThreadsafeFunction<String, UnknownReturnValue>;
 type LevelCallback = ThreadsafeFunction<f64, UnknownReturnValue>;
 
@@ -80,9 +90,17 @@ impl LiveWebRtcPeer {
 			.map_err(napi::Error::from_reason)
 	}
 
-	/// Queue 16 kHz mono floating-point PCM for Opus transmission.
+	/// Queued speaker backlog and audio dropped to stay within about two
+	/// seconds.
 	#[napi]
-	pub fn push_audio(&self, samples: Float32Array) -> Result<()> {
+	pub fn playback_queue_stats(&self) -> PlaybackQueueStats {
+		let stats = self.inner.playback_queue_stats();
+		PlaybackQueueStats { queued_ms: stats.queued_ms, dropped_ms: stats.dropped_ms }
+	}
+
+	/// Queue 16 kHz mono floating-point PCM; false means the queue dropped it.
+	#[napi]
+	pub fn push_audio(&self, samples: Float32Array) -> Result<bool> {
 		self
 			.inner
 			.push_audio(&samples)

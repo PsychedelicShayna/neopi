@@ -32,14 +32,13 @@ The following work is merged in the repository:
 - [PR #63](https://github.com/PsychedelicShayna/neopi/pull/63): severity-aware advisor delivery boundaries.
 - [PR #62](https://github.com/PsychedelicShayna/neopi/pull/62) and [PR #67](https://github.com/PsychedelicShayna/neopi/pull/67): upstream release synchronization.
 
-Fork extensions provide these operator commands:
+Built-in operator commands added by the fork:
 
-| Command | Source directory |
+| Command | Purpose |
 | --- | --- |
-| `/persona` | `extensions/neopi-persona/` |
-| `/loadout` | `extensions/neopi-loadout/` |
-| `/repl`, `/kernel` | `extensions/neopi-repl/` |
-| `/live-persona` | `extensions/neopi-live-persona/` |
+| `/persona`, `/persona live` | Edit and switch system-prompt personas and live-voice personas |
+| `/loadout` | Switch runtime model loadouts |
+| `/repl`, `/kernel` | Point the composer at a JavaScript, Python, or Bash kernel |
 
 See [docs/neopi-fork.md](docs/neopi-fork.md) for the committed fork history and boundaries.
 
@@ -54,17 +53,16 @@ cd neopi
 # Review the source and bun.lock first. Audit any newly proposed dependency.
 bun install --frozen-lockfile
 ./build.sh     # rebuilds the native addon only when stale, then packages/coding-agent/dist/npi
-./install.sh   # atomic install to ~/.local/bin/npi (NPI_DEST overrides), extensions, smoke test
+./install.sh   # atomic install to ~/.local/bin/npi (NPI_DEST overrides), smoke test
 ```
 
 `build.sh` and `install.sh` support Linux. On macOS, run the same steps by hand:
 
 ```sh
 CARGO_BUILD_JOBS=6 bun --cwd=packages/natives run build   # first, and after every version bump
-OMP_BUILD_BYTECODE=0 NPI_SKIP_EXTENSION_INSTALL=1 bun --cwd=packages/coding-agent run build
+OMP_BUILD_BYTECODE=0 bun --cwd=packages/coding-agent run build
 mkdir -p ~/.local/bin
 cp packages/coding-agent/dist/npi ~/.local/bin/npi        # a dedicated npi path
-bun scripts/install-neopi-extensions.ts
 ~/.local/bin/npi --version && ~/.local/bin/npi --smoke-test
 ```
 

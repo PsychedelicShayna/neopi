@@ -1,4 +1,6 @@
 import type { SidePanelController } from "./controllers/side-panel-controller";
+import type { PersonaScope } from "../neopi/persona-config";
+import type { ReplMode, ReplTarget } from "../neopi/repl";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, ImageContent, Model, Usage, UsageReport } from "@oh-my-pi/pi-ai";
@@ -223,6 +225,8 @@ export interface InteractiveModeContext {
 	pendingPythonComponents: EvalExecutionComponent[];
 	pythonComponent: EvalExecutionComponent | undefined;
 	isPythonMode: boolean;
+	/** Composer REPL mode (`/repl`): which kernel plain composer text runs in. */
+	readonly replMode: ReplMode;
 	streamingComponent: AssistantMessageComponent | undefined;
 	streamingMessage: AssistantMessage | undefined;
 	/**
@@ -487,7 +491,7 @@ export interface InteractiveModeContext {
 	refreshSlashCommandState(cwd?: string): Promise<void>;
 	/** Reload session skills and derived `/skill:<name>` commands. */
 	refreshSkillState(): Promise<void>;
-	applyCwdChange(newCwd: string): Promise<boolean>;
+	applyCwdChange(newCwd: string, options?: { deferMixtureCommit?: boolean }): Promise<boolean>;
 
 	// Selector handling
 	showSettingsSelector(): void;
@@ -495,6 +499,10 @@ export interface InteractiveModeContext {
 	showUsageDashboard(reports: UsageReport[]): void;
 	showAdvisorConfigure(): void;
 	showChainConfigure(): void;
+	/** Fullscreen persona editor: main system-prompt personas or live-voice personas. */
+	showPersonaConfigure(scope: PersonaScope): void;
+	/** Point the composer at a REPL kernel, or back at the agent. */
+	setReplTarget(target: ReplTarget): void;
 	showHistorySearch(): void;
 	showExtensionsDashboard(): void;
 	showAgentsDashboard(): void;

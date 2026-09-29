@@ -1,10 +1,9 @@
 /**
  * Live personas: named instruction sets for the live voice model.
  *
- * Deliberate twin of the neopi-persona extension's conventions: schema-v1 JSON
- * state in the agent dir written atomically (backup copy, temp file, fsync,
- * rename, directory fsync), a named-persona record, and loud errors on invalid
- * mutations. The "default" persona is the bundled prompts/live-instructions.md
+ * Shares the NeoPi persona conventions: schema-v1 JSON state in the agent dir
+ * written atomically through {@link JsonStateStore}, a named-persona record,
+ * and loud errors on invalid mutations. The "default" persona is the bundled prompts/live-instructions.md
  * template: it is never stored, cannot be edited, deleted, or replaced (clone
  * it instead), and is what the resolver falls back to whenever the store is
  * missing, corrupt, or the selection dangles.
@@ -14,10 +13,9 @@
  * variables intact, so the live controller can pass it through `prompt.render`
  * exactly as it renders the bundled template today.
  */
-import * as fs from "node:fs/promises";
 import * as nodePath from "node:path";
-import { getAgentDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
-import { readJsonWithLegacyFile } from "@oh-my-pi/pi-utils/dirs";
+import { getAgentDir, logger } from "@oh-my-pi/pi-utils";
+import { isRecord, JsonStateStore } from "../neopi/json-state";
 import liveInstructionsTemplate from "./prompts/live-instructions.md" with { type: "text" };
 
 /** Reserved name of the immutable bundled persona. */
@@ -41,7 +39,6 @@ export interface LivePersonaState {
 
 export const emptyLivePersonaState = (): LivePersonaState => ({ schemaVersion: 1, personas: {} });
 
-const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const isDefinition = (v: unknown): v is LivePersonaDefinition => isRecord(v) && typeof v.instructions === "string";
 
 export function validateLivePersonaState(v: unknown): LivePersonaState {
@@ -60,48 +57,10 @@ export function validateLivePersonaState(v: unknown): LivePersonaState {
 /** State file beside neopi-persona.json: profile, XDG, and PI_CODING_AGENT_DIR aware. */
 export const defaultLivePersonaStatePath = (): string => nodePath.join(getAgentDir(), "neopi-live-personas.json");
 
-/** Atomic JSON store; same backup + temp + fsync + rename algorithm as the persona extension's BompStateStore. */
-export class LivePersonaStore {
-	readonly backupPath: string;
-	readonly #legacyPath: string;
-
-	constructor(readonly path: string = defaultLivePersonaStatePath()) {
-		this.backupPath = `${path}.bak`;
-		this.#legacyPath = nodePath.join(nodePath.dirname(this.path), "omomp-live-personas.json");
-	}
-
-	async read(): Promise<LivePersonaState> {
-		try {
-			return validateLivePersonaState(await readJsonWithLegacyFile(this.path, this.#legacyPath));
-		} catch (error) {
-			if (isEnoent(error)) return emptyLivePersonaState();
-			throw error;
-		}
-	}
-
-	async write(state: LivePersonaState): Promise<void> {
-		validateLivePersonaState(state);
-		await fs.mkdir(nodePath.dirname(this.path), { recursive: true });
-		const temp = nodePath.join(nodePath.dirname(this.path), `.${Bun.randomUUIDv7()}.tmp`);
-		try {
-			await fs.copyFile(this.path, this.backupPath);
-		} catch (error) {
-			if (!isEnoent(error)) throw error;
-		}
-		const file = await fs.open(temp, "wx", 0o600);
-		try {
-			await file.writeFile(`${JSON.stringify(state, null, 2)}\n`);
-			await file.sync();
-		} finally {
-			await file.close();
-		}
-		await fs.rename(temp, this.path);
-		const dir = await fs.open(nodePath.dirname(this.path), "r");
-		try {
-			await dir.sync();
-		} finally {
-			await dir.close();
-		}
+/** Atomic schema-v1 store for live personas; see {@link JsonStateStore}. */
+export class LivePersonaStore extends JsonStateStore<LivePersonaState> {
+	constructor(path: string | (() => string) = defaultLivePersonaStatePath) {
+		super(path, "omomp-live-personas.json", validateLivePersonaState, emptyLivePersonaState);
 	}
 }
 
@@ -127,6 +86,11 @@ export interface LivePersonaFeature {
 	clone(source: string, name: string): Promise<string>;
 	edit(name: string, instructions: string): Promise<string>;
 	delete(name: string): Promise<string>;
+	/**
+	 * Replace every custom live persona at once (the configuration menu's save).
+	 * `active` undefined selects the bundled default.
+	 */
+	saveAll(personas: Record<string, LivePersonaDefinition>, active: string | undefined): Promise<string>;
 }
 
 const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -224,6 +188,22 @@ export function createLivePersonaFeature(store: LivePersonaStore = new LivePerso
 			if (state.active === name) delete state.active;
 			await store.write(state);
 			return `Deleted live persona '${name}'.`;
+		},
+		async saveAll(personas, active) {
+			for (const [name, definition] of Object.entries(personas)) {
+				validName(name);
+				assertMutable(name);
+				if (!definition.instructions.trim()) throw new Error(`${name}: live persona instructions are empty`);
+			}
+			const selected = active === DEFAULT_LIVE_PERSONA ? undefined : active;
+			if (selected !== undefined && !personas[selected]) throw new Error(`Unknown live persona: ${selected}`);
+			const state = await store.read();
+			state.personas = personas;
+			if (selected === undefined) delete state.active;
+			else state.active = selected;
+			await store.write(state);
+			const count = Object.keys(personas).length;
+			return `Saved ${count} live persona${count === 1 ? "" : "s"} · next live session uses '${selected ?? DEFAULT_LIVE_PERSONA}'.`;
 		},
 	};
 }

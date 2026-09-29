@@ -85,7 +85,6 @@ const steps: Step[] = [
 	{ label: "build:native", cmd: ["bun", "run", "build:native", ...passthrough] },
 	{ label: "coding-agent link", cmd: ["bun", "--cwd=packages/coding-agent", "link"] },
 	{ label: "link npi", cmd: ["sh", "scripts/link-npi.sh"] },
-	{ label: "neopi extensions", cmd: ["bun", "scripts/install-neopi-extensions.ts"] },
 ];
 
 for (const step of steps) {

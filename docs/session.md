@@ -234,11 +234,18 @@ are merged into `CustomAgentMessages` (`packages/agent/src/compaction/messages.t
   "id": "c1d2e3f4",
   "parentId": "b1c2d3e4",
   "timestamp": "2026-02-16T10:22:00.000Z",
-  "thinkingLevel": "high"
+  "thinkingLevel": "high",
+  "configured": "auto",
+  "effortOrigin": "role",
+  "autoSelection": {
+    "mode": "auto",
+    "allowed": ["medium", "high"],
+    "selector": "openai-codex/gpt-5.6-sol"
+  }
 }
 ```
 
-`configured` may additionally preserve the selector the user chose (`"auto"` or a concrete level). Readers of older entries fall back to `thinkingLevel`.
+`thinkingLevel` is the resolved wire level; `configured` preserves the requested selector (`"auto"` or a concrete level). `effortOrigin` records `caller`, `manual`, `role`, `fallback`, `inherited`, or `default`, so a restored implicit default does not become an explicit manual override. `autoSelection` optionally captures `{ mode: "auto", allowed?, selector? }` for reliable branch/resume of a model-bound Auto set. Entering Auto writes a provisional concrete level with `configured: "auto"` before the first classification; later classifications persist changed resolutions. Leaving Auto persists even if the concrete level stays equal. Older entries may omit these fields: readers fall back to `thinkingLevel` for `configured`. On resume, the latest entry on the selected branch restores both the concrete/configured level and its origin/Auto selection, which remain subject to the current model's supported efforts and implicit policy.
 
 ### `compaction`
 
@@ -460,7 +467,7 @@ Algorithm:
    - otherwise fallback to last entry.
 2. Walk `parentId` to root, stopping on a repeated id to bound corrupt cycles, then reverse to root->leaf.
 3. Derive runtime state across the path:
-   - resolved and configured thinking selectors from latest `thinking_level_change`
+   - resolved and configured thinking selectors, effort origin, and Auto selection from latest `thinking_level_change`
    - service tier from latest `service_tier_change`
    - model map from `model_change` entries (`role ?? "default"`); assistant-message inference is legacy fallback only until an explicit default is seen
    - deduplicated `injectedTtsrRules`

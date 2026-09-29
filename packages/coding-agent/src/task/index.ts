@@ -30,6 +30,8 @@ import taskCoordinationAdvisoryTemplate from "../prompts/tools/task-coordination
 import taskSpawnFeedbackTemplate from "../prompts/tools/task-spawn-feedback.md" with { type: "text" };
 import taskSpecializationAdvisoryTemplate from "../prompts/tools/task-specialization-advisory.md" with { type: "text" };
 import taskFollowUpTemplate from "../prompts/tools/task-follow-up.md" with { type: "text" };
+import { THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
+import { cfgEffortPolicyMode } from "../config/effort-policy";
 import { TASK_EFFORTS, type TaskEffort } from "@oh-my-pi/pi-tui/thinking";
 import { truncateForPrompt } from "../tools/approval";
 import { hasWaitTool } from "../tools/wait";
@@ -156,6 +158,7 @@ interface TaskDescriptionOptions {
 	disabledAgents: string[];
 	batchEnabled: boolean;
 	effortEnabled: boolean;
+	effortMode: "replacement" | "legacy";
 	evalToolsEnabled: boolean;
 	asyncEnabled: boolean;
 	ircEnabled: boolean;
@@ -191,6 +194,7 @@ function renderDescription(options: TaskDescriptionOptions): string {
 		applyIsolatedChanges: options.applyIsolatedChanges,
 		batchEnabled: options.batchEnabled,
 		effortEnabled: options.effortEnabled,
+		legacyEffort: options.effortMode === "legacy",
 		evalToolsEnabled: options.evalToolsEnabled,
 		asyncEnabled: options.asyncEnabled,
 		hasBlockingAgents: renderedAgents.some(agent => agent.blocking),
@@ -236,12 +240,35 @@ function validateShapeParams(batchEnabled: boolean, params: TaskParams): string 
  */
 
 /** Reject an out-of-range `effort` selector on internal/stale-transcript calls that bypass the wire schema. */
-function validateEffort(effort: TaskEffort | undefined, label: string): string | undefined {
-	if (effort === undefined || TASK_EFFORTS.includes(effort)) return undefined;
-	return `${label} has an invalid \`effort\` value ${JSON.stringify(effort)}. Use "lo", "med", or "hi".`;
+function validateEffort(
+	effort: TaskParams["effort"],
+	label: string,
+	mode: "replacement" | "legacy",
+): string | undefined {
+	if (effort === undefined) return undefined;
+	if (mode === "replacement") {
+		return THINKING_EFFORTS.includes(effort as (typeof THINKING_EFFORTS)[number])
+			? undefined
+			: `${label} has a legacy or invalid \`effort\` value ${JSON.stringify(effort)}. In replacement mode use minimal, low, medium, high, xhigh, or max. Legacy lo/med/hi hints require effort.mode=legacy.`;
+	}
+	return TASK_EFFORTS.includes(effort as (typeof TASK_EFFORTS)[number])
+		? undefined
+		: `${label} has an invalid \`effort\` value ${JSON.stringify(effort)}. In legacy mode use lo, med, or hi.`;
 }
 
-function validateSpawnParams(params: TaskParams, batchEnabled: boolean): string | undefined {
+/** Normalize wire strings to the nominal provider Effort enum after validating the call. */
+function normalizeTaskEffort(effort: TaskParams["effort"]): TaskEffort | undefined {
+	if (effort === undefined || effort === "lo" || effort === "med" || effort === "hi") return effort;
+	const concrete = THINKING_EFFORTS.find(candidate => candidate === effort);
+	if (!concrete) throw new Error(`Unsupported task effort: ${effort}`);
+	return concrete;
+}
+
+function validateSpawnParams(
+	params: TaskParams,
+	batchEnabled: boolean,
+	mode: "replacement" | "legacy",
+): string | undefined {
 	const hasTask = typeof params.task === "string" && params.task.trim() !== "";
 	const tasks = params.tasks;
 	if (batchEnabled && tasks !== undefined) {
@@ -256,7 +283,11 @@ function validateSpawnParams(params: TaskParams, batchEnabled: boolean): string 
 			if (!item || typeof item.task !== "string" || item.task.trim() === "") {
 				return `Task ${i + 1}${item?.name ? ` (\`${item.name}\`)` : ""} is missing \`task\`. Every task needs complete, self-contained instructions.`;
 			}
-			const effortError = validateEffort(item.effort, `Task ${i + 1}${item.name ? ` (\`${item.name}\`)` : ""}`);
+			const effortError = validateEffort(
+				item.effort,
+				`Task ${i + 1}${item.name ? ` (\`${item.name}\`)` : ""}`,
+				mode,
+			);
 			if (effortError) return effortError;
 		}
 		const seen = new Map<string, string>();
@@ -280,7 +311,7 @@ function validateSpawnParams(params: TaskParams, batchEnabled: boolean): string 
 			? "Missing `tasks`. Provide a `tasks` array (one subagent per item) with a shared `context`."
 			: "Missing `task`. Provide complete, self-contained instructions for the agent.";
 	}
-	return validateEffort(params.effort, "The call");
+	return validateEffort(params.effort, "The call", mode);
 }
 
 /**
@@ -612,6 +643,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			isolationEnabled,
 			batchEnabled: this.#isBatchEnabled(),
 			effortEnabled: cfgTaskEnableEffort.get(this.session.settings),
+			effortMode: cfgEffortPolicyMode.get(this.session.settings),
 			evalToolsEnabled: evalToolsEnabled(this.session),
 			defaultAgent,
 		});
@@ -636,6 +668,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			disabledAgents,
 			batchEnabled: this.#isBatchEnabled(),
 			effortEnabled: cfgTaskEnableEffort.get(this.session.settings),
+			effortMode: cfgEffortPolicyMode.get(this.session.settings),
 			evalToolsEnabled: evalToolsEnabled(this.session),
 			asyncEnabled: cfgAsyncEnabled.get(this.session.settings),
 			ircEnabled: isIrcEnabled(this.session.settings, this.session.taskDepth ?? 0),
@@ -683,7 +716,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			agent: params.agent,
 			...(Object.hasOwn(params, "outputSchema") ? { outputSchema: params.outputSchema } : {}),
 			...(Object.hasOwn(params, "schemaMode") ? { schemaMode: params.schemaMode } : {}),
-			...(params.effort !== undefined ? { effort: params.effort } : {}),
+			...(params.effort !== undefined ? { effort: normalizeTaskEffort(params.effort) } : {}),
 			...("isolated" in params ? { isolation: { requested: params.isolated } } : {}),
 			blockedAgent: this.#blockedAgent,
 			enableLsp: (this.session.enableLsp ?? true) && cfgTaskEnableLsp.get(this.session.settings),
@@ -712,7 +745,9 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		// item's agent type against the session's actual default agent.
 		const defaultAgent = resolveSpawnPolicy(this.session.getSessionSpawns()).defaultAgent;
 		const batchEnabled = this.#isBatchEnabled();
-		const validationError = validateShapeParams(batchEnabled, params) ?? validateSpawnParams(params, batchEnabled);
+		const validationError =
+			validateShapeParams(batchEnabled, params) ??
+			validateSpawnParams(params, batchEnabled, cfgEffortPolicyMode.get(this.session.settings));
 		if (validationError) {
 			return createTaskModeError(validationError);
 		}
@@ -1517,7 +1552,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				agent: params.agent,
 				...(Object.hasOwn(params, "outputSchema") ? { outputSchema: params.outputSchema } : {}),
 				...(Object.hasOwn(params, "schemaMode") ? { schemaMode: params.schemaMode } : {}),
-				...(params.effort !== undefined ? { effort: params.effort } : {}),
+				...(params.effort !== undefined ? { effort: normalizeTaskEffort(params.effort) } : {}),
 				...(params.tools?.length
 					? {
 							customTools: createEvalCustomTools(

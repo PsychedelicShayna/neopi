@@ -113,6 +113,10 @@
 	"dictation": [
 		"local/parakeet-tdt-0.6b-v3"
 	],
+	"effort": [
+		"openai-codex/gpt-6-luna:xhigh",
+		"openai-codex/gpt-5.6-luna:xhigh"
+	],
 	"judge": [
 		"typesafe/jev-latest",
 		"openrouter/~typesafe/jev-latest",

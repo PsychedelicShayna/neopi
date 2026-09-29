@@ -138,7 +138,7 @@ source_id=$(source_id)
 started=$(mktemp)
 trap 'rm -f -- "$started"' EXIT
 # A host build only: an inherited cross target would write dist/npi-<target> instead.
-env -u CROSS_TARGET OMP_BUILD_BYTECODE=0 NPI_SKIP_EXTENSION_INSTALL=1 bun --cwd=packages/coding-agent run build
+env -u CROSS_TARGET OMP_BUILD_BYTECODE=0 bun --cwd=packages/coding-agent run build
 
 [[ $binary -nt $started ]] || die "$binary was not rewritten by this build"
 git diff --quiet -- "$native_dir/embedded-addon.js" || die "$native_dir/embedded-addon.js was left modified"

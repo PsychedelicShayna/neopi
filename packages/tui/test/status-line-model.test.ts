@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { SegmentContext } from "../src/status-line/segments";
-import { renderSegment } from "../src/status-line/segments";
+import { getPreset } from "../src/status-line/presets";
+import { renderSegment, type SegmentContext } from "../src/status-line/segments";
 import { initTheme, theme } from "../src/theme";
 
 beforeAll(async () => {
@@ -76,25 +76,31 @@ describe("status line stream segment", () => {
 	});
 });
 
-describe("status line model segment live icon", () => {
-	it("shows the mic by call phase, slashes it while muted, and hides it when live is off", () => {
+describe("status line live segment", () => {
+	it("renders the call in every preset, including minimal without a model, but not while live is off", () => {
 		const ctx = createModelContext(false);
-		ctx.live = { phase: "listening", destination: "primary" };
-		expect(renderSegment("model", ctx).content).toContain(theme.fg("success", ` ${theme.icon.mic}`));
-		ctx.live = { phase: "muted", destination: "primary" };
-		expect(renderSegment("model", ctx).content).toContain(theme.fg("dim", ` ${theme.icon.micMuted}`));
-		ctx.live = { phase: "disconnected", destination: "primary" };
-		expect(renderSegment("model", ctx).content).toContain(theme.fg("error", ` ${theme.icon.mic}`));
-		ctx.live = null;
-		expect(renderSegment("model", ctx).content).not.toContain(theme.icon.mic);
+		for (const preset of ["default", "minimal", "compact", "full", "nerd", "ascii", "custom"] as const) {
+			const { leftSegments, rightSegments } = getPreset(preset);
+			ctx.live = { phase: "listening", destination: "voice" };
+			const rendered = [...leftSegments, ...rightSegments]
+				.map(id => renderSegment(id, ctx))
+				.filter(segment => segment.visible)
+				.map(segment => segment.content)
+				.join(" ");
+			expect(rendered).toContain(theme.fg("success", theme.icon.mic));
+			expect(rendered).toContain(theme.fg("success", " voice"));
+			expect(rendered).not.toContain(theme.fg("success", ` ${theme.icon.mic}`));
+			ctx.live = null;
+			expect(renderSegment("live", ctx)).toEqual({ content: "", visible: false });
+		}
 	});
 
-	it("names the Enter target only when it is not the main agent", () => {
+	it("shows muted and disconnected phases and distinguishes both from the primary destination", () => {
 		const ctx = createModelContext(false);
-		ctx.live = { phase: "listening", destination: "voice" };
-		expect(renderSegment("model", ctx).content).toContain(theme.fg("success", " voice"));
-		ctx.live = { phase: "listening", destination: "primary" };
-		expect(renderSegment("model", ctx).content).not.toContain("primary");
+		ctx.live = { phase: "muted", destination: "both" };
+		expect(renderSegment("live", ctx).content).toBe(theme.fg("dim", theme.icon.micMuted) + theme.fg("dim", " both"));
+		ctx.live = { phase: "disconnected", destination: "primary" };
+		expect(renderSegment("live", ctx).content).toBe(theme.fg("error", theme.icon.mic));
 	});
 });
 

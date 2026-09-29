@@ -6,15 +6,23 @@ import {
 	type LiveSessionControllerOptions,
 	type LiveTranscript,
 } from "../../live/controller";
+import { stripLiveKeyword } from "../../live/keywords";
 import { LIVE_MODEL } from "../../live/protocol";
 import { vocalizer } from "../../tts/vocalizer";
 import type { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { UserMessageComponent } from "@oh-my-pi/pi-tui/chat/user-message";
 import { theme } from "@oh-my-pi/pi-tui/theme";
+import { chipLabel } from "@oh-my-pi/pi-tui/prompt/composer-attachments";
 import type { InteractiveModeContext } from "../types";
 import { createAssistantMessageComponent } from "@oh-my-pi/pi-tui/prompt/interactive-context-helpers";
 
-import { cfgLiveVoice } from "../../live/settings";
+import {
+	cfgLiveBlockDelegateKeyword,
+	cfgLiveForceDelegateKeyword,
+	cfgLiveSubmitKeyword,
+	cfgLiveSubmitSilenceMs,
+	cfgLiveVoice,
+} from "../../live/settings";
 
 type LiveSessionFactory = (options: LiveSessionControllerOptions) => LiveSessionController;
 
@@ -47,10 +55,8 @@ interface ComposerUtterance {
 }
 
 /**
- * Owns the realtime session lifecycle for `/live`. The ordinary composer stays mounted
- * and focused: operator speech types into it like hold-space dictation (a volatile
- * preview while speaking, committed when the utterance ends), and utterances the primary
- * agent accepts through a voice handoff leave the draft as one undoable edit.
+ * Owns the realtime session lifecycle for `/live`. Speech previews type into the
+ * ordinary composer; every sent batch clears that composer and enters its history.
  */
 export class LiveCommandController {
 	readonly #ctx: InteractiveModeContext;
@@ -59,9 +65,6 @@ export class LiveCommandController {
 	#session: LiveSessionController | undefined;
 	#settling: Promise<void> | undefined;
 	#utterance: ComposerUtterance | undefined;
-	/** Utterances committed into the draft, by editor utterance id, for removal on handoff. */
-	/** Editor utterance id of each ledger turn committed into the draft, for removal on handoff. */
-	#committed = new Map<number, number>();
 	/** Set while the controller itself edits the draft, so those edits are not operator activity. */
 	#editing = false;
 	#phase: LivePhase | undefined;
@@ -70,6 +73,8 @@ export class LiveCommandController {
 	#assistantTranscriptComponent: AssistantMessageComponent | undefined;
 	#assistantTranscriptTurn = 0;
 	#assistantTranscriptStartedAt = 0;
+	#keywordTimer: ReturnType<typeof setTimeout> | undefined;
+	#keywordSettingsUnsubscribe: Array<() => void> = [];
 
 	constructor(ctx: InteractiveModeContext, createSession?: LiveSessionFactory) {
 		this.#ctx = ctx;
@@ -100,6 +105,7 @@ export class LiveCommandController {
 	noteComposerActivity(): void {
 		if (this.#editing) return;
 		this.#session?.noteComposerActivity();
+		this.#scheduleKeyword();
 	}
 
 	/** Where Enter sends composer text, or undefined when no call is running. */
@@ -130,7 +136,6 @@ export class LiveCommandController {
 		const session = this.#session;
 		if (!session) return "primary";
 		if (!session.retireComposerSpeech()) return "held";
-		this.#committed.clear();
 		if (this.#destination !== "voice" || options.hasImages) return "primary";
 		void session.sendOperatorText(text, "voice").then(delivered => {
 			if (!delivered) this.#restoreUndelivered(text);
@@ -147,9 +152,7 @@ export class LiveCommandController {
 	 * hold, or the same request would go out twice.
 	 */
 	discardSpeech(): boolean {
-		const settled = this.#session?.retireComposerSpeech() ?? true;
-		if (settled) this.#committed.clear();
-		return settled;
+		return this.#session?.retireComposerSpeech() ?? true;
 	}
 
 	/** A voice-only prompt never reached the voice agent (the call ended first): give it back. */
@@ -198,19 +201,55 @@ export class LiveCommandController {
 		}
 	}
 
+	#clearKeywordTimer(): void {
+		if (this.#keywordTimer !== undefined) clearTimeout(this.#keywordTimer);
+		this.#keywordTimer = undefined;
+	}
+
+	/** The editor's onChange reports partials, final corrections, and typed edits alike.
+	 * Only the text actually visible after the last write may trigger a keyword. */
+	#scheduleKeyword(): void {
+		this.#clearKeywordTimer();
+		if (!this.#session || this.#ctx.editor.chainLocked) return;
+		const text = this.#ctx.editor.getText();
+		if (!stripLiveKeyword(text, cfgLiveForceDelegateKeyword.get(this.#ctx.settings), true).matched &&
+			!stripLiveKeyword(text, cfgLiveSubmitKeyword.get(this.#ctx.settings), true).matched) return;
+		const delay = cfgLiveSubmitSilenceMs.get(this.#ctx.settings);
+		this.#keywordTimer = setTimeout(() => {
+			this.#keywordTimer = undefined;
+			const session = this.#session;
+			if (!session || this.#ctx.editor.chainLocked || this.#ctx.editor.getText() !== text) return;
+			const force = stripLiveKeyword(text, cfgLiveForceDelegateKeyword.get(this.#ctx.settings), true);
+			if (force.matched && force.text) {
+				session.forceDelegateComposer(force.text);
+				return;
+			}
+			const submit = stripLiveKeyword(text, cfgLiveSubmitKeyword.get(this.#ctx.settings), true);
+			if (!submit.matched || !submit.text) return;
+			this.#editing = true;
+			try {
+				this.#ctx.editor.setCollapsedText(submit.text);
+			} finally {
+				this.#editing = false;
+			}
+			this.#ctx.editor.submit();
+		}, delay);
+	}
+
 	async #start(): Promise<void> {
 		this.#assistantTranscriptTurn = 0;
 		this.#assistantTranscriptStartedAt = 0;
 		this.#destination = "primary";
 		this.#showPhase("connecting");
+		this.#clearKeywordTimer();
 		this.#utterance = undefined;
-		this.#committed.clear();
 		this.#resumeVocalizer = vocalizer.suspend();
 
 		const options: LiveSessionControllerOptions = {
 			session: this.#ctx.session,
 			extractAssistantText: message => this.#ctx.extractAssistantText(message),
 			voice: cfgLiveVoice.get(this.#ctx.settings),
+			blockDelegateKeyword: cfgLiveBlockDelegateKeyword.get(this.#ctx.settings),
 			callbacks: {
 				onPhase: phase => {
 					if (this.#session !== session) return;
@@ -233,15 +272,31 @@ export class LiveCommandController {
 					}
 					this.#typeUserTranscript(speech);
 				},
-				onDelegated: turns => {
+				onSpeechSent: text => {
 					if (this.#session !== session) return;
-					this.#removeDelegated(turns);
+					this.#clearKeywordTimer();
+					this.#editing = true;
+					try {
+						const chips = this.#ctx.editor
+							.composerChips()
+							.map(chip => (chip.kind === "paste" ? chip.text.label : chipLabel(chip.kind, chip.n)));
+						this.#ctx.editor.setText(chips.join(" "));
+						this.#ctx.editor.addToHistory(text);
+						this.#utterance = undefined;
+					} finally {
+						this.#editing = false;
+					}
+					this.#ctx.ui.requestRender();
 				},
 				onTerminal: error => this.#finish(session, error),
 			},
 		};
 		const session = this.#createSession ? this.#createSession(options) : new LiveSessionController(options);
 		this.#session = session;
+		for (const setting of [cfgLiveForceDelegateKeyword, cfgLiveSubmitKeyword, cfgLiveSubmitSilenceMs]) {
+			this.#keywordSettingsUnsubscribe.push(setting.listen(this.#ctx.settings, () => this.#scheduleKeyword()));
+		}
+		this.#scheduleKeyword();
 		this.#ctx.ui.requestRender();
 
 		try {
@@ -282,8 +337,7 @@ export class LiveCommandController {
 	}
 
 	#commitUtterance(utterance: ComposerUtterance, text: string): void {
-		const id = this.#ctx.editor.commitVolatileText(`${utterance.prefix}${text}${this.#separator("after")}`);
-		if (id !== undefined && text) this.#committed.set(utterance.turn, id);
+		this.#ctx.editor.commitVolatileText(`${utterance.prefix}${text}${this.#separator("after")}`);
 	}
 
 	/** A space when the character on that side of the cursor would otherwise touch the speech. */
@@ -293,25 +347,6 @@ export class LiveCommandController {
 		const text = editor.getLines()[line] ?? "";
 		const neighbour = side === "before" ? (col > 0 ? text[col - 1] : line > 0 ? "\n" : "") : text[col];
 		return neighbour && !/\s/.test(neighbour) ? " " : "";
-	}
-
-	/** Remove the utterances of the turns the primary agent accepted through a voice handoff. */
-	#removeDelegated(turns: readonly number[]): void {
-		const ids: number[] = [];
-		for (const turn of turns) {
-			const id = this.#committed.get(turn);
-			if (id === undefined) continue;
-			ids.push(id);
-			this.#committed.delete(turn);
-		}
-		if (ids.length === 0) return;
-		this.#editing = true;
-		try {
-			this.#ctx.editor.removeUtterances(ids);
-		} finally {
-			this.#editing = false;
-		}
-		this.#ctx.ui.requestRender();
 	}
 
 	#presentAssistantTranscript(transcript: LiveTranscript): void {
@@ -367,8 +402,8 @@ export class LiveCommandController {
 
 	#finish(session: LiveSessionController, error?: Error): void {
 		if (this.#session !== session) return;
-		// Stop first, while this session still owns the composer: stopping settles an accepted
-		// handoff synchronously, and its onDelegated must still find the committed speech.
+		// Stop while this session still owns the composer: a handoff accepted
+		// during teardown must still save its final text to history.
 		const stopping = session.stop();
 		this.#session = undefined;
 		this.#release();
@@ -387,11 +422,13 @@ export class LiveCommandController {
 
 	/** Keep any in-flight speech preview as draft text and hand audio output back to TTS. */
 	#release(): void {
+		for (const unsubscribe of this.#keywordSettingsUnsubscribe) unsubscribe();
+		this.#keywordSettingsUnsubscribe = [];
+		this.#clearKeywordTimer();
 		this.#finalizeAssistantTranscript();
 		const utterance = this.#utterance;
 		this.#utterance = undefined;
 		if (utterance) this.#commitUtterance(utterance, utterance.text);
-		this.#committed.clear();
 		this.#showPhase(undefined);
 		this.#resumeVocalizer?.();
 		this.#resumeVocalizer = undefined;

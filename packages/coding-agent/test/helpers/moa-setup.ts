@@ -206,14 +206,17 @@ export interface MoaSessionOptions {
 	settings?: Settings;
 	/** The starting model; `null` lets the session restore one (session file, then the default role). */
 	model?: Model | null;
+	/** The workspace; defaults to the fixture's project directory. */
+	cwd?: string;
 }
 
 /** A real session over the fixture's registry, starting on `fake/other` unless `model` says otherwise. */
 export async function createMoaSession(fixture: MoaFixture, options: MoaSessionOptions = {}): Promise<AgentSession> {
+	const cwd = options.cwd ?? fixture.cwd;
 	const { session } = await createAgentSession({
-		cwd: fixture.cwd,
+		cwd,
 		agentDir: fixture.agentDir,
-		sessionManager: options.sessionManager ?? SessionManager.inMemory(fixture.cwd),
+		sessionManager: options.sessionManager ?? SessionManager.inMemory(cwd),
 		authStorage: fixture.authStorage,
 		modelRegistry: fixture.registry,
 		settings: options.settings ?? Settings.isolated({ "compaction.enabled": false }),

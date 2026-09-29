@@ -1,6 +1,7 @@
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import type { ModelRegistry } from "../config/model-registry";
+import { cfgFallbackEffortSelections, type EffortOrigin, type EffortSelection } from "../config/effort-policy";
 import { formatModelSelectorValue, parseModelString } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import { formatModelString, formatModelStringWithRouting } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
@@ -51,7 +52,18 @@ export interface ActiveRetryFallbackState {
 	role: string;
 	originalSelector: string;
 	originalThinkingLevel: ConfiguredThinkingLevel | undefined;
+	originalEffortOrigin?: EffortOrigin;
+	originalAutoSelection?: EffortSelection;
 	lastAppliedFallbackThinkingLevel: ConfiguredThinkingLevel | undefined;
+	/** Origin applied by this fallback arm; guards against a later manual selection of the same level. */
+	lastAppliedFallbackEffortOrigin?: EffortOrigin;
+	/** Selection revision applied by the fallback; later deliberate choices take precedence even at the same level. */
+	lastAppliedFallbackRevision?: number;
+	/** A manual change since the first fallback must not be undone after subsequent fallback hops. */
+	manualSelectionObserved?: boolean;
+	manualThinkingLevel?: ConfiguredThinkingLevel;
+	manualEffortOrigin?: EffortOrigin;
+	manualAutoSelection?: EffortSelection;
 	pinned: boolean;
 	/**
 	 * Set once a turn on the fallback target settles successfully. Until then the
@@ -162,6 +174,32 @@ export function getRetryFallbackChains(settings: Settings): RetryFallbackChains 
 	const configuredChains = cfgRetryFallbackChains.get(settings);
 	if (!configuredChains || typeof configuredChains !== "object") return {};
 	return expandDefaultRetryFallbackChains(configuredChains, Object.keys(settings.getModelRoles()));
+}
+
+/** Preserve configured entry metadata even when a provider wildcard expands to a concrete model. */
+export function getFallbackEffortSelection(
+	settings: Settings,
+	chainKey: string,
+	candidate: RetryFallbackSelector,
+): EffortSelection | undefined {
+	const selections =
+		cfgFallbackEffortSelections.get(settings)[chainKey] ??
+		(cfgRetryFallbackChains.get(settings)[chainKey] === undefined
+			? cfgFallbackEffortSelections.get(settings).default
+			: undefined);
+	if (!selections) return undefined;
+	if (Object.hasOwn(selections, candidate.raw)) return selections[candidate.raw];
+	for (const entry of cfgRetryFallbackChains.get(settings)[chainKey] ??
+		cfgRetryFallbackChains.get(settings).default ??
+		[]) {
+		if (
+			(entry.endsWith("/*") && candidate.raw.startsWith(entry.slice(0, -1))) ||
+			(/[*?[\]{}]/.test(entry) && new Bun.Glob(entry).match(candidate.raw))
+		) {
+			if (Object.hasOwn(selections, entry)) return selections[entry];
+		}
+	}
+	return undefined;
 }
 
 /**
@@ -281,6 +319,11 @@ export function validateRetryFallbackChains(
 				report(`Invalid fallback selector format in ${keyKind} '${key}': ${selectorStr}`);
 				continue;
 			}
+			if (
+				/[*?[\]{}]/.test(selectorStr) &&
+				resolveModelRoleValue(selectorStr, modelRegistry.getAll("all"), { settings }).model
+			)
+				continue;
 			if (!modelRegistry.find(parsed.provider, parsed.id) && !isDiscoveryPending(parsed.provider)) {
 				report(`Fallback chain for ${keyKind} '${key}' references unknown model: ${selectorStr}`);
 			}

@@ -2,6 +2,8 @@
  * Interactive mode for the coding agent.
  * Handles TUI rendering and user interaction, delegating business logic to AgentSession.
  */
+import type { PersonaScope } from "../neopi/persona-config";
+import { REPL_STATUS_KEY, ReplMode, type ReplTarget, replTargetLabel } from "../neopi/repl";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
@@ -1062,6 +1064,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	pendingPythonComponents: EvalExecutionComponent[] = [];
 	pythonComponent: EvalExecutionComponent | undefined = undefined;
 	isPythonMode = false;
+	readonly replMode = new ReplMode();
 	streamingComponent: AssistantMessageComponent | undefined = undefined;
 	streamingMessage: AssistantMessage | undefined = undefined;
 	lastAssistantUsage: Usage | undefined = undefined;
@@ -2310,9 +2313,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * Re-point the process and every cwd-derived cache at `newCwd` after the
 	 * active session's working directory changed (`/move` relocation or resuming
 	 * a session from another project). The SessionManager's cwd MUST already
-	 * reflect `newCwd` before this is called.
+	 * reflect `newCwd` before this is called. A resume commits only after the
+	 * enclosing session switch succeeds.
 	 */
-	async applyCwdChange(newCwd: string): Promise<boolean> {
+	async applyCwdChange(newCwd: string, options?: { deferMixtureCommit?: boolean }): Promise<boolean> {
 		const previousCwd = getProjectDir();
 		try {
 			setProjectDir(newCwd);
@@ -2336,6 +2340,8 @@ export class InteractiveMode implements InteractiveModeContext {
 				// retain against the source project's memory.
 				await rebindMemoryBackendForCwd(this.session);
 			}
+			// Mixtures follow the workspace, under the settings just reloaded for it.
+			await this.session.rebindMixturesForCwd(newCwd, true);
 			// Re-warm plugin roots, capabilities, slash commands, and the ssh tool so
 			// the next prompt sees everything scoped to the new project directory.
 			clearClaudePluginRootsCache();
@@ -2353,6 +2359,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					await settings.reloadForCwd(previousCwd);
 					await rebindMemoryBackendForCwd(this.session);
 				}
+				await this.session.rebindMixturesForCwd(previousCwd, true);
 				clearClaudePluginRootsCache();
 				await this.refreshTitleSystemPrompt(previousCwd);
 				await this.session.refreshSkillsAndCommands();
@@ -2364,6 +2371,7 @@ export class InteractiveMode implements InteractiveModeContext {
 						await settings.reloadForCwd(actual);
 						await rebindMemoryBackendForCwd(this.session);
 					}
+					await this.session.rebindMixturesForCwd(actual, true);
 					clearClaudePluginRootsCache();
 					await this.refreshTitleSystemPrompt(actual);
 					await this.session.refreshSkillsAndCommands();
@@ -2382,6 +2390,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
 		this.statusLine.applyCwdChange();
+		if (!options?.deferMixtureCommit) this.session.commitMixtureWorkspaceMove();
 		return true;
 	}
 
@@ -6909,10 +6918,6 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/** Ctrl+Space owns an independent, whole-recording xAI path. */
 	async handleSTTToggle(): Promise<void> {
-		if (this.#liveCommandController.active) {
-			this.showWarning("End live mode before recording xAI speech input.");
-			return;
-		}
 		if (this.#sttController && this.#sttController.state !== "idle") {
 			this.showWarning("Finish configured dictation before recording xAI speech input.");
 			return;
@@ -6942,21 +6947,17 @@ export class InteractiveMode implements InteractiveModeContext {
 	 *  latches the recording past the space bar's release. */
 	dictationSpaceHold(target: DictationTarget): SpaceHoldHandler {
 		return {
-			// Live mode owns the microphone; a held space bar stays plain spaces during a call.
-			enabled: () => cfgSttEnabled.get(settings) && this.sttIdle && !this.#liveCommandController.active,
+			// A held capture shares the live microphone; neither consumer stops the other.
+			enabled: () => cfgSttEnabled.get(settings) && this.sttIdle,
 			onStart: () => void this.#readySTTController()?.holdStart(target, this.#dictationCallbacks(target)),
 			onEnd: () => void this.#sttController?.holdEnd(),
 			onLatch: () => this.showStatus("Dictation latched: release Space, then tap Space or Backspace to stop"),
 		};
 	}
 
-	/** The speech-to-text controller, created on first use; undefined (after a warning) while live mode,
-	 *  an xAI recording, or a disabled STT rules dictation out. */
+	/** The speech-to-text controller, created on first use; undefined (after a warning) while
+	 *  an xAI recording or disabled STT rules dictation out. */
 	#readySTTController(): STTController | undefined {
-		if (this.#liveCommandController.active) {
-			this.showWarning("End live mode before using speech-to-text input.");
-			return undefined;
-		}
 		if (this.#xaiSttController && this.#xaiSttController.state !== "idle") {
 			this.showWarning("Finish the xAI recording before using configured dictation.");
 			return undefined;
@@ -7032,10 +7033,6 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/** Start or stop the Codex-backed realtime voice surface. */
 	async handleLiveCommand(): Promise<void> {
-		if (!this.sttIdle) {
-			this.showWarning("Finish the current speech-to-text capture before starting live mode.");
-			return;
-		}
 		await this.#liveCommandController.handleCommand();
 	}
 
@@ -7148,6 +7145,24 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	showAdvisorConfigure(): void {
 		this.#selectorController.showAdvisorConfigure();
+	}
+
+	showPersonaConfigure(scope: PersonaScope): void {
+		this.#selectorController.showPersonaConfigure(scope);
+	}
+
+	setReplTarget(target: ReplTarget): void {
+		this.replMode.set(target);
+		this.editor.enterInsertsNewline = this.replMode.active;
+		const run = this.keybindings.getKeys("app.repl.execute")[0];
+		const toggle = this.keybindings.getKeys("app.repl.toggle")[0];
+		this.setHookStatus(
+			REPL_STATUS_KEY,
+			this.replMode.active
+				? `REPL ${replTargetLabel(target)} · Enter newline · ${run ?? "app.repl.execute"} run · ${toggle ?? "/repl agent"} agent`
+				: undefined,
+		);
+		this.ui.requestRender();
 	}
 
 	showChainConfigure(): void {

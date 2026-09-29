@@ -1726,8 +1726,8 @@ export interface TaskItem {
 	agent?: string;
 	/** The work; required by the schema. */
 	task?: string;
-	/** Per-spawn thinking effort: lowest/middle/highest level the resolved model supports. Overrides the agent's default selector (e.g. `auto`). */
-	effort?: "lo" | "med" | "hi";
+	/** Per-spawn effort: concrete level in replacement mode, coarse hint only in legacy mode. */
+	effort?: "lo" | "med" | "hi" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	/** Caller-provided output schema; its presence overrides the selected agent's schema. */
 	outputSchema?: unknown;
 	/** Validation behavior for a caller-provided or inherited output schema. */
@@ -1751,8 +1751,8 @@ export interface TaskParams {
 	agent?: string;
 	/** The work (flat form). */
 	task?: string;
-	/** Per-spawn thinking effort (flat form): lowest/middle/highest level the resolved model supports. */
-	effort?: "lo" | "med" | "hi";
+	/** Per-spawn effort: concrete level in replacement mode, coarse hint only in legacy mode. */
+	effort?: "lo" | "med" | "hi" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	/** Caller-provided output schema; its presence overrides the selected agent's schema. */
 	outputSchema?: unknown;
 	/** Validation behavior for a caller-provided or inherited output schema. */
@@ -1956,6 +1956,18 @@ export interface SingleResult {
 	/** Retains {@link AgentProgress.advisor} after the advised session is disposed. */
 	advisor?: boolean;
 	error?: string;
+	/** Recoverable effort-policy failure; parent may choose a supported explicit override and retry. */
+	effortPolicy?: {
+		model: string;
+		/** Requested agent/model selector, distinct from the winning restriction rule. */
+		requested?: string;
+		/** Selection provenance: caller, configured role, or default. */
+		origin?: string;
+		supported: string[];
+		permitted: string[];
+		selector?: string;
+		alternatives: string[];
+	};
 	aborted?: boolean;
 	abortReason?: string;
 	/** Aggregated usage from the subprocess, accumulated incrementally from message_end events. */
