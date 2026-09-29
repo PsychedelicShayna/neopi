@@ -28,6 +28,10 @@ export const cleanseHelp = {
 	description: "Detect and fix project diagnostics with weighted parallel subagents",
 } satisfies CommandMetadata;
 
+export const chronicleHelp = {
+	description: "Chronicler memory tools over stored sessions: backfill",
+} satisfies CommandMetadata;
+
 export const collabHelp = {
 	description:
 		"List active local Collab host metadata without URLs; use collab link <instanceId|pid> to retrieve a control link (--view for view-only)",
