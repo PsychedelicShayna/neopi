@@ -6,7 +6,7 @@
  * responses by `requestId`. Never spawns processes.
  */
 import * as net from "node:net";
-import { RpcFrameDecoder } from "../modes/rpc/rpc-frame";
+import { RpcFrameDecoder, RpcFrameEncoder } from "../modes/rpc/rpc-frame";
 import { callerConnectionToken, type ControlMetadata } from "./registry";
 import { type ControlResponse, type ControlSnapshot } from "./types";
 
@@ -44,6 +44,8 @@ interface PendingRequest {
 export class ControlClient {
 	readonly #options: ControlClientOptions;
 	readonly #decoder = new RpcFrameDecoder();
+	/** Outbound frames: protocol v2 chunks any command over the 1 MiB line limit. */
+	readonly #encoder = new RpcFrameEncoder();
 	readonly #pending = new Map<string, PendingRequest>();
 	readonly #events: Array<(frame: Record<string, unknown>) => void> = [];
 	#socket: net.Socket | undefined;
@@ -109,6 +111,7 @@ export class ControlClient {
 						return;
 					}
 					const data = frame.data as { connectionId?: string; snapshot?: ControlSnapshot } | undefined;
+					this.#encoder.setProtocolVersion(2);
 					this.connectionId = data?.connectionId ?? "";
 					this.snapshot = data?.snapshot;
 					resolve(data?.snapshot as ControlSnapshot);
@@ -180,7 +183,7 @@ export class ControlClient {
 					}, timeout)
 				: undefined;
 		this.#pending.set(requestId, { resolve, reject, timer });
-		this.#socket.write(`${JSON.stringify(frame)}\n`);
+		this.#socket.write(this.#encoder.encode(frame));
 		return promise;
 	}
 

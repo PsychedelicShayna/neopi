@@ -2129,6 +2129,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				editor: this.editor,
 				ui: this.ui,
 				runAction: id => this.#inputController.runAppAction(id),
+				rewind: (entryId, prefillDraft) => this.#selectorController.rewindToEntry(entryId, { prefillDraft }),
 				notify: text => this.showStatus(text),
 			});
 			if (controlHost.presenter) {

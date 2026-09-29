@@ -1063,6 +1063,7 @@ export class TUI extends Container {
 		}
 
 		const previousFocusedComponent = this.#focusedComponent;
+		if (previousFocusedComponent !== component) this.onFocusChange?.();
 		// Clear focused flag on old component
 		if (isFocusable(previousFocusedComponent)) {
 			previousFocusedComponent.focused = false;
@@ -1111,6 +1112,10 @@ export class TUI extends Container {
 	 */
 	inputOrigin: "keyboard" | "control" = "keyboard";
 	onHumanInput?: () => void;
+	/** Fires when keyboard focus moves to a different component (control focus revision, #171). */
+	onFocusChange?: () => void;
+	/** Fires after each frame is written (control paint revision, #171). */
+	onPaint?: () => void;
 	/** Fires when an overlay is mounted. The returned disposer runs on hide. */
 	onOverlayShown?: (component: Component, hide: () => void) => (() => void) | void;
 
@@ -2169,6 +2174,7 @@ export class TUI extends Container {
 		this.#lastRenderAt = start;
 		this.#doRender();
 		this.#lastFrameCostMs = this.#renderScheduler.now() - start;
+		this.onPaint?.();
 	}
 
 	/**
@@ -2268,6 +2274,7 @@ export class TUI extends Container {
 		this.#lastRenderAt = start;
 		this.#doRender();
 		this.#lastFrameCostMs = this.#renderScheduler.now() - start;
+		this.onPaint?.();
 	}
 	/**
 	 * True when the frame was deferred because the terminal's output backlog

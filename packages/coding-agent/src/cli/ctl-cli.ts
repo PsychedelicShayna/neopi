@@ -12,22 +12,21 @@ export interface CtlIo {
 	stderr: (text: string) => void;
 }
 
-const io: CtlIo = {
+const processIo: CtlIo = {
 	stdout: text => process.stdout.write(text),
 	stderr: text => process.stderr.write(text),
 };
+const ioScope = new AsyncLocalStorage<CtlIo>();
 
-/** Run ctl helpers against a sink instead of the process streams (the ctl tool). */
-export async function withCtlIo<T>(sink: CtlIo, fn: () => Promise<T>): Promise<T> {
-	const previous = { ...io };
-	io.stdout = sink.stdout;
-	io.stderr = sink.stderr;
-	try {
-		return await fn();
-	} finally {
-		io.stdout = previous.stdout;
-		io.stderr = previous.stderr;
-	}
+/** The sink for the current ctl call: the tool's request-local sink, else the process streams. */
+const io: CtlIo = {
+	stdout: text => (ioScope.getStore() ?? processIo).stdout(text),
+	stderr: text => (ioScope.getStore() ?? processIo).stderr(text),
+};
+
+/** Run ctl helpers against a sink instead of the process streams (the ctl tool). Request-local. */
+export function withCtlIo<T>(sink: CtlIo, fn: () => Promise<T>): Promise<T> {
+	return ioScope.run(sink, fn);
 }
 
 export function ctlExit(code: number): never {

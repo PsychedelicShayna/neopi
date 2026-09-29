@@ -17,7 +17,12 @@ export interface ControlPresenter {
 	dialogs(): DialogSummary[];
 	answerDialog(dialogId: string, answer: unknown): Promise<{ settled: boolean; error?: string }>;
 	draft(): { text: string; images: ImageContent[] };
-	setDraft(text: string): void;
+	/** Replace the human draft: text and pending images together. */
+	setDraft(text: string, images?: ImageContent[]): void;
+	/** Insert text at the human editor's cursor. */
+	insertDraft(text: string): void;
+	/** Rewind the session to an entry through the pane's own rewind flow. */
+	rewind(entryId: string, prefillDraft: boolean): Promise<RewindOutcome>;
 	notify(text: string): void;
 	keybindings?: {
 		get(actionId: string): string[];
@@ -33,6 +38,8 @@ export interface ControlPresenter {
 	/** Whether control.approvals may settle the open approval, and settle it. */
 	settleApproval?(id: string, approved: boolean, reason?: string): boolean;
 }
+
+export type RewindOutcome = { status: "rewound" | "unchanged" | "cancelled" | "invalid"; error?: string };
 
 export interface RevisionSource {
 	revisions(): Revisions;

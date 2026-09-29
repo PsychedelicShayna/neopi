@@ -229,8 +229,10 @@ export class ControlConnection {
 	/** Reserve one chunk's declared size. Rejects non-integers and negatives. */
 	noteChunk(chunkId: string, bytes: number): boolean {
 		if (!Number.isInteger(bytes) || bytes < 0 || bytes > MAX_RPC_REASSEMBLED_BYTES) return false;
+		// Every physical chunk repeats the logical length; reserve it once per sequence.
+		if (this.#chunkReserved.has(chunkId)) return true;
 		if (!this.noteInbound(bytes)) return false;
-		this.#chunkReserved.set(chunkId, (this.#chunkReserved.get(chunkId) ?? 0) + bytes);
+		this.#chunkReserved.set(chunkId, bytes);
 		return true;
 	}
 

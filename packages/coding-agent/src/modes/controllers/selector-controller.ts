@@ -1273,44 +1273,49 @@ export class SelectorController {
 	 * alternate screen never flashes a stale transcript.
 	 */
 	async #rewindFromTranscript(entryId: string, done: () => void): Promise<void> {
-		const entry = this.ctx.sessionManager.getEntry(entryId);
-		if (!entry || !isTranscriptEntry(entry)) {
-			done();
-			return;
-		}
-
-		const isUserTarget = isUserRequestEntry(entry);
-		const realLeafId = this.ctx.sessionManager.getLeafId();
-		if (entryId === realLeafId && !isUserTarget) {
-			done();
-			this.ctx.showStatus("Already at this point");
-			return;
-		}
-		const treeRewind = this.#treeRewindBoundary(entryId, realLeafId);
 		try {
-			const result = await this.ctx.session.navigateTree(entryId, { summarize: false });
-			if (result.cancelled) {
-				done();
-				this.ctx.showStatus("Navigation cancelled");
-				return;
-			}
-			const fastRewind =
-				treeRewind !== undefined &&
-				this.ctx.sessionManager.getLeafId() === treeRewind.expectedLeafId &&
-				this.ctx.truncateTranscriptFromMessage(treeRewind.message);
-			if (!fastRewind) {
-				await this.ctx.renderInitialMessages({ clearTerminalHistory: true });
-			}
-			await this.ctx.reloadTodos();
-			if (result.editorText && (isUserTarget || !this.ctx.editor.getText().trim())) {
-				this.ctx.editor.setDraft(result.editorText, result.editorImages);
-			}
+			const outcome = await this.rewindToEntry(entryId, { prefillDraft: "auto" });
 			done();
-			this.ctx.showStatus("Rewound to selected point");
+			if (outcome.status === "unchanged") this.ctx.showStatus("Already at this point");
+			else if (outcome.status === "cancelled") this.ctx.showStatus("Navigation cancelled");
+			else if (outcome.status === "rewound") this.ctx.showStatus("Rewound to selected point");
 		} catch (error) {
 			done();
 			this.ctx.showError(error instanceof Error ? error.message : String(error));
 		}
+	}
+
+	/**
+	 * Rewind in place to `entryId` and rebuild the transcript. `prefillDraft`
+	 * `"auto"` is the keyboard rule (a user target, or an empty editor, takes
+	 * the target's text); a boolean is the control socket's explicit choice.
+	 */
+	async rewindToEntry(
+		entryId: string,
+		options: { prefillDraft: boolean | "auto" },
+	): Promise<{ status: "rewound" | "unchanged" | "cancelled" | "invalid"; error?: string }> {
+		const entry = this.ctx.sessionManager.getEntry(entryId);
+		if (!entry || !isTranscriptEntry(entry)) return { status: "invalid", error: `no transcript entry ${entryId}` };
+		const isUserTarget = isUserRequestEntry(entry);
+		const realLeafId = this.ctx.sessionManager.getLeafId();
+		if (entryId === realLeafId && !isUserTarget) return { status: "unchanged" };
+		const treeRewind = this.#treeRewindBoundary(entryId, realLeafId);
+		const result = await this.ctx.session.navigateTree(entryId, { summarize: false });
+		if (result.cancelled) return { status: "cancelled" };
+		const fastRewind =
+			treeRewind !== undefined &&
+			this.ctx.sessionManager.getLeafId() === treeRewind.expectedLeafId &&
+			this.ctx.truncateTranscriptFromMessage(treeRewind.message);
+		if (!fastRewind) {
+			await this.ctx.renderInitialMessages({ clearTerminalHistory: true });
+		}
+		await this.ctx.reloadTodos();
+		const prefill =
+			options.prefillDraft === "auto" ? isUserTarget || !this.ctx.editor.getText().trim() : options.prefillDraft;
+		if (result.editorText && prefill) {
+			this.ctx.editor.setDraft(result.editorText, result.editorImages);
+		}
+		return { status: "rewound" };
 	}
 
 	showCopySelector(): void {

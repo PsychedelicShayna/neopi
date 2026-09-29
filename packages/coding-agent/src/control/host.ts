@@ -6,6 +6,7 @@
  * the interactive mode is up; until then screen commands answer `no_tui`.
  */
 import { randomBytes } from "node:crypto";
+import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
 import { BUILD_INFO } from "../build-info";
 import { lookup } from "../config/registry";
@@ -22,7 +23,7 @@ import { currentControlActor, runAsControlActor } from "./actor";
 import { HostBudget, workClass } from "./budget";
 import { RPC_COMMAND_TYPES } from "./parity";
 import { encodeKeyId, encodeSgrMouse } from "./keys";
-import type { ControlPresenter } from "./presenter";
+import type { ControlPresenter, RewindOutcome } from "./presenter";
 import { newControlInstanceId, publishControlEndpoint, type ControlPublication } from "./registry";
 import { ControlServer, type ControlConnection } from "./server";
 import { APPROVAL_GATED_SETTINGS, cfgControlApprovals, cfgControlSecretInput } from "./settings";
@@ -44,6 +45,10 @@ import {
 } from "./types";
 
 const RPC_TYPES = new Set<string>(RPC_COMMAND_TYPES);
+
+function rpcError(response: RpcResponse): string | undefined {
+	return "error" in response && typeof response.error === "string" ? response.error : undefined;
+}
 
 export interface ControlHostOptions {
 	session: AgentSession;
@@ -144,6 +149,7 @@ export class ControlHost {
 	#ready = false;
 	#closed = false;
 	#seenSessionId: string | undefined;
+	#identityKey = "";
 
 	constructor(options: ControlHostOptions) {
 		this.#options = options;
@@ -171,6 +177,9 @@ export class ControlHost {
 	bumpGeneration(): void {
 		this.#revisions.generation++;
 	}
+	bumpPaint(): void {
+		this.#revisions.paint++;
+	}
 
 	markReady(): void {
 		this.#ready = true;
@@ -181,6 +190,8 @@ export class ControlHost {
 	async start(): Promise<void> {
 		liveHosts.add(this);
 		const session = this.#options.session;
+		this.#seenSessionId = session.sessionId;
+		this.#identityKey = this.#currentIdentityKey();
 		const connectionHost = {
 			instanceId: this.instanceId,
 			token: "",
@@ -247,8 +258,19 @@ export class ControlHost {
 		});
 	}
 
+	#currentIdentityKey(): string {
+		const session = this.#options.session;
+		return JSON.stringify([
+			session.sessionId,
+			session.sessionFile ?? null,
+			session.sessionName ?? null,
+			session.sessionManager.getCwd(),
+		]);
+	}
+
 	#refreshIdentity(): void {
 		const session = this.#options.session;
+		this.#identityKey = this.#currentIdentityKey();
 		this.publication?.update({
 			sessionId: session.sessionId,
 			sessionFile: session.sessionFile ?? null,
@@ -490,18 +512,26 @@ export class ControlHost {
 	}
 
 	async #rpc(connection: ControlConnection, frame: Record<string, unknown>): Promise<void> {
+		const response = await this.#runRpc(connection, frame);
+		connection.write({ ...response, requestId: response.id });
+	}
+
+	/** Run one RPC command for this connection and return its response without writing it. */
+	async #runRpc(connection: ControlConnection, frame: Record<string, unknown>): Promise<RpcResponse> {
 		const command = {
 			...frame,
 			id:
 				typeof frame.id === "string" ? frame.id : typeof frame.requestId === "string" ? frame.requestId : undefined,
 		} as RpcCommand;
 		if (command.type === "set_approval_handler" && cfgControlApprovals.get(this.#options.session.settings) !== true) {
-			this.#reply(connection, frame, {
+			return {
+				id: command.id,
+				type: "response",
+				command: command.type,
 				success: false,
 				error: "approvals belong to the pane",
 				code: "approval_owner_only",
-			});
-			return;
+			} as RpcResponse;
 		}
 		const response = await (await this.#handlerFor(connection))(command);
 		if (
@@ -513,8 +543,9 @@ export class ControlHost {
 		) {
 			this.#seenSessionId = this.#options.session.sessionId;
 			this.bumpGeneration();
+			this.#refreshIdentity();
 		}
-		connection.write({ ...response, requestId: command.id });
+		return response;
 	}
 
 	async #control(connection: ControlConnection, frame: Record<string, unknown>): Promise<void> {
@@ -540,7 +571,9 @@ export class ControlHost {
 			case "slash": {
 				if (needTui()) return;
 				const text = String(frame.text ?? "");
-				const result = await presenter!.submit(text);
+				const images =
+					type === "input" && Array.isArray(frame.images) ? (frame.images as ImageContent[]) : undefined;
+				const result = await presenter!.submit(text, images);
 				this.#notify(connection, type === "slash" ? text : "input");
 				this.#reply(connection, frame, { success: true, data: result });
 				return;
@@ -659,20 +692,10 @@ export class ControlHost {
 				return;
 			}
 			case "serve":
-				if (Array.isArray(frame.tools))
-					await this.#rpc(connection, { ...frame, type: "set_host_tools", tools: frame.tools });
-				if (Array.isArray(frame.schemes))
-					await this.#rpc(connection, { ...frame, type: "set_host_uri_schemes", schemes: frame.schemes });
-				if (!Array.isArray(frame.tools) && !Array.isArray(frame.schemes)) {
-					this.#reply(connection, frame, {
-						success: false,
-						error: "serve requires tools or schemes",
-						code: "invalid_value",
-					});
-				}
+				await this.#serve(connection, frame);
 				return;
 			case "unserve":
-				await this.#rpc(connection, { ...frame, type: "set_host_tools", tools: [] });
+				await this.#unserve(connection, frame);
 				return;
 			case "esc":
 				if (needTui()) return;
@@ -706,6 +729,7 @@ export class ControlHost {
 				this.#reply(connection, frame, { success: true, data: presenter!.draft() });
 				return;
 			case "draft_set":
+			case "draft_insert":
 			case "draft_clear":
 				if (needTui()) return;
 				const draftRevision =
@@ -718,8 +742,23 @@ export class ControlHost {
 					});
 					return;
 				}
-				presenter!.setDraft(type === "draft_clear" ? "" : String(frame.text ?? ""));
+				if (type === "draft_clear") presenter!.setDraft("", []);
+				else if (type === "draft_insert") presenter!.insertDraft(String(frame.text ?? ""));
+				else
+					presenter!.setDraft(
+						String(frame.text ?? ""),
+						Array.isArray(frame.images) ? (frame.images as ImageContent[]) : [],
+					);
 				this.#reply(connection, frame, { success: true, data: { revisions: this.revisions } });
+				return;
+			case "dequeue":
+				await this.#dequeue(connection, frame);
+				return;
+			case "requests":
+				this.#requests(connection, frame);
+				return;
+			case "switch_model":
+				await this.#switchModel(connection, frame);
 				return;
 			case "settings_get":
 			case "settings_set":
@@ -747,8 +786,7 @@ export class ControlHost {
 				return;
 			}
 			case "rewind":
-				if (needTui()) return;
-				this.#reply(connection, frame, { success: true, data: await presenter!.action("app.session.tree") });
+				await this.#rewind(connection, frame);
 				return;
 			case "todo_set":
 				await this.#rpc(connection, { ...frame, type: "set_todos" });
@@ -941,16 +979,210 @@ export class ControlHost {
 		return true;
 	}
 
-	#noteSessionIdentity(): void {
-		const id = this.#options.session.sessionId;
-		if (this.#seenSessionId === undefined) {
-			this.#seenSessionId = id;
+	async #serve(connection: ControlConnection, frame: Record<string, unknown>): Promise<void> {
+		const tools = Array.isArray(frame.tools) ? frame.tools : undefined;
+		const schemes = Array.isArray(frame.schemes) ? frame.schemes : undefined;
+		if (!tools && !schemes) {
+			this.#reply(connection, frame, {
+				success: false,
+				error: "serve requires tools or schemes",
+				code: "invalid_value",
+			});
 			return;
 		}
+		const data: Record<string, unknown> = { serviceId: `svc-${connection.id}` };
+		if (tools) {
+			const response = await this.#runRpc(connection, { type: "set_host_tools", tools });
+			if (!response.success) {
+				this.#reply(connection, frame, { success: false, error: rpcError(response), code: "invalid_value" });
+				return;
+			}
+			data.tools = (response as { data?: unknown }).data;
+		}
+		if (schemes) {
+			const response = await this.#runRpc(connection, { type: "set_host_uri_schemes", schemes });
+			if (!response.success) {
+				// Leave no half-installed service behind.
+				if (tools) await this.#runRpc(connection, { type: "set_host_tools", tools: [] });
+				this.#reply(connection, frame, { success: false, error: rpcError(response), code: "invalid_value" });
+				return;
+			}
+			data.schemes = (response as { data?: unknown }).data;
+		}
+		this.#reply(connection, frame, { success: true, data });
+	}
+
+	async #unserve(connection: ControlConnection, frame: Record<string, unknown>): Promise<void> {
+		const serviceId = `svc-${connection.id}`;
+		if (typeof frame.serviceId === "string" && frame.serviceId !== serviceId) {
+			this.#reply(connection, frame, {
+				success: false,
+				error: `unknown service ${frame.serviceId}`,
+				code: "invalid_value",
+			});
+			return;
+		}
+		const tools = await this.#runRpc(connection, { type: "set_host_tools", tools: [] });
+		const schemes = await this.#runRpc(connection, { type: "set_host_uri_schemes", schemes: [] });
+		this.#reply(
+			connection,
+			frame,
+			tools.success && schemes.success
+				? { success: true, data: { serviceId } }
+				: {
+						success: false,
+						error: rpcError(tools) ?? rpcError(schemes),
+						code: "invalid_value",
+					},
+		);
+	}
+
+	async #dequeue(connection: ControlConnection, frame: Record<string, unknown>): Promise<void> {
+		const session = this.#options.session;
+		if (frame.restoreToDraft === true) {
+			if (!this.presenter) {
+				this.#reply(connection, frame, { success: false, error: "this session has no TUI", code: "no_tui" });
+				return;
+			}
+			const expected =
+				frame.if && typeof frame.if === "object" ? (frame.if as Record<string, unknown>).draft : undefined;
+			if (typeof expected !== "number") {
+				this.#reply(connection, frame, {
+					success: false,
+					error: "dequeue into the draft requires if.draft",
+					code: "precondition_required",
+				});
+				return;
+			}
+			if (session.queuedMessageCount === 0) {
+				this.#reply(connection, frame, { success: false, error: "no queued message", code: "empty_queue" });
+				return;
+			}
+			const result = await this.presenter.action("app.message.dequeue");
+			this.#reply(connection, frame, {
+				success: result.handled,
+				data: { restored: this.presenter.draft(), revisions: this.revisions },
+			});
+			return;
+		}
+		const popped = session.popLastQueuedMessage();
+		this.#reply(
+			connection,
+			frame,
+			popped
+				? { success: true, data: { message: popped } }
+				: { success: false, error: "no queued message", code: "empty_queue" },
+		);
+	}
+
+	#requests(connection: ControlConnection, frame: Record<string, unknown>): void {
+		const handle = typeof frame.requestHandle === "string" ? frame.requestHandle : undefined;
+		if (handle) {
+			const status = this.#settledHandles.has(handle)
+				? "settled"
+				: this.#openHandles.has(handle)
+					? "open"
+					: undefined;
+			this.#reply(
+				connection,
+				frame,
+				status
+					? { success: true, data: { requestHandle: handle, status } }
+					: { success: false, error: `unknown request ${handle}`, code: "unknown_request" },
+			);
+			return;
+		}
+		this.#reply(connection, frame, {
+			success: true,
+			data: { open: [...this.#openHandles], settled: [...this.#settledHandles] },
+		});
+	}
+
+	async #switchModel(connection: ControlConnection, frame: Record<string, unknown>): Promise<void> {
+		const session = this.#options.session;
+		const base = typeof frame.selector === "string" ? frame.selector.trim() : "";
+		if (!base) {
+			this.#reply(connection, frame, {
+				success: false,
+				error: "switch_model requires a selector",
+				code: "invalid_value",
+			});
+			return;
+		}
+		const selector = typeof frame.thinkingLevel === "string" ? `${base}:${frame.thinkingLevel}` : base;
+		const { resolveSessionModelSelector } = await import("../slash-commands/builtin-modes");
+		const resolved = resolveSessionModelSelector(selector, session, session.settings);
+		if (!resolved.model) {
+			this.#reply(connection, frame, { success: false, error: `Unknown model: ${selector}`, code: "unknown_model" });
+			return;
+		}
+		// With a pane, go through /switch so the status line and title refresh as if typed.
+		if (this.presenter) await this.presenter.submit(`/switch ${selector}`);
+		else await session.setModelTemporary(resolved.model, resolved.thinkingLevel);
+		const model = session.model;
+		const applied =
+			model && model.provider === resolved.model.provider && model.id === resolved.model.id
+				? "immediate"
+				: "deferred";
+		this.#reply(connection, frame, {
+			success: true,
+			data: {
+				model: model ? `${model.provider}/${model.id}` : null,
+				thinkingLevel: session.thinkingLevel,
+				applied,
+			},
+		});
+	}
+
+	async #rewind(connection: ControlConnection, frame: Record<string, unknown>): Promise<void> {
+		const entryId = typeof frame.entryId === "string" ? frame.entryId : "";
+		if (!entryId) {
+			this.#reply(connection, frame, { success: false, error: "rewind requires entryId", code: "invalid_value" });
+			return;
+		}
+		const prefillDraft = frame.prefillDraft === true;
+		if (prefillDraft) {
+			const expected =
+				frame.if && typeof frame.if === "object" ? (frame.if as Record<string, unknown>).draft : undefined;
+			if (typeof expected !== "number") {
+				this.#reply(connection, frame, {
+					success: false,
+					error: "rewind with prefillDraft requires if.draft",
+					code: "precondition_required",
+				});
+				return;
+			}
+		}
+		let outcome: RewindOutcome;
+		if (this.presenter) {
+			outcome = await this.presenter.rewind(entryId, prefillDraft);
+		} else {
+			const session = this.#options.session;
+			if (!session.sessionManager.getEntry(entryId)) {
+				outcome = { status: "invalid", error: `no transcript entry ${entryId}` };
+			} else {
+				const result = await session.navigateTree(entryId, { summarize: false });
+				outcome = { status: result.cancelled ? "cancelled" : "rewound" };
+			}
+		}
+		if (outcome.status === "rewound") this.bumpGeneration();
+		this.#reply(
+			connection,
+			frame,
+			outcome.status === "invalid" || outcome.status === "cancelled"
+				? { success: false, error: outcome.error ?? `rewind ${outcome.status}`, code: `rewind_${outcome.status}` }
+				: { success: true, data: { ...outcome, revisions: this.revisions } },
+		);
+	}
+
+	/** A session replaced under the connection bumps generation; any identity change republishes. */
+	#noteSessionIdentity(): void {
+		const id = this.#options.session.sessionId;
 		if (id !== this.#seenSessionId) {
 			this.#seenSessionId = id;
 			this.bumpGeneration();
 		}
+		if (this.#currentIdentityKey() !== this.#identityKey) this.#refreshIdentity();
 	}
 
 	#settings(connection: ControlConnection, frame: Record<string, unknown>): void {

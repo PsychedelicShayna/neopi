@@ -14,7 +14,7 @@ import { cfgControlApprovals } from "./settings";
 import { currentControlActor, runAsControlActor } from "./actor";
 import { DialogRegistry, setDialogRegistry } from "./dialogs";
 import type { ControlHost } from "./host";
-import type { ControlPresenter } from "./presenter";
+import type { ControlPresenter, RewindOutcome } from "./presenter";
 import type { DialogSummary } from "./types";
 
 export interface TuiControlSurface {
@@ -22,6 +22,8 @@ export interface TuiControlSurface {
 	editor: {
 		getText(): string;
 		setText(text: string): void;
+		setDraft(text: string, images?: readonly ImageContent[]): void;
+		insertText(text: string): void;
 		onSubmit?: (text: string) => void | Promise<void>;
 		onEscape?: () => void;
 		pendingImages: ImageContent[];
@@ -30,12 +32,15 @@ export interface TuiControlSurface {
 	ui: {
 		injectInput(data: string, origin?: "keyboard" | "control"): void;
 		onHumanInput?: () => void;
+		onFocusChange?: () => void;
+		onPaint?: () => void;
 		onOverlayShown?: (component: Component, hide: () => void) => (() => void) | void;
 		getDebugDocument(): readonly string[];
 		overlayStack: readonly unknown[];
 		hasOverlay(): boolean;
 	};
 	runAction(id: string): boolean;
+	rewind(entryId: string, prefillDraft: boolean): Promise<RewindOutcome>;
 	notify(text: string): void;
 }
 
@@ -45,6 +50,8 @@ export function attachTuiPresenter(host: ControlHost, surface: TuiControlSurface
 	setDialogRegistry(registry);
 	registry.onChange(() => host.bumpDialogs());
 	surface.ui.onHumanInput = () => host.bumpHuman();
+	surface.ui.onFocusChange = () => host.bumpFocus();
+	surface.ui.onPaint = () => host.bumpPaint();
 	const previousChange = surface.editor.onChange;
 	surface.editor.onChange = (text: string) => {
 		previousChange?.(text);
@@ -62,7 +69,7 @@ export function attachTuiPresenter(host: ControlHost, surface: TuiControlSurface
 	};
 	installApprovalArbiter(host, surface.session, registry, surface.notify);
 	const presenter: ControlPresenter = {
-		async submit(text) {
+		async submit(text, images) {
 			const outer = currentControlActor();
 			const actor = outer ?? {
 				connectionId: "control",
@@ -71,9 +78,11 @@ export function attachTuiPresenter(host: ControlHost, surface: TuiControlSurface
 				humanNow: () => host.revisions.human,
 			};
 			return runAsControlActor(actor, async () => {
+				const submitted = withImageMarkers(text, images?.length ?? 0);
 				await runWithDetachedDraft(async () => {
-					surface.editor.setText(text);
-					await surface.editor.onSubmit?.(text);
+					surface.editor.pendingImages = images ? [...images] : [];
+					surface.editor.setText(submitted);
+					await surface.editor.onSubmit?.(submitted);
 				});
 				return { delivery: "started" };
 			});
@@ -112,9 +121,13 @@ export function attachTuiPresenter(host: ControlHost, surface: TuiControlSurface
 		draft() {
 			return { text: surface.editor.getText(), images: [...surface.editor.pendingImages] };
 		},
-		setDraft(text) {
-			surface.editor.setText(text);
+		setDraft(text, images) {
+			surface.editor.setDraft(text, images);
 		},
+		insertDraft(text) {
+			surface.editor.insertText(text);
+		},
+		rewind: (entryId, prefillDraft) => surface.rewind(entryId, prefillDraft),
 		draftRevision: () => host.revisions.draft,
 		focusRevision: () => host.revisions.focus,
 		dialogRevision: () => host.revisions.dialogs,
@@ -122,6 +135,19 @@ export function attachTuiPresenter(host: ControlHost, surface: TuiControlSurface
 	};
 	host.presenter = presenter;
 	host.markReady();
+}
+
+/**
+ * The submit path drops images whose `[Image #N]` marker is absent from the
+ * text, so a control input carrying images names each one it did not reference.
+ */
+export function withImageMarkers(text: string, imageCount: number): string {
+	const missing: string[] = [];
+	for (let n = 1; n <= imageCount; n++) {
+		if (!text.includes(`[Image #${n}`)) missing.push(`[Image #${n}]`);
+	}
+	if (missing.length === 0) return text;
+	return text ? `${text} ${missing.join(" ")}` : missing.join(" ");
 }
 
 /**
