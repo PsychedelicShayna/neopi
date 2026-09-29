@@ -9,10 +9,13 @@ npi ctl %3 send "Reply with exactly: PONG"
 npi ctl %3 steer "stop and summarize"
 npi ctl %3 abort
 npi ctl %3 slash "/fast on"
+npi ctl %3 action app.model.select
+npi ctl %3 keys escape
+npi ctl %3 dialog_answer <id> '{"index":0}'
 ```
 
-Targets match an instance id, a prefix of one, a session id, a tmux pane (`%3`), `pid:N`, or a title.
+Read `state` before a write. Pass `if` revisions on draft and surface commands. A stale revision is `conflict` and the pane shows `⌁ <label> backed off`. Retry only after re-reading state. Do not use `tmux send-keys` on npi panes.
 
-The human at the pane always wins a concurrent edit. A control step that carries `if` revisions is refused with `conflict` when the pane changed, and the draft is not overwritten. Tool approvals stay with the pane unless `control.approvals` is on. `app.suspend` and external editors are exempt.
+`app.suspend`, external `$EDITOR`, and `/todo edit` are exempt. Everything else a human can do from the keyboard is reachable by `input`, `keys`, `action`, or a structured twin (`set_model`, `settings_set`, `dialog_answer`).
 
 Disable publishing with `--no-control-socket` or `control.enabled=false`.
