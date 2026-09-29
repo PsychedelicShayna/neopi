@@ -59,6 +59,9 @@ export const cfgLiveSubmitSilenceMs = register({
 	id: "live.submitSilenceMs",
 	type: "number",
 	default: 2000,
+	validate: value => {
+		if (typeof value === "number" && value < 0) throw new Error("Live submit silence must not be negative");
+	},
 	ui: {
 		tab: "providers",
 		group: "Services",

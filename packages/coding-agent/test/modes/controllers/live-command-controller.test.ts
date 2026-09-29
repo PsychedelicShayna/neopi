@@ -250,6 +250,12 @@ describe("LiveCommandController", () => {
 		}
 	});
 
+	it("rejects negative silence intervals before a keyword timer can run", () => {
+		const h = createHarness();
+		expect(() => cfgLiveSubmitSilenceMs.set(h.ctx.settings, -1)).toThrow("must not be negative");
+		expect(cfgLiveSubmitSilenceMs.get(h.ctx.settings)).toBe(2000);
+	});
+
 	it("restarts silence on new text and cancels a corrected or mid-text keyword", async () => {
 		const h = createHarness();
 		const sent: string[] = [];
