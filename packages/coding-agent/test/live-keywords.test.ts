@@ -3,22 +3,24 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "../src/config/settings";
-import { cfgLiveBlockDelegateKeyword, cfgLiveForceDelegateKeyword, cfgLiveSubmitKeyword } from "../src/live/settings";
+import { cfgLiveBlockDelegateKeyword, cfgLiveForceDelegateKeyword, cfgLiveSubmitKeyword, cfgLiveSubmitSilenceMs } from "../src/live/settings";
 import { stripLiveKeyword } from "../src/live/keywords";
 
 describe("live keyword normalization", () => {
-	it("persists both configured phrases when settings are reloaded", async () => {
+	it("persists configured phrases and their shared silence timeout", async () => {
 		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "live-keyword-settings-"));
 		try {
 			const configured = await Settings.loadIsolated({ cwd: dir, agentDir: dir });
 			cfgLiveForceDelegateKeyword.set(configured, "send it now");
 			cfgLiveBlockDelegateKeyword.set(configured, "iris only");
 			cfgLiveSubmitKeyword.set(configured, "send off");
+			cfgLiveSubmitSilenceMs.set(configured, 2500);
 			await configured.flush();
 			const reloaded = await Settings.loadIsolated({ cwd: dir, agentDir: dir });
 			expect(cfgLiveForceDelegateKeyword.get(reloaded)).toBe("send it now");
 			expect(cfgLiveBlockDelegateKeyword.get(reloaded)).toBe("iris only");
 			expect(cfgLiveSubmitKeyword.get(reloaded)).toBe("send off");
+			expect(cfgLiveSubmitSilenceMs.get(reloaded)).toBe(2500);
 		} finally {
 			await fs.rm(dir, { recursive: true, force: true });
 		}
@@ -59,7 +61,7 @@ describe("live keyword normalization", () => {
 		});
 	});
 
-	it("requires submit at the end of a final turn, with punctuation and whitespace variants", () => {
+	it("requires a keyword at the end of composer text, with punctuation and whitespace variants", () => {
 		expect(stripLiveKeyword("send off was mentioned earlier", "send off", true)).toEqual({
 			matched: false,
 			text: "send off was mentioned earlier",
