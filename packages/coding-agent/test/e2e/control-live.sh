@@ -95,7 +95,8 @@ for _ in $(seq 1 80); do
 	sleep 0.25
 done
 state=$(env PI_CODING_AGENT_DIR=$DIR "$NPI" ctl %0 rpc get_state '{}' || true)
-echo "$state" | tee "$LOG.pre"
+printf "%s
+" "$state" >"$LOG.pre"
 if ! grep -q '"provider": "fake"' "$LOG.pre"; then
 	echo "fail: model.provider is not fake; refusing to send a turn" | tee "$LOG"
 	exit 1

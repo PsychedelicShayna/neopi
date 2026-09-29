@@ -696,7 +696,6 @@ export class KeybindingsManager extends TuiKeybindingsManager {
 		this.setUserBindings(mergeKeybindingsConfig(inheritedConfig, profileConfig));
 	}
 
-
 	/** Write one action's chords into the profile file and reload. */
 	setPersisted(actionId: string, keys: string[]): boolean {
 		if (!this.#configPath) return false;

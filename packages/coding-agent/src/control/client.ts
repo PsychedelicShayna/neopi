@@ -8,7 +8,7 @@
 import * as net from "node:net";
 import { RpcFrameDecoder } from "../modes/rpc/rpc-frame";
 import { callerConnectionToken, type ControlMetadata } from "./registry";
-import { CONTROL_PROTOCOL_VERSION, type ControlResponse, type ControlSnapshot } from "./types";
+import { type ControlResponse, type ControlSnapshot } from "./types";
 
 export interface ControlClientOptions {
 	metadata: ControlMetadata;
@@ -148,7 +148,8 @@ export class ControlClient {
 
 	#dispatch(frame: Record<string, unknown>): void {
 		if (frame.type === "response") {
-			const id = typeof frame.requestId === "string" ? frame.requestId : typeof frame.id === "string" ? frame.id : "";
+			const id =
+				typeof frame.requestId === "string" ? frame.requestId : typeof frame.id === "string" ? frame.id : "";
 			const pending = this.#pending.get(id);
 			if (pending) {
 				this.#pending.delete(id);
@@ -163,7 +164,8 @@ export class ControlClient {
 	/** Send one command and await its response. */
 	request(command: Record<string, unknown>, timeoutMs?: number): Promise<ControlResponse> {
 		if (this.#closed || !this.#socket) return Promise.reject(new ControlClientError("closed", "not connected"));
-		const requestId = (command.requestId as string | undefined) ?? (command.id as string | undefined) ?? `r${++this.#seq}`;
+		const requestId =
+			(command.requestId as string | undefined) ?? (command.id as string | undefined) ?? `r${++this.#seq}`;
 		const frame = { ...command, requestId };
 		const { promise, resolve, reject } = Promise.withResolvers<ControlResponse>();
 		const timeout = timeoutMs ?? this.#options.timeoutMs ?? 30_000;

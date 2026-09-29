@@ -3728,7 +3728,8 @@ export class AgentSession implements SettingsScope {
 				displayEvent = { ...event, message: { ...message, content: deobfuscatedContent } };
 			}
 		}
-		if (runOwners) displayEvent = { ...event, runOwners, agentStarts: this.#agentStartCount } as unknown as AgentEvent;
+		if (runOwners)
+			displayEvent = { ...event, runOwners, agentStarts: this.#agentStartCount } as unknown as AgentEvent;
 
 		if (event.type === "turn_start") {
 			this.#advisors.onPrimaryTurnStart();
@@ -7246,7 +7247,9 @@ export class AgentSession implements SettingsScope {
 	 * stop instead of hanging.
 	 */
 	async promptCustomMessage<T = unknown>(
-		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution"> & { origin?: MessageOrigin },
+		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution"> & {
+			origin?: MessageOrigin;
+		},
 		options?: Pick<PromptOptions, "streamingBehavior" | "toolChoice" | "entryId" | "runOwner"> & {
 			queueChipText?: string;
 			queueOnly?: boolean;
@@ -7258,7 +7261,9 @@ export class AgentSession implements SettingsScope {
 	}
 
 	async #promptCustomMessage<T = unknown>(
-		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution"> & { origin?: MessageOrigin },
+		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution"> & {
+			origin?: MessageOrigin;
+		},
 		options?: Pick<PromptOptions, "streamingBehavior" | "toolChoice" | "entryId"> & {
 			queueChipText?: string;
 			queueOnly?: boolean;
@@ -7279,7 +7284,9 @@ export class AgentSession implements SettingsScope {
 	}
 
 	async #dispatchCustomPrompt<T = unknown>(
-		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution"> & { origin?: MessageOrigin },
+		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution"> & {
+			origin?: MessageOrigin;
+		},
 		options:
 			| (Pick<PromptOptions, "streamingBehavior" | "toolChoice" | "entryId"> & {
 					queueChipText?: string;

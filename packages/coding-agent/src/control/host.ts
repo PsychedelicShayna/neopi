@@ -22,11 +22,7 @@ import { HostBudget, workClass } from "./budget";
 import { RPC_COMMAND_TYPES } from "./parity";
 import { encodeKeyId, encodeSgrMouse } from "./keys";
 import type { ControlPresenter } from "./presenter";
-import {
-	newControlInstanceId,
-	publishControlEndpoint,
-	type ControlPublication,
-} from "./registry";
+import { newControlInstanceId, publishControlEndpoint, type ControlPublication } from "./registry";
 import { ControlServer, type ControlConnection } from "./server";
 import { APPROVAL_GATED_SETTINGS, cfgControlApprovals } from "./settings";
 import { RpcPlanModeController } from "../modes/rpc/rpc-plan-mode";
@@ -55,9 +51,11 @@ export interface ControlHostOptions {
 	tmuxPane?: string | null;
 }
 
-
 /** Field that failed an optimistic revision check, if any. */
-export function revisionConflict(expected: unknown, revisions: Revisions): "generation" | "human" | "focus" | "draft" | "dialogs" | undefined {
+export function revisionConflict(
+	expected: unknown,
+	revisions: Revisions,
+): "generation" | "human" | "focus" | "draft" | "dialogs" | undefined {
 	if (!expected || typeof expected !== "object") return undefined;
 	const check = expected as Record<string, unknown>;
 	for (const field of ["generation", "human", "focus", "draft", "dialogs"] as const) {
@@ -90,7 +88,6 @@ export class ControlHost {
 	#settleWatcher: RpcSessionSettleWatcher | undefined;
 	readonly #extensionTracker = new RpcExtensionUserMessageTracker();
 	#runOwnerSeq = 0;
-	#server: ControlServer | undefined;
 	#revisions: Revisions = {
 		generation: 1,
 		human: 0,
@@ -102,7 +99,6 @@ export class ControlHost {
 		role: null,
 	};
 	#ready = false;
-	#requestSeq = 0;
 	#closed = false;
 
 	constructor(options: ControlHostOptions) {
@@ -146,7 +142,8 @@ export class ControlHost {
 			budget: this.budget,
 			registryDir: this.#options.dir,
 			snapshot: () => this.snapshot(),
-			dispatch: (connection: ControlConnection, command: Record<string, unknown>) => this.#dispatch(connection, command),
+			dispatch: (connection: ControlConnection, command: Record<string, unknown>) =>
+				this.#dispatch(connection, command),
 			onAuthenticated: (connection: ControlConnection) => {
 				this.#connections.add(connection);
 				connection.write({
@@ -166,7 +163,6 @@ export class ControlHost {
 			logger.warn("control: socket disabled (peer credentials unavailable)");
 			return;
 		}
-		this.#server = server;
 		this.publication = await publishControlEndpoint({
 			dir: this.#options.dir,
 			role: this.#options.role,
@@ -201,7 +197,6 @@ export class ControlHost {
 			for (const forwarder of this.#forwarders.values()) forwarder.forward(event);
 		});
 	}
-
 
 	#refreshIdentity(): void {
 		const session = this.#options.session;
@@ -246,7 +241,14 @@ export class ControlHost {
 						draftLength: presenter.draft().text.length,
 					}
 				: null,
-			modes: { plan: false, chat: session.chatMode?.mode ?? "off", goal: false, vibe: false, live: false, repl: false },
+			modes: {
+				plan: false,
+				chat: session.chatMode?.mode ?? "off",
+				goal: false,
+				vibe: false,
+				live: false,
+				repl: false,
+			},
 			dialogs: presenter?.dialogs() ?? [],
 			connections: this.#connections.size,
 			requests: { open: 0, retained: 0 },
@@ -270,18 +272,25 @@ export class ControlHost {
 
 	async #dispatch(connection: ControlConnection, frame: Record<string, unknown>): Promise<void> {
 		const { runAsControlActor } = await import("./actor");
-		return runAsControlActor({
-			connectionId: connection.id,
-			label: connection.label || "ctl",
-			humanAtAdmission: this.#revisions.human,
-			humanNow: () => this.#revisions.human,
-		}, () => this.#dispatchInner(connection, frame));
+		return runAsControlActor(
+			{
+				connectionId: connection.id,
+				label: connection.label || "ctl",
+				humanAtAdmission: this.#revisions.human,
+				humanNow: () => this.#revisions.human,
+			},
+			() => this.#dispatchInner(connection, frame),
+		);
 	}
 
 	async #dispatchInner(connection: ControlConnection, frame: Record<string, unknown>): Promise<void> {
 		const type = String(frame.type ?? "");
 		if (connection.probe && type !== "get_status" && type !== "state" && type !== "bye") {
-			this.#reply(connection, frame, { success: false, error: "probe connections are read-only", code: "probe_only" });
+			this.#reply(connection, frame, {
+				success: false,
+				error: "probe connections are read-only",
+				code: "probe_only",
+			});
 			return;
 		}
 		if (type === "bye") {
@@ -293,7 +302,12 @@ export class ControlHost {
 			this.#reply(connection, frame, conflict);
 			return;
 		}
-		logger.info("control", { connectionId: connection.id, peerPid: connection.peer.pid, type, generation: this.#revisions.generation });
+		logger.info("control", {
+			connectionId: connection.id,
+			peerPid: connection.peer.pid,
+			type,
+			generation: this.#revisions.generation,
+		});
 		try {
 			if (RPC_TYPES.has(type)) {
 				await this.#rpc(connection, frame);
@@ -301,14 +315,20 @@ export class ControlHost {
 			}
 			await this.#control(connection, frame);
 		} catch (error) {
-			this.#reply(connection, frame, { success: false, error: error instanceof Error ? error.message : String(error) });
+			this.#reply(connection, frame, {
+				success: false,
+				error: error instanceof Error ? error.message : String(error),
+			});
 		} finally {
 			const kind = workClass(type, frame);
 			if (kind === "retained") connection.budget.release("retained");
 		}
 	}
 
-	#precondition(connection: ControlConnection, frame: Record<string, unknown>): { success: false; error: string; code: string } | undefined {
+	#precondition(
+		connection: ControlConnection,
+		frame: Record<string, unknown>,
+	): { success: false; error: string; code: string } | undefined {
 		const field = revisionConflict(frame.if, this.#revisions);
 		if (!field) return undefined;
 		const text = `⌁ ${connection.label}#${connection.id} backed off (${field} changed)`;
@@ -317,7 +337,6 @@ export class ControlHost {
 		return { success: false, error: text, code: "conflict" };
 	}
 
-
 	async #handlerFor(connection: ControlConnection): Promise<(command: RpcCommand) => Promise<RpcResponse>> {
 		const existing = this.#handlers.get(connection);
 		if (existing) return existing;
@@ -325,12 +344,14 @@ export class ControlHost {
 		const output = (frame: object) => connection.write(frame);
 		const forwarder = new RpcSessionEventForwarder(output);
 		this.#forwarders.set(connection, forwarder);
-		if (!this.#planMode) this.#planMode = new RpcPlanModeController(session, frame => {
-			for (const subscriber of this.#subscribed) subscriber.write(frame);
-		});
-		if (!this.#settleWatcher) this.#settleWatcher = new RpcSessionSettleWatcher(session, frame => {
-			for (const subscriber of this.#subscribed) subscriber.write(frame);
-		});
+		if (!this.#planMode)
+			this.#planMode = new RpcPlanModeController(session, frame => {
+				for (const subscriber of this.#subscribed) subscriber.write(frame);
+			});
+		if (!this.#settleWatcher)
+			this.#settleWatcher = new RpcSessionSettleWatcher(session, frame => {
+				for (const subscriber of this.#subscribed) subscriber.write(frame);
+			});
 		const planMode = this.#planMode;
 		const settleWatcher = this.#settleWatcher;
 		const success = (id: string | undefined, command: string, data?: object | null): RpcResponse =>
@@ -339,7 +360,12 @@ export class ControlHost {
 				: { id, type: "response", command, success: true, data }) as RpcResponse;
 		const error = (id: string | undefined, command: string, message: string, code?: string): RpcResponse =>
 			({
-				id, type: "response", command, success: false, error: message, ...(code ? { code } : {}),
+				id,
+				type: "response",
+				command,
+				success: false,
+				error: message,
+				...(code ? { code } : {}),
 			}) as RpcResponse;
 		const { createRpcCommandHandler, RpcPendingExtensionRequests } = await import("../modes/rpc/rpc-mode");
 		const pending = new RpcPendingExtensionRequests();
@@ -402,7 +428,8 @@ export class ControlHost {
 	async #rpc(connection: ControlConnection, frame: Record<string, unknown>): Promise<void> {
 		const command = {
 			...frame,
-			id: typeof frame.id === "string" ? frame.id : typeof frame.requestId === "string" ? frame.requestId : undefined,
+			id:
+				typeof frame.id === "string" ? frame.id : typeof frame.requestId === "string" ? frame.requestId : undefined,
 		} as RpcCommand;
 		const response = await (await this.#handlerFor(connection))(command);
 		connection.write({ ...response, requestId: command.id });
@@ -438,11 +465,19 @@ export class ControlHost {
 				if (needTui()) return;
 				const actionId = String(frame.actionId ?? "");
 				if (actionId === "app.suspend") {
-					this.#reply(connection, frame, { success: false, error: "job control is exempt", code: "exempt_job_control" });
+					this.#reply(connection, frame, {
+						success: false,
+						error: "job control is exempt",
+						code: "exempt_job_control",
+					});
 					return;
 				}
 				if (actionId === "app.editor.external") {
-					this.#reply(connection, frame, { success: false, error: "external editor is exempt", code: "exempt_external_program" });
+					this.#reply(connection, frame, {
+						success: false,
+						error: "external editor is exempt",
+						code: "exempt_external_program",
+					});
 					return;
 				}
 				const result = await presenter!.action(actionId);
@@ -466,7 +501,11 @@ export class ControlHost {
 					const record = token as { key?: string; text?: string };
 					const bytes = record.text ?? (record.key ? encodeKeyId(record.key) : undefined);
 					if (!bytes) {
-						this.#reply(connection, frame, { success: false, error: `cannot encode ${record.key}`, code: "key_unencodable" });
+						this.#reply(connection, frame, {
+							success: false,
+							error: `cannot encode ${record.key}`,
+							code: "key_unencodable",
+						});
 						return;
 					}
 					presenter!.inject(bytes);
@@ -482,9 +521,14 @@ export class ControlHost {
 				return;
 			case "mouse": {
 				if (needTui()) return;
-				const action = frame.action === "release" || frame.action === "scrollUp" || frame.action === "scrollDown" || frame.action === "move" || frame.action === "press"
-					? frame.action
-					: "click";
+				const action =
+					frame.action === "release" ||
+					frame.action === "scrollUp" ||
+					frame.action === "scrollDown" ||
+					frame.action === "move" ||
+					frame.action === "press"
+						? frame.action
+						: "click";
 				presenter!.inject(encodeSgrMouse(Number(frame.x ?? 0), Number(frame.y ?? 0), action));
 				this.#reply(connection, frame, { success: true, data: { revisions: this.revisions } });
 				return;
@@ -492,14 +536,23 @@ export class ControlHost {
 			case "repl_execute": {
 				const language = typeof frame.target === "string" && frame.target ? frame.target : "py";
 				const result = await this.#options.session.executeEval(language, String(frame.code ?? ""));
-				this.#reply(connection, frame, { success: result.exitCode === 0, data: { output: result.output, exitCode: result.exitCode, language } });
+				this.#reply(connection, frame, {
+					success: result.exitCode === 0,
+					data: { output: result.output, exitCode: result.exitCode, language },
+				});
 				return;
 			}
 			case "serve":
-				if (Array.isArray(frame.tools)) await this.#rpc(connection, { ...frame, type: "set_host_tools", tools: frame.tools });
-				if (Array.isArray(frame.schemes)) await this.#rpc(connection, { ...frame, type: "set_host_uri_schemes", schemes: frame.schemes });
+				if (Array.isArray(frame.tools))
+					await this.#rpc(connection, { ...frame, type: "set_host_tools", tools: frame.tools });
+				if (Array.isArray(frame.schemes))
+					await this.#rpc(connection, { ...frame, type: "set_host_uri_schemes", schemes: frame.schemes });
 				if (!Array.isArray(frame.tools) && !Array.isArray(frame.schemes)) {
-					this.#reply(connection, frame, { success: false, error: "serve requires tools or schemes", code: "invalid_value" });
+					this.#reply(connection, frame, {
+						success: false,
+						error: "serve requires tools or schemes",
+						code: "invalid_value",
+					});
 				}
 				return;
 			case "unserve":
@@ -511,7 +564,10 @@ export class ControlHost {
 				return;
 			case "screen":
 				if (needTui()) return;
-				this.#reply(connection, frame, { success: true, data: presenter!.screen(typeof frame.mode === "string" ? frame.mode : undefined) });
+				this.#reply(connection, frame, {
+					success: true,
+					data: presenter!.screen(typeof frame.mode === "string" ? frame.mode : undefined),
+				});
 				return;
 			case "dialogs":
 				this.#reply(connection, frame, { success: true, data: { dialogs: presenter?.dialogs() ?? [] } });
@@ -522,7 +578,11 @@ export class ControlHost {
 					return;
 				}
 				const settled = await presenter.answerDialog(String(frame.dialogId ?? ""), frame.answer);
-				this.#reply(connection, frame, { success: settled.settled, error: settled.error, code: settled.settled ? undefined : "unknown_dialog" });
+				this.#reply(connection, frame, {
+					success: settled.settled,
+					error: settled.error,
+					code: settled.settled ? undefined : "unknown_dialog",
+				});
 				return;
 			}
 			case "draft_get":
@@ -533,7 +593,11 @@ export class ControlHost {
 			case "draft_clear":
 				if (needTui()) return;
 				if (!frame.if) {
-					this.#reply(connection, frame, { success: false, error: "draft writes require if.draft", code: "precondition_required" });
+					this.#reply(connection, frame, {
+						success: false,
+						error: "draft writes require if.draft",
+						code: "precondition_required",
+					});
 					return;
 				}
 				presenter!.setDraft(type === "draft_clear" ? "" : String(frame.text ?? ""));
@@ -547,7 +611,11 @@ export class ControlHost {
 			case "commands":
 				this.#reply(connection, frame, {
 					success: true,
-					data: { commands: await import("../slash-commands/available-commands").then(m => m.buildAvailableSlashCommands(this.#options.session)) },
+					data: {
+						commands: await import("../slash-commands/available-commands").then(m =>
+							m.buildAvailableSlashCommands(this.#options.session),
+						),
+					},
 				});
 				return;
 			case "agents":
@@ -580,8 +648,6 @@ export class ControlHost {
 		}
 	}
 
-
-
 	async #wait(connection: ControlConnection, frame: Record<string, unknown>): Promise<void> {
 		const timeoutMs = Math.min(Math.max(Number(frame.timeoutMs ?? 30_000) || 30_000, 0), 120_000);
 		const want = String(frame.for ?? "settled");
@@ -596,15 +662,23 @@ export class ControlHost {
 			await new Promise(resolve => setTimeout(resolve, 50));
 		}
 		const settled = ready();
-		this.#reply(connection, frame, settled
-			? { success: true, data: { waited: want, revisions: this.revisions, snapshot: this.snapshot() } }
-			: { success: false, error: `timed out waiting for ${want}`, code: "timeout" });
+		this.#reply(
+			connection,
+			frame,
+			settled
+				? { success: true, data: { waited: want, revisions: this.revisions, snapshot: this.snapshot() } }
+				: { success: false, error: `timed out waiting for ${want}`, code: "timeout" },
+		);
 	}
 
 	#keybindings(connection: ControlConnection, frame: Record<string, unknown>): void {
 		const bindings = this.presenter?.keybindings;
 		if (!bindings) {
-			this.#reply(connection, frame, { success: false, error: "this session has no keybindings store", code: "no_tui" });
+			this.#reply(connection, frame, {
+				success: false,
+				error: "this session has no keybindings store",
+				code: "no_tui",
+			});
 			return;
 		}
 		const type = String(frame.type);
@@ -624,9 +698,13 @@ export class ControlHost {
 		const actionId = String(frame.actionId ?? "");
 		const keys = Array.isArray(frame.keys) ? frame.keys.filter((key): key is string => typeof key === "string") : [];
 		const saved = bindings.set(actionId, keys);
-		this.#reply(connection, frame, saved
-			? { success: true, data: { actionId, keys } }
-			: { success: false, error: "keybindings file is not writable", code: "invalid_value" });
+		this.#reply(
+			connection,
+			frame,
+			saved
+				? { success: true, data: { actionId, keys } }
+				: { success: false, error: "keybindings file is not writable", code: "invalid_value" },
+		);
 	}
 
 	#settings(connection: ControlConnection, frame: Record<string, unknown>): void {
@@ -634,7 +712,10 @@ export class ControlHost {
 		const path = typeof frame.path === "string" ? frame.path : "";
 		const type = String(frame.type);
 		if (type === "settings_get" && !path) {
-			this.#reply(connection, frame, { success: true, data: { approvals: cfgControlApprovals.get(session.settings) === true } });
+			this.#reply(connection, frame, {
+				success: true,
+				data: { approvals: cfgControlApprovals.get(session.settings) === true },
+			});
 			return;
 		}
 		const setting = lookup(path);
@@ -644,10 +725,16 @@ export class ControlHost {
 		}
 		if (type === "settings_get") {
 			const member = typeof frame.member === "string" ? frame.member : undefined;
-			this.#reply(connection, frame, { success: true, data: { path, member, value: readSetting(session.settings, path, member) } });
+			this.#reply(connection, frame, {
+				success: true,
+				data: { path, member, value: readSetting(session.settings, path, member) },
+			});
 			return;
 		}
-		if (APPROVAL_GATED_SETTINGS.some(id => path === id || path.startsWith(`${id}.`)) && !cfgControlApprovals.get(session.settings)) {
+		if (
+			APPROVAL_GATED_SETTINGS.some(id => path === id || path.startsWith(`${id}.`)) &&
+			!cfgControlApprovals.get(session.settings)
+		) {
 			this.#reply(connection, frame, {
 				success: false,
 				error: "approval settings belong to the pane (control.approvals is off)",
@@ -660,9 +747,16 @@ export class ControlHost {
 			if (type === "settings_unset") unsetSetting(session.settings, path, member);
 			else writeSetting(session.settings, { path, member, value: frame.value, runtime: frame.scope === "runtime" });
 			this.#notify(connection, `settings ${path}`);
-			this.#reply(connection, frame, { success: true, data: { path, member, value: readSetting(session.settings, path, member) } });
+			this.#reply(connection, frame, {
+				success: true,
+				data: { path, member, value: readSetting(session.settings, path, member) },
+			});
 		} catch (error) {
-			this.#reply(connection, frame, { success: false, error: error instanceof Error ? error.message : String(error), code: "invalid_value" });
+			this.#reply(connection, frame, {
+				success: false,
+				error: error instanceof Error ? error.message : String(error),
+				code: "invalid_value",
+			});
 		}
 	}
 
@@ -704,9 +798,16 @@ export class ControlHost {
 		}
 		if (op === "describe") {
 			const ref = registry.get(String(frame.agentId ?? frame.to ?? ""));
-			this.#reply(connection, frame, ref
-				? { success: true, data: { id: ref.id, status: ref.status, kind: ref.kind, displayName: ref.displayName } }
-				: { success: false, error: "unknown agent", code: "unknown_agent" });
+			this.#reply(
+				connection,
+				frame,
+				ref
+					? {
+							success: true,
+							data: { id: ref.id, status: ref.status, kind: ref.kind, displayName: ref.displayName },
+						}
+					: { success: false, error: "unknown agent", code: "unknown_agent" },
+			);
 			return;
 		}
 		if (op === "send") {
@@ -717,7 +818,9 @@ export class ControlHost {
 			this.#reply(connection, frame, {
 				success: result.isError !== true,
 				data: { ...result.details, inboxHandle: `${this.instanceId}:${mailboxId}`, from: mailboxId },
-				error: result.isError ? result.content.map(part => part.type === "text" ? part.text : "").join("") : undefined,
+				error: result.isError
+					? result.content.map(part => (part.type === "text" ? part.text : "")).join("")
+					: undefined,
 			});
 			return;
 		}
@@ -728,17 +831,27 @@ export class ControlHost {
 				const messages = frame.peek === true ? bus.peek(mailboxId, from) : [];
 				if (frame.peek !== true) {
 					const taken = bus.take(mailboxId, from);
-					this.#reply(connection, frame, { success: true, data: { inboxHandle: `${this.instanceId}:${mailboxId}`, messages: taken ? [taken] : [] } });
+					this.#reply(connection, frame, {
+						success: true,
+						data: { inboxHandle: `${this.instanceId}:${mailboxId}`, messages: taken ? [taken] : [] },
+					});
 					return;
 				}
-				this.#reply(connection, frame, { success: true, data: { inboxHandle: `${this.instanceId}:${mailboxId}`, messages } });
+				this.#reply(connection, frame, {
+					success: true,
+					data: { inboxHandle: `${this.instanceId}:${mailboxId}`, messages },
+				});
 				return;
 			}
 			const timeoutMs = Math.min(Math.max(Number(frame.timeoutMs ?? 1000) || 1000, 0), 120_000);
 			const waited = await bus.wait(mailboxId, { from }, timeoutMs);
-			this.#reply(connection, frame, waited
-				? { success: true, data: { inboxHandle: `${this.instanceId}:${mailboxId}`, message: waited } }
-				: { success: false, error: "timed out waiting for mail", code: "timeout" });
+			this.#reply(
+				connection,
+				frame,
+				waited
+					? { success: true, data: { inboxHandle: `${this.instanceId}:${mailboxId}`, message: waited } }
+					: { success: false, error: "timed out waiting for mail", code: "timeout" },
+			);
 			return;
 		}
 		this.#reply(connection, frame, { success: false, error: `unsupported agents op ${op}` });
@@ -750,7 +863,11 @@ export class ControlHost {
 		this.#options.session.emitNotice("info", text, "control");
 	}
 
-	#reply(connection: ControlConnection, frame: Record<string, unknown>, result: { success: boolean; data?: unknown; error?: string; code?: string }): void {
+	#reply(
+		connection: ControlConnection,
+		frame: Record<string, unknown>,
+		result: { success: boolean; data?: unknown; error?: string; code?: string },
+	): void {
 		const response: ControlResponse = {
 			type: "response",
 			command: String(frame.type ?? ""),
@@ -766,7 +883,9 @@ export class ControlHost {
 }
 
 /** Start the host unless the flag or setting disables it. */
-export async function startControlHost(options: ControlHostOptions & { enabled: boolean }): Promise<ControlHost | undefined> {
+export async function startControlHost(
+	options: ControlHostOptions & { enabled: boolean },
+): Promise<ControlHost | undefined> {
 	if (!options.enabled || process.platform === "win32") return undefined;
 	const host = new ControlHost(options);
 	try {

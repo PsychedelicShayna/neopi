@@ -365,7 +365,11 @@ export class AgentRegistry {
 	 */
 	listVisibleTo(id: string): AgentRef[] {
 		return this.list().filter(
-			ref => ref.id !== id && ref.kind !== "advisor" && ref.kind !== "mailbox" && (ref.status === "running" || ref.status === "idle"),
+			ref =>
+				ref.id !== id &&
+				ref.kind !== "advisor" &&
+				ref.kind !== "mailbox" &&
+				(ref.status === "running" || ref.status === "idle"),
 		);
 	}
 

@@ -242,7 +242,13 @@ export async function authenticateHello(
 	if (typeof client !== "object" || client === null) {
 		return { code: "unauthorized", message: "hello requires a client object" };
 	}
-	const { label, kind, callerInstanceId, callerConnectionToken: presentedCallerToken, controlChain } = client as Record<string, unknown>;
+	const {
+		label,
+		kind,
+		callerInstanceId,
+		callerConnectionToken: presentedCallerToken,
+		controlChain,
+	} = client as Record<string, unknown>;
 	if (typeof label !== "string" || !/^[\x20-\x7e]{1,64}$/.test(label)) {
 		return { code: "unauthorized", message: "label must be 1-64 printable characters" };
 	}
@@ -388,6 +394,8 @@ export class ControlServer {
 }
 
 /** Structural guard for a control-only command frame. */
-export function isControlCommand(frame: Record<string, unknown>): frame is ControlOnlyCommand & Record<string, unknown> {
+export function isControlCommand(
+	frame: Record<string, unknown>,
+): frame is ControlOnlyCommand & Record<string, unknown> {
 	return typeof frame.type === "string";
 }

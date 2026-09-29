@@ -36,7 +36,15 @@ export default class Ctl extends Command {
 				return;
 			}
 			if (op === "send" || op === "input" || op === "slash" || op === "steer" || op === "follow-up") {
-				const mode = flags.steer ? "steer" : flags["follow-up"] ? "follow_up" : op === "follow-up" ? "follow_up" : op === "send" ? "prompt" : op;
+				const mode = flags.steer
+					? "steer"
+					: flags["follow-up"]
+						? "follow_up"
+						: op === "follow-up"
+							? "follow_up"
+							: op === "send"
+								? "prompt"
+								: op;
 				process.exitCode = await ctlSend(head, rest.join(" "), mode, flags.json);
 				return;
 			}
@@ -64,7 +72,12 @@ export default class Ctl extends Command {
 				return;
 			}
 			if (op === "dialog-answer" || op === "dialog_answer") {
-				process.exitCode = await ctlRpc(head, "dialog_answer", { dialogId: rest[0] ?? "", answer: rest[1] ? JSON.parse(rest[1]) : rest[1] }, flags.json);
+				process.exitCode = await ctlRpc(
+					head,
+					"dialog_answer",
+					{ dialogId: rest[0] ?? "", answer: rest[1] ? JSON.parse(rest[1]) : rest[1] },
+					flags.json,
+				);
 				return;
 			}
 			process.exitCode = await ctlRpc(head, op.replaceAll("-", "_"), {}, flags.json);

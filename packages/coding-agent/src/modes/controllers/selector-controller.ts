@@ -845,10 +845,10 @@ export class SelectorController {
 			title: "Model",
 			cancel: () => overlayHandle.hide(),
 		});
-		overlayHandle.hide = ((hide => () => {
+		overlayHandle.hide = (hide => () => {
 			closePicker();
 			hide();
-		})(overlayHandle.hide.bind(overlayHandle)));
+		})(overlayHandle.hide.bind(overlayHandle));
 		this.ctx.ui.setFocus(picker);
 		this.ctx.ui.requestRender();
 	}
@@ -1984,7 +1984,12 @@ export class SelectorController {
 			kind: "login",
 			title: providerId,
 			answer: value => {
-				const code = typeof value === "string" ? value : typeof value === "object" && value && "code" in value ? String((value as { code: unknown }).code) : undefined;
+				const code =
+					typeof value === "string"
+						? value
+						: typeof value === "object" && value && "code" in value
+							? String((value as { code: unknown }).code)
+							: undefined;
 				if (code === undefined) return false;
 				return dialog.submitValue(code);
 			},

@@ -38,7 +38,8 @@ export class CtlTool implements AgentTool<typeof ctlSchema> {
 			answer?: unknown;
 			params?: Record<string, unknown>;
 		};
-		const sendMode = params.op === "slash" || params.op === "steer" || params.op === "follow_up" ? params.op : "prompt";
+		const sendMode =
+			params.op === "slash" || params.op === "steer" || params.op === "follow_up" ? params.op : "prompt";
 		const chunks: string[] = [];
 		await withCtlIo(
 			{
@@ -75,7 +76,12 @@ export class CtlTool implements AgentTool<typeof ctlSchema> {
 					return;
 				}
 				if (params.op === "dialog_answer") {
-					await ctlRpc(params.target, "dialog_answer", { dialogId: params.dialogId ?? "", answer: params.answer }, true);
+					await ctlRpc(
+						params.target,
+						"dialog_answer",
+						{ dialogId: params.dialogId ?? "", answer: params.answer },
+						true,
+					);
 					return;
 				}
 				if (params.op === "settings") {

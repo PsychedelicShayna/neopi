@@ -8,7 +8,12 @@
  */
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
-import type { RpcCommand, RpcHostToolDefinition, RpcHostUriSchemeDefinition, RpcSessionState } from "../modes/rpc/rpc-types";
+import type {
+	RpcCommand,
+	RpcHostToolDefinition,
+	RpcHostUriSchemeDefinition,
+	RpcSessionState,
+} from "../modes/rpc/rpc-types";
 
 /** Control protocol version announced in the `challenge` frame. */
 export const CONTROL_PROTOCOL_VERSION = 1;
@@ -101,7 +106,11 @@ export interface ControlOrigin {
 }
 
 /** Where an input came from, for provenance and approval policy. */
-export type InputOrigin = { kind: "keyboard" } | { kind: "owner-host"; host: string } | ControlOrigin | { kind: "extension" };
+export type InputOrigin =
+	| { kind: "keyboard" }
+	| { kind: "owner-host"; host: string }
+	| ControlOrigin
+	| { kind: "extension" };
 
 /** Delivery outcome of a submission (plan §3.4). */
 export type ControlDelivery = "started" | "steered" | "followUp" | "compactionQueued" | "chained" | "local" | "refused";
@@ -235,7 +244,12 @@ export type ControlOnlyCommand =
 	| (ControlBase & { type: "action"; actionId: string; args?: Record<string, unknown> })
 	| (ControlBase & { type: "keys"; keys: KeyToken[] })
 	| (ControlBase & { type: "paste"; text: string })
-	| (ControlBase & { type: "mouse"; x: number; y: number; action?: "click" | "press" | "release" | "scrollUp" | "scrollDown" | "move" })
+	| (ControlBase & {
+			type: "mouse";
+			x: number;
+			y: number;
+			action?: "click" | "press" | "release" | "scrollUp" | "scrollDown" | "move";
+	  })
 	| (ControlBase & { type: "screen"; mode?: "text" | "tree" | "info" | "values" | "frame" })
 	| (ControlBase & { type: "dialogs" })
 	| (ControlBase & { type: "dialog_answer"; dialogId: string; answer: unknown })

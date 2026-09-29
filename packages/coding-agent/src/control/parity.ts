@@ -62,10 +62,6 @@ export const RPC_COMMAND_TYPES = [
 
 type MissingRpcCommand = Exclude<RpcCommand["type"], (typeof RPC_COMMAND_TYPES)[number]>;
 type ExtraRpcCommand = Exclude<(typeof RPC_COMMAND_TYPES)[number], RpcCommand["type"]>;
-type _RpcInventoryComplete = MissingRpcCommand extends never
-	? ExtraRpcCommand extends never
-		? true
-		: never
-	: never;
+type _RpcInventoryComplete = MissingRpcCommand extends never ? (ExtraRpcCommand extends never ? true : never) : never;
 const _rpcInventoryComplete: _RpcInventoryComplete = true;
 void _rpcInventoryComplete;

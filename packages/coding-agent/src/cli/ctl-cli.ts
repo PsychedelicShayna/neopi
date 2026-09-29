@@ -3,11 +3,7 @@
  * speaks the control protocol. Never spawns a session.
  */
 import { ControlClient, ControlClientError } from "../control/client";
-import {
-	readControlEntries,
-	type ControlMetadata,
-	type ControlRegistryOptions,
-} from "../control/registry";
+import { readControlEntries, type ControlMetadata, type ControlRegistryOptions } from "../control/registry";
 import type { ControlSnapshot } from "../control/types";
 
 export interface CtlIo {
@@ -39,10 +35,7 @@ export function ctlExit(code: number): never {
 }
 
 /** Resolve a target selector to one registry entry. */
-export async function resolveCtlTarget(
-	selector: string,
-	options?: ControlRegistryOptions,
-): Promise<ControlMetadata> {
+export async function resolveCtlTarget(selector: string, options?: ControlRegistryOptions): Promise<ControlMetadata> {
 	const entries = await readControlEntries(options);
 	const wanted = selector.trim();
 	const tiers: Array<(meta: ControlMetadata) => boolean> = [
@@ -80,7 +73,13 @@ export async function ctlList(json: boolean): Promise<number> {
 	const rows = [];
 	for (const entry of entries) {
 		try {
-			const client = new ControlClient({ metadata: entry.meta, label: "ctl-list", kind: "cli", probe: true, timeoutMs: 750 });
+			const client = new ControlClient({
+				metadata: entry.meta,
+				label: "ctl-list",
+				kind: "cli",
+				probe: true,
+				timeoutMs: 750,
+			});
 			const snapshot = await client.connect();
 			client.close();
 			rows.push({ meta: publicMeta(entry.meta), snapshot });
@@ -129,10 +128,7 @@ export async function ctlSend(
 ): Promise<number> {
 	const client = await connect(selector, "ctl");
 	try {
-		const command =
-			mode === "input" || mode === "slash"
-				? { type: mode, text }
-				: { type: mode, message: text };
+		const command = mode === "input" || mode === "slash" ? { type: mode, text } : { type: mode, message: text };
 		const response = await client.request(command, 120_000);
 		io.stdout(`${JSON.stringify(response, null, json ? 2 : 0)}\n`);
 		return response.success ? 0 : 1;
@@ -141,7 +137,12 @@ export async function ctlSend(
 	}
 }
 
-export async function ctlRpc(selector: string, type: string, params: Record<string, unknown>, json: boolean): Promise<number> {
+export async function ctlRpc(
+	selector: string,
+	type: string,
+	params: Record<string, unknown>,
+	json: boolean,
+): Promise<number> {
 	const client = await connect(selector, "ctl");
 	try {
 		const response = await client.request({ type, ...params }, 120_000);

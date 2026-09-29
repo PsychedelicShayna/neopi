@@ -75,7 +75,23 @@ function toWireSelectOptions(options: ExtensionUISelectItem[]): CollabUiSelectIt
 }
 
 export class ExtensionUiController {
-	#nextDialog?: { family: "ask" | "extension" | "approval" | "plan_review" | "login" | "selector" | "confirm" | "app" | "panel" | "custom" | "session_in_use"; kind: string; title: string; schema?: unknown };
+	#nextDialog?: {
+		family:
+			| "ask"
+			| "extension"
+			| "approval"
+			| "plan_review"
+			| "login"
+			| "selector"
+			| "confirm"
+			| "app"
+			| "panel"
+			| "custom"
+			| "session_in_use";
+		kind: string;
+		title: string;
+		schema?: unknown;
+	};
 	#extensionTerminalInputUnsubscribers = new Set<() => void>();
 	#composerShapeDisposers: Array<() => void> = [];
 	#hookWidgetsAbove = new Map<string, ExtensionUiComponent>();
@@ -1285,7 +1301,12 @@ export class ExtensionUiController {
 	#presentDialog<T = string>(
 		signal: AbortSignal | undefined,
 		present: (settle: (value: T | undefined) => void) => () => void,
-		meta?: { family: import("../../control/dialogs").OpenDialog["family"]; kind: string; title: string; schema?: unknown },
+		meta?: {
+			family: import("../../control/dialogs").OpenDialog["family"];
+			kind: string;
+			title: string;
+			schema?: unknown;
+		},
 	): Promise<T | undefined> {
 		const { promise, resolve, reject } = Promise.withResolvers<T | undefined>();
 		let settled = false;

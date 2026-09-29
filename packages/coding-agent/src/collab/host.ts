@@ -1024,7 +1024,9 @@ export class CollabHost {
 				// Advisor transcripts are local observability only; never mirror them to
 				// guests (the wire AgentSnapshot kind has no `advisor`, and guests must not
 				// be able to chat/kill/revive them).
-				.filter((ref): ref is AgentRef & { kind: "main" | "sub" } => ref.kind !== "advisor" && ref.kind !== "mailbox")
+				.filter(
+					(ref): ref is AgentRef & { kind: "main" | "sub" } => ref.kind !== "advisor" && ref.kind !== "mailbox",
+				)
 				.map(ref => ({
 					id: ref.id,
 					displayName: ref.displayName,

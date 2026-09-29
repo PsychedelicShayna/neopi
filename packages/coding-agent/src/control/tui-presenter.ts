@@ -127,11 +127,7 @@ export function attachTuiPresenter(host: ControlHost, surface: TuiControlSurface
  * A control answer is refused unless `control.approvals` is on, and an
  * accepted one is attributed in the pane.
  */
-function installApprovalArbiter(
-	session: AgentSession,
-	registry: DialogRegistry,
-	notify: (text: string) => void,
-): void {
+function installApprovalArbiter(session: AgentSession, registry: DialogRegistry, notify: (text: string) => void): void {
 	const runner = session.extensionRunner;
 	if (!runner) return;
 	const ui = runner.getUIContext();
@@ -178,11 +174,12 @@ function answerMountedOverlay(surface: TuiControlSurface, value: unknown): boole
 		surface.ui.injectInput("\x1b", "control");
 		return true;
 	}
-	const index = typeof value === "number"
-		? value
-		: typeof value === "object" && value !== null && "index" in value
-			? Number((value as { index: unknown }).index)
-			: undefined;
+	const index =
+		typeof value === "number"
+			? value
+			: typeof value === "object" && value !== null && "index" in value
+				? Number((value as { index: unknown }).index)
+				: undefined;
 	if (index !== undefined && Number.isFinite(index) && index >= 0) {
 		for (let i = 0; i < index; i++) surface.ui.injectInput("\x1b[B", "control");
 		surface.ui.injectInput("\r", "control");

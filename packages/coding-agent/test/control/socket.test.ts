@@ -50,10 +50,7 @@ describe("control socket", () => {
 			budget: new HostBudget(),
 			registryDir: dir,
 			snapshot: () => snapshot("abcd1234abcd1234"),
-			dispatch: async (
-				connection: { respond: (response: object) => void },
-				frame: Record<string, unknown>,
-			) => {
+			dispatch: async (connection: { respond: (response: object) => void }, frame: Record<string, unknown>) => {
 				if (frame.type === "get_status") {
 					connection.respond({
 						type: "response",
