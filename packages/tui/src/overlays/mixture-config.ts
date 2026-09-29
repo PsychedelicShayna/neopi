@@ -633,14 +633,15 @@ export class MixtureConfigOverlayComponent implements Component {
 				if (matchesKey(data, "delete") || matchesKey(data, "backspace")) {
 					const member = mixture.members[position];
 					if (!member) return true;
-					mixture.members.splice(position, 1);
-					mixture.edges = mixture.edges.filter(
-						edge =>
+					mixture.edges = mixture.edges.filter(edge => {
+						const keep =
 							edge.from !== member.id &&
 							(isFanoutEdge(edge)
 								? edge.join !== member.id && !edge.to.includes(member.id)
-								: edge.to !== member.id),
-					);
+								: edge.to !== member.id);
+						if (!keep) this.#syncFallback(mixture, mixtureEdgeId(edge), undefined);
+						return keep;
+					});
 					if (mixture.entry === member.id)
 						mixture.entry = mixture.members.find(next => next.kind !== "verdict")?.id ?? "";
 					this.#touch();
@@ -664,16 +665,25 @@ export class MixtureConfigOverlayComponent implements Component {
 		return member && member.kind !== "verdict" ? member : undefined;
 	}
 
+	#syncFallback(mixture: MixtureDefinition, oldId: string, newId: string | undefined): void {
+		if (oldId === newId) return;
+		for (const member of mixture.members) {
+			if (member.kind !== "verdict" && member.route?.fallback === oldId) member.route.fallback = newId;
+		}
+	}
+
 	#renameMember(mixture: MixtureDefinition, member: MixtureMember, id: string): void {
 		if (!id || id === member.id) return;
 		if (mixture.entry === member.id) mixture.entry = id;
 		if (mixture.limits?.limitTarget === member.id) mixture.limits.limitTarget = id;
 		for (const edge of mixture.edges) {
+			const oldId = mixtureEdgeId(edge);
 			if (edge.from === member.id) edge.from = id;
 			if (isFanoutEdge(edge)) {
 				edge.to = edge.to.map(target => (target === member.id ? id : target));
 				if (edge.join === member.id) edge.join = id;
 			} else if (edge.to === member.id) edge.to = id;
+			this.#syncFallback(mixture, oldId, mixtureEdgeId(edge));
 		}
 		member.id = id;
 		this.#touch();
@@ -1496,7 +1506,8 @@ export class MixtureConfigOverlayComponent implements Component {
 				if (!match) return false;
 				const position = Number(match[1]);
 				if (matchesKey(data, "delete") || matchesKey(data, "backspace")) {
-					mixture.edges.splice(position, 1);
+					const [removed] = mixture.edges.splice(position, 1);
+					if (removed) this.#syncFallback(mixture, mixtureEdgeId(removed), undefined);
 					this.#touch();
 					this.#showEdges(index);
 					return true;
@@ -1546,7 +1557,9 @@ export class MixtureConfigOverlayComponent implements Component {
 							"Edge id (blank derives from endpoints)",
 							edge.id ?? "",
 							text => {
+								const oldId = mixtureEdgeId(edge);
 								edge.id = text.trim() || undefined;
+								this.#syncFallback(mixture, oldId, mixtureEdgeId(edge));
 								this.#touch();
 							},
 							back,
@@ -1559,7 +1572,9 @@ export class MixtureConfigOverlayComponent implements Component {
 							mixture.members.map(member => ({ value: member.id, label: member.id })),
 							edge[value],
 							id => {
+								const oldId = mixtureEdgeId(edge);
 								edge[value] = id;
+								this.#syncFallback(mixture, oldId, mixtureEdgeId(edge));
 								this.#touch();
 							},
 							back,

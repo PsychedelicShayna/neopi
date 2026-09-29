@@ -122,6 +122,24 @@ describe("MixtureConfigOverlayComponent", () => {
 		expect(h.actions).toEqual(["save"]);
 	});
 
+	it("keeps route fallbacks pointed at an edge when its endpoint changes", async () => {
+		const doc = structuredClone(graph);
+		doc.mixtures[0]!.members[0] = {
+			id: "writer",
+			model: "fake/writer",
+			tools: false,
+			route: { instructions: "Choose the next editor", fallback: "writer->editor" },
+		};
+		const h = makeOverlay(doc);
+		h.press(ENTER, HOME, DOWN, DOWN, DOWN, DOWN, ENTER, ENTER); // first edge
+		h.press(HOME, DOWN, DOWN, ENTER, HOME, DOWN, ENTER); // to: reviewer
+		h.press(ESC, ESC, ESC, "s");
+		await Bun.sleep(0);
+		expect(h.saved[0]?.mixtures[0]?.members[0]).toMatchObject({
+			route: { fallback: "writer->reviewer" },
+		});
+	});
+
 	it("requires a second Delete before removing a mixture and leaves the active roster unchanged until apply", async () => {
 		const h = makeOverlay(graph);
 		h.press(DELETE, ESC);
