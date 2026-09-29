@@ -147,6 +147,8 @@ export interface CollectConfigOptions {
 	maxBytes?: number;
 	/** A candidate skipped unread; without it a rejection is logged. */
 	onRejected?(filePath: string, rejection: ConfigRejection): void;
+	/** An existing candidate could not be read; live reloads must retain the previous roster. */
+	onReadError?(filePath: string, error: unknown): void;
 }
 
 /**
@@ -185,6 +187,7 @@ export async function collectConfigCandidates(
 		} catch (err) {
 			if (!isEnoent(err)) {
 				logger.warn("Failed to read config candidate", { path: candidate, error: String(err) });
+				options.onReadError?.(candidate, err);
 			}
 		}
 	}

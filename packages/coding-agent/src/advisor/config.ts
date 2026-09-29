@@ -68,6 +68,8 @@ export interface DiscoveredAdvisors {
 	 * a broken roster entry never fails silently.
 	 */
 	warnings: string[];
+	/** A present file was unreadable or malformed; keep the prior live roster during hot reload. */
+	unsafeToReconcile: boolean;
 }
 
 const advisorEntrySchema = type({
@@ -231,7 +233,16 @@ function filterAdvisorTools(tools: string[] | undefined, sourcePath: string): st
  * thrown — so a bad project config can't kill the session.
  */
 export async function discoverAdvisorConfigs(cwd: string, agentDir?: string): Promise<DiscoveredAdvisors> {
-	const items = await collectConfigCandidates(cwd, agentDir, ["WATCHDOG.yml", "WATCHDOG.yaml"]);
+	let unsafeToReconcile = false;
+	const items = await collectConfigCandidates(cwd, agentDir, ["WATCHDOG.yml", "WATCHDOG.yaml"], {
+		onReadError: () => {
+			unsafeToReconcile = true;
+		},
+		onRejected: (filePath, rejection) => {
+			unsafeToReconcile = true;
+			logger.warn("Skipped config candidate", { path: filePath, ...rejection });
+		},
+	});
 	const advisors = new Map<string, AdvisorConfig>();
 	const sharedParts: string[] = [];
 	let sharedMaxNotesPerUpdate: number | undefined;
@@ -247,10 +258,12 @@ export async function discoverAdvisorConfigs(cwd: string, agentDir?: string): Pr
 			parsed = YAML.parse(item.content);
 		} catch (err) {
 			warn(`${item.path}: failed to parse YAML (${String(err)}) — file skipped`, { path: item.path });
+			unsafeToReconcile = true;
 			continue;
 		}
 		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
 			warn(`${item.path}: expected a YAML mapping — file skipped`, { path: item.path });
+			unsafeToReconcile = true;
 			continue;
 		}
 		const {
@@ -295,6 +308,7 @@ export async function discoverAdvisorConfigs(cwd: string, agentDir?: string): Pr
 		sharedInstructions: sharedParts.length > 0 ? sharedParts.join("\n\n") : undefined,
 		sharedMaxNotesPerUpdate,
 		warnings,
+		unsafeToReconcile,
 	};
 }
 
