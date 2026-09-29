@@ -11,7 +11,12 @@ import { discoverMixtures, saveMixturesConfigFile } from "./config";
 import { MixtureCatalog, type MixtureScope } from "./provider";
 import { resolveMixture } from "./resolve";
 import type { MixtureIssue, ResolvedMixture } from "./types";
-import { prepareDocumentPresets, type PreparedDocumentPresets, validateMixture } from "./validate";
+import {
+	prepareDocumentPresets,
+	type PreparedDocumentPresets,
+	type MixtureValidation,
+	validateMixture,
+} from "./validate";
 
 export interface MixtureRegistrationContext {
 	cwd: string;
@@ -20,12 +25,12 @@ export interface MixtureRegistrationContext {
 	settings: Settings;
 }
 
-function checkMixture(
+export function checkMixture(
 	definition: MixtureDefinition,
 	ctx: MixtureRegistrationContext,
 	preparedPresets: PreparedDocumentPresets,
 	names: readonly string[],
-) {
+): MixtureValidation & { resolved: ResolvedMixture } {
 	const resolved = resolveMixture(definition, {
 		registry: ctx.registry,
 		settings: ctx.settings,
@@ -167,6 +172,11 @@ export class MixtureWorkspace {
 	/** The scope of the workspace the session is in now. */
 	get scope(): MixtureScope {
 		return this.#scope;
+	}
+
+	/** Config search root retained by this session, including SDK-supplied agent directories. */
+	get agentDir(): string | undefined {
+		return this.#ctx.agentDir;
 	}
 
 	/** Keep the live session's selected model in sync with shared registry metadata. */

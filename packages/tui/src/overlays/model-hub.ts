@@ -165,6 +165,8 @@ export interface ModelHubCallbacks {
 	) => boolean | void;
 	/** Locked provider activation: forward to the /login flow. */
 	onLoginRequest?: (providerId: string) => void;
+	/** Open the mixture graph editor from a selected mixture model. */
+	onDefineMixture?: (name?: string) => void;
 	/** Persist a new quick-switch cycle order (the ctrl+p role cycle). */
 	onCycleOrderChange?: (order: string[]) => void;
 	onCancel: () => void;
@@ -173,6 +175,8 @@ export interface ModelHubCallbacks {
 export interface ModelHubOptions {
 	/** Preselect this provider's sidebar entry (e.g. when reopening after /login). */
 	initialProviderId?: string;
+	/** Provider entries available even before their first model exists. */
+	pinnedProviders?: ReadonlyArray<{ id: string; label: string; action: { label: string; onSelect: () => void } }>;
 }
 
 interface SidebarEntry extends HubSidebarEntry<"recent" | "roles" | "effort" | "all" | "separator" | "provider"> {
@@ -346,6 +350,11 @@ export class ModelHubComponent implements Component {
 		const rows = Math.max(1, Math.floor(height ?? 10));
 		const lines: string[] = [this.#statusRow(width)];
 		const entry = this.#activeEntry();
+		const pinned =
+			entry.kind === "provider" && this.#assigning === null
+				? this.#pinnedProviders.find(provider => provider.id === entry.providerId)
+				: undefined;
+		this.#pinnedActionLine = null;
 		if (entry.kind === "effort" && this.#assigning === null) {
 			lines.push(...this.#renderEffortRules(width, rows - 1));
 		} else if (entry.kind === "roles" && this.#assigning === null) {
@@ -354,9 +363,17 @@ export class ModelHubComponent implements Component {
 			lines.push(...this.#renderLockedView(entry, width, rows - 1));
 		} else {
 			lines.push(this.#renderModelKindTabs(width));
-			this.#browser.setMaxVisible(rows - 2 - 5);
-			this.#browser.setFocused(this.#focus === "list");
-			lines.push(...this.#browser.render(width));
+			const visible = Math.max(1, rows - 7 - (pinned ? 1 : 0));
+			this.#browser.setMaxVisible(visible);
+			this.#browser.setFocused(this.#focus === "list" && !this.#pinnedActionFocused);
+			const browserLines = this.#browser.render(width);
+			if (pinned) {
+				this.#pinnedActionLine = lines.length + 2 + visible;
+				const selected = this.#focus === "list" && this.#pinnedActionFocused;
+				const label = `  ${selected ? theme.nav.cursor : " "} ${pinned.action.label}`;
+				browserLines.splice(2 + visible, 0, truncateToWidth(theme.fg(selected ? "accent" : "muted", label), width));
+			}
+			lines.push(...browserLines);
 		}
 		while (lines.length < rows) lines.push("");
 		return lines.slice(0, rows);
@@ -367,6 +384,9 @@ export class ModelHubComponent implements Component {
 		(width, rows) => this.#renderSidebar(width, rows),
 		this.#renderBodyPane,
 	);
+	#pinnedActionLine: number | null = null;
+	#pinnedActionFocused = false;
+	readonly #pinnedProviders: NonNullable<ModelHubOptions["pinnedProviders"]>;
 	#lockedLoginLine: number | null = null;
 	#rolesRowStart = 1;
 
@@ -383,6 +403,7 @@ export class ModelHubComponent implements Component {
 		this.#registry = registry;
 		this.#scopedModels = scopedModels;
 		this.#callbacks = callbacks;
+		this.#pinnedProviders = options.pinnedProviders ?? [];
 
 		this.#browser = new ModelBrowser(settings, {
 			emptyText: () => this.#emptyStateMessage(),
@@ -550,11 +571,15 @@ export class ModelHubComponent implements Component {
 			}
 		}
 
+		for (const pinned of this.#pinnedProviders) {
+			unlocked.add(pinned.id);
+			locked.delete(pinned.id);
+		}
 		const oauthIds = new Set(getOAuthProviders().map(provider => provider.id));
 		const providerEntry = (providerId: string, isLocked: boolean): SidebarEntry => ({
 			id: `provider:${providerId}`,
 			kind: "provider",
-			label: providerId,
+			label: this.#pinnedProviders.find(pinned => pinned.id === providerId)?.label ?? providerId,
 			providerId,
 			locked: isLocked,
 			annotation: isLocked ? undefined : String(availableCounts.get(providerId) ?? 0),
@@ -675,13 +700,18 @@ export class ModelHubComponent implements Component {
 		if (!this.#entries.some(entry => entry.id === id)) return;
 		this.#activeEntryId = id;
 		this.#sidebarFollowActive = true;
+		this.#pinnedActionFocused = false;
 		this.#applyScope();
 		const entry = this.#activeEntry();
 		// Hops must never steal arrow focus: landing on a scope keeps provider
 		// navigation active. Diving into the roles rows is explicit (Enter, →,
 		// or a click on the Roles entry).
 		this.#focus = "scope";
-		if (entry.kind === "provider" && !entry.locked) {
+		if (
+			entry.kind === "provider" &&
+			!entry.locked &&
+			!this.#pinnedProviders.some(pinned => pinned.id === entry.providerId)
+		) {
 			this.#scheduleProviderRefresh(entry.providerId ?? "");
 		}
 		this.#cancelScheduledRefreshesExcept(entry.kind === "provider" ? entry.providerId : undefined);
@@ -835,7 +865,9 @@ export class ModelHubComponent implements Component {
 		if (
 			this.#assigning === null &&
 			entry.kind === "provider" &&
-			(entry.locked || (counts.get(entry.providerId ?? "") ?? 0) === 0)
+			(entry.locked ||
+				((counts.get(entry.providerId ?? "") ?? 0) === 0 &&
+					!this.#pinnedProviders.some(provider => provider.id === entry.providerId)))
 		) {
 			this.#setActiveEntry("all");
 		}
@@ -853,7 +885,10 @@ export class ModelHubComponent implements Component {
 		if (entry.kind === "recent") return this.#recentSearchCount === 0;
 		if (entry.kind === "provider") {
 			if (entry.locked) return true;
-			return (this.#searchCounts.get(entry.providerId ?? "") ?? 0) === 0;
+			return (
+				(this.#searchCounts.get(entry.providerId ?? "") ?? 0) === 0 &&
+				!this.#pinnedProviders.some(provider => provider.id === entry.providerId)
+			);
 		}
 		return false;
 	}
@@ -1955,7 +1990,11 @@ export class ModelHubComponent implements Component {
 			return;
 		}
 		if (matchesKey(data, "f5")) {
-			if (entry.kind === "provider" && !entry.locked) {
+			if (
+				entry.kind === "provider" &&
+				!entry.locked &&
+				!this.#pinnedProviders.some(provider => provider.id === entry.providerId)
+			) {
 				this.#scheduleProviderRefresh(entry.providerId ?? "", { force: true });
 			}
 			return;
@@ -2031,10 +2070,44 @@ export class ModelHubComponent implements Component {
 			return;
 		}
 
+		const pinned =
+			entry.kind === "provider" && this.#assigning === null
+				? this.#pinnedProviders.find(provider => provider.id === entry.providerId)
+				: undefined;
+		if (pinned && this.#focus === "list") {
+			if (data === "e" && !this.#pinnedActionFocused) {
+				const selected = this.#browser.getSelected();
+				if (selected) this.#callbacks.onDefineMixture?.(selected.model.id);
+				return;
+			}
+			if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
+				if (this.#pinnedActionFocused) {
+					pinned.action.onSelect();
+					return;
+				}
+			}
+			if (matchesSelectDown(data)) {
+				if (!this.#pinnedActionFocused) {
+					const selected = this.#browser.getSelected();
+					this.#browser.moveSelection(1, { wrap: false });
+					if (!selected || selected === this.#browser.getSelected()) this.#pinnedActionFocused = true;
+				}
+				return;
+			}
+			if (matchesSelectUp(data) && this.#pinnedActionFocused) {
+				this.#pinnedActionFocused = false;
+				return;
+			}
+			if (this.#pinnedActionFocused && extractPrintableText(data) !== undefined) {
+				this.#pinnedActionFocused = false;
+			}
+		}
+
 		// Enter on the sidebar is a pane switch, like →: it lands on the model
 		// rows instead of acting on a row the user cannot see is selected.
 		if (this.#focus === "scope" && (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n")) {
 			this.#focus = "list";
+			if (pinned && !this.#browser.getSelected()) this.#pinnedActionFocused = true;
 			return;
 		}
 
@@ -2450,7 +2523,20 @@ export class ModelHubComponent implements Component {
 					this.#requestLogin(entry);
 				}
 			} else if (this.#isBrowserView(entry) && bodyLine > 0) {
-				this.#browser.routeMouse(event, bodyLine - 1);
+				const pinned =
+					entry.kind === "provider" && this.#assigning === null
+						? this.#pinnedProviders.find(provider => provider.id === entry.providerId)
+						: undefined;
+				if (pinned && bodyLine === this.#pinnedActionLine && event.leftClick) {
+					if (this.#pinnedActionFocused && this.#focus === "list") pinned.action.onSelect();
+					else {
+						this.#focus = "list";
+						this.#pinnedActionFocused = true;
+					}
+				} else {
+					this.#pinnedActionFocused = false;
+					this.#browser.routeMouse(event, bodyLine - 1);
+				}
 			}
 		}
 		return true;
@@ -2857,6 +2943,11 @@ export class ModelHubComponent implements Component {
 		}
 		if (entry.kind === "provider" && entry.locked) {
 			return entry.oauth ? "Enter log in · ↑/↓ providers · Esc close" : "↑/↓ providers · Esc close";
+		}
+		if (entry.kind === "provider" && this.#pinnedProviders.some(provider => provider.id === entry.providerId)) {
+			return this.#focus === "scope"
+				? "Enter/→ mixtures · ↑/↓ providers · Esc close"
+				: "Enter pick · e edit graph · ↓ define mixture · ← providers · Esc close";
 		}
 		const refresh = entry.kind === "provider" ? " · F5 refresh" : "";
 		if (this.#focus === "scope") {

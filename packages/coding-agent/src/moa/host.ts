@@ -68,6 +68,8 @@ export interface SessionMixtureHost extends MixtureHost {
 	commitWorkspaceMove(): void;
 	/** Observe registry metadata updates for this session's current workspace. */
 	observeCatalog(listener: () => void): void;
+	/** Config root from this session's workspace, including SDK-supplied agent directories. */
+	configAgentDir(): string | undefined;
 }
 
 function traceSummary(details: MixtureTraceDetails): string {
@@ -168,6 +170,7 @@ export function createSessionMixtureHost(deps: SessionMixtureHostDeps): SessionM
 		observeCatalog(listener) {
 			deps.workspace.observeCatalog(listener);
 		},
+		configAgentDir: () => deps.workspace.agentDir,
 		stream: deps.stream,
 		resolveRun(name: string): ResolvedMixture | string {
 			// Only this workspace's definitions: a same-named mixture another workspace

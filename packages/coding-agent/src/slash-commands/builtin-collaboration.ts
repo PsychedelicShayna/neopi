@@ -1,6 +1,8 @@
 import { Spacer } from "@oh-my-pi/pi-tui";
 import { APP_NAME, formatAge, getAgentDir } from "@oh-my-pi/pi-utils";
 import { discoverChains } from "../chains/config";
+import { discoverMixtures } from "../moa/config";
+import { checkMixture } from "../moa/registration";
 import { CollabGuestLink } from "../collab/guest";
 import type { CollabHost } from "../collab/host";
 import { type CollabHostSnapshot, listCollabHosts } from "../collab/registry";
@@ -18,7 +20,7 @@ import { copyToClipboard } from "../utils/clipboard";
 import { refreshStatusLine } from "./builtin-modes";
 import { CollabQrCodeComponent, collabBrowserLink } from "@oh-my-pi/pi-tui/chrome/collab-qrcode";
 import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers/parse";
-import type { SlashCommandSpec } from "./types";
+import type { SlashCommandRuntime, SlashCommandSpec } from "./types";
 
 import { cfgBrowserEnabled, cfgBrowserHeadless } from "../tools/browser/settings";
 import { cfgShareRedactSecrets, cfgShareServerUrl, cfgShareStore } from "../commands/settings";
@@ -98,6 +100,46 @@ async function applyChainingVerb(verb: string, rest: string, cwd: string): Promi
 }
 
 const CHAINING_USAGE = "Usage: /chaining [on|off|status|use [name]|configure]";
+
+const MIXTURE_USAGE = "Usage: /mixture [configure|list|use <name>]";
+
+async function mixtureList(runtime: Pick<SlashCommandRuntime, "session" | "settings" | "cwd">): Promise<string> {
+	const agentDir = runtime.session.getMixtureAgentDir() ?? getAgentDir();
+	const found = await discoverMixtures(runtime.cwd, agentDir);
+	const names = found.mixtures.map(item => item.definition.name);
+	const active = runtime.session.model?.api === "mixture" ? runtime.session.model.id : undefined;
+	const lines = ["Mixtures:"];
+	for (const item of found.mixtures) {
+		const checked = checkMixture(
+			item.definition,
+			{
+				cwd: runtime.cwd,
+				agentDir,
+				registry: runtime.session.modelRegistry,
+				settings: runtime.settings,
+			},
+			item.preparedPresets,
+			names,
+		);
+		const state = checked.errors[0]?.code ?? "ready";
+		lines.push(
+			`  ${active === item.definition.name ? "*" : "-"} ${sanitizeDisplayLine(item.definition.name)} (${state})`,
+		);
+	}
+	if (found.mixtures.length === 0) lines.push("  (none — open /mixture to create one)");
+	for (const warning of found.warnings) lines.push(`Warning: ${sanitizeDisplayLine(warning)}`);
+	return lines.join("\n");
+}
+
+async function useMixture(runtime: Pick<SlashCommandRuntime, "session">, name: string): Promise<string> {
+	if (!name) return MIXTURE_USAGE;
+	if (!runtime.session.getRegisteredMixture(name))
+		return `Mixture ${sanitizeDisplayLine(name)} is not registered in this workspace.`;
+	const model = runtime.session.modelRegistry.find("mixture", name);
+	if (!model) return `Mixture ${sanitizeDisplayLine(name)} is not available for selection.`;
+	await runtime.session.setModel(model);
+	return `Using mixture/${sanitizeDisplayLine(name)}`;
+}
 function showCollabQrCode(ctx: InteractiveModeContext, webLink: string): void {
 	try {
 		ctx.present([new Spacer(1), new CollabQrCodeComponent(webLink)]);
@@ -270,6 +312,57 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 			}
 			const message = await applyChainingVerb(verb || "status", rest, runtime.ctx.sessionManager.getCwd());
 			runtime.ctx.showStatus(message ?? CHAINING_USAGE);
+			refreshStatusLine(runtime.ctx);
+		},
+	},
+	{
+		name: "mixture",
+		aliases: ["moa"],
+		icon: "advisor",
+		description: "Configure, list, and select Mixture of Agents models",
+		acpDescription: "Manage and select Mixture of Agents models",
+		acpInputHint: "[list|use <name>|configure [name]]",
+		subcommands: [
+			{ name: "configure", description: "Open the fullscreen graph configurator (TUI)", usage: "[name]" },
+			{ name: "list", description: "List discovered mixtures and validation state" },
+			{ name: "use", description: "Select a registered mixture model", usage: "<name>" },
+		],
+		allowArgs: true,
+		handle: async (command, runtime) => {
+			const { verb, rest } = parseSubcommand(command.args);
+			if (verb === "configure") {
+				await runtime.output("/mixture configure requires the interactive TUI.");
+				return commandConsumed();
+			}
+			const message =
+				!verb || verb === "list"
+					? await mixtureList(runtime)
+					: verb === "use"
+						? await useMixture(runtime, rest.trim())
+						: undefined;
+			return message === undefined
+				? usage(MIXTURE_USAGE, runtime)
+				: (await runtime.output(message), commandConsumed());
+		},
+		handleTui: async (command, runtime) => {
+			const { verb, rest } = parseSubcommand(command.args);
+			runtime.ctx.editor.setText("");
+			if (!verb || verb === "configure") {
+				runtime.ctx.showMixtureConfigure(rest.trim() || undefined);
+				return;
+			}
+			const shared = {
+				session: runtime.ctx.session,
+				settings: runtime.ctx.settings,
+				cwd: runtime.ctx.sessionManager.getCwd(),
+			};
+			const message =
+				verb === "list"
+					? await mixtureList(shared)
+					: verb === "use"
+						? await useMixture(shared, rest.trim())
+						: MIXTURE_USAGE;
+			runtime.ctx.showStatus(message);
 			refreshStatusLine(runtime.ctx);
 		},
 	},

@@ -108,6 +108,7 @@ import type { AdvisorConfig } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { formatUsageResetWindow } from "@oh-my-pi/pi-tui/overlays/usage-display";
 import type { MixtureSessionEvent, SessionMixtureHost } from "../moa/host";
 import { isMixtureModel } from "../moa/provider";
+import type { ResolvedMixture } from "../moa/types";
 import { loadAdvisorTranscriptCosts } from "../advisor";
 import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, type AsyncJob, type AsyncJobManager } from "../async";
 import { reset as resetCapabilities } from "../capability";
@@ -756,7 +757,15 @@ export class AgentSession implements SettingsScope {
 	#lastAppendOnlyResolution?: { enable: boolean; providerId: string | undefined };
 	#eventListeners: AgentSessionEventListener[] = [];
 	#mixtureHost:
-		| Pick<SessionMixtureHost, "commitPersisted" | "resetConversation" | "rebindWorkspace" | "commitWorkspaceMove">
+		| Pick<
+				SessionMixtureHost,
+				| "commitPersisted"
+				| "resetConversation"
+				| "rebindWorkspace"
+				| "commitWorkspaceMove"
+				| "resolveRun"
+				| "configAgentDir"
+		  >
 		| undefined;
 	#activeToolExecutionUpdates = new Map<string, Extract<AgentSessionEvent, { type: "tool_execution_update" }>>();
 	#runStateListeners = new Set<(state: "running" | "idle") => void>();
@@ -2981,7 +2990,13 @@ export class AgentSession implements SettingsScope {
 	attachMixtureHost(
 		host: Pick<
 			SessionMixtureHost,
-			"commitPersisted" | "resetConversation" | "rebindWorkspace" | "commitWorkspaceMove" | "observeCatalog"
+			| "commitPersisted"
+			| "resetConversation"
+			| "rebindWorkspace"
+			| "commitWorkspaceMove"
+			| "observeCatalog"
+			| "resolveRun"
+			| "configAgentDir"
 		>,
 	): void {
 		this.#mixtureHost = host;
@@ -2992,6 +3007,17 @@ export class AgentSession implements SettingsScope {
 				logger.warn("Failed to reconcile mixture metadata after catalog change", { error: String(error) });
 			});
 		});
+	}
+
+	/** Resolve only a mixture registered in this session's workspace, never another scope's model. */
+	getRegisteredMixture(name: string): ResolvedMixture | undefined {
+		const resolved = this.#mixtureHost?.resolveRun(name);
+		return resolved && typeof resolved !== "string" ? resolved : undefined;
+	}
+
+	/** Config search root of this session's mixture workspace, not the process's active profile. */
+	getMixtureAgentDir(): string | undefined {
+		return this.#mixtureHost?.configAgentDir();
 	}
 
 	/**
