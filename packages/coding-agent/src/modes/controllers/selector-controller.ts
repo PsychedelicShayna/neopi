@@ -89,7 +89,7 @@ import { openPath } from "../../utils/open";
 import { setSessionTerminalTitle } from "../../utils/title-generator";
 import { getAssistantMessageLinkTargets } from "@oh-my-pi/pi-tui/prompt/interactive-context-helpers";
 import { type AdvisorConfigDeps, AdvisorConfigOverlayComponent } from "@oh-my-pi/pi-tui/overlays/advisor-config";
-import { PersonaConfigOverlayComponent } from "@oh-my-pi/pi-tui/overlays/persona-config";
+import { PersonaConfigOverlayComponent, type PersonaConfigDoc } from "@oh-my-pi/pi-tui/overlays/persona-config";
 import {
 	loadPersonaConfigDoc,
 	newPersonaContent,
@@ -580,7 +580,7 @@ export class SelectorController {
 				setStatus: (key, text) => this.ctx.setHookStatus(key, text),
 				setWidget: (key, lines) => this.ctx.setHookWidget(key, lines),
 			});
-			let doc: Awaited<ReturnType<typeof loadPersonaConfigDoc>>;
+			let doc: PersonaConfigDoc;
 			try {
 				doc = await loadPersonaConfigDoc(scope, host.sessionId);
 			} catch (error) {
