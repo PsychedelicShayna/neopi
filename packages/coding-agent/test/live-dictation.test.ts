@@ -21,6 +21,25 @@ afterEach(async () => {
 });
 
 describe("dictation during a live call", () => {
+	it("never forwards callbacks from a retired microphone into a new capture", () => {
+		const callbacks: Array<(error: Error | null, samples: Float32Array) => void> = [];
+		const capture = createSharedAudioCapture((_rate, callback) => {
+			callbacks.push(callback);
+			return { stop() {} };
+		});
+		const first = vi.fn();
+		const second = vi.fn();
+		const oldCapture = capture(16_000, first);
+		callbacks[0](null, new Float32Array([1]));
+		expect(first).toHaveBeenCalledTimes(1);
+		oldCapture.stop();
+		capture(16_000, second);
+		callbacks[0](null, new Float32Array([2]));
+		expect(second).not.toHaveBeenCalled();
+		callbacks[1](null, new Float32Array([3]));
+		expect(second).toHaveBeenCalledTimes(1);
+	});
+
 	it("records and inserts xAI text from the same mic without interrupting live audio", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "neopi-live-dictation-"));
 		temporaryDirs.push(dir);
@@ -48,7 +67,7 @@ describe("dictation during a live call", () => {
 			extractAssistantText: () => "",
 			createTransport: () => ({
 				connect: async () => {}, send: async () => {}, close: async () => {},
-				setMuted: async () => {}, pushAudio: samples => { liveAudio.push(samples); },
+				setMuted: async () => {}, pushAudio: samples => { liveAudio.push(samples); return true; },
 			}),
 			createRecorder: capture,
 		});
@@ -67,6 +86,7 @@ describe("dictation during a live call", () => {
 		try {
 			await live.start();
 			await dictation.toggle(editor, { showWarning: warning, showStatus() {}, onStateChange() {} });
+			expect(warning.mock.calls).toEqual([]);
 			expect(dictation.state).toBe("recording");
 			expect(opens).toBe(1);
 			const samples = new Float32Array([0.5, -0.5]);
