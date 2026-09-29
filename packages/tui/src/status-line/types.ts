@@ -127,7 +127,7 @@ export interface SegmentContext {
 	stream: { viewers: number } | null;
 	/** A `/record` capture of this screen is running. */
 	recording: boolean;
-	/** Live voice call state for the model-segment mic icon, or null when `/live` is off. */
+	/** Live voice call phase and composer destination, or null when `/live` is off. */
 	live: {
 		phase: "connecting" | "listening" | "working" | "speaking" | "muted" | "disconnected";
 		/** Where Enter sends composer text during the call. */
