@@ -237,9 +237,9 @@ export class LiveCommandController {
 					if (this.#session !== session) return;
 					this.#editing = true;
 					try {
-						const chips = this.#ctx.editor.composerChips().map(chip =>
-							chip.kind === "paste" ? chip.text.label : chipLabel(chip.kind, chip.n),
-						);
+						const chips = this.#ctx.editor
+							.composerChips()
+							.map(chip => (chip.kind === "paste" ? chip.text.label : chipLabel(chip.kind, chip.n)));
 						this.#ctx.editor.setText(chips.join(" "));
 						this.#ctx.editor.addToHistory(text);
 						this.#utterance = undefined;
