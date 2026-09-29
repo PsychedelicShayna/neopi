@@ -3,6 +3,7 @@ export const STATUS_LINE_SEGMENT_IDS = [
 	"pi",
 	"status",
 	"model",
+	"live",
 	"mode",
 	"path",
 	"git",
@@ -37,7 +38,7 @@ export const CUSTOM_STATUS_LINE_DEFAULTS: {
 	readonly left: StatusLineSegmentId[];
 	readonly right: StatusLineSegmentId[];
 } = {
-	left: ["vim", "model", "mode", "path", "git", "pr"],
+	left: ["vim", "model", "live", "mode", "path", "git", "pr"],
 	right: ["session_name", "token_total", "cost", "context_pct"],
 };
 

@@ -791,6 +791,8 @@ tui:
 
 For a custom status line, set `statusLine.preset: custom` and configure `statusLine.leftSegments`, `statusLine.rightSegments`, and `statusLine.segmentOptions`. Include `status` in either segment list to render extension statuses registered through `ctx.ui.setStatus()`, ordered by key and joined inline. Set `statusLine.showHookStatus: false` to suppress the same statuses in the footer.
 
+The `live` segment shows the microphone phase, mute state, and non-primary composer destination while `/live` is active. Every built-in preset includes it, including `minimal` without a model segment. Existing custom segment lists must include `live` to keep the call visible; it is no longer attached to `model`.
+
 The `cost` segment shows recorded session costs. For an active provider/model with scheduled pricing, it appends `↑` during peak hours or `↓` off-peak, refreshing at boundaries even while idle. The arrow reflects the current tariff, not past spending; flat-price models and explicit cost overrides have no arrow. See [usage costs and time-based pricing](models.md#usage-costs-and-time-based-pricing) for the UTC schedule and estimation semantics.
 
 ### Interaction

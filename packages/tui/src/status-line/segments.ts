@@ -218,6 +218,20 @@ const LIVE_PHASE_COLORS: Record<NonNullable<SegmentContext["live"]>["phase"], Th
 	muted: "dim",
 	disconnected: "error",
 };
+const liveSegment: StatusLineSegment = {
+	id: "live",
+	render(ctx) {
+		if (!ctx.live) return { content: "", visible: false };
+		const muted = ctx.live.phase === "muted";
+		const liveIcon = muted ? theme.icon.micMuted || theme.icon.mic : theme.icon.mic;
+		const color = LIVE_PHASE_COLORS[ctx.live.phase];
+		let content = liveIcon ? theme.fg(color, liveIcon) : "";
+		if (ctx.live.destination !== "primary") {
+			content += theme.fg(color, `${content ? " " : ""}${ctx.live.destination}`);
+		}
+		return { content, visible: content.length > 0 };
+	},
+};
 
 const modelSegment: StatusLineSegment = {
 	id: "model",
@@ -297,15 +311,6 @@ const modelSegment: StatusLineSegment = {
 			const allYielded = advisorStats.advisors.every(a => a.yielded);
 			const advisorIcon = allYielded ? theme.icon.advisorClosed || theme.icon.advisor : theme.icon.advisor;
 			if (advisorIcon) content += theme.fg(badgeColor, ` ${advisorIcon}`);
-		}
-		// Live voice call: mic colored by call phase, slashed while muted. A label names
-		// where Enter sends composer text when that is not the ordinary primary submit.
-		if (ctx.live) {
-			const muted = ctx.live.phase === "muted";
-			const liveIcon = muted ? theme.icon.micMuted || theme.icon.mic : theme.icon.mic;
-			const color = LIVE_PHASE_COLORS[ctx.live.phase];
-			if (liveIcon) content += theme.fg(color, ` ${liveIcon}`);
-			if (ctx.live.destination !== "primary") content += theme.fg(color, ` ${ctx.live.destination}`);
 		}
 		if (tail) {
 			content += accentFg(ctx, "statusLineModel", tail);
@@ -938,6 +943,7 @@ export const SEGMENTS: Record<StatusLineSegmentId, StatusLineSegment> = {
 	pi: piSegment,
 	status: statusSegment,
 	model: modelSegment,
+	live: liveSegment,
 	mode: modeSegment,
 	path: pathSegment,
 	git: gitSegment,
