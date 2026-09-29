@@ -3000,6 +3000,27 @@ describe("Editor component", () => {
 			expect(editor.getText()).toBe("ab hello wor!ld");
 		});
 
+		it("replaces an unchanged preview adopted by cursor movement when the final transcript corrects it", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.insertText("note: ");
+			editor.setVolatileText("recognize speach");
+			editor.handleInput("\x1b[D"); // move into the preview without editing it
+			const spoken = editor.commitVolatileText("recognize speech");
+			expect(editor.getText()).toBe("note: recognize speech");
+			expect(spoken).toBeDefined();
+			expect(editor.removeUtterances([spoken!])).toBe(1);
+			expect(editor.getText()).toBe("note: ");
+		});
+
+		it("keeps edits inside an adopted preview when the final transcript differs", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.setVolatileText("speach");
+			editor.handleInput("\x1b[D");
+			editor.insertText("!");
+			editor.commitVolatileText("speech");
+			expect(editor.getText()).toBe("speac!h");
+		});
+
 		it("removes one spoken utterance without breaking tracking of the next", () => {
 			const editor = new Editor(defaultEditorTheme);
 			const first = editor.commitVolatileText("hello");

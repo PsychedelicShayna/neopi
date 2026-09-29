@@ -382,10 +382,10 @@ export class CodexLiveTransport {
 		return operation;
 	}
 
-	/** Queue 16 kHz mono Float32 PCM for native Opus transmission. */
-	pushAudio(samples: Float32Array): void {
-		if (this.#state !== "connected" || this.#muted || samples.length === 0) return;
-		this.#peer?.pushAudio(samples);
+	/** Queue 16 kHz mono Float32 PCM; false when the native queue rejects it. */
+	pushAudio(samples: Float32Array): boolean {
+		if (this.#state !== "connected" || this.#muted || samples.length === 0) return false;
+		return this.#peer?.pushAudio(samples) ?? false;
 	}
 
 	/** Enable or disable the native audio source and discard partial input when muted. */

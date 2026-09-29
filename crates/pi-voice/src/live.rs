@@ -268,11 +268,11 @@ impl LivePeerCore {
 			.map_err(|_| "Timed out waiting for the live data channel to open".to_owned())?
 	}
 
-	/// Queue 16 kHz mono PCM for Opus transmission. Silently drops audio while
-	/// muted or when the bounded input queue is full.
-	pub fn push_audio(&self, samples: &[f32]) -> VoiceResult<()> {
+	/// Queue 16 kHz mono PCM for Opus transmission. Returns whether the input
+	/// queue accepted the frame, so the host can account for overflow drops.
+	pub fn push_audio(&self, samples: &[f32]) -> VoiceResult<bool> {
 		if samples.is_empty() || self.muted.load(Ordering::Acquire) {
-			return Ok(());
+			return Ok(false);
 		}
 		let input_tx = self
 			.resources
@@ -289,7 +289,7 @@ impl LivePeerCore {
 			self
 				.queued_samples
 				.fetch_sub(sample_count, Ordering::AcqRel);
-			return Ok(());
+			return Ok(false);
 		}
 		if input_tx
 			.send(InputCommand::Audio(retained.to_vec()))
@@ -300,7 +300,7 @@ impl LivePeerCore {
 				.fetch_sub(sample_count, Ordering::AcqRel);
 			return Err("Native live audio input is closed".to_owned());
 		}
-		Ok(())
+		Ok(true)
 	}
 
 	/// Enable or disable microphone transmission, discarding partial muted
