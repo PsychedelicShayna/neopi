@@ -18,41 +18,33 @@ const server = Bun.serve({
 	async fetch(req) {
 		const body = await req.json().catch(() => ({}));
 		const messages = Array.isArray(body.messages) ? body.messages : [];
-		const last = messages.at(-1);
-		const asked = JSON.stringify(last ?? "");
+		const asked = JSON.stringify(messages.at(-1) ?? "");
 		const toolCall = asked.includes("DRIVE") || asked.includes("drive the other pane");
+		console.log("request", req.url, "stream", body.stream, "tool", toolCall);
+		const args = JSON.stringify({ op: "keys", target: "%1", text: "x" });
+		if (body.stream) {
+			const chunks = toolCall
+				? [
+					{ choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, id: "call_ctl", type: "function", function: { name: "ctl", arguments: "" } }] } }] },
+					{ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: args } }] } }] },
+					{ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] },
+				]
+				: [
+					{ choices: [{ index: 0, delta: { role: "assistant", content: "PONG" } }] },
+					{ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
+				];
+			const lines = chunks.map(chunk => `data: ${JSON.stringify({ id: "chatcmpl-fake", object: "chat.completion.chunk", ...chunk })}\n\n`).join("") + "data: [DONE]\n\n";
+			return new Response(lines, { headers: { "content-type": "text/event-stream" } });
+		}
 		const payload = toolCall
-			? {
-					id: "chatcmpl-fake",
-					object: "chat.completion",
-					choices: [{
-						index: 0,
-						finish_reason: "tool_calls",
-						message: {
-							role: "assistant",
-							content: null,
-							tool_calls: [{
-								id: "call_ctl",
-								type: "function",
-								function: {
-									name: "ctl",
-									arguments: JSON.stringify({ op: "keys", target: "%1", text: "x" }),
-								},
-							}],
-						},
-					}],
-				}
-			: {
-					id: "chatcmpl-fake",
-					object: "chat.completion",
-					choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: "PONG" } }],
-				};
+			? { id: "chatcmpl-fake", object: "chat.completion", choices: [{ index: 0, finish_reason: "tool_calls", message: { role: "assistant", content: null, tool_calls: [{ id: "call_ctl", type: "function", function: { name: "ctl", arguments: args } }] } }] }
+			: { id: "chatcmpl-fake", object: "chat.completion", choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: "PONG" } }] };
 		return Response.json(payload);
 	},
 });
 console.log(`fake listening ${server.port}`);
 JS
-PORT=$PORT bun "$DIR/fake.mjs" >"$DIR/fake.log" 2>&1 &
+PORT=$PORT bun "$DIR/fake.mjs" > /tmp/control-live-fake.log 2>&1 &
 FAKE=$!
 trap 'kill $FAKE 2>/dev/null || true; tmux -L ctl-live kill-server 2>/dev/null || true' EXIT
 for _ in $(seq 1 20); do
@@ -72,7 +64,7 @@ providers:
         reasoning: false
         input: [text]
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
-        contextWindow: 8000
+        contextWindow: 200000
         maxTokens: 1000
 EOF
 cat >"$DIR/config.yml" <<'YAML'
@@ -104,7 +96,12 @@ fi
 # Ask pane 0's agent to drive pane 1. The fake model returns a ctl keys call.
 env PI_CODING_AGENT_DIR=$DIR "$NPI" ctl %0 send "DRIVE the other pane" || true
 env PI_CODING_AGENT_DIR=$DIR "$NPI" ctl %2 slash "/live" || true
-sleep 2
+for _ in $(seq 1 40); do
+	if tmux -L "$SOCK" capture-pane -p -t ctl:0.1 | grep -q "╰─ x"; then
+		break
+	fi
+	sleep 0.25
+done
 {
 	echo "=== list ==="
 	env PI_CODING_AGENT_DIR=$DIR "$NPI" ctl list || true
@@ -115,4 +112,10 @@ sleep 2
 	echo "=== pane 2 live ==="
 	tmux -L "$SOCK" capture-pane -p -t ctl:0.2 || true
 } | tee "$LOG"
-echo "wrote $LOG"
+if ! grep -q "╰─ x" "$LOG"; then
+	echo "fail: ctl tool call did not type into the other pane" | tee -a "$LOG"
+	echo "=== fake log ===" | tee -a "$LOG"
+	cat /tmp/control-live-fake.log | tee -a "$LOG" || true
+	exit 1
+fi
+echo "pass: fake model drove the other pane" | tee -a "$LOG"
