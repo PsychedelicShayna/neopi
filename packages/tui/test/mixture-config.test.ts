@@ -47,7 +47,9 @@ function makeOverlay(doc: MixturesConfigDoc, overrides: Partial<MixtureConfigCal
 		activate: async name => {
 			actions.push(`activate:${name}`);
 		},
-		close: () => {},
+		close: () => {
+			actions.push("close");
+		},
 		requestRender: () => {},
 		notify: message => {
 			notices.push(message);
@@ -107,7 +109,7 @@ describe("MixtureConfigOverlayComponent", () => {
 		h.press(ENTER); // mixture detail
 		h.press(HOME, DOWN, DOWN, DOWN, DOWN, ENTER); // edges
 		h.press(ENTER); // writer -> editor
-		h.press(DOWN, ENTER); // 'to' picker
+		h.press(DOWN, DOWN, ENTER); // 'to' picker (after edge id and from)
 		h.press(HOME, DOWN, ENTER); // reviewer
 		h.press(DOWN, ENTER); // transit parts
 		h.press(HOME, DOWN, DOWN, " "); // reasoning
@@ -130,5 +132,108 @@ describe("MixtureConfigOverlayComponent", () => {
 		await Bun.sleep(0);
 		expect(h.saved.at(-1)?.mixtures).toEqual([]);
 		expect(h.actions.at(-1)).toBe("apply");
+	});
+
+	it("preserves route instructions while editing the judge floor, state and fallback", async () => {
+		const doc = structuredClone(graph);
+		doc.mixtures[0]!.members[0] = {
+			id: "writer",
+			model: "fake/writer",
+			tools: false,
+			route: { instructions: "Pick a rebuttal", state: ["output"] },
+		};
+		const h = makeOverlay(doc);
+		h.press(ENTER, HOME, DOWN, DOWN, DOWN, ENTER, ENTER); // writer member
+		h.press(HOME, ...Array(9).fill(DOWN), ENTER); // route
+		h.press(HOME, DOWN, DOWN, DOWN, ENTER, HOME, DOWN, ENTER); // fallback: pause
+		h.press(HOME, DOWN, DOWN, ENTER, "0", ".", "7", ENTER); // floor
+		h.press(HOME, DOWN, ENTER, HOME, DOWN, DOWN, " ", ESC); // include tool trace
+		h.press(ESC, ESC, ESC, ESC, "s");
+		await Bun.sleep(0);
+		expect(h.saved[0]?.mixtures[0]?.members[0]).toMatchObject({
+			route: {
+				instructions: "Pick a rebuttal",
+				state: ["output", "toolTrace"],
+				minConfidence: 0.7,
+				fallback: "pause",
+			},
+		});
+	});
+
+	it("configures compact transcript transit with a bounded token budget", async () => {
+		const h = makeOverlay(graph);
+		h.press(ENTER, HOME, DOWN, DOWN, DOWN, DOWN, ENTER, ENTER); // first edge
+		h.press(HOME, DOWN, DOWN, DOWN, ENTER); // transit
+		h.press(HOME, DOWN, DOWN, DOWN, DOWN, ENTER); // transcript settings
+		h.press(ENTER, HOME, DOWN, DOWN, ENTER); // compact
+		h.press(DOWN, ENTER, "2", "5", "6", ENTER); // budget
+		h.press(ESC, ESC, ESC, ESC, ESC, "s");
+		await Bun.sleep(0);
+		expect(h.saved[0]?.mixtures[0]?.edges[0]?.x.transcript).toEqual({ optimize: "compact", budgetTokens: 256 });
+	});
+
+	it("creates and edits a verdict member with a choice question and rubric", async () => {
+		const h = makeOverlay(graph);
+		h.press(ENTER, HOME, DOWN, DOWN, DOWN, ENTER); // members
+		h.press(HOME, DOWN, DOWN, DOWN, DOWN, ENTER); // add verdict
+		h.press(..."judge", ENTER);
+		h.press(HOME, DOWN, DOWN, DOWN, ENTER, HOME, DOWN, ENTER); // type: choice
+		h.press(HOME, DOWN, DOWN, DOWN, DOWN, ENTER, ..."Which answer is sound?", "\x11"); // instructions
+		h.press(HOME, ...Array(7).fill(DOWN), ENTER, ENTER); // criteria, add option
+		h.press(..."agree", ENTER);
+		h.press(DOWN, ENTER, ..."Evidence supports it", "\x11"); // rubric
+		h.press(ESC, ESC, ESC, ESC, ESC, "s"); // option, criteria, verdict, members, list
+		await Bun.sleep(0);
+		expect(h.saved[0]?.mixtures[0]?.members.at(-1)).toEqual({
+			id: "judge",
+			kind: "verdict",
+			question: {
+				type: "choice",
+				instructions: "Which answer is sound?",
+				criteria: { agree: "Evidence supports it" },
+			},
+		});
+	});
+
+	it("keeps termination criteria while rejecting an out-of-range threshold in place", async () => {
+		const doc = structuredClone(graph);
+		doc.mixtures[0]!.members[2] = {
+			id: "editor",
+			model: "fake/editor",
+			tools: false,
+			terminate: {
+				instructions: "Did the defense concede?",
+				criteria: { true: "Conceded the claim", false: "Still contests the claim" },
+				state: ["output"],
+			},
+		};
+		const h = makeOverlay(doc);
+		h.press(ENTER, HOME, DOWN, DOWN, DOWN, ENTER, HOME, DOWN, DOWN, ENTER); // editor member
+		h.press(HOME, ...Array(10).fill(DOWN), ENTER); // terminate
+		h.press(HOME, DOWN, DOWN, ENTER, "1", ".", "2", ENTER); // rejected, still editing
+		expect(h.notices).toContain("Termination threshold must be between 0 and 1");
+		h.press("\x15", "0", ".", "8", ENTER); // correct in the same input
+		h.press(HOME, DOWN, ENTER, HOME, DOWN, " ", ESC); // include input
+		h.press(ESC, ESC, ESC, ESC, "s");
+		await Bun.sleep(0);
+		expect(h.saved[0]?.mixtures[0]?.members[2]).toMatchObject({
+			terminate: {
+				instructions: "Did the defense concede?",
+				criteria: { true: "Conceded the claim", false: "Still contests the claim" },
+				state: ["output", "input"],
+				threshold: 0.8,
+			},
+		});
+	});
+
+	it("requires explicit confirmation before discarding dirty graph edits", async () => {
+		const h = makeOverlay(graph);
+		h.press(ENTER, HOME, ENTER); // edit name
+		h.press("2", ENTER, ESC, ESC);
+		expect(h.actions).toEqual([]);
+		h.press(ESC); // keep editing
+		expect(h.actions).toEqual([]);
+		h.press(ESC, DOWN, ENTER); // confirm discard
+		expect(h.actions).toEqual(["close"]);
 	});
 });
