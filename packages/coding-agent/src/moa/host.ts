@@ -10,12 +10,14 @@
 import type { StreamFn } from "@oh-my-pi/pi-agent-core";
 import type { Api, ApiKey, AssistantMessage, Context, Model } from "@oh-my-pi/pi-ai";
 import { MIXTURE_TRACE_MESSAGE_TYPE, type MixtureTraceDetails } from "@oh-my-pi/pi-tui/overlays/mixture-types";
+import { logger } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
 import { resolveJudge } from "../judgment";
 import type { SessionManager } from "../session/session-manager";
 import { commitMixtureResponse } from "./engine";
 import { isMixtureModel } from "./provider";
+import { restoreMixtureRun } from "./restore";
 import type { MixtureWorkspace } from "./registration";
 import { resolveMixture } from "./resolve";
 import { MixtureRunStore } from "./run-store";
@@ -24,6 +26,7 @@ import {
 	MIXTURE_USAGE_PURPOSE,
 	type MixtureEvent,
 	type MixtureHost,
+	type MixtureRun,
 	type MixtureLifecycleRecord,
 	type ResolvedMixture,
 } from "./types";
@@ -61,6 +64,8 @@ export interface SessionMixtureHost extends MixtureHost {
 	 * boundary. A run still finishing afterwards persists nothing.
 	 */
 	resetConversation(): void;
+	/** Restore the newest resumable checkpoint on the active session branch. */
+	restoreConversation(): void;
 	/**
 	 * Rebind to `cwd`'s mixtures. A move can defer dropping source runs until
 	 * its other cwd-derived state commits; a rollback to the source keeps them.
@@ -255,6 +260,53 @@ export function createSessionMixtureHost(deps: SessionMixtureHostDeps): SessionM
 		resetConversation(): void {
 			runs.clear();
 			credentials.clear();
+		},
+		restoreConversation(): void {
+			const found = restoreMixtureRun(sessionManager.getBranch());
+			if (!found) return;
+			const serialized = found.checkpoint.run;
+			const mixture = serialized.resolved.definition.name;
+			const registered = deps.workspace.scope.find(mixture);
+			const fresh = resolveMixture(serialized.resolved.definition, {
+				registry: modelRegistry,
+				settings,
+				preparedPresets: registered?.presets,
+			});
+			const { errors } = validateMixture(fresh, { settings, names: [mixture] });
+			if (errors.length > 0) {
+				logger.warn("mixture run not restored", { mixture, runId: serialized.id, errors });
+				deps.notice(
+					"warning",
+					`${mixture} run ${serialized.id} could not be restored: ${errors.map(issue => issue.code).join(", ")}`,
+				);
+				return;
+			}
+			const sessionId = sessionManager.getSessionId();
+			const run: MixtureRun = {
+				...structuredClone(serialized),
+				resolved: fresh,
+				summaries: serialized.summaries ?? {},
+				key: { ...serialized.key, host: sessionId, conversation: sessionId },
+			};
+			if (run.phase.kind === "generating") {
+				logger.warn("mixture run not restored", { mixture, runId: run.id, phase: "generating" });
+				return;
+			}
+			if (found.committed) commitMixtureResponse(run, found.checkpoint.outerResponseId!);
+			else {
+				run.reportedThrough = found.checkpoint.committedThrough;
+				run.status = "checkpoint";
+			}
+			if (run.status === "running") run.status = "checkpoint";
+			const lease = runs.acquire(run.key);
+			if (!lease) return;
+			runs.install(lease.entry, run);
+			const entryState = found.checkpoint.entry ?? { conversation: "", topicImages: [] };
+			lease.entry.conversation = entryState.conversation;
+			lease.entry.topicImages = entryState.topicImages;
+			lease.release();
+			logger.info("mixture run restored", { mixture, runId: run.id, phase: run.phase.kind, status: run.status });
+			deps.notice("info", `${mixture} run restored at ${run.phase.kind} (${run.status})`);
 		},
 		async rebindWorkspace(cwd: string, deferReset = false): Promise<void> {
 			if (!(await deps.workspace.rebind(cwd))) return;

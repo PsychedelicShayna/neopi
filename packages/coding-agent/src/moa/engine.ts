@@ -1654,6 +1654,11 @@ class MixtureCall {
 			committedThrough: run.reportedThrough,
 			outerResponseId: record?.responseId,
 			report: record ? { ...record.report } : undefined,
+			entry: {
+				conversation: this.#entry.conversation,
+				topicImages:
+					run.phase.kind === "hop_ready" && run.phase.edgeInId === undefined ? this.#entry.topicImages : [],
+			},
 		};
 		// Abort and pause leave a resumable card; hop and decision checkpoints do not.
 		const trace: Extract<MixtureTraceDetails, { kind: "checkpoint" }> | undefined =

@@ -10,6 +10,7 @@ import type {
 	AssistantMessage,
 	Context,
 	Effort,
+	ImageContent,
 	Message,
 	Model,
 	SimpleStreamOptions,
@@ -248,6 +249,8 @@ export interface MixtureCheckpoint {
 	committedThrough: number;
 	outerResponseId?: string;
 	report?: { from: number; to: number };
+	/** Conversation and entry attachments needed to redo a failed entry hop. */
+	entry?: { conversation: string; topicImages: ImageContent[] };
 }
 
 /** Lifecycle records sharing the checkpoint entry type; they carry no card. */

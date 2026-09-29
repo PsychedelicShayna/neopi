@@ -108,7 +108,7 @@ import type { AdvisorConfig } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { formatUsageResetWindow } from "@oh-my-pi/pi-tui/overlays/usage-display";
 import type { MixtureSessionEvent, SessionMixtureHost } from "../moa/host";
 import { isMixtureModel } from "../moa/provider";
-import type { ResolvedMixture } from "../moa/types";
+import type { MixtureRun, ResolvedMixture } from "../moa/types";
 import { loadAdvisorTranscriptCosts } from "../advisor";
 import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, type AsyncJob, type AsyncJobManager } from "../async";
 import { reset as resetCapabilities } from "../capability";
@@ -762,6 +762,8 @@ export class AgentSession implements SettingsScope {
 				| "commitPersisted"
 				| "resetConversation"
 				| "rebindWorkspace"
+				| "restoreConversation"
+				| "runs"
 				| "commitWorkspaceMove"
 				| "resolveRun"
 				| "configAgentDir"
@@ -2983,6 +2985,11 @@ export class AgentSession implements SettingsScope {
 		this.#emit(event);
 	}
 
+	/** Mixture runs held on this session's active branch, for status and reset. */
+	mixtureRuns(): readonly MixtureRun[] {
+		return this.#mixtureHost?.runs.runs() ?? [];
+	}
+
 	/**
 	 * Bind the session's mixture host: it commits mixture responses once they are persisted,
 	 * and drops its runs whenever the conversation is replaced.
@@ -2992,6 +2999,8 @@ export class AgentSession implements SettingsScope {
 			SessionMixtureHost,
 			| "commitPersisted"
 			| "resetConversation"
+			| "restoreConversation"
+			| "runs"
 			| "rebindWorkspace"
 			| "commitWorkspaceMove"
 			| "observeCatalog"
@@ -11134,6 +11143,7 @@ export class AgentSession implements SettingsScope {
 		// discards the old conversation's runs regardless of its workspace.
 		this.commitMixtureWorkspaceMove();
 		this.#mixtureHost?.resetConversation();
+		this.#mixtureHost?.restoreConversation();
 		return true;
 	}
 
@@ -11244,6 +11254,7 @@ export class AgentSession implements SettingsScope {
 			if (!skipConversationRestore) {
 				this.agent.replaceMessages(sessionContext.messages);
 				this.#mixtureHost?.resetConversation();
+				this.#mixtureHost?.restoreConversation();
 				this.#advisors.resetSessionState();
 				this.#closeCodexProviderSessionsForHistoryRewrite();
 			}
@@ -11383,6 +11394,7 @@ export class AgentSession implements SettingsScope {
 
 			this.agent.replaceMessages(sessionContext.messages);
 			this.#mixtureHost?.resetConversation();
+			this.#mixtureHost?.restoreConversation();
 			this.#advisors.resetSessionState();
 			this.#closeCodexProviderSessionsForHistoryRewrite();
 			advisorRecordersDetached = false;
@@ -11708,6 +11720,7 @@ export class AgentSession implements SettingsScope {
 		const displayContext = this.#withEvalStateContext(deobfuscateSessionContext(stateContext, this.#obfuscator));
 		this.agent.replaceMessages(displayContext.messages);
 		this.#mixtureHost?.resetConversation();
+		this.#mixtureHost?.restoreConversation();
 		this.#rehydrateCheckpointRewindState();
 		this.#advisors.resetSessionState({ preserveCost: true });
 		this.#todo.syncFromBranch();
