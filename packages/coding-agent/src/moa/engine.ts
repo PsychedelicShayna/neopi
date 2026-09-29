@@ -15,14 +15,18 @@ import type {
 	Api,
 	AssistantMessage,
 	Context,
+	ImageContent,
 	Message,
 	Model,
+	SimpleStreamOptions,
+	TextContent,
 	Usage,
 	UsageBreakdownEntry,
 	UserMessage,
 } from "@oh-my-pi/pi-ai";
 import { NON_VISION_IMAGE_PLACEHOLDER, sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
 import { Tokenizer } from "@oh-my-pi/pi-agent-core";
+import { DEFAULT_RESERVE_TOKENS, generateSummary } from "@oh-my-pi/pi-agent-core/compaction";
 import type {
 	MixtureCheckpointReason,
 	MixtureEdge,
@@ -30,6 +34,13 @@ import type {
 	MixtureTraceHeader,
 } from "@oh-my-pi/pi-tui/overlays/mixture-types";
 import { mixtureEdgeId } from "@oh-my-pi/pi-tui/overlays/mixture-types";
+import {
+	FRAME_TOKEN_ESTIMATE,
+	compact,
+	getPreservedArchive,
+	historyBlocks,
+	providerFrameBudget,
+} from "@oh-my-pi/snapcompact";
 import { logger } from "@oh-my-pi/pi-utils";
 import { thinkingFromContent } from "../session/messages";
 import { clampProviderContextImages, dropUnreadableContextImages } from "../session/provider-image-budget";
@@ -41,8 +52,9 @@ import {
 	isInlineTemplate,
 	renderEnvelope,
 	renderLimitNotice,
+	renderToolTrace,
 } from "./envelopes";
-import { normalizeToolChoice, prepareMemberCall } from "./member-call";
+import { memberSessionId, normalizeToolChoice, prepareHelperCall, prepareMemberCall } from "./member-call";
 import { type OuterOutcome, type OuterSettled, OuterWriter, zeroUsage } from "./outer-stream";
 import {
 	assistantText,
@@ -55,7 +67,15 @@ import {
 	textHash,
 } from "./request";
 import type { MixtureRunEntry, MixtureRunLease } from "./run-store";
-import { cfgMoaConversationBudgetTokens, cfgMoaHardMaxHops, cfgMoaMaxHops, cfgMoaPartBudgetTokens } from "./settings";
+import {
+	cfgMoaConversationBudgetTokens,
+	cfgMoaHardMaxHops,
+	cfgMoaMaxHops,
+	cfgMoaPartBudgetTokens,
+	cfgMoaTranscriptBudgetTokens,
+	cfgMoaWallClockMinutes,
+} from "./settings";
+import { renderTranscript, toolCallSummaries, transcriptMessages } from "./transcript";
 import type {
 	HopRecord,
 	MixtureCheckpoint,
@@ -83,6 +103,7 @@ const ERROR_PREFIX = {
 
 /** The outer error message of a caller abort; the caller's loop words its own copy. */
 const CALLER_ABORT_MESSAGE = "Request was aborted";
+const FINALIZED = new Error("mixture request finalized");
 
 /** Add each reported counter of `add` into `total`; a counter no attempt reported stays absent. */
 function addCounters<T extends Record<string, number | undefined>>(
@@ -215,6 +236,7 @@ class MixtureCall {
 	 * flight afterwards only settles usage, late.
 	 */
 	#finalized = false;
+	#deadline: AbortSignal | undefined;
 	readonly #onCallerAbort = (): void => {
 		try {
 			this.#finalizeAbort();
@@ -472,11 +494,32 @@ class MixtureCall {
 		const systemPrompt = [...(member.inherit ? (this.#context.systemPrompt ?? []) : []), member.rolePrompt].filter(
 			text => text !== "",
 		);
+		let transcript: { text: string; blocks: (TextContent | ImageContent)[] } = { text: "", blocks: [] };
+		if (edge?.x.transcript) {
+			try {
+				transcript = await this.#transcriptPart(run, edge, member, systemPrompt);
+			} catch (error) {
+				if (this.#finalized) return;
+				if (this.#deadlineFired()) return this.#onTranscriptDeadline(run);
+				return this.#fail(run, undefined, {
+					kind: "failed",
+					message: `helper.failed: transcript for edge ${mixtureEdgeId(edge)}: ${error instanceof Error ? error.message : String(error)}`,
+				});
+			}
+		}
+		if (this.#finalized) return;
+		envelopeContext.x.transcript = transcript.text;
 		const assemble = (parts: HopParts) =>
 			renderEnvelope(template, {
 				...envelopeContext,
 				conversation: parts.conversation ?? "",
-				x: { output: parts.output, input: parts.input, reasoning: parts.reasoning, tool_trace: parts.toolTrace },
+				x: {
+					output: parts.output,
+					input: parts.input,
+					reasoning: parts.reasoning,
+					tool_trace: parts.toolTrace,
+					transcript: parts.transcript,
+				},
 			});
 		// Match the member's outbound image transforms before fitting. Reuse their
 		// surviving blocks in the request, so discarded or wire-stripped images
@@ -512,6 +555,7 @@ class MixtureCall {
 			systemPrompt,
 			assemble,
 			parts: { ...partsOf(envelopeContext.x), conversation: envelopeContext.conversation },
+			attachments: transcript.blocks,
 			// The entry blocks join the envelope after fitting. Count them now
 			// without counting the envelope's text twice.
 			hopMessages: entryContext?.messages ?? [],
@@ -548,7 +592,7 @@ class MixtureCall {
 
 		const envelopeMessage: UserMessage = {
 			role: "user",
-			content: [{ type: "text", text: input }, ...entryParts],
+			content: [{ type: "text", text: input }, ...transcript.blocks, ...entryParts],
 			attribution: "agent",
 			timestamp: Date.now(),
 		};
@@ -569,6 +613,172 @@ class MixtureCall {
 		return isInlineTemplate(reference) ? reference : resolved.envelopes[reference];
 	}
 
+	#onTranscriptDeadline(run: MixtureRun): void {
+		this.#fail(run, undefined, {
+			kind: "failed",
+			message: "helper.failed: the run deadline expired while preparing the transcript",
+		});
+	}
+
+	#guard(): void {
+		if (this.#finalized) throw FINALIZED;
+	}
+
+	#deadlineFired(): boolean {
+		return this.#deadline?.aborted === true && this.#options.signal?.aborted !== true;
+	}
+
+	#callSignal(run: MixtureRun, hop?: Pick<HopRecord, "edgeInId">): AbortSignal {
+		if (hop?.edgeInId === "limit") {
+			this.#deadline = undefined;
+			return this.#options.signal ?? new AbortController().signal;
+		}
+		const minutes =
+			run.resolved.definition.limits?.wallClockMinutes ?? cfgMoaWallClockMinutes.get(this.#host.settings);
+		const remaining = run.window.startedAt + minutes * 60_000 - Date.now();
+		this.#deadline = AbortSignal.timeout(Math.max(1, remaining));
+		return this.#options.signal ? AbortSignal.any([this.#options.signal, this.#deadline]) : this.#deadline;
+	}
+
+	/** Fold only completed hop outputs; the two newest hops remain verbatim. */
+	async #transcriptPart(
+		run: MixtureRun,
+		edge: MixtureEdge,
+		member: ResolvedModelMember,
+		systemPrompt: string[],
+	): Promise<{ text: string; blocks: (TextContent | ImageContent)[] }> {
+		const spec = edge.x.transcript === true ? {} : edge.x.transcript;
+		const budget = spec?.budgetTokens ?? cfgMoaTranscriptBudgetTokens.get(this.#host.settings);
+		const tokenizer = new Tokenizer(member.model);
+		const done = run.hops.filter(hop => hop.status === "done");
+		const full = renderTranscript(done);
+		if (tokenizer.countTokens(full) <= budget) return { text: full, blocks: [] };
+		const recent = done.slice(-2);
+		const fold = done.slice(0, -2);
+		if (fold.length === 0) return { text: full, blocks: [] };
+		const edgeId = mixtureEdgeId(edge);
+		const cursor = run.summaries[edgeId] ?? { throughHop: 0 };
+		const newFold = fold.filter(hop => hop.index > cursor.throughHop);
+		if ((spec?.optimize ?? "verbatim") === "verbatim") {
+			return { text: `[… ${fold.length} earlier hops omitted]\n\n${renderTranscript(recent)}`, blocks: [] };
+		}
+		const compactText = async (): Promise<{ text: string; blocks: (TextContent | ImageContent)[] }> => {
+			const summaryModel = run.resolved.summaryModel;
+			if (!summaryModel) throw new Error("helper.unresolved: moa.summary_model is not resolved for this run");
+			if (newFold.length > 0) {
+				const apiKey = this.#host.resolver(summaryModel, memberSessionId(run, "summary"), () => {});
+				if (!apiKey) throw new Error("helper.unresolved: no credential for the summary model");
+				const summary = await generateSummary(
+					transcriptMessages(newFold),
+					summaryModel,
+					DEFAULT_RESERVE_TOKENS,
+					apiKey,
+					this.#callSignal(run),
+					undefined,
+					cursor.text,
+					{ completeImpl: (model, context, options) => this.#completeViaHost(run, model, context, options) },
+				);
+				this.#guard();
+				run.summaries[edgeId] = { text: summary, throughHop: fold.at(-1)!.index };
+			}
+			return {
+				text: `[hops 1–${fold.at(-1)!.index} summarized]\n${run.summaries[edgeId]?.text ?? ""}\n\n${renderTranscript(recent)}`,
+				blocks: [],
+			};
+		};
+		if (spec?.optimize === "compact") return compactText();
+		const reserveOutput = member.maxTokens ?? Math.min(member.model.maxTokens ?? 16_384, 16_384);
+		const remaining = Math.max(
+			0,
+			(member.model.contextWindow ?? Number.POSITIVE_INFINITY) -
+				reserveOutput -
+				tokenizer.countTokens(systemPrompt) -
+				budget,
+		);
+		const frames = Math.min(providerFrameBudget(member.model.provider), Math.floor(remaining / FRAME_TOKEN_ESTIMATE));
+		if (frames < 1) {
+			logger.warn("mixture transcript degraded to compact", {
+				mixture: run.key.mixture,
+				edge: edgeId,
+				reason: "no frame budget",
+			});
+			return compactText();
+		}
+		if (newFold.length > 0) {
+			const result = await compact(
+				{
+					firstKeptEntryId: `moa:${run.id}:${edgeId}:${cursor.throughHop}`,
+					messagesToSummarize: transcriptMessages(newFold),
+					turnPrefixMessages: [],
+					tokensBefore: tokenizer.countMessages(transcriptMessages(fold)),
+					previousPreserveData: cursor.preserveData,
+					fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+				},
+				{ model: member.model, includeThinking: false, maxFrames: frames },
+			);
+			this.#guard();
+			if (!getPreservedArchive(result.preserveData)) {
+				logger.warn("mixture transcript degraded to compact", {
+					mixture: run.key.mixture,
+					edge: edgeId,
+					reason: "no archive",
+				});
+				return compactText();
+			}
+			run.summaries[edgeId] = {
+				text: result.summary,
+				preserveData: result.preserveData,
+				throughHop: fold.at(-1)!.index,
+			};
+		}
+		const summary = run.summaries[edgeId];
+		const archive = getPreservedArchive(summary?.preserveData);
+		return {
+			text: `${summary?.text ?? ""}\n\n${renderTranscript(recent)}`,
+			blocks: archive ? historyBlocks(archive) : [],
+		};
+	}
+
+	/** Drain and settle helper streams even when an abort finalized the outer response. */
+	async #completeViaHost(
+		run: MixtureRun,
+		model: Model<Api>,
+		context: Context,
+		options: SimpleStreamOptions,
+	): Promise<AssistantMessage> {
+		const prepared = await this.#host.prepareContext(context, model);
+		this.#guard();
+		const stream = await this.#host.stream(model, prepared, {
+			...options,
+			...prepareHelperCall(this.#options, run, model, "summary", this.#host, this.#entry),
+			signal: options.signal,
+		});
+		let final: AssistantMessage | undefined;
+		let failed = false;
+		for await (const event of stream) {
+			if (event.type === "done") final = event.message;
+			else if (event.type === "error") {
+				final = event.error;
+				failed = true;
+			}
+		}
+		if (final?.usage) {
+			this.#settle(run, undefined, {
+				kind: "summary",
+				api: final.api,
+				provider: final.provider,
+				model: final.model,
+				usage: final.usage,
+				stopReason: final.stopReason,
+				errorMessage: final.errorMessage,
+				failed: failed || undefined,
+			});
+		}
+		this.#guard();
+		if (failed || !final) throw new Error(final?.errorMessage ?? "summary stream ended without a result");
+		return final;
+	}
+
 	#envelopeContext(
 		run: MixtureRun,
 		member: ResolvedModelMember,
@@ -586,6 +796,7 @@ class MixtureCall {
 			if (edge.x.output) x.output = source.output;
 			if (edge.x.input) x.input = source.input;
 			if (edge.x.reasoning) x.reasoning = source.reasoning;
+			if (edge.x.toolTrace) x.tool_trace = source.toolTrace;
 		}
 		const tokenizer = new Tokenizer(member.model);
 		const conversation = this.#entry.conversation
@@ -687,6 +898,7 @@ class MixtureCall {
 		hop.messages = [message];
 		hop.output = assistantText(message);
 		hop.reasoning = thinkingFromContent(message.content);
+		hop.toolTrace = renderToolTrace(toolCallSummaries(hop.messages));
 		if (outcome.truncated) {
 			hop.truncated = true;
 			logger.warn("mixture member stopped at its length limit", { mixture: run.key.mixture, member: member.id });
@@ -864,16 +1076,18 @@ class MixtureCall {
 	// Settlement, responses, checkpoints, traces
 	// -----------------------------------------------------------------------
 
-	#settle(run: MixtureRun, hop: HopRecord, settlement: Omit<Settlement, "attempt" | "late">): void {
+	#settle(run: MixtureRun, hop: HopRecord | undefined, settlement: Omit<Settlement, "attempt" | "late">): void {
 		const record: Settlement = { attempt: `${run.id}:${run.settlements.length + 1}`, ...settlement };
 		// After finalization no outer response of this request can report the attempt.
 		if (this.#finalized) record.late = true;
 		run.settlements.push(record);
 		run.lifetime.usd += record.usage.cost.total;
 		run.window.usd += record.usage.cost.total;
-		const hopUsage = hop.usage ?? zeroUsage();
-		addUsage(hopUsage, record.usage);
-		hop.usage = hopUsage;
+		if (hop) {
+			const hopUsage = hop.usage ?? zeroUsage();
+			addUsage(hopUsage, record.usage);
+			hop.usage = hopUsage;
+		}
 		this.#host.onSettlement?.(run, record);
 		if (record.late) this.#host.onLateSettlement?.(run, record);
 	}
@@ -1013,6 +1227,12 @@ class MixtureCall {
 	}
 }
 
-function partsOf(x: EnvelopeContext["x"]) {
-	return { output: x.output, input: x.input, reasoning: x.reasoning, toolTrace: x.tool_trace };
+function partsOf(x: EnvelopeContext["x"]): HopParts {
+	return {
+		output: x.output,
+		input: x.input,
+		reasoning: x.reasoning,
+		toolTrace: x.tool_trace,
+		transcript: x.transcript,
+	};
 }
