@@ -994,6 +994,7 @@ If the turn is aborted while a request is pending, RPC mode emits a cancellation
 - `decision: "allow_session"` runs this call and records an in-memory `tools.approval.<toolName>: allow` for the rest of the process, so later calls of that tool that this policy would allow run without a request. It is never written to `config.yml` or project config. Calls that prompt regardless of a user `allow` (for example critical `bash` patterns outside `yolo`) still ask.
 - `decision: "deny"` fails the call with `isError: true`. An optional `reason` string is included in the tool error text the model sees.
 - `{ "type": "tool_approval_response", "id": "appr_1", "cancelled": true }` resolves as `deny`, like a cancelled dialog.
+- If a malformed host frame carries both `cancelled: true` and a `decision`, cancellation wins: the call is denied and no `allow_session` policy is recorded.
 
 A missing or unknown `decision` resolves as `deny`. Responses to an unknown, timed-out, or cancelled `id` are ignored. When stdin closes, pending requests are rejected and their calls fail as denied.
 
