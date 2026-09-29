@@ -88,6 +88,12 @@ for _ in $(seq 1 80); do
 	if env PI_CODING_AGENT_DIR=$DIR "$NPI" ctl list --json 2>/dev/null | grep -q instanceId; then break; fi
 	sleep 0.25
 done
+state=$(env PI_CODING_AGENT_DIR=$DIR "$NPI" ctl %0 state --json || true)
+echo "$state" | tee "$LOG.pre"
+if ! echo "$state" | grep -q '"provider": "fake"'; then
+	echo "fail: model.provider is not fake; refusing to send a turn" | tee "$LOG"
+	exit 1
+fi
 # Ask pane 0's agent to drive pane 1. The fake model returns a ctl keys call.
 env PI_CODING_AGENT_DIR=$DIR "$NPI" ctl %0 send "DRIVE the other pane" || true
 env PI_CODING_AGENT_DIR=$DIR "$NPI" ctl %2 slash "/live" || true
