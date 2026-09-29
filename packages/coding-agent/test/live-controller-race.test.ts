@@ -407,6 +407,30 @@ describe("live controller delegation ownership", () => {
 		expect(h.sentSpeech).toEqual(["tell me a joke"]);
 		await h.controller.stop();
 	});
+	it("allows delegation of the next utterance after an Iris-only turn", async () => {
+		const h = makeHarness({ blockDelegateKeyword: "iris only" });
+		await h.controller.start();
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "iris only say hello" } });
+		h.fireLive({ type: "input_transcript.added", item: { text: "fix the cache" } });
+		h.fireLive(delegation("dlg-after-block", "wrong"));
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "fix the cache" } });
+		await settle();
+		expect(h.prompts).toEqual(["fix the cache"]);
+		await h.controller.stop();
+	});
+
+	it("does not cancel an older delegation for a separate Iris-only utterance", async () => {
+		const h = makeHarness({ blockDelegateKeyword: "iris only" });
+		await h.controller.start();
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "fix the cache" } });
+		h.fireLive(delegation("dlg-first", "wrong"));
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "iris only say hello" } });
+		await settle();
+		expect(h.prompts).toEqual(["fix the cache"]);
+		expect(h.sentSpeech).toContain("say hello");
+		await h.controller.stop();
+	});
+
 	it("matches a force phrase across finalized VAD turns and overrides a pending Iris claim", async () => {
 		const h = makeHarness({ forceDelegateKeyword: "send it now" });
 		await h.controller.start();

@@ -223,7 +223,6 @@ export class LiveSessionController {
 	#userTurns = new Map<number, UserLedgerTurn>();
 	/** Insertion-order tail of {@link #userTurns}. Partial updates land here. */
 	#tailTurnNumber: number | undefined;
-	#lastTurnBlocked = false;
 	/** Ledger turns already final and unclaimed when the voice agent began its current response:
 	 *  the turns that response answers. Undefined while no response is under way. */
 	#answeredTurns: number[] | undefined;
@@ -533,7 +532,6 @@ export class LiveSessionController {
 	async #handleDelegation(event: Extract<LiveServerEvent, { type: "delegation.created" }>, forced = false): Promise<void> {
 		if (this.#seenDelegationIds.has(event.item.id)) return;
 		this.#seenDelegationIds.add(event.item.id);
-		if (!forced && this.#lastTurnBlocked) return;
 
 		const generation = ++this.#delegationGeneration;
 		const previousPending = this.#pendingDelegation;
@@ -1135,7 +1133,6 @@ export class LiveSessionController {
 		let submitRequested = false;
 		if (final) {
 			const block = stripLiveKeyword(current.text, this.#blockDelegateKeyword);
-			this.#lastTurnBlocked = block.matched;
 			if (block.matched) {
 				current.text = block.text;
 				current.blocked = true;
@@ -1163,7 +1160,7 @@ export class LiveSessionController {
 		this.#emitUserSpeech({ role: "user", turn: current.turn, text: current.text, final: current.final });
 		if (current.blocked) {
 			const pending = this.#pendingDelegation;
-			if (pending) {
+			if (pending && current.claim === pending.generation) {
 				this.#pendingDelivery?.cancel();
 				this.#delegationGeneration += 1;
 				this.#pendingDelegation = undefined;

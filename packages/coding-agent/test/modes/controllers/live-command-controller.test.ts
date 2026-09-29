@@ -196,6 +196,23 @@ describe("LiveCommandController", () => {
 		await h.controller.stop();
 	});
 
+	it("keeps unsent image and text attachments when speech is handed off", async () => {
+		const h = createHarness();
+		await h.controller.handleCommand();
+		h.editor.pendingImages = [{ type: "image", data: "img", mimeType: "image/png" }];
+		h.editor.pendingImageLinks = ["file:///tmp/future.png"];
+		h.editor.insertText("[Image #1] ");
+		h.editor.insertTextAttachment("keep me");
+		speak(h, 1, "ship this", true);
+		h.callbacks().onSpeechSent?.("ship this");
+		expect(h.editor.getText()).toContain(h.editor.pendingTexts[0]!.label);
+		expect(h.editor.composerChips().map(chip => chip.kind)).toEqual(["image", "paste"]);
+		expect(h.editor.pendingImages).toEqual([{ type: "image", data: "img", mimeType: "image/png" }]);
+		expect(h.editor.pendingImageLinks).toEqual(["file:///tmp/future.png"]);
+		expect(h.editor.pendingTexts[0]?.content).toBe("keep me");
+		await h.controller.stop();
+	});
+
 	for (const destination of ["primary", "voice", "both"] as const) {
 		it(`submits the trailing keyword to the selected ${destination} destination and recalls the sent text`, async () => {
 			const h = createHarness();

@@ -11,6 +11,7 @@ import { vocalizer } from "../../tts/vocalizer";
 import type { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { UserMessageComponent } from "@oh-my-pi/pi-tui/chat/user-message";
 import { theme } from "@oh-my-pi/pi-tui/theme";
+import { chipLabel } from "@oh-my-pi/pi-tui/prompt/composer-attachments";
 import type { InteractiveModeContext } from "../types";
 import { createAssistantMessageComponent } from "@oh-my-pi/pi-tui/prompt/interactive-context-helpers";
 
@@ -236,7 +237,10 @@ export class LiveCommandController {
 					if (this.#session !== session) return;
 					this.#editing = true;
 					try {
-						this.#ctx.editor.clearDraft();
+						const chips = this.#ctx.editor.composerChips().map(chip =>
+							chip.kind === "paste" ? chip.text.label : chipLabel(chip.kind, chip.n),
+						);
+						this.#ctx.editor.setText(chips.join(" "));
 						this.#ctx.editor.addToHistory(text);
 						this.#utterance = undefined;
 					} finally {
