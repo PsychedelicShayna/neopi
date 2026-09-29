@@ -389,7 +389,7 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 	it("caps caller-requested effort at task.maxEffort", async () => {
 		const model = getBundledModel("openai-codex", "gpt-5.6-sol");
 		if (!model) throw new Error("Expected gpt-5.6-sol model to exist");
-		const settings = Settings.isolated({ "task.maxEffort": "low" });
+		const settings = Settings.isolated({ "effort.mode": "legacy", "task.maxEffort": "low" });
 		settings.setModelRole("task", `${model.provider}/${model.id}`);
 		const session = yieldEmittingSession();
 		const spy = vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
@@ -419,7 +419,7 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 			provider: "mock",
 			thinking: { mode: "effort", efforts: [Effort.High] },
 		} as Model;
-		const settings = Settings.isolated({ "task.maxEffort": "low" });
+		const settings = Settings.isolated({ "effort.mode": "legacy", "task.maxEffort": "low" });
 		settings.setModelRole("task", `${model.provider}/${model.id}`);
 		const spy = vi.spyOn(sdkModule, "createAgentSession");
 
@@ -442,7 +442,7 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 	it("preserves the model's full effort range by default", async () => {
 		const model = getBundledModel("openai-codex", "gpt-5.6-sol");
 		if (!model) throw new Error("Expected gpt-5.6-sol model to exist");
-		const settings = Settings.isolated();
+		const settings = Settings.isolated({ "effort.mode": "legacy" });
 		settings.setModelRole("task", `${model.provider}/${model.id}`);
 		const session = yieldEmittingSession();
 		const spy = vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
@@ -458,6 +458,26 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 
 		expect(result.exitCode).toBe(0);
 		expect(spy.mock.calls[0]?.[0]?.thinkingLevel).toBe(ThinkingLevel.Max);
+	});
+
+	it("does not accept a legacy hi hint in replacement mode", async () => {
+		const model = getBundledModel("openai-codex", "gpt-5.6-sol");
+		if (!model) throw new Error("Expected gpt-5.6-sol model to exist");
+		const settings = Settings.isolated({ "effort.mode": "replacement" });
+		settings.setModelRole("task", `${model.provider}/${model.id}`);
+		const spy = vi.spyOn(sdkModule, "createAgentSession");
+
+		const result = await runSubprocess({
+			...baseOptions,
+			agent: { ...baseAgent, model: ["@task"] },
+			id: "subagent-legacy-hint-rejected",
+			effort: "hi",
+			settings,
+			modelRegistry: createModelRegistry(model),
+		});
+
+		expect(result.exitCode).toBe(1);
+		expect(spy).not.toHaveBeenCalled();
 	});
 
 	it("resolves an explicit task-role effort suffix over the agent-definition default", async () => {

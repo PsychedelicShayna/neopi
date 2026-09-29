@@ -3,6 +3,8 @@ import * as path from "node:path";
 import type { Api, AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import * as ai from "@oh-my-pi/pi-ai";
 import { Effort } from "@oh-my-pi/pi-ai";
+import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import { cfgEffortRules, cfgFallbackEffortSelections } from "../../src/config/effort-policy";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import type { ModelRegistry } from "../../src/config/model-registry";
@@ -23,6 +25,7 @@ import { executeJs } from "../../src/eval/js/executor";
 import { disposeAllKernelSessions, type PythonResult } from "../../src/eval/py/executor";
 import type { ToolSession } from "../../src/tools";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
+import { AUTO_THINKING } from "@oh-my-pi/pi-tui/thinking";
 
 import { cfgRetryFallbackChains, cfgRetryMaxRetries } from "@oh-my-pi/pi-coding-agent/session/settings";
 
@@ -305,6 +308,74 @@ describe("runEvalCompletion", () => {
 
 		expect(spy.mock.calls.map(call => (call[0] as Model<Api>).id)).toEqual(["smol", "b", "c"]);
 		expect(result.text).toBe("c answer");
+	});
+
+	it("restricts an inherited session effort but preserves a manual override in direct completion", async () => {
+		const session = makeSession({ available: [REASONING_SLOW], activeModel: "p/slow" });
+		session.getActiveModel = () => REASONING_SLOW;
+		cfgEffortRules.set(session.settings, [{ selector: "p/slow", allowed: [Effort.Low] }]);
+		const notices: string[] = [];
+		session.onEffortDisclosure = message => notices.push(message);
+		let origin: "role" | "manual" = "role";
+		session.getActiveEffort = () => ({ level: ThinkingLevel.High, origin });
+		const spy = vi.spyOn(ai, "completeSimple").mockResolvedValue(assistant({ text: "ok" }));
+
+		const inherited = await runEvalCompletionAndWait({ prompt: "q" }, { session });
+		expect((spy.mock.calls[0]?.[2] as { reasoning?: Effort }).reasoning).toBe(Effort.Low);
+		expect(inherited.details.notices).toContainEqual(expect.stringContaining("adjusted to low"));
+		expect(notices).toContainEqual(expect.stringContaining("adjusted to low"));
+
+		origin = "manual";
+		const manual = await runEvalCompletionAndWait({ prompt: "q" }, { session });
+		expect((spy.mock.calls[1]?.[2] as { reasoning?: Effort }).reasoning).toBe(Effort.High);
+		expect(manual.details.notices).toBeUndefined();
+	});
+
+	it("honors a live Auto subset without issuing an unnecessary classifier request", async () => {
+		const session = makeSession({ available: [REASONING_SLOW], activeModel: "p/slow" });
+		session.getActiveModel = () => REASONING_SLOW;
+		session.getActiveEffort = () => ({
+			level: AUTO_THINKING,
+			origin: "role",
+			selection: { mode: "auto", allowed: [Effort.Medium] },
+		});
+		cfgEffortRules.set(session.settings, [
+			{
+				selector: "p/slow",
+				allowed: [Effort.Low, Effort.Medium, Effort.High],
+			},
+		]);
+		const spy = vi.spyOn(ai, "completeSimple").mockResolvedValue(assistant({ text: "answer" }));
+
+		const result = await runEvalCompletionAndWait({ prompt: "q" }, { session });
+		expect(result.text).toBe("answer");
+		expect(spy).toHaveBeenCalledTimes(1);
+		expect((spy.mock.calls[0]?.[2] as { reasoning?: Effort }).reasoning).toBe(Effort.Medium);
+	});
+
+	it("applies a fallback entry's own fixed effort and rule instead of inheriting the failed model's effort", async () => {
+		const fallback = makeModel("p", "fallback", {
+			api: "anthropic-messages",
+			reasoning: true,
+			thinking: { efforts: [Effort.Low, Effort.Medium, Effort.High], mode: "anthropic-adaptive" },
+		});
+		const session = makeSession({ available: [REASONING_SLOW, fallback], roles: { slow: "p/slow" } });
+		cfgRetryFallbackChains.set(session.settings, { slow: ["p/fallback"] });
+		cfgFallbackEffortSelections.set(session.settings, {
+			slow: { "p/fallback": { mode: "fixed", level: ThinkingLevel.Medium } },
+		});
+		cfgEffortRules.set(session.settings, [{ selector: "p/fallback", allowed: [Effort.Low, Effort.High] }]);
+		const spy = vi
+			.spyOn(ai, "completeSimple")
+			.mockResolvedValueOnce(assistant({ stopReason: "error", errorMessage: "primary unavailable" }))
+			.mockResolvedValueOnce(assistant({ text: "fallback answer" }));
+
+		const result = await runEvalCompletionAndWait({ prompt: "q", model: "slow" }, { session });
+		expect(spy.mock.calls.map(call => (call[2] as { reasoning?: Effort }).reasoning)).toEqual([
+			Effort.High,
+			Effort.Low,
+		]);
+		expect(result.details.notices).toContainEqual(expect.stringContaining("medium adjusted to low"));
 	});
 
 	it("terminates on cyclic fallback chains instead of looping", async () => {

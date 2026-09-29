@@ -13,7 +13,8 @@ Shared edits need one integration owner{{#if ircEnabled}}; siblings coordinate v
 `agent`: agent type, or a direct model selector `provider/model[:effort]` / `@role[:effort]` (efforts: minimal|low|medium|high|xhigh|max|auto) crewing the generic task agent with exactly that model; registered agent names win; invalid selectors fail loudly.
 `name`: CamelCase ≤32, auto-generated if omitted; address agent by name. `outputSchema` overrides agent/session schemas.
 {{#if evalToolsEnabled}}`tools`: eval-defined, run in your kernel.
-{{/if}}{{#if effortEnabled}}`effort`: `"lo"`|`"med"`|`"hi"` by complexity.
+{{/if}}{{#if effortEnabled}}{{#if legacyEffort}}`effort`: `"lo"`|`"med"`|`"hi"` legacy coarse hint (model-relative; capped by task.maxEffort).
+{{else}}`effort`: `minimal|low|medium|high|xhigh|max` explicit per-spawn effort; unsupported levels fail.{{/if}}
 {{/if}}`schemaMode`: default permissive warns after retries; strict fails.
 {{#if isolationEnabled}}{{#if applyIsolatedChanges}}`isolated`: worktree; successful changes apply to parent.
 {{else}}`isolated`: worktree; changes retained, not applied.

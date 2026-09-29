@@ -3,6 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Effort, type FetchImpl } from "@oh-my-pi/pi-ai";
+import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import { cfgEffortRules, cfgFallbackEffortSelections } from "@oh-my-pi/pi-coding-agent/config/effort-policy";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
@@ -829,6 +831,118 @@ describe("createAgentSession deferred model pattern resolution", () => {
 			}
 		} finally {
 			exitSpy.mockRestore();
+		}
+	});
+
+	test("a startup fallback applies its own fixed effort rather than the explicit role suffix", async () => {
+		const settings = Settings.isolated({
+			"retry.fallbackChains": { slow: ["runtime-provider/runtime-fallback-model"] },
+		});
+		settings.setModelRole("slow", "missing-provider/missing-model");
+		cfgFallbackEffortSelections.set(settings, {
+			slow: { "runtime-provider/runtime-fallback-model": { mode: "fixed", level: ThinkingLevel.High } },
+		});
+		cfgEffortRules.set(settings, [{ selector: "runtime-provider/runtime-fallback-model", allowed: [Effort.Low] }]);
+		const authStorage = createInMemoryAuthStorage();
+		authStorage.keys.setRuntime("runtime-provider", "test-key");
+		authStoragesToClose.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "fallback-effort-models.yml"));
+		const parsed = parseArgs(["--model", "slow:medium"]);
+		const cliOptions = await buildCliSessionOptions(parsed, [], SessionManager.inMemory(), modelRegistry, settings);
+		expect(cliOptions.thinkingOrigin).toBe("caller");
+
+		const { session } = await createAgentSession({
+			...cliOptions,
+			cwd: tempDir,
+			agentDir: tempDir,
+			authStorage,
+			modelRegistry,
+			settings,
+			disableExtensionDiscovery: true,
+			extensions: [providerExtension],
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			skipPythonPreflight: true,
+			rules: [],
+			preloadedCustomToolPaths: [],
+			toolNames: ["read"],
+		});
+		try {
+			expect(session.model?.id).toBe("runtime-fallback-model");
+			expect(session.effortOrigin).toBe("fallback");
+			expect(session.configuredThinkingLevel()).toBe(ThinkingLevel.High);
+			expect(session.thinkingLevel).toBe(Effort.Low);
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	test("persists the requested role effort and implicit origin across a cold restart", async () => {
+		const settings = Settings.isolated();
+		settings.setModelRole("default", "runtime-provider/runtime-fallback-model:high");
+		cfgEffortRules.set(settings, [{ selector: "runtime-provider/runtime-fallback-model", allowed: [Effort.Low] }]);
+		const authStorage = createInMemoryAuthStorage();
+		authStorage.keys.setRuntime("runtime-provider", "test-key");
+		authStoragesToClose.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "restart-effort-models.yml"));
+		const sessionsDir = path.join(tempDir, "restart-effort-sessions");
+		const manager = SessionManager.create(tempDir, sessionsDir);
+		const sessionOptions = {
+			...buildSessionOptions("runtime-provider/runtime-fallback-model"),
+			modelPattern: undefined,
+			settings,
+			authStorage,
+			modelRegistry,
+			sessionManager: manager,
+		};
+		const { session } = await createAgentSession(sessionOptions);
+		const file = manager.getSessionFile();
+		if (!file) throw new Error("missing session file");
+		try {
+			expect(session.thinkingLevel).toBe(Effort.Low);
+			expect(session.configuredThinkingLevel()).toBe(ThinkingLevel.High);
+			expect(session.effortOrigin).toBe("role");
+			expect(manager.getBranch().find(entry => entry.type === "thinking_level_change")).toEqual(
+				expect.objectContaining({
+					thinkingLevel: Effort.Low,
+					configured: ThinkingLevel.High,
+					effortOrigin: "role",
+				}),
+			);
+			await manager.ensureOnDisk();
+		} finally {
+			await session.dispose();
+		}
+
+		const resumedManager = await SessionManager.open(file, sessionsDir);
+		const { session: resumed } = await createAgentSession({ ...sessionOptions, sessionManager: resumedManager });
+		try {
+			expect(resumed.model?.id).toBe("runtime-fallback-model");
+			expect(resumed.thinkingLevel).toBe(Effort.Low);
+			expect(resumed.configuredThinkingLevel()).toBe(ThinkingLevel.High);
+			expect(resumed.effortOrigin).toBe("role");
+		} finally {
+			await resumed.dispose();
+		}
+	});
+
+	test("a direct SDK model-pattern suffix remains a caller override", async () => {
+		const settings = Settings.isolated();
+		cfgEffortRules.set(settings, [{ selector: "runtime-provider/runtime-fallback-model", allowed: [Effort.Low] }]);
+		const { session } = await createAgentSession({
+			...buildSessionOptions("runtime-provider/runtime-fallback-model:high"),
+			settings,
+		});
+		try {
+			expect(session.effortOrigin).toBe("caller");
+			expect(session.configuredThinkingLevel()).toBe(ThinkingLevel.High);
+			expect(session.thinkingLevel).toBe(Effort.High);
+		} finally {
+			await session.dispose();
 		}
 	});
 

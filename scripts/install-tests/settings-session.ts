@@ -136,7 +136,7 @@ export default function (api) {
 									const result = await task.execute("own-" + name, { agent: "only-" + name, task: "Fixture check" });
 									const child = result.details?.results?.[0];
 									assert.equal(child?.exitCode, 0, JSON.stringify(result));
-									assert.equal(child.resolvedModel, "fixture/model-" + name);
+									assert.equal(child.resolvedModelIdentity, "fixture/model-" + name);
 									assert(child.output.includes("model-" + name), child.output);
 									checked.push(name);
 								} catch (error) {

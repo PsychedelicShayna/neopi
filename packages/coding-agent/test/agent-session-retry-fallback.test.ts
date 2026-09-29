@@ -5649,7 +5649,7 @@ describe("AgentSession retry fallback", () => {
 	});
 	it("preserves thinking on bare fallback selectors and does not overwrite user thinking on restore", async () => {
 		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
-		const fallbackModel = getBundledModel("openai", "gpt-4o-mini");
+		const fallbackModel = getBundledModel("openai-codex", "gpt-5.6-sol");
 		if (!primaryModel || !fallbackModel) {
 			throw new Error("Expected bundled test models to exist");
 		}
@@ -5685,7 +5685,7 @@ describe("AgentSession retry fallback", () => {
 		]);
 		expect(session.model?.provider).toBe(fallbackModel.provider);
 		expect(session.model?.id).toBe(fallbackModel.id);
-		expect(session.thinkingLevel).toBeUndefined();
+		expect(session.thinkingLevel).toBe(Effort.High);
 
 		session.setThinkingLevel(Effort.Low);
 		now += 240;
@@ -5698,7 +5698,7 @@ describe("AgentSession retry fallback", () => {
 		]);
 		expect(session.model?.provider).toBe(primaryModel.provider);
 		expect(session.model?.id).toBe(primaryModel.id);
-		expect(session.thinkingLevel).toBeUndefined();
+		expect(session.thinkingLevel).toBe(Effort.Low);
 	});
 
 	it("clamps a fallback selector's explicit thinking level to the session effort ceiling", async () => {

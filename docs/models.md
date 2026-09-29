@@ -422,7 +422,7 @@ So a model can exist in registry but not be selectable until auth is available.
 - exact model id (provider inferred)
 - fuzzy/substring matching
 - glob scope patterns in `--models` (e.g. `openai/*`, `*sonnet*`)
-- optional `:thinkingLevel` suffix (`off|minimal|low|medium|high|xhigh|max`)
+- optional `:thinkingLevel` suffix (`off|auto|minimal|low|medium|high|xhigh|max`); explicit concrete requests must be supported by the resolved model
 
 `--provider` is legacy; `--model` is preferred. An exact `provider/modelId` is unambiguous; bare ids
 and fuzzy patterns are resolved against the available concrete models.
@@ -459,8 +459,8 @@ Model roles assign model selectors to workloads. Configure them under `modelRole
 
 Built-in roles are grouped in the model picker:
 
-- **Chat roles:** `default`, `smol`, `slow`, `vision`, `plan`, `commit`, `tiny`, `memory`, `task`, and `advisor`. The `tiny` and `memory` roles accept both ordinary chat models and `tiny` catalog models.
-- **Model-kind roles:** `image`, `web`, `speech`, `dictation`, and `judge`. These select image generation, search/grounded chat, text-to-speech, speech-to-text, and judgment runners respectively. The `judge` role also accepts tiny and chat models.
+- **Chat roles:** `default`, `smol`, `slow`, `vision`, `plan`, `commit`, `tiny`, `memory`, `task`, `advisor`, `chronicler`, `effort`, and `prose`. The `tiny` and `memory` roles accept both ordinary chat models and `tiny` catalog models. The `effort` chat role selects the dedicated replacement-mode Auto classifier.
+- **Model-kind roles:** `image`, `web`, `speech`, `dictation`, and `judge`. These select image generation, search/grounded chat, text-to-speech, speech-to-text, and other judgment runners respectively. The `judge` role also accepts tiny and chat models; replacement-mode Auto thinking uses `effort`, not `judge`.
 
 `vision` and `image` are different workloads: `vision` selects a chat model for image analysis, such as `read screenshot.png?q=...`; `image` selects a model with catalog kind `image` for `generate_image`. Assigning a model to `vision` does not give it image-input support: image questions additionally check that the model can send image input to its provider.
 
@@ -468,9 +468,17 @@ The `tiny` role selects lightweight models for background work such as session t
 
 Assigning a non-default role in `/models` normally saves its selector without switching the active conversation model. A workload uses the role when invoked; assigning `plan` does not itself enter plan mode, and calling `todo` does not itself select the plan model. While plan mode is active, changing the `plan` role reapplies its model. Assigning `default` normally also switches the active model, unless a higher-priority settings layer overrides the edited assignment. The session-only model picker changes the active model without rewriting role assignments.
 
-Role aliases like `@smol` expand through `settings.modelRoles`; `*` selects `@default`. Quote `@` aliases in YAML values (`plan: "@slow"`). Chat-role values can append a thinking selector such as `:minimal`, `:low`, `:medium`, or `:high`; model-kind roles do not use chat thinking suffixes.
+Role aliases like `@smol` expand through `settings.modelRoles`; `*` selects `@default`. Quote `@` aliases in YAML values (`plan: "@slow"`). Chat-role values can append `:auto` or a concrete thinking selector (`:minimal`, `:low`, `:medium`, `:high`, `:xhigh`, `:max`); model-kind roles do not use chat thinking suffixes. An explicit `provider/model:high` or `@role:high` in a caller's selector bypasses implicit global effort rules, but `:auto` classifies within the matching rule and saved Auto set.
 
 If a role points at another role, the target model still inherits normally and any explicit suffix on the referring role wins for that role-specific use.
+
+### Effort controls in `/models`
+
+The **Effort rules** sidebar edits global `effort.rules`: pick an exact catalog model or enter a `provider/model` glob, then toggle its allowed concrete levels. An exact rule wins over any glob even if listed later; among globs, the first matching row wins and can be reordered. These are implicit-effort restrictions, not model metadata or limits on explicit supported caller/manual levels.
+
+Assign a role in **Roles** or from a model row and select **Inherit**, **Off**, a fixed supported level, or **Auto**. Auto opens a multi-select of permitted levels and saves its model-bound `{ mode: "auto", allowed, selector }` preference in `roleEffortSelections`; a role's fixed or Inherit selection uses `{ mode: "fixed", level }` or `{ mode: "inherit" }`. When `modelRoleStorage: project`, choose project or global for the role and its effort metadata; otherwise it saves globally. Fallback rows have their own effort strips, including Auto sets, persisted as `retry.fallbackEffortSelections` beside the global chain. The `effort` classifier role itself offers no Auto option: it needs concrete enabled reasoning. Edits to a role model and its effort selection are saved together, and failed saves keep the draft open.
+
+In the default `effort.mode: replacement`, implicit role/fallback choices are intersected with the target model's capabilities and winning global rule. A constrained fixed level adjusts to the nearest permitted level below it or, if necessary, the lowest permitted level, with a warning. An empty permitted intersection yields an actionable error instead of silent promotion. `effort.mode: legacy` restores the old `lo|med|hi` task hints and `task.maxEffort` ceiling; the replacement wire accepts only concrete levels when enabled. See [Thinking and effort policy](./settings.md#thinking-and-effort-policy).
 
 Related settings:
 

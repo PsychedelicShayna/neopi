@@ -8,6 +8,7 @@ import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
@@ -21,6 +22,9 @@ import { AUTO_THINKING } from "@oh-my-pi/pi-tui/thinking";
 import type { TUI } from "@oh-my-pi/pi-tui";
 
 import { cfgCycleOrder } from "@oh-my-pi/pi-coding-agent/config/model-settings";
+import { cfgEffortRules, cfgFallbackEffortSelections } from "@oh-my-pi/pi-coding-agent/config/effort-policy";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
+import type { HubEffortSelection } from "@oh-my-pi/pi-tui/overlays/model-hub";
 import { cfgRetryFallbackChains } from "@oh-my-pi/pi-coding-agent/session/settings";
 
 function normalize(lines: readonly string[]): string {
@@ -103,7 +107,14 @@ interface HubHarness {
 	onUnassign: ReturnType<typeof vi.fn>;
 	onLoginRequest: ReturnType<typeof vi.fn>;
 	onCancel: ReturnType<typeof vi.fn>;
-	onFallbackChainChange: Mock<(role: string, chain: string[]) => void>;
+	onFallbackChainChange: Mock<
+		(
+			role: string,
+			chain: string[],
+			effort?: { selector: string; selection: HubEffortSelection },
+			copiedSelections?: Readonly<Record<string, HubEffortSelection>>,
+		) => void
+	>;
 }
 
 const openHubs: ModelHubComponent[] = [];
@@ -126,27 +137,61 @@ function createHub(options: {
 	const onUnassign = vi.fn();
 	const onLoginRequest = vi.fn();
 	const onCancel = vi.fn();
-	// Mirror the controller: persist chain edits so the hub's re-read sees them.
-	const onFallbackChainChange = vi.fn((role: string, chain: string[]) => {
-		const chains = { ...cfgRetryFallbackChains.get(settings) };
-		if (chain.length === 0) {
-			delete chains[role];
-		} else {
-			chains[role] = chain;
-		}
-		cfgRetryFallbackChains.override(settings, chains);
-	});
+	// Mirror the controller's chain/metadata result in the isolated overlay used by this UI fixture.
+	const onFallbackChainChange = vi.fn(
+		(
+			role: string,
+			chain: string[],
+			effort?: { selector: string; selection: HubEffortSelection },
+			copiedSelections?: Readonly<Record<string, HubEffortSelection>>,
+		) => {
+			const chains = { ...cfgRetryFallbackChains.get(settings) };
+			if (chain.length === 0) delete chains[role];
+			else chains[role] = chain;
+			const selections = { ...cfgFallbackEffortSelections.get(settings)[role] };
+			for (const selector of Object.keys(selections)) if (!chain.includes(selector)) delete selections[selector];
+			if (effort) selections[effort.selector] = effort.selection;
+			if (copiedSelections) {
+				for (const [selector, selection] of Object.entries(copiedSelections)) {
+					if (chain.includes(selector) && !(selector in selections)) selections[selector] = selection;
+				}
+			}
+			cfgRetryFallbackChains.override(settings, chains);
+			const stored = { ...cfgFallbackEffortSelections.get(settings) };
+			if (chain.length === 0) delete stored[role];
+			else stored[role] = selections;
+			cfgFallbackEffortSelections.override(settings, stored);
+		},
+	);
 	const hub = new ModelHubComponent(
 		ui,
 		createModelBrowserSource(settings),
 		registry,
 		options.scoped ? modelsFn().map(model => ({ model })) : [],
 		{
-			onAssign: options.callbacks?.onAssign ?? onAssign,
+			onAssign: (model, role, level, selector, scope, selection) => {
+				const result = options.callbacks?.onAssign
+					? options.callbacks.onAssign(model, role, level, selector, scope, selection)
+					: onAssign(model, role, level, selector, scope, selection);
+				const save = () => {
+					if (!selection) return;
+					if (scope === "project") settings.setProjectRoleEffortSelection(role, selection);
+					else settings.setRoleEffortSelection(role, selection);
+				};
+				if (result instanceof Promise)
+					return result.then(applied => {
+						if (applied !== false) save();
+						return applied;
+					});
+				if (result !== false) save();
+				return result;
+			},
 			onUnassign: options.callbacks?.onUnassign ?? onUnassign,
 			onLoginRequest: options.callbacks?.onLoginRequest ?? onLoginRequest,
 			onCycleOrderChange: options.callbacks?.onCycleOrderChange,
 			onFallbackChainChange: options.callbacks?.onFallbackChainChange ?? onFallbackChainChange,
+			onEffortRulesChange:
+				options.callbacks?.onEffortRulesChange ?? (rules => cfgEffortRules.override(settings, rules)),
 			onCancel: options.callbacks?.onCancel ?? onCancel,
 		},
 		options.hub,
@@ -219,6 +264,7 @@ describe("ModelHub", () => {
 			hub.handleInput(ALT_RIGHT);
 			hub.handleInput("\n");
 			hub.handleInput("\n");
+			hub.handleInput("\n"); // conventional exact-model picker
 
 			const rendered = normalize(hub.render(220));
 			expect(rendered).toContain("Assigning IMAGE");
@@ -476,6 +522,7 @@ describe("ModelHub", () => {
 			expect(footerLine(hub.render(220))).toContain("model-b →");
 
 			hub.handleInput("\n"); // assign to default
+			hub.handleInput("\n"); // confirm effort, then persist assignment
 			expect(onAssign.mock.calls[0]?.[0]).toBe(modelB);
 		});
 
@@ -590,6 +637,7 @@ describe("ModelHub", () => {
 
 			hub.handleInput("\n"); // sidebar → model list
 			hub.handleInput("\n"); // pick the sole model for the new role
+			hub.handleInput("\n"); // Confirm staged effort.
 			expect(onAssign).toHaveBeenCalledTimes(1);
 			const call = onAssign.mock.calls[0];
 			expect(call?.[1]).toBe("reviewer");
@@ -598,35 +646,21 @@ describe("ModelHub", () => {
 	});
 
 	describe("assignment strips", () => {
-		test("Enter opens the role strip; assigning fires onAssign and opens the thinking strip", () => {
+		test("stage selector and effort together, then persist once on confirmation", () => {
 			const model = getBundledModel("openai", "gpt-5.5");
-			if (!model) throw new Error("Expected bundled model openai/gpt-5.5");
+			if (!model) throw new Error("Expected bundled reasoning model");
 			const { hub, onAssign } = createHub({ models: [model], scoped: true });
-			installTestTheme();
-
-			hub.handleInput("\n"); // sidebar → model list
+			hub.handleInput("\n"); // model list
+			hub.handleInput("\n"); // role strip
+			hub.handleInput("\n"); // effort strip
+			expect(onAssign).not.toHaveBeenCalled();
+			expect(footerLine(hub.render(220))).toContain("xhigh");
+			expect(footerLine(hub.render(220))).not.toContain("max");
+			hub.handleInput("\x1b[C"); // off
 			hub.handleInput("\n");
-			const strip = footerLine(hub.render(220));
-			expect(strip).toContain("default");
-			expect(strip).toContain("retry-fallback");
-			expect(strip).not.toContain("project default");
-			expect(strip).not.toContain("global default");
-
-			hub.handleInput("\n"); // assign to default (first chip)
 			expect(onAssign).toHaveBeenCalledTimes(1);
-			const call = onAssign.mock.calls[0];
-			expect(call?.[0]).toBe(model);
-			expect(call?.[1]).toBe("default");
-			expect(call?.[2]).toBe(ThinkingLevel.Inherit);
-			expect(call?.[3]).toBe("openai/gpt-5.5");
-			expect(call?.[4]).toBe("global");
-
-			// The thinking strip follows immediately, scoped to the model's
-			// real ladder: gpt-5.5 tops out at xhigh — no invented max tier.
-			const thinking = footerLine(hub.render(220));
-			expect(thinking).toContain("inherit");
-			expect(thinking).toContain("xhigh");
-			expect(thinking).not.toContain("max");
+			expect(onAssign.mock.calls[0]?.[0]).toBe(model);
+			expect(onAssign.mock.calls[0]?.[5]).toEqual({ mode: "fixed", level: ThinkingLevel.Off });
 		});
 		test("awaits an async default assignment and does not recommit its preselected thinking", async () => {
 			const model = getBundledModel("openai", "gpt-5.5");
@@ -637,59 +671,60 @@ describe("ModelHub", () => {
 
 			hub.handleInput("\n"); // Sidebar → model list.
 			hub.handleInput("\n"); // Open role strip.
-			hub.handleInput("\n"); // Assign default.
+			hub.handleInput("\n"); // Stage default; thinking strip opens without writing.
+			expect(onAssign).not.toHaveBeenCalled();
+			hub.handleInput("\n"); // Confirm inherit and begin async assignment.
 			expect(onAssign).toHaveBeenCalledTimes(1);
 			expect(normalize(hub.render(220))).toContain("Applying model");
-
 			hub.handleInput("\n"); // A repeated Enter while persistence is pending is ignored.
 			expect(onAssign).toHaveBeenCalledTimes(1);
-
 			assignment.resolve(true);
 			await assignment.promise;
 			await Promise.resolve();
-			expect(footerLine(hub.render(220))).toContain("inherit");
-
-			hub.handleInput("\n"); // Confirming unchanged thinking only closes the strip.
 			expect(onAssign).toHaveBeenCalledTimes(1);
 		});
-		test("does not open thinking controls when an async assignment is rejected", async () => {
+		test("retains a failed async role draft for retry without persisting it", async () => {
 			const model = getBundledModel("openai", "gpt-5.5");
 			if (!model) throw new Error("Expected bundled model openai/gpt-5.5");
+			const settings = Settings.isolated({});
 			const assignment = Promise.withResolvers<boolean>();
-			const onAssign = vi.fn(() => assignment.promise);
-			const { hub } = createHub({ models: [model], scoped: true, callbacks: { onAssign } });
+			let attempts = 0;
+			const onAssign = vi.fn(() => (attempts++ === 0 ? assignment.promise : true));
+			const { hub } = createHub({ models: [model], scoped: true, settings, callbacks: { onAssign } });
 
-			hub.handleInput("\n"); // Sidebar → model list.
-			hub.handleInput("\n");
-			hub.handleInput("\n");
+			hub.handleInput("\n"); // Select model.
+			hub.handleInput("\n"); // Select role.
+			hub.handleInput("\n"); // Select effort.
+			hub.handleInput("\n"); // First save fails asynchronously.
 			assignment.resolve(false);
 			await assignment.promise;
 			await Promise.resolve();
+			expect(settings.getGlobalRoleEffortSelection("default")).toBeUndefined();
 
-			expect(onAssign).toHaveBeenCalledTimes(1);
-			expect(footerLine(hub.render(220))).not.toContain("inherit");
+			hub.handleInput("\n"); // Retry the same draft.
+			expect(onAssign).toHaveBeenCalledTimes(2);
+			expect(settings.getGlobalRoleEffortSelection("default")).toEqual({ mode: "inherit" });
 		});
-		test("hides thinking chips while a changed level is being applied", async () => {
+		test("ignores changes to staged effort while async persistence is pending", async () => {
 			const model = getBundledModel("openai", "gpt-5.5");
 			if (!model) throw new Error("Expected bundled model openai/gpt-5.5");
-			const thinking = Promise.withResolvers<boolean>();
-			let assignments = 0;
-			const onAssign = vi.fn(() => (++assignments === 1 ? true : thinking.promise));
-			const { hub } = createHub({ models: [model], scoped: true, callbacks: { onAssign } });
+			const settings = Settings.isolated({});
+			const pending = Promise.withResolvers<boolean>();
+			const onAssign = vi.fn(() => pending.promise);
+			const { hub } = createHub({ models: [model], scoped: true, settings, callbacks: { onAssign } });
 
-			hub.handleInput("\n"); // Sidebar → model list.
-			hub.handleInput("\n");
-			hub.handleInput("\n");
-			hub.handleInput("\x1b[C"); // Inherit → off.
-			hub.handleInput("\n");
-
-			expect(normalize(hub.render(220))).toContain("Applying model");
-			expect(footerLine(hub.render(220))).not.toContain("inherit");
-
-			thinking.resolve(true);
-			await thinking.promise;
+			hub.handleInput("\n"); // Select model.
+			hub.handleInput("\n"); // Select role.
+			hub.handleInput("\n"); // Open effort choices.
+			hub.handleInput("\x1b[C"); // Inherit → Off.
+			hub.handleInput("\n"); // Begin async save.
+			hub.handleInput("\x1b[C"); // Attempt to change the pending choice.
+			hub.handleInput("\n"); // Attempt a duplicate save.
+			expect(onAssign).toHaveBeenCalledTimes(1);
+			pending.resolve(true);
+			await pending.promise;
 			await Promise.resolve();
-			expect(onAssign).toHaveBeenCalledTimes(2);
+			expect(settings.getGlobalRoleEffortSelection("default")).toEqual({ mode: "fixed", level: ThinkingLevel.Off });
 		});
 		test("project storage exposes project and global role actions with callback scopes", () => {
 			const model = makeModel("test", "scoped-role-model");
@@ -702,6 +737,7 @@ describe("ModelHub", () => {
 			expect(projectStrip).toContain("project default");
 			expect(projectStrip).toContain("global default");
 			projectHarness.hub.handleInput("\n");
+			projectHarness.hub.handleInput("\n"); // Confirm inherited effort.
 			expect(projectHarness.onAssign.mock.calls[0]?.[4]).toBe("project");
 
 			const globalHarness = createHub({ models: [model], scoped: true, settings });
@@ -709,6 +745,7 @@ describe("ModelHub", () => {
 			globalHarness.hub.handleInput("\n");
 			globalHarness.hub.handleInput(DOWN);
 			globalHarness.hub.handleInput("\n");
+			globalHarness.hub.handleInput("\n"); // Confirm inherited effort.
 			expect(globalHarness.onAssign.mock.calls[0]?.[4]).toBe("global");
 		});
 		test("shadowed global assignments unassign from the global chip", () => {
@@ -805,6 +842,7 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN);
 			hub.handleInput(DOWN);
 			hub.handleInput("\n");
+			hub.handleInput("\n"); // Confirm staged effort.
 
 			expect(onAssign.mock.calls[0]?.[1]).toBe("smol");
 			expect(onAssign.mock.calls[0]?.[4]).toBe("project");
@@ -830,10 +868,10 @@ describe("ModelHub", () => {
 			hub.handleInput("\n");
 			hub.handleInput(DOWN); // Project default → global default.
 			hub.handleInput("\n");
+			hub.handleInput("\n"); // Confirm preserved global effort.
 
 			expect(onAssign.mock.calls[0]?.[2]).toBe(ThinkingLevel.Low);
 			expect(onAssign.mock.calls[0]?.[4]).toBe("global");
-			hub.handleInput("\n"); // Confirm the already committed thinking level.
 			expect(onAssign).toHaveBeenCalledTimes(1);
 		});
 		test("project-scope alias falls back to the global role when the project role is absent", () => {
@@ -862,6 +900,7 @@ describe("ModelHub", () => {
 			assignHub.hub.handleInput(DOWN); // gpt-5.5 → gpt-5.6.
 			assignHub.hub.handleInput("\n"); // Open the role strip for gpt-5.6.
 			assignHub.hub.handleInput("\n"); // Assign to "project default" (first chip).
+			assignHub.hub.handleInput("\n"); // Confirm preserved project effort.
 			expect(assignHub.onAssign).toHaveBeenCalledTimes(1);
 			expect(assignHub.onAssign.mock.calls[0]?.[1]).toBe("default");
 			expect(assignHub.onAssign.mock.calls[0]?.[2]).toBe(ThinkingLevel.Low);
@@ -894,7 +933,16 @@ describe("ModelHub", () => {
 		test("Enter on a chip already holding this model unassigns it", () => {
 			const model = makeModel("test", "toggled-model");
 			const settings = Settings.isolated({ modelRoles: { smol: "test/toggled-model" } });
-			const { hub, onAssign, onUnassign } = createHub({ models: [model], scoped: true, settings });
+			const { hub } = createHub({
+				models: [model],
+				scoped: true,
+				settings,
+				callbacks: {
+					onUnassign: (role, scope) => {
+						if (scope === "global") settings.setModelRole(role, undefined);
+					},
+				},
+			});
 			installTestTheme();
 
 			hub.handleInput("\n"); // Sidebar → model list.
@@ -902,10 +950,7 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN); // default → smol chip (down moves right)
 			hub.handleInput("\n");
 
-			expect(onUnassign).toHaveBeenCalledWith("smol");
-			expect(onAssign).not.toHaveBeenCalled();
-			// Toggle closes the strip without a thinking step.
-			expect(footerLine(hub.render(220))).not.toContain("inherit");
+			expect(settings.getGlobalModelRole("smol")).toBeUndefined();
 		});
 
 		test("role strip offers only roles the model can fill", () => {
@@ -939,25 +984,28 @@ describe("ModelHub", () => {
 			expect(searchStrip).not.toContain("retry-fallback");
 		});
 
-		test("retry-fallback chip appends the model to the default chain without a thinking strip", () => {
+		test("retry fallback is staged until effort confirmation, and cancel makes no change", () => {
 			const model = makeModel("test", "retry-fallback-model");
-			const { hub, onAssign, onFallbackChainChange } = createHub({ models: [model], scoped: true });
-			installTestTheme();
-
-			hub.handleInput("\n"); // Sidebar → model list.
-			hub.handleInput("\n");
-			hub.handleInput(LEFT); // wraps to the trailing retry-fallback chip
-			hub.handleInput("\n");
-
-			expect(onFallbackChainChange).toHaveBeenCalledWith("default", ["test/retry-fallback-model"]);
+			const settings = Settings.isolated({});
+			const { hub, onAssign, onFallbackChainChange } = createHub({ models: [model], scoped: true, settings });
+			hub.handleInput("\n"); // model list
+			hub.handleInput("\n"); // role strip
+			hub.handleInput(LEFT); // retry fallback
+			hub.handleInput("\n"); // effort strip, still uncommitted
+			expect(onFallbackChainChange).not.toHaveBeenCalled();
+			hub.handleInput(ESC);
+			expect(cfgRetryFallbackChains.get(settings).default).toBeUndefined();
 			expect(onAssign).not.toHaveBeenCalled();
-			expect(footerLine(hub.render(220))).not.toContain("inherit");
-
-			// A second registration of the same model is a no-op, not a duplicate.
-			hub.handleInput("\n");
-			hub.handleInput(LEFT);
-			hub.handleInput("\n");
-			expect(onFallbackChainChange).toHaveBeenCalledTimes(1);
+			const resumed = createHub({ models: [model], scoped: true, settings });
+			resumed.hub.handleInput("\n");
+			resumed.hub.handleInput("\n");
+			resumed.hub.handleInput(LEFT);
+			resumed.hub.handleInput("\n");
+			resumed.hub.handleInput("\n"); // confirm Inherit
+			expect(cfgRetryFallbackChains.get(settings).default).toEqual(["test/retry-fallback-model"]);
+			expect(cfgFallbackEffortSelections.get(settings).default?.["test/retry-fallback-model"]).toEqual({
+				mode: "inherit",
+			});
 		});
 
 		test("overflowing role strip scrolls left so the selected chip stays visible", () => {
@@ -1004,20 +1052,45 @@ describe("ModelHub", () => {
 			expect(rendered).toContain("↳ test/model-b");
 		});
 
-		test("f on a role opens fallback assignment and Enter appends the picked model", () => {
+		test("f on a role offers exact or pattern and saves fallback effort with its selector", () => {
 			const a = makeModel("test", "model-a");
 			const settings = Settings.isolated({});
 			const { hub, onFallbackChainChange, onAssign } = createHub({ models: [a], scoped: true, settings });
-
 			enterRolesView(hub);
-			hub.handleInput("f"); // add a fallback for the first role (default)
-			expect(normalize(hub.render(220))).toContain("Adding fallback for");
-
-			hub.handleInput("\n"); // Sidebar → model list.
-			hub.handleInput("\n"); // pick the only model
-			expect(onFallbackChainChange).toHaveBeenCalledWith("default", ["test/model-a"]);
-			expect(onAssign).not.toHaveBeenCalled(); // no role assignment, no thinking strip
+			hub.handleInput("f");
+			expect(footerLine(hub.render(220))).toContain("pick model");
+			expect(footerLine(hub.render(220))).toContain("pattern");
+			hub.handleInput("\n"); // exact model picker
+			hub.handleInput("\n"); // sidebar → model list
+			hub.handleInput("\n"); // model → effort choices
+			hub.handleInput("\n"); // Inherit
+			expect(onFallbackChainChange).toHaveBeenCalledWith("default", ["test/model-a"], {
+				selector: "test/model-a",
+				selection: { mode: "inherit" },
+			});
+			expect(onAssign).not.toHaveBeenCalled();
 			expect(normalize(hub.render(220))).toContain("↳ test/model-a");
+		});
+
+		test("pattern entry creates a fallback with its own Auto set", () => {
+			const settings = Settings.isolated({});
+			const { hub } = createHub({ models: [makeModel("test", "model-a")], scoped: true, settings });
+			enterRolesView(hub);
+			hub.handleInput("f");
+			hub.handleInput("\x1b[C"); // pattern…
+			hub.handleInput("\n");
+			for (const ch of "test/*") hub.handleInput(ch);
+			hub.handleInput("\n"); // model pattern → effort options
+			hub.handleInput("\x1b[C"); // Off
+			hub.handleInput("\x1b[C"); // Auto
+			hub.handleInput("\n"); // allowed levels
+			hub.handleInput(" "); // exclude minimal
+			hub.handleInput("\n"); // save
+			expect(cfgRetryFallbackChains.get(settings).default).toEqual(["test/*"]);
+			expect(cfgFallbackEffortSelections.get(settings).default?.["test/*"]).toEqual({
+				mode: "auto",
+				allowed: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
+			});
 		});
 
 		test("x removes a chain entry and Enter on an entry replaces it", () => {
@@ -1030,11 +1103,15 @@ describe("ModelHub", () => {
 
 			enterRolesView(hub);
 			hub.handleInput(DOWN); // default → its first chain entry (model-a)
-			hub.handleInput("\n"); // replace this entry
-			expect(normalize(hub.render(220))).toContain("Replacing fallback of");
-			for (const ch of "model-b") hub.handleInput(ch); // search: arrows hop scopes in assign mode
-			hub.handleInput("\n");
-			expect(onFallbackChainChange).toHaveBeenLastCalledWith("default", ["test/model-b"]);
+			hub.handleInput("\n"); // exact/pattern choice
+			hub.handleInput("\n"); // exact picker
+			for (const ch of "model-b") hub.handleInput(ch);
+			hub.handleInput("\n"); // model → effort choices
+			hub.handleInput("\n"); // Inherit
+			expect(onFallbackChainChange).toHaveBeenLastCalledWith("default", ["test/model-b"], {
+				selector: "test/model-b",
+				selection: { mode: "inherit" },
+			});
 
 			hub.handleInput("x"); // cursor landed on the replaced entry — remove it
 			expect(onFallbackChainChange).toHaveBeenLastCalledWith("default", []);
@@ -1159,6 +1236,162 @@ describe("ModelHub", () => {
 			expect(cfgRetryFallbackChains.get(settings).default).toEqual(["test/model-a"]);
 		});
 
+		test("y snapshots a routed primary's fixed effort and saves it with the target chain", () => {
+			const model = getBundledModel("openrouter", "z-ai/glm-4.7");
+			if (!model) throw new Error("Expected bundled OpenRouter model z-ai/glm-4.7");
+			const selector = "openrouter/z-ai/glm-4.7@fireworks";
+			const settings = Settings.isolated({});
+			settings.setRoleModelAndEffort("default", selector, { mode: "fixed", level: ThinkingLevel.High }, "global");
+			const { hub, onFallbackChainChange } = createHub({ models: [model], scoped: true, settings });
+			enterRolesView(hub);
+			hub.handleInput("y");
+			settings.setRoleEffortSelection("default", { mode: "fixed", level: ThinkingLevel.Low });
+			hub.handleInput(DOWN); // smol role
+			hub.handleInput("p");
+			expect(onFallbackChainChange).toHaveBeenCalledWith("smol", [selector], undefined, {
+				[selector]: { mode: "fixed", level: ThinkingLevel.High },
+			});
+			expect(cfgFallbackEffortSelections.get(settings).smol?.[selector]).toEqual({
+				mode: "fixed",
+				level: ThinkingLevel.High,
+			});
+		});
+
+		test("y copies a routed primary's Auto allowlist without aliasing its mutable source", () => {
+			const model = getBundledModel("openrouter", "z-ai/glm-4.7");
+			if (!model) throw new Error("Expected bundled OpenRouter model z-ai/glm-4.7");
+			const selector = "openrouter/z-ai/glm-4.7@fireworks";
+			const allowed = [Effort.Low, Effort.High];
+			const settings = Settings.isolated({});
+			settings.setRoleModelAndEffort(
+				"default",
+				selector,
+				{
+					mode: "auto",
+					selector: "openrouter/z-ai/glm-4.7",
+					allowed,
+				},
+				"global",
+			);
+			const { hub } = createHub({ models: [model], scoped: true, settings });
+			enterRolesView(hub);
+			hub.handleInput("y");
+			allowed.push(Effort.Max);
+			hub.handleInput(DOWN);
+			hub.handleInput("p");
+			expect(cfgFallbackEffortSelections.get(settings).smol?.[selector]).toEqual({
+				mode: "auto",
+				selector: "openrouter/z-ai/glm-4.7",
+				allowed: [Effort.Low, Effort.High],
+			});
+		});
+
+		test("y copies effective overlay role effort even without a persisted role source", () => {
+			const model = makeModel("test", "model-a");
+			const settings = Settings.isolated({
+				modelRoles: { default: "test/model-a" },
+				roleEffortSelections: { default: { mode: "fixed", level: ThinkingLevel.Off } },
+			});
+			const { hub } = createHub({ models: [model], scoped: true, settings });
+			enterRolesView(hub);
+			hub.handleInput("y");
+			hub.handleInput(DOWN);
+			hub.handleInput("p");
+			expect(cfgFallbackEffortSelections.get(settings).smol?.["test/model-a"]).toEqual({
+				mode: "fixed",
+				level: ThinkingLevel.Off,
+			});
+		});
+
+		test("y converts a legacy primary thinking suffix to fallback effort metadata", () => {
+			const model = getBundledModel("openrouter", "z-ai/glm-4.7");
+			if (!model) throw new Error("Expected bundled OpenRouter model z-ai/glm-4.7");
+			const selector = "openrouter/z-ai/glm-4.7@fireworks";
+			const settings = Settings.isolated({ modelRoles: { default: `${selector}:high` } });
+			const { hub } = createHub({ models: [model], scoped: true, settings });
+			enterRolesView(hub);
+			hub.handleInput("y");
+			hub.handleInput(DOWN);
+			hub.handleInput("p");
+			expect(cfgRetryFallbackChains.get(settings).smol).toEqual([selector]);
+			expect(cfgFallbackEffortSelections.get(settings).smol?.[selector]).toEqual({
+				mode: "fixed",
+				level: ThinkingLevel.High,
+			});
+		});
+
+		test("Y copies sparse Auto and fixed metadata in order without replacing duplicate target effort", () => {
+			const a = "test/model-a";
+			const b = "test/model-b";
+			const c = "test/model-c@route";
+			const settings = Settings.isolated({
+				"retry.fallbackChains": { default: [a, b, c], smol: [b] },
+				"retry.fallbackEffortSelections": {
+					default: {
+						[a]: { mode: "auto", allowed: [Effort.Low, Effort.High] },
+						[b]: { mode: "fixed", level: ThinkingLevel.Low },
+						[c]: { mode: "fixed", level: ThinkingLevel.High },
+					},
+					smol: { [b]: { mode: "fixed", level: ThinkingLevel.Off } },
+				},
+			});
+			const models = ["model-a", "model-b", "model-c"].map(id => makeModel("test", id));
+			const { hub, onFallbackChainChange } = createHub({ models, scoped: true, settings });
+			enterRolesView(hub);
+			hub.handleInput(DOWN); // first default fallback
+			hub.handleInput("Y");
+			const sourceSelections = cfgFallbackEffortSelections.get(settings);
+			(sourceSelections.default[a] as { allowed: Effort[] }).allowed.push(Effort.Max);
+			hub.handleInput(DOWN);
+			hub.handleInput(DOWN);
+			hub.handleInput(DOWN); // smol role
+			hub.handleInput("p");
+			hub.handleInput("p"); // deduped: no second persistence
+			expect(onFallbackChainChange).toHaveBeenCalledTimes(1);
+			expect(cfgRetryFallbackChains.get(settings).smol).toEqual([b, a, c]);
+			expect(cfgFallbackEffortSelections.get(settings).smol).toEqual({
+				[b]: { mode: "fixed", level: ThinkingLevel.Off },
+				[a]: { mode: "auto", allowed: [Effort.Low, Effort.High] },
+				[c]: { mode: "fixed", level: ThinkingLevel.High },
+			});
+			expect(cfgFallbackEffortSelections.get(settings).default[b]).toEqual({
+				mode: "fixed",
+				level: ThinkingLevel.Low,
+			});
+		});
+
+		test("y on one fallback copies Auto metadata into a model-keyed chain without changing source", () => {
+			const selector = "test/model-a@upstream";
+			const settings = Settings.isolated({
+				"retry.fallbackChains": { default: [selector], "test/*": ["test/model-b"] },
+				"retry.fallbackEffortSelections": {
+					default: { [selector]: { mode: "auto", allowed: [Effort.Medium, Effort.Max] } },
+				},
+			});
+			const { hub } = createHub({
+				models: [makeModel("test", "model-a"), makeModel("test", "model-b")],
+				scoped: true,
+				settings,
+			});
+			enterRolesView(hub);
+			hub.handleInput(DOWN);
+			hub.handleInput("y");
+			hub.handleInput(UP); // default role
+			hub.handleInput(UP); // + New fallback…
+			hub.handleInput(UP); // test/* fallback
+			hub.handleInput(UP); // test/* header
+			hub.handleInput("p");
+			expect(cfgRetryFallbackChains.get(settings)["test/*"]).toEqual(["test/model-b", selector]);
+			expect(cfgFallbackEffortSelections.get(settings)["test/*"]?.[selector]).toEqual({
+				mode: "auto",
+				allowed: [Effort.Medium, Effort.Max],
+			});
+			expect(cfgFallbackEffortSelections.get(settings).default?.[selector]).toEqual({
+				mode: "auto",
+				allowed: [Effort.Medium, Effort.Max],
+			});
+		});
+
 		test("windows the roles list so model-keyed chains past the panel height stay reachable", () => {
 			const settings = Settings.isolated({
 				// Model-keyed chains sort alphabetically; the unique tail key lands last.
@@ -1201,7 +1434,7 @@ describe("ModelHub", () => {
 			const sgr = `\x1b[<0;61;${screenRow + 1}M`; // SGR reports are 1-based
 			hub.handleInput(sgr); // select (dive into rows)
 			hub.handleInput(sgr); // click-again activates
-			expect(normalize(hub.render(220))).toContain("Assigning DEFAULT");
+			expect(footerLine(hub.render(220))).toContain("pick model");
 		});
 
 		test("fallbacks chip keys a new chain by the selected model", () => {
@@ -1219,7 +1452,11 @@ describe("ModelHub", () => {
 
 			for (const ch of "model-b") hub.handleInput(ch);
 			hub.handleInput("\n");
-			expect(onFallbackChainChange).toHaveBeenLastCalledWith("test/model-a", ["test/model-b"]);
+			hub.handleInput("\n"); // confirm fallback effort
+			expect(onFallbackChainChange).toHaveBeenLastCalledWith("test/model-a", ["test/model-b"], {
+				selector: "test/model-b",
+				selection: { mode: "inherit" },
+			});
 			const rendered = normalize(hub.render(220));
 			expect(rendered).toContain("test/model-a");
 			expect(rendered).toContain("↳ test/model-b");
@@ -1239,7 +1476,11 @@ describe("ModelHub", () => {
 
 			for (const ch of "model-b") hub.handleInput(ch);
 			hub.handleInput("\n");
-			expect(onFallbackChainChange).toHaveBeenLastCalledWith("test/*", ["test/model-b"]);
+			hub.handleInput("\n"); // confirm fallback effort
+			expect(onFallbackChainChange).toHaveBeenLastCalledWith("test/*", ["test/model-b"], {
+				selector: "test/model-b",
+				selection: { mode: "inherit" },
+			});
 		});
 
 		test("+ New fallback… picks the protected model, then keys the chain via the strip", () => {
@@ -1262,7 +1503,11 @@ describe("ModelHub", () => {
 			expect(normalize(hub.render(220))).toContain("Adding fallback for test/model-a");
 			for (const ch of "model-b") hub.handleInput(ch);
 			hub.handleInput("\n");
-			expect(onFallbackChainChange).toHaveBeenLastCalledWith("test/model-a", ["test/model-b"]);
+			hub.handleInput("\n"); // confirm fallback effort
+			expect(onFallbackChainChange).toHaveBeenLastCalledWith("test/model-a", ["test/model-b"], {
+				selector: "test/model-b",
+				selection: { mode: "inherit" },
+			});
 		});
 
 		test("model-keyed chains render below the separator and x clears the whole chain", () => {
@@ -1287,148 +1532,121 @@ describe("ModelHub", () => {
 			expect(normalize(hub.render(220))).not.toContain("↳ test/model-a");
 		});
 
-		test("t on a fallback entry sets an explicit effort suffix", () => {
+		test("exact fallback choices store fixed effort separately from the model selector", () => {
 			const model = getBundledModel("openai", "gpt-5.5");
-			if (!model) throw new Error("Expected bundled model openai/gpt-5.5");
+			if (!model) throw new Error("Expected bundled reasoning model");
 			const selector = `${model.provider}/${model.id}`;
 			const settings = Settings.isolated({ "retry.fallbackChains": { default: [selector] } });
 			const { hub, onFallbackChainChange } = createHub({ models: [model], scoped: true, settings });
-
 			enterRolesView(hub);
-			hub.handleInput(DOWN); // default → its fallback entry
-			expect(footerLine(hub.render(220))).toContain("t thinking");
-
+			hub.handleInput(DOWN);
 			hub.handleInput("t");
-			const strip = footerLine(hub.render(220));
-			expect(strip).toContain("inherit");
-			expect(strip).toContain("off");
-			expect(strip).not.toContain("auto");
-
-			hub.handleInput("\x1b[C"); // inherit → off
+			hub.handleInput("\x1b[C"); // Inherit → Off
 			hub.handleInput("\n");
-			expect(onFallbackChainChange).toHaveBeenLastCalledWith("default", [`${selector}:off`]);
-			expect(normalize(hub.render(220))).toContain(`↳ ${selector}:off`);
+			expect(onFallbackChainChange).toHaveBeenLastCalledWith("default", [selector], {
+				selector,
+				selection: { mode: "fixed", level: ThinkingLevel.Off },
+			});
+			expect(cfgFallbackEffortSelections.get(settings).default?.[selector]).toEqual({
+				mode: "fixed",
+				level: ThinkingLevel.Off,
+			});
 		});
 
-		test("t on a suffixed fallback entry clears back to inherit", () => {
-			const model = getBundledModel("openai", "gpt-5.5");
-			if (!model) throw new Error("Expected bundled model openai/gpt-5.5");
-			const selector = `${model.provider}/${model.id}`;
-			const settings = Settings.isolated({ "retry.fallbackChains": { default: [`${selector}:off`] } });
-			const { hub, onFallbackChainChange } = createHub({ models: [model], scoped: true, settings });
-
-			enterRolesView(hub);
-			hub.handleInput(DOWN); // default → its fallback entry
-			expect(normalize(hub.render(220))).toContain(`↳ ${selector}:off`);
-
-			hub.handleInput("t");
-			hub.handleInput(LEFT); // off → inherit
-			hub.handleInput("\n");
-			expect(onFallbackChainChange).toHaveBeenLastCalledWith("default", [selector]);
-			expect(normalize(hub.render(220))).not.toContain(`${selector}:off`);
-		});
-
-		test("t on a routed fallback entry preserves @upstream when setting effort", () => {
-			const model = makeModel("openrouter", "z-ai/glm-4.7");
-			const routed = `${model.provider}/${model.id}@fireworks`;
-			const settings = Settings.isolated({ "retry.fallbackChains": { default: [routed] } });
-			const { hub, onFallbackChainChange } = createHub({ models: [model], scoped: true, settings });
-
-			enterRolesView(hub);
-			hub.handleInput(DOWN); // default → its fallback entry
-			expect(normalize(hub.render(220))).toContain(`↳ ${routed}`);
-
-			hub.handleInput("t");
-			hub.handleInput("\x1b[C"); // inherit → off
-			hub.handleInput("\n");
-			expect(onFallbackChainChange).toHaveBeenLastCalledWith("default", [`${routed}:off`]);
-			expect(normalize(hub.render(220))).toContain(`↳ ${routed}:off`);
-		});
-
-		test("t on a routed+suffixed entry clears back to the bare route", () => {
-			const model = makeModel("openrouter", "z-ai/glm-4.7");
-			const routed = `${model.provider}/${model.id}@fireworks`;
-			const settings = Settings.isolated({ "retry.fallbackChains": { default: [`${routed}:off`] } });
-			const { hub, onFallbackChainChange } = createHub({ models: [model], scoped: true, settings });
-
-			enterRolesView(hub);
-			hub.handleInput(DOWN); // default → its fallback entry
-			hub.handleInput("t");
-			hub.handleInput(LEFT); // off → inherit
-			hub.handleInput("\n");
-			expect(onFallbackChainChange).toHaveBeenLastCalledWith("default", [routed]);
-			expect(normalize(hub.render(220))).not.toContain(`${routed}:off`);
-		});
-
-		test("wildcard fallback rows hide the thinking hint and ignore t", () => {
-			const a = makeModel("test", "model-a");
+		test("wildcard fallback edits Auto candidates rather than ignoring effort", () => {
 			const settings = Settings.isolated({ "retry.fallbackChains": { default: ["test/*"] } });
-			const { hub, onFallbackChainChange } = createHub({ models: [a], scoped: true, settings });
-
+			const { hub } = createHub({ models: [makeModel("test", "model-a")], scoped: true, settings });
 			enterRolesView(hub);
-			hub.handleInput(DOWN); // default → its wildcard entry
-			expect(normalize(hub.render(220))).toContain("↳ test/*");
-			expect(footerLine(hub.render(220))).not.toContain("t thinking");
-
-			hub.handleInput("t"); // inert: no strip, no chain write
-			expect(onFallbackChainChange).not.toHaveBeenCalled();
-			expect(footerLine(hub.render(220))).not.toContain("inherit");
-		});
-
-		test("t on a literal @-suffixed id does not strip it as routing", () => {
-			const model = makeModel("test", "model@default");
-			const selector = `${model.provider}/${model.id}`;
-			const settings = Settings.isolated({ "retry.fallbackChains": { default: [selector] } });
-			const { hub, onFallbackChainChange } = createHub({ models: [model], scoped: true, settings });
-
-			enterRolesView(hub);
-			hub.handleInput(DOWN); // default → its fallback entry
-			expect(normalize(hub.render(220))).toContain(`↳ ${selector}`);
-
+			hub.handleInput(DOWN);
 			hub.handleInput("t");
-			hub.handleInput("\x1b[C"); // inherit → off
+			expect(footerLine(hub.render(220))).toContain("auto");
+			hub.handleInput("\x1b[C"); // Off
+			hub.handleInput("\x1b[C"); // Auto
 			hub.handleInput("\n");
-			expect(onFallbackChainChange).toHaveBeenLastCalledWith("default", [`${selector}:off`]);
+			hub.handleInput(" "); // disable minimal
+			hub.handleInput("\n");
+			expect(cfgFallbackEffortSelections.get(settings).default?.["test/*"]).toEqual({
+				mode: "auto",
+				allowed: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
+			});
+			expect(cfgRetryFallbackChains.get(settings).default).toEqual(["test/*"]);
 		});
 
-		test("t on a locked fallback entry resolves the ladder from the catalog", () => {
-			const available = makeModel("test", "model-a");
-			const locked = makeModel("locked", "model-x");
-			const selector = `${locked.provider}/${locked.id}`;
-			const settings = Settings.isolated({ "retry.fallbackChains": { default: [selector] } });
-			const { hub, onFallbackChainChange } = createHub({
-				models: [available],
+		test("editing a legacy suffixed pattern retains its authored effort", () => {
+			const settings = Settings.isolated({ "retry.fallbackChains": { default: ["test/*:high"] } });
+			const { hub } = createHub({ models: [makeModel("test", "model-a")], scoped: true, settings });
+			enterRolesView(hub);
+			hub.handleInput(DOWN);
+			hub.handleInput("t");
+			hub.handleInput("\n"); // confirm the preselected effort without changing it
+			expect(cfgRetryFallbackChains.get(settings).default).toEqual(["test/*"]);
+			expect(cfgFallbackEffortSelections.get(settings).default?.["test/*"]).toEqual({
+				mode: "fixed",
+				level: ThinkingLevel.High,
+			});
+		});
+
+		test("a rejected fallback save retains its draft for retry without changing the chain", () => {
+			const settings = Settings.isolated({ "retry.fallbackChains": { default: ["test/*"] } });
+			let reject = true;
+			const { hub } = createHub({
+				models: [makeModel("test", "model-a")],
 				scoped: true,
 				settings,
-				registry: { getAvailable: () => [available], getAll: () => [available, locked] },
+				callbacks: {
+					onFallbackChainChange: (role, _chain, effort) => {
+						if (reject) {
+							reject = false;
+							return false;
+						}
+						if (effort)
+							cfgFallbackEffortSelections.override(settings, {
+								[role]: { [effort.selector]: effort.selection },
+							});
+						return true;
+					},
+				},
 			});
-
 			enterRolesView(hub);
-			hub.handleInput(DOWN); // default → its fallback entry
-			expect(footerLine(hub.render(220))).toContain("t thinking");
-
+			hub.handleInput(DOWN);
 			hub.handleInput("t");
-			hub.handleInput("\x1b[C"); // inherit → off
-			hub.handleInput("\n");
-			expect(onFallbackChainChange).toHaveBeenLastCalledWith("default", [`${selector}:off`]);
+			hub.handleInput("\x1b[C"); // choose Off
+			hub.handleInput("\n"); // rejected
+			expect(cfgRetryFallbackChains.get(settings).default).toEqual(["test/*"]);
+			expect(cfgFallbackEffortSelections.get(settings).default).toBeUndefined();
+			hub.handleInput("\n"); // retry same staged choice
+			expect(cfgFallbackEffortSelections.get(settings).default?.["test/*"]).toEqual({
+				mode: "fixed",
+				level: ThinkingLevel.Off,
+			});
 		});
 
-		test("t on a case-variant entry resolves through the registry and saves canonically", () => {
-			const model = getBundledModel("openai", "gpt-5.5");
-			if (!model) throw new Error("Expected bundled model openai/gpt-5.5");
-			const selector = `${model.provider}/${model.id}`;
-			const settings = Settings.isolated({ "retry.fallbackChains": { default: ["OpenAI/GPT-5.5"] } });
-			const { hub, onFallbackChainChange } = createHub({ models: [model], scoped: true, settings });
-
+		test("literal @ model IDs and routed selectors retain their identity when editing effort", () => {
+			const literal = makeModel("test", "model@default");
+			const routed = makeModel("openrouter", "z-ai/glm-4.7");
+			const route = `${routed.provider}/${routed.id}@fireworks`;
+			const settings = Settings.isolated({
+				"retry.fallbackChains": { default: [`${literal.provider}/${literal.id}`, route] },
+			});
+			const { hub } = createHub({ models: [literal, routed], scoped: true, settings });
 			enterRolesView(hub);
-			hub.handleInput(DOWN); // default → its fallback entry
-			expect(normalize(hub.render(220))).toContain("↳ OpenAI/GPT-5.5");
-			expect(footerLine(hub.render(220))).toContain("t thinking");
-
+			hub.handleInput(DOWN);
 			hub.handleInput("t");
-			hub.handleInput("\x1b[C"); // inherit → off
+			hub.handleInput("\x1b[C");
 			hub.handleInput("\n");
-			expect(onFallbackChainChange).toHaveBeenLastCalledWith("default", [`${selector}:off`]);
+			hub.handleInput(DOWN);
+			hub.handleInput("t");
+			hub.handleInput("\x1b[C");
+			hub.handleInput("\n");
+			expect(cfgRetryFallbackChains.get(settings).default).toEqual(["test/model@default", route]);
+			expect(cfgFallbackEffortSelections.get(settings).default?.["test/model@default"]).toEqual({
+				mode: "fixed",
+				level: ThinkingLevel.Off,
+			});
+			expect(cfgFallbackEffortSelections.get(settings).default?.[route]).toEqual({
+				mode: "fixed",
+				level: ThinkingLevel.Off,
+			});
 		});
 	});
 
@@ -1527,7 +1745,7 @@ describe("ModelHub", () => {
 			for (let i = 0; i < 4; i++) hub.handleInput(WHEEL_UP_BODY); // cursor stays on the first role
 			hub.handleInput("\n"); // dive into the rows
 			hub.handleInput("\n"); // activate the cursor row
-			expect(normalize(hub.render(220))).toContain("Assigning DEFAULT");
+			expect(footerLine(hub.render(220))).toContain("pick model");
 		});
 	});
 
@@ -1778,6 +1996,146 @@ describe("ModelHub", () => {
 
 			hub.handleInput("\n");
 			expect(onLoginRequest).toHaveBeenCalledWith("anthropic");
+		});
+	});
+	describe("effort policy editors", () => {
+		test("Auto edits a sparse set, cancels atomically, and saves in the selected role scope", () => {
+			const model = getBundledModel("openai", "gpt-5.5");
+			if (!model) throw new Error("Expected bundled reasoning model");
+			const settings = Settings.isolated({ modelRoleStorage: "project" });
+			const assigned = vi.fn();
+			const { hub } = createHub({
+				models: [model],
+				scoped: true,
+				settings,
+				callbacks: {
+					onAssign: (selectedModel, role, level, selector, scope, selection) => {
+						assigned(selectedModel, role, level, selector, scope, selection);
+						settings.setProjectModelRole(role, selector);
+						return true;
+					},
+				},
+			});
+			hub.handleInput("\n"); // model list
+			hub.handleInput("\n"); // role choices
+			hub.handleInput("\n"); // project default role
+			hub.handleInput("\x1b[C"); // off
+			hub.handleInput("\x1b[C"); // Auto
+			hub.handleInput("\n"); // Auto set editor
+			expect(footerLine(hub.render(220))).not.toContain("inherit");
+			expect(footerLine(hub.render(220))).not.toContain("auto");
+			hub.handleInput(" "); // create a hole
+			hub.handleInput(ESC); // no partial assignment
+			expect(assigned).not.toHaveBeenCalled();
+			expect(settings.getProjectRoleEffortSelection("default")).toBeUndefined();
+
+			hub.handleInput("\n"); // select model
+			hub.handleInput("\n"); // project role opens effort choices
+			hub.handleInput("\x1b[C");
+			hub.handleInput("\x1b[C");
+			hub.handleInput("\n");
+			hub.handleInput(" ");
+			hub.handleInput("\x1b[C");
+			hub.handleInput(" ");
+			hub.handleInput("\n"); // confirm sparse Auto selection
+			const auto = settings.getProjectRoleEffortSelection("default");
+			expect(auto).toEqual({
+				mode: "auto",
+				allowed: getSupportedEfforts(model).slice(2),
+				selector: "openai/gpt-5.5",
+			});
+			expect(settings.getGlobalRoleEffortSelection("default")).toBeUndefined();
+			expect(assigned).toHaveBeenCalledTimes(1);
+			expect(assigned.mock.calls[0]?.[5]).toEqual(auto);
+			const reopened = createHub({ models: [model], scoped: true, settings });
+			reopened.hub.handleInput(UP); // Roles
+			reopened.hub.handleInput("\n"); // role rows
+			reopened.hub.handleInput("t"); // saved Auto is preselected
+			expect(footerLine(reopened.hub.render(220))).toContain("auto");
+			reopened.hub.handleInput("\n"); // existing enabled set
+			const first = getSupportedEfforts(model)[0];
+			const third = getSupportedEfforts(model)[2];
+			const restored = footerLine(reopened.hub.render(220));
+			expect(restored).toContain(`${theme.status.disabled} ${first}`);
+			expect(restored).toContain(`${theme.status.enabled} ${third}`);
+		});
+
+		test("role rows offer exact picking and pattern entry before effort confirmation", () => {
+			const model = getBundledModel("openai", "gpt-5.5");
+			if (!model) throw new Error("Expected bundled reasoning model");
+			const { hub, onAssign } = createHub({ models: [model], scoped: true });
+			hub.handleInput(UP); // All → Roles
+			hub.handleInput("\n"); // focus role rows
+			hub.handleInput("\n"); // selector choices
+			expect(footerLine(hub.render(220))).toContain("pick model");
+			expect(footerLine(hub.render(220))).toContain("pattern");
+			hub.handleInput("\x1b[C");
+			hub.handleInput("\n");
+			for (const ch of "openai/gpt-5.?") hub.handleInput(ch);
+			hub.handleInput("\n"); // pattern resolves to compatible model; opens effort
+			expect(onAssign).not.toHaveBeenCalled();
+			hub.handleInput("\x1b[C"); // Off
+			hub.handleInput("\x1b[C"); // Auto
+			hub.handleInput("\n"); // toggle menu
+			hub.handleInput("\n"); // save all permitted
+			expect(onAssign.mock.calls[0]?.[3]).toBe("openai/gpt-5.?");
+			expect(onAssign.mock.calls[0]?.[5]).toEqual({
+				mode: "auto",
+				allowed: [...getSupportedEfforts(model)],
+				selector: "openai/gpt-5.?",
+			});
+		});
+
+		test("global pattern rules reject empty sets and retain prior rules on cancel", () => {
+			const model = getBundledModel("openai", "gpt-5.5");
+			if (!model) throw new Error("Expected bundled reasoning model");
+			const settings = Settings.isolated({});
+			const { hub } = createHub({ models: [model], scoped: true, settings });
+			hub.handleInput(UP); // All → Roles
+			hub.handleInput(UP); // Roles → Effort rules
+			hub.handleInput("\n"); // rules list
+			hub.handleInput(DOWN); // pattern entry
+			hub.handleInput("\n");
+			for (const ch of "openai/*") hub.handleInput(ch);
+			hub.handleInput("\n"); // enabled-level editor
+			for (let i = 0; i < 6; i++) {
+				hub.handleInput(" ");
+				hub.handleInput("\x1b[C");
+			}
+			hub.handleInput("\n"); // empty rejected
+			expect(cfgEffortRules.get(settings)).toEqual([]);
+			expect(normalize(hub.render(220))).toContain("at least one");
+			hub.handleInput(" "); // permit just minimal
+			hub.handleInput("\n");
+			expect(cfgEffortRules.get(settings)).toEqual([{ selector: "openai/*", allowed: [Effort.Minimal] }]);
+			hub.handleInput("\n"); // reopen existing
+			expect(footerLine(hub.render(220))).toContain("minimal");
+			hub.handleInput("\x1b[C");
+			hub.handleInput(" ");
+			hub.handleInput(ESC);
+			expect(cfgEffortRules.get(settings)).toEqual([{ selector: "openai/*", allowed: [Effort.Minimal] }]);
+		});
+		test("pattern reordering skips exact entries without moving their precedence", () => {
+			const model = getBundledModel("openai", "gpt-5.5");
+			if (!model) throw new Error("Expected bundled reasoning model");
+			const settings = Settings.isolated({});
+			cfgEffortRules.set(settings, [
+				{ selector: "openai/*", allowed: [Effort.Low] },
+				{ selector: "openai/gpt-5.5", allowed: [Effort.High] },
+				{ selector: "*/gpt-5.?", allowed: [Effort.Medium] },
+			]);
+			const { hub } = createHub({ models: [model], scoped: true, settings });
+			hub.handleInput(UP);
+			hub.handleInput(UP); // global effort menu
+			hub.handleInput("\n");
+			hub.handleInput(DOWN);
+			hub.handleInput(DOWN); // second pattern, with an exact row between
+			hub.handleInput("[");
+			expect(cfgEffortRules.get(settings).map(rule => rule.selector)).toEqual([
+				"*/gpt-5.?",
+				"openai/gpt-5.5",
+				"openai/*",
+			]);
 		});
 	});
 });

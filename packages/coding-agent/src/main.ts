@@ -121,7 +121,7 @@ import {
 import { createPersistedSubagentReviverFactory } from "./task/persisted-revive";
 import { createTelemetryExportConfig, initTelemetryExport, isTelemetryExportEnabled } from "./telemetry-export";
 import { registerLocalInferenceApi } from "./tiny/local-inference-api";
-import { concreteThinkingLevel, parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
+import { AUTO_THINKING, concreteThinkingLevel, parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { LspStartupServerInfo } from "./tools";
 import { sanitizeDisplayWarnings } from "@oh-my-pi/pi-tui/render/render-utils";
 import { getChangelogPath, resolveStartupChangelogForDisplay, type StartupChangelogSelection } from "./utils/changelog";
@@ -1045,14 +1045,16 @@ export async function resolveScopedModels(
 }
 
 /**
- * Map resolver scope entries to the session's Ctrl+P cycle shape, filling in the
- * configured default thinking level for entries without an explicit `:level`
- * suffix. `auto` is session-level only, so it is coerced to a concrete default here.
+ * Map resolver entries to Ctrl+P's cycle shape, retaining a suffix's caller
+ * provenance only when the scope itself came from CLI --models. Persisted
+ * enabledModels suffixes remain implicit and subject to policy. `auto` is
+ * session-level only, so a configured default is concrete here.
  */
 export function toSessionScopedModels(
 	scopedModels: readonly ScopedModel[],
 	activeSettings: Settings,
-): Array<{ model: Model; thinkingLevel?: ThinkingLevel }> {
+	fromCliModels = false,
+): Array<{ model: Model; thinkingLevel?: ThinkingLevel; explicitThinkingLevel?: boolean }> {
 	if (scopedModels.length === 0) return [];
 	const defaultThinkingLevel = concreteThinkingLevel(
 		parseConfiguredThinkingLevel(cfgDefaultThinkingLevel.get(activeSettings)),
@@ -1062,21 +1064,38 @@ export function toSessionScopedModels(
 		thinkingLevel: scopedModel.explicitThinkingLevel
 			? (scopedModel.thinkingLevel ?? defaultThinkingLevel)
 			: defaultThinkingLevel,
+		explicitThinkingLevel: fromCliModels && scopedModel.explicitThinkingLevel,
 	}));
 }
 
-/** Whether two scope lists reference the same set of models (order-independent). */
-function sameScopedModelSet(a: ReadonlyArray<{ model: Model }>, b: ReadonlyArray<{ model: Model }>): boolean {
+/** Whether scope entries have the same models, configured effort and authorship (order-independent). */
+function sameScopedModelSet(
+	a: ReadonlyArray<{ model: Model; thinkingLevel?: ThinkingLevel; explicitThinkingLevel?: boolean }>,
+	b: ReadonlyArray<{ model: Model; thinkingLevel?: ThinkingLevel; explicitThinkingLevel?: boolean }>,
+): boolean {
 	if (a.length !== b.length) return false;
-	const keys = new Set(a.map(entry => `${entry.model.provider}/${entry.model.id}`));
-	return b.every(entry => keys.has(`${entry.model.provider}/${entry.model.id}`));
+	const entries = new Map(a.map(entry => [`${entry.model.provider}/${entry.model.id}`, entry]));
+	return b.every(entry => {
+		const previous = entries.get(`${entry.model.provider}/${entry.model.id}`);
+		return (
+			previous !== undefined &&
+			previous.thinkingLevel === entry.thinkingLevel &&
+			Boolean(previous.explicitThinkingLevel) === Boolean(entry.explicitThinkingLevel)
+		);
+	});
 }
 
 /** Minimal session surface the post-discovery scope rebuild mutates. */
 export interface ScopedModelSink {
 	readonly isDisposed: boolean;
-	readonly scopedModels: ReadonlyArray<{ model: Model; thinkingLevel?: ThinkingLevel }>;
-	setScopedModels(scopedModels: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>): void;
+	readonly scopedModels: ReadonlyArray<{
+		model: Model;
+		thinkingLevel?: ThinkingLevel;
+		explicitThinkingLevel?: boolean;
+	}>;
+	setScopedModels(
+		scopedModels: Array<{ model: Model; thinkingLevel?: ThinkingLevel; explicitThinkingLevel?: boolean }>,
+	): void;
 }
 
 /**
@@ -1109,7 +1128,7 @@ export async function rebuildScopedModelsAfterDiscovery(
 		getModelMatchPreferences(activeSettings),
 		activeSettings,
 	);
-	const mapped = toSessionScopedModels(rebuilt, activeSettings);
+	const mapped = toSessionScopedModels(rebuilt, activeSettings, Boolean(parsed.models?.length));
 	if (mapped.length === 0 || sameScopedModelSet(session.scopedModels, mapped)) return;
 	session.setScopedModels(mapped);
 }
@@ -1145,7 +1164,7 @@ export function watchScopedModelSettings(
 						getModelMatchPreferences(activeSettings),
 						activeSettings,
 					);
-		const mapped = toSessionScopedModels(rebuilt, activeSettings);
+		const mapped = toSessionScopedModels(rebuilt, activeSettings, Boolean(parsed.models?.length));
 		if (sameScopedModelSet(session.scopedModels, mapped)) return;
 		session.setScopedModels(mapped);
 	});
@@ -1475,6 +1494,14 @@ export async function buildSessionOptions(
 			settings: activeSettings,
 			preferences: modelMatchPreferences,
 		});
+		const requestedEffortSuffix = parseConfiguredThinkingLevel(parsed.model.slice(parsed.model.lastIndexOf(":") + 1));
+		if (
+			!parsed.thinking &&
+			requestedEffortSuffix !== undefined &&
+			(!resolved.model || resolved.thinkingLevel !== undefined)
+		) {
+			options.thinkingOrigin = "caller";
+		}
 		if (resolved.warning) {
 			process.stderr.write(`${chalk.yellow(`Warning: ${resolved.warning}`)}\n`);
 		}
@@ -1502,16 +1529,37 @@ export async function buildSessionOptions(
 		} else if (resolved.model) {
 			options.model = resolved.model;
 			options.rebindModelAfterDiscovery = true;
+			const configuredRoleEffort =
+				!parsed.thinking && options.thinkingOrigin !== "caller" && resolved.configuredRole
+					? activeSettings.getRoleEffortSelection(resolved.configuredRole)
+					: undefined;
+			const roleLevel =
+				configuredRoleEffort?.mode === "auto"
+					? AUTO_THINKING
+					: configuredRoleEffort?.mode === "fixed"
+						? configuredRoleEffort.level
+						: undefined;
 			// The recorded role must carry the effort the session actually starts
 			// at, or the first cycle back into `default` overrides it.
 			activeSettings.overrideModelRoles({
 				default: formatModelSelectorValue(
 					resolved.selector ?? `${resolved.model.provider}/${resolved.model.id}`,
-					parsed.thinking ?? resolved.thinkingLevel,
+					parsed.thinking ??
+						roleLevel ??
+						(options.thinkingOrigin === "caller" ? requestedEffortSuffix : undefined) ??
+						resolved.thinkingLevel,
 				),
 			});
-			if (!parsed.thinking && resolved.thinkingLevel) {
-				options.thinkingLevel = resolved.thinkingLevel;
+			if (!parsed.thinking && (roleLevel !== undefined || resolved.thinkingLevel !== undefined)) {
+				options.thinkingLevel =
+					roleLevel ??
+					(options.thinkingOrigin === "caller" ? requestedEffortSuffix : undefined) ??
+					resolved.thinkingLevel;
+				options.thinkingOrigin =
+					configuredRoleEffort || (resolved.configuredRole && options.thinkingOrigin !== "caller")
+						? "role"
+						: "caller";
+				if (configuredRoleEffort?.mode === "auto") options.autoSelection = configuredRoleEffort;
 			}
 		}
 	} else if (scopedModels.length > 0 && !restoringSession) {
@@ -1536,9 +1584,17 @@ export async function buildSessionOptions(
 			if (rememberedModel) {
 				options.model = rememberedModel.model;
 				options.rebindModelAfterDiscovery = true;
-				// Apply explicit thinking level from remembered role value
-				if (!parsed.thinking && rememberedSpec.explicitThinkingLevel && rememberedSpec.thinkingLevel) {
+				const defaultEffort = activeSettings.getRoleEffortSelection("default");
+				if (!parsed.thinking && defaultEffort?.mode === "auto") {
+					options.thinkingLevel = AUTO_THINKING;
+					options.thinkingOrigin = "role";
+					options.autoSelection = defaultEffort;
+				} else if (!parsed.thinking && defaultEffort?.mode === "fixed") {
+					options.thinkingLevel = defaultEffort.level;
+					options.thinkingOrigin = "role";
+				} else if (!parsed.thinking && rememberedSpec.explicitThinkingLevel && rememberedSpec.thinkingLevel) {
 					options.thinkingLevel = rememberedSpec.thinkingLevel;
+					options.thinkingOrigin = "role";
 				}
 			}
 		}
@@ -1710,8 +1766,10 @@ export async function buildSessionOptions(
 	// Thinking level
 	if (parsed.thinking) {
 		options.thinkingLevel = parsed.thinking;
+		options.thinkingOrigin = "caller";
 	} else if (
 		scopedModels.length > 0 &&
+		((parsed.models?.length ?? 0) > 0 || options.thinkingLevel === undefined) &&
 		scopedModels[0].explicitThinkingLevel === true &&
 		// A deferred default role resolves its own model (and any explicit
 		// thinking suffix) after extensions register; seeding the fallback
@@ -1720,11 +1778,13 @@ export async function buildSessionOptions(
 		!restoringSession
 	) {
 		options.thinkingLevel = scopedModels[0].thinkingLevel;
+		options.thinkingOrigin = (parsed.models?.length ?? 0) > 0 ? "caller" : "default";
+		if (options.thinkingOrigin === "caller") options.autoSelection = undefined;
 	}
 
 	// Scoped models for Ctrl+P cycling — fill in default thinking levels when not explicit.
 	if (scopedModels.length > 0) {
-		options.scopedModels = toSessionScopedModels(scopedModels, activeSettings);
+		options.scopedModels = toSessionScopedModels(scopedModels, activeSettings, Boolean(parsed.models?.length));
 	}
 
 	// API key from CLI - set in authStorage

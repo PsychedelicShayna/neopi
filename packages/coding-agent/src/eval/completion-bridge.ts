@@ -17,6 +17,14 @@ import { instrumentedCompleteSimple, resolveTelemetry, type ThinkingLevel } from
 import { type Api, type AssistantMessage, Effort, type Model, type Tool } from "@oh-my-pi/pi-ai";
 import { clampThinkingLevelForModel, getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { Snowflake } from "@oh-my-pi/pi-utils";
+import { classifyDifficulty } from "../auto-thinking/classifier";
+import {
+	cfgEffortPolicyMode,
+	EffortPolicyError,
+	resolveImplicitEffort,
+	type EffortOrigin,
+	type EffortSelection,
+} from "../config/effort-policy";
 import { extractTextContent, extractToolCall, parseJsonPayload } from "../commit/utils";
 
 import type { ModelRegistry } from "../config/model-registry";
@@ -35,11 +43,17 @@ import type { ToolSession } from "../tools";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import {
 	findRetryFallbackCandidates,
+	getFallbackEffortSelection,
 	getRetryFallbackChains,
 	type RetryFallbackResolutionContext,
 	resolveRetryFallbackChainKey,
 } from "../session/retry-fallback-chains";
-import { shouldDisableReasoning, toReasoningEffort } from "@oh-my-pi/pi-tui/thinking";
+import {
+	AUTO_THINKING,
+	concreteThinkingLevel,
+	shouldDisableReasoning,
+	toReasoningEffort,
+} from "@oh-my-pi/pi-tui/thinking";
 import type { JsStatusEvent } from "./js/shared/types";
 
 import { cfgDisabledProviders } from "../config/model-settings";
@@ -77,7 +91,7 @@ export interface EvalCompletionResult {
 	text: string;
 	/** Structured payload; when present the cell receives it in place of `text`. */
 	data?: unknown;
-	details: { model: string; tier?: CompletionTier; structured: boolean };
+	details: { model: string; tier?: CompletionTier; structured: boolean; notices?: string[] };
 }
 
 /** Handle returned immediately after an eval completion starts. */
@@ -131,6 +145,10 @@ interface CompletionCandidate {
 	model: Model<Api>;
 	reasoning: Effort | undefined;
 	disableReasoning: boolean;
+	selection?: EffortSelection;
+	origin: EffortOrigin;
+	parent?: CompletionCandidate;
+	inheritsReasoning?: boolean;
 }
 
 function reasoningForCandidate(
@@ -141,9 +159,7 @@ function reasoningForCandidate(
 ): Pick<CompletionCandidate, "reasoning" | "disableReasoning"> {
 	if (shouldDisableReasoning(level)) return { reasoning: undefined, disableReasoning: true };
 	const explicit = toReasoningEffort(level);
-	if (explicit !== undefined) {
-		return { reasoning: clampThinkingLevelForModel(model, explicit), disableReasoning: false };
-	}
+	if (explicit !== undefined) return { reasoning: explicit, disableReasoning: false };
 	// Bare nested entries inherit the failed candidate's effective effort
 	// instead of recomputing the tier default for a different model.
 	if (parent) {
@@ -174,7 +190,7 @@ function candidateIdentity(
 interface FallbackExpansion {
 	context: RetryFallbackResolutionContext;
 	modelRegistry: ModelRegistry;
-	settings: Settings | undefined;
+	settings: Settings;
 	tier: CompletionTier;
 	disabledProviders: Set<string>;
 }
@@ -195,7 +211,7 @@ function appendFallbackCandidates(
 	deps: FallbackExpansion,
 	selector: string,
 	model: Model<Api>,
-	parent: Pick<CompletionCandidate, "reasoning" | "disableReasoning"> | undefined,
+	parent: CompletionCandidate | undefined,
 	roleHint: string | undefined,
 	seen: Set<string>,
 	expanded: Set<string>,
@@ -215,12 +231,34 @@ function appendFallbackCandidates(
 		const resolved = resolveModelOverride([entry.raw], deps.modelRegistry, deps.settings);
 		const candidate = resolved.model;
 		if (!candidate || deps.disabledProviders.has(candidate.provider)) continue;
-		const reasoning = reasoningForCandidate(deps.tier, candidate, entry.thinkingLevel, parent);
-		const identity = candidateIdentity(candidate, reasoning);
+		const selection = getFallbackEffortSelection(deps.settings, chainKey, entry);
+		const configuredLevel =
+			selection?.mode === "fixed" ? selection.level : (entry.thinkingLevel ?? resolved.thinkingLevel);
+		const reasoning = reasoningForCandidate(deps.tier, candidate, concreteThinkingLevel(configuredLevel), parent);
+		const effectiveSelection =
+			selection ??
+			(configuredLevel === AUTO_THINKING
+				? { mode: "auto" as const }
+				: configuredLevel !== undefined
+					? { mode: "fixed" as const, level: configuredLevel }
+					: undefined);
+		const identity = `${candidateIdentity(candidate, reasoning)}|${effectiveSelection?.mode ?? "inherit"}`;
 		if (seen.has(identity)) continue;
 		seen.add(identity);
-		out.push({ selector: entry.raw, model: candidate, ...reasoning });
-		appendFallbackCandidates(deps, entry.raw, candidate, reasoning, undefined, seen, expanded, out);
+		const next = {
+			selector: entry.raw,
+			model: candidate,
+			...reasoning,
+			selection: effectiveSelection,
+			origin:
+				effectiveSelection && effectiveSelection.mode !== "inherit"
+					? ("fallback" as const)
+					: (parent?.origin ?? ("inherited" as const)),
+			parent,
+			inheritsReasoning: !effectiveSelection || effectiveSelection.mode === "inherit",
+		};
+		out.push(next);
+		appendFallbackCandidates(deps, entry.raw, candidate, next, undefined, seen, expanded, out);
 	}
 }
 
@@ -232,23 +270,55 @@ function resolveTierCandidates(tier: CompletionTier, session: ToolSession): Comp
 	const modelRegistry = session.modelRegistry;
 	if (!modelRegistry) return [];
 	const available = modelRegistry.getAvailable();
-	if (available.length === 0) return [];
+	if (available.length === 0 && !session.getActiveModel?.()) return [];
 
 	const matchPreferences = getModelMatchPreferences(session.settings);
-	const resolve = (pattern: string | undefined): { model: Model<Api>; selector: string } | undefined => {
+	const resolve = (
+		pattern: string | undefined,
+	): { model: Model<Api>; selector: string; level?: ThinkingLevel | typeof AUTO_THINKING } | undefined => {
 		if (!pattern) return undefined;
 		const selector = expandRoleAlias(pattern, session.settings);
 		const model = resolveModelFromString(selector, available, matchPreferences);
-		return model ? { model, selector } : undefined;
+		if (!model) return undefined;
+		const parsed = resolveModelOverride([selector], modelRegistry, session.settings);
+		return {
+			model,
+			selector,
+			level:
+				parsed.model?.provider === model.provider && parsed.model.id === model.id
+					? parsed.thinkingLevel
+					: undefined,
+		};
 	};
-	const primary =
-		tier === "default"
+	const activeModel = tier === "default" ? session.getActiveModel?.() : undefined;
+	const activeEffort = activeModel ? session.getActiveEffort?.() : undefined;
+	const primary = activeModel
+		? { model: activeModel, selector: session.getActiveModelString?.() ?? formatModelStringWithRouting(activeModel) }
+		: tier === "default"
 			? (resolve(session.getActiveModelString?.() ?? session.getModelString?.()) ?? resolve(TIER_TO_PATTERN.default))
 			: resolve(TIER_TO_PATTERN[tier]);
 	if (!primary) return [];
-
+	const level = activeEffort?.level ?? ("level" in primary ? primary.level : undefined);
+	const selection = activeEffort
+		? level === AUTO_THINKING
+			? (activeEffort.selection ?? { mode: "auto" as const })
+			: level !== undefined
+				? { mode: "fixed" as const, level }
+				: undefined
+		: (session.settings.getRoleEffortSelection(tier) ??
+			(level === AUTO_THINKING
+				? { mode: "auto" as const }
+				: level !== undefined
+					? { mode: "fixed" as const, level }
+					: undefined));
 	const candidates: CompletionCandidate[] = [
-		{ selector: primary.selector, model: primary.model, ...reasoningForCandidate(tier, primary.model) },
+		{
+			selector: primary.selector,
+			model: primary.model,
+			...reasoningForCandidate(tier, primary.model, concreteThinkingLevel(level)),
+			selection,
+			origin: activeEffort?.origin ?? "role",
+		},
 	];
 	const retry = cfgRetry.get(session.settings);
 	if (!retry.enabled || !retry.modelFallback) return candidates;
@@ -267,9 +337,9 @@ function resolveTierCandidates(tier: CompletionTier, session: ToolSession): Comp
 		},
 		primary.selector,
 		primary.model,
-		undefined,
+		candidates[0],
 		tier,
-		new Set([candidateIdentity(primary.model, candidates[0])]),
+		new Set([`${candidateIdentity(primary.model, candidates[0])}|${candidates[0].selection?.mode ?? "inherit"}`]),
 		new Set(),
 		candidates,
 	);
@@ -322,10 +392,66 @@ async function executeCompletion(
 	let lastError: unknown;
 	let retriesUsed = 0;
 	let completed = false;
+	const notices: string[] = [];
+	const disclose = (message: string): void => {
+		notices.push(message);
+		session.onEffortDisclosure?.(message);
+	};
+	const effective = new Map<
+		CompletionCandidate,
+		{ reasoning: Effort | undefined; disableReasoning: boolean; selection?: EffortSelection; origin: EffortOrigin }
+	>();
 	for (const [index, candidate] of candidates.entries()) {
 		if (index > 0 && retriesUsed >= maxRetries) break;
 		model = candidate.model;
 		try {
+			const inherited = candidate.parent ? effective.get(candidate.parent) : undefined;
+			let reasoning = candidate.inheritsReasoning && inherited ? inherited.reasoning : candidate.reasoning;
+			let disableReasoning =
+				candidate.inheritsReasoning && inherited ? inherited.disableReasoning : candidate.disableReasoning;
+			const selection = candidate.inheritsReasoning
+				? inherited?.selection?.mode === "auto"
+					? inherited.selection
+					: reasoning !== undefined
+						? { mode: "fixed" as const, level: reasoning }
+						: disableReasoning
+							? { mode: "fixed" as const, level: "off" as ThinkingLevel }
+							: undefined
+				: (candidate.selection ??
+					(reasoning !== undefined ? { mode: "fixed" as const, level: reasoning } : undefined));
+			const origin = candidate.inheritsReasoning ? (inherited?.origin ?? candidate.origin) : candidate.origin;
+			if (cfgEffortPolicyMode.get(session.settings) === "replacement" && !disableReasoning && model.reasoning) {
+				const decision = resolveImplicitEffort(session.settings, model, selection, origin);
+				if (decision.disclosure) disclose(decision.disclosure);
+				if (selection?.mode === "auto") {
+					try {
+						reasoning = await classifyDifficulty(prompt, {
+							settings: session.settings,
+							registry,
+							model,
+							sessionId: session.getSessionId?.() ?? undefined,
+							signal,
+							allowedEfforts: decision.candidates,
+							sessionManager: session.sessionManager,
+							onContextFallback: disclose,
+							onEffortDisclosure: disclose,
+						});
+					} catch (error) {
+						if (signal.aborted) throw error;
+						reasoning = undefined;
+					}
+					if (!reasoning || !decision.candidates.includes(reasoning)) {
+						reasoning = decision.candidates[0];
+						disclose(`Effort classification failed; using lowest permitted effort ${reasoning}.`);
+					}
+				} else {
+					reasoning = toReasoningEffort(decision.level);
+					disableReasoning = shouldDisableReasoning(decision.level);
+				}
+			} else if (!disableReasoning) {
+				reasoning = clampThinkingLevelForModel(model, reasoning);
+			}
+			effective.set(candidate, { reasoning, disableReasoning, selection, origin });
 			// Forward the session id so session-sticky OAuth credentials
 			// resolve (see #5325); without it a usable fallback looks keyless.
 			const apiKey = await registry.getApiKey(model, session.getSessionId?.() ?? undefined, { signal });
@@ -346,14 +472,16 @@ async function executeCompletion(
 				{
 					apiKey: registry.resolver(model, session.getSessionId?.() ?? undefined),
 					signal,
-					reasoning: candidate.reasoning,
-					disableReasoning: candidate.disableReasoning,
+					reasoning,
+					disableReasoning,
 					toolChoice: schema ? { type: "tool", name: STRUCTURED_TOOL_NAME } : undefined,
 				},
 				{ telemetry, oneshotKind: "eval_completion" },
 			);
 		} catch (error) {
 			lastError = error;
+			if (error instanceof EffortPolicyError)
+				disclose(`Skipped completion candidate ${candidate.selector}: ${error.message}`);
 			if (signal.aborted || index === candidates.length - 1) throw error;
 			continue;
 		}
@@ -396,7 +524,12 @@ async function executeCompletion(
 
 	return {
 		text: resultText,
-		details: { model: formatModelString(model), tier: finalTier, structured: Boolean(schema) },
+		details: {
+			model: formatModelString(model),
+			tier: finalTier,
+			structured: Boolean(schema),
+			...(notices.length ? { notices } : {}),
+		},
 	};
 }
 
