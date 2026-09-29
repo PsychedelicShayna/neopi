@@ -1,8 +1,8 @@
-import { AudioCapture } from "@oh-my-pi/pi-natives";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../config/settings";
 import { evaluateSubmitTrigger } from "./submit-trigger";
 import type { SttState } from "./stt-controller";
+import { sharedAudioCapture } from "./shared-audio-capture";
 import { WavFileRecorder } from "./wav-file-recorder";
 import { cfgSttSubmitTrigger } from "./settings";
 
@@ -52,7 +52,7 @@ export class XaiSTTController {
 	constructor({ settings, transcribe, createCapture }: XaiSTTControllerDependencies) {
 		this.#settings = settings;
 		this.#transcribe = transcribe;
-		this.#createCapture = createCapture ?? (callback => new AudioCapture(16_000, callback));
+		this.#createCapture = createCapture ?? (callback => sharedAudioCapture(16_000, callback));
 	}
 
 	get state(): SttState {
