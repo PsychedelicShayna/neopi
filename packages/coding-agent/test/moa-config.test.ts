@@ -7,7 +7,11 @@ import {
 	parseMixturesDoc,
 	saveMixturesConfigFile,
 } from "@oh-my-pi/pi-coding-agent/moa/config";
-import { discoverRegistrableMixtures } from "@oh-my-pi/pi-coding-agent/moa/registration";
+import {
+	discoverRegistrableMixtures,
+	MixtureWorkspace,
+	saveValidatedMixturesConfigFile,
+} from "@oh-my-pi/pi-coding-agent/moa/registration";
 import { serializeMixturesConfig } from "@oh-my-pi/pi-coding-agent/moa/toml";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { logger, TempDir } from "@oh-my-pi/pi-utils";
@@ -291,6 +295,40 @@ describe("MIXTURES.toml serialization", () => {
 		await expect(saveMixturesConfigFile(file, oversized)).rejects.toThrow("file.too_large");
 		expect(await Bun.file(file).text()).toBe(saved);
 		expect(await loadMixturesConfigFile(file)).toEqual(original);
+	});
+
+	it("rejects invalid drafts without replacing the file and registers valid edits only on apply", async () => {
+		using dir = TempDir.createSync("@moa-config-edit-");
+		const fixture = await createMoaFixture(dir);
+		const file = path.join(fixture.agentDir, "MIXTURES.toml");
+		const ctx = {
+			cwd: fixture.cwd,
+			agentDir: fixture.agentDir,
+			registry: fixture.registry,
+			settings: Settings.isolated(),
+		};
+		const workspace = await MixtureWorkspace.retain("editor", ctx);
+		try {
+			const original = await Bun.file(file).text();
+			const doc = await loadMixturesConfigFile(file);
+			const first = doc.mixtures[0]!;
+			await expect(
+				saveValidatedMixturesConfigFile(file, { ...doc, mixtures: [{ ...first, entry: "missing" }] }, ctx),
+			).rejects.toThrow("entry");
+			expect(await Bun.file(file).text()).toBe(original);
+			expect(fixture.registry.find("mixture", "draft-then-edit")).toBeDefined();
+
+			await saveValidatedMixturesConfigFile(file, { ...doc, mixtures: [{ ...first, name: "new-mixture" }] }, ctx);
+			expect(fixture.registry.find("mixture", "new-mixture")).toBeUndefined();
+			workspace.scope.setRoster(await discoverRegistrableMixtures(ctx));
+			expect(fixture.registry.getAvailable().map(model => `${model.provider}/${model.id}`)).toContain(
+				"mixture/new-mixture",
+			);
+			expect(fixture.registry.find("mixture", "draft-then-edit")).toBeUndefined();
+		} finally {
+			workspace.release();
+			fixture.authStorage.close();
+		}
 	});
 });
 

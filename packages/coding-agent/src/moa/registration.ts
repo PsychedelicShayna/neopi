@@ -3,14 +3,15 @@
  * validated; one with errors (or refused by the capability gate) is logged
  * and never becomes a selectable model.
  */
+import type { MixtureDefinition, MixturesConfigDoc } from "@oh-my-pi/pi-tui/overlays/mixture-types";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
-import { discoverMixtures } from "./config";
+import { discoverMixtures, saveMixturesConfigFile } from "./config";
 import { MixtureCatalog, type MixtureScope } from "./provider";
 import { resolveMixture } from "./resolve";
-import type { ResolvedMixture } from "./types";
-import { validateMixture } from "./validate";
+import type { MixtureIssue, ResolvedMixture } from "./types";
+import { prepareDocumentPresets, type PreparedDocumentPresets, validateMixture } from "./validate";
 
 export interface MixtureRegistrationContext {
 	cwd: string;
@@ -19,18 +20,68 @@ export interface MixtureRegistrationContext {
 	settings: Settings;
 }
 
+function checkMixture(
+	definition: MixtureDefinition,
+	ctx: MixtureRegistrationContext,
+	preparedPresets: PreparedDocumentPresets,
+	names: readonly string[],
+) {
+	const resolved = resolveMixture(definition, {
+		registry: ctx.registry,
+		settings: ctx.settings,
+		preparedPresets,
+	});
+	return { resolved, ...validateMixture(resolved, { settings: ctx.settings, names }) };
+}
+
+export interface MixtureDocValidation {
+	/** Definitions that passed all registration checks. */
+	resolved: ResolvedMixture[];
+	errors: MixtureIssue[];
+	warnings: MixtureIssue[];
+}
+
+/** Validate the exact draft being saved; never replace a file with an unregisterable definition. */
+export function validateMixturesConfigDoc(
+	doc: MixturesConfigDoc,
+	ctx: MixtureRegistrationContext,
+): MixtureDocValidation {
+	const prepared = prepareDocumentPresets(doc.envelopes, doc.roles);
+	const names = doc.mixtures.map(mixture => mixture.name);
+	const result: MixtureDocValidation = { resolved: [], errors: [], warnings: [] };
+	if (names.length === 0 && prepared.sizeIssue) result.errors.push(prepared.sizeIssue);
+	for (const [index, definition] of doc.mixtures.entries()) {
+		const checked = checkMixture(definition, ctx, prepared, names);
+		for (const issue of checked.errors) result.errors.push({ ...issue, path: `mixtures[${index}].${issue.path}` });
+		for (const issue of checked.warnings)
+			result.warnings.push({ ...issue, path: `mixtures[${index}].${issue.path}` });
+		if (checked.errors.length === 0) result.resolved.push(checked.resolved);
+	}
+	return result;
+}
+
+/** Persist an editable scope only when its definitions can actually register. */
+export async function saveValidatedMixturesConfigFile(
+	filePath: string,
+	doc: MixturesConfigDoc,
+	ctx: MixtureRegistrationContext,
+): Promise<MixtureDocValidation> {
+	const checked = validateMixturesConfigDoc(doc, ctx);
+	if (checked.errors.length > 0) {
+		const issue = checked.errors[0]!;
+		throw new Error(`${issue.path}: ${issue.message}`);
+	}
+	await saveMixturesConfigFile(filePath, doc);
+	return checked;
+}
+
 /** Discover, resolve, and validate; returns the mixtures that may be registered. */
 export async function discoverRegistrableMixtures(ctx: MixtureRegistrationContext): Promise<ResolvedMixture[]> {
 	const discovered = await discoverMixtures(ctx.cwd, ctx.agentDir);
 	const names = discovered.mixtures.map(entry => entry.definition.name);
 	const registrable: ResolvedMixture[] = [];
 	for (const entry of discovered.mixtures) {
-		const resolved = resolveMixture(entry.definition, {
-			registry: ctx.registry,
-			settings: ctx.settings,
-			preparedPresets: entry.preparedPresets,
-		});
-		const { errors, warnings } = validateMixture(resolved, { settings: ctx.settings, names });
+		const { resolved, errors, warnings } = checkMixture(entry.definition, ctx, entry.preparedPresets, names);
 		const mixture = entry.definition.name;
 		for (const issue of warnings) {
 			logger.warn("Mixture definition warning", { mixture, file: entry.path, ...issue });
