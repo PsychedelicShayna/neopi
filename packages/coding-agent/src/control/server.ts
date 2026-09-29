@@ -9,7 +9,12 @@
  */
 import * as net from "node:net";
 import { isRecord, logger } from "@oh-my-pi/pi-utils";
-import { RpcFrameDecoder, RpcFrameEncoder, MAX_RPC_FRAME_BYTES } from "../modes/rpc/rpc-frame";
+import {
+	RpcFrameDecoder,
+	RpcFrameEncoder,
+	MAX_RPC_FRAME_BYTES,
+	MAX_RPC_REASSEMBLED_BYTES,
+} from "../modes/rpc/rpc-frame";
 import { ADMISSIONS_PER_SECOND, HANDSHAKE_TIMEOUT_MS, HostBudget, MAX_CONNECTIONS, workClass } from "./budget";
 import { isSameUserPeer, peerCredentials, peerCredentialsSupported, type PeerCredentials } from "./peercred";
 import { callerConnectionToken, constantTimeEqual, findControlMetadata, type ControlMetadata } from "./registry";
@@ -223,7 +228,7 @@ export class ControlConnection {
 
 	/** Reserve one chunk's declared size. Rejects non-integers and negatives. */
 	noteChunk(chunkId: string, bytes: number): boolean {
-		if (!Number.isInteger(bytes) || bytes < 0 || bytes > MAX_RPC_FRAME_BYTES) return false;
+		if (!Number.isInteger(bytes) || bytes < 0 || bytes > MAX_RPC_REASSEMBLED_BYTES) return false;
 		if (!this.noteInbound(bytes)) return false;
 		this.#chunkReserved.set(chunkId, (this.#chunkReserved.get(chunkId) ?? 0) + bytes);
 		return true;
@@ -401,7 +406,7 @@ export class ControlServer {
 					typeof bytes !== "number" ||
 					!Number.isInteger(bytes) ||
 					bytes < 0 ||
-					bytes > MAX_RPC_FRAME_BYTES
+					bytes > MAX_RPC_REASSEMBLED_BYTES
 				) {
 					connection.close("frame_too_large");
 					return;

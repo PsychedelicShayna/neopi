@@ -2,6 +2,7 @@
  * `npi ctl` implementation (#171). Discovers sessions from the registry and
  * speaks the control protocol. Never spawns a session.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { ControlClient, ControlClientError } from "../control/client";
 import { readControlEntries, type ControlMetadata, type ControlRegistryOptions } from "../control/registry";
 import type { ControlSnapshot } from "../control/types";
@@ -61,22 +62,16 @@ export async function resolveCtlTarget(selector: string, options?: ControlRegist
 	throw new ControlClientError("not_found", `no control session matches ${wanted}`);
 }
 
-let bindCaller = false;
+const callerBinding = new AsyncLocalStorage<true>();
 
 /** The ctl tool sets this so the connection carries the caller's publication. */
-export async function withCtlCaller<T>(fn: () => Promise<T>): Promise<T> {
-	const previous = bindCaller;
-	bindCaller = true;
-	try {
-		return await fn();
-	} finally {
-		bindCaller = previous;
-	}
+export function withCtlCaller<T>(fn: () => Promise<T>): Promise<T> {
+	return callerBinding.run(true, fn);
 }
 
 async function connect(selector: string, label: string): Promise<ControlClient> {
 	const metadata = await resolveCtlTarget(selector);
-	const caller = bindCaller ? (await import("../control/host")).currentControlCaller() : null;
+	const caller = callerBinding.getStore() ? (await import("../control/host")).currentControlCaller() : null;
 	const client = new ControlClient({
 		metadata,
 		label,

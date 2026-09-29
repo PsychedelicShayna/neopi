@@ -495,6 +495,14 @@ export class ControlHost {
 			id:
 				typeof frame.id === "string" ? frame.id : typeof frame.requestId === "string" ? frame.requestId : undefined,
 		} as RpcCommand;
+		if (command.type === "set_approval_handler" && cfgControlApprovals.get(this.#options.session.settings) !== true) {
+			this.#reply(connection, frame, {
+				success: false,
+				error: "approvals belong to the pane",
+				code: "approval_owner_only",
+			});
+			return;
+		}
 		const response = await (await this.#handlerFor(connection))(command);
 		if (
 			response.success &&
@@ -898,6 +906,14 @@ export class ControlHost {
 			type !== "extension_ui_response"
 		) {
 			return false;
+		}
+		if (type === "tool_approval_response" && cfgControlApprovals.get(this.#options.session.settings) !== true) {
+			this.#reply(connection, frame, {
+				success: false,
+				error: "approvals belong to the pane",
+				code: "approval_owner_only",
+			});
+			return true;
 		}
 		await this.#handlerFor(connection);
 		const bridges = this.#bridges.get(connection);

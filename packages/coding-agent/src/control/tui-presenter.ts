@@ -141,10 +141,13 @@ function installApprovalArbiter(
 	runner.setToolApprovalRequester(async request => {
 		const { promise, resolve } = Promise.withResolvers<ToolApprovalVerdict>();
 		let done = false;
+		const abort = new AbortController();
 		const finish = (verdict: ToolApprovalVerdict): void => {
 			if (done) return;
 			done = true;
+			host.setApprovalUiOpen(false);
 			registry.close(opened.dialogId);
+			abort.abort();
 			resolve(verdict);
 		};
 		const opened = registry.open({
@@ -170,13 +173,14 @@ function installApprovalArbiter(
 			cancel: () => finish({ approved: false, reason: "cancelled" }),
 		});
 		host.setApprovalUiOpen(true);
-		let choice: string | undefined;
-		try {
-			choice = await ui.select(`Approve ${request.toolName}?`, ["Approve", "Deny"]);
-		} finally {
-			host.setApprovalUiOpen(false);
-		}
-		finish(choice === "Approve" ? { approved: true } : { approved: false, reason: "denied" });
+		void ui
+			.select(`Approve ${request.toolName}?`, ["Approve", "Deny"], { signal: abort.signal })
+			.then(choice => {
+				finish(choice === "Approve" ? { approved: true } : { approved: false, reason: "denied" });
+			})
+			.catch(() => {
+				finish({ approved: false, reason: "cancelled" });
+			});
 		return promise;
 	});
 }
