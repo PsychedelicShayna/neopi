@@ -24,19 +24,36 @@ for _ in $(seq 1 80); do
 	fi
 	sleep 0.25
 done
-{
-	echo "=== list ==="
-	"$NPI" ctl list || true
-	echo "=== pane 0 ==="
-	tmux -L "$SOCK" capture-pane -p -t ctl:0.0 || true
-	echo "=== pane 1 ==="
-	tmux -L "$SOCK" capture-pane -p -t ctl:0.1 || true
-} | tee "$LOG"
-
 if [[ $ready -ne 1 ]]; then
-	echo "fail: sessions did not publish" | tee -a "$LOG"
+	echo "fail: sessions did not publish" | tee "$LOG"
 	tmux -L "$SOCK" kill-server || true
 	exit 1
 fi
-echo "pass: panes published a control socket" | tee -a "$LOG"
+
+# Type into pane 1's composer. The same on-screen draft must show the letters.
+"$NPI" ctl %1 keys h u m a n >/dev/null
+sleep 0.3
+# A stale draft revision must refuse and leave that composer alone.
+"$NPI" ctl %1 rpc draft_set '{"text":"stolen","if":{"draft":0}}' >"$LOG.rpc" || true
+sleep 0.4
+{
+	echo "=== list ==="
+	"$NPI" ctl list
+	echo "=== rpc ==="
+	cat "$LOG.rpc"
+	echo "=== pane 0 ==="
+	tmux -L "$SOCK" capture-pane -p -t ctl:0.0
+	echo "=== pane 1 ==="
+	tmux -L "$SOCK" capture-pane -p -t ctl:0.1
+} | tee "$LOG"
+tmux -L "$SOCK" capture-pane -p -t ctl:0.1 >"$LOG.pane1"
 tmux -L "$SOCK" kill-server || true
+
+grep -q "pid=" "$LOG"
+grep -q 'backed off' "$LOG"
+grep -q 'human' "$LOG.pane1"
+if grep -q stolen "$LOG.pane1"; then
+	echo "fail: stale write overwrote the draft" | tee -a "$LOG"
+	exit 1
+fi
+echo "pass: two panes published; socket typed into the composer; stale write backed off" | tee -a "$LOG"
