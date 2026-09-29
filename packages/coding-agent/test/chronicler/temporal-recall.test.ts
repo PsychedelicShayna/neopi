@@ -412,4 +412,22 @@ describe("chronicle recall", () => {
 			"2026/09/w3/16/14",
 		]);
 	});
+
+	it("keeps rank requests within one hop for a recollection longer than a hop, and discloses the clip", async () => {
+		await writeParaphraseCorpus();
+		const payloads: number[] = [];
+		const recording: NodeRanker = {
+			kind: "model",
+			async score(query, candidates, signal) {
+				payloads.push(rankPayloadTokens(query, candidates));
+				return model.score(query, candidates, signal);
+			},
+		};
+		const longQuery = `${"remember ".repeat(600)}signin redirect cycle repaired`;
+		const result = await recall({ query: longQuery, hint: longQuery, ranker: recording });
+		expect(payloads.length).toBeGreaterThan(0);
+		expect(Math.max(...payloads)).toBeLessThanOrEqual(CONFIG.hopTokens);
+		const clipped = result.trace.filter(step => step.action === "query-clipped").map(step => step.search);
+		expect(clipped.sort()).toEqual(["hint", "query"]);
+	});
 });

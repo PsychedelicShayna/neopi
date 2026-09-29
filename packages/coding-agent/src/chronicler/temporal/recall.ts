@@ -64,7 +64,8 @@ export type TraceAction =
 	| "ranker-fallback"
 	| "atom-missing"
 	| "stale-atom"
-	| "moved-out-of-scope";
+	| "moved-out-of-scope"
+	| "query-clipped";
 
 export interface TraceStep {
 	search: "query" | "hint";
@@ -149,11 +150,32 @@ interface SearchState {
 
 /** Estimated tokens of a rank request: the recollection plus each candidate's key, label, and text. */
 export function rankPayloadTokens(query: string, candidates: readonly RankCandidate[]): number {
-	let tokens = estimateTokens(`Recollection: ${query}\n\n`);
-	for (const candidate of candidates) {
-		tokens += estimateTokens(`### Candidate \`${candidate.key}\` — ${candidate.label}\n${candidate.text}\n\n`);
-	}
+	let tokens = rankQueryTokens(query);
+	for (const candidate of candidates) tokens += rankCandidateTokens(candidate);
 	return tokens;
+}
+
+function rankQueryTokens(query: string): number {
+	return estimateTokens(`Recollection: ${query}\n\n`);
+}
+
+function candidateHeader(candidate: Pick<RankCandidate, "key" | "label">): string {
+	return `### Candidate \`${candidate.key}\` — ${candidate.label}\n`;
+}
+
+function rankCandidateTokens(candidate: RankCandidate): number {
+	return estimateTokens(`${candidateHeader(candidate)}${candidate.text}\n\n`);
+}
+
+/** Share of one hop a recollection may take in a rank request; the rest is for candidates. */
+const QUERY_SHARE = 0.25;
+
+/** Clip `text` so that `prefix + text + suffix` estimates to at most `tokens`; marks the cut with `…`. */
+function fitText(prefix: string, text: string, suffix: string, tokens: number): { text: string; clipped: boolean } {
+	if (estimateTokens(`${prefix}${text}${suffix}`) <= tokens) return { text, clipped: false };
+	const room = tokens * 4 - prefix.length - suffix.length - 1;
+	const clipped = clipText(text, Math.max(0, room));
+	return { text: `${clipped.text}…`, clipped: true };
 }
 
 export class ChronicleViewMissingError extends Error {
@@ -232,9 +254,27 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 	let rankerFallback = false;
 	const hopTokens = manifest?.config?.hopTokens ?? 1000;
 	/**
-	 * Rank in pages whose serialized candidates (key, label, text) fit one hop;
-	 * a lone candidate larger than a hop has its text clipped, visibly. No
-	 * candidate is dropped.
+	 * A recollection (query or hint) longer than its share of one hop is
+	 * clipped for ranking, and the clip is recorded in the trace.
+	 */
+	const boundQuery = (text: string, search: "query" | "hint"): string => {
+		const fitted = fitText("Recollection: ", text, "\n\n", Math.floor(hopTokens * QUERY_SHARE));
+		if (fitted.clipped) {
+			trace.push({
+				search,
+				hop: 0,
+				node: "",
+				action: "query-clipped",
+				note: `${search} clipped to ${Math.floor(hopTokens * QUERY_SHARE)} tokens for ranking`,
+			});
+		}
+		return fitted.text;
+	};
+	/**
+	 * Rank in pages whose serialized request (recollection plus each
+	 * candidate's key, label, and text) fits one hop. A candidate larger than
+	 * the remaining room has its label and then its text clipped, visibly; no
+	 * candidate is dropped, and every page is checked before it is sent.
 	 */
 	const rank = async (
 		query: string,
@@ -243,17 +283,30 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 		hop: number,
 		key: string,
 	): Promise<number[]> => {
-		const base = rankPayloadTokens(query, []);
+		const base = rankQueryTokens(query);
+		const room = hopTokens - base;
 		const bounded = candidates.map(candidate => {
-			const room = hopTokens - base - rankPayloadTokens("", [{ ...candidate, text: "" }]);
-			const clipped = clipText(candidate.text, Math.max(0, room) * 4 - 1);
-			return clipped.remainder > 0 ? { ...candidate, text: `${clipped.text}…` } : candidate;
+			// Keep the header to half the room so the text always has space.
+			const label = fitText(
+				`### Candidate \`${candidate.key}\` — `,
+				candidate.label,
+				"\n",
+				Math.floor(room / 2),
+			).text;
+			const header = candidateHeader({ key: candidate.key, label });
+			const text = fitText(header, candidate.text, "\n\n", room).text;
+			return { ...candidate, label, text };
 		});
 		const scores: number[] = Array.from({ length: candidates.length }, () => 0);
 		let page: number[] = [];
 		let tokens = base;
 		const flush = async (): Promise<void> => {
 			if (page.length === 0) return;
+			const request = page.map(index => bounded[index]!);
+			const payload = rankPayloadTokens(query, request);
+			if (payload > hopTokens) {
+				throw new Error(`chronicle rank request of ${payload} tokens exceeds the ${hopTokens}-token hop ceiling`);
+			}
 			const outcome = await options.ranker.score(
 				query,
 				page.map(index => bounded[index]!),
@@ -270,7 +323,7 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 			tokens = base;
 		};
 		for (let index = 0; index < bounded.length; index++) {
-			const cost = rankPayloadTokens("", [bounded[index]!]);
+			const cost = rankCandidateTokens(bounded[index]!);
 			if (page.length > 0 && tokens + cost > hopTokens) await flush();
 			page.push(index);
 			tokens += cost;
@@ -489,13 +542,14 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 		}
 		return current;
 	};
-	const primary = await descend(options.query, "query");
+	const query = boundQuery(options.query, "query");
+	const primary = await descend(query, "query");
 
 	let adjacent: ScoredAtom[] = [];
 	let anchor: ScoredAtom | undefined;
 	let anchorWindowCenter = 0;
 	if (options.hint?.trim() && resolution === "atom") {
-		const hinted = await descend(options.hint, "hint");
+		const hinted = await descend(boundQuery(options.hint, "hint"), "hint");
 		anchor = [...hinted.atoms.values()].sort((a, b) => b.score - a.score)[0];
 		let anchorTime = anchor ? Date.parse(anchor.entry.eventTime) : 0;
 		if (anchor && anchor.score >= ATOM_MIN) {
@@ -519,7 +573,7 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 					(a, b) => Math.abs(Date.parse(a.entry.eventTime) - at) - Math.abs(Date.parse(b.entry.eventTime) - at),
 				);
 			const scores = await rank(
-				options.query,
+				query,
 				nearby.map(candidate => ({
 					key: candidate.entry.id,
 					label: candidate.entry.localTime,
