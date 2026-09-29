@@ -61,6 +61,7 @@ async function cycle(
 	toml = CYCLE_TOML,
 	settings = Settings.isolated({ "compaction.enabled": false }),
 	wordsPerHop = 80,
+	costPerHop?: number,
 ): Promise<AgentSession> {
 	fixture = await createMoaFixture(temp, toml);
 	const session = await createMoaSession(fixture, { settings });
@@ -69,7 +70,7 @@ async function cycle(
 	if (!model) throw new Error("cycle was not registered");
 	await session.setModel(model);
 	for (let n = 1; n <= 8; n++)
-		members.script(n % 2 ? "writer" : "editor", { text: `${"lorem ".repeat(wordsPerHop)}${n}` });
+		members.script(n % 2 ? "writer" : "editor", { text: `${"lorem ".repeat(wordsPerHop)}${n}`, cost: costPerHop });
 	return session;
 }
 
@@ -214,6 +215,32 @@ it("fails at the hop-ready continuation when summary generation fails and bills 
 	expect(members.callsTo("editor")).toHaveLength(2);
 	const outer = session.agent.state.messages.findLast(message => message.role === "assistant");
 	expect(outer?.role === "assistant" && outer.errorMessage).toContain("helper.failed: transcript for edge b->a:");
+	expect(outer?.role === "assistant" && outer.usageBreakdown?.filter(entry => entry.kind === "summary")).toHaveLength(
+		1,
+	);
+});
+
+it("stops after a billed summary exceeds the soft budget, before starting the next member", async () => {
+	const toml = CYCLE_TOML.replace("budget_tokens = 40", 'optimize = "compact", budget_tokens = 40').replace(
+		'[mixtures.limits]\nmax_hops = 8\non_limit = "stop"',
+		'[mixtures.limits]\nmax_hops = 8\nbudget_usd = 0.04\non_limit = "stop"',
+	);
+	const session = await cycle(
+		toml,
+		Settings.isolated({ "compaction.enabled": false, "moa.summary_model": "fake/summary" }),
+		80,
+		0.001,
+	);
+	members.script("summary", { text: "S", cost: 0.05 });
+	await session.sendUserMessage("debate");
+	expect(members.callsTo("writer")).toHaveLength(2);
+	expect(members.callsTo("editor")).toHaveLength(2);
+	expect(members.callsTo("summary")).toHaveLength(1);
+	const outer = session.agent.state.messages.findLast(message => message.role === "assistant");
+	expect(outer?.role === "assistant" && outer.content[0]).toEqual({
+		type: "text",
+		text: expect.stringContaining("the $0.04 budget limit was reached"),
+	});
 	expect(outer?.role === "assistant" && outer.usageBreakdown?.filter(entry => entry.kind === "summary")).toHaveLength(
 		1,
 	);

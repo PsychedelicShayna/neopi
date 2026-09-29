@@ -161,6 +161,9 @@ export function createSessionMixtureHost(deps: SessionMixtureHostDeps): SessionM
 					);
 				}
 				return;
+			case "resume":
+				deps.notice("info", event.note);
+				return;
 			case "run_end":
 				deps.emit({ type: "mixture_run_end", details: event.trace });
 				return;

@@ -272,8 +272,15 @@ x = { output = true }
 		expect(cards.findLast(card => card.kind === "checkpoint")?.kind).toBe("checkpoint");
 	});
 
-	async function nativeCourtroom(confidence: number, fallback = "verdict") {
-		const toml = COURTROOM_TOML.replace('fallback = "verdict"', `fallback = "${fallback}"`);
+	async function nativeCourtroom(
+		confidence: number,
+		fallback = "verdict",
+		options: { deadline?: boolean; limits?: string } = {},
+	) {
+		const base = options.limits
+			? COURTROOM_TOML.replace(/\[mixtures\.limits\][\s\S]*$/, `[mixtures.limits]\n${options.limits}\n`)
+			: COURTROOM_TOML;
+		const toml = base.replace('fallback = "verdict"', `fallback = "${fallback}"`);
 		await ensureFixture(toml);
 		await Bun.write(path.join(fixture.agentDir, "MIXTURES.toml"), toml);
 		const settings = Settings.isolated(COURTROOM_SETTINGS);
@@ -323,8 +330,22 @@ x = { output = true }
 			const override = {
 				...host,
 				judge: () => ({
-					withCandidate: <T>(run: (judge: Judge, kind: "native" | "local" | "online") => Promise<T>): Promise<T> =>
-						run(native, "native"),
+					withCandidate: async <T>(
+						run: (judge: Judge, kind: "native" | "local" | "online") => Promise<T>,
+						judgeOptions?: { signal?: AbortSignal },
+					): Promise<T> => {
+						if (options.deadline) {
+							const signal = judgeOptions?.signal;
+							if (!signal) throw new Error("no deadline signal");
+							if (!signal.aborted) {
+								const aborted = Promise.withResolvers<void>();
+								signal.addEventListener("abort", () => aborted.resolve(), { once: true });
+								await aborted.promise;
+							}
+							throw signal.reason;
+						}
+						return run(native, "native");
+					},
 				}),
 			};
 			const result = await streamMixture(
@@ -379,6 +400,188 @@ x = { output = true }
 				.map(call => call.model.id),
 		).toEqual(["writer", "editor", "writer"]);
 		expect(result.cards.some(card => card.kind === "decision" && card.decision.outcome === "→ rebut 0.60")).toBe(
+			true,
+		);
+	});
+
+	it("treats a judgment deadline as a wall-clock limit before recording a decision", async () => {
+		const timed = await nativeCourtroom(0.6, "verdict", {
+			deadline: true,
+			limits: 'wall_clock_minutes = 0.002\non_limit = "stop"',
+		});
+		expect(timed.result.content[0]).toEqual({
+			type: "text",
+			text: expect.stringContaining("the 0.002m wall-clock limit was reached"),
+		});
+		expect(timed.cards.filter(card => card.kind === "decision")).toHaveLength(0);
+		expect(members.calls.map(call => call.model.id)).toEqual(["writer", "editor"]);
+	});
+});
+
+describe("limits, pause, and resume", () => {
+	const limitsToml = (lines: string) =>
+		COURTROOM_TOML.replace(/\[mixtures\.limits\][\s\S]*$/, `[mixtures.limits]\n${lines}\n`);
+
+	it("runs a judge-on-limit hop with the prior transcript then ends at the hop limit", async () => {
+		const session = await courtroomSession(limitsToml('max_hops = 3\non_limit = "judge"\nlimit_target = "judge"'));
+		members.script("jev", { text: "no" }, { text: "rebut" });
+		members.script("other", { text: "ruling" });
+		await session.sendUserMessage("Debate");
+		expect(members.calls.filter(call => call.model.id !== "jev").map(call => call.model.id)).toEqual([
+			"writer",
+			"editor",
+			"writer",
+			"other",
+		]);
+		expect(userText(members.callsTo("other")[0]?.context.messages[0])).toContain("[hop 1 · prosecution ← entry]");
+		expect(userText(members.callsTo("other")[0]?.context.messages[0])).toContain("The run reached a limit (hops: 3)");
+		expect(lastAssistant(session).content).toEqual([{ type: "text", text: "ruling" }]);
+		const done = checkpoints(session).findLast(checkpoint => checkpoint.reason === "done");
+		expect([done?.run.endReason, done?.run.lifetime.hops]).toEqual(["limit:hops", 4]);
+		expect(traceCards(session).some(card => card.kind === "limit" && card.action === "judge")).toBe(true);
+	});
+
+	it("stops after the member settlement that crosses the budget before judging", async () => {
+		const session = await courtroomSession(limitsToml('budget_usd = 0.015\non_limit = "stop"'));
+		members.script("writer", { cost: 0.005 });
+		members.script("editor", { text: "rebuttal", cost: 0.02 });
+		await session.sendUserMessage("Debate");
+		expect(members.calls.map(call => call.model.id)).toEqual(["writer", "editor"]);
+		expect(lastAssistant(session).content[0]).toEqual({
+			type: "text",
+			text: expect.stringContaining("the $0.015 budget limit was reached"),
+		});
+		expect(checkpoints(session).findLast(checkpoint => checkpoint.reason === "done")?.run.endReason).toBe(
+			"limit:budget",
+		);
+	});
+
+	it("checks a terminating judge settlement against the budget before asking for a route", async () => {
+		const session = await courtroomSession(limitsToml('budget_usd = 0.04\non_limit = "stop"'));
+		members.script("writer", { cost: 0.01 });
+		members.script("editor", { cost: 0.01 });
+		members.script("jev", { text: "no", cost: 0.05 });
+		await session.sendUserMessage("Debate");
+		expect(members.callsTo("jev")).toHaveLength(1);
+		expect(
+			traceCards(session)
+				.filter(card => card.kind === "decision")
+				.map(card => card.kind === "decision" && card.decision.kind),
+		).toEqual(["terminate"]);
+		expect(lastAssistant(session).content[0]).toEqual({
+			type: "text",
+			text: expect.stringContaining("the $0.04 budget limit was reached"),
+		});
+	});
+
+	it("resumes a paused hop in a new window without forwarding the next prompt; hard caps persist", async () => {
+		const session = await courtroomSession(
+			limitsToml('max_hops = 2\non_limit = "pause"'),
+			Settings.isolated({ ...COURTROOM_SETTINGS, "moa.hard_max_hops": 3 }),
+		);
+		const seen = events(session);
+		members.script("jev", { text: "no" }, { text: "rebut" });
+		await session.sendUserMessage("go");
+		expect(members.calls.filter(call => call.model.id !== "jev").map(call => call.model.id)).toEqual([
+			"writer",
+			"editor",
+		]);
+		expect(lastAssistant(session).content[0]).toEqual({
+			type: "text",
+			text: expect.stringContaining("⏸ courtroom paused at prosecution after 2 hops"),
+		});
+		expect(checkpoints(session).findLast(checkpoint => checkpoint.reason === "pause")?.run.phase.kind).toBe(
+			"hop_ready",
+		);
+		const before = members.calls.length;
+		await session.sendUserMessage("continue please");
+		const after = members.calls.slice(before);
+		expect(after.map(call => call.model.id)).toEqual(["writer"]);
+		expect(userText(after[0]?.context.messages[0])).not.toContain("continue please");
+		expect(seen.some(event => event.type === "notice" && event.message.includes("resumed with a fresh window"))).toBe(
+			true,
+		);
+		expect(lastAssistant(session).content[0]).toEqual({
+			type: "text",
+			text: expect.stringContaining("the hard cap of 3 hops was reached"),
+		});
+		const done = checkpoints(session).findLast(checkpoint => checkpoint.reason === "done");
+		expect([done?.run.window.hops, done?.run.lifetime.hops]).toEqual([1, 3]);
+	});
+
+	it("stops on a hard budget even when the soft policy says pause", async () => {
+		const session = await courtroomSession(
+			limitsToml('on_limit = "pause"'),
+			Settings.isolated({ ...COURTROOM_SETTINGS, "moa.hard_budget_usd": 0.015 }),
+		);
+		members.script("writer", { cost: 0.02 });
+		await session.sendUserMessage("Debate");
+		expect(lastAssistant(session).content[0]).toEqual({
+			type: "text",
+			text: expect.stringContaining("the hard cap of $0.015 was reached"),
+		});
+		expect(checkpoints(session).findLast(checkpoint => checkpoint.reason === "done")?.run.endReason).toBe("hard_cap");
+		expect(checkpoints(session).some(checkpoint => checkpoint.reason === "pause")).toBe(false);
+	});
+
+	it("turns a mid-call wall-clock deadline into a limit with the aborted attempt billed", async () => {
+		const session = await courtroomSession(limitsToml('wall_clock_minutes = 0.002\non_limit = "stop"'));
+		members.script("writer", { waitForAbort: true, cost: 0.01 });
+		await session.sendUserMessage("Debate");
+		expect(lastAssistant(session).content[0]).toEqual({
+			type: "text",
+			text: expect.stringContaining("the 0.002m wall-clock limit was reached"),
+		});
+		expect(traceCards(session).some(card => card.kind === "hop" && card.hop === 1 && card.status === "aborted")).toBe(
+			true,
+		);
+		expect(checkpoints(session).findLast(entry => entry.reason === "done")?.run.endReason).toBe("limit:wall_clock");
+		expect(lastAssistant(session).usageBreakdown?.find(entry => entry.kind === "member")?.usage.cost.total).toBe(
+			0.01,
+		);
+	});
+
+	it("exempts the wall-clock limit hop from the expired deadline", async () => {
+		const session = await courtroomSession(
+			limitsToml('wall_clock_minutes = 0.002\non_limit = "judge"\nlimit_target = "judge"'),
+		);
+		members.script("writer", { waitForAbort: true, cost: 0.01 });
+		members.script("other", { text: "ruling" });
+		await session.sendUserMessage("Debate");
+		expect(members.calls.map(call => call.model.id)).toEqual(["writer", "other"]);
+		expect(lastAssistant(session).content).toEqual([{ type: "text", text: "ruling" }]);
+		expect(members.callsTo("other")[0]?.options?.signal?.aborted).toBe(false);
+		expect(checkpoints(session).findLast(entry => entry.reason === "done")?.run.endReason).toBe("limit:wall_clock");
+	});
+
+	it("finishes a limit hop even when its target has ordinary outgoing edges", async () => {
+		const session = await courtroomSession(
+			limitsToml('budget_usd = 0.015\non_limit = "judge"\nlimit_target = "prosecution"'),
+		);
+		members.script("writer", { text: "opening", cost: 0.01 }, { text: "closing statement", cost: 0.01 });
+		members.script("editor", { cost: 0.01 });
+		await session.sendUserMessage("Debate");
+		expect(members.calls.map(call => call.model.id)).toEqual(["writer", "editor", "writer"]);
+		expect(lastAssistant(session).content).toEqual([{ type: "text", text: "closing statement" }]);
+		expect(traceCards(session).filter(card => card.kind === "limit")).toHaveLength(1);
+		expect(checkpoints(session).findLast(entry => entry.reason === "done")?.run.endReason).toBe("limit:budget");
+	});
+
+	it("appends the limit notice after live partial output when the terminal member times out", async () => {
+		const toml = DRAFT_THEN_EDIT_TOML.replace(
+			'entry = "writer"',
+			'entry = "writer"\nlimits = { wall_clock_minutes = 0.002, on_limit = "stop" }',
+		);
+		const session = await mixtureSession(toml);
+		members.script("editor", { text: "partial answer", waitForAbort: true, cost: 0.01 });
+		await session.sendUserMessage("go");
+		expect(lastAssistant(session).content[0]).toEqual({
+			type: "text",
+			text: expect.stringContaining(
+				"partial answer\n\n⏹ draft-then-edit stopped after 2 hops: the 0.002m wall-clock limit was reached",
+			),
+		});
+		expect(traceCards(session).some(card => card.kind === "hop" && card.hop === 2 && card.status === "aborted")).toBe(
 			true,
 		);
 	});
@@ -518,7 +721,12 @@ describe("linear mixture in a session", () => {
 	});
 
 	it.each([
-		{ limit: "hops", toml: 'entry = "writer"\nlimits = { max_hops = 1 }', settings: {}, reason: "the 1-hop limit" },
+		{
+			limit: "hops",
+			toml: 'entry = "writer"\nlimits = { max_hops = 1, on_limit = "stop" }',
+			settings: {},
+			reason: "the 1-hop limit",
+		},
 		{
 			limit: "hard_cap",
 			toml: 'entry = "writer"',
