@@ -1,5 +1,5 @@
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import {
 	type LivePhase,
 	LiveSessionController,
@@ -10,6 +10,8 @@ import { stripLiveKeyword } from "../../live/keywords";
 import { LIVE_MODEL } from "../../live/protocol";
 import { vocalizer } from "../../tts/vocalizer";
 import type { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
+import type { Component } from "@oh-my-pi/pi-tui";
+import { replaceTabs, truncateMiddleToWidth, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
 import { UserMessageComponent } from "@oh-my-pi/pi-tui/chat/user-message";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import { chipLabel } from "@oh-my-pi/pi-tui/prompt/composer-attachments";
@@ -54,6 +56,22 @@ interface ComposerUtterance {
 	text: string;
 }
 
+/** One fixed-height live caption; finalized replies enter the transcript only after the primary turn settles. */
+class LiveAssistantCaption implements Component {
+	#text = "";
+
+	setText(text: string): void {
+		this.#text = replaceTabs(sanitizeText(text)).replace(/\s+/g, " ").trim();
+	}
+
+	render(width: number): readonly string[] {
+		if (!this.#text || width <= 0) return [];
+		const label = "Voice: ";
+		const content = truncateMiddleToWidth(this.#text, Math.max(0, width - Bun.stringWidth(label)));
+		return [truncateToWidth(`${theme.fg("borderAccent", label)}${theme.fg("muted", content)}`, width)];
+	}
+}
+
 /**
  * Owns the realtime session lifecycle for `/live`. Speech previews type into the
  * ordinary composer; every sent batch clears that composer and enters its history.
@@ -71,6 +89,7 @@ export class LiveCommandController {
 	#destination: LiveInputDestination = "primary";
 	#resumeVocalizer: (() => void) | undefined;
 	#assistantTranscriptComponent: AssistantMessageComponent | undefined;
+	#assistantCaption: LiveAssistantCaption | undefined;
 	#assistantTranscriptTurn = 0;
 	#assistantTranscriptStartedAt = 0;
 	#keywordTimer: ReturnType<typeof setTimeout> | undefined;
@@ -243,6 +262,8 @@ export class LiveCommandController {
 		this.#showPhase("connecting");
 		this.#clearKeywordTimer();
 		this.#utterance = undefined;
+		this.#ctx.liveTranscriptContainer.clear();
+		this.#assistantCaption = undefined;
 		this.#resumeVocalizer = vocalizer.suspend();
 
 		const options: LiveSessionControllerOptions = {
@@ -367,6 +388,9 @@ export class LiveCommandController {
 			component.setTextColorTransform(text => theme.fg("borderAccent", text));
 			this.#assistantTranscriptComponent = component;
 			this.#assistantTranscriptStartedAt = Date.now();
+			this.#assistantCaption = new LiveAssistantCaption();
+			this.#ctx.liveTranscriptContainer.clear();
+			this.#ctx.liveTranscriptContainer.addChild(this.#assistantCaption);
 		}
 		const message: AssistantMessage = {
 			role: "assistant",
@@ -379,15 +403,12 @@ export class LiveCommandController {
 			timestamp: this.#assistantTranscriptStartedAt,
 		};
 		component.updateContent(message, { transient: !transcript.final });
+		this.#assistantCaption?.setText(transcript.text);
 		if (transcript.final) {
-			component.markTranscriptBlockFinalized();
-			this.#assistantTranscriptComponent = undefined;
-			this.#assistantTranscriptStartedAt = 0;
-		}
-		if (!this.#ctx.chatContainer.children.includes(component)) {
-			this.#ctx.present(component);
+			this.#finalizeAssistantTranscript();
+			if (!this.#ctx.session.isStreaming) this.#ctx.liveTranscriptContainer.clear();
 		} else {
-			this.#ctx.ui.requestComponentRender(component);
+			this.#ctx.ui.requestRender();
 		}
 	}
 
@@ -395,9 +416,9 @@ export class LiveCommandController {
 		const component = this.#assistantTranscriptComponent;
 		if (!component) return;
 		component.markTranscriptBlockFinalized();
+		this.#ctx.presentCommandOutput(component, { preview: false });
 		this.#assistantTranscriptComponent = undefined;
 		this.#assistantTranscriptStartedAt = 0;
-		this.#ctx.ui.requestComponentRender(component);
 	}
 
 	#finish(session: LiveSessionController, error?: Error): void {
@@ -426,6 +447,8 @@ export class LiveCommandController {
 		this.#keywordSettingsUnsubscribe = [];
 		this.#clearKeywordTimer();
 		this.#finalizeAssistantTranscript();
+		this.#ctx.liveTranscriptContainer.clear();
+		this.#assistantCaption = undefined;
 		const utterance = this.#utterance;
 		this.#utterance = undefined;
 		if (utterance) this.#commitUtterance(utterance, utterance.text);
