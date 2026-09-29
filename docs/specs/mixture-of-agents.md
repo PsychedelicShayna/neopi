@@ -1350,12 +1350,13 @@ keeping head and tail with an `[… truncated N tokens]` marker:
    `min(providerFrameBudget(target.provider), floor(remaining / FRAME_TOKEN_ESTIMATE))`;
    zero frames degrades to the text summary.
 
-Tokens are counted with `Tokenizer` for the target model. The entry hop's
-operator images are irreducible even though they join the fitted text envelope
-only when the member request is assembled. Charge the images that survive the
-member provider's image cap before fitting, using the tokenizer's image estimate
-(`packages/agent/src/tokenizer.ts`, `IMAGE_TOKEN_ESTIMATE`); the later member
-context transform drops the same oldest images. Frames use `FRAME_TOKEN_ESTIMATE`.
+Tokens are counted with `Tokenizer` for the target model. Before fitting the
+entry hop, apply the member provider's image cap and replace unreadable inline
+images with omission text using the shared outbound transforms. Count those
+surviving blocks as irreducible alongside the text envelope, and reuse them in
+the member request; neither a discarded image nor an unreadable one consumes
+the tokenizer's `IMAGE_TOKEN_ESTIMATE` (`packages/agent/src/tokenizer.ts`).
+Frames use `FRAME_TOKEN_ESTIMATE`.
 
 ### 4.7 Limits, settlement, and the limit state machine
 

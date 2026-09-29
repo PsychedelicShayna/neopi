@@ -840,6 +840,36 @@ describe("provider context for members", () => {
 		).toBe(5);
 	});
 
+	it("fits the omission text rather than charging an unreadable entry image", async () => {
+		const definition = DRAFT_THEN_EDIT_TOML.replace('model = "fake/writer"', 'model = "vision/tight"');
+		await ensureFixture(definition);
+		fixture.registry.registerProvider("vision", {
+			baseUrl: "http://127.0.0.1:1/v1",
+			apiKey: "k",
+			api: "moa-fake",
+			models: [
+				{
+					id: "tight",
+					name: "tight",
+					reasoning: true,
+					input: ["text", "image"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 1_300,
+					maxTokens: 100,
+				},
+			],
+		});
+		const session = await mixtureSession(definition);
+		await session.prompt("describe", { images: [{ type: "image", data: "not a png", mimeType: "image/png" }] });
+		expect(lastAssistant(session).stopReason).toBe("stop");
+		const content = members.callsTo("tight")[0]?.context.messages[0]?.content;
+		expect(content).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ type: "text", text: expect.stringContaining("[image omitted:") }),
+			]),
+		);
+	});
+
 	it("gives every member call the session's per-request provider options, as a native model gets them", async () => {
 		const settings = Settings.isolated({
 			...SETTINGS,

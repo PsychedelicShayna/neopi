@@ -22,7 +22,6 @@ import type {
 	UserMessage,
 } from "@oh-my-pi/pi-ai";
 import { Tokenizer } from "@oh-my-pi/pi-agent-core";
-import { providerImageBudget } from "@oh-my-pi/snapcompact";
 import type {
 	MixtureCheckpointReason,
 	MixtureEdge,
@@ -32,6 +31,7 @@ import type {
 import { mixtureEdgeId } from "@oh-my-pi/pi-tui/overlays/mixture-types";
 import { logger } from "@oh-my-pi/pi-utils";
 import { thinkingFromContent } from "../session/messages";
+import { clampProviderContextImages, dropUnreadableContextImages } from "../session/provider-image-budget";
 import { fitHopRequest, type HopParts, truncateToTokens } from "./budget";
 import {
 	DEFAULT_EDGE_ENVELOPE,
@@ -476,23 +476,32 @@ class MixtureCall {
 				conversation: parts.conversation ?? "",
 				x: { output: parts.output, input: parts.input, reasoning: parts.reasoning, tool_trace: parts.toolTrace },
 			});
-		// The member context transform drops oldest images above this provider's
-		// cap. Fit against the surviving tail, not attachments it will discard.
+		// Match the member's outbound image transforms before fitting. Reuse their
+		// surviving blocks in the request, so discarded images are neither billed
+		// to the fit nor sent a second time.
 		const entryImages = edgeInId === undefined ? this.#entry.topicImages : [];
-		const imageLimit = member.model.input.includes("image")
-			? providerImageBudget(member.model.provider)
-			: Number.POSITIVE_INFINITY;
-		const fittedImages =
-			entryImages.length > imageLimit ? entryImages.slice(entryImages.length - imageLimit) : entryImages;
+		const entryContext =
+			entryImages.length > 0
+				? await dropUnreadableContextImages(
+						clampProviderContextImages(
+							{ systemPrompt: [], messages: [{ role: "user", content: entryImages, timestamp: 0 }] },
+							member.model,
+						),
+						member.model,
+					)
+				: undefined;
+		const entryMessage = entryContext?.messages[0];
+		const entryParts =
+			entryMessage?.role === "user" && Array.isArray(entryMessage.content) ? entryMessage.content : [];
 		const fitted = fitHopRequest({
 			target: member.model,
 			maxTokens: member.maxTokens,
 			systemPrompt,
 			assemble,
 			parts: { ...partsOf(envelopeContext.x), conversation: envelopeContext.conversation },
-			// The entry images join the envelope after fitting. Count the images
-			// that reach the member without counting envelope text twice.
-			hopMessages: fittedImages.length > 0 ? [{ role: "user", content: fittedImages, timestamp: 0 }] : [],
+			// The entry blocks join the envelope after fitting. Count them now
+			// without counting the envelope's text twice.
+			hopMessages: entryContext?.messages ?? [],
 			partBudgetTokens: cfgMoaPartBudgetTokens.get(settings),
 		});
 		if (!fitted.ok) {
@@ -526,7 +535,7 @@ class MixtureCall {
 
 		const envelopeMessage: UserMessage = {
 			role: "user",
-			content: [{ type: "text", text: input }, ...(edgeInId === undefined ? this.#entry.topicImages : [])],
+			content: [{ type: "text", text: input }, ...entryParts],
 			attribution: "agent",
 			timestamp: Date.now(),
 		};
