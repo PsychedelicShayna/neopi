@@ -19,8 +19,6 @@ import { AgentRegistry } from "../registry/agent-registry";
 import { executeSend } from "../irc/messaging";
 import { IrcBus } from "../irc/bus";
 import { currentControlActor, runAsControlActor } from "./actor";
-import { createRpcCommandHandler, dispatchRpcControlFrame, RpcPendingExtensionRequests } from "../modes/rpc/rpc-mode";
-import { buildAvailableSlashCommands } from "../slash-commands/available-commands";
 import { HostBudget, workClass } from "./budget";
 import { RPC_COMMAND_TYPES } from "./parity";
 import { encodeKeyId, encodeSgrMouse } from "./keys";
@@ -32,6 +30,7 @@ import { RpcPlanModeController } from "../modes/rpc/rpc-plan-mode";
 import { RpcSessionSettleWatcher } from "../modes/rpc/rpc-session-settle";
 import { RpcSessionEventForwarder } from "../modes/rpc/rpc-session-events";
 import { RpcHostToolBridge } from "../modes/rpc/host-tools";
+import type { RpcPendingExtensionRequests } from "../modes/rpc/rpc-mode";
 import { RpcHostUriBridge } from "../modes/rpc/host-uris";
 import { RpcToolApprovalBridge } from "../modes/rpc/rpc-tool-approval";
 import { RpcExtensionUserMessageTracker } from "../modes/rpc/rpc-prompt-results";
@@ -405,6 +404,7 @@ export class ControlHost {
 			runner: session.extensionRunner,
 			settings: session.settings,
 		});
+		const { RpcPendingExtensionRequests } = await import("../modes/rpc/rpc-mode");
 		const pending = new RpcPendingExtensionRequests();
 		this.#bridges.set(connection, { forwarder, hostTools, hostUris, approvals, pending });
 		if (!this.#planMode)
@@ -432,6 +432,7 @@ export class ControlHost {
 			}) as RpcResponse;
 		const bridges = this.#bridges.get(connection);
 		if (!bridges) throw new Error("control bridges were not installed");
+		const { createRpcCommandHandler } = await import("../modes/rpc/rpc-mode");
 		const handler = createRpcCommandHandler({
 			session,
 			output,
@@ -459,10 +460,14 @@ export class ControlHost {
 				return session.executeCustomCommand(message);
 			},
 			emitAvailableCommandsUpdate: async () => {
+				const { buildAvailableSlashCommands } = await import("../slash-commands/available-commands");
 				output({ type: "available_commands_update", commands: await buildAvailableSlashCommands(session) });
 			},
 			reloadPluginState: async () => {},
-			getAvailableCommands: () => buildAvailableSlashCommands(session),
+			getAvailableCommands: async () => {
+				const { buildAvailableSlashCommands } = await import("../slash-commands/available-commands");
+				return buildAvailableSlashCommands(session);
+			},
 			onPromptError: (id, command) => promptError => output(error(id, command, promptError.message)),
 			extensionUserMessageTracker: this.#extensionTracker,
 			trackBackground: () => {},
@@ -716,7 +721,9 @@ export class ControlHost {
 				this.#reply(connection, frame, {
 					success: true,
 					data: {
-						commands: await buildAvailableSlashCommands(this.#options.session),
+						commands: await import("../slash-commands/available-commands").then(m =>
+							m.buildAvailableSlashCommands(this.#options.session),
+						),
 					},
 				});
 				return;
@@ -867,6 +874,7 @@ export class ControlHost {
 		await this.#handlerFor(connection);
 		const bridges = this.#bridges.get(connection);
 		if (!bridges) return false;
+		const { dispatchRpcControlFrame } = await import("../modes/rpc/rpc-mode");
 		const handled = dispatchRpcControlFrame(frame, {
 			handleCommand: async () => ({ type: "response", command: type, success: false, error: "not a command" }),
 			output: outbound => connection.write(outbound),

@@ -3,7 +3,6 @@
  * speaks the control protocol. Never spawns a session.
  */
 import { ControlClient, ControlClientError } from "../control/client";
-import { currentControlCaller } from "../control/host";
 import { readControlEntries, type ControlMetadata, type ControlRegistryOptions } from "../control/registry";
 import type { ControlSnapshot } from "../control/types";
 
@@ -77,7 +76,7 @@ export async function withCtlCaller<T>(fn: () => Promise<T>): Promise<T> {
 
 async function connect(selector: string, label: string): Promise<ControlClient> {
 	const metadata = await resolveCtlTarget(selector);
-	const caller = bindCaller ? currentControlCaller() : null;
+	const caller = bindCaller ? (await import("../control/host")).currentControlCaller() : null;
 	const client = new ControlClient({
 		metadata,
 		label,
