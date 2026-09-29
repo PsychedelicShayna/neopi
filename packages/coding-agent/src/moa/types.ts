@@ -118,6 +118,8 @@ export interface HopRecord {
 	reasoning: string;
 	toolTrace: string;
 	truncated?: boolean;
+	/** Its hop_end trace was emitted; a resumed decision never publishes it twice. */
+	published?: true;
 	decisions: MixtureDecision[];
 	status: MixtureHopStatus;
 	pendingToolCalls?: { outerId: string; memberId: string; name: string }[];

@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { Tokenizer } from "@oh-my-pi/pi-agent-core";
 import {
@@ -10,6 +11,7 @@ import {
 	registerCustomApi,
 	type ToolChoice,
 } from "@oh-my-pi/pi-ai";
+import type { Judge, JudgmentRequest, JudgmentResult, Questions } from "@oh-my-pi/pi-ai/judgment";
 import { streamSimple } from "@oh-my-pi/pi-ai/stream";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -18,6 +20,7 @@ import { streamMixture } from "@oh-my-pi/pi-coding-agent/moa/engine";
 import { createSessionMixtureHost, type SessionMixtureHost } from "@oh-my-pi/pi-coding-agent/moa/host";
 import { MIXTURE_API, MixtureCatalog, registerMixtureApi } from "@oh-my-pi/pi-coding-agent/moa/provider";
 import { discoverRegistrableMixtures, MixtureWorkspace } from "@oh-my-pi/pi-coding-agent/moa/registration";
+import { zeroUsage } from "@oh-my-pi/pi-coding-agent/moa/outer-stream";
 import { findAnchor } from "@oh-my-pi/pi-coding-agent/moa/request";
 import { MIXTURE_RUN_ENTRY_TYPE, type MixtureCheckpoint, type MixtureRun } from "@oh-my-pi/pi-coding-agent/moa/types";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -29,6 +32,7 @@ import { MIXTURE_TRACE_MESSAGE_TYPE, type MixtureTraceDetails } from "@oh-my-pi/
 import { TempDir } from "@oh-my-pi/pi-utils";
 import {
 	createMoaFixture,
+	COURTROOM_TOML,
 	createMoaSession,
 	DRAFT_THEN_EDIT_TOML,
 	FAKE_API,
@@ -67,9 +71,9 @@ async function ensureFixture(toml = DRAFT_THEN_EDIT_TOML): Promise<MoaFixture> {
 	return fixture;
 }
 
-function mixtureModel() {
-	const model = fixture.registry.find("mixture", "draft-then-edit");
-	if (!model) throw new Error("mixture/draft-then-edit was not registered");
+function mixtureModel(name = "draft-then-edit") {
+	const model = fixture.registry.find("mixture", name);
+	if (!model) throw new Error(`mixture/${name} was not registered`);
 	return model;
 }
 
@@ -77,12 +81,27 @@ async function mixtureSession(
 	toml = DRAFT_THEN_EDIT_TOML,
 	sessionManager?: SessionManager,
 	settings: Settings = Settings.isolated(SETTINGS),
+	name = "draft-then-edit",
 ): Promise<AgentSession> {
 	await ensureFixture(toml);
 	const session = await createMoaSession(fixture, { sessionManager, settings });
 	sessions.push(session);
-	await session.setModel(mixtureModel());
+	await session.setModel(mixtureModel(name));
 	return session;
+}
+
+const COURTROOM_SETTINGS = {
+	...SETTINGS,
+	"moa.summary_model": "fake/summary",
+	modelRoles: { judge: "fake/jev" },
+	"retry.fallbackChains": { judge: [] },
+};
+
+function courtroomSession(
+	toml = COURTROOM_TOML,
+	settings = Settings.isolated(COURTROOM_SETTINGS),
+): Promise<AgentSession> {
+	return mixtureSession(toml, undefined, settings, "courtroom");
 }
 
 function lastAssistant(session: AgentSession): AssistantMessage {
@@ -145,6 +164,225 @@ async function abortDuringEditor(session: AgentSession, editorCost: number): Pro
 	await turn.catch(() => {});
 	return editorAbort.resolve;
 }
+
+describe("graph control in a session", () => {
+	it("routes on the pinned chat judge choice, records decisions, and counts traversals", async () => {
+		const session = await courtroomSession();
+		members.script("jev", { text: "no" }, { text: "rebut" }, { text: "no" }, { text: "verdict" });
+		members.script("other", { text: "Final ruling" });
+		await session.sendUserMessage("Is this proposal sound?");
+		expect(members.calls.filter(call => call.model.id !== "jev").map(call => call.model.id)).toEqual([
+			"writer",
+			"editor",
+			"writer",
+			"editor",
+			"other",
+		]);
+		expect(lastAssistant(session).content).toEqual([{ type: "text", text: "Final ruling" }]);
+		const routes = traceCards(session).filter(card => card.kind === "decision" && card.decision.kind === "route");
+		expect(routes).toHaveLength(2);
+		expect(routes[0]?.kind === "decision" && routes[0].decision.outcome).toBe("→ rebut (floor inactive)");
+		expect(routes[0]?.kind === "decision" && routes[0].decision.judge).toBe("fake/jev");
+		const done = checkpoints(session).findLast(entry => entry.reason === "done");
+		expect(done?.run.traversals.rebut).toBe(1);
+	});
+
+	it("chooses the only eligible edge after the rebuttal traversal bound", async () => {
+		const session = await courtroomSession(COURTROOM_TOML.replace("max_traversals = 3", "max_traversals = 1"));
+		members.script("jev", { text: "no" }, { text: "rebut" }, { text: "no" });
+		await session.sendUserMessage("Debate");
+		expect(members.calls.filter(call => call.model.id !== "jev").map(call => call.model.id)).toEqual([
+			"writer",
+			"editor",
+			"writer",
+			"editor",
+			"other",
+		]);
+		expect(members.callsTo("jev")).toHaveLength(3);
+		expect(
+			traceCards(session).filter(card => card.kind === "decision" && card.decision.kind === "route"),
+		).toHaveLength(1);
+	});
+
+	it("ends on a termination judgment before asking for a route", async () => {
+		const session = await courtroomSession();
+		members.script("jev", { text: "yes" });
+		members.script("editor", { text: "Defense conceded" });
+		await session.sendUserMessage("Debate");
+		expect(members.callsTo("jev")).toHaveLength(1);
+		expect(lastAssistant(session).content).toEqual([{ type: "text", text: "Defense conceded" }]);
+		expect(checkpoints(session).findLast(entry => entry.reason === "done")?.run.endReason).toBe("terminate");
+		expect(
+			traceCards(session).some(card => card.kind === "decision" && card.decision.outcome.startsWith("yes 1.00")),
+		).toBe(true);
+	});
+
+	it("renders a verdict member's answer and charges a separate verdict hop", async () => {
+		const toml = `
+[[mixtures]]
+name = "verdict-test"
+entry = "a"
+[[mixtures.members]]
+id = "a"
+model = "fake/writer"
+system_prompt = "Argue."
+tools = false
+[[mixtures.members]]
+id = "v"
+kind = "verdict"
+[mixtures.members.question]
+type = "choice"
+instructions = "Which side won?"
+[mixtures.members.question.criteria]
+proposal = "the proposal won"
+nobody = "no one won"
+[[mixtures.edges]]
+from = "a"
+to = "v"
+x = { output = true }
+`;
+		const session = await mixtureSession(toml, undefined, Settings.isolated(COURTROOM_SETTINGS), "verdict-test");
+		members.script("jev", { text: "proposal" });
+		await session.sendUserMessage("Debate");
+		expect(lastAssistant(session).content).toEqual([
+			{ type: "text", text: expect.stringContaining("Answer: proposal") },
+		]);
+		const done = checkpoints(session).findLast(entry => entry.reason === "done");
+		expect(done?.run.lifetime.hops).toBe(2);
+		expect(done?.run.endReason).toBe("verdict");
+		expect(traceCards(session).some(card => card.kind === "hop" && card.model === "verdict")).toBe(true);
+	});
+
+	it("pauses on a failed route judgment instead of silently choosing an edge", async () => {
+		const session = await courtroomSession(COURTROOM_TOML.replace('fallback = "verdict"', 'fallback = "pause"'));
+		members.script("jev", { text: "no" }, { error: { message: "judge down" } });
+		await session.sendUserMessage("Debate");
+		expect(lastAssistant(session).content[0]).toEqual({
+			type: "text",
+			text: expect.stringContaining("⏸ courtroom paused at defense after 2 hops"),
+		});
+		expect(checkpoints(session).findLast(entry => entry.reason === "pause")?.run.phase.kind).toBe("decision_pending");
+		expect(members.callsTo("writer")).toHaveLength(1);
+		expect(members.callsTo("editor")).toHaveLength(1);
+		const cards = traceCards(session);
+		expect(cards.filter(card => card.kind === "hop")).toHaveLength(2);
+		expect(
+			cards.some(card => card.kind === "decision" && card.decision.outcome === "fallback → pause (judgment failed)"),
+		).toBe(true);
+		expect(cards.findLast(card => card.kind === "checkpoint")?.kind).toBe("checkpoint");
+	});
+
+	async function nativeCourtroom(confidence: number, fallback = "verdict") {
+		const toml = COURTROOM_TOML.replace('fallback = "verdict"', `fallback = "${fallback}"`);
+		await ensureFixture(toml);
+		await Bun.write(path.join(fixture.agentDir, "MIXTURES.toml"), toml);
+		const settings = Settings.isolated(COURTROOM_SETTINGS);
+		const manager = SessionManager.inMemory(fixture.cwd);
+		const workspace = await MixtureWorkspace.retain("native-judge", {
+			cwd: fixture.cwd,
+			agentDir: fixture.agentDir,
+			registry: fixture.registry,
+			settings,
+		});
+		try {
+			const host = createSessionMixtureHost({
+				sessionManager: manager,
+				modelRegistry: fixture.registry,
+				workspace,
+				settings,
+				stream: streamSimple,
+				prepareContext: async context => context,
+				emit: () => {},
+				notice: () => {},
+			});
+			const native: Judge = {
+				label: "typesafe/jev-latest",
+				async judge<Q extends Questions>(request: JudgmentRequest<Q>): Promise<JudgmentResult<Q>> {
+					const answers = Object.fromEntries(
+						Object.entries(request.questions).map(([id, question]) => {
+							if (question.type === "noul") return [id, { type: "noul", noul: 0 }];
+							if (question.type === "choice") {
+								const labels = Object.keys(question.criteria);
+								const choice = labels[0]!;
+								return [
+									id,
+									{
+										type: "choice",
+										choice,
+										probabilities: Object.fromEntries(labels.map(label => [label, label === choice ? 1 : 0])),
+										confidence,
+									},
+								];
+							}
+							return [id, { type: "score", score: 0, probabilities: { "0": 1 }, confidence }];
+						}),
+					) as JudgmentResult<Q>["answers"];
+					return { api: "typesafe", provider: "typesafe", model: "jev-latest", answers, usage: zeroUsage() };
+				},
+			};
+			const override = {
+				...host,
+				judge: () => ({
+					withCandidate: <T>(run: (judge: Judge, kind: "native" | "local" | "online") => Promise<T>): Promise<T> =>
+						run(native, "native"),
+				}),
+			};
+			const result = await streamMixture(
+				mixtureModel("courtroom"),
+				{ systemPrompt: ["outer"], messages: [{ role: "user", content: "Debate", timestamp: 0 }] },
+				undefined,
+				override,
+			).result();
+			const cards = manager
+				.getBranch()
+				.flatMap(entry =>
+					entry.type === "custom_message" && entry.customType === MIXTURE_TRACE_MESSAGE_TYPE
+						? [entry.details as MixtureTraceDetails]
+						: [],
+				);
+			return { result, cards };
+		} finally {
+			workspace.release();
+		}
+	}
+
+	it("falls back below a native confidence floor, including to pause", async () => {
+		const chosen = await nativeCourtroom(0.31);
+		expect(members.calls.filter(call => call.model.id !== "jev").map(call => call.model.id)).toEqual([
+			"writer",
+			"editor",
+			"other",
+		]);
+		expect(
+			chosen.cards.some(
+				card => card.kind === "decision" && card.decision.outcome === "fallback → verdict (0.31 < 0.60)",
+			),
+		).toBe(true);
+		const paused = await nativeCourtroom(0.31, "pause");
+		expect(paused.result.content[0]).toEqual({
+			type: "text",
+			text: expect.stringContaining("⏸ courtroom paused at defense"),
+		});
+		expect(
+			paused.cards.some(
+				card => card.kind === "decision" && card.decision.outcome === "fallback → pause (0.31 < 0.60)",
+			),
+		).toBe(true);
+	});
+
+	it("takes a native judge's selected edge when confidence meets the floor", async () => {
+		const result = await nativeCourtroom(0.6);
+		expect(
+			members.calls
+				.filter(call => call.model.id !== "jev")
+				.slice(0, 3)
+				.map(call => call.model.id),
+		).toEqual(["writer", "editor", "writer"]);
+		expect(result.cards.some(card => card.kind === "decision" && card.decision.outcome === "→ rebut 0.60")).toBe(
+			true,
+		);
+	});
+});
 
 describe("linear mixture in a session", () => {
 	it("answers with the editor's text only, hands on the writer's output without its reasoning, and persists cards above the answer", async () => {

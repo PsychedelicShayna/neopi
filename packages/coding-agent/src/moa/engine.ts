@@ -24,12 +24,14 @@ import type {
 	UsageBreakdownEntry,
 	UserMessage,
 } from "@oh-my-pi/pi-ai";
+import type { JudgmentRequest, JudgmentResult } from "@oh-my-pi/pi-ai/judgment";
 import { NON_VISION_IMAGE_PLACEHOLDER, sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
 import { Tokenizer } from "@oh-my-pi/pi-agent-core";
 import { DEFAULT_RESERVE_TOKENS, generateSummary } from "@oh-my-pi/pi-agent-core/compaction";
 import type {
 	MixtureCheckpointReason,
 	MixtureEdge,
+	MixtureDecision,
 	MixtureTraceDetails,
 	MixtureTraceHeader,
 } from "@oh-my-pi/pi-tui/overlays/mixture-types";
@@ -42,9 +44,11 @@ import {
 	providerFrameBudget,
 } from "@oh-my-pi/snapcompact";
 import { logger } from "@oh-my-pi/pi-utils";
+import type { JudgeKind } from "../judgment";
 import { thinkingFromContent } from "../session/messages";
 import { clampProviderContextImages, dropUnreadableContextImages } from "../session/provider-image-budget";
 import { fitHopRequest, type HopParts, truncateToTokens } from "./budget";
+import { decisionState, describeOutcome, failedChoice, routeQuestion, terminateQuestion } from "./decisions";
 import {
 	DEFAULT_EDGE_ENVELOPE,
 	ENTRY_ENVELOPE,
@@ -52,6 +56,8 @@ import {
 	isInlineTemplate,
 	renderEnvelope,
 	renderLimitNotice,
+	renderPauseNotice,
+	renderVerdict,
 	renderToolTrace,
 } from "./envelopes";
 import { memberSessionId, normalizeToolChoice, prepareHelperCall, prepareMemberCall } from "./member-call";
@@ -71,6 +77,8 @@ import {
 	cfgMoaConversationBudgetTokens,
 	cfgMoaHardMaxHops,
 	cfgMoaMaxHops,
+	cfgMoaDecisionStateTokens,
+	cfgMoaJudgeMinConfidence,
 	cfgMoaPartBudgetTokens,
 	cfgMoaTranscriptBudgetTokens,
 	cfgMoaWallClockMinutes,
@@ -455,7 +463,8 @@ class MixtureCall {
 					await this.#hopReady(run, phase.memberId, phase.edgeInId);
 					break;
 				case "decision_pending":
-					this.#decide(run, phase.hop);
+					await this.#decide(run, phase.hop);
+					if (this.#finalized) return;
 					break;
 				case "finalizing":
 					return this.#finalize(run);
@@ -477,14 +486,16 @@ class MixtureCall {
 		if (run.lifetime.hops >= hardCap) return this.#limitStop(run, "hard_cap", hardCap);
 		if (run.window.hops >= maxHops) return this.#limitStop(run, "hops", maxHops);
 
-		const member = run.resolved.members[memberId];
-		if (member?.kind !== "model") {
-			return this.#fail(run, undefined, { kind: "failed", message: `member ${memberId} cannot run in this build` });
-		}
-		const edge = edgeInId
-			? run.resolved.definition.edges.find(candidate => mixtureEdgeId(candidate) === edgeInId)
-			: undefined;
+		const edge =
+			edgeInId && edgeInId !== "limit"
+				? run.resolved.definition.edges.find(candidate => mixtureEdgeId(candidate) === edgeInId)
+				: undefined;
 		const source = edge ? run.hops.findLast(hop => hop.memberId === edge.from && hop.status === "done") : undefined;
+		const member = run.resolved.members[memberId];
+		if (member?.kind === "verdict") return this.#verdictHop(run, member, edge, source);
+		if (member?.kind !== "model") {
+			return this.#fail(run, undefined, { kind: "failed", message: `member ${memberId} is not defined` });
+		}
 		const template = edge ? this.#edgeTemplate(run.resolved, edge) : run.resolved.envelopes[ENTRY_ENVELOPE];
 		if (template === undefined) {
 			return this.#fail(run, undefined, { kind: "failed", message: `mixture ${run.key.mixture}: envelope missing` });
@@ -908,34 +919,347 @@ class MixtureCall {
 		this.#checkpoint(run, "hop");
 	}
 
-	/** Step 1.5: in this build the only decision is the single outgoing edge, or none. */
-	#decide(run: MixtureRun, hopIndex: number): void {
+	#decisionTokenizer(run: MixtureRun): Tokenizer {
+		return new Tokenizer(run.resolved.judgePlan?.[0]?.model ?? null);
+	}
+
+	#decisionState(
+		run: MixtureRun,
+		hop: HopRecord,
+		selected: readonly ("output" | "input" | "toolTrace")[] = [],
+	): Record<string, string> {
+		const parts: Record<string, string | undefined> = { topic: run.topic, output: hop.output };
+		for (const part of selected) parts[part] = hop[part];
+		return decisionState(parts, cfgMoaDecisionStateTokens.get(this.#host.settings), this.#decisionTokenizer(run));
+	}
+
+	async #judge(
+		run: MixtureRun,
+		hop: HopRecord,
+		request: JudgmentRequest,
+	): Promise<{ result: JudgmentResult; kind: JudgeKind }> {
+		const plan = run.resolved.judgePlan;
+		if (!plan) throw new Error("no judge plan");
+		const judge = this.#host.judge(plan, attempt =>
+			this.#settle(run, hop, {
+				kind: "judge",
+				hop: hop.index,
+				api: attempt.api,
+				provider: attempt.provider,
+				model: attempt.model,
+				usage: attempt.usage,
+				stopReason: attempt.stopReason,
+				errorMessage: attempt.errorMessage,
+				failed: attempt.stopReason === "error" || attempt.stopReason === "aborted" || undefined,
+			}),
+		);
+		const signal = this.#callSignal(run);
+		return judge.withCandidate(
+			async (candidate, kind) => ({ result: await candidate.judge(request, { signal }), kind }),
+			{ signal },
+		);
+	}
+
+	#recordDecision(run: MixtureRun, hop: HopRecord, decision: MixtureDecision): void {
+		hop.decisions.push(decision);
+		this.#emit({
+			type: "decision",
+			run,
+			hop,
+			trace: {
+				...this.#header(run),
+				kind: "decision",
+				hop: hop.index,
+				memberId: hop.memberId,
+				decision,
+			},
+		});
+	}
+
+	#publishHop(
+		run: MixtureRun,
+		hop: HopRecord,
+		member: ResolvedMixture["members"][string] | undefined,
+		edgeOutId?: string,
+	): void {
+		if (hop.published) return;
+		hop.published = true;
+		this.#emit({ type: "hop_end", run, hop, trace: this.#hopTrace(run, hop, member, edgeOutId) });
+	}
+
+	#leaveDecision(run: MixtureRun, hop: HopRecord, member: ResolvedMixture["members"][string] | undefined): void {
+		if (hop.visible === undefined) hop.visible = member?.show === "always";
+		this.#publishHop(run, hop, member);
+	}
+
+	#pause(run: MixtureRun, member: string, reason: string): void {
+		run.status = "paused";
+		const text = renderPauseNotice({
+			mixture: run.key.mixture,
+			member,
+			reason,
+			hops: run.lifetime.hops,
+			usd: run.lifetime.usd.toFixed(2),
+		});
+		this.#writer.appendText(this.#streamedLive ? `\n\n${text}` : text);
+		const pending: PendingResponse = {
+			responseId: this.#nextResponseId(run),
+			content: structuredClone(this.#writer.message.content),
+			stopReason: "stop",
+		};
+		const record = this.#recordResponse(run, pending, "responded");
+		this.#checkpoint(run, "pause", record, `paused at ${member}`);
+		this.#finishWith(run, record, { kind: "done", reason: "stop" });
+	}
+
+	#onJudgeFailure(
+		run: MixtureRun,
+		hop: HopRecord,
+		member: ResolvedMixture["members"][string] | undefined,
+		kind: "route" | "terminate",
+		error: unknown,
+	): void {
+		this.#leaveDecision(run, hop, member);
+		this.#pause(
+			run,
+			hop.memberId,
+			`${kind} judgment at ${hop.memberId} failed: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
+
+	#judgeDeadline(_error: unknown): boolean {
+		return false;
+	}
+
+	#onVerdictDeadline(run: MixtureRun, hop: HopRecord): void {
+		this.#fail(run, hop, { kind: "failed", message: "verdict.failed: the run deadline expired" });
+	}
+
+	#takeEdge(
+		run: MixtureRun,
+		hop: HopRecord,
+		member: ResolvedMixture["members"][string] | undefined,
+		edge: MixtureEdge,
+	): void {
+		const edgeId = mixtureEdgeId(edge);
+		run.traversals[edgeId] = (run.traversals[edgeId] ?? 0) + 1;
+		hop.visible = (edge.show ?? member?.show ?? "always") === "always";
+		run.phase = {
+			kind: "hop_ready",
+			memberId: typeof edge.to === "string" ? edge.to : edge.to[0]!,
+			edgeInId: edgeId,
+		};
+		run.activeMemberId = run.phase.memberId;
+		this.#publishHop(run, hop, member, edgeId);
+		this.#checkpoint(run, "decision");
+	}
+
+	async #verdictHop(
+		run: MixtureRun,
+		member: Extract<ResolvedMixture["members"][string], { kind: "verdict" }>,
+		edge: MixtureEdge | undefined,
+		source: HopRecord | undefined,
+	): Promise<void> {
+		const hop: HopRecord = {
+			index: run.hops.length + 1,
+			memberId: member.id,
+			edgeInId: edge && mixtureEdgeId(edge),
+			input: "",
+			messages: [],
+			output: "",
+			reasoning: "",
+			toolTrace: "",
+			decisions: [],
+			status: "running",
+			startedAt: Date.now(),
+		};
+		run.hops.push(hop);
+		run.lifetime.hops++;
+		run.window.hops++;
+		run.activeMemberId = member.id;
+		run.phase = { kind: "generating", hop: hop.index };
+		const judgeModel = run.resolved.judgePlan?.[0]?.model;
+		if (!judgeModel) return this.#fail(run, hop, { kind: "failed", message: "verdict.failed: no judge plan" });
+		this.#emit({ type: "hop_start", run, hop, model: judgeModel, trace: this.#hopTrace(run, hop, member) });
+		const available: Record<string, string | undefined> = { topic: run.topic };
+		if (source && edge) {
+			if (edge.x.output) available.output = source.output;
+			if (edge.x.input) available.input = source.input;
+			if (edge.x.reasoning) available.reasoning = source.reasoning;
+			if (edge.x.toolTrace) available.toolTrace = source.toolTrace;
+			if (edge.x.transcript) available.transcript = renderTranscript(run.hops);
+		}
+		const selected: Record<string, string | undefined> = { topic: run.topic };
+		for (const name of member.state ?? Object.keys(available)) selected[name] = available[name];
+		let judged: { result: JudgmentResult; kind: JudgeKind };
+		try {
+			judged = await this.#judge(run, hop, {
+				state: decisionState(
+					selected,
+					cfgMoaDecisionStateTokens.get(this.#host.settings),
+					this.#decisionTokenizer(run),
+				),
+				questions: { verdict: member.question },
+			});
+		} catch (error) {
+			if (this.#finalized) return;
+			if (this.#judgeDeadline(error)) return this.#onVerdictDeadline(run, hop);
+			return this.#fail(run, hop, {
+				kind: "failed",
+				message: `verdict.failed: ${error instanceof Error ? error.message : String(error)}`,
+			});
+		}
+		if (this.#finalized) return;
+		const answer = judged.result.answers.verdict;
+		if (!answer) return this.#fail(run, hop, { kind: "failed", message: "verdict.failed: no answer" });
+		const confidence = answer.type === "noul" ? undefined : answer.confidence;
+		const judge = `${judged.result.provider}/${judged.result.model}`;
+		const decision: MixtureDecision = {
+			kind: "verdict",
+			answer,
+			confidence,
+			judge,
+			judgeKind: judged.kind,
+			outcome: describeOutcome({ kind: "verdict", answer, confidence, judgeKind: judged.kind }),
+		};
+		hop.output = renderVerdict(member.render, {
+			member: { id: member.id, description: member.description },
+			question: member.question,
+			answer,
+			confidence,
+			judge,
+			judgeKind: judged.kind,
+		});
+		hop.status = "done";
+		hop.elapsedMs = Date.now() - hop.startedAt;
+		hop.visible = false;
+		this.#recordDecision(run, hop, decision);
+		run.final = { text: hop.output, hop: hop.index };
+		run.endReason = "verdict";
+		run.phase = { kind: "finalizing" };
+		this.#publishHop(run, hop, member);
+		this.#checkpoint(run, "decision");
+	}
+
+	async #decide(run: MixtureRun, hopIndex: number): Promise<void> {
 		const hop = run.hops[hopIndex - 1];
 		if (!hop) return this.#fail(run, undefined, { kind: "failed", message: `hop ${hopIndex} is missing` });
 		const member = run.resolved.members[hop.memberId];
-		const edge = run.resolved.definition.edges.find(candidate => candidate.from === hop.memberId);
-		if (edge) {
-			const edgeId = mixtureEdgeId(edge);
-			run.traversals[edgeId] = (run.traversals[edgeId] ?? 0) + 1;
-			const show = edge.show ?? member?.show ?? "always";
-			hop.visible = show === "always";
-			run.phase = {
-				kind: "hop_ready",
-				memberId: typeof edge.to === "string" ? edge.to : edge.to[0]!,
-				edgeInId: edgeId,
-			};
-			run.activeMemberId = run.phase.memberId;
-			this.#emit({ type: "hop_end", run, hop, trace: this.#hopTrace(run, hop, member, edgeId) });
+		const outgoing = run.resolved.definition.edges.filter(edge => edge.from === hop.memberId);
+		if (hop.edgeInId === "limit") {
+			hop.visible = false;
+			run.final = { text: hop.output, hop: hop.index };
+			run.endReason = `limit:${run.limitHop!.kind}`;
+			run.phase = { kind: "finalizing" };
+			this.#publishHop(run, hop, member);
 			this.#checkpoint(run, "decision");
 			return;
 		}
-		// Terminal: the output becomes the answer, so the card carries only the header.
-		hop.visible = false;
-		run.final = { text: hop.output, hop: hop.index };
-		run.endReason = "terminal";
-		run.phase = { kind: "finalizing" };
-		this.#emit({ type: "hop_end", run, hop, trace: this.#hopTrace(run, hop, member) });
-		this.#checkpoint(run, "decision");
+		const definitionMember = run.resolved.definition.members.find(candidate => candidate.id === hop.memberId);
+		if (definitionMember?.kind !== "verdict" && definitionMember?.terminate) {
+			const terminate = definitionMember.terminate;
+			const threshold = terminate.threshold ?? 0.5;
+			let judged: { result: JudgmentResult; kind: JudgeKind };
+			try {
+				judged = await this.#judge(run, hop, {
+					state: this.#decisionState(run, hop, terminate.state),
+					questions: { terminate: terminateQuestion(terminate) },
+				});
+			} catch (error) {
+				if (this.#finalized) return;
+				return this.#onJudgeFailure(run, hop, member, "terminate", error);
+			}
+			if (this.#finalized) return;
+			const answer = judged.result.answers.terminate;
+			if (answer?.type !== "noul")
+				return this.#fail(run, undefined, {
+					kind: "failed",
+					message: "terminate judgment returned no probability",
+				});
+			const decision: MixtureDecision = {
+				kind: "terminate",
+				answer,
+				judge: `${judged.result.provider}/${judged.result.model}`,
+				judgeKind: judged.kind,
+				outcome: describeOutcome({ kind: "terminate", answer, judgeKind: judged.kind }, { floor: threshold }),
+			};
+			this.#recordDecision(run, hop, decision);
+			if (answer.noul >= threshold) {
+				hop.visible = false;
+				run.final = { text: hop.output, hop: hop.index };
+				run.endReason = "terminate";
+				run.phase = { kind: "finalizing" };
+				this.#publishHop(run, hop, member);
+				this.#checkpoint(run, "decision");
+				return;
+			}
+		}
+		const eligible = outgoing.filter(
+			edge => edge.maxTraversals === undefined || (run.traversals[mixtureEdgeId(edge)] ?? 0) < edge.maxTraversals,
+		);
+		if (eligible.length === 0) {
+			hop.visible = false;
+			run.final = { text: hop.output, hop: hop.index };
+			run.endReason = "terminal";
+			run.phase = { kind: "finalizing" };
+			this.#publishHop(run, hop, member);
+			this.#checkpoint(run, "decision");
+			return;
+		}
+		if (eligible.length === 1) return this.#takeEdge(run, hop, member, eligible[0]!);
+		const route = definitionMember?.kind === "verdict" ? undefined : definitionMember?.route;
+		if (!route) return this.#fail(run, undefined, { kind: "failed", message: `route.required: ${hop.memberId}` });
+		const floor = route.minConfidence ?? cfgMoaJudgeMinConfidence.get(this.#host.settings);
+		let answer: MixtureDecision["answer"];
+		let judgeKind: JudgeKind;
+		let judge: string;
+		let failed = false;
+		try {
+			const judged = await this.#judge(run, hop, {
+				state: this.#decisionState(run, hop, route.state),
+				questions: { route: routeQuestion(route, eligible) },
+			});
+			if (this.#finalized) return;
+			answer = judged.result.answers.route!;
+			judgeKind = judged.kind;
+			judge = `${judged.result.provider}/${judged.result.model}`;
+			if (answer.type !== "choice") throw new Error("route judgment returned no choice");
+		} catch (error) {
+			if (this.#finalized) return;
+			if (this.#judgeDeadline(error)) return this.#onJudgeFailure(run, hop, member, "route", error);
+			failed = true;
+			answer = failedChoice(eligible.map(edge => mixtureEdgeId(edge)));
+			judgeKind = "online";
+			judge = "failed";
+		}
+		if (answer.type !== "choice")
+			return this.#fail(run, undefined, { kind: "failed", message: "route judgment returned no choice" });
+		const confidence = answer.confidence;
+		const below = failed || (judgeKind === "native" && confidence < floor);
+		const selected = below ? route.fallback : answer.choice;
+		const edge = eligible.find(candidate => mixtureEdgeId(candidate) === selected);
+		const fallbackTo = below ? (edge ? mixtureEdgeId(edge) : "pause") : undefined;
+		const decision: MixtureDecision = {
+			kind: "route",
+			answer,
+			confidence,
+			judge,
+			judgeKind,
+			outcome: describeOutcome(
+				{ kind: "route", answer, confidence, judgeKind },
+				{ fallbackTo, floor, failed: failed || undefined },
+			),
+		};
+		this.#recordDecision(run, hop, decision);
+		if (edge) return this.#takeEdge(run, hop, member, edge);
+		this.#leaveDecision(run, hop, member);
+		this.#pause(
+			run,
+			hop.memberId,
+			failed
+				? `route judgment at ${hop.memberId} failed and its fallback is pause`
+				: `route from ${hop.memberId} fell below its confidence floor (${confidence.toFixed(2)} < ${floor.toFixed(2)}) and its fallback is pause`,
+		);
 	}
 
 	#limitStop(run: MixtureRun, limit: "hops" | "hard_cap", value: number): void {
@@ -1156,10 +1480,11 @@ class MixtureCall {
 			outerResponseId: record?.responseId,
 			report: record ? { ...record.report } : undefined,
 		};
-		// Only abort carries a card here: a failed hop already has its hop card, and hop,
-		// decision, and done checkpoints are not shown.
+		// Abort and pause leave a resumable card; hop and decision checkpoints do not.
 		const trace: Extract<MixtureTraceDetails, { kind: "checkpoint" }> | undefined =
-			reason === "abort" ? { ...this.#header(run), kind: "checkpoint", reason, note } : undefined;
+			reason === "abort" || reason === "pause"
+				? { ...this.#header(run), kind: "checkpoint", reason, note }
+				: undefined;
 		this.#emit({
 			type: "checkpoint",
 			run,
@@ -1203,7 +1528,8 @@ class MixtureCall {
 			kind: "hop",
 			hop: hop.index,
 			memberId: hop.memberId,
-			model: member?.kind === "model" ? modelLabel(member.model) : hop.memberId,
+			model:
+				member?.kind === "model" ? modelLabel(member.model) : member?.kind === "verdict" ? "verdict" : hop.memberId,
 			edgeInId: hop.edgeInId,
 			edgeOutId,
 			output: visible ? hop.output : undefined,

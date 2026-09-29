@@ -311,6 +311,7 @@ export class EventController {
 			irc_message: e => this.#handleIrcMessage(e),
 			notice: e => this.#handleNotice(e),
 			mixture_hop_end: async e => this.#showMixtureTrace(e.details),
+			mixture_decision: async e => this.#showMixtureTrace(e.details),
 			mixture_limit: async e => this.#showMixtureTrace(e.details),
 			mixture_checkpoint: async e => this.#showMixtureTrace(e.details),
 			mixture_run_end: async () => {

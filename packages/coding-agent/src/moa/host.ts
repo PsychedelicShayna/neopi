@@ -32,6 +32,7 @@ import { validateMixture } from "./validate";
 /** Session events a mixture run raises; each carries the trace variant a consumer renders. */
 export type MixtureSessionEvent =
 	| { type: "mixture_hop_end"; details: Extract<MixtureTraceDetails, { kind: "hop" | "branch" }> }
+	| { type: "mixture_decision"; details: Extract<MixtureTraceDetails, { kind: "decision" }> }
 	| { type: "mixture_limit"; details: Extract<MixtureTraceDetails, { kind: "limit" }> }
 	| { type: "mixture_checkpoint"; details: Extract<MixtureTraceDetails, { kind: "checkpoint" }> }
 	| { type: "mixture_run_end"; details: Extract<MixtureTraceDetails, { kind: "run_end" }> };
@@ -78,6 +79,8 @@ function traceSummary(details: MixtureTraceDetails): string {
 		case "hop":
 		case "branch":
 			return `◆ ${details.mixture} · hop ${details.hop} · ${details.memberId} (${details.model})`;
+		case "decision":
+			return `◆ ${details.mixture} · hop ${details.hop} · ${details.decision.kind} ${details.decision.outcome} · ${details.decision.judge} (${details.decision.judgeKind})`;
 		case "limit":
 			return `◆ ${details.mixture} · ${details.limit} limit (${details.value}) · ${details.action}`;
 		case "checkpoint":
@@ -136,6 +139,10 @@ export function createSessionMixtureHost(deps: SessionMixtureHostDeps): SessionM
 			case "hop_end":
 				persistCard(event.trace);
 				deps.emit({ type: "mixture_hop_end", details: event.trace });
+				return;
+			case "decision":
+				persistCard(event.trace);
+				deps.emit({ type: "mixture_decision", details: event.trace });
 				return;
 			case "limit":
 				persistCard(event.trace);
