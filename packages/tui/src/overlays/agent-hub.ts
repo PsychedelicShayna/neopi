@@ -1117,7 +1117,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		add(
 			theme.fg(
 				"dim",
-				ref.kind === "advisor" || ref.history?.readOnly
+				ref.kind === "advisor" || ref.kind === "mailbox" || ref.history?.readOnly
 					? "Read-only · 0 LoC"
 					: "Shared workspace · per-agent LoC not attributable",
 			),
@@ -1173,7 +1173,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		if (this.#viewMode === "roster" && ref.parentId && ref.parentId !== MAIN_AGENT_ID) {
 			fields.push(theme.fg("dim", `↳ ${sanitizeDisplaySingleLine(ref.parentId)}`));
 		}
-		if (ref.kind === "advisor") {
+		if (ref.kind === "advisor" || ref.kind === "mailbox") {
 			fields.push(theme.fg("warning", "read-only"));
 		}
 		const unread = this.#irc.unreadCount(ref.id);
@@ -1488,7 +1488,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		const focusAgent = this.#focusAgent;
 		// Aborted agents and advisor refs are read-only transcripts with no
 		// revivable session; open the in-hub viewer instead of failing ensureLive.
-		if (ref.kind === "advisor" || ref.status === "aborted" || this.#remote || !focusAgent) {
+		if (ref.kind === "advisor" || ref.kind === "mailbox" || ref.status === "aborted" || this.#remote || !focusAgent) {
 			this.openChat(ref.id);
 			return;
 		}
@@ -1506,7 +1506,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	#reviveSelected(): void {
 		const ref = this.#rows[this.#selectedRow];
 		if (!ref) return;
-		if (ref.kind === "advisor") {
+		if (ref.kind === "advisor" || ref.kind === "mailbox") {
 			this.#notice = `"${ref.id}" is a read-only advisor transcript — nothing to revive.`;
 			this.#requestRender();
 			return;
@@ -1535,7 +1535,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	#killSelected(): void {
 		const ref = this.#rows[this.#selectedRow];
 		if (!ref) return;
-		if (ref.kind === "advisor") {
+		if (ref.kind === "advisor" || ref.kind === "mailbox") {
 			this.#notice = `"${ref.id}" is a read-only advisor transcript — cannot be killed.`;
 			this.#requestRender();
 			return;

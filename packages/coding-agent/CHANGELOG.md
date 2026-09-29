@@ -8,8 +8,8 @@
 
 ### Added
 
+- Added a same-user control socket on every running session (`npi ctl`, the `ctl` tool). An orchestrator can submit, steer, run slash commands and keybinding actions, and answer mounted dialogs in the on-screen pane. A concurrent human edit wins: the draft is left alone and the pane shows `⌁ backed off`. Tool approvals from the socket stay with the pane unless `control.approvals` is on. (#171)
 - Added `OMP_BUILD_BYTECODE=0` for local binary builds affected by Bun bytecode startup failures.
-
 - Added independent, opt-in Chronicler capture with a built-in model role, per-session sourced markdown beats, bounded background passes, and immutable completed-batch checkpoints that recover without crash-replay duplicates. Local memory can remain enabled; task subagents do not capture.
 - Added per-advisor base system prompt editing in `/advisor configure`, with Backspace to restore the bundled default.
 - Added `npi flash` to build and install an attested x86-64 baseline portable
@@ -20,6 +20,8 @@
 - Added post-processing chains: named, ordered model steps in `CHAINS.yml` (user and project) that rewrite composer text before it is sent. Alt+C sends one prompt through the active chain; `/chaining on|off|use|status|configure` manages automatic mode, the active chain, and a fullscreen editor. Steps without a model use the new Prose role, which falls back to the configured `smol` role.
 ### Fixed
 
+- Control socket chunk-sequence failures release their reserved memory, `keys` rejects more than 4 KiB before injecting any input, stale registry entries are pruned after PID reuse, and control `app.clear` cannot trigger a Ctrl-C shutdown. (#171)
+- Control sessions list TUI-only slash commands, explicitly reject unavailable subagent-bus reads, and exempt pane-exit actions before the control connection closes. Large model catalogs remain intact through protocol-v2 chunked frames. (#171)
 - Live voice playback stays within about two seconds of live audio by dropping the oldest queued speaker audio instead of letting the decoder outrun the speaker. The live transcript audio-frame summary now includes the queued and dropped milliseconds.
 - Live voice deletes user turns once they are handed off or answered, and caps context held while the operator is speaking. Repeated thinking and progress updates collapse to the latest item.
 - Live voice now clears stale speaker activity after 250 ms without output, allowing microphone input through the existing echo-suppression gate after playback. Gate and native audio-queue frame drops are counted in a live transcript artifact summary instead of going unreported.

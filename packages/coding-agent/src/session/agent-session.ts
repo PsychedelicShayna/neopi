@@ -17,6 +17,7 @@ import { directoryIsMissing, PRODUCT_NAME } from "@oh-my-pi/pi-utils/dirs";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { scheduler } from "node:timers/promises";
 import { isPromise } from "node:util/types";
 
@@ -61,6 +62,7 @@ import type {
 	Judge,
 	Message,
 	MessageAttribution,
+	MessageOrigin,
 	Model,
 	OAuthAccountIdentity,
 	ProviderResponseMetadata,
@@ -587,11 +589,14 @@ type ScheduledAgentContinueOptions = {
 	shouldContinue?: () => boolean;
 	onSkip?: (reason: AgentContinueSkipReason) => void;
 	onError?: (error: unknown) => void;
+	/** Run owners (#171); defaults to the scheduling context's ambient owners. */
+	owners?: readonly string[];
 };
 
 type ScheduledAgentContinueRequest = {
 	schedulerToken: number;
 	options: ScheduledAgentContinueOptions;
+	owners: readonly string[];
 };
 
 type AgentContinueOutcome =
@@ -974,6 +979,16 @@ export class AgentSession implements SettingsScope {
 	readonly #streamingEditGuard: StreamingEditGuard;
 	readonly #loopGuards: LoopGuards;
 	#promptInFlightCount = 0;
+	/**
+	 * Run ownership (#171): request handles whose work launched or scheduled the
+	 * next agent run. Filled at every launch site (`#beginInFlight`), moved onto
+	 * the next `agent_start` as `runOwners`, and drained as skipped when the
+	 * in-flight count returns to zero with no run started.
+	 */
+	readonly #runOwnerScope = new AsyncLocalStorage<readonly string[]>();
+	#pendingRunOwners = new Set<string>();
+	#agentStartCount = 0;
+	#runActive = false;
 	#abortInProgress = false;
 	/** Submissions accepted by prompt()/promptCustomMessage()/sendCustomMessage() that have not
 	 *  yet dispatched a turn, queued, or bailed. Preprocessing (manual-compaction wait, slash
@@ -1073,17 +1088,70 @@ export class AgentSession implements SettingsScope {
 		}
 	}
 
-	#beginInFlight(): void {
+	/**
+	 * Run `fn` with `owner` added to the ambient run owners (#171): every agent
+	 * run launched or scheduled from inside it — directly, through a slash
+	 * command, an extension-sent message, a retry, or a continuation — reports
+	 * `owner` on its enriched `agent_start.runOwners`.
+	 */
+	withRunOwner<T>(owner: string | undefined, fn: () => T): T {
+		if (!owner) return fn();
+		const current = this.#runOwnerScope.getStore();
+		if (current?.includes(owner)) return fn();
+		return this.#runOwnerScope.run(current ? [...current, owner] : [owner], fn);
+	}
+
+	/** Run owners of the calling async context (captured by schedulers at schedule time). */
+	currentRunOwners(): readonly string[] {
+		return this.#runOwnerScope.getStore() ?? [];
+	}
+
+	/** Number of runs started so far; `agent_start.agentStarts` carries the same count. */
+	get agentStartCount(): number {
+		return this.#agentStartCount;
+	}
+
+	#beginInFlight(owners: readonly string[] = this.currentRunOwners()): void {
+		this.#noteRunOwners(owners);
 		this.#promptInFlightCount++;
 		if (this.#promptInFlightCount === 1) {
 			this.#acquirePowerAssertion();
 		}
 	}
 
+	/**
+	 * Attach owners to the next run, or to the live run when one is already
+	 * streaming (a coalesced continuation joins the attempt it waits on).
+	 */
+	#noteRunOwners(owners: readonly string[]): void {
+		if (owners.length === 0) return;
+		if (this.#runActive) {
+			this.#emit({ type: "run_owners_joined", owners: [...owners], agentStarts: this.#agentStartCount });
+			return;
+		}
+		for (const owner of owners) this.#pendingRunOwners.add(owner);
+	}
+
+	/** Report owners whose scheduled work ended before any run consumed them. */
+	#skipRunOwners(owners: readonly string[], reason: string): void {
+		if (owners.length === 0) return;
+		for (const owner of owners) this.#pendingRunOwners.delete(owner);
+		this.#emit({ type: "run_owners_skipped", owners: [...owners], reason: `skipped:${reason}` });
+	}
+
+	#takeRunOwners(): string[] {
+		const owners = [...this.#pendingRunOwners];
+		this.#pendingRunOwners.clear();
+		return owners;
+	}
+
 	#endInFlight(onSettled?: () => void | Promise<void>): void {
 		if (onSettled) this.#inFlightSettledCallbacks.push(onSettled);
 		this.#promptInFlightCount = Math.max(0, this.#promptInFlightCount - 1);
 		if (this.#promptInFlightCount !== 0) return;
+		if (!this.#runActive && this.#pendingRunOwners.size > 0) {
+			this.#emit({ type: "run_owners_skipped", owners: this.#takeRunOwners(), reason: "skipped:no-run" });
+		}
 		this.yieldQueue.requestIdleFlush();
 		this.#releasePowerAssertion();
 		this.#flushPendingAgentEnd();
@@ -3611,12 +3679,18 @@ export class AgentSession implements SettingsScope {
 		const eventPromptGeneration = this.#promptGeneration;
 		// A fresh run supersedes the previously settled (and pruned) refusal
 		// turn: state-based lookups take over again.
+		let runOwners: string[] | undefined;
 		if (event.type === "agent_start") {
+			this.#agentStartCount++;
+			this.#runActive = true;
+			runOwners = this.#takeRunOwners();
 			this.#activeAgentPromptGeneration = eventPromptGeneration;
 			this.#prunedTerminalRefusal = undefined;
 			this.#advisors.onPrimaryAgentStart();
 			this.#emitRunState("running");
 			this.#maintenance.noteTurnStarted();
+		} else if (event.type === "agent_end") {
+			this.#runActive = false;
 		}
 		// This must happen before event fan-out awaits: streamed tool-call deltas
 		// can otherwise queue validation that a delayed turn-start reset erases.
@@ -3749,6 +3823,8 @@ export class AgentSession implements SettingsScope {
 				displayEvent = { ...event, message: { ...message, content: deobfuscatedContent } };
 			}
 		}
+		if (runOwners)
+			displayEvent = { ...event, runOwners, agentStarts: this.#agentStartCount } as unknown as AgentEvent;
 
 		if (event.type === "turn_start") {
 			this.#advisors.onPrimaryTurnStart();
@@ -4443,6 +4519,7 @@ export class AgentSession implements SettingsScope {
 			source: request.options.source,
 			schedulerToken: request.schedulerToken,
 		});
+		this.#skipRunOwners(request.owners, reason);
 		request.options.onSkip?.(reason);
 	}
 
@@ -4523,6 +4600,7 @@ export class AgentSession implements SettingsScope {
 		const request: ScheduledAgentContinueRequest = {
 			schedulerToken: ++this.#agentContinueSchedulerToken,
 			options,
+			owners: options.owners ?? this.currentRunOwners(),
 		};
 		logger.debug("agent.continue scheduled", {
 			source: options.source,
@@ -4547,6 +4625,7 @@ export class AgentSession implements SettingsScope {
 				const active = this.#activeAgentContinue;
 				if (active) {
 					active.coalescedSources.add(options.source);
+					this.#noteRunOwners(request.owners);
 					logger.debug("agent.continue coalesced after scheduling", {
 						source: options.source,
 						schedulerToken: request.schedulerToken,
@@ -4557,7 +4636,7 @@ export class AgentSession implements SettingsScope {
 					return;
 				}
 
-				this.#beginInFlight();
+				this.#beginInFlight(request.owners);
 				const coalescedSources = new Set([options.source]);
 				const promise = this.#runAgentContinue(signal, request, coalescedSources);
 				const attempt: ActiveAgentContinue = {
@@ -7016,7 +7095,7 @@ export class AgentSession implements SettingsScope {
 	 * the ACP agent) use this to know whether to expect an `agent_end` event.
 	 */
 	async prompt(text: string, options?: PromptOptions): Promise<boolean> {
-		return this.#admitSubmission(() => this.#prompt(text, options));
+		return this.withRunOwner(options?.runOwner, () => this.#admitSubmission(() => this.#prompt(text, options)));
 	}
 
 	async #prompt(text: string, options?: PromptOptions): Promise<boolean> {
@@ -7121,6 +7200,7 @@ export class AgentSession implements SettingsScope {
 				timestamp: submittedAt,
 				attribution: promptAttribution,
 				entryId: options?.entryId,
+				origin: options?.origin,
 			});
 			outcome.sessionClaimed = true;
 			return true;
@@ -7178,6 +7258,7 @@ export class AgentSession implements SettingsScope {
 				timestamp: submittedAt,
 				attribution: promptAttribution,
 				entryId: options?.entryId,
+				origin: options?.origin,
 				preprocessed: {
 					images: normalizedImages,
 					descriptionNotice: imageDescriptionNotice,
@@ -7202,7 +7283,13 @@ export class AgentSession implements SettingsScope {
 					synthetic: true,
 					userInitiated: options?.userInitiated === true ? true : undefined,
 				}
-			: { role: "user" as const, content: userContent, attribution: promptAttribution, timestamp: submittedAt };
+			: {
+					role: "user" as const,
+					content: userContent,
+					attribution: promptAttribution,
+					timestamp: submittedAt,
+					...(options?.origin ? { origin: options.origin } : {}),
+				};
 		if (options?.entryId !== undefined) setMessageEntryId(message, options.entryId);
 
 		const preludeMessages: AgentMessage[] = [];
@@ -7266,17 +7353,23 @@ export class AgentSession implements SettingsScope {
 	 * stop instead of hanging.
 	 */
 	async promptCustomMessage<T = unknown>(
-		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
-		options?: Pick<PromptOptions, "streamingBehavior" | "toolChoice" | "entryId"> & {
+		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution"> & {
+			origin?: MessageOrigin;
+		},
+		options?: Pick<PromptOptions, "streamingBehavior" | "toolChoice" | "entryId" | "runOwner"> & {
 			queueChipText?: string;
 			queueOnly?: boolean;
 		},
 	): Promise<boolean> {
-		return this.#admitSubmission(() => this.#promptCustomMessage(message, options));
+		return this.withRunOwner(options?.runOwner, () =>
+			this.#admitSubmission(() => this.#promptCustomMessage(message, options)),
+		);
 	}
 
 	async #promptCustomMessage<T = unknown>(
-		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
+		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution"> & {
+			origin?: MessageOrigin;
+		},
 		options?: Pick<PromptOptions, "streamingBehavior" | "toolChoice" | "entryId"> & {
 			queueChipText?: string;
 			queueOnly?: boolean;
@@ -7297,7 +7390,9 @@ export class AgentSession implements SettingsScope {
 	}
 
 	async #dispatchCustomPrompt<T = unknown>(
-		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
+		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution"> & {
+			origin?: MessageOrigin;
+		},
 		options:
 			| (Pick<PromptOptions, "streamingBehavior" | "toolChoice" | "entryId"> & {
 					queueChipText?: string;
@@ -7369,6 +7464,7 @@ export class AgentSession implements SettingsScope {
 			details: message.details,
 			attribution: message.attribution ?? "agent",
 			timestamp: Date.now(),
+			...(message.origin ? { origin: message.origin } : {}),
 		};
 		if (options?.entryId !== undefined) setMessageEntryId(customMessage, options.entryId);
 
@@ -7940,6 +8036,7 @@ export class AgentSession implements SettingsScope {
 			timestamp: submittedAt,
 			attribution: options?.attribution,
 			entryId: options?.entryId,
+			origin: options?.origin,
 		});
 	}
 
@@ -7965,6 +8062,7 @@ export class AgentSession implements SettingsScope {
 				timestamp: submittedAt,
 				attribution: options?.attribution,
 				entryId: options?.entryId,
+				origin: options?.origin,
 			});
 			return;
 		}
@@ -8031,6 +8129,8 @@ export class AgentSession implements SettingsScope {
 			attribution?: MessageAttribution;
 			/** Reserved session entry id the queued user message is persisted under. */
 			entryId?: string;
+			/** Control-socket provenance persisted on the queued user message (#171). */
+			origin?: MessageOrigin;
 			preprocessed?: { images: ImageContent[] | undefined; descriptionNotice: CustomMessage | undefined };
 		},
 	): Promise<void> {
@@ -8068,6 +8168,7 @@ export class AgentSession implements SettingsScope {
 				: undefined;
 		const reserved = <M extends AgentMessage>(message: M): M => {
 			if (options?.entryId !== undefined) setMessageEntryId(message, options.entryId);
+			if (options?.origin && message.role === "user") message.origin = options.origin;
 			return message;
 		};
 		if (mode === "aside") {

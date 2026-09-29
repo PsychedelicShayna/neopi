@@ -1,6 +1,7 @@
 import * as url from "node:url";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { BracketedPasteHandler } from "../bracketed-paste";
+import { currentDetachedDraft } from "../draft-scope";
 import { BRACKETED_PASTE_END, BRACKETED_PASTE_START } from "../stdin-buffer";
 import { Editor, type EditorTextDecorationContext, type EditorTheme } from "../components/editor";
 import { addKeyAliases, canonicalKeyId, getKeybindings } from "../keybindings";
@@ -385,10 +386,26 @@ export class CustomEditor extends Editor {
 
 	/** Draft images pasted into the composer, consumed on submit. Co-located with
 	 *  {@link imageLinks} so every piece of draft-image state lives on the editor. */
-	pendingImages: ImageContent[] = [];
-	/** Per-image source links (file:// targets) parallel to {@link pendingImages};
-	 *  `undefined` entries are images without a backing reference yet. */
-	pendingImageLinks: (string | undefined)[] = [];
+	#pendingImages: ImageContent[] = [];
+	#pendingImageLinks: (string | undefined)[] = [];
+
+	/** Draft images. A control submission sees a detached copy (#171). */
+	get pendingImages(): ImageContent[] {
+		return currentDetachedDraft()?.images ?? this.#pendingImages;
+	}
+	set pendingImages(images: ImageContent[]) {
+		const detached = currentDetachedDraft();
+		if (detached) detached.images = images;
+		else this.#pendingImages = images;
+	}
+	get pendingImageLinks(): (string | undefined)[] {
+		return currentDetachedDraft()?.imageLinks ?? this.#pendingImageLinks;
+	}
+	set pendingImageLinks(links: (string | undefined)[]) {
+		const detached = currentDetachedDraft();
+		if (detached) detached.imageLinks = links;
+		else this.#pendingImageLinks = links;
+	}
 	/** Large text pastes staged as compact chip tokens; expansion lives in the atom table.
 	 *  Numbered by a per-draft monotonic counter so a deleted chip never recycles its number
 	 *  (labels key the atom table). */
@@ -453,6 +470,13 @@ export class CustomEditor extends Editor {
 	 *  reset the editor text and all pending draft-image state. The shared tail of
 	 *  every "message submitted" path; pass no argument for a plain discard. */
 	clearDraft(historyText?: string): void {
+		const detached = currentDetachedDraft();
+		if (detached) {
+			detached.text = "";
+			detached.images = [];
+			detached.imageLinks = [];
+			return;
+		}
 		if (historyText !== undefined) this.addToHistory(historyText);
 		this.setText("");
 		this.clearPasteState();
@@ -461,6 +485,19 @@ export class CustomEditor extends Editor {
 		this.pendingImageLinks = [];
 		this.pendingTexts = [];
 		this.#textAttachmentCounter = 0;
+	}
+	/** Control submissions read and write the detached draft, never the human composer (#171). */
+	override getText(): string {
+		return currentDetachedDraft()?.text ?? super.getText();
+	}
+
+	override setText(text: string): void {
+		const detached = currentDetachedDraft();
+		if (detached) {
+			detached.text = text;
+			return;
+		}
+		super.setText(text);
 	}
 
 	/** Preserve a canceled draft in local navigation, then clear the composer. */

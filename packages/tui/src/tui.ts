@@ -1063,6 +1063,7 @@ export class TUI extends Container {
 		}
 
 		const previousFocusedComponent = this.#focusedComponent;
+		if (previousFocusedComponent !== component) this.onFocusChange?.();
 		// Clear focused flag on old component
 		if (isFocusable(previousFocusedComponent)) {
 			previousFocusedComponent.focused = false;
@@ -1105,6 +1106,30 @@ export class TUI extends Container {
 	}
 
 	/**
+	 * Inject input with an origin. Terminal stdin is `keyboard`; control-socket
+	 * injection passes `control` so approval and revision checks can tell them
+	 * apart (#171). `onHumanInput` fires only for keyboard origin.
+	 */
+	inputOrigin: "keyboard" | "control" = "keyboard";
+	onHumanInput?: () => void;
+	/** Fires when keyboard focus moves to a different component (control focus revision, #171). */
+	onFocusChange?: () => void;
+	/** Fires after each frame is written (control paint revision, #171). */
+	onPaint?: () => void;
+	/** Fires when an overlay is mounted. The returned disposer runs on hide. */
+	onOverlayShown?: (component: Component, hide: () => void) => (() => void) | void;
+
+	injectInput(data: string, origin: "keyboard" | "control" = "control"): void {
+		const previous = this.inputOrigin;
+		this.inputOrigin = origin;
+		try {
+			this.#handleInput(data);
+		} finally {
+			this.inputOrigin = previous;
+		}
+	}
+
+	/**
 	 * Show an overlay component with configurable positioning and sizing.
 	 * Returns a handle to control the overlay's visibility.
 	 */
@@ -1120,24 +1145,32 @@ export class TUI extends Container {
 		this.#recordHardwareCursorHidden();
 		this.requestRender();
 
-		// Return handle for controlling this overlay
-		return {
-			hide: () => {
-				const index = this.overlayStack.indexOf(entry);
-				if (index !== -1) {
-					this.overlayStack.splice(index, 1);
-					// Restore focus if this overlay or one of its owned targets had focus
-					if (isOverlayFocusTarget(component, this.#focusedComponent)) {
-						const topVisible = this.#getTopmostVisibleOverlay();
-						this.setFocus(topVisible?.component ?? entry.preFocus);
-					}
-					if (this.overlayStack.length === 0) {
-						this.terminal.hideCursor();
-						this.#recordHardwareCursorHidden();
-					}
-					this.requestRender();
+		// Return handle for controlling this overlay. onOverlayShown lets the
+		// control socket list and answer the surface for as long as it is mounted.
+		let disposed = false;
+		let dispose: (() => void) | undefined;
+		const hide = (): void => {
+			if (disposed) return;
+			disposed = true;
+			const index = this.overlayStack.indexOf(entry);
+			if (index !== -1) {
+				this.overlayStack.splice(index, 1);
+				if (isOverlayFocusTarget(component, this.#focusedComponent)) {
+					const topVisible = this.#getTopmostVisibleOverlay();
+					this.setFocus(topVisible?.component ?? entry.preFocus);
 				}
-			},
+				if (this.overlayStack.length === 0) {
+					this.terminal.hideCursor();
+					this.#recordHardwareCursorHidden();
+				}
+				this.requestRender();
+			}
+			dispose?.();
+		};
+		const shown = this.onOverlayShown?.(component, hide);
+		if (typeof shown === "function") dispose = shown;
+		return {
+			hide,
 			setHidden: (hidden: boolean) => {
 				if (entry.hidden === hidden) return;
 				entry.hidden = hidden;
@@ -2141,6 +2174,7 @@ export class TUI extends Container {
 		this.#lastRenderAt = start;
 		this.#doRender();
 		this.#lastFrameCostMs = this.#renderScheduler.now() - start;
+		this.onPaint?.();
 	}
 
 	/**
@@ -2240,6 +2274,7 @@ export class TUI extends Container {
 		this.#lastRenderAt = start;
 		this.#doRender();
 		this.#lastFrameCostMs = this.#renderScheduler.now() - start;
+		this.onPaint?.();
 	}
 	/**
 	 * True when the frame was deferred because the terminal's output backlog
@@ -2259,6 +2294,7 @@ export class TUI extends Container {
 	}
 
 	#handleInput(data: string): void {
+		if (this.inputOrigin === "keyboard") this.onHumanInput?.();
 		// Consume CPR replies (CSI row;col R) while an anchor probe is unanswered;
 		// they are terminal reports, never keystrokes, and must not reach the
 		// focused component.

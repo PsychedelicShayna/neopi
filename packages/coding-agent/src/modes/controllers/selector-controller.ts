@@ -1,3 +1,5 @@
+import { trackMountedDialog } from "../../control/dialogs";
+import { cfgControlSecretInput } from "../../control/settings";
 import * as fs from "node:fs";
 import advisorSystemPrompt from "../../prompts/advisor/system.md" with { type: "text" };
 import { renderChatAdvisorPrompt } from "../../chat/chat-system-prompt";
@@ -1000,6 +1002,16 @@ export class SelectorController {
 			maxHeight: "100%",
 			margin: 0,
 		});
+		const closePicker = trackMountedDialog({
+			family: "selector",
+			kind: "model_picker",
+			title: "Model",
+			cancel: () => overlayHandle.hide(),
+		});
+		overlayHandle.hide = (hide => () => {
+			closePicker();
+			hide();
+		})(overlayHandle.hide.bind(overlayHandle));
 		this.ctx.ui.setFocus(picker);
 		this.ctx.ui.requestRender();
 	}
@@ -1449,44 +1461,49 @@ export class SelectorController {
 	 * alternate screen never flashes a stale transcript.
 	 */
 	async #rewindFromTranscript(entryId: string, done: () => void): Promise<void> {
-		const entry = this.ctx.sessionManager.getEntry(entryId);
-		if (!entry || !isTranscriptEntry(entry)) {
-			done();
-			return;
-		}
-
-		const isUserTarget = isUserRequestEntry(entry);
-		const realLeafId = this.ctx.sessionManager.getLeafId();
-		if (entryId === realLeafId && !isUserTarget) {
-			done();
-			this.ctx.showStatus("Already at this point");
-			return;
-		}
-		const treeRewind = this.#treeRewindBoundary(entryId, realLeafId);
 		try {
-			const result = await this.ctx.session.navigateTree(entryId, { summarize: false });
-			if (result.cancelled) {
-				done();
-				this.ctx.showStatus("Navigation cancelled");
-				return;
-			}
-			const fastRewind =
-				treeRewind !== undefined &&
-				this.ctx.sessionManager.getLeafId() === treeRewind.expectedLeafId &&
-				this.ctx.truncateTranscriptFromMessage(treeRewind.message);
-			if (!fastRewind) {
-				await this.ctx.renderInitialMessages({ clearTerminalHistory: true });
-			}
-			await this.ctx.reloadTodos();
-			if (result.editorText && (isUserTarget || !this.ctx.editor.getText().trim())) {
-				this.ctx.editor.setDraft(result.editorText, result.editorImages);
-			}
+			const outcome = await this.rewindToEntry(entryId, { prefillDraft: "auto" });
 			done();
-			this.ctx.showStatus("Rewound to selected point");
+			if (outcome.status === "unchanged") this.ctx.showStatus("Already at this point");
+			else if (outcome.status === "cancelled") this.ctx.showStatus("Navigation cancelled");
+			else if (outcome.status === "rewound") this.ctx.showStatus("Rewound to selected point");
 		} catch (error) {
 			done();
 			this.ctx.showError(error instanceof Error ? error.message : String(error));
 		}
+	}
+
+	/**
+	 * Rewind in place to `entryId` and rebuild the transcript. `prefillDraft`
+	 * `"auto"` is the keyboard rule (a user target, or an empty editor, takes
+	 * the target's text); a boolean is the control socket's explicit choice.
+	 */
+	async rewindToEntry(
+		entryId: string,
+		options: { prefillDraft: boolean | "auto" },
+	): Promise<{ status: "rewound" | "unchanged" | "cancelled" | "invalid"; error?: string }> {
+		const entry = this.ctx.sessionManager.getEntry(entryId);
+		if (!entry || !isTranscriptEntry(entry)) return { status: "invalid", error: `no transcript entry ${entryId}` };
+		const isUserTarget = isUserRequestEntry(entry);
+		const realLeafId = this.ctx.sessionManager.getLeafId();
+		if (entryId === realLeafId && !isUserTarget) return { status: "unchanged" };
+		const treeRewind = this.#treeRewindBoundary(entryId, realLeafId);
+		const result = await this.ctx.session.navigateTree(entryId, { summarize: false });
+		if (result.cancelled) return { status: "cancelled" };
+		const fastRewind =
+			treeRewind !== undefined &&
+			this.ctx.sessionManager.getLeafId() === treeRewind.expectedLeafId &&
+			this.ctx.truncateTranscriptFromMessage(treeRewind.message);
+		if (!fastRewind) {
+			await this.ctx.renderInitialMessages({ clearTerminalHistory: true });
+		}
+		await this.ctx.reloadTodos();
+		const prefill =
+			options.prefillDraft === "auto" ? isUserTarget || !this.ctx.editor.getText().trim() : options.prefillDraft;
+		if (result.editorText && prefill) {
+			this.ctx.editor.setDraft(result.editorText, result.editorImages);
+		}
+		return { status: "rewound" };
 	}
 
 	showCopySelector(): void {
@@ -1941,6 +1958,17 @@ export class SelectorController {
 			margin: 0,
 			fullscreen: true,
 		});
+		const closeSessions = trackMountedDialog({
+			family: "selector",
+			kind: "session",
+			title: "Sessions",
+			cancel: () => overlayHandle.hide(),
+		});
+		const hideSessions = overlayHandle.hide.bind(overlayHandle);
+		overlayHandle.hide = () => {
+			closeSessions();
+			hideSessions();
+		};
 		this.ctx.ui.setFocus(selector);
 		this.ctx.ui.requestRender();
 	}
@@ -2120,9 +2148,11 @@ export class SelectorController {
 		const { LoginDialogComponent, PASTE_CODE_LOGIN_PROVIDERS } = loadProviderAuthUi();
 		const useManualInput = PASTE_CODE_LOGIN_PROVIDERS.has(providerId);
 		let restored = false;
+		const loginDialog = { close: () => {} };
 		const restoreEditor = () => {
 			if (restored) return;
 			restored = true;
+			loginDialog.close();
 			this.ctx.editorContainer.clear();
 			this.ctx.editorContainer.addChild(this.ctx.editor);
 			this.ctx.ui.setFocus(this.ctx.editor);
@@ -2143,6 +2173,24 @@ export class SelectorController {
 		this.ctx.editorContainer.addChild(dialog);
 		this.ctx.ui.setFocus(dialog);
 		this.ctx.ui.requestRender();
+		dialog.secretInputAllowed = () => cfgControlSecretInput.get(this.ctx.session.settings) === true;
+		loginDialog.close = trackMountedDialog({
+			family: "login",
+			kind: "login",
+			title: providerId,
+			answer: value => {
+				const code =
+					typeof value === "string"
+						? value
+						: typeof value === "object" && value && "code" in value
+							? String((value as { code: unknown }).code)
+							: undefined;
+				if (code === undefined) return false;
+				if (dialog.isSecretPrompt() && cfgControlSecretInput.get(this.ctx.session.settings) !== true) return false;
+				return dialog.submitValue(code);
+			},
+			cancel: () => dialog.handleInput("\x1b"),
+		});
 		try {
 			const identity = await this.ctx.session.modelRegistry.authStorage.oauth.login(providerId as OAuthProvider, {
 				signal: dialog.signal,

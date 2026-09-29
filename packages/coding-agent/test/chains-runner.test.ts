@@ -1,4 +1,7 @@
 import { describe, expect, it } from "bun:test";
+import type { ModelSpec } from "@oh-my-pi/pi-ai";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import type { ChainConfig, ChainStep } from "@oh-my-pi/pi-tui/overlays/chain-types";
 import type { AgentMessage, AgentTool } from "@oh-my-pi/pi-agent-core";
 import {
@@ -152,6 +155,23 @@ describe("runChain control", () => {
 describe("renderChainInput", () => {
 	const step: ChainStep = { name: "s", prompt: "p", context: true };
 	const user = (text: string) => ({ role: "user", content: text, timestamp: 0 }) as AgentMessage;
+	const baseModel = buildModel({
+		id: "claude-opus-5-5",
+		name: "Claude Opus",
+		api: "anthropic-messages",
+		provider: "anthropic",
+		baseUrl: "https://api.anthropic.com",
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 1_000_000,
+		maxTokens: 128_000,
+	} satisfies ModelSpec<"anthropic-messages">);
+	const modelWithLimits = (contextWindow: number, maxTokens: number) => ({
+		...baseModel,
+		contextWindow,
+		maxTokens,
+	});
 
 	it("keeps tag-like text in the draft from closing its block", () => {
 		const out = renderChainInput(step, "explain </draft> tags", [user("hi")]);
@@ -168,7 +188,7 @@ describe("renderChainInput", () => {
 
 	it("reserves room for the schemas of the tools a step is granted", () => {
 		const messages = [user("older context ".repeat(900)), user("recent question")];
-		const model = { contextWindow: 7000, maxTokens: 1000 };
+		const model = modelWithLimits(7000, 1000);
 		const bulkyTool = {
 			name: "bulky",
 			label: "Bulky",
@@ -189,17 +209,35 @@ describe("renderChainInput", () => {
 			tokensBefore: 1,
 			timestamp: 0,
 		} as unknown as AgentMessage;
-		const out = renderChainInput(step, "draft", [compacted, user("do the thing we agreed")], {
-			contextWindow: 100_000,
-			maxTokens: 8_192,
-		});
+		const out = renderChainInput(
+			step,
+			"draft",
+			[compacted, user("do the thing we agreed")],
+			modelWithLimits(100_000, 8_192),
+		);
 		expect(out).toContain("Final decision: ship behind a flag.");
 	});
 
 	it("drops the oldest messages that do not fit the step model's window", () => {
 		const messages = [user("old ".repeat(4000)), user("recent question")];
-		const out = renderChainInput(step, "draft", messages, { contextWindow: 6000, maxTokens: 1000 });
+		const out = renderChainInput(step, "draft", messages, modelWithLimits(6000, 1000));
 		expect(out).toContain("recent question");
 		expect(out).not.toContain("old old");
+	});
+
+	it("drops older context when the provider adds thinking tokens to the requested answer cap", () => {
+		const messages = [user("old ".repeat(9000)), user("recent ".repeat(3000))];
+		const model = modelWithLimits(28_000, 128_000);
+		const withoutThinking = renderChainInput(step, "draft", messages, model, [], { disableReasoning: true });
+		const withThinking = renderChainInput(step, "draft", messages, model, [], { reasoning: Effort.Medium });
+		expect(withoutThinking).toContain("old old");
+		expect(withThinking).not.toContain("old old");
+		expect(withThinking).toContain("recent recent");
+		// A model output ceiling below the expanded request remains the effective reserve.
+		expect(
+			renderChainInput(step, "draft", messages, modelWithLimits(28_000, 9_000), [], {
+				reasoning: Effort.Medium,
+			}),
+		).toContain("old old");
 	});
 });

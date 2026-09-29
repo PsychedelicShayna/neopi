@@ -13,6 +13,7 @@
  */
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import type { MessageOrigin } from "@oh-my-pi/pi-ai";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
@@ -54,12 +55,8 @@ import { claimRpcInput, readRpcInputFrames } from "./rpc-input";
 import { pageRpcMessages, RPC_MESSAGES_PAGE_BUSY_ERROR, RpcMessagesPageError } from "./rpc-messages";
 import { RpcOutputWriter } from "./rpc-output";
 import { isRpcPlanProposalResponse, RpcPlanModeController, RpcSetModeError } from "./rpc-plan-mode";
-import {
-	RpcExtensionUserMessageTracker,
-	RpcPromptResults,
-	type RpcPromptTicket,
-	watchAndReportPromptResult,
-} from "./rpc-prompt-results";
+import { RpcExtensionUserMessageTracker, RpcPromptResults, watchAndReportPromptResult } from "./rpc-prompt-results";
+import type { RpcPromptTicket } from "./rpc-prompt-results";
 import { RpcRoles } from "./rpc-roles";
 import { setRpcChatMode } from "./rpc-chat-mode";
 import { RpcSessionEventForwarder } from "./rpc-session-events";
@@ -183,6 +180,7 @@ export async function runRpcSkillCommand(
 	streamingBehavior: "steer" | "followUp" = "steer",
 	prebuilt?: BuiltSkillPromptMessage,
 	entryId?: string,
+	runOwner?: string,
 ): Promise<boolean> {
 	const built = prebuilt ?? (await buildSkillPromptMessage(invocation.skill, invocation, "user"));
 	return session.promptCustomMessage(
@@ -193,7 +191,7 @@ export async function runRpcSkillCommand(
 			details: built.details,
 			attribution: "user",
 		},
-		{ streamingBehavior, entryId },
+		{ streamingBehavior, entryId, runOwner },
 	);
 }
 
@@ -216,6 +214,8 @@ export async function dispatchRpcSkillPrompt(input: {
 	results: RpcPromptResults;
 	onError: (error: Error) => void;
 	extensionUserMessageTracker: RpcExtensionUserMessageTracker;
+	/** Run owner the skill prompt's work is scheduled under (#171). */
+	runOwner?: string;
 }): Promise<RpcSkillCommandResult | null> {
 	const invocation = resolveRpcSkillInvocation(input.session, input.message);
 	if (!invocation) return null;
@@ -226,10 +226,19 @@ export async function dispatchRpcSkillPrompt(input: {
 	// calls) is what moves behind the acknowledgement.
 	const built = await buildSkillPromptMessage(invocation.skill, invocation, "user");
 	const userEntryId = input.reserveEntryId();
+	input.results.bindEntry(input.ticket, userEntryId);
+	if (input.runOwner) input.results.bindOwner(input.ticket, input.runOwner);
 	watchAndReportPromptResult({
 		ticket: input.ticket,
 		startPrompt: () =>
-			runRpcSkillCommand(input.session, invocation, input.streamingBehavior ?? "steer", built, userEntryId),
+			runRpcSkillCommand(
+				input.session,
+				invocation,
+				input.streamingBehavior ?? "steer",
+				built,
+				userEntryId,
+				input.runOwner,
+			),
 		results: input.results,
 		releaseReservation: () => input.releaseEntryId?.(userEntryId),
 		onError: input.onError,
@@ -872,6 +881,852 @@ export interface RpcModeOptions {
  * Run in RPC mode.
  * Listens for JSON commands on stdin, outputs events and responses on stdout.
  */
+
+/** Everything the 53-arm command switch needs. Stdio and the control socket share this. */
+export interface RpcCommandHandlerContext {
+	session: AgentSession;
+	output: RpcOutput;
+	success: <T extends RpcCommand["type"]>(id: string | undefined, command: T, data?: object | null) => RpcResponse;
+	error: (id: string | undefined, command: string, message: string, code?: string) => RpcResponse;
+	promptResults: RpcPromptResults;
+	ownPrompt: (ticket: RpcPromptTicket) => string;
+	reservePromptEntryId: (message: string) => string | undefined;
+	executeCustomPromptCommand: (message: string) => Promise<string | null>;
+	emitAvailableCommandsUpdate: () => Promise<void>;
+	reloadPluginState: () => Promise<void>;
+	getAvailableCommands: () => Promise<unknown>;
+	/** Set by a control connection so the user entry is attributed. Absent on stdio. */
+	origin?: MessageOrigin;
+	onPromptError: (id: string | undefined, command: string) => (promptError: Error) => void;
+	extensionUserMessageTracker: RpcExtensionUserMessageTracker;
+	trackBackground: (task: () => Promise<void>) => void;
+	subagentRegistry: RpcSubagentRegistry | undefined;
+	planMode: RpcPlanModeController;
+	settleWatcher: RpcSessionSettleWatcher;
+	rpcRoles: RpcRoles;
+	sessionEvents: RpcSessionEventForwarder;
+	hostToolBridge: RpcHostToolBridge;
+	hostUriBridge: RpcHostUriBridge;
+	toolApprovalBridge: RpcToolApprovalBridge;
+	pendingExtensionRequests: Map<string, PendingExtensionRequest>;
+	createUiContext: (pending: Map<string, PendingExtensionRequest>, output: RpcOutput) => ExtensionUIContext;
+}
+
+// Handle a single command
+export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command: RpcCommand) => Promise<RpcResponse> {
+	const {
+		session,
+		output,
+		success,
+		error,
+		promptResults,
+		ownPrompt,
+		reservePromptEntryId,
+		executeCustomPromptCommand,
+		emitAvailableCommandsUpdate,
+		reloadPluginState,
+		getAvailableCommands,
+		onPromptError,
+		origin,
+		extensionUserMessageTracker,
+		trackBackground,
+		subagentRegistry,
+		planMode,
+		settleWatcher,
+		rpcRoles,
+		sessionEvents,
+		hostToolBridge,
+		hostUriBridge,
+		toolApprovalBridge,
+		pendingExtensionRequests,
+		createUiContext,
+	} = ctx;
+	return async (command: RpcCommand): Promise<RpcResponse> => {
+		const id = command.id;
+
+		switch (command.type) {
+			case "negotiate_protocol":
+				return answerRpcProtocolNegotiation(command);
+
+			// =================================================================
+			// Prompting
+			// =================================================================
+
+			case "prompt": {
+				// Taken before any dispatch so a builtin that schedules a turn (e.g. `/retry`)
+				// cannot start its run ahead of the prompt's event-stream position.
+				const ticket = promptResults.begin(id);
+				try {
+					const skillResult = await dispatchRpcSkillPrompt({
+						ticket,
+						session,
+						message: command.message,
+						streamingBehavior: command.streamingBehavior,
+						reserveEntryId: () => session.sessionManager.reserveEntryId(),
+						releaseEntryId: entryId => session.sessionManager.releaseEntryId(entryId),
+						results: promptResults,
+						onError: onPromptError(id, "prompt"),
+						extensionUserMessageTracker,
+						runOwner: ownPrompt(ticket),
+					});
+					if (skillResult) {
+						return success(id, "prompt", skillResult);
+					}
+					const builtinResult = await executeAcpBuiltinSlashCommand(command.message, {
+						session,
+						sessionManager: session.sessionManager,
+						settings: session.settings,
+						cwd: session.sessionManager.getCwd(),
+						output: text => output({ type: "command_output", text }),
+						refreshCommands: emitAvailableCommandsUpdate,
+						reloadPlugins: reloadPluginState,
+						runCommandInBackground: task => trackBackground(task),
+						notifyTitleChanged: async () => {
+							output({ type: "session_info_update", title: session.sessionName, sessionId: session.sessionId });
+						},
+						notifyConfigChanged: async () => {
+							output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
+						},
+					});
+					if (builtinResult !== false) {
+						if ("prompt" in builtinResult) {
+							const userEntryId = session.sessionManager.reserveEntryId();
+							promptResults.bindEntry(ticket, userEntryId);
+							const runOwner = ownPrompt(ticket);
+							watchAndReportPromptResult({
+								ticket,
+								startPrompt: () =>
+									session.prompt(builtinResult.prompt, {
+										images: command.images,
+										entryId: userEntryId,
+										runOwner,
+										origin,
+									}),
+								results: promptResults,
+								onError: onPromptError(id, "prompt"),
+								releaseReservation: () => session.sessionManager.releaseEntryId(userEntryId),
+								extensionUserMessageTracker,
+							});
+							return success(id, "prompt", { userEntryId });
+						}
+						// A consumed builtin is normally local-only, but some (e.g.
+						// `/retry`) schedule an agent turn whose events stream after
+						// this response. Report that so the host does not finalize the
+						// request as non-agent work while the agent is running; the
+						// turn's prompt_result follows once the session settles. Either
+						// way the command itself writes no user entry, so no userEntryId.
+						if (builtinResult.agentInvoked === true) {
+							void session.waitForIdle().then(
+								() => promptResults.settle(ticket),
+								(idleError: unknown) =>
+									promptResults.fail(
+										ticket,
+										idleError instanceof Error ? idleError.message : String(idleError),
+									),
+							);
+						} else {
+							// Completed synchronously: `data.agentInvoked: false` is the completion signal.
+							promptResults.discard(ticket);
+						}
+						return success(id, "prompt", { agentInvoked: builtinResult.agentInvoked === true });
+					}
+
+					const customCommandResult = await executeCustomPromptCommand(command.message);
+					if (customCommandResult === "") {
+						promptResults.completeLocal(ticket);
+						return success(id, "prompt", { agentInvoked: false });
+					}
+					// Don't await - events will stream
+					// Extension commands are executed immediately, file prompt templates are expanded
+					// If streaming and streamingBehavior specified, queues via steer/followUp
+					const userEntryId = reservePromptEntryId(command.message);
+					if (userEntryId) promptResults.bindEntry(ticket, userEntryId);
+					const runOwner = ownPrompt(ticket);
+					watchAndReportPromptResult({
+						ticket,
+						startPrompt: () =>
+							session.prompt(command.message, {
+								images: command.images,
+								streamingBehavior: command.streamingBehavior,
+								entryId: userEntryId,
+								runOwner,
+								origin,
+								customCommandResult: customCommandResult ?? undefined,
+							}),
+						results: promptResults,
+						onError: onPromptError(id, "prompt"),
+						releaseReservation: () => session.sessionManager.releaseEntryId(userEntryId),
+						extensionUserMessageTracker,
+					});
+					return success(id, "prompt", userEntryId === undefined ? undefined : { userEntryId });
+				} catch (promptSetupError) {
+					// Rejected before acceptance: the error response is the only answer.
+					promptResults.discard(ticket);
+					throw promptSetupError;
+				}
+			}
+
+			case "steer": {
+				const userEntryId = session.sessionManager.reserveEntryId();
+				try {
+					await session.steer(command.message, command.images, { entryId: userEntryId, origin });
+					return success(id, "steer", { userEntryId });
+				} catch (error) {
+					session.sessionManager.releaseEntryId(userEntryId);
+					throw error;
+				}
+			}
+
+			case "follow_up": {
+				const userEntryId = session.sessionManager.reserveEntryId();
+				try {
+					await session.followUp(command.message, command.images, { entryId: userEntryId, origin });
+					return success(id, "follow_up", { userEntryId });
+				} catch (error) {
+					session.sessionManager.releaseEntryId(userEntryId);
+					throw error;
+				}
+			}
+
+			case "abort": {
+				await session.abort({ reason: USER_INTERRUPT_LABEL });
+				return success(id, "abort");
+			}
+
+			case "abort_and_prompt": {
+				await session.abort({ reason: USER_INTERRUPT_LABEL });
+				const customCommandResult = await executeCustomPromptCommand(command.message);
+				if (customCommandResult === "") {
+					promptResults.completeLocal(promptResults.begin(id));
+					return success(id, "abort_and_prompt", { agentInvoked: false });
+				}
+				const userEntryId = reservePromptEntryId(command.message);
+				const ticket = promptResults.begin(id);
+				if (userEntryId) promptResults.bindEntry(ticket, userEntryId);
+				const runOwner = ownPrompt(ticket);
+				// After the abort so the aborted run's terminal agent_end cannot settle this prompt.
+				watchAndReportPromptResult({
+					ticket,
+					startPrompt: () =>
+						session.prompt(command.message, {
+							images: command.images,
+							entryId: userEntryId,
+							runOwner,
+							origin,
+							customCommandResult: customCommandResult ?? undefined,
+						}),
+					results: promptResults,
+					onError: onPromptError(id, "abort_and_prompt"),
+					releaseReservation: () => session.sessionManager.releaseEntryId(userEntryId),
+					extensionUserMessageTracker,
+				});
+				return success(id, "abort_and_prompt", userEntryId === undefined ? undefined : { userEntryId });
+			}
+
+			case "new_session":
+			case "switch_session":
+			case "branch": {
+				let result: RpcSessionChangeResult;
+				try {
+					result = await handleRpcSessionChange(session, command, subagentRegistry);
+				} catch (err) {
+					const code = sessionLeaseErrorCode(err);
+					if (!code) throw err;
+					return error(id, command.type, err instanceof Error ? err.message : String(err), code);
+				}
+				if (!result.data.cancelled) {
+					promptResults.abortOpen();
+					// The detached run publishes no terminal agent_end to settle on.
+					void settleWatcher.check();
+					await emitAvailableCommandsUpdate();
+					// A session change ends set_mode's plan mode; answer once its restore landed.
+					await planMode.settled();
+				}
+				return success(id, result.type, result.data);
+			}
+
+			case "open_session": {
+				let result: RpcOpenSessionResult;
+				try {
+					result = await openRpcSession(session, command.sessionDir, subagentRegistry);
+				} catch (err) {
+					const code = sessionLeaseErrorCode(err);
+					if (!code) throw err;
+					return error(id, "open_session", err instanceof Error ? err.message : String(err), code);
+				}
+				if (!result.cancelled) {
+					promptResults.abortOpen();
+					void settleWatcher.check();
+					await emitAvailableCommandsUpdate();
+					await planMode.settled();
+				}
+				return success(id, "open_session", result);
+			}
+
+			// =================================================================
+			// State
+			// =================================================================
+
+			case "get_state": {
+				const state: RpcSessionState = {
+					model: session.model,
+					thinkingLevel: session.thinkingLevel,
+					isStreaming: session.isStreaming,
+					isCompacting: session.isCompacting,
+					steeringMode: session.steeringMode,
+					followUpMode: session.followUpMode,
+					interruptMode: session.interruptMode,
+					sessionFile: session.sessionFile,
+					sessionId: session.sessionId,
+					sessionName: session.sessionName,
+					autoCompactionEnabled: session.autoCompactionEnabled,
+					queuedMessageCount: session.queuedMessageCount,
+					hasPendingAsyncWork: session.hasPendingAsyncWork(),
+					isSettled: isRpcSessionSettled(session),
+					todoPhases: session.getTodoPhases(),
+					fastModeEnabled: session.isFastModeEnabled(),
+					tokensPerSecond: calculateTokensPerSecond(session.messages, session.isStreaming),
+					fastModeActive: session.isFastModeActive(),
+					messageCount: session.messages.length,
+					systemPrompt: session.systemPrompt,
+					dumpTools: session.agent.state.tools.map(tool => ({
+						name: tool.name,
+						description: tool.description,
+						parameters: toolWireSchema(tool),
+						examples: tool.examples,
+					})),
+					contextUsage: session.getContextUsage(),
+					activeRole: rpcRoles.activeRole(),
+					chatMode: session.chatMode?.mode ?? "off",
+					...planMode.state,
+				};
+				return success(id, "get_state", state);
+			}
+
+			case "set_fast_mode": {
+				const supported = session.setFastMode(command.enabled);
+				if (command.enabled && !supported) {
+					return error(id, "set_fast_mode", "Fast mode is unavailable for the current model.");
+				}
+				return success(id, "set_fast_mode", {
+					enabled: session.isFastModeEnabled(),
+					active: session.isFastModeActive(),
+				});
+			}
+
+			case "set_chat_mode": {
+				const outcome = await setRpcChatMode(session, command);
+				if (!outcome.ok) return error(id, "set_chat_mode", outcome.message, outcome.code);
+				return success(id, "set_chat_mode", outcome.state);
+			}
+
+			case "set_mode": {
+				try {
+					return success(id, "set_mode", await planMode.setMode(command.mode, command.planFilePath));
+				} catch (err) {
+					if (!(err instanceof RpcSetModeError)) throw err;
+					return error(id, "set_mode", err.message, err.code);
+				}
+			}
+
+			case "get_available_commands": {
+				return success(id, "get_available_commands", { commands: await getAvailableCommands() });
+			}
+
+			case "get_entries": {
+				try {
+					return success(
+						id,
+						"get_entries",
+						selectRpcEntries(
+							session.sessionManager.getEntries(),
+							session.sessionManager.getLeafId(),
+							command.since,
+						),
+					);
+				} catch (err) {
+					return error(id, "get_entries", err instanceof Error ? err.message : String(err), "unknown_since");
+				}
+			}
+
+			case "get_tree": {
+				return success(id, "get_tree", {
+					tree: session.sessionManager.getTree(),
+					leafId: session.sessionManager.getLeafId(),
+				});
+			}
+
+			case "set_todos": {
+				session.setTodoPhases(command.phases);
+				return success(id, "set_todos", { todoPhases: session.getTodoPhases() });
+			}
+
+			case "set_host_tools": {
+				const tools = normalizeHostToolDefinitions(command.tools);
+				const rpcTools = hostToolBridge.setTools(tools);
+				await session.refreshRpcHostTools(rpcTools);
+				return success(id, "set_host_tools", { toolNames: tools.map(tool => tool.name) });
+			}
+
+			case "set_host_uri_schemes": {
+				try {
+					const schemes = hostUriBridge.setSchemes(command.schemes);
+					return success(id, "set_host_uri_schemes", { schemes });
+				} catch (err) {
+					return error(id, "set_host_uri_schemes", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "set_subagent_subscription": {
+				if (!subagentRegistry) {
+					return error(id, "set_subagent_subscription", "Subagent event bus is unavailable");
+				}
+				if (!isSubagentSubscriptionLevel(command.level)) {
+					return error(
+						id,
+						"set_subagent_subscription",
+						`Invalid subagent subscription level: ${String(command.level)}`,
+					);
+				}
+				subagentRegistry.setSubscriptionLevel(command.level);
+				return success(id, "set_subagent_subscription", { level: subagentRegistry.getSubscriptionLevel() });
+			}
+
+			case "set_event_filter": {
+				const events = command.events;
+				if (
+					events !== null &&
+					(!Array.isArray(events) || !events.every(event => typeof event === "string" && event.length > 0))
+				) {
+					return error(id, "set_event_filter", "events must be null or an array of non-empty event type strings");
+				}
+				return success(id, "set_event_filter", { events: sessionEvents.setFilter(events) });
+			}
+
+			case "set_approval_handler": {
+				if (!isRpcApprovalHandler(command.handler)) {
+					return error(
+						id,
+						"set_approval_handler",
+						`handler must be "host" or "ui", got ${JSON.stringify(command.handler)}`,
+					);
+				}
+				return success(id, "set_approval_handler", { handler: toolApprovalBridge.setHandler(command.handler) });
+			}
+
+			case "get_subagents": {
+				if (!subagentRegistry) {
+					return error(id, "get_subagents", "Subagent event bus is unavailable", "subagent_bus_unavailable");
+				}
+				return success(id, "get_subagents", { subagents: subagentRegistry.getSubagents() });
+			}
+
+			case "get_subagent_messages": {
+				if (!subagentRegistry) {
+					return error(id, "get_subagent_messages", "Subagent event bus is unavailable");
+				}
+				try {
+					if (command.fromByte !== undefined && !Number.isFinite(command.fromByte)) {
+						return error(id, "get_subagent_messages", "fromByte must be a finite number");
+					}
+					const sessionFile = subagentRegistry.resolveSessionFile(command);
+					const transcript = await readRpcSubagentTranscript(sessionFile, command.fromByte);
+					return success(id, "get_subagent_messages", transcript);
+				} catch (err) {
+					return error(id, "get_subagent_messages", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			// =================================================================
+			// Model
+			// =================================================================
+
+			case "set_model": {
+				let models = session.getAvailableModels();
+				let model = models.find(m => m.provider === command.provider && m.id === command.modelId);
+				if (!model) {
+					// Model not in the current catalog. Wait for in-flight
+					// background discovery before declaring it missing: on cold
+					// start, discovery-backed providers (proxy / ollama / etc.)
+					// populate seconds after session ready. Models already in
+					// the bundled catalog skip this await entirely so the RPC
+					// queue is not stalled behind unrelated discovery.
+					await session.modelRegistry.awaitBackgroundRefresh();
+					models = session.getAvailableModels();
+					model = models.find(m => m.provider === command.provider && m.id === command.modelId);
+				}
+				if (!model) {
+					return error(id, "set_model", `Model not found: ${command.provider}/${command.modelId}`);
+				}
+				await session.setModel(model);
+				return success(id, "set_model", model);
+			}
+
+			case "cycle_model": {
+				const result = await session.cycleModel();
+				if (!result) {
+					return success(id, "cycle_model", null);
+				}
+				return success(id, "cycle_model", result);
+			}
+
+			case "get_available_models": {
+				await session.modelRegistry.awaitBackgroundRefresh();
+				const models = session.getAvailableModels();
+				return success(id, "get_available_models", { models });
+			}
+
+			case "list_mixtures": {
+				const cwd = session.sessionManager.getCwd();
+				const agentDir = session.getMixtureAgentDir() ?? getAgentDir();
+				const discovered = await discoverMixtures(cwd, agentDir);
+				const names = discovered.mixtures.map(item => item.definition.name);
+				const context = { cwd, agentDir, registry: session.modelRegistry, settings: session.settings };
+				return success(id, "list_mixtures", {
+					mixtures: discovered.mixtures.map(item => ({
+						name: item.definition.name,
+						path: item.path,
+						registered: session.getRegisteredMixture(item.definition.name) !== undefined,
+						errors: checkMixture(item.definition, context, item.preparedPresets, names).errors,
+					})),
+					warnings: discovered.warnings,
+				});
+			}
+
+			case "create_mixture": {
+				if (command.scope !== "project" && command.scope !== "user")
+					return error(id, "create_mixture", "scope must be project or user");
+				const definition = command.definition;
+				if (
+					!isRecord(definition) ||
+					typeof definition.name !== "string" ||
+					!Array.isArray(definition.members) ||
+					!Array.isArray(definition.edges)
+				)
+					return error(id, "create_mixture", "definition needs a name, members, and edges");
+				const cwd = session.sessionManager.getCwd();
+				const agentDir = session.getMixtureAgentDir() ?? getAgentDir();
+				const discovered = await discoverMixtures(cwd, agentDir);
+				if (
+					discovered.mixtures.some(item => item.definition.name === definition.name) ||
+					session.modelRegistry.find("mixture", definition.name)
+				)
+					return error(id, "create_mixture", `mixture/${definition.name} already exists`);
+				let projectDir = cwd;
+				try {
+					projectDir = vcs.repo(cwd)?.root() ?? cwd;
+				} catch {
+					// A directory outside a repository is its own project scope.
+				}
+				const filePath = mixturesConfigFilePath(command.scope, { projectDir, agentDir });
+				try {
+					const { doc, hash: baseHash } = await readMixtureDefinitionFile(filePath);
+					doc.mixtures.push(definition);
+					const saved = await saveMixtureDefinition({
+						cwd,
+						agentDir,
+						registry: session.modelRegistry,
+						settings: session.settings,
+						sourcePath: filePath,
+						doc,
+						baseHash,
+						apply: true,
+					});
+					if (!saved.registered)
+						return error(id, "create_mixture", `mixture/${definition.name} could not register in this workspace`);
+					return success(id, "create_mixture", { name: definition.name, path: filePath });
+				} catch (err) {
+					return error(id, "create_mixture", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "select_mixture": {
+				if (!session.getRegisteredMixture(command.name))
+					return error(id, "select_mixture", `mixture/${command.name} is not registered in this workspace`);
+				const model = session.modelRegistry.find("mixture", command.name);
+				if (!model) return error(id, "select_mixture", `mixture/${command.name} is unavailable`);
+				await session.setModel(model);
+				return success(id, "select_mixture", model);
+			}
+
+			case "get_roles": {
+				await session.modelRegistry.awaitBackgroundRefresh();
+				return success(id, "get_roles", rpcRoles.list());
+			}
+
+			case "set_role": {
+				const result = await rpcRoles.setRole(command.role);
+				if (!result.ok) return error(id, "set_role", result.message, result.code);
+				output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
+				return success(id, "set_role", result.data);
+			}
+
+			// =================================================================
+			// Thinking
+			// =================================================================
+
+			case "set_thinking_level": {
+				session.setThinkingLevel(command.level);
+				return success(id, "set_thinking_level");
+			}
+
+			case "cycle_thinking_level": {
+				const level = session.cycleThinkingLevel();
+				if (!level) {
+					return success(id, "cycle_thinking_level", null);
+				}
+				return success(id, "cycle_thinking_level", { level });
+			}
+
+			case "get_available_thinking_levels": {
+				// Pi-compatible discovery: the selectable levels for the live model,
+				// including `off` (which `set_thinking_level` accepts but the
+				// effort-only helper excludes). NeoPi-only `auto`/`inherit` are
+				// intentionally omitted — that selector stays a NeoPi dialect.
+				return success(id, "get_available_thinking_levels", {
+					levels: [ThinkingLevel.Off, ...session.getAvailableThinkingLevels()],
+				});
+			}
+
+			// =================================================================
+			// Queue Modes
+			// =================================================================
+
+			case "set_steering_mode": {
+				applyRpcQueueModeCommand(session, command);
+				return success(id, "set_steering_mode");
+			}
+
+			case "set_follow_up_mode": {
+				applyRpcQueueModeCommand(session, command);
+				return success(id, "set_follow_up_mode");
+			}
+
+			case "set_interrupt_mode": {
+				applyRpcQueueModeCommand(session, command);
+				return success(id, "set_interrupt_mode");
+			}
+
+			// =================================================================
+			// Compaction
+			// =================================================================
+
+			case "compact": {
+				const result = await session.compact(command.customInstructions);
+				return success(id, "compact", result);
+			}
+
+			case "set_auto_compaction": {
+				session.setAutoCompactionEnabled(command.enabled);
+				return success(id, "set_auto_compaction");
+			}
+
+			// =================================================================
+			// Retry
+			// =================================================================
+
+			case "set_auto_retry": {
+				session.setAutoRetryEnabled(command.enabled);
+				return success(id, "set_auto_retry");
+			}
+
+			case "abort_retry": {
+				session.abortRetry();
+				return success(id, "abort_retry");
+			}
+
+			// =================================================================
+			// Bash
+			// =================================================================
+
+			case "bash": {
+				const result = await session.executeBash(command.command);
+				return success(id, "bash", result);
+			}
+
+			case "abort_bash": {
+				session.abortBash();
+				return success(id, "abort_bash");
+			}
+
+			// =================================================================
+			// Session
+			// =================================================================
+
+			case "get_session_stats": {
+				const stats = session.getSessionStats();
+				return success(id, "get_session_stats", stats);
+			}
+
+			case "get_usage": {
+				try {
+					const usage = await getRpcUsage(
+						{
+							authStorage: session.modelRegistry.authStorage,
+							fetchUsageReports: () => session.fetchUsageReports(),
+						},
+						command,
+					);
+					return success(id, "get_usage", usage);
+				} catch (err: unknown) {
+					if (err instanceof RpcUsageUnavailableError) return error(id, "get_usage", err.message, err.code);
+					throw err;
+				}
+			}
+
+			case "export_html": {
+				const path = await session.exportToHtml(command.outputPath);
+				return success(id, "export_html", { path });
+			}
+
+			case "get_branch_messages": {
+				const messages = session.getUserMessagesForBranching();
+				return success(id, "get_branch_messages", { messages });
+			}
+
+			case "get_last_assistant_text": {
+				const text = session.getLastAssistantText();
+				return success(id, "get_last_assistant_text", { text });
+			}
+
+			case "set_session_name": {
+				const name = command.name.trim();
+				if (!name) {
+					return error(id, "set_session_name", "Session name cannot be empty");
+				}
+				const applied = await session.setSessionName(name, "user");
+				if (!applied) {
+					return error(id, "set_session_name", "Session name cannot be empty");
+				}
+				return success(id, "set_session_name");
+			}
+
+			case "handoff": {
+				// Resetting the agent mid-stream lets the live turn keep emitting into a
+				// session that handoff has already torn down. Refuse while a prompt is in
+				// flight (mirrors the TUI /handoff guard).
+				if (session.isStreaming) {
+					return error(id, "handoff", "Cannot hand off while a response is in progress");
+				}
+				const result = await session.handoff(command.customInstructions);
+				await planMode.settled();
+				return success(id, "handoff", result ? { savedPath: result.savedPath } : null);
+			}
+
+			// =================================================================
+			// Messages
+			// =================================================================
+
+			case "get_messages": {
+				return success(id, "get_messages", { messages: session.messages });
+			}
+
+			case "get_messages_page": {
+				if (session.isStreaming || session.isCompacting)
+					return error(id, "get_messages_page", RPC_MESSAGES_PAGE_BUSY_ERROR, "session_busy");
+				const messages = session.messages;
+				try {
+					return success(
+						id,
+						"get_messages_page",
+						pageRpcMessages(
+							messages,
+							{
+								sessionId: session.sessionId,
+								leafId: session.sessionManager.getLeafId(),
+								messageCount: messages.length,
+							},
+							{ cursor: command.cursor, limit: command.limit },
+						),
+					);
+				} catch (pageError) {
+					return error(
+						id,
+						"get_messages_page",
+						pageError instanceof Error ? pageError.message : String(pageError),
+						pageError instanceof RpcMessagesPageError ? pageError.code : undefined,
+					);
+				}
+			}
+
+			// =================================================================
+			// Login
+			// =================================================================
+
+			case "get_login_providers": {
+				const providers = getOAuthProviders().map(provider => ({
+					id: provider.id,
+					name: provider.name,
+					available: provider.available,
+					authenticated: session.modelRegistry.authStorage.keys.source(provider.id) !== undefined,
+				}));
+				return success(id, "get_login_providers", { providers });
+			}
+
+			case "login": {
+				const knownProvider = getOAuthProviders().find(p => p.id === command.providerId);
+				if (!knownProvider) {
+					return error(id, "login", `Unknown OAuth provider: ${command.providerId}`);
+				}
+				const uiCtx = createUiContext(pendingExtensionRequests, output);
+				// Track whether onAuth has fired. Providers that require interactive
+				// input before a browser URL cannot be satisfied headlessly; after
+				// onAuth, prompt input is the pasted OAuth code/redirect URL path.
+				let authEmitted = false;
+				try {
+					await session.modelRegistry.authStorage.oauth.login(command.providerId, {
+						onAuth: info => {
+							authEmitted = true;
+							output({
+								type: "extension_ui_request",
+								id: Snowflake.next() as string,
+								method: "open_url",
+								url: info.url,
+								launchUrl: info.launchUrl,
+								instructions: info.instructions,
+							} as RpcExtensionUIRequest);
+						},
+						onProgress: message => {
+							uiCtx.notify(message, "info");
+						},
+						onPrompt: async prompt => {
+							if (prompt.secret) {
+								throw new Error(
+									`Provider '${command.providerId}' requires secret input, ` +
+										"which is not supported in RPC mode. Use the terminal UI to log in.",
+								);
+							}
+							if (!authEmitted) {
+								// onPrompt called before any auth URL — provider requires
+								// interactive input that cannot be satisfied headlessly.
+								return Promise.reject(
+									new Error(
+										`Provider '${command.providerId}' requires interactive prompts ` +
+											"which are not supported in RPC mode. Use the terminal UI to log in.",
+									),
+								);
+							}
+							return (await uiCtx.input(prompt.message, prompt.placeholder, { timeout: 600_000 })) ?? "";
+						},
+					});
+					// Provider-scoped online refresh so the just-persisted credential
+					// re-runs discovery instead of reusing a fresh authoritative cache
+					// row (#5780).
+					await session.modelRegistry.refreshProvider(command.providerId, "online");
+					return success(id, "login", { providerId: command.providerId });
+				} catch (err: unknown) {
+					return error(id, "login", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			default: {
+				const unknownCommand = command as { type: string };
+				return error(id, unknownCommand.type, `Unknown command: ${unknownCommand.type}`);
+			}
+		}
+	};
+}
+
 export async function runRpcMode(session: AgentSession, options: RpcModeOptions = {}): Promise<never> {
 	const { setToolUIContext, headless = false, subagentEventBus, input = claimRpcInput(), launchModel } = options;
 	// Signal to RPC clients that the server is ready to accept commands
@@ -1271,6 +2126,15 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	// TypeScript/MCP command may also consume the prompt without writing one.
 	const reservePromptEntryId = (message: string): string | undefined =>
 		session.isExtensionCommand(message) ? undefined : session.sessionManager.reserveEntryId();
+	// Run ownership (#171): every prompt-family request schedules its work under a
+	// handle that the run's enriched `agent_start.runOwners` carries back, so the
+	// correlator binds receipts to runs instead of counting them.
+	let runOwnerSeq = 0;
+	const ownPrompt = (ticket: RpcPromptTicket): string => {
+		const owner = ticket.requestHandle ?? `rpc-${++runOwnerSeq}`;
+		promptResults.bindOwner(ticket, owner);
+		return owner;
+	};
 	const executeCustomPromptCommand = async (message: string): Promise<string | null> => {
 		if (!message.startsWith("/") || session.isExtensionCommand(message)) return null;
 		const space = message.indexOf(" ");
@@ -1279,774 +2143,32 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		return session.executeCustomCommand(message);
 	};
 
-	// Handle a single command
-	const handleCommand = async (command: RpcCommand): Promise<RpcResponse> => {
-		const id = command.id;
-
-		switch (command.type) {
-			case "negotiate_protocol":
-				return answerRpcProtocolNegotiation(command);
-
-			// =================================================================
-			// Prompting
-			// =================================================================
-
-			case "prompt": {
-				// Taken before any dispatch so a builtin that schedules a turn (e.g. `/retry`)
-				// cannot start its run ahead of the prompt's event-stream position.
-				const ticket = promptResults.begin(id);
-				try {
-					const skillResult = await dispatchRpcSkillPrompt({
-						ticket,
-						session,
-						message: command.message,
-						streamingBehavior: command.streamingBehavior,
-						reserveEntryId: () => session.sessionManager.reserveEntryId(),
-						releaseEntryId: entryId => session.sessionManager.releaseEntryId(entryId),
-						results: promptResults,
-						onError: onPromptError(id, "prompt"),
-						extensionUserMessageTracker,
-					});
-					if (skillResult) {
-						return success(id, "prompt", skillResult);
-					}
-					const builtinResult = await executeAcpBuiltinSlashCommand(command.message, {
-						session,
-						sessionManager: session.sessionManager,
-						settings: session.settings,
-						cwd: session.sessionManager.getCwd(),
-						output: text => output({ type: "command_output", text }),
-						refreshCommands: emitAvailableCommandsUpdate,
-						reloadPlugins: reloadPluginState,
-						runCommandInBackground: task => shutdownCoordinator.track(task()),
-						notifyTitleChanged: async () => {
-							output({ type: "session_info_update", title: session.sessionName, sessionId: session.sessionId });
-						},
-						notifyConfigChanged: async () => {
-							output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
-						},
-					});
-					if (builtinResult !== false) {
-						if ("prompt" in builtinResult) {
-							const userEntryId = session.sessionManager.reserveEntryId();
-							watchAndReportPromptResult({
-								ticket,
-								startPrompt: () =>
-									session.prompt(builtinResult.prompt, { images: command.images, entryId: userEntryId }),
-								results: promptResults,
-								onError: onPromptError(id, "prompt"),
-								releaseReservation: () => session.sessionManager.releaseEntryId(userEntryId),
-								extensionUserMessageTracker,
-							});
-							return success(id, "prompt", { userEntryId });
-						}
-						// A consumed builtin is normally local-only, but some (e.g.
-						// `/retry`) schedule an agent turn whose events stream after
-						// this response. Report that so the host does not finalize the
-						// request as non-agent work while the agent is running; the
-						// turn's prompt_result follows once the session settles. Either
-						// way the command itself writes no user entry, so no userEntryId.
-						if (builtinResult.agentInvoked === true) {
-							void session.waitForIdle().then(
-								() => promptResults.settle(ticket),
-								(idleError: unknown) =>
-									promptResults.fail(
-										ticket,
-										idleError instanceof Error ? idleError.message : String(idleError),
-									),
-							);
-						} else {
-							// Completed synchronously: `data.agentInvoked: false` is the completion signal.
-							promptResults.discard(ticket);
-						}
-						return success(id, "prompt", { agentInvoked: builtinResult.agentInvoked === true });
-					}
-
-					const customCommandResult = await executeCustomPromptCommand(command.message);
-					if (customCommandResult === "") {
-						promptResults.completeLocal(ticket);
-						return success(id, "prompt", { agentInvoked: false });
-					}
-					// Don't await - events will stream
-					// Extension commands are executed immediately, file prompt templates are expanded
-					// If streaming and streamingBehavior specified, queues via steer/followUp
-					const userEntryId = reservePromptEntryId(command.message);
-					watchAndReportPromptResult({
-						ticket,
-						startPrompt: () =>
-							session.prompt(command.message, {
-								images: command.images,
-								streamingBehavior: command.streamingBehavior,
-								entryId: userEntryId,
-								customCommandResult: customCommandResult ?? undefined,
-							}),
-						results: promptResults,
-						onError: onPromptError(id, "prompt"),
-						releaseReservation: () => session.sessionManager.releaseEntryId(userEntryId),
-						extensionUserMessageTracker,
-					});
-					return success(id, "prompt", userEntryId === undefined ? undefined : { userEntryId });
-				} catch (promptSetupError) {
-					// Rejected before acceptance: the error response is the only answer.
-					promptResults.discard(ticket);
-					throw promptSetupError;
-				}
-			}
-
-			case "steer": {
-				const userEntryId = session.sessionManager.reserveEntryId();
-				try {
-					await session.steer(command.message, command.images, { entryId: userEntryId });
-					return success(id, "steer", { userEntryId });
-				} catch (error) {
-					session.sessionManager.releaseEntryId(userEntryId);
-					throw error;
-				}
-			}
-
-			case "follow_up": {
-				const userEntryId = session.sessionManager.reserveEntryId();
-				try {
-					await session.followUp(command.message, command.images, { entryId: userEntryId });
-					return success(id, "follow_up", { userEntryId });
-				} catch (error) {
-					session.sessionManager.releaseEntryId(userEntryId);
-					throw error;
-				}
-			}
-
-			case "abort": {
-				await session.abort({ reason: USER_INTERRUPT_LABEL });
-				return success(id, "abort");
-			}
-
-			case "abort_and_prompt": {
-				await session.abort({ reason: USER_INTERRUPT_LABEL });
-				const customCommandResult = await executeCustomPromptCommand(command.message);
-				if (customCommandResult === "") {
-					promptResults.completeLocal(promptResults.begin(id));
-					return success(id, "abort_and_prompt", { agentInvoked: false });
-				}
-				const userEntryId = reservePromptEntryId(command.message);
-				// After the abort so the aborted run's terminal agent_end cannot settle this prompt.
-				watchAndReportPromptResult({
-					ticket: promptResults.begin(id),
-					startPrompt: () =>
-						session.prompt(command.message, {
-							images: command.images,
-							entryId: userEntryId,
-							customCommandResult: customCommandResult ?? undefined,
-						}),
-					results: promptResults,
-					onError: onPromptError(id, "abort_and_prompt"),
-					releaseReservation: () => session.sessionManager.releaseEntryId(userEntryId),
-					extensionUserMessageTracker,
-				});
-				return success(id, "abort_and_prompt", userEntryId === undefined ? undefined : { userEntryId });
-			}
-
-			case "new_session":
-			case "switch_session":
-			case "branch": {
-				let result: RpcSessionChangeResult;
-				try {
-					result = await handleRpcSessionChange(session, command, subagentRegistry);
-				} catch (err) {
-					const code = sessionLeaseErrorCode(err);
-					if (!code) throw err;
-					return error(id, command.type, err instanceof Error ? err.message : String(err), code);
-				}
-				if (!result.data.cancelled) {
-					promptResults.abortOpen();
-					// The detached run publishes no terminal agent_end to settle on.
-					void settleWatcher.check();
-					await emitAvailableCommandsUpdate();
-					// A session change ends set_mode's plan mode; answer once its restore landed.
-					await planMode.settled();
-				}
-				return success(id, result.type, result.data);
-			}
-
-			case "open_session": {
-				let result: RpcOpenSessionResult;
-				try {
-					result = await openRpcSession(session, command.sessionDir, subagentRegistry);
-				} catch (err) {
-					const code = sessionLeaseErrorCode(err);
-					if (!code) throw err;
-					return error(id, "open_session", err instanceof Error ? err.message : String(err), code);
-				}
-				if (!result.cancelled) {
-					promptResults.abortOpen();
-					void settleWatcher.check();
-					await emitAvailableCommandsUpdate();
-					await planMode.settled();
-				}
-				return success(id, "open_session", result);
-			}
-
-			// =================================================================
-			// State
-			// =================================================================
-
-			case "get_state": {
-				const state: RpcSessionState = {
-					model: session.model,
-					thinkingLevel: session.thinkingLevel,
-					isStreaming: session.isStreaming,
-					isCompacting: session.isCompacting,
-					steeringMode: session.steeringMode,
-					followUpMode: session.followUpMode,
-					interruptMode: session.interruptMode,
-					sessionFile: session.sessionFile,
-					sessionId: session.sessionId,
-					sessionName: session.sessionName,
-					autoCompactionEnabled: session.autoCompactionEnabled,
-					queuedMessageCount: session.queuedMessageCount,
-					hasPendingAsyncWork: session.hasPendingAsyncWork(),
-					isSettled: isRpcSessionSettled(session),
-					todoPhases: session.getTodoPhases(),
-					fastModeEnabled: session.isFastModeEnabled(),
-					tokensPerSecond: calculateTokensPerSecond(session.messages, session.isStreaming),
-					fastModeActive: session.isFastModeActive(),
-					messageCount: session.messages.length,
-					systemPrompt: session.systemPrompt,
-					dumpTools: session.agent.state.tools.map(tool => ({
-						name: tool.name,
-						description: tool.description,
-						parameters: toolWireSchema(tool),
-						examples: tool.examples,
-					})),
-					contextUsage: session.getContextUsage(),
-					activeRole: rpcRoles.activeRole(),
-					chatMode: session.chatMode?.mode ?? "off",
-					...planMode.state,
-				};
-				return success(id, "get_state", state);
-			}
-
-			case "set_fast_mode": {
-				const supported = session.setFastMode(command.enabled);
-				if (command.enabled && !supported) {
-					return error(id, "set_fast_mode", "Fast mode is unavailable for the current model.");
-				}
-				return success(id, "set_fast_mode", {
-					enabled: session.isFastModeEnabled(),
-					active: session.isFastModeActive(),
-				});
-			}
-
-			case "set_chat_mode": {
-				const outcome = await setRpcChatMode(session, command);
-				if (!outcome.ok) return error(id, "set_chat_mode", outcome.message, outcome.code);
-				return success(id, "set_chat_mode", outcome.state);
-			}
-
-			case "set_mode": {
-				try {
-					return success(id, "set_mode", await planMode.setMode(command.mode, command.planFilePath));
-				} catch (err) {
-					if (!(err instanceof RpcSetModeError)) throw err;
-					return error(id, "set_mode", err.message, err.code);
-				}
-			}
-
-			case "get_available_commands": {
-				return success(id, "get_available_commands", { commands: await getAvailableCommands() });
-			}
-
-			case "get_entries": {
-				try {
-					return success(
-						id,
-						"get_entries",
-						selectRpcEntries(
-							session.sessionManager.getEntries(),
-							session.sessionManager.getLeafId(),
-							command.since,
-						),
-					);
-				} catch (err) {
-					return error(id, "get_entries", err instanceof Error ? err.message : String(err), "unknown_since");
-				}
-			}
-
-			case "get_tree": {
-				return success(id, "get_tree", {
-					tree: session.sessionManager.getTree(),
-					leafId: session.sessionManager.getLeafId(),
-				});
-			}
-
-			case "set_todos": {
-				session.setTodoPhases(command.phases);
-				return success(id, "set_todos", { todoPhases: session.getTodoPhases() });
-			}
-
-			case "set_host_tools": {
-				const tools = normalizeHostToolDefinitions(command.tools);
-				const rpcTools = hostToolBridge.setTools(tools);
-				await session.refreshRpcHostTools(rpcTools);
-				return success(id, "set_host_tools", { toolNames: tools.map(tool => tool.name) });
-			}
-
-			case "set_host_uri_schemes": {
-				try {
-					const schemes = hostUriBridge.setSchemes(command.schemes);
-					return success(id, "set_host_uri_schemes", { schemes });
-				} catch (err) {
-					return error(id, "set_host_uri_schemes", err instanceof Error ? err.message : String(err));
-				}
-			}
-
-			case "set_subagent_subscription": {
-				if (!subagentRegistry) {
-					return error(id, "set_subagent_subscription", "Subagent event bus is unavailable");
-				}
-				if (!isSubagentSubscriptionLevel(command.level)) {
-					return error(
-						id,
-						"set_subagent_subscription",
-						`Invalid subagent subscription level: ${String(command.level)}`,
-					);
-				}
-				subagentRegistry.setSubscriptionLevel(command.level);
-				return success(id, "set_subagent_subscription", { level: subagentRegistry.getSubscriptionLevel() });
-			}
-
-			case "set_event_filter": {
-				const events = command.events;
-				if (
-					events !== null &&
-					(!Array.isArray(events) || !events.every(event => typeof event === "string" && event.length > 0))
-				) {
-					return error(id, "set_event_filter", "events must be null or an array of non-empty event type strings");
-				}
-				return success(id, "set_event_filter", { events: sessionEvents.setFilter(events) });
-			}
-
-			case "set_approval_handler": {
-				if (!isRpcApprovalHandler(command.handler)) {
-					return error(
-						id,
-						"set_approval_handler",
-						`handler must be "host" or "ui", got ${JSON.stringify(command.handler)}`,
-					);
-				}
-				return success(id, "set_approval_handler", { handler: toolApprovalBridge.setHandler(command.handler) });
-			}
-
-			case "get_subagents": {
-				if (!subagentRegistry) {
-					return error(id, "get_subagents", "Subagent event bus is unavailable");
-				}
-				return success(id, "get_subagents", { subagents: subagentRegistry.getSubagents() });
-			}
-
-			case "get_subagent_messages": {
-				if (!subagentRegistry) {
-					return error(id, "get_subagent_messages", "Subagent event bus is unavailable");
-				}
-				try {
-					if (command.fromByte !== undefined && !Number.isFinite(command.fromByte)) {
-						return error(id, "get_subagent_messages", "fromByte must be a finite number");
-					}
-					const sessionFile = subagentRegistry.resolveSessionFile(command);
-					const transcript = await readRpcSubagentTranscript(sessionFile, command.fromByte);
-					return success(id, "get_subagent_messages", transcript);
-				} catch (err) {
-					return error(id, "get_subagent_messages", err instanceof Error ? err.message : String(err));
-				}
-			}
-
-			// =================================================================
-			// Model
-			// =================================================================
-
-			case "set_model": {
-				let models = session.getAvailableModels();
-				let model = models.find(m => m.provider === command.provider && m.id === command.modelId);
-				if (!model) {
-					// Model not in the current catalog. Wait for in-flight
-					// background discovery before declaring it missing: on cold
-					// start, discovery-backed providers (proxy / ollama / etc.)
-					// populate seconds after session ready. Models already in
-					// the bundled catalog skip this await entirely so the RPC
-					// queue is not stalled behind unrelated discovery.
-					await session.modelRegistry.awaitBackgroundRefresh();
-					models = session.getAvailableModels();
-					model = models.find(m => m.provider === command.provider && m.id === command.modelId);
-				}
-				if (!model) {
-					return error(id, "set_model", `Model not found: ${command.provider}/${command.modelId}`);
-				}
-				await session.setModel(model);
-				return success(id, "set_model", model);
-			}
-
-			case "cycle_model": {
-				const result = await session.cycleModel();
-				if (!result) {
-					return success(id, "cycle_model", null);
-				}
-				return success(id, "cycle_model", result);
-			}
-
-			case "get_available_models": {
-				await session.modelRegistry.awaitBackgroundRefresh();
-				const models = session.getAvailableModels();
-				return success(id, "get_available_models", { models });
-			}
-
-			case "list_mixtures": {
-				const cwd = session.sessionManager.getCwd();
-				const agentDir = session.getMixtureAgentDir() ?? getAgentDir();
-				const discovered = await discoverMixtures(cwd, agentDir);
-				const names = discovered.mixtures.map(item => item.definition.name);
-				const ctx = { cwd, agentDir, registry: session.modelRegistry, settings: session.settings };
-				return success(id, "list_mixtures", {
-					mixtures: discovered.mixtures.map(item => ({
-						name: item.definition.name,
-						path: item.path,
-						registered: session.getRegisteredMixture(item.definition.name) !== undefined,
-						errors: checkMixture(item.definition, ctx, item.preparedPresets, names).errors,
-					})),
-					warnings: discovered.warnings,
-				});
-			}
-
-			case "create_mixture": {
-				if (command.scope !== "project" && command.scope !== "user")
-					return error(id, "create_mixture", "scope must be project or user");
-				const definition = command.definition;
-				if (
-					!isRecord(definition) ||
-					typeof definition.name !== "string" ||
-					!Array.isArray(definition.members) ||
-					!Array.isArray(definition.edges)
-				)
-					return error(id, "create_mixture", "definition needs a name, members, and edges");
-				const cwd = session.sessionManager.getCwd();
-				const agentDir = session.getMixtureAgentDir() ?? getAgentDir();
-				const discovered = await discoverMixtures(cwd, agentDir);
-				if (
-					discovered.mixtures.some(item => item.definition.name === definition.name) ||
-					session.modelRegistry.find("mixture", definition.name)
-				)
-					return error(id, "create_mixture", `mixture/${definition.name} already exists`);
-				let projectDir = cwd;
-				try {
-					projectDir = vcs.repo(cwd)?.root() ?? cwd;
-				} catch {
-					// A directory outside a repository is its own project scope.
-				}
-				const filePath = mixturesConfigFilePath(command.scope, { projectDir, agentDir });
-				try {
-					const { doc, hash: baseHash } = await readMixtureDefinitionFile(filePath);
-					doc.mixtures.push(definition);
-					const saved = await saveMixtureDefinition({
-						cwd,
-						agentDir,
-						registry: session.modelRegistry,
-						settings: session.settings,
-						sourcePath: filePath,
-						doc,
-						baseHash,
-						apply: true,
-					});
-					if (!saved.registered)
-						return error(id, "create_mixture", `mixture/${definition.name} could not register in this workspace`);
-					return success(id, "create_mixture", { name: definition.name, path: filePath });
-				} catch (err) {
-					return error(id, "create_mixture", err instanceof Error ? err.message : String(err));
-				}
-			}
-
-			case "select_mixture": {
-				if (!session.getRegisteredMixture(command.name))
-					return error(id, "select_mixture", `mixture/${command.name} is not registered in this workspace`);
-				const model = session.modelRegistry.find("mixture", command.name);
-				if (!model) return error(id, "select_mixture", `mixture/${command.name} is unavailable`);
-				await session.setModel(model);
-				return success(id, "select_mixture", model);
-			}
-
-			case "get_roles": {
-				await session.modelRegistry.awaitBackgroundRefresh();
-				return success(id, "get_roles", rpcRoles.list());
-			}
-
-			case "set_role": {
-				const result = await rpcRoles.setRole(command.role);
-				if (!result.ok) return error(id, "set_role", result.message, result.code);
-				output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
-				return success(id, "set_role", result.data);
-			}
-
-			// =================================================================
-			// Thinking
-			// =================================================================
-
-			case "set_thinking_level": {
-				session.setThinkingLevel(command.level);
-				return success(id, "set_thinking_level");
-			}
-
-			case "cycle_thinking_level": {
-				const level = session.cycleThinkingLevel();
-				if (!level) {
-					return success(id, "cycle_thinking_level", null);
-				}
-				return success(id, "cycle_thinking_level", { level });
-			}
-
-			case "get_available_thinking_levels": {
-				// Pi-compatible discovery: the selectable levels for the live model,
-				// including `off` (which `set_thinking_level` accepts but the
-				// effort-only helper excludes). NeoPi-only `auto`/`inherit` are
-				// intentionally omitted — that selector stays a NeoPi dialect.
-				return success(id, "get_available_thinking_levels", {
-					levels: [ThinkingLevel.Off, ...session.getAvailableThinkingLevels()],
-				});
-			}
-
-			// =================================================================
-			// Queue Modes
-			// =================================================================
-
-			case "set_steering_mode": {
-				applyRpcQueueModeCommand(session, command);
-				return success(id, "set_steering_mode");
-			}
-
-			case "set_follow_up_mode": {
-				applyRpcQueueModeCommand(session, command);
-				return success(id, "set_follow_up_mode");
-			}
-
-			case "set_interrupt_mode": {
-				applyRpcQueueModeCommand(session, command);
-				return success(id, "set_interrupt_mode");
-			}
-
-			// =================================================================
-			// Compaction
-			// =================================================================
-
-			case "compact": {
-				const result = await session.compact(command.customInstructions);
-				return success(id, "compact", result);
-			}
-
-			case "set_auto_compaction": {
-				session.setAutoCompactionEnabled(command.enabled);
-				return success(id, "set_auto_compaction");
-			}
-
-			// =================================================================
-			// Retry
-			// =================================================================
-
-			case "set_auto_retry": {
-				session.setAutoRetryEnabled(command.enabled);
-				return success(id, "set_auto_retry");
-			}
-
-			case "abort_retry": {
-				session.abortRetry();
-				return success(id, "abort_retry");
-			}
-
-			// =================================================================
-			// Bash
-			// =================================================================
-
-			case "bash": {
-				const result = await session.executeBash(command.command);
-				return success(id, "bash", result);
-			}
-
-			case "abort_bash": {
-				session.abortBash();
-				return success(id, "abort_bash");
-			}
-
-			// =================================================================
-			// Session
-			// =================================================================
-
-			case "get_session_stats": {
-				const stats = session.getSessionStats();
-				return success(id, "get_session_stats", stats);
-			}
-
-			case "get_usage": {
-				try {
-					const usage = await getRpcUsage(
-						{
-							authStorage: session.modelRegistry.authStorage,
-							fetchUsageReports: () => session.fetchUsageReports(),
-						},
-						command,
-					);
-					return success(id, "get_usage", usage);
-				} catch (err: unknown) {
-					if (err instanceof RpcUsageUnavailableError) return error(id, "get_usage", err.message, err.code);
-					throw err;
-				}
-			}
-
-			case "export_html": {
-				const path = await session.exportToHtml(command.outputPath);
-				return success(id, "export_html", { path });
-			}
-
-			case "get_branch_messages": {
-				const messages = session.getUserMessagesForBranching();
-				return success(id, "get_branch_messages", { messages });
-			}
-
-			case "get_last_assistant_text": {
-				const text = session.getLastAssistantText();
-				return success(id, "get_last_assistant_text", { text });
-			}
-
-			case "set_session_name": {
-				const name = command.name.trim();
-				if (!name) {
-					return error(id, "set_session_name", "Session name cannot be empty");
-				}
-				const applied = await session.setSessionName(name, "user");
-				if (!applied) {
-					return error(id, "set_session_name", "Session name cannot be empty");
-				}
-				return success(id, "set_session_name");
-			}
-
-			case "handoff": {
-				// Resetting the agent mid-stream lets the live turn keep emitting into a
-				// session that handoff has already torn down. Refuse while a prompt is in
-				// flight (mirrors the TUI /handoff guard).
-				if (session.isStreaming) {
-					return error(id, "handoff", "Cannot hand off while a response is in progress");
-				}
-				const result = await session.handoff(command.customInstructions);
-				await planMode.settled();
-				return success(id, "handoff", result ? { savedPath: result.savedPath } : null);
-			}
-
-			// =================================================================
-			// Messages
-			// =================================================================
-
-			case "get_messages": {
-				return success(id, "get_messages", { messages: session.messages });
-			}
-
-			case "get_messages_page": {
-				if (session.isStreaming || session.isCompacting)
-					return error(id, "get_messages_page", RPC_MESSAGES_PAGE_BUSY_ERROR, "session_busy");
-				const messages = session.messages;
-				try {
-					return success(
-						id,
-						"get_messages_page",
-						pageRpcMessages(
-							messages,
-							{
-								sessionId: session.sessionId,
-								leafId: session.sessionManager.getLeafId(),
-								messageCount: messages.length,
-							},
-							{ cursor: command.cursor, limit: command.limit },
-						),
-					);
-				} catch (pageError) {
-					return error(
-						id,
-						"get_messages_page",
-						pageError instanceof Error ? pageError.message : String(pageError),
-						pageError instanceof RpcMessagesPageError ? pageError.code : undefined,
-					);
-				}
-			}
-
-			// =================================================================
-			// Login
-			// =================================================================
-
-			case "get_login_providers": {
-				const providers = getOAuthProviders().map(provider => ({
-					id: provider.id,
-					name: provider.name,
-					available: provider.available,
-					authenticated: session.modelRegistry.authStorage.keys.source(provider.id) !== undefined,
-				}));
-				return success(id, "get_login_providers", { providers });
-			}
-
-			case "login": {
-				const knownProvider = getOAuthProviders().find(p => p.id === command.providerId);
-				if (!knownProvider) {
-					return error(id, "login", `Unknown OAuth provider: ${command.providerId}`);
-				}
-				const uiCtx = new RpcExtensionUIContext(pendingExtensionRequests, output);
-				// Track whether onAuth has fired. Providers that require interactive
-				// input before a browser URL cannot be satisfied headlessly; after
-				// onAuth, prompt input is the pasted OAuth code/redirect URL path.
-				let authEmitted = false;
-				try {
-					await session.modelRegistry.authStorage.oauth.login(command.providerId, {
-						onAuth: info => {
-							authEmitted = true;
-							output({
-								type: "extension_ui_request",
-								id: Snowflake.next() as string,
-								method: "open_url",
-								url: info.url,
-								launchUrl: info.launchUrl,
-								instructions: info.instructions,
-							} as RpcExtensionUIRequest);
-						},
-						onProgress: message => {
-							uiCtx.notify(message, "info");
-						},
-						onPrompt: async prompt => {
-							if (prompt.secret) {
-								throw new Error(
-									`Provider '${command.providerId}' requires secret input, ` +
-										"which is not supported in RPC mode. Use the terminal UI to log in.",
-								);
-							}
-							if (!authEmitted) {
-								// onPrompt called before any auth URL — provider requires
-								// interactive input that cannot be satisfied headlessly.
-								return Promise.reject(
-									new Error(
-										`Provider '${command.providerId}' requires interactive prompts ` +
-											"which are not supported in RPC mode. Use the terminal UI to log in.",
-									),
-								);
-							}
-							return (await uiCtx.input(prompt.message, prompt.placeholder, { timeout: 600_000 })) ?? "";
-						},
-					});
-					// Provider-scoped online refresh so the just-persisted credential
-					// re-runs discovery instead of reusing a fresh authoritative cache
-					// row (#5780).
-					await session.modelRegistry.refreshProvider(command.providerId, "online");
-					return success(id, "login", { providerId: command.providerId });
-				} catch (err: unknown) {
-					return error(id, "login", err instanceof Error ? err.message : String(err));
-				}
-			}
-
-			default: {
-				const unknownCommand = command as { type: string };
-				return error(id, unknownCommand.type, `Unknown command: ${unknownCommand.type}`);
-			}
-		}
-	};
+	const handleCommand = createRpcCommandHandler({
+		session,
+		output,
+		success,
+		error,
+		promptResults,
+		ownPrompt,
+		reservePromptEntryId,
+		executeCustomPromptCommand,
+		emitAvailableCommandsUpdate,
+		reloadPluginState,
+		getAvailableCommands,
+		onPromptError,
+		extensionUserMessageTracker,
+		trackBackground: task => shutdownCoordinator.track(task()),
+		subagentRegistry,
+		planMode,
+		settleWatcher,
+		rpcRoles,
+		sessionEvents,
+		hostToolBridge,
+		hostUriBridge,
+		toolApprovalBridge,
+		pendingExtensionRequests,
+		createUiContext: (pending, uiOutput) => new RpcExtensionUIContext(pending, uiOutput),
+	});
 
 	// Deferred shutdown (pi.shutdown() from an extension) must not kill the
 	// process while a background-dispatched bash still owes the client its
