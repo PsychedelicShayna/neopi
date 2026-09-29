@@ -3,7 +3,7 @@ import { Container, Spacer, Text } from "@oh-my-pi/pi-tui";
 import type { CollabUiRequestDraft, CollabUiSelectItem } from "@oh-my-pi/pi-wire";
 import type { CollabHost } from "../../collab/host";
 import { currentControlActor } from "../../control/actor";
-import { dialogRegistry } from "../../control/dialogs";
+import { dialogRegistry, type OpenDialog } from "../../control/dialogs";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import type {
 	CompactOptions,
@@ -1302,7 +1302,7 @@ export class ExtensionUiController {
 		signal: AbortSignal | undefined,
 		present: (settle: (value: T | undefined) => void) => () => void,
 		meta?: {
-			family: import("../../control/dialogs").OpenDialog["family"];
+			family: OpenDialog["family"];
 			kind: string;
 			title: string;
 			schema?: unknown;

@@ -3,6 +3,7 @@
  * speaks the control protocol. Never spawns a session.
  */
 import { ControlClient, ControlClientError } from "../control/client";
+import { currentControlCaller } from "../control/host";
 import { readControlEntries, type ControlMetadata, type ControlRegistryOptions } from "../control/registry";
 import type { ControlSnapshot } from "../control/types";
 
@@ -61,9 +62,29 @@ export async function resolveCtlTarget(selector: string, options?: ControlRegist
 	throw new ControlClientError("not_found", `no control session matches ${wanted}`);
 }
 
+let bindCaller = false;
+
+/** The ctl tool sets this so the connection carries the caller's publication. */
+export async function withCtlCaller<T>(fn: () => Promise<T>): Promise<T> {
+	const previous = bindCaller;
+	bindCaller = true;
+	try {
+		return await fn();
+	} finally {
+		bindCaller = previous;
+	}
+}
+
 async function connect(selector: string, label: string): Promise<ControlClient> {
 	const metadata = await resolveCtlTarget(selector);
-	const client = new ControlClient({ metadata, label, kind: "cli" });
+	const caller = bindCaller ? currentControlCaller() : null;
+	const client = new ControlClient({
+		metadata,
+		label,
+		kind: caller ? "tool" : "cli",
+		caller: caller ? { instanceId: caller.instanceId, token: caller.token } : null,
+		controlChain: caller?.controlChain ?? [],
+	});
 	await client.connect();
 	return client;
 }

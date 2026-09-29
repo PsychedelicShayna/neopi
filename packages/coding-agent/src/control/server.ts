@@ -60,6 +60,7 @@ export class ControlConnection {
 	#admissionWindow = 0;
 	#closed = false;
 	#inboundReserved = 0;
+	readonly #chunkReserved = new Map<string, number>();
 
 	constructor(
 		readonly socket: net.Socket,
@@ -219,6 +220,20 @@ export class ControlConnection {
 		this.#inboundReserved = Math.max(0, this.#inboundReserved - bytes);
 		this.host.budget.releaseInbound(bytes);
 	}
+
+	/** Reserve one chunk's declared size. Rejects non-integers and negatives. */
+	noteChunk(chunkId: string, bytes: number): boolean {
+		if (!Number.isInteger(bytes) || bytes < 0 || bytes > MAX_RPC_FRAME_BYTES) return false;
+		if (!this.noteInbound(bytes)) return false;
+		this.#chunkReserved.set(chunkId, (this.#chunkReserved.get(chunkId) ?? 0) + bytes);
+		return true;
+	}
+
+	releaseChunk(chunkId: string): void {
+		const bytes = this.#chunkReserved.get(chunkId) ?? 0;
+		this.#chunkReserved.delete(chunkId);
+		if (bytes > 0) this.releaseInbound(bytes);
+	}
 }
 
 export interface HelloFailure {
@@ -377,17 +392,34 @@ export class ControlServer {
 		let parsed: unknown;
 		try {
 			parsed = JSON.parse(line);
+			let reservedChunk: string | undefined;
 			if (isRecord(parsed) && parsed.type === "rpc_chunk") {
-				const bytes = typeof parsed.byteLength === "number" ? parsed.byteLength : Buffer.byteLength(line);
-				if (!connection.noteInbound(bytes)) {
+				const bytes = parsed.byteLength;
+				const chunkId = typeof parsed.chunkId === "string" ? parsed.chunkId : "";
+				if (
+					!chunkId ||
+					typeof bytes !== "number" ||
+					!Number.isInteger(bytes) ||
+					bytes < 0 ||
+					bytes > MAX_RPC_FRAME_BYTES
+				) {
+					connection.close("frame_too_large");
+					return;
+				}
+				if (!connection.noteChunk(chunkId, bytes)) {
 					connection.close("rate_limited");
 					return;
 				}
+				reservedChunk = chunkId;
 			}
-			const assembled = connection.decoder.push(parsed);
-			if (assembled && isRecord(parsed) && parsed.type === "rpc_chunk" && typeof parsed.byteLength === "number") {
-				connection.releaseInbound(parsed.byteLength * (typeof parsed.count === "number" ? parsed.count : 1));
+			let assembled: unknown;
+			try {
+				assembled = connection.decoder.push(parsed);
+			} catch (error) {
+				if (reservedChunk) connection.releaseChunk(reservedChunk);
+				throw error;
 			}
+			if (assembled && reservedChunk) connection.releaseChunk(reservedChunk);
 			parsed = assembled;
 		} catch (error) {
 			connection.respond({

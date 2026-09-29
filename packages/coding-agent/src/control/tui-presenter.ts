@@ -60,7 +60,7 @@ export function attachTuiPresenter(host: ControlHost, surface: TuiControlSurface
 			cancel: () => hide(),
 		});
 	};
-	installApprovalArbiter(surface.session, registry, surface.notify);
+	installApprovalArbiter(host, surface.session, registry, surface.notify);
 	const presenter: ControlPresenter = {
 		async submit(text) {
 			const outer = currentControlActor();
@@ -83,6 +83,7 @@ export function attachTuiPresenter(host: ControlHost, surface: TuiControlSurface
 			if (actionId === "app.editor.external") return { handled: false, exempt: "exempt_external_program" };
 			if (surface.runAction(actionId)) return { handled: true };
 			const keys = host.presenter?.keybindings?.get(actionId) ?? [];
+			if (host.blocksInjectedInput()) return { handled: false };
 			for (const key of keys) {
 				const bytes = encodeKeyId(String(key));
 				if (!bytes) continue;
@@ -92,6 +93,7 @@ export function attachTuiPresenter(host: ControlHost, surface: TuiControlSurface
 			return { handled: false };
 		},
 		inject(bytes) {
+			if (host.blocksInjectedInput()) return;
 			surface.ui.injectInput(bytes, "control");
 		},
 		async esc() {
@@ -127,7 +129,12 @@ export function attachTuiPresenter(host: ControlHost, surface: TuiControlSurface
  * A control answer is refused unless `control.approvals` is on, and an
  * accepted one is attributed in the pane.
  */
-function installApprovalArbiter(session: AgentSession, registry: DialogRegistry, notify: (text: string) => void): void {
+function installApprovalArbiter(
+	host: ControlHost,
+	session: AgentSession,
+	registry: DialogRegistry,
+	notify: (text: string) => void,
+): void {
 	const runner = session.extensionRunner;
 	if (!runner) return;
 	const ui = runner.getUIContext();
@@ -162,7 +169,13 @@ function installApprovalArbiter(session: AgentSession, registry: DialogRegistry,
 			},
 			cancel: () => finish({ approved: false, reason: "cancelled" }),
 		});
-		const choice = await ui.select(`Approve ${request.toolName}?`, ["Approve", "Deny"]);
+		host.setApprovalUiOpen(true);
+		let choice: string | undefined;
+		try {
+			choice = await ui.select(`Approve ${request.toolName}?`, ["Approve", "Deny"]);
+		} finally {
+			host.setApprovalUiOpen(false);
+		}
 		finish(choice === "Approve" ? { approved: true } : { approved: false, reason: "denied" });
 		return promise;
 	});

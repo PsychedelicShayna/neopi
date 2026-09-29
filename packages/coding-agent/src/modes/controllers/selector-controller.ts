@@ -1980,6 +1980,7 @@ export class SelectorController {
 		this.ctx.editorContainer.addChild(dialog);
 		this.ctx.ui.setFocus(dialog);
 		this.ctx.ui.requestRender();
+		dialog.secretInputAllowed = () => cfgControlSecretInput.get(this.ctx.session.settings) === true;
 		loginDialog.close = trackMountedDialog({
 			family: "login",
 			kind: "login",

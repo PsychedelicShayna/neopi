@@ -13,6 +13,7 @@
  */
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import type { MessageOrigin } from "@oh-my-pi/pi-ai";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { $env, isRecord, logger, Snowflake } from "@oh-my-pi/pi-utils";
@@ -892,7 +893,7 @@ export interface RpcCommandHandlerContext {
 	reloadPluginState: () => Promise<void>;
 	getAvailableCommands: () => Promise<unknown>;
 	/** Set by a control connection so the user entry is attributed. Absent on stdio. */
-	origin?: import("@oh-my-pi/pi-ai").MessageOrigin;
+	origin?: MessageOrigin;
 	onPromptError: (id: string | undefined, command: string) => (promptError: Error) => void;
 	extensionUserMessageTracker: RpcExtensionUserMessageTracker;
 	trackBackground: (task: () => Promise<void>) => void;

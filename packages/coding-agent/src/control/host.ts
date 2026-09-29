@@ -18,7 +18,9 @@ import type { AgentSession } from "../session/agent-session";
 import { AgentRegistry } from "../registry/agent-registry";
 import { executeSend } from "../irc/messaging";
 import { IrcBus } from "../irc/bus";
-import { runAsControlActor } from "./actor";
+import { currentControlActor, runAsControlActor } from "./actor";
+import { createRpcCommandHandler, dispatchRpcControlFrame, RpcPendingExtensionRequests } from "../modes/rpc/rpc-mode";
+import { buildAvailableSlashCommands } from "../slash-commands/available-commands";
 import { HostBudget, workClass } from "./budget";
 import { RPC_COMMAND_TYPES } from "./parity";
 import { encodeKeyId, encodeSgrMouse } from "./keys";
@@ -66,6 +68,43 @@ export function revisionConflict(
 }
 
 const hosts = new WeakMap<AgentSession, ControlHost>();
+const liveHosts = new Set<ControlHost>();
+
+export interface ControlCallerIdentity {
+	instanceId: string;
+	token: string;
+	controlChain: string[];
+}
+
+/** Publication of the in-process host, so the ctl tool can bind its caller. */
+export function currentControlCaller(): ControlCallerIdentity | null {
+	const actor = currentControlActor();
+	for (const host of liveHosts) {
+		const token = host.publication?.token;
+		if (!token) continue;
+		if (actor) {
+			for (const connection of host.connections()) {
+				if (connection.id === actor.connectionId) {
+					return { instanceId: host.instanceId, token, controlChain: connection.propagatedChain };
+				}
+			}
+		}
+	}
+	for (const host of liveHosts) {
+		const token = host.publication?.token;
+		if (!token) continue;
+		return { instanceId: host.instanceId, token, controlChain: [] };
+	}
+	return null;
+}
+
+interface ConnectionBridges {
+	forwarder: RpcSessionEventForwarder;
+	hostTools: RpcHostToolBridge;
+	hostUris: RpcHostUriBridge;
+	approvals: RpcToolApprovalBridge;
+	pending: RpcPendingExtensionRequests;
+}
 
 /** The control host for a session, once published. */
 export function controlHostFor(session: AgentSession): ControlHost | undefined {
@@ -85,6 +124,10 @@ export class ControlHost {
 	readonly #subscribed = new Set<ControlConnection>();
 	readonly #handlers = new Map<ControlConnection, (command: RpcCommand) => Promise<RpcResponse>>();
 	readonly #forwarders = new Map<ControlConnection, RpcSessionEventForwarder>();
+	readonly #bridges = new Map<ControlConnection, ConnectionBridges>();
+	readonly #openHandles = new Set<string>();
+	readonly #settledHandles = new Set<string>();
+	#approvalUiOpen = false;
 	#planMode: RpcPlanModeController | undefined;
 	#settleWatcher: RpcSessionSettleWatcher | undefined;
 	readonly #extensionTracker = new RpcExtensionUserMessageTracker();
@@ -137,6 +180,7 @@ export class ControlHost {
 
 	/** Publish the socket. No-op when peer credentials are unavailable. */
 	async start(): Promise<void> {
+		liveHosts.add(this);
 		const session = this.#options.session;
 		const connectionHost = {
 			instanceId: this.instanceId,
@@ -160,6 +204,7 @@ export class ControlHost {
 				this.#subscribed.delete(connection);
 				this.#handlers.delete(connection);
 				this.#forwarders.delete(connection);
+				this.#closeBridges(connection);
 			},
 		};
 		const server = new ControlServer({ metadata: { instanceId: this.instanceId }, host: connectionHost });
@@ -270,6 +315,7 @@ export class ControlHost {
 			connection.write({ type: "host_shutdown", reason });
 			connection.close(reason);
 		}
+		liveHosts.delete(this);
 		AgentRegistry.global().unregister(this.#mailboxId());
 		await this.publication?.close();
 		hosts.delete(this.#options.session);
@@ -313,6 +359,7 @@ export class ControlHost {
 			generation: this.#revisions.generation,
 		});
 		try {
+			if (await this.#routeSideChannel(connection, frame)) return;
 			if (RPC_TYPES.has(type)) {
 				await this.#rpc(connection, frame);
 				return;
@@ -345,9 +392,21 @@ export class ControlHost {
 		const existing = this.#handlers.get(connection);
 		if (existing) return existing;
 		const session = this.#options.session;
-		const output = (frame: object) => connection.write(frame);
+		const output = (frame: object) => {
+			this.#notePromptResult(frame);
+			connection.write(frame);
+		};
 		const forwarder = new RpcSessionEventForwarder(output);
 		this.#forwarders.set(connection, forwarder);
+		const hostTools = new RpcHostToolBridge(output);
+		const hostUris = new RpcHostUriBridge(output);
+		const approvals = new RpcToolApprovalBridge({
+			output,
+			runner: session.extensionRunner,
+			settings: session.settings,
+		});
+		const pending = new RpcPendingExtensionRequests();
+		this.#bridges.set(connection, { forwarder, hostTools, hostUris, approvals, pending });
 		if (!this.#planMode)
 			this.#planMode = new RpcPlanModeController(session, frame => {
 				for (const subscriber of this.#subscribed) subscriber.write(frame);
@@ -371,8 +430,8 @@ export class ControlHost {
 				error: message,
 				...(code ? { code } : {}),
 			}) as RpcResponse;
-		const { createRpcCommandHandler, RpcPendingExtensionRequests } = await import("../modes/rpc/rpc-mode");
-		const pending = new RpcPendingExtensionRequests();
+		const bridges = this.#bridges.get(connection);
+		if (!bridges) throw new Error("control bridges were not installed");
 		const handler = createRpcCommandHandler({
 			session,
 			output,
@@ -380,9 +439,13 @@ export class ControlHost {
 			error,
 			promptResults: this.promptResults,
 			ownPrompt: ticket => {
-				ticket.route = frame => connection.write(frame);
+				ticket.route = frame => {
+					this.#notePromptResult(frame);
+					connection.write(frame);
+				};
 				const owner = ticket.requestHandle ?? `r-${this.instanceId.slice(0, 8)}-${++this.#runOwnerSeq}`;
 				ticket.requestHandle = owner;
+				this.#openHandles.add(owner);
 				this.promptResults.bindOwner(ticket, owner);
 				return owner;
 			},
@@ -396,14 +459,10 @@ export class ControlHost {
 				return session.executeCustomCommand(message);
 			},
 			emitAvailableCommandsUpdate: async () => {
-				const { buildAvailableSlashCommands } = await import("../slash-commands/available-commands");
 				output({ type: "available_commands_update", commands: await buildAvailableSlashCommands(session) });
 			},
 			reloadPluginState: async () => {},
-			getAvailableCommands: async () => {
-				const { buildAvailableSlashCommands } = await import("../slash-commands/available-commands");
-				return buildAvailableSlashCommands(session);
-			},
+			getAvailableCommands: () => buildAvailableSlashCommands(session),
 			onPromptError: (id, command) => promptError => output(error(id, command, promptError.message)),
 			extensionUserMessageTracker: this.#extensionTracker,
 			trackBackground: () => {},
@@ -412,14 +471,10 @@ export class ControlHost {
 			settleWatcher,
 			rpcRoles: this.roles,
 			sessionEvents: forwarder,
-			hostToolBridge: new RpcHostToolBridge(output),
-			hostUriBridge: new RpcHostUriBridge(output),
-			toolApprovalBridge: new RpcToolApprovalBridge({
-				output,
-				runner: session.extensionRunner,
-				settings: session.settings,
-			}),
-			pendingExtensionRequests: pending,
+			hostToolBridge: bridges.hostTools,
+			hostUriBridge: bridges.hostUris,
+			toolApprovalBridge: bridges.approvals,
+			pendingExtensionRequests: bridges.pending,
 			createUiContext: () => {
 				throw new Error("control login uses the pane dialog");
 			},
@@ -436,6 +491,16 @@ export class ControlHost {
 				typeof frame.id === "string" ? frame.id : typeof frame.requestId === "string" ? frame.requestId : undefined,
 		} as RpcCommand;
 		const response = await (await this.#handlerFor(connection))(command);
+		if (
+			response.success &&
+			(command.type === "new_session" ||
+				command.type === "open_session" ||
+				command.type === "switch_session" ||
+				command.type === "branch")
+		) {
+			this.#seenSessionId = this.#options.session.sessionId;
+			this.bumpGeneration();
+		}
 		connection.write({ ...response, requestId: command.id });
 	}
 
@@ -454,6 +519,7 @@ export class ControlHost {
 				return;
 			case "subscribe":
 				this.#subscribed.add(connection);
+				await this.#handlerFor(connection);
 				this.#reply(connection, frame, { success: true, data: { cursor: 0 } });
 				return;
 			case "input":
@@ -467,6 +533,14 @@ export class ControlHost {
 			}
 			case "action": {
 				if (needTui()) return;
+				if (this.blocksInjectedInput()) {
+					this.#reply(connection, frame, {
+						success: false,
+						error: "approvals belong to the pane",
+						code: "approval_owner_only",
+					});
+					return;
+				}
 				const actionId = String(frame.actionId ?? "");
 				if (actionId === "app.suspend") {
 					this.#reply(connection, frame, {
@@ -499,7 +573,7 @@ export class ControlHost {
 			}
 			case "keys": {
 				if (needTui()) return;
-				if (this.#paneOwnsOpenApproval()) {
+				if (this.blocksInjectedInput()) {
 					this.#reply(connection, frame, {
 						success: false,
 						error: "approvals belong to the pane",
@@ -528,7 +602,7 @@ export class ControlHost {
 			}
 			case "paste":
 				if (needTui()) return;
-				if (this.#paneOwnsOpenApproval()) {
+				if (this.blocksInjectedInput()) {
 					this.#reply(connection, frame, {
 						success: false,
 						error: "approvals belong to the pane",
@@ -541,7 +615,7 @@ export class ControlHost {
 				return;
 			case "mouse": {
 				if (needTui()) return;
-				if (this.#paneOwnsOpenApproval()) {
+				if (this.blocksInjectedInput()) {
 					this.#reply(connection, frame, {
 						success: false,
 						error: "approvals belong to the pane",
@@ -620,7 +694,9 @@ export class ControlHost {
 			case "draft_set":
 			case "draft_clear":
 				if (needTui()) return;
-				if (!frame.if) {
+				const draftRevision =
+					frame.if && typeof frame.if === "object" ? (frame.if as Record<string, unknown>).draft : undefined;
+				if (typeof draftRevision !== "number") {
 					this.#reply(connection, frame, {
 						success: false,
 						error: "draft writes require if.draft",
@@ -640,9 +716,7 @@ export class ControlHost {
 				this.#reply(connection, frame, {
 					success: true,
 					data: {
-						commands: await import("../slash-commands/available-commands").then(m =>
-							m.buildAvailableSlashCommands(this.#options.session),
-						),
+						commands: await buildAvailableSlashCommands(this.#options.session),
 					},
 				});
 				return;
@@ -680,10 +754,21 @@ export class ControlHost {
 		const timeoutMs = Math.min(Math.max(Number(frame.timeoutMs ?? 30_000) || 30_000, 0), 120_000);
 		const want = String(frame.for ?? "settled");
 		const started = Date.now();
+		const handle = typeof frame.requestHandle === "string" ? frame.requestHandle : "";
+		if (want === "request" && !handle) {
+			this.#reply(connection, frame, {
+				success: false,
+				error: "wait for request requires requestHandle",
+				code: "invalid_value",
+			});
+			return;
+		}
+		const paintBaseline = this.#revisions.paint;
 		const ready = (): boolean => {
 			const session = this.#options.session;
 			if (want === "dialog" || want === "approval") return (this.presenter?.dialogs().length ?? 0) > 0;
-			if (want === "paint") return this.#revisions.paint > Number(frame.after ?? this.#revisions.paint);
+			if (want === "paint") return this.#revisions.paint > Number(frame.after ?? paintBaseline);
+			if (want === "request") return this.#settledHandles.has(handle);
 			return !session.isStreaming && session.queuedMessageCount === 0 && !session.isCompacting;
 		};
 		while (!ready() && Date.now() - started < timeoutMs) {
@@ -735,6 +820,75 @@ export class ControlHost {
 		);
 	}
 
+	connections(): Iterable<ControlConnection> {
+		return this.#connections;
+	}
+
+	/** True while the pane's approval selector is open and control may not press it. */
+	setApprovalUiOpen(open: boolean): void {
+		this.#approvalUiOpen = open;
+	}
+
+	blocksInjectedInput(): boolean {
+		if (cfgControlApprovals.get(this.#options.session.settings) === true) return false;
+		if (this.#approvalUiOpen) return true;
+		return (this.presenter?.dialogs() ?? []).some(dialog => dialog.family === "approval");
+	}
+
+	#notePromptResult(frame: object): void {
+		const record = frame as { type?: string; requestHandle?: string };
+		if (record.type !== "prompt_result" || typeof record.requestHandle !== "string") return;
+		this.#openHandles.delete(record.requestHandle);
+		this.#settledHandles.add(record.requestHandle);
+	}
+
+	#closeBridges(connection: ControlConnection): void {
+		const bridges = this.#bridges.get(connection);
+		if (!bridges) return;
+		this.#bridges.delete(connection);
+		bridges.hostTools.close("control connection closed");
+		bridges.hostUris.clear("control connection closed");
+		bridges.approvals.close("control connection closed");
+		bridges.pending.rejectAll("control connection closed");
+	}
+
+	async #routeSideChannel(connection: ControlConnection, frame: Record<string, unknown>): Promise<boolean> {
+		const type = String(frame.type ?? "");
+		if (
+			type !== "host_tool_result" &&
+			type !== "host_tool_update" &&
+			type !== "host_uri_result" &&
+			type !== "tool_approval_response" &&
+			type !== "plan_proposal_response" &&
+			type !== "extension_ui_response"
+		) {
+			return false;
+		}
+		await this.#handlerFor(connection);
+		const bridges = this.#bridges.get(connection);
+		if (!bridges) return false;
+		const handled = dispatchRpcControlFrame(frame, {
+			handleCommand: async () => ({ type: "response", command: type, success: false, error: "not a command" }),
+			output: outbound => connection.write(outbound),
+			errorResponse: (id, command, message) => ({ id, type: "response", command, success: false, error: message }),
+			pendingExtensionRequests: bridges.pending,
+			onHostToolResult: result => {
+				bridges.hostTools.handleResult(result);
+			},
+			onHostToolUpdate: update => {
+				bridges.hostTools.handleUpdate(update);
+			},
+			onHostUriResult: result => {
+				bridges.hostUris.handleResult(result);
+			},
+			onToolApprovalResponse: response => bridges.approvals.handleResponse(response),
+			onPlanProposalResponse: response => this.#planMode?.handleProposalResponse(response),
+		});
+		if (!handled) return false;
+		this.#reply(connection, frame, { success: true });
+		return true;
+	}
+
 	#noteSessionIdentity(): void {
 		const id = this.#options.session.sessionId;
 		if (this.#seenSessionId === undefined) {
@@ -745,11 +899,6 @@ export class ControlHost {
 			this.#seenSessionId = id;
 			this.bumpGeneration();
 		}
-	}
-
-	#paneOwnsOpenApproval(): boolean {
-		if (cfgControlApprovals.get(this.#options.session.settings) === true) return false;
-		return (this.presenter?.dialogs() ?? []).some(dialog => dialog.family === "approval");
 	}
 
 	#settings(connection: ControlConnection, frame: Record<string, unknown>): void {
