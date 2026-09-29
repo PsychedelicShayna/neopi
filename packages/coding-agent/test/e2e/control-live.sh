@@ -75,6 +75,12 @@ providers:
         contextWindow: 8000
         maxTokens: 1000
 EOF
+cat >"$DIR/config.yml" <<'YAML'
+setupVersion: 2
+startup:
+  setupWizard: false
+  quiet: true
+YAML
 export PI_CODING_AGENT_DIR=$DIR
 SOCK=ctl-live
 tmux -L "$SOCK" kill-server 2>/dev/null || true
@@ -88,9 +94,9 @@ for _ in $(seq 1 80); do
 	if env PI_CODING_AGENT_DIR=$DIR "$NPI" ctl list --json 2>/dev/null | grep -q instanceId; then break; fi
 	sleep 0.25
 done
-state=$(env PI_CODING_AGENT_DIR=$DIR "$NPI" ctl %0 state --json || true)
+state=$(env PI_CODING_AGENT_DIR=$DIR "$NPI" ctl %0 rpc get_state '{}' || true)
 echo "$state" | tee "$LOG.pre"
-if ! echo "$state" | grep -q '"provider": "fake"'; then
+if ! grep -q '"provider": "fake"' "$LOG.pre"; then
 	echo "fail: model.provider is not fake; refusing to send a turn" | tee "$LOG"
 	exit 1
 fi
