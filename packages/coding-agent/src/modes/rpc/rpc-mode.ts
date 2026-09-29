@@ -33,9 +33,8 @@ import {
 	type SkillPromptInput,
 } from "../../extensibility/skills";
 import { type Theme, theme } from "@oh-my-pi/pi-tui/theme";
-import { discoverMixtures, loadMixturesConfigFile, mixturesConfigFilePath } from "../../moa/config";
-import { MixtureCatalog } from "../../moa/provider";
-import { checkMixture, discoverRegistrableMixtures, saveValidatedMixturesConfigFile } from "../../moa/registration";
+import { discoverMixtures, mixturesConfigFilePath } from "../../moa/config";
+import { checkMixture, readMixtureDefinitionFile, saveMixtureDefinition } from "../../moa/registration";
 import type { AgentSession } from "../../session/agent-session";
 import { findMostRecentNonEmptySession } from "../../session/session-listing";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
@@ -1742,16 +1741,20 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					// A directory outside a repository is its own project scope.
 				}
 				const filePath = mixturesConfigFilePath(command.scope, { projectDir, agentDir });
-				const doc = await loadMixturesConfigFile(filePath);
-				if (doc.warnings?.length) return error(id, "create_mixture", `${filePath}: ${doc.warnings.join("; ")}`);
-				doc.mixtures.push(definition);
-				const ctx = { cwd, agentDir, registry: session.modelRegistry, settings: session.settings };
 				try {
-					await saveValidatedMixturesConfigFile(filePath, doc, ctx);
-					MixtureCatalog.for(session.modelRegistry)
-						.scope(cwd, agentDir)
-						.setRoster(await discoverRegistrableMixtures(ctx));
-					if (!session.getRegisteredMixture(definition.name))
+					const { doc, hash: baseHash } = await readMixtureDefinitionFile(filePath);
+					doc.mixtures.push(definition);
+					const saved = await saveMixtureDefinition({
+						cwd,
+						agentDir,
+						registry: session.modelRegistry,
+						settings: session.settings,
+						sourcePath: filePath,
+						doc,
+						baseHash,
+						apply: true,
+					});
+					if (!saved.registered)
 						return error(id, "create_mixture", `mixture/${definition.name} could not register in this workspace`);
 					return success(id, "create_mixture", { name: definition.name, path: filePath });
 				} catch (err) {

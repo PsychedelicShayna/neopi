@@ -30,9 +30,9 @@ import type { AdvisorConfigScope } from "@oh-my-pi/pi-tui/overlays/advisor-confi
 import { type ChainConfigDeps, ChainConfigOverlayComponent } from "@oh-my-pi/pi-tui/overlays/chain-config";
 import type { ChainConfigScope } from "@oh-my-pi/pi-tui/overlays/chain-types";
 import { chainsConfigFilePath, discoverChains, loadChainsConfigFile, saveChainsConfigFile } from "../../chains/config";
-import { discoverMixtures, loadMixturesConfigFile, mixturesConfigFilePath } from "../../moa/config";
+import { discoverMixtures, mixturesConfigFilePath } from "../../moa/config";
 import { MixtureCatalog } from "../../moa/provider";
-import { discoverRegistrableMixtures, saveValidatedMixturesConfigFile } from "../../moa/registration";
+import { discoverRegistrableMixtures, readMixtureDefinitionFile, saveMixtureDefinition } from "../../moa/registration";
 import { type MixtureConfigDeps, MixtureConfigOverlayComponent } from "@oh-my-pi/pi-tui/overlays/mixture-config";
 import type { MixtureConfigScope } from "@oh-my-pi/pi-tui/overlays/mixture-types";
 import { CHAIN_DEFAULT_ROLE, CHAIN_SYSTEM_PROMPT } from "../../chains/runner";
@@ -595,10 +595,13 @@ export class SelectorController {
 			const selected = name ? discovered.mixtures.find(item => item.definition.name === name) : undefined;
 			const initialScope: MixtureConfigScope =
 				selected?.path === mixturesConfigFilePath("user", dirs) ? "user" : "project";
-			const initialDoc = await loadMixturesConfigFile(mixturesConfigFilePath(initialScope, dirs));
-			if (initialDoc.warnings?.length) {
-				this.ctx.showWarning(`MIXTURES.toml: ${sanitizeDisplayWarnings(initialDoc.warnings).join("; ")}`);
-			}
+			const snapshots = new Map<MixtureConfigScope, string | null>();
+			const readScope = async (scope: MixtureConfigScope) => {
+				const snapshot = await readMixtureDefinitionFile(mixturesConfigFilePath(scope, dirs));
+				snapshots.set(scope, snapshot.hash);
+				return snapshot.doc;
+			};
+			const initialDoc = await readScope(initialScope);
 			const registration = {
 				cwd,
 				agentDir,
@@ -621,15 +624,17 @@ export class SelectorController {
 				initialScope,
 				initialDoc,
 				{
-					loadDoc: scope => loadMixturesConfigFile(mixturesConfigFilePath(scope, dirs)),
+					loadDoc: readScope,
 					save: async (scope, doc) => {
-						const result = await saveValidatedMixturesConfigFile(
-							mixturesConfigFilePath(scope, dirs),
+						const result = await saveMixtureDefinition({
+							...registration,
+							sourcePath: mixturesConfigFilePath(scope, dirs),
 							doc,
-							registration,
-						);
-						if (result.warnings.length)
-							this.ctx.showWarning(result.warnings.map(issue => issue.message).join("; "));
+							baseHash: snapshots.get(scope) ?? null,
+						});
+						snapshots.set(scope, result.hash);
+						if (result.validation.warnings.length)
+							this.ctx.showWarning(result.validation.warnings.map(issue => issue.message).join("; "));
 						this.ctx.showStatus(`Saved ${scope} MIXTURES.toml; press a to apply changes.`);
 					},
 					apply: async () => {
