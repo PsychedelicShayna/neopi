@@ -44,5 +44,7 @@ describe("control revisions", () => {
 		expect(encodeKeyId("escape")).toBe("\x1b");
 		expect(encodeKeyId("down")).toBe("\x1b[B");
 		expect(encodeKeyId("ctrl+c")).toBe("\x1b[99;5u");
+		expect(encodeKeyId("alt+left")).toBe("\x1b[1;3D");
+		expect(encodeKeyId("pageup")).toBe("\x1b[5~");
 	});
 });

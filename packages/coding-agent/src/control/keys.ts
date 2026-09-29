@@ -17,6 +17,10 @@ const SPECIAL: Record<string, { code: number; legacy: string }> = {
 	down: { code: 0, legacy: "\x1b[B" },
 	right: { code: 0, legacy: "\x1b[C" },
 	left: { code: 0, legacy: "\x1b[D" },
+	home: { code: 0, legacy: "\x1b[H" },
+	end: { code: 0, legacy: "\x1b[F" },
+	pageup: { code: 0, legacy: "\x1b[5~" },
+	pagedown: { code: 0, legacy: "\x1b[6~" },
 };
 
 const MOD_BITS: Record<string, number> = { shift: 1, alt: 2, ctrl: 4, super: 8 };
@@ -36,10 +40,22 @@ export function encodeKeyId(id: string): string | undefined {
 		if (key.length === 1) return key;
 		return SPECIAL[key]?.legacy;
 	}
+	const mod = bits + 1;
+	const xterm: Record<string, string> = {
+		up: `\x1b[1;${mod}A`,
+		down: `\x1b[1;${mod}B`,
+		right: `\x1b[1;${mod}C`,
+		left: `\x1b[1;${mod}D`,
+		home: `\x1b[1;${mod}H`,
+		end: `\x1b[1;${mod}F`,
+		pageup: `\x1b[5;${mod}~`,
+		pagedown: `\x1b[6;${mod}~`,
+	};
+	const named = key.toLowerCase();
+	if (xterm[named]) return xterm[named];
 	const code = key.length === 1 ? key.codePointAt(0)! : SPECIAL[key]?.code;
 	if (!code) return undefined;
-	// CSI-u modifier is bits+1 (the encoding parseKey accepts).
-	return `\x1b[${code};${bits + 1}u`;
+	return `\x1b[${code};${mod}u`;
 }
 
 /** Encode one SGR mouse report. Coordinates are 0-based, matching the parser. */

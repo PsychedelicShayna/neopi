@@ -82,12 +82,14 @@ export function attachTuiPresenter(host: ControlHost, surface: TuiControlSurface
 			if (actionId === "app.suspend") return { handled: false, exempt: "exempt_job_control" };
 			if (actionId === "app.editor.external") return { handled: false, exempt: "exempt_external_program" };
 			if (surface.runAction(actionId)) return { handled: true };
-			const key = host.presenter?.keybindings?.get(actionId)?.[0];
-			if (!key) return { handled: false };
-			const bytes = encodeKeyId(String(key));
-			if (!bytes) return { handled: false, text: String(key) };
-			surface.ui.injectInput(bytes, "control");
-			return { handled: true, text: String(key) };
+			const keys = host.presenter?.keybindings?.get(actionId) ?? [];
+			for (const key of keys) {
+				const bytes = encodeKeyId(String(key));
+				if (!bytes) continue;
+				surface.ui.injectInput(bytes, "control");
+				return { handled: true, text: String(key) };
+			}
+			return { handled: false };
 		},
 		inject(bytes) {
 			surface.ui.injectInput(bytes, "control");
