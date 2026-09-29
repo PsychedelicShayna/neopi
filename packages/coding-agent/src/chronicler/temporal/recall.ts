@@ -10,9 +10,9 @@
  */
 import * as path from "node:path";
 import { localParts, localStamp, spanWithin, type TimeBound, type TimeSpan } from "./calendar";
-import { type CanonicalAtomResult, readCanonicalAtom } from "./corpus";
+import { type CanonicalAtomResult, type ChronicleAtom, readCanonicalAtom } from "./corpus";
 import type { NodeRanker, RankCandidate } from "./rank";
-import type { AtomEntry, NodeLevel, Resolution } from "./tree";
+import { type AtomEntry, clipText, estimateTokens, type NodeLevel, type Resolution } from "./tree";
 import { nodeDir, readViewManifest, readViewNode, type ViewChildRef, type ViewNode } from "./view";
 
 /** Best child below this fraction of its parent's score (and not confident) marks a collapsed branch. */
@@ -27,7 +27,6 @@ const FRONTIER_FACTOR = 4;
 const MAX_HOPS = 32;
 const MAX_EVIDENCE_CHARS = 12_000;
 const MAX_NEIGHBORS = 6;
-const MAX_ADJACENT_CANDIDATES = 40;
 const MAX_CANDIDATE_PERIODS = 5;
 
 export interface RecallOptions {
@@ -148,6 +147,15 @@ interface SearchState {
 	pool: Map<string, CandidatePeriod>;
 }
 
+/** Estimated tokens of a rank request: the recollection plus each candidate's key, label, and text. */
+export function rankPayloadTokens(query: string, candidates: readonly RankCandidate[]): number {
+	let tokens = estimateTokens(`Recollection: ${query}\n\n`);
+	for (const candidate of candidates) {
+		tokens += estimateTokens(`### Candidate \`${candidate.key}\` — ${candidate.label}\n${candidate.text}\n\n`);
+	}
+	return tokens;
+}
+
 export class ChronicleViewMissingError extends Error {
 	constructor(root: string) {
 		super(`No chronicle view at ${root}. Run \`npi chronicle index\` first.`);
@@ -222,19 +230,53 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 	}
 
 	let rankerFallback = false;
+	const hopTokens = manifest?.config?.hopTokens ?? 1000;
+	/**
+	 * Rank in pages whose serialized candidates (key, label, text) fit one hop;
+	 * a lone candidate larger than a hop has its text clipped, visibly. No
+	 * candidate is dropped.
+	 */
 	const rank = async (
 		query: string,
 		candidates: RankCandidate[],
 		search: "query" | "hint",
 		hop: number,
 		key: string,
-	) => {
-		const outcome = await options.ranker.score(query, candidates, options.signal);
-		if (outcome.fallback) {
-			rankerFallback = true;
-			trace.push({ search, hop, node: key, action: "ranker-fallback", note: outcome.fallback });
+	): Promise<number[]> => {
+		const base = rankPayloadTokens(query, []);
+		const bounded = candidates.map(candidate => {
+			const room = hopTokens - base - rankPayloadTokens("", [{ ...candidate, text: "" }]);
+			const clipped = clipText(candidate.text, Math.max(0, room) * 4 - 1);
+			return clipped.remainder > 0 ? { ...candidate, text: `${clipped.text}…` } : candidate;
+		});
+		const scores: number[] = Array.from({ length: candidates.length }, () => 0);
+		let page: number[] = [];
+		let tokens = base;
+		const flush = async (): Promise<void> => {
+			if (page.length === 0) return;
+			const outcome = await options.ranker.score(
+				query,
+				page.map(index => bounded[index]!),
+				options.signal,
+			);
+			if (outcome.fallback) {
+				rankerFallback = true;
+				trace.push({ search, hop, node: key, action: "ranker-fallback", note: outcome.fallback });
+			}
+			page.forEach((index, position) => {
+				scores[index] = outcome.scores[position] ?? 0;
+			});
+			page = [];
+			tokens = base;
+		};
+		for (let index = 0; index < bounded.length; index++) {
+			const cost = rankPayloadTokens("", [bounded[index]!]);
+			if (page.length > 0 && tokens + cost > hopTokens) await flush();
+			page.push(index);
+			tokens += cost;
 		}
-		return outcome.scores;
+		await flush();
+		return scores;
 	};
 
 	const toPeriod = (ref: ViewChildRef, score: number): CandidatePeriod => ({
@@ -259,6 +301,12 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 		while (frontier.length > 0 && hops < MAX_HOPS) {
 			options.signal?.throwIfAborted();
 			frontier.sort((a, b) => b.score - a.score);
+			const confident = [...state.atoms.values()]
+				.map(atom => atom.score)
+				.filter(score => score >= CONFIDENT)
+				.sort((a, b) => b - a);
+			// Enough confident atoms, and no retained branch scores close enough to hide an equal one.
+			if (confident.length >= budget && frontier[0]!.score < confident[budget - 1]! - TIE_MARGIN) break;
 			const item = frontier.shift()!;
 			if (lastExpanded !== null && item.parent !== lastExpanded) {
 				trace.push({
@@ -285,7 +333,7 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 				const entries = node.atoms.filter(inScopeAtom);
 				const scores = await rank(
 					query,
-					entries.map(entry => ({ key: entry.id, label: entry.title, text: entry.route })),
+					entries.map(entry => ({ key: entry.id, label: entry.localTime, text: entry.route })),
 					search,
 					hops,
 					node.key,
@@ -318,8 +366,6 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 						note: `best atom ${best.toFixed(2)}`,
 					});
 				}
-				const confident = [...state.atoms.values()].filter(atom => atom.score >= CONFIDENT).length;
-				if (confident >= budget) break;
 				continue;
 			}
 
@@ -329,7 +375,7 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 				query,
 				children.map(child => ({
 					key: child.key,
-					label: `${child.label} (${child.localStart} – ${child.localEnd}, ${child.atomCount} atoms)`,
+					label: child.label,
 					text: child.description,
 				})),
 				search,
@@ -407,13 +453,56 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 	};
 
 	const windowMs = Math.max(1, options.neighborhoodMinutes) * 60_000;
+	const timeZone = manifest?.timeZone ?? "UTC";
+	const evidenceErrors: { id: string; reason: string }[] = [];
+	/** Canonical re-read of an atom the view points at; null (disclosed) when gone, changed out of scope, or unreadable. */
+	const revalidate = async (
+		entry: AtomEntry,
+		terminal: string,
+		search: "query" | "hint",
+	): Promise<ChronicleAtom | null> => {
+		let resolved: CanonicalAtomResult;
+		try {
+			resolved = await readCanonicalAtom(entry);
+		} catch (error) {
+			resolved = { ok: false, reason: error instanceof Error ? error.message : String(error) };
+		}
+		if (!resolved.ok) {
+			viewStale = true;
+			trace.push({
+				search,
+				hop: 0,
+				node: terminal,
+				action: "atom-missing",
+				note: `${entry.id}: ${resolved.reason}`,
+			});
+			return null;
+		}
+		const current = resolved.atom;
+		if (current.fingerprint !== entry.fingerprint) {
+			viewStale = true;
+			trace.push({ search, hop: 0, node: terminal, action: "stale-atom", note: entry.id });
+		}
+		if (!inScopeAtom({ ...current, localTime: localStamp(localParts(current.eventTime, timeZone)) })) {
+			trace.push({ search, hop: 0, node: terminal, action: "moved-out-of-scope", note: entry.id });
+			return null;
+		}
+		return current;
+	};
 	const primary = await descend(options.query, "query");
 
 	let adjacent: ScoredAtom[] = [];
 	let anchor: ScoredAtom | undefined;
+	let anchorWindowCenter = 0;
 	if (options.hint?.trim() && resolution === "atom") {
 		const hinted = await descend(options.hint, "hint");
 		anchor = [...hinted.atoms.values()].sort((a, b) => b.score - a.score)[0];
+		let anchorTime = anchor ? Date.parse(anchor.entry.eventTime) : 0;
+		if (anchor && anchor.score >= ATOM_MIN) {
+			const current = await revalidate(anchor.entry, anchor.terminal, "hint");
+			if (current) anchorTime = Date.parse(current.eventTime);
+			else anchor = undefined;
+		}
 		if (anchor && anchor.score >= ATOM_MIN) {
 			trace.push({
 				search: "hint",
@@ -422,16 +511,18 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 				action: "anchor",
 				candidates: [{ key: anchor.entry.id, label: anchor.entry.title, score: anchor.score }],
 			});
-			const at = Date.parse(anchor.entry.eventTime);
+			const at = anchorTime;
+			anchorWindowCenter = at;
 			const nearby = (await collectWindow(at - windowMs, at + windowMs, "hint"))
 				.filter(candidate => candidate.entry.id !== anchor!.entry.id)
-				.sort((a, b) => Math.abs(Date.parse(a.entry.eventTime) - at) - Math.abs(Date.parse(b.entry.eventTime) - at))
-				.slice(0, MAX_ADJACENT_CANDIDATES);
+				.sort(
+					(a, b) => Math.abs(Date.parse(a.entry.eventTime) - at) - Math.abs(Date.parse(b.entry.eventTime) - at),
+				);
 			const scores = await rank(
 				options.query,
 				nearby.map(candidate => ({
 					key: candidate.entry.id,
-					label: candidate.entry.title,
+					label: candidate.entry.localTime,
 					text: candidate.entry.route,
 				})),
 				"hint",
@@ -458,7 +549,7 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 			});
 		} else {
 			anchor = undefined;
-			trace.push({ search: "hint", hop: 0, node: "", action: "anchor", note: "no atom matched the hint" });
+			trace.push({ search: "hint", hop: 0, node: "", action: "anchor", note: "no current atom matched the hint" });
 		}
 	}
 
@@ -486,8 +577,6 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 		}
 	}
 
-	const timeZone = manifest?.timeZone ?? "UTC";
-	const evidenceErrors: { id: string; reason: string }[] = [];
 	const results: RecallAtom[] = [];
 	for (const { atom, via } of selected) {
 		const entry = atom.entry;
@@ -516,28 +605,32 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 			trace.push({ search: "query", hop: 0, node: atom.terminal, action: "stale-atom", note: entry.id });
 		}
 		const localTime = localStamp(localParts(current.eventTime, timeZone));
-		if (!inScopeAtom({ ...current, localTime })) {
+		const at = Date.parse(current.eventTime);
+		const leftWindow = via === "adjacent" && anchor !== undefined && Math.abs(at - anchorWindowCenter) > windowMs;
+		if (!inScopeAtom({ ...current, localTime }) || leftWindow) {
 			trace.push({ search: "query", hop: 0, node: atom.terminal, action: "moved-out-of-scope", note: entry.id });
 			continue;
 		}
-		const at = Date.parse(current.eventTime);
-		const neighbors =
-			atom.score >= CONFIDENT || via === "adjacent"
-				? (await collectWindow(at - windowMs, at + windowMs, "query"))
-						.filter(candidate => candidate.entry.id !== current.id)
-						.sort(
-							(a, b) =>
-								Math.abs(Date.parse(a.entry.eventTime) - at) - Math.abs(Date.parse(b.entry.eventTime) - at),
-						)
-						.slice(0, MAX_NEIGHBORS)
-						.map(candidate => ({
-							id: candidate.entry.id,
-							title: candidate.entry.title,
-							eventTime: candidate.entry.eventTime,
-							project: candidate.entry.project,
-							sessionId: candidate.entry.sessionId,
-						}))
-				: [];
+		const neighbors: RecallNeighbor[] = [];
+		if (atom.score >= CONFIDENT || via === "adjacent") {
+			const nearby = (await collectWindow(at - windowMs, at + windowMs, "query"))
+				.filter(candidate => candidate.entry.id !== current.id)
+				.sort(
+					(a, b) => Math.abs(Date.parse(a.entry.eventTime) - at) - Math.abs(Date.parse(b.entry.eventTime) - at),
+				);
+			for (const candidate of nearby) {
+				if (neighbors.length >= MAX_NEIGHBORS) break;
+				const neighbor = await revalidate(candidate.entry, candidate.terminal, "query");
+				if (!neighbor || Math.abs(Date.parse(neighbor.eventTime) - at) > windowMs) continue;
+				neighbors.push({
+					id: neighbor.id,
+					title: neighbor.title,
+					eventTime: neighbor.eventTime,
+					project: neighbor.project,
+					sessionId: neighbor.sessionId,
+				});
+			}
+		}
 		const bodyTruncated = current.body.length > MAX_EVIDENCE_CHARS;
 		results.push({
 			id: current.id,
@@ -563,19 +656,56 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 	let candidates: CandidatePeriod[] = [];
 	let ambiguous = false;
 	let ask: RecallResult["ask"];
+	const askFor = (periods: readonly CandidatePeriod[]): RecallResult["ask"] => {
+		const [first, second] = periods;
+		return first && second && first.localStart.slice(0, 7) !== second.localStart.slice(0, 7)
+			? "time-range"
+			: "adjacent-event";
+	};
 	if (resolution !== "atom") {
 		candidates = primary.periods.sort((a, b) => b.score - a.score).slice(0, MAX_CANDIDATE_PERIODS);
 	} else if (
 		!results.some(result => result.confident) &&
-		!(anchor && results.some(result => result.via === "adjacent"))
+		!(anchor && anchor.score >= CONFIDENT && results.some(result => result.via === "adjacent"))
 	) {
 		ambiguous = true;
 		candidates = [...primary.pool.values()].sort((a, b) => b.score - a.score).slice(0, MAX_CANDIDATE_PERIODS);
-		const [first, second] = candidates;
-		ask =
-			first && second && first.localStart.slice(0, 7) !== second.localStart.slice(0, 7)
-				? "time-range"
-				: "adjacent-event";
+		ask = askFor(candidates);
+	} else {
+		// High scores do not mean discrimination: atoms just past the budget that
+		// tie the last selected one in another period leave the choice open.
+		const ranked = [...primary.atoms.values()].sort((a, b) => b.score - a.score);
+		const chosen = selected.filter(item => item.via === "descent").map(item => item.atom);
+		const last = chosen[chosen.length - 1];
+		if (last && chosen.length >= budget) {
+			const chosenTerminals = new Set(chosen.map(atom => atom.terminal));
+			const tied = ranked.filter(
+				atom =>
+					!chosen.includes(atom) && last.score - atom.score <= TIE_MARGIN && !chosenTerminals.has(atom.terminal),
+			);
+			if (tied.length > 0) {
+				ambiguous = true;
+				const periods: CandidatePeriod[] = [];
+				for (const atom of [last, ...tied]) {
+					if (periods.some(period => period.key === atom.terminal)) continue;
+					const node = cache.get(atom.terminal);
+					if (!node) continue;
+					periods.push({
+						key: node.key,
+						level: node.level,
+						label: node.label,
+						localStart: node.localStart,
+						localEnd: node.localEnd,
+						atomCount: node.atomCount,
+						projects: node.projects,
+						description: atom.entry.route,
+						score: atom.score,
+					});
+				}
+				candidates = periods.slice(0, MAX_CANDIDATE_PERIODS);
+				ask = askFor(candidates);
+			}
+		}
 	}
 
 	return {

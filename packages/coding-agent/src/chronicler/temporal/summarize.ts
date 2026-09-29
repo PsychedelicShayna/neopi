@@ -28,8 +28,12 @@ export interface SummaryChildInput extends SummaryNodeInput {
 }
 
 export interface SummaryBudget {
+	/** Overview target and ceiling. */
 	overviewTokens: number;
+	/** Per-child description target the model is asked for (from the summary target). */
 	childTokens: number;
+	/** Per-child hard ceiling (from the per-hop ceiling); longer output is clipped. */
+	childCeilingTokens: number;
 }
 
 export interface SummaryOutput {
@@ -67,7 +71,10 @@ export function createSummarizer(client: ChronicleModelClient): ChronicleSummari
 				projects: node.projects.join(", ") || "none",
 				children: children.map(child => ({ ...child, projects: child.projects.join(", ") || "none" })),
 			});
-			const maxTokens = Math.max(512, (budget.overviewTokens + budget.childTokens * children.length) * 2 + 256);
+			const maxTokens = Math.max(
+				512,
+				(budget.overviewTokens + budget.childCeilingTokens * children.length) * 2 + 256,
+			);
 			const reply = parseJsonObject(await client.complete(system, input, maxTokens, signal));
 			if (typeof reply.overview !== "string" || !Array.isArray(reply.children)) {
 				throw new Error(`summary for ${node.key || "root"} lacks overview/children`);
@@ -89,7 +96,7 @@ export function createSummarizer(client: ChronicleModelClient): ChronicleSummari
 				if (description === undefined || description.trim().length === 0) {
 					throw new Error(`summary for ${node.key || "root"} omitted child ${child.key}`);
 				}
-				return clip(description, budget.childTokens);
+				return clip(description, budget.childCeilingTokens);
 			});
 			return { overview: clip(reply.overview, budget.overviewTokens), descriptions, truncated };
 		},

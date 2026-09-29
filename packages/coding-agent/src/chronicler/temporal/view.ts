@@ -97,8 +97,92 @@ export interface ViewManifest {
 	summaryModel?: string;
 }
 
+const SEGMENT_RE = /^[0-9A-Za-z][0-9A-Za-z._-]*$/;
+
+/** A node key is `/`-joined safe segments; anything else could escape the view root. */
+export function isSafeKey(key: string): boolean {
+	return key === "" || key.split("/").every(segment => SEGMENT_RE.test(segment) && !segment.includes(".."));
+}
+
 export function nodeDir(root: string, key: string): string {
+	if (!isSafeKey(key)) throw new Error(`Unsafe chronicle node key: ${key}`);
 	return key ? path.join(root, ...key.split("/")) : root;
+}
+
+function isString(value: unknown): value is string {
+	return typeof value === "string";
+}
+
+function isStringArray(value: unknown): value is string[] {
+	return Array.isArray(value) && value.every(isString);
+}
+
+/** Structural check of every field a reader or the indexer consumes. */
+function structureProblem(node: ViewNode, key: string): string | undefined {
+	if (node.format !== "chronicle-node" || node.version !== VIEW_FORMAT_VERSION || node.key !== key) {
+		return "unexpected node format, version, or key";
+	}
+	if (!isString(node.identity) || !isString(node.contentHash) || !isString(node.label) || !isString(node.segment)) {
+		return "node.json lacks identity, content hash, label, or segment";
+	}
+	if (!isString(node.start) || !isString(node.end) || !isString(node.localStart) || !isString(node.localEnd)) {
+		return "node.json lacks its period";
+	}
+	if (!isStringArray(node.projects) || !isStringArray(node.sessions) || typeof node.atomCount !== "number") {
+		return "node.json lacks projects, sessions, or atom count";
+	}
+	if (typeof node.provenance !== "object" || node.provenance === null || typeof node.identityParts !== "object") {
+		return "node.json lacks provenance";
+	}
+	if (!Array.isArray(node.children)) return "node.json lacks children";
+	for (const child of node.children) {
+		if (
+			typeof child !== "object" ||
+			child === null ||
+			![child.key, child.segment, child.label, child.identity, child.contentHash, child.description].every(
+				isString,
+			) ||
+			![child.start, child.end, child.localStart, child.localEnd].every(isString) ||
+			!isStringArray(child.projects) ||
+			!isStringArray(child.sessions) ||
+			!SEGMENT_RE.test(child.segment) ||
+			child.key !== (key ? `${key}/${child.segment}` : child.segment)
+		) {
+			return "node.json has a malformed child entry";
+		}
+	}
+	if (node.atoms !== undefined) {
+		if (!Array.isArray(node.atoms) || node.children.length > 0) return "node.json has malformed atoms";
+		for (const atom of node.atoms) {
+			if (
+				typeof atom !== "object" ||
+				atom === null ||
+				![
+					atom.id,
+					atom.stub,
+					atom.title,
+					atom.route,
+					atom.fingerprint,
+					atom.eventTime,
+					atom.localTime,
+					atom.project,
+					atom.sessionId,
+					atom.beatFile,
+					atom.chroniclerRoot,
+					atom.batchId,
+					atom.transcriptPath,
+					atom.lead,
+				].every(isString) ||
+				!isStringArray(atom.sources) ||
+				!isStringArray(atom.topics) ||
+				!SEGMENT_RE.test(atom.stub)
+			) {
+				return "node.json has a malformed atom entry";
+			}
+		}
+	}
+	if (computeContentHash(node) !== node.contentHash) return "node.json content does not match its content hash";
+	return undefined;
 }
 
 export function isTerminal(node: Pick<ViewNode, "atoms">): boolean {
@@ -206,18 +290,15 @@ export async function readViewNode(root: string, key: string): Promise<StoredNod
 		if (isEnoent(error)) return { state: "missing" };
 		return { state: "corrupt", reason: String(error) };
 	}
+	let node: ViewNode;
 	try {
-		const node = JSON.parse(raw) as ViewNode;
-		if (node.format !== "chronicle-node" || node.version !== VIEW_FORMAT_VERSION || node.key !== key) {
-			return { state: "corrupt", reason: "unexpected node format, version, or key" };
-		}
-		if (!Array.isArray(node.children) || typeof node.identity !== "string") {
-			return { state: "corrupt", reason: "node.json lacks children or identity" };
-		}
-		return { state: "ok", node };
+		node = JSON.parse(raw) as ViewNode;
 	} catch (error) {
 		return { state: "corrupt", reason: `node.json is not valid JSON (${String(error)})` };
 	}
+	if (typeof node !== "object" || node === null) return { state: "corrupt", reason: "node.json is not an object" };
+	const problem = structureProblem(node, key);
+	return problem ? { state: "corrupt", reason: problem } : { state: "ok", node };
 }
 
 /**
@@ -334,4 +415,28 @@ export async function findOrphanDirs(root: string, wanted: ReadonlySet<string>):
 
 export async function removeNodeDir(root: string, key: string): Promise<void> {
 	await fs.rm(nodeDir(root, key), { recursive: true, force: true });
+}
+
+function isWithin(child: string, parent: string): boolean {
+	const relative = path.relative(parent, child);
+	return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+/**
+ * Refuse to manage a directory the view does not own. The root may not be,
+ * contain, or sit inside the sessions directory, nor be or contain the agent
+ * directory; an existing non-empty root must already carry VIEW.json.
+ * Pruning deletes unrecognized entries, so this is what keeps it inside the view.
+ */
+export async function assertOwnedViewRoot(root: string, agentDir: string, sessionsDir: string): Promise<void> {
+	const target = path.resolve(root);
+	const sessions = path.resolve(sessionsDir);
+	const agent = path.resolve(agentDir);
+	if (isWithin(sessions, target) || isWithin(target, sessions) || isWithin(agent, target)) {
+		throw new Error(`Refusing to use ${root} as the chronicle view: it overlaps the agent or sessions directory`);
+	}
+	const entries = await listDir(target);
+	if (entries.length > 0 && !entries.includes(VIEW_FILE)) {
+		throw new Error(`Refusing to use ${root} as the chronicle view: it is not empty and has no ${VIEW_FILE}`);
+	}
 }

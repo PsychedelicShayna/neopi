@@ -4,11 +4,14 @@
  * canonical diagnostics. Atoms are committed through the real ChroniclerStore;
  * summaries come from a mock-provider model through the real prompts.
  */
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { loadChronicleCorpus } from "../../src/chronicler/temporal/corpus";
+import { lexicalRanker } from "../../src/chronicler/temporal/rank";
+import { recallChronicle } from "../../src/chronicler/temporal/recall";
+import * as viewModule from "../../src/chronicler/temporal/view";
 import { indexChronicle, type IndexReport } from "../../src/chronicler/temporal/indexer";
 import { createSummarizer, type ChronicleSummarizer } from "../../src/chronicler/temporal/summarize";
 import {
@@ -358,5 +361,80 @@ describe("chronicle temporal view", () => {
 		);
 		const kept = await readViewNode(root, "2026/09/w2/08/09");
 		expect(kept.state === "ok" && kept.node.atoms?.[0]?.id).toBe(written.atomIds[0]!);
+	});
+
+	it("refuses view roots that overlap canonical data or unowned directories and leaves them untouched", async () => {
+		await writeSessionAtoms(sessionsDir, {
+			cwd: "/work/alpha",
+			sessionId: "a1a1a1a1-0000-7000-8000-00000000000c",
+			batches: [[atom("Kept", "2026-09-08T09:00:00.000Z")]],
+		});
+		const unowned = path.join(agentDir, "notes");
+		await Bun.write(path.join(unowned, "keep.txt"), "mine");
+		const before = await snapshot(agentDir);
+		for (const bad of [sessionsDir, agentDir, path.join(sessionsDir, "inner"), unowned]) {
+			await expect(index({ root: bad })).rejects.toThrow(/Refusing/);
+		}
+		expect(await snapshot(agentDir)).toEqual(before);
+		expect(() => nodeDir(root, "2026/../../escape")).toThrow();
+	});
+
+	it("treats malformed or content-edited node.json as corrupt: recall discloses it and index repairs it", async () => {
+		await writeSessionAtoms(sessionsDir, {
+			cwd: "/work/alpha",
+			sessionId: "a1a1a1a1-0000-7000-8000-00000000000d",
+			batches: [[atom("Monday note", "2026-09-08T09:00:00.000Z"), atom("Tuesday note", "2026-09-09T11:00:00.000Z")]],
+		});
+		await index();
+		const weekFile = path.join(nodeDir(root, "2026/09/w2"), "node.json");
+		const week = await Bun.file(weekFile).json();
+		week.children[0].description = "tampered description";
+		await Bun.write(weekFile, JSON.stringify(week));
+		const dayFile = path.join(nodeDir(root, "2026/09/w2/09"), "node.json");
+		const day = await Bun.file(dayFile).json();
+		day.children = [{}];
+		await Bun.write(dayFile, JSON.stringify(day));
+		expect((await readViewNode(root, "2026/09/w2")).state).toBe("corrupt");
+		expect((await readViewNode(root, "2026/09/w2/09")).state).toBe("corrupt");
+
+		const recalled = await recallChronicle({
+			root,
+			query: "tuesday note",
+			budget: 1,
+			beam: 2,
+			neighborhoodMinutes: 90,
+			ranker: lexicalRanker,
+		});
+		expect(recalled.view.viewStale).toBe(true);
+		expect(recalled.trace.some(step => step.action === "view-drift" && step.node === "2026/09/w2")).toBe(true);
+
+		const repaired = await index();
+		const reasons = new Map(
+			repaired.changes.filter(change => change.outcome === "generated").map(c => [c.key, c.reason]),
+		);
+		expect(reasons.get("2026/09/w2")).toBe("corrupt");
+		expect(reasons.get("2026/09/w2/09")).toBe("corrupt");
+		expect((await readViewNode(root, "2026/09/w2")).state).toBe("ok");
+	});
+
+	it("publishes the incomplete manifest before any node is written", async () => {
+		await writeSessionAtoms(sessionsDir, {
+			cwd: "/work/alpha",
+			sessionId: "a1a1a1a1-0000-7000-8000-00000000000e",
+			batches: [Array.from({ length: 6 }, (_, n) => atom(`Parallel ${n}`, `2026-09-0${n + 1}T0${n}:00:00.000Z`))],
+		});
+		const original = viewModule.writeViewNode;
+		const seen: (boolean | null)[] = [];
+		const spy = spyOn(viewModule, "writeViewNode").mockImplementation(async (...args) => {
+			seen.push((await readViewManifest(root))?.complete ?? null);
+			return original(...args);
+		});
+		try {
+			await index();
+		} finally {
+			spy.mockRestore();
+		}
+		expect(seen.length).toBeGreaterThan(6);
+		expect(seen.every(complete => complete === false)).toBe(true);
 	});
 });

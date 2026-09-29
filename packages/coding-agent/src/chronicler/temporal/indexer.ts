@@ -14,6 +14,7 @@ import { type CorpusDiagnostic, hashText, loadChronicleCorpus } from "./corpus";
 import { type ChronicleSummarizer, SUMMARY_PROMPT_VERSION, type SummaryChildInput } from "./summarize";
 import { buildPlan, clipText, estimateTokens, type IndexConfig, overviewTokens, type PlanNode, walkPlan } from "./tree";
 import {
+	assertOwnedViewRoot,
 	computeContentHash,
 	findOrphanDirs,
 	type IdentityParts,
@@ -163,8 +164,10 @@ export async function indexChronicle(options: IndexOptions): Promise<IndexReport
 	const { root, config } = options;
 	const dryRun = options.dryRun === true;
 	const progress = options.onProgress ?? (() => {});
+	const sessionsDir = options.sessionsDir ?? getSessionsDir(options.agentDir);
+	await assertOwnedViewRoot(root, options.agentDir, sessionsDir);
 	progress("reading canonical atoms");
-	const corpus = await loadChronicleCorpus(options.sessionsDir ?? getSessionsDir(options.agentDir), {
+	const corpus = await loadChronicleCorpus(sessionsDir, {
 		checkTranscripts: true,
 	});
 	const plan = buildPlan(corpus.atoms, config);
@@ -197,11 +200,11 @@ export async function indexChronicle(options: IndexOptions): Promise<IndexReport
 
 	const previous = await readViewManifest(root);
 	const startedAt = new Date().toISOString();
-	let mutationStarted = false;
-	const beginMutation = async (): Promise<void> => {
-		if (mutationStarted || dryRun) return;
-		mutationStarted = true;
-		await writeViewManifest(root, {
+	// One shared publication: every writer awaits the same incomplete-manifest write.
+	let mutation: Promise<void> | undefined;
+	const beginMutation = (): Promise<void> => {
+		if (dryRun) return Promise.resolve();
+		mutation ??= writeViewManifest(root, {
 			format: "chronicle-view",
 			version: VIEW_FORMAT_VERSION,
 			timeZone: config.timeZone,
@@ -211,6 +214,7 @@ export async function indexChronicle(options: IndexOptions): Promise<IndexReport
 			atomCount: corpus.atoms.length,
 			summaryModel: options.summarizer?.identity,
 		});
+		return mutation;
 	};
 
 	const limiter = new Limiter(Math.max(1, options.concurrency ?? 4));
@@ -486,7 +490,14 @@ async function generateInterior(
 				projects: base.projects,
 			},
 			inputs,
-			{ overviewTokens: overviewBudget, childTokens: childBudget },
+			{
+				overviewTokens: overviewBudget,
+				childTokens: Math.min(
+					childBudget,
+					Math.max(MIN_DESCRIPTION_TOKENS, Math.floor((config.summaryTokens - overviewBudget) / current.length)),
+				),
+				childCeilingTokens: childBudget,
+			},
 			options.signal,
 		),
 	);

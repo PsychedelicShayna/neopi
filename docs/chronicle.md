@@ -41,6 +41,8 @@ Regenerates only stale nodes, children first. A node is stale when it is missing
 - `--rebuild`: regenerate every node.
 - `--since`/`--until` (`YYYY`, `YYYY-MM`, `YYYY-MM-DD`, or an ISO instant): regenerate only nodes overlapping the window. Ancestors of a stale node left outside the window are reported **blocked** and stay stale; the view is then marked incomplete.
 
+The view root must be dedicated to the view: index refuses a root that is, contains, or sits inside the sessions directory, contains the agent directory, or is a non-empty directory without `VIEW.json`, because refreshing removes entries the view does not recognize.
+
 The report also lists canonical problems without touching atoms: malformed batches (other batches of the session are still indexed), duplicate atom ids, entries committed twice, beats citing uncommitted or missing transcript entries, missing transcripts, and `related`/`supersedes` ids that match no atom. `VIEW.json` is marked incomplete before the first write and complete only when every node settled. Exit status is 1 when a summary failed.
 
 ## Recall
@@ -58,8 +60,8 @@ Recall descends coarse to fine. At each node it ranks the in-scope children's de
 - **Scope**: `from`/`to`, `project` (path substring), and `session` (id prefix) apply to every step, including adjacency and neighbors.
 - **Adjacent event**: `hint` describes something remembered from around the same time. Recall finds that event, then ranks the atoms within `chronicler.recall.neighborhoodMinutes` of it, across sessions, so a poorly described target next to a well described event is still found.
 - **Step-by-step narrowing**: `--resolution month` returns ranked candidate periods; call again with `--node <key> --resolution week`, and so on down to atoms.
-- **Uncertainty**: when no atom is confident, the result says so, lists the best candidate periods, and names the follow-up that would discriminate best (a time range or an adjacent event).
-- **Evidence**: returned atoms are re-read from their committed batch — body, transcript path, and cited entry ids come from the store. An atom changed since indexing is marked stale and shown as it is now; a deleted one is reported instead of returned.
+- **Uncertainty**: when no atom is confident, or when an atom in another period ties the chosen one, the result says so, lists the best candidate periods, and names the follow-up that would discriminate best (a time range or an adjacent event).
+- **Evidence**: returned atoms, hint anchors, and listed neighbors are re-read from their committed batch — body, transcript path, and cited entry ids come from the store. An atom changed since indexing is marked stale and shown as it is now; a deleted one is reported instead of returned.
 
 The `model` ranker (default) uses the `chronicler-summary` role; `lexical` scores word overlap and needs no model, but it cannot match a memory described in different words.
 

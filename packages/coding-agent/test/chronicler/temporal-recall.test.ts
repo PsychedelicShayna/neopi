@@ -12,7 +12,12 @@ import { parseFrontmatter, TempDir } from "@oh-my-pi/pi-utils";
 import { loadChronicleCorpus } from "../../src/chronicler/temporal/corpus";
 import { indexChronicle } from "../../src/chronicler/temporal/indexer";
 import { createModelRanker, lexicalRanker, lexicalScore, type NodeRanker } from "../../src/chronicler/temporal/rank";
-import { ChronicleViewMissingError, type RecallOptions, recallChronicle } from "../../src/chronicler/temporal/recall";
+import {
+	ChronicleViewMissingError,
+	rankPayloadTokens,
+	type RecallOptions,
+	recallChronicle,
+} from "../../src/chronicler/temporal/recall";
 import { createSummarizer } from "../../src/chronicler/temporal/summarize";
 import type { IndexConfig } from "../../src/chronicler/temporal/tree";
 import { nodeDir, readViewNode } from "../../src/chronicler/temporal/view";
@@ -227,6 +232,24 @@ describe("chronicle recall", () => {
 			expect(hinted.results.map(result => result.id)).not.toContain(anchorSession.atomIds[1]!);
 		});
 
+		it("revalidates neighbors and the hint anchor against canonical atoms", async () => {
+			const corpus = await loadChronicleCorpus(sessionsDir);
+			const beatOf = (id: string) => corpus.atoms.find(atom => atom.id === id)!.beatFile;
+			await fs.rm(path.dirname(beatOf(neighborSession.atomIds[0]!)), { recursive: true });
+			const crash = await recall({ query: "postgres crash during migration" });
+			expect(crash.results[0]!.id).toBe(anchorSession.atomIds[0]!);
+			expect(crash.results[0]!.neighbors.map(neighbor => neighbor.id)).not.toContain(neighborSession.atomIds[0]!);
+			expect(crash.trace.some(step => step.action === "atom-missing")).toBe(true);
+
+			await fs.rm(path.dirname(beatOf(anchorSession.atomIds[0]!)), { recursive: true });
+			const hinted = await recall({
+				query: "the experiment right after the outage",
+				hint: "postgres crash during migration",
+			});
+			expect(hinted.results.some(result => result.via === "adjacent")).toBe(false);
+			expect(hinted.trace.some(step => step.search === "hint" && step.action === "atom-missing")).toBe(true);
+		});
+
 		it("keeps project and session scope through adjacency and neighborhood expansion", async () => {
 			const scoped = await recall({
 				query: "the experiment right after the outage",
@@ -331,5 +354,62 @@ describe("chronicle recall", () => {
 		expect(walked.stub).toBe(native.results[0]!.stub);
 		const terminal = await readViewNode(root, key);
 		expect(terminal.state).toBe("ok");
+	});
+
+	it("keeps every rank request within one hop, even for a huge title and a crowded adjacency window", async () => {
+		await writeSessionAtoms(sessionsDir, {
+			cwd: "/work/alpha",
+			sessionId: ALPHA,
+			batches: [
+				[
+					{
+						title: `${"Giant ".repeat(2000)}postgres crash`,
+						eventTime: "2026-09-15T14:00:00.000Z",
+						body: "The postgres primary crashed during the migration.",
+					},
+				],
+			],
+		});
+		await writeSessionAtoms(sessionsDir, {
+			cwd: "/work/beta",
+			sessionId: BETA,
+			batches: [
+				Array.from({ length: 30 }, (_, n) => ({
+					title: `Nearby note ${n}`,
+					eventTime: `2026-09-15T14:${String(n + 1).padStart(2, "0")}:00.000Z`,
+					body: `Scratch observation ${n} recorded while the database was down, with enough words to make the route long.`,
+				})),
+			],
+		});
+		await index();
+		const payloads: number[] = [];
+		const recording: NodeRanker = {
+			kind: "model",
+			async score(query, candidates, signal) {
+				payloads.push(rankPayloadTokens(query, candidates));
+				return model.score(query, candidates, signal);
+			},
+		};
+		const result = await recall({ query: "postgres crash", hint: "postgres crash", ranker: recording });
+		expect(Math.max(...payloads)).toBeLessThanOrEqual(CONFIG.hopTokens);
+		const adjacency = result.trace.find(step => step.action === "adjacent");
+		expect(adjacency?.candidates).toHaveLength(30);
+	});
+
+	it("reports tied plausible periods instead of silently choosing one", async () => {
+		await writeSessionAtoms(sessionsDir, {
+			cwd: "/work/alpha",
+			sessionId: ALPHA,
+			batches: [[TARGET, { ...TARGET, eventTime: "2026-09-16T14:00:00.000Z" }]],
+		});
+		await index();
+		const result = await recall({ query: "signin redirect cycle repaired", budget: 1 });
+		expect(result.results).toHaveLength(1);
+		expect(result.ambiguous).toBe(true);
+		expect(result.ask).toBe("adjacent-event");
+		expect(result.candidates.map(candidate => candidate.key).sort()).toEqual([
+			"2026/09/w1/02/10",
+			"2026/09/w3/16/14",
+		]);
 	});
 });
