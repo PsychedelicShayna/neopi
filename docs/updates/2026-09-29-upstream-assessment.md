@@ -136,7 +136,52 @@
 - Focused TUI picker/agents/chain/composer tests: 79 passed; focused coding-agent queue/RPC/classifier/live/side-panel tests: 95 passed.
 - `bun --cwd=packages/utils run test`: 757 passed, 3 skipped; an initially failing stderr-rotation probe used the upstream `omp` filename against the fork `npi` logger, fixed and rerun successfully in `6e29cbc094`.
 - `bun packages/coding-agent/src/cli.ts --version`: `npi/18.4.4`.
-- Remaining validation after this 200-request handoff: run the package test scripts for catalog, ai, natives, tui, agent, coding-agent, stats and collab-web; diagnose each failure against the merge, and only label it pre-existing with proof on `8b951f7204`. Recheck type-check if further code changes. All conflict resolutions, merge and ledger commits, and four post-merge repairs have verified signatures.
+
+### Full package test-script validation
+
+The first run used each package's `bun --cwd=packages/<name> run test` script. The coding-agent script stopped after its singleton bucket failed; its remaining three buckets were then run through the same `scripts/ci-test-ts.ts` runner with `--only-failures`, without repeating passing chunks. The figures below are from those first runs, before the repairs listed below.
+
+| Package | First-run result |
+| --- | --- |
+| catalog | 102 pass, 0 fail |
+| ai | 4,988 pass, 291 skip, 2 fail |
+| natives | 143 pass, 7 fail |
+| tui | 3,122 pass, 5 skip, 1 fail |
+| agent | 665 pass, 0 fail |
+| coding-agent | Singleton: 1,110 pass, 2 skip, 3 fail across 113 files. UI: 61/67 chunks passed, 6 failed (334 files). Runtime: 31/32 chunks passed, 1 failed (313 files). Native/tooling: 66/86 chunks passed, 20 failed, including one Bun crash after three attempts (851 files). The quiet runner does not expose aggregate assertion counts for passing chunks; these are exact chunk counts, not invented test counts. |
+| stats | No `test` script in either the merge or `8b951f7204`; `bun --cwd=packages/stats run test` reports `a package.json script "test" was not found` after `/usr/bin/test` exits 1. No package test count exists. |
+| collab-web | 102 pass, 0 fail |
+
+**Merge-introduced failures repaired, without rerunning entire passing suites:**
+
+- `100b7537b4`: AI's new synthetic Cowork stream had ended before its simulated socket reset. Keep `_read` inert until reset; `bun --cwd=packages/ai test test/cowork-fetch-cancellation.test.ts`: 3 pass. The equivalent temporary test on `8b951f7204` with the live-stream fixture produced 2 pass / 1 fail (`"aborted"` rather than the retryable socket-close message); the merged transport behavior passes.
+- `968e3886a9`, `82a1d79611`: the merged native session picker advertised Backspace for Delete and expected Backspace to open confirmation, contrary to the fork's guarded Delete-only behavior. `bun --cwd=packages/tui test test/session-picker-native.test.ts`: 5 pass, including the native Delete action key. A temporary baseline picker probe confirmed Backspace on an empty filter does **not** open deletion confirmation (1 pass); the native-picker test did not exist on the base.
+- `db84162956`: the new cross-child SDK yield test reused one registered `agentId` for two live sessions. Unique fixture IDs: `test/sdk-yield-report.test.ts` 17 pass; this test was absent on the base.
+- `b36960d12c`: fallback choices for nonreasoning models had inherited the role picker’s empty effort strip; restore fallback-specific Inherit/Off/Auto choices. `test/model-hub.test.ts` 83 pass; base 82 pass.
+- `1a8923769a`: merged command fixtures omitted real `exit`/`quit`/`q` names and the existing eval-alias runner method; the new `/new` Auto assertion assumed upstream's provisional high rather than the fork's pre-existing replacement-policy minimal. `test/input-controller-slash-history.test.ts` 43 pass (base 26 pass); `test/agent-session-role-thinking.test.ts` 27 pass (base 13 pass).
+- `f5e6842a05`: atomic fallback persistence copied effective `--config` overlay chains into the global file and wrote empty effort maps. Stage the edited role against its persisted layer, preserve other persisted roles, and prune removed entries. `test/modes/controllers/selector-controller-model-writes.test.ts` and `test/model-hub.test.ts`: 85 pass together; selector-write test absent on the base.
+- `383113e1ac`: new native input-ingress fixture lacked the fork's composer activity, REPL state and speech abort context methods. `test/input-controller-input-events.test.ts`: 27 pass; the file was absent on the base.
+- `715097f8b0`: the extracted RPC handler lost `set_cache_warming` and the `messageUpdates` filter projection. `test/rpc-event-filter.test.ts` plus `test/rpc-compatible-primitives.test.ts`: 10 pass; baseline compatible-primitives tests passed, while the new cases exposed the merged dispatch gap.
+- `f8d4927986`: shared OAuth credential state made four security coordinator cases fail after earlier scans. Per-case fixture isolation leaves only the separately proven pre-existing Git-signing failure: `test/security/coordinator.test.ts` 6 pass / 1 fail.
+- `fad3297da4`: the new unsettled-command assertion named upstream `omp` while the fork correctly printed `npi`; `test/cli-unsettled-command.test.ts` 4 pass.
+- `c0de86b999`: early CLI imports pulled in the native addon loader through the Windows path helper on Linux. Defer that helper to the Windows branch; `test/startup-composer-graph.test.ts` 1 pass, `packages/utils/test/dirs.test.ts` 6 pass / 1 skip, and `bun packages/coding-agent/src/cli.ts --version` printed `npi/18.4.4`. Baseline startup graph passed before this merged import.
+- `f7d0813782`: the new Chrome-for-Testing fixture seeded `cache/npi` and inherited a custom agent dir, while the resolver uses `cache/omp` for the default dir. `test/tools/browser-launch.test.ts --timeout=30000`: 12 pass; the new test was absent on the base.
+- `bc9d24df89`: usage-backed overflow inference was discarding successful mixture image responses from active context. Limit provider overflow recovery to failed non-mixture responses; `test/moa-engine.test.ts` 60 pass and context-promotion/dead-end tests 9 pass. The unchanged baseline MoA and startup-graph tests passed together (61 across the two files).
+- `87172f6a10`: the broker idle-shutdown integration test timed out once in the 113-file singleton under concurrent suite load; both merged and baseline isolated runs passed (1/1). Give it the existing short-lived native/tooling broker bucket. Runner dry-run now shows 112 singleton files; the isolated broker test passes. The initial timeout alone is **not** evidence of a pre-existing failure.
+
+**Pre-existing or host-runtime failures reproduced at `8b951f7204`:**
+
+- The host's default Git signer is the encrypted user key. Fixture `git commit` calls without the explicit agent signer fail on **both** revisions: `Load key "/home/shayna/.ssh/id_ed25519_github_signing": incorrect passphrase supplied to decrypt private key?`, then `fatal: failed to write commit object`. Signing was not disabled or reconfigured.
+  - `bun --cwd=packages/natives test test/vcs.test.ts`: base 2 pass / 6 fail; merged full suite has 7 VCS failures, including one upstream-added case. `bun --cwd=packages/coding-agent test test/commit-extension-providers.test.ts`: base 0 pass / 2 fail, merged singleton 2 fail. `test/git-tui-sidebar.test.ts`: base 0 pass / 10 fail, merged UI 10 fail.
+  - The same exact error was reproduced on the base with `bun --cwd=packages/coding-agent test <files> --only-failures` for `test/acp-builtins.test.ts` (3 failures), `test/autoresearch-tools.test.ts` (setup plus cleanup errors), `test/extensibility/custom-commands/review.test.ts` (2), `test/git-reftable.test.ts` (setup), `test/git-tui-stream.test.ts` (6), `test/issue-966-repro.test.ts` (1), and `test/plugin-install-git.test.ts` (1).
+  - Baseline `test/security/coordinator.test.ts` has one signing failure after 6 passing cases; `test/task/worktree.test.ts` has 14; `test/utils/{git-eisdir-fallback,git-show-stream,vcs-adapter}.test.ts` have one each. Their corresponding merged failures stop at fixture commit/signing before the behavior under test.
+- `bun --cwd=packages/coding-agent test test/session-loader-stream.test.ts --only-failures --timeout=60000`: **both** revisions 13 pass / 1 fail, the incomplete-large-record case timing out at 60 seconds. `test/stream/streamer.test.ts --only-failures --timeout=35000`: **both** 1 pass / 1 fail, same reconnect hook timeout after 35 seconds.
+- Baseline `bun --cwd=packages/coding-agent test test/tools/puppeteer-stealth-patch.test.ts test/update-cli.test.ts test/utils/changelog-static-import.test.ts --only-failures --timeout=45000`: 104 pass / 3 fail. The matching merged native chunks fail respectively at `site.toString` on undefined in the installed Puppeteer dependency, the mise dry-run still offering `github:can1357/oh-my-pi@2.0.0`, and `Unexpected reading file: packages/utils/src/marked.ts` in the compiled changelog binary.
+- The 10-file SDK chunk (from `sdk-file-write-fallback-extension.test.ts` through `sdk-workpool-yield-schema.test.ts`) crashed on both revisions with Bun Canary 1.3.14 `Segmentation fault at address 0x4`, exit 132, and the same Bun crash-report fingerprint `lt20d9b296ijkgEulooCgi91/C+mxP+kpjkBA2AI`. The merged runner retried the chunk three times; this is a Bun runtime crash, not an assertion result.
+
+Post-repair scoped `check:types` passed for utils, ai, tui, and coding-agent. The ledger above retains the exact first-run counts; fixed-file reruns prove repaired paths, not an unperformed second full-suite pass.
+
+The temporary detached baseline worktree at `8b951f7204` was removed after these comparisons. No push or PR; issue #207 and #208 remain outside this validation.
 
 
 ## Line-anchor delta for vocal-ingest planning
