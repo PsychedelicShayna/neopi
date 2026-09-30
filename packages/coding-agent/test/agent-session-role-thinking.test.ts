@@ -887,15 +887,15 @@ describe("AgentSession role model thinking behavior", () => {
 
 		await session.newSession();
 
-		// The configured auto mode survives, but the per-turn cache is gone,
-		// so the next turn reclassifies its own prompt from undefined.
+		// The configured auto mode survives, but the per-turn cache is gone.
+		// The fork's replacement effort policy starts pending Auto at its lowest
+		// permitted level (minimal for this model), not the legacy high provisional.
 		expect(session.isAutoThinking).toBe(true);
 		expect(session.configuredThinkingLevel()).toBe(AUTO_THINKING);
 		expect(session.autoResolvedThinkingLevel()).toBeUndefined();
-		const provisional = resolveProvisionalAutoLevel(model);
 		const entries = session.sessionManager.getEntries().filter(e => e.type === "thinking_level_change");
-		expect(session.thinkingLevel).toBe(provisional);
-		expect(session.agent.state.thinkingLevel).toBe(provisional);
-		expect(entries.at(-1)).toMatchObject({ thinkingLevel: provisional, configured: AUTO_THINKING });
+		expect(session.thinkingLevel).toBe(Effort.Minimal);
+		expect(session.agent.state.thinkingLevel).toBe(Effort.Minimal);
+		expect(entries.at(-1)).toMatchObject({ thinkingLevel: Effort.Minimal, configured: AUTO_THINKING });
 	});
 });

@@ -53,7 +53,7 @@ function makeCtx(isStreaming = false, messages: AgentMessage[] = []) {
 	const sessionManager = { sessionId: "session-a", getSessionId: () => sessionManager.sessionId };
 	const ctx = {
 		editor,
-		slashCommandNames: new Set(["rename", "hotkeys", "mcp", "queue"]),
+		slashCommandNames: new Set(["rename", "hotkeys", "mcp", "queue", "exit", "quit", "q"]),
 		isKnownSlashCommand: (command: string) =>
 			Boolean(ctx.session.extensionRunner?.getCommand(command.slice(1).split(/\s+/, 1)[0]!)),
 		sessionManager,
@@ -440,6 +440,7 @@ describe("input controller — bare slash commands opt-in", () => {
 			value: {
 				getCommand: (name: string) => (name === "id" ? { name } : undefined),
 				hasHandlers: () => false,
+				getEvalBackendAliases: () => [],
 			},
 		});
 		controllerFor(ctx);
