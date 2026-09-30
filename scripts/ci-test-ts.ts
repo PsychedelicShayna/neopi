@@ -113,6 +113,7 @@ const codingAgentNativePathPatterns = [
 	// Real broker subprocess startup needs a short-lived test process rather
 	// than the 100-file singleton bucket's accumulated process-wide state.
 	/^test\/launch\/broker-placement\.test\.ts$/,
+	/^test\/launch\/broker-idle-shutdown\.test\.ts$/,
 	/(^|\/)[^/]*(bash|native|browser|cmux|mnemopi|hindsight|memory)[^/]*\.test\.ts$/i,
 	/^test\/[^/]*(ask|gh|irc|task|eval|search|read|write|edit|ast|resolve|sqlite|web-search|fetch|image|ssh|tool)[^/]*\.test\.ts$/,
 	/^test\/core\/python-[^/]*\.test\.ts$/,
