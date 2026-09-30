@@ -22,6 +22,7 @@ import {
 	matchesSelectPageDown,
 	matchesSelectPageUp,
 	matchesSelectUp,
+	pickerNavigationKey,
 } from "../keybinding-matchers";
 import { isUserRequestEntry, type TranscriptEntryLike } from "../chat/transcript-entry";
 
@@ -160,6 +161,7 @@ class TreeList implements Component {
 	#nodeById: Map<string, TreeSelectorNode> = new Map();
 	#filterMode: FilterMode;
 	#searchQuery = "";
+	#filterEditing = false;
 	#toolCallMap: Map<string, ToolCallInfo> = new Map();
 	#multipleRoots = false;
 	#activePathIds: Set<string> = new Set();
@@ -872,7 +874,28 @@ class TreeList implements Component {
 		}
 	}
 
-	handleInput(keyData: string): void {
+	handleInput(rawData: string): void {
+		if (this.#filterEditing) {
+			if (matchesAppInterrupt(rawData)) {
+				this.#filterEditing = false;
+				return;
+			}
+			if (matchesKey(rawData, "backspace")) {
+				this.#searchQuery = this.#searchQuery.slice(0, -1);
+				this.#applyFilter();
+				return;
+			}
+			const printable = extractPrintableText(rawData);
+			if (printable !== undefined) {
+				this.#searchQuery += printable;
+				this.#applyFilter();
+				return;
+			}
+		} else if (matchesKey(rawData, "i")) {
+			this.#filterEditing = true;
+			return;
+		}
+		const keyData = this.#filterEditing ? rawData : pickerNavigationKey(rawData);
 		if (matchesSelectUp(keyData)) {
 			this.#tree.moveSelection(-1, true);
 		} else if (matchesSelectDown(keyData)) {
@@ -916,12 +939,7 @@ class TreeList implements Component {
 				this.onSelect(selected.entry.id, { summarize: false });
 			}
 		} else if (matchesAppInterrupt(keyData)) {
-			if (this.#searchQuery) {
-				this.#searchQuery = "";
-				this.#applyFilter();
-			} else {
-				this.onCancel?.();
-			}
+			this.onCancel?.();
 		} else if (matchesKey(keyData, "ctrl+c")) {
 			this.onCancel?.();
 		} else if (matchesKey(keyData, "shift+ctrl+o") || matchesKey(keyData, "ctrl+shift+o")) {
@@ -951,21 +969,10 @@ class TreeList implements Component {
 		} else if (matchesKey(keyData, "alt+a")) {
 			this.#filterMode = "all";
 			this.#applyFilter();
-		} else if (matchesKey(keyData, "backspace")) {
-			if (this.#searchQuery.length > 0) {
-				this.#searchQuery = this.#searchQuery.slice(0, -1);
-				this.#applyFilter();
-			}
-		} else if (matchesKey(keyData, "shift+l") && !this.#searchQuery) {
+		} else if (matchesKey(keyData, "e") && !this.#searchQuery) {
 			const selected = this.#tree.selectedItem;
 			if (selected && this.onLabelEdit) {
 				this.onLabelEdit(selected.entry.id, selected.label);
-			}
-		} else {
-			const printableText = extractPrintableText(keyData);
-			if (printableText) {
-				this.#searchQuery += printableText;
-				this.#applyFilter();
 			}
 		}
 	}
@@ -1068,7 +1075,7 @@ export class TreeSelectorComponent extends OverlayPanel {
 			new TruncatedText(
 				theme.fg(
 					"muted",
-					"Enter: switch. Alt+↑/↓: previous/next turn. PgUp/PgDn (←/→): page. Home/End: first/last item. Shift+Enter: summarize & switch. Shift+L: label. Ctrl+O: filter. Alt+D/T/U/L/A: filter. Type to search",
+					"Enter: switch. hjkl: navigate. i: filter (Esc normal, Esc close). Alt+↑/↓: turn. PgUp/PgDn (h/l): page. Shift+Enter: summarize & switch. e: label. Ctrl+O: filter. Alt+D/T/U/L/A: filter",
 				),
 				0,
 				0,

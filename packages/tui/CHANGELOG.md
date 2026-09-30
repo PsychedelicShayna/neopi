@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Picker navigation accepts `h/j/k/l` as arrows in normal mode; `i` opens filter editing, where letters stay literal. Escape leaves the filter, then closes the picker on the next press (#35).
+
 ### Fixed
 
 - Volatile speech updates reuse a cached draft and cursor offset, and apply a known edit region, instead of rejoining and diffing the whole buffer on every partial.

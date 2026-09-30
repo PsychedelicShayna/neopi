@@ -11,7 +11,7 @@ import {
 	TruncatedText,
 } from "../index";
 import { theme } from "../theme/theme";
-import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../keybinding-matchers";
+import { matchesSelectCancel, matchesSelectDown, matchesSelectUp, pickerNavigationKey } from "../keybinding-matchers";
 import { OverlayPanel } from "../chrome/overlay-box";
 import { MenuSelection } from "../components/menu-selection";
 import { centeredViewportRange } from "../components/scroll-viewport";
@@ -50,6 +50,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 	#visibleCount = 0;
 	/** Visible list window, shrunk by {@link setMaxHeight} on short screens. */
 	#maxVisible = OAUTH_SELECTOR_MAX_VISIBLE;
+	#filterEditing = false;
 	#mode: "login" | "logout";
 	#authStorage: OAuthSelectorAuthSource;
 	#onSelectCallback: (providerId: string) => void;
@@ -243,7 +244,9 @@ export class OAuthSelectorComponent extends OverlayPanel {
 
 	#renderStatusLine(_total: number): string {
 		const query = this.#menu.query.trim();
-		const suffix = query ? `Search: ${this.#menu.query}` : "Type to search";
+		const suffix = query
+			? `Search: ${this.#menu.query}${this.#filterEditing ? " (INSERT · Esc normal)" : ""}`
+			: this.#filterEditing ? "INSERT filter · Esc normal" : "i filter · hjkl navigate";
 		return theme.fg("muted", suffix);
 	}
 
@@ -348,17 +351,28 @@ export class OAuthSelectorComponent extends OverlayPanel {
 			this.#listContainer.addChild(new TruncatedText(theme.fg("warning", this.#statusMessage), 0, 0));
 		}
 	}
-	handleInput(keyData: string): void {
-		// Escape or Ctrl+C
-		if (matchesSelectCancel(keyData)) {
-			this.stopValidation();
-			this.#onCancelCallback();
-			return;
+	handleInput(rawData: string): void {
+		if (this.#filterEditing) {
+			if (matchesSelectCancel(rawData)) {
+				this.#filterEditing = false;
+				this.#updateList();
+				return;
+			}
+			if (this.#handleSearchInput(rawData)) return;
+			if (extractPrintableText(rawData) !== undefined) return;
+		} else {
+			if (this.#isSearchEnabled() && matchesKey(rawData, "i")) {
+				this.#filterEditing = true;
+				this.#updateList();
+				return;
+			}
+			if (matchesSelectCancel(rawData)) {
+				this.stopValidation();
+				this.#onCancelCallback();
+				return;
+			}
 		}
-
-		if (this.#handleSearchInput(keyData)) {
-			return;
-		}
+		const keyData = this.#filterEditing ? rawData : pickerNavigationKey(rawData);
 
 		// Up arrow
 		if (matchesSelectUp(keyData)) {

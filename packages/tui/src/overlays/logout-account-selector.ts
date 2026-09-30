@@ -1,6 +1,6 @@
 import { Container, matchesKey, ScrollView, TruncatedText } from "../index";
 import { theme } from "../theme/theme";
-import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../keybinding-matchers";
+import { matchesSelectCancel, matchesSelectDown, matchesSelectUp, pickerNavigationKey } from "../keybinding-matchers";
 import { OverlayPanel } from "../chrome/overlay-box";
 import { MenuSelection } from "../components/menu-selection";
 import { centeredViewportRange } from "../components/scroll-viewport";
@@ -84,11 +84,12 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 		}
 
 		this.#listContainer.addChild(
-			new TruncatedText(theme.fg("muted", "↑/↓ select · ↵ log out account · Esc cancel"), 0, 0),
+			new TruncatedText(theme.fg("muted", "j/k or ↑/↓ select · ↵ log out account · Esc cancel"), 0, 0),
 		);
 	}
 
-	handleInput(keyData: string): void {
+	handleInput(rawData: string): void {
+		const keyData = pickerNavigationKey(rawData);
 		if (matchesSelectCancel(keyData)) {
 			this.#onCancelCallback();
 			return;

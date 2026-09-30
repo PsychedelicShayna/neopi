@@ -45,6 +45,7 @@ function searchResult(tree: SessionTreeNode[], query: string): string {
 		() => {},
 		() => {},
 	);
+	selector.handleInput("i");
 	for (const ch of query) selector.handleInput(ch);
 	return Bun.stripANSI(selector.render(120).join("\n"));
 }

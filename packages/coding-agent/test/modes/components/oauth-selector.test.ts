@@ -17,7 +17,7 @@ const authStorage = {
 } as unknown as AuthStorage;
 
 describe("OAuthSelectorComponent", () => {
-	it("fuzzy-filters overflowing provider lists from typed input", () => {
+	it("navigates and filters overflowing provider lists with modal keys", () => {
 		const providers = getOAuthProviders();
 		expect(providers.length).toBeGreaterThan(10);
 		const target =
@@ -35,6 +35,9 @@ describe("OAuthSelectorComponent", () => {
 			() => {},
 		);
 
+		component.handleInput("j");
+		component.handleInput("k");
+		component.handleInput("i");
 		for (const char of target.id) {
 			component.handleInput(char);
 		}
@@ -45,9 +48,24 @@ describe("OAuthSelectorComponent", () => {
 			.join("\n");
 		expect(rendered).toContain(target.name);
 		expect(rendered).toContain(`Search: ${target.id}`);
+		component.handleInput("\x1b");
+		expect(Bun.stripANSI(component.render(80).join("\n"))).toContain(`Search: ${target.id}`);
 
 		component.handleInput("\n");
 		expect(selected).toEqual([target.id]);
+	});
+
+	it("retains an active filter on the first Esc and closes on the second", () => {
+		let cancelled = 0;
+		const component = new OAuthSelectorComponent("login", authStorage, () => {}, () => cancelled++);
+		component.handleInput("i");
+		component.handleInput("h");
+		component.handleInput("j");
+		component.handleInput("\x1b");
+		expect(cancelled).toBe(0);
+		expect(Bun.stripANSI(component.render(80).join("\n"))).toContain("Search: hj");
+		component.handleInput("\x1b");
+		expect(cancelled).toBe(1);
 	});
 
 	it("does not offer env-only providers as logout targets", () => {

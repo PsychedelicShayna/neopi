@@ -80,6 +80,7 @@ describe("issue #1909: tree-selector empty-state messaging", () => {
 			() => {},
 		);
 		// Type a character that won't match anything in the tree.
+		selector.handleInput("i");
 		selector.handleInput("z");
 		const text = renderSelector(selector);
 

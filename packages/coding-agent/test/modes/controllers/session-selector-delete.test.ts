@@ -110,6 +110,7 @@ describe("SessionSelectorComponent delete confirmation", () => {
 		const selector = createSelector(onDelete);
 
 		// Type a query, then Backspace — must delete a query char, NOT a session.
+		selector.handleInput("i");
 		selector.handleInput("alpha");
 		const beforeBackspace = renderText(selector);
 		expect(beforeBackspace).toContain("alpha");

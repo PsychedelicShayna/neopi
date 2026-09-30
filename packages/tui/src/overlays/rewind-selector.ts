@@ -38,7 +38,7 @@ import {
 import type { MessageRenderer } from "../chat/extension-types";
 import type { TranscriptEntryLike as TranscriptEntry } from "../chat/transcript-entry";
 import { theme } from "../theme/theme";
-import { matchesAppToolsExpand, matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../keybinding-matchers";
+import { matchesAppToolsExpand, matchesSelectCancel, matchesSelectDown, matchesSelectUp, pickerNavigationKey } from "../keybinding-matchers";
 import { ChatTranscriptBuilder } from "../chat/chat-transcript-builder";
 import { TranscriptBrowser, type TranscriptBrowserFrame } from "../chat/transcript-browser";
 import { padToWidth } from "../render/utils";
@@ -233,7 +233,8 @@ export class RewindSelectorComponent implements Component {
 	// Input
 	// ========================================================================
 
-	handleInput(data: string): void {
+	handleInput(rawData: string): void {
+		const data = this.#filter === undefined ? pickerNavigationKey(rawData) : rawData;
 		if (data.startsWith("\x1b[<")) {
 			routeSgrMouseInput(data, event => {
 				if (event.wheel !== null) {
@@ -253,7 +254,7 @@ export class RewindSelectorComponent implements Component {
 			this.deps.onCancel();
 			return;
 		}
-		if (matchesKey(data, "f")) {
+		if (matchesKey(rawData, "f") || matchesKey(rawData, "i")) {
 			this.#filter = "";
 			this.#activeVariant = 0;
 			this.#siblingSelected = 0;
@@ -494,7 +495,7 @@ export class RewindSelectorComponent implements Component {
 				anchor: this.#outlineAnchor(composed),
 			},
 			footer: [
-				theme.fg("dim", `${position}↑/↓ step  ${lateral}  f filter  enter rewind  ctrl+o expand  esc cancel`),
+				theme.fg("dim", `${position}hjkl/↑/↓ step  ${lateral}  i/f filter  enter rewind  ctrl+o expand  esc cancel`),
 			],
 		};
 	}

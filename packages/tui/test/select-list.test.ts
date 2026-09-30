@@ -236,7 +236,7 @@ describe("SelectList", () => {
 		expect(selectedValue).toBe("run");
 	});
 
-	it("fuzzy-filters overflowing lists from typed input", () => {
+	it("filters only after i, keeps hjkl literal in insert mode, and Esc then closes", () => {
 		const items = [
 			{ value: "ollama", label: "Ollama" },
 			{ value: "kagi", label: "Kagi" },
@@ -245,6 +245,24 @@ describe("SelectList", () => {
 		];
 		const list = new SelectList(items, 3, testTheme);
 
+		let cancelled = 0;
+		list.onCancel = () => cancelled++;
+		list.handleInput("j");
+		expect(list.getSelectedItem()?.value).toBe("kagi");
+		list.handleInput("k");
+		expect(list.getSelectedItem()?.value).toBe("ollama");
+		list.handleInput("i");
+		list.handleInput("o");
+		list.handleInput("g");
+		for (const key of "hjkl") list.handleInput(key);
+		expect(list.debugState().filterText).toBe("oghjkl");
+		list.handleInput("\x1b");
+		expect(cancelled).toBe(0);
+		expect(list.debugState().filterText).toBe("oghjkl");
+		list.handleInput("\x1b");
+		expect(cancelled).toBe(1);
+		list.setFilter("");
+		list.handleInput("i");
 		list.handleInput("o");
 		list.handleInput("g");
 

@@ -2,6 +2,7 @@ import { popLoopPhase, pushLoopPhase } from "@oh-my-pi/pi-utils";
 import { getMenuWindow, MenuSelection } from "./menu-selection";
 import { getKeybindings } from "../keybindings";
 import { extractPrintableText, matchesKey } from "../keys";
+import { pickerNavigationKey } from "../keybinding-matchers";
 import { type MouseRoutable, routeSelectListMouse, type SgrMouseEvent } from "../mouse";
 import type { SymbolTheme } from "../symbols";
 import type { Component } from "../tui";
@@ -153,6 +154,7 @@ export class SelectList implements Component, MouseRoutable {
 	#hoveredIndex: number | null = null;
 	/** Per-render map of 0-based output line → filtered-item index. */
 	#hitRows: (number | undefined)[] = [];
+	#filterEditing = false;
 
 	onSelect?: (item: SelectItem) => void;
 	onCancel?: () => void;
@@ -349,14 +351,27 @@ export class SelectList implements Component, MouseRoutable {
 		return lines;
 	}
 
-	handleInput(keyData: string): void {
+	handleInput(rawData: string): void {
 		const kb = getKeybindings();
-		if (kb.matches(keyData, "tui.select.cancel")) {
-			if (!this.#selection.cancelConfirmation()) this.onCancel?.();
-			return;
+		if (this.#filterEditing) {
+			if (kb.matches(rawData, "tui.select.cancel")) {
+				this.#filterEditing = false;
+				return;
+			}
+			if (this.#handleSearchInput(rawData)) return;
+			if (extractPrintableText(rawData) !== undefined) return;
+		} else {
+			if (this.#canEditSearch() && matchesKey(rawData, "i")) {
+				this.#filterEditing = true;
+				return;
+			}
+			if (kb.matches(rawData, "tui.select.cancel")) {
+				if (!this.#selection.cancelConfirmation()) this.onCancel?.();
+				return;
+			}
+			if (pickerNavigationKey(rawData) === rawData && (extractPrintableText(rawData) !== undefined || matchesKey(rawData, "backspace"))) return;
 		}
-
-		if (this.#handleSearchInput(keyData)) return;
+		const keyData = this.#filterEditing ? rawData : pickerNavigationKey(rawData);
 		if (this.#selection.visibleItems.length === 0) return;
 
 		let selectionChanged = false;
@@ -586,7 +601,11 @@ export class SelectList implements Component, MouseRoutable {
 			this.layout.statusText !== undefined
 				? (custom ?? "")
 				: (pendingItem?.confirmation ??
-					(query ? `  Search: ${query}` : this.#canEditSearch() ? "  Type to search" : ""));
+					(query
+						? `  Search: ${query}${this.#filterEditing ? " (INSERT · Esc normal)" : ""}`
+						: this.#canEditSearch()
+							? `  ${this.#filterEditing ? "INSERT · Esc normal" : "i filter · hjkl navigate"}`
+							: ""));
 		return this.theme.scrollInfo(truncateToWidth(statusText, Math.max(1, width - 2), Ellipsis.Omit));
 	}
 

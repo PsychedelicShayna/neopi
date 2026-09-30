@@ -24,6 +24,7 @@ import {
 	matchesSelectCancel,
 	matchesSelectDown,
 	matchesSelectUp,
+	pickerNavigationKey,
 } from "../keybinding-matchers";
 import { CountdownTimer } from "../chrome/countdown-timer";
 import { OverlayPanel } from "../chrome/overlay-box";
@@ -162,6 +163,7 @@ type FilteredOption = { option: HookSelectorOption; index: number };
 export class HookSelectorComponent extends OverlayPanel {
 	#options: HookSelectorOption[];
 	#menu: MenuSelection<FilteredOption>;
+	#filterEditing = false;
 	#disabledIndices: Set<number>;
 	#selectionMarker: "radio" | "checkbox" | undefined;
 	#checkedIndices: Set<number>;
@@ -532,7 +534,9 @@ export class HookSelectorComponent extends OverlayPanel {
 			this.#menu.query.trim() && total !== this.#options.length
 				? `${selectedCount}/${total} of ${this.#options.length}`
 				: `${selectedCount}/${total}`;
-		const suffix = this.#menu.query.trim() ? `  Search: ${this.#menu.query}` : "  Type to search";
+		const suffix = this.#menu.query.trim()
+			? `  Search: ${this.#menu.query}${this.#filterEditing ? " (INSERT · Esc normal)" : ""}`
+			: this.#filterEditing ? "  INSERT filter · Esc normal" : "  i filter · hjkl navigate";
 		return theme.fg("dim", `  (${count})${suffix}`);
 	}
 
@@ -577,42 +581,43 @@ export class HookSelectorComponent extends OverlayPanel {
 		return true;
 	}
 
-	handleInput(keyData: string): void {
+	handleInput(rawData: string): void {
 		if (this.#countdown) {
 			this.#countdown.reset();
 			this.#onTimeoutResetCallback?.();
 		}
-
-		if (matchesSelectCancel(keyData)) {
-			this.#onCancelCallback();
-			return;
+		if (this.#filterEditing) {
+			if (matchesSelectCancel(rawData)) {
+				this.#filterEditing = false;
+				this.#updateList();
+				return;
+			}
+			if (this.#handleSearchInput(rawData)) return;
+			if (extractPrintableText(rawData) !== undefined) return;
+		} else {
+			if (this.#isSearchEnabled() && matchesKey(rawData, "i")) {
+				this.#filterEditing = true;
+				this.#updateList();
+				return;
+			}
+			if (matchesSelectCancel(rawData)) {
+				this.#onCancelCallback();
+				return;
+			}
+			if (this.#handleQuickSelect(rawData)) return;
 		}
-
-		if (this.#handleQuickSelect(keyData)) {
-			return;
-		}
-
-		if (this.#handleSearchInput(keyData)) {
-			return;
-		}
-
-		if (matchesSelectUp(keyData) || (!this.#isSearchEnabled() && matchesKey(keyData, "k"))) {
+		const keyData = this.#filterEditing ? rawData : pickerNavigationKey(rawData);
+		if (matchesSelectUp(keyData)) {
 			this.#moveSelection(-1);
-		} else if (matchesSelectDown(keyData) || (!this.#isSearchEnabled() && matchesKey(keyData, "j"))) {
+		} else if (matchesSelectDown(keyData)) {
 			this.#moveSelection(1);
 		} else if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
 			const selected = this.#menu.selectedItem;
 			if (selected && !this.#menu.isDisabled(selected)) this.#onSelectCallback(selected.option.label);
-		} else if (
-			matchesKey(keyData, "left") ||
-			(this.#slider && !this.#isSearchEnabled() && matchesKey(keyData, "h"))
-		) {
+		} else if (matchesKey(keyData, "left")) {
 			if (this.#slider) this.#moveSlider(-1);
 			else this.#onLeftCallback?.();
-		} else if (
-			matchesKey(keyData, "right") ||
-			(this.#slider && !this.#isSearchEnabled() && matchesKey(keyData, "l"))
-		) {
+		} else if (matchesKey(keyData, "right")) {
 			if (this.#slider) this.#moveSlider(1);
 			else this.#onRightCallback?.();
 		} else if (this.#onExternalEditorCallback && matchesAppExternalEditor(keyData)) {
