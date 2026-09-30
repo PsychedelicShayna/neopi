@@ -123,9 +123,26 @@
 
 ## Semantic re-seats
 
+- Grouped queue/entry ID: removed user messages release reserved IDs; the extracted RPC handler again implements `remove_queued_message` and `get_state.queuedMessages`. The focused RPC and session tests pass.
+- Extracted RPC command handler: the lost removal arm was a real integration regression, repaired in `d07a1c77cd`; the client tests exercise validation, removal, queue updates and surviving delivery.
+- Native TODO/side panel: native rendering selects the same active phase as the fork side panel; focused side-panel tests pass.
+- Live controller: its fork implementation and live command controller have no content delta from `8b951f7204`; the inspected operator text and speech routes retained their existing dispatch. Focused live tests pass.
+
+
 ## Verification
 
+- `bun --cwd=packages/natives run build`: passed; regenerated and committed `native/index.d.ts`.
+- `bun --cwd=packages/{utils,catalog,ai,natives,tui,agent,coding-agent,stats,collab-web} run check:types` (sequential loop): all nine passed.
+- Focused TUI picker/agents/chain/composer tests: 79 passed; focused coding-agent queue/RPC/classifier/live/side-panel tests: 95 passed.
+- `bun --cwd=packages/utils run test`: 757 passed, 3 skipped; an initially failing stderr-rotation probe used the upstream `omp` filename against the fork `npi` logger, fixed and rerun successfully in `6e29cbc094`.
+- `bun packages/coding-agent/src/cli.ts --version`: `npi/18.4.4`.
+- Remaining validation after this 200-request handoff: run the package test scripts for catalog, ai, natives, tui, agent, coding-agent, stats and collab-web; diagnose each failure against the merge, and only label it pre-existing with proof on `8b951f7204`. Recheck type-check if further code changes. All conflict resolutions, merge and ledger commits, and four post-merge repairs have verified signatures.
+
+
 ## Line-anchor delta for vocal-ingest planning
+
+- `local://upstream-anchor-delta.md` maps requested live/advisor/registry/task/settings symbols from `8b951f7204` to merged paths and lines.
+
 
 ## Review gate
 
