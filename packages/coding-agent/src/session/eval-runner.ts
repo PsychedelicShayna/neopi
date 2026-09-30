@@ -40,10 +40,9 @@ export class EvalRunner {
 	#activeExecutions = new Set<Promise<unknown>>();
 	#disposing = false;
 
-	constructor(host: EvalRunnerHost, options: { kernelOwnerId: string; parentSessionId: string | undefined }) {
+	constructor(host: EvalRunnerHost, options: { kernelOwnerId: string }) {
 		this.#host = host;
 		this.#kernelOwnerId = options.kernelOwnerId;
-		this.#parentSessionId = options.parentSessionId;
 	}
 
 	async execute(

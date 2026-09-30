@@ -12,6 +12,7 @@ describe("AdvisorConfigOverlayComponent", () => {
 		getDefaultSystemPrompt: () => "Bundled advisor baseline",
 		getAvailableModels: () => [],
 		browserSource: {
+			revision: 0,
 			defaultThinkingLevel: "high",
 			modelProviderOrder: [],
 			knownRoleIds: [],
