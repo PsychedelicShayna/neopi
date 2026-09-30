@@ -284,6 +284,29 @@ describe("WATCHDOG.yml file round-trip", () => {
 		const loaded = await loadWatchdogConfigFile(file);
 		expect(loaded).toEqual(doc);
 	});
+	it("persists each advisor's thinking preference through discovery and editor saves", async () => {
+		const file = path.join(tmp, "WATCHDOG.yml");
+		const original: WatchdogConfigDoc = {
+			advisors: [
+				{ name: "Reasoning", includeThinking: true },
+				{ name: "Output only", includeThinking: false },
+				{ name: "Default" },
+			],
+		};
+		await saveWatchdogConfigFile(file, original);
+		expect((await loadWatchdogConfigFile(file)).advisors).toEqual(original.advisors);
+		const discovered = await discoverAdvisorConfigs(tmp, tmp);
+		expect(discovered.advisors.map(advisor => advisor.includeThinking)).toEqual([true, false, undefined]);
+
+		const edited = await loadWatchdogConfigFile(file);
+		edited.advisors[2]!.includeThinking = false;
+		await saveWatchdogConfigFile(file, edited);
+		expect((await loadWatchdogConfigFile(file)).advisors.map(advisor => advisor.includeThinking)).toEqual([
+			true,
+			false,
+			false,
+		]);
+	});
 
 	it("keeps the previous complete WATCHDOG file visible until the replacement is published", async () => {
 		const file = path.join(tmp, "WATCHDOG.yml");

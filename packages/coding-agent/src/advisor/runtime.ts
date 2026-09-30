@@ -86,6 +86,8 @@ export interface AdvisorRuntimeHost {
 	 *  recovery (credential switch, fallback chain) declined. Cleared only by
 	 *  an explicit reset (`/new`, config rebuild, session restart). */
 	notifyQuotaExhausted?(): void;
+	/** Per-advisor roster preference; omitted keeps primary thinking visible. */
+	includeThinking?: boolean;
 	/** Stable identity for the live advisor model. Used to restore full transcript rendering after a model switch. */
 	getModelIdentity?(): string;
 	/** Called once the runtime finishes draining its review backlog (or
@@ -295,7 +297,7 @@ export class AdvisorRuntime {
 	 * terminal turn ends the cascade, or on reset, so a later refusal starts fresh.
 	 */
 	readonly #refusalModelsTried = new Set<string>();
-	/** Whether primary reasoning is included in advisor deltas for the current model. */
+	/** Refusal recovery can suppress reasoning temporarily; roster preference remains authoritative. */
 	#includeThinking = true;
 	#modelIdentity: string | undefined;
 	/** Completed 3-failure backlog-drop cycles since the last success/reset. */
@@ -339,7 +341,9 @@ export class AdvisorRuntime {
 		private readonly agent: AdvisorAgent,
 		private readonly host: AdvisorRuntimeHost,
 		private readonly retryDelayMs = 1000,
-	) {}
+	) {
+		this.#includeThinking = host.includeThinking !== false;
+	}
 
 	get backlog(): number {
 		return this.#backlog;
@@ -670,7 +674,7 @@ export class AdvisorRuntime {
 		const identity = this.host.getModelIdentity?.();
 		if (identity === undefined || identity === this.#modelIdentity) return;
 		this.#modelIdentity = identity;
-		this.#includeThinking = true;
+		this.#includeThinking = this.host.includeThinking !== false;
 	}
 
 	// Candidate 4 (multi-message split): render the Session update as MULTIPLE
@@ -773,6 +777,7 @@ export class AdvisorRuntime {
 		const probeMd = formatSessionHistoryMarkdown(delta, {
 			...ADVISOR_RENDER_OPTIONS,
 			includeThinking: this.#includeThinking,
+			wrapPrimaryThinking: true,
 		});
 		if (obfuscator?.hasSecrets()) {
 			this.#collectAdvisorSecrets(obfuscator, delta, probeMd);
@@ -839,6 +844,7 @@ export class AdvisorRuntime {
 		let md = formatSessionHistoryMarkdown(delta, {
 			...ADVISOR_RENDER_OPTIONS,
 			includeThinking: this.#includeThinking,
+			wrapPrimaryThinking: true,
 		});
 		if (!md.trim()) return null;
 		if (obfuscator?.hasSecrets()) {
@@ -846,6 +852,7 @@ export class AdvisorRuntime {
 			md = formatSessionHistoryMarkdown(this.#obfuscatePrimaryContextMessages(obfuscator, delta), {
 				...ADVISOR_RENDER_OPTIONS,
 				includeThinking: this.#includeThinking,
+				wrapPrimaryThinking: true,
 				transformExpandedToolIO: text => obfuscator.obfuscate(text, this.#advisorRegexSecretValues),
 			});
 			md = obfuscator.obfuscate(md, this.#advisorRegexSecretValues);

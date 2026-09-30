@@ -686,6 +686,24 @@ describe("AgentSession advisor toggle", () => {
 		expect(restarted).not.toBe(alpha);
 		expect(restarted?.state.systemPrompt.join("\n")).toContain("Watch naming.");
 	});
+	it("rebuilds only the advisor whose reasoning preference changes and updates its default prompt", () => {
+		enableAdvisor();
+		session.applyAdvisorConfigs([{ name: "Alpha" }, { name: "Beta" }], undefined);
+		const visible = session.getAdvisorAgent();
+		if (!visible) throw new Error("Expected Alpha advisor");
+		expect(visible.state.systemPrompt.join("\n")).toContain("Primary thinking is provisional");
+
+		session.applyAdvisorConfigs([{ name: "Alpha", includeThinking: false }, { name: "Beta" }], undefined);
+		const hidden = session.getAdvisorAgent();
+		expect(hidden).not.toBe(visible);
+		expect(hidden?.state.systemPrompt.join("\n")).not.toContain("Primary thinking is provisional");
+
+		session.applyAdvisorConfigs([{ name: "Alpha", includeThinking: false }, { name: "Beta" }], undefined);
+		expect(session.getAdvisorAgent()).toBe(hidden);
+		session.applyAdvisorConfigs([{ name: "Alpha", includeThinking: true }, { name: "Beta" }], undefined);
+		expect(session.getAdvisorAgent()).not.toBe(hidden);
+	});
+
 	it("restarts every advisor when shared instructions change", () => {
 		enableAdvisor();
 		session.applyAdvisorConfigs([{ name: "Alpha" }], "Be brief.");

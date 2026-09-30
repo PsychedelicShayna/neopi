@@ -285,6 +285,7 @@ advisors:
     enabled: true
     model: anthropic/claude-sonnet-4-5:medium
     tools: [read, grep, glob]
+    includeThinking: false
     instructions: |
       Watch cross-module coupling and public-API growth.
 
@@ -302,12 +303,15 @@ Fields:
 - `advisors[].name`: human label; slugified for the session id and its `__advisor.<slug>.jsonl` filename. Duplicate slugs across files are resolved by the same specificity rule as `WATCHDOG.md` discovery (project leaf > project ancestor > user).
 - `advisors[].enabled`: optional per-advisor switch, default `true`. `false` leaves the advisor visible as paused in status/configuration.
 - `advisors[].model`: optional model selector with optional `:level` thinking suffix (e.g. `x-ai/grok-code-fast:high`). Omitted → the advisor uses `modelRoles.advisor`.
+- `advisors[].includeThinking`: optional **Read primary reasoning stream** switch, default `true`. `false` omits stored primary thinking from this advisor's updates while retaining assistant text and tool calls/results. When enabled, readable thinking arrives in escaped `<primary-thinking>` blocks as provisional reasoning; provider-redacted or unstored reasoning is never forwarded. This does not affect the human thinking display.
 - `advisors[].tools`: optional list of built-in tool names to grant. Omitted → the default `read`/`grep`/`glob` subset; explicit `[]` → no investigative tools. Any name in [`BUILTIN_TOOL_NAMES`](../packages/coding-agent/src/tools/builtin-names.ts) is accepted, including mutating tools. Legacy aliases (`search`→`grep`, `find`→`glob`) are normalized. Unknown names are dropped with a warning; if that leaves a nonempty input with no valid names, the implementation currently treats the result as omitted and uses the default subset.
 - `maxNotesPerUpdate` (top level or per advisor): accepted non-blocker notes per prompt update, default `4`. A per-advisor value overrides the top-level value, which overrides the `advisor.maxNotesPerUpdate` setting.
 - `advisors[].instructions`: this advisor's specialization, appended after the shared baseline. Both instruction fields expand `@path` imports like `WATCHDOG.md`.
 - `advisors[].systemPrompt`: optional literal base prompt that replaces the bundled advisor system prompt. Project context, memory instructions, `WATCHDOG.md`, shared instructions, and per-advisor instructions still append in their normal order. Omitted uses the bundled default; an explicit empty string is an empty base, not a reset. Unlike the instruction fields, this field does not expand `@path` imports.
 
-In `/advisor configure`, open an advisor and select **System prompt**, directly below **Instructions**. Enter opens the shared multiline editor, prefilled with the current override or the bundled default. Ctrl+G opens your external editor; Ctrl+Q / Ctrl+Enter accepts the text, and Esc cancels without changing the override. Backspace while **System prompt** is highlighted in the list clears the override; Backspace inside the editor only edits text. **Save & apply** persists the change and rebuilds the live advisors. Clearing removes `systemPrompt` from the saved YAML.
+In `/advisor configure`, open an advisor to toggle **Read primary reasoning stream** next to **Enabled**. For the implicit default advisor, turning this off saves a roster entry; untouched defaults are not written. Changes apply to the live advisor on **Save & apply**, without `/new`.
+
+Select **System prompt** below **Instructions** to edit the base prompt. Enter opens the shared multiline editor, prefilled with the current override or the bundled default. Ctrl+G opens your external editor; Ctrl+Q / Ctrl+Enter accepts the text, and Esc cancels without changing the override. Backspace while **System prompt** is highlighted in the list clears the override; Backspace inside the editor only edits text. **Save & apply** persists the change and rebuilds the live advisors. Clearing removes `systemPrompt` from the saved YAML.
 
 Saves stage and sync the complete `WATCHDOG.yml` beside its destination,
 then publish it under the existing file lock. Readers see either the previous

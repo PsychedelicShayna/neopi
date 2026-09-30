@@ -997,6 +997,7 @@ export class SessionAdvisors {
 			tools,
 			instructions,
 			JSON.stringify(config.systemPrompt ?? null),
+			config.includeThinking !== false,
 			budget,
 			this.#advisorSharedInstructions ?? "",
 			this.#advisorWatchdogPrompt ?? "",
@@ -1112,7 +1113,10 @@ export class SessionAdvisors {
 				config.systemPrompt ??
 					(this.#chatMode
 						? renderChatAdvisorPrompt(this.#chatMode, budgetPerUpdate)
-						: prompt.render(advisorSystemPrompt, { max_notes_per_update: budgetPerUpdate })),
+						: prompt.render(advisorSystemPrompt, {
+								max_notes_per_update: budgetPerUpdate,
+								include_thinking: config.includeThinking !== false,
+							})),
 			];
 			if (this.#advisorContextPrompt) systemPrompt.push(this.#advisorContextPrompt);
 			if (this.#advisorMemoryPrompt) systemPrompt.push(this.#advisorMemoryPrompt);
@@ -1415,6 +1419,7 @@ export class SessionAdvisors {
 				maintainContext: (incoming, signal) => this.#maintainAdvisorContext(advisorRef, incoming, signal),
 				obfuscator: this.#host.obfuscator(),
 				getModelIdentity: () => formatModelString(advisorRef.agent.state.model),
+				includeThinking: config.includeThinking,
 				beginAdvisorUpdate: () => {
 					advisorRef.recorder.beginTurn();
 					// A model stop is provisional until the primary session finishes
