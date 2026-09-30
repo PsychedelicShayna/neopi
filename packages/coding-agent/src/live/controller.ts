@@ -100,6 +100,8 @@ export interface LiveSessionControllerOptions {
 	callbacks: LiveSessionCallbacks;
 	/** Extracts visible assistant text using the caller's normal UI rules. */
 	extractAssistantText(message: AssistantMessage): string;
+	/** Ingest seam: returns a transformed crew IRC body, or suppresses it. */
+	ircRelayTransform?: (message: CustomMessage, body: string) => string | undefined;
 	/** Realtime output voice, defaulting to sol. */
 	voice?: string;
 	blockDelegateKeyword?: string;
@@ -178,6 +180,7 @@ export class LiveSessionController {
 	readonly #voice: string;
 	readonly #speakableIdleMs: number;
 	readonly #blockDelegateKeyword: string;
+	readonly #ircRelayTransform: (message: CustomMessage, body: string) => string | undefined;
 
 	readonly #createTransport: (options: ConstructorParameters<typeof CodexLiveTransport>[0]) => LiveTransportLike;
 	readonly #createRecorder: (
@@ -285,6 +288,7 @@ export class LiveSessionController {
 		this.#extractAssistantText = options.extractAssistantText;
 		this.#voice = options.voice?.trim() || DEFAULT_LIVE_VOICE;
 		this.#blockDelegateKeyword = options.blockDelegateKeyword ?? "";
+		this.#ircRelayTransform = options.ircRelayTransform ?? ((_, body) => body);
 		const speakableIdleMs = options.speakableIdleMs;
 		this.#speakableIdleMs =
 			typeof speakableIdleMs === "number" && Number.isFinite(speakableIdleMs) && speakableIdleMs >= 0
@@ -874,13 +878,15 @@ export class LiveSessionController {
 
 	/** Fleet feed: relay a crew IRC message onto the speakable channel for background awareness. */
 	#relayCrewMessage(message: CustomMessage): void {
-		const details = message.details as { from?: string; message?: string } | undefined;
+		const details = message.details as { from?: string; to?: string; message?: string; body?: string } | undefined;
 		const from = details?.from?.trim() || "unknown crew";
-		const body = details?.message?.trim() ?? "";
+		// `irc:incoming` carries `message`; the peer relay card (`irc:relay`) carries `body`.
+		const raw = (details?.message ?? details?.body ?? "").trim();
+		if (!raw) return;
+		const body = this.#ircRelayTransform(message, raw);
 		if (!body) return;
-		// Headline-sized: the operator reads the full text in the TUI; the voice
-		// surface only needs enough to narrate the development.
-		this.#appendSpeakable(`Crew report from ${from}: ${body}`);
+		const to = message.customType === "irc:relay" ? details?.to?.trim() : undefined;
+		this.#appendSpeakable(to ? `Crew relay from ${from} to ${to}: ${body}` : `Crew report from ${from}: ${body}`);
 	}
 
 	/**

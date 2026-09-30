@@ -122,6 +122,7 @@ function makeHarness(options?: {
 	dropAudio?: boolean;
 	playbackQueue?: { queuedMs: number; droppedMs: number };
 	blockDelegateKeyword?: string;
+	ircRelayTransform?: (message: import("../src/session/messages").CustomMessage, body: string) => string | undefined;
 }): Harness {
 	const sent: LiveClientMessage[] = [];
 	const aborts: Array<Record<string, unknown>> = [];
@@ -229,6 +230,7 @@ function makeHarness(options?: {
 		...(options?.speakableIdleMs !== undefined ? { speakableIdleMs: options.speakableIdleMs } : {}),
 		...(options?.thinkingFlushMs !== undefined ? { thinkingFlushMs: options.thinkingFlushMs } : {}),
 		blockDelegateKeyword: options?.blockDelegateKeyword,
+		ircRelayTransform: options?.ircRelayTransform,
 		extractAssistantText: message => (message as unknown as { testText?: string }).testText ?? "",
 		createTransport: transportOptions => {
 			liveCallbacks = transportOptions.callbacks;
@@ -996,6 +998,35 @@ describe("live controller delegation ownership", () => {
 		expect(texts).toEqual(["Crew report from Helios: build is green"]);
 		// No active delegation: must ride the session-level append, not a stale delegation id.
 		expect(h.sent.some(m => m.type === "session.context.append" && m.channel === "speakable")).toBe(true);
+	});
+
+	it("relays the peer IRC body once with sender and recipient attribution", async () => {
+		const h = makeHarness();
+		await h.controller.start();
+		h.fireSession({
+			type: "irc_message",
+			message: {
+				role: "custom", customType: "irc:relay", content: "", display: true,
+				details: { from: "A", to: "B", body: "x" }, attribution: "agent", timestamp: 1,
+			},
+		} as unknown as AgentSessionEvent);
+		await settle();
+		expect(speakableTexts(h.sent)).toEqual(["Crew relay from A to B: x"]);
+	});
+
+	it("ignores empty crew cards and lets the IRC transform suppress or replace a body", async () => {
+		const suppressed = makeHarness({ ircRelayTransform: () => undefined });
+		await suppressed.controller.start();
+		suppressed.fireSession(crewMessage("empty", "A", ""));
+		suppressed.fireSession(crewMessage("suppressed", "A", "x"));
+		await settle();
+		expect(speakableTexts(suppressed.sent)).toEqual([]);
+
+		const replaced = makeHarness({ ircRelayTransform: (_message, _body) => "y" });
+		await replaced.controller.start();
+		replaced.fireSession(crewMessage("replaced", "A", "x"));
+		await settle();
+		expect(speakableTexts(replaced.sent)).toEqual(["Crew report from A: y"]);
 	});
 
 	it("sends typed operator text immediately: addressed to the voice agent, or as silent commentary when shared", async () => {
