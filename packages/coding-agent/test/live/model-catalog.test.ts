@@ -13,7 +13,7 @@ const slot = (recommendation: string | null) => ({
 });
 const fixture = (recommendation: string | null = "never") => JSON.stringify({
 	schemaVersion: 1,
-	effortLevels: ["low", "medium", "high", "xhigh", "max"],
+	effortLevels: ["minimal", "low", "medium", "high", "xhigh", "max"],
 	metrics: Object.fromEntries(["economy", "performance", "stability", "speed"].map(metric =>
 		[metric, { scale: "0-5", meaning: "Operator rating" }])),
 	models: {

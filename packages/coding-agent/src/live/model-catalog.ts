@@ -37,7 +37,7 @@ export function expandCatalogPath(path: string): string {
 	return path === "~" ? homedir() : path.startsWith("~/") ? `${homedir()}${path.slice(1)}` : path;
 }
 
-const effortLevels = ["low", "medium", "high", "xhigh", "max"];
+const effortLevels = ["minimal", "low", "medium", "high", "xhigh", "max"];
 const recommendations = new Set<CatalogRecommendation>([null, "recommended", "ok", "avoid", "never"]);
 const isObject = (value: unknown): value is Record<string, unknown> =>
 	typeof value === "object" && value !== null && !Array.isArray(value);
