@@ -130,7 +130,7 @@ function createAsyncSession(
 	};
 
 	const session = {
-		...createSessionDefaults(),
+		...createSessionDefaults(emit),
 		state,
 		agent: { state: { systemPrompt: ["test"] } },
 		model: undefined,

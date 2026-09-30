@@ -169,7 +169,7 @@ function createScriptedSession(
 	const emittedGate = Promise.withResolvers<void>();
 	let aborted = false;
 	const session = {
-		...createSessionDefaults(),
+		...createSessionDefaults(emit),
 		state: { messages: [] },
 		agent: { state: { systemPrompt: ["test"] } },
 		model: undefined,

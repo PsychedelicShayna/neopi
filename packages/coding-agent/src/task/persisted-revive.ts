@@ -256,6 +256,7 @@ export function createPersistedSubagentReviverFactory(
 				};
 				attachIrcWakeTurnMonitor(session, {
 					id: ref.id,
+					taskDepth,
 					agent: wakeAgent,
 					eventBus: ctx.eventBus,
 					subagentEventBus: ctx.subagentEventBus,

@@ -25,6 +25,7 @@ import {
 	type UserMessage,
 	validateToolArguments,
 } from "@oh-my-pi/pi-ai";
+import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
 import {
 	type Dialect,
 	encodeInbandToolHistory,
@@ -77,6 +78,7 @@ import { createAdditionalContextMessage, isNonBlankContext, joinAdditionalContex
 import type {
 	AgentContext,
 	AgentEvent,
+	AgentRequestAttribution,
 	AgentLoopConfig,
 	AgentMessage,
 	AgentPreModelCallResult,
@@ -1997,6 +1999,15 @@ async function streamAssistantResponse(
 	const effectiveToolChoice = ownedDialect ? undefined : (hostToolChoice ?? forcedToolChoice ?? config.toolChoice);
 	const effectiveReasoning = dynamicReasoning ?? config.reasoning;
 	const effectiveDisableReasoning = dynamicDisableReasoning ?? config.disableReasoning;
+	// Capture after dynamic selectors are read, once per provider request. A
+	// later live effort switch must not re-label this request's delayed output.
+	const requestAttribution = {
+		requestModelProvider: model.provider,
+		requestModelId: model.id,
+		requestReasoning: effectiveReasoning,
+		requestDisableReasoning: effectiveDisableReasoning,
+		requestEffectiveThinkingLevel: effectiveDisableReasoning ? undefined : clampThinkingLevelForModel(model, effectiveReasoning),
+	} as const;
 	// `getCwd` is read once per LLM call so a mid-run session move (`/move`) reaches
 	// workspace-scoped provider discovery; falls back to the static `cwd` when unset.
 	const effectiveCwd = config.getCwd?.() ?? config.cwd;
@@ -2124,6 +2135,7 @@ async function streamAssistantResponse(
 					config,
 					stream,
 					requestSignal,
+					requestAttribution,
 				);
 				await finishChat(aborted);
 				return aborted;
@@ -2233,9 +2245,9 @@ async function streamAssistantResponse(
 							context.messages.push(finalMessage);
 						}
 						if (!addedPartial) {
-							stream.push({ type: "message_start", message: snapshotAssistantMessage(finalMessage) });
+							stream.push({ type: "message_start", message: snapshotAssistantMessage(finalMessage), ...requestAttribution });
 						}
-						stream.push({ type: "message_end", message: snapshotAssistantMessage(finalMessage) });
+						stream.push({ type: "message_end", message: snapshotAssistantMessage(finalMessage), ...requestAttribution });
 						await finishChat(finalMessage);
 						speculationSettled = true;
 						providerStreamSettled = true;
@@ -2310,6 +2322,7 @@ async function streamAssistantResponse(
 								openBlocks.clear();
 								stream.push({
 									type: "message_update",
+									...requestAttribution,
 									assistantMessageEvent: snapshotAssistantMessageEvent(event, messageSnapshot),
 									message: messageSnapshot,
 								});
@@ -2317,7 +2330,7 @@ async function streamAssistantResponse(
 								context.messages.push(partialMessage);
 								addedPartial = true;
 								turnSnapshot = snapshotAssistantMessage(partialMessage);
-								stream.push({ type: "message_start", message: turnSnapshot });
+								stream.push({ type: "message_start", message: turnSnapshot, ...requestAttribution });
 							}
 							break;
 
@@ -2425,6 +2438,7 @@ async function streamAssistantResponse(
 								turnSnapshot = messageSnapshot;
 								stream.push({
 									type: "message_update",
+									...requestAttribution,
 									assistantMessageEvent: snapshotAssistantMessageEvent(event, messageSnapshot),
 									message: messageSnapshot,
 								});
@@ -2507,9 +2521,9 @@ async function streamAssistantResponse(
 					context.messages[context.messages.length - 1] = trailing;
 				} else {
 					context.messages.push(trailing);
-					stream.push({ type: "message_start", message: snapshotAssistantMessage(trailing) });
+					stream.push({ type: "message_start", message: snapshotAssistantMessage(trailing), ...requestAttribution });
 				}
-				stream.push({ type: "message_end", message: snapshotAssistantMessage(trailing) });
+				stream.push({ type: "message_end", message: snapshotAssistantMessage(trailing), ...requestAttribution });
 				await finishChat(trailing);
 				speculationSettled = true;
 				providerStreamSettled = true;
@@ -2670,6 +2684,7 @@ function emitAbortedAssistantMessage(
 	config: AgentLoopConfig,
 	stream: EventStream<AgentEvent, AgentMessage[]>,
 	requestSignal: AbortSignal | undefined,
+	requestAttribution: AgentRequestAttribution,
 ): AssistantMessage {
 	const model = config.getModel?.() ?? config.model;
 	const errorMessage = abortReasonText(requestSignal);
@@ -2712,9 +2727,9 @@ function emitAbortedAssistantMessage(
 		context.messages[context.messages.length - 1] = abortedMessage;
 	} else {
 		context.messages.push(abortedMessage);
-		stream.push({ type: "message_start", message: snapshotAssistantMessage(abortedMessage) });
+		stream.push({ type: "message_start", message: snapshotAssistantMessage(abortedMessage), ...requestAttribution });
 	}
-	stream.push({ type: "message_end", message: snapshotAssistantMessage(abortedMessage) });
+	stream.push({ type: "message_end", message: snapshotAssistantMessage(abortedMessage), ...requestAttribution });
 	return abortedMessage;
 }
 

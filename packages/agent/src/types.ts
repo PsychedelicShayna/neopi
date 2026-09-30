@@ -1227,6 +1227,16 @@ export interface AgentContext {
  * Events emitted by the Agent for UI updates.
  * These events provide fine-grained lifecycle information for messages, turns, and tool executions.
  */
+/** Immutable selection captured for the provider call that produced an assistant event. */
+export interface AgentRequestAttribution {
+	requestModelProvider: string;
+	requestModelId: string;
+	requestReasoning?: Effort;
+	requestDisableReasoning?: boolean;
+	/** Model-clamped tier from this request, absent when disabled or unmappable. */
+	requestEffectiveThinkingLevel?: Effort;
+}
+
 export type AgentEvent =
 	// Agent lifecycle
 	| { type: "agent_start" }
@@ -1241,10 +1251,11 @@ export type AgentEvent =
 	| { type: "turn_start" }
 	| { type: "turn_end"; message: AgentMessage; toolResults: ToolResultMessage[] }
 	// Message lifecycle - emitted for user, assistant, and toolResult messages
-	| { type: "message_start"; message: AgentMessage }
+	| ({ type: "message_start"; message: AgentMessage } & Partial<AgentRequestAttribution>)
 	// Only emitted for assistant messages during streaming
-	| { type: "message_update"; message: AgentMessage; assistantMessageEvent: AssistantMessageEvent }
-	| { type: "message_end"; message: AgentMessage }
+	| ({ type: "message_update"; message: AgentMessage; assistantMessageEvent: AssistantMessageEvent } &
+			Partial<AgentRequestAttribution>)
+	| ({ type: "message_end"; message: AgentMessage } & Partial<AgentRequestAttribution>)
 	// Tool execution lifecycle
 	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: any; intent?: string }
 	| { type: "tool_execution_update"; toolCallId: string; toolName: string; args: any; partialResult: any }
