@@ -8,6 +8,7 @@
 
 ### Added
 
+- Added opt-in `re:` regular expressions for model selectors across scopes, effort rules, role and subagent model selection, and retry fallback chain keys and entries. Existing literal and glob selectors retain their behavior; malformed expressions produce configuration warnings and are skipped. (#208)
 - Added a same-user control socket on every running session (`npi ctl`, the `ctl` tool). An orchestrator can submit, steer, run slash commands and keybinding actions, and answer mounted dialogs in the on-screen pane. A concurrent human edit wins: the draft is left alone and the pane shows `⌁ backed off`. Tool approvals from the socket stay with the pane unless `control.approvals` is on. (#171)
 - Added `OMP_BUILD_BYTECODE=0` for local binary builds affected by Bun bytecode startup failures.
 - Added independent, opt-in Chronicler capture with a built-in model role, per-session sourced markdown beats, bounded background passes, and immutable completed-batch checkpoints that recover without crash-replay duplicates. Local memory can remain enabled; task subagents do not capture.

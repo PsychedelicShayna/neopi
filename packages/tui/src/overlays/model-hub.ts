@@ -63,9 +63,58 @@ export interface HubEffortRule {
 	allowed: Effort[];
 }
 
+/**
+ * Selector kinds the hub can author. `re:` opts a selector into a native
+ * ECMAScript regular expression; everything else keeps its existing literal or
+ * Bun-glob meaning. This mirrors the agent's `config/selector-pattern.ts`,
+ * which the TUI cannot import — the coding agent depends on this package, not
+ * the other way round.
+ */
+const REGEX_SELECTOR_PREFIX = "re:";
+
+type SelectorKind = "exact" | "glob" | "regex";
+
+function selectorKind(selector: string): SelectorKind {
+	if (selector.startsWith(REGEX_SELECTOR_PREFIX)) return "regex";
+	return /[*?[\]{}]/.test(selector) ? "glob" : "exact";
+}
+
 /** Keep the hub's exact/pattern distinction aligned with the effort-policy resolver. */
 function isPatternSelector(selector: string): boolean {
-	return /[*?[\]{}]/.test(selector);
+	return selectorKind(selector) !== "exact";
+}
+
+/** Compile a `re:` selector, keeping the engine's own message for inline validation. */
+function compileSelectorRegex(selector: string): { regex: RegExp } | { error: string } {
+	try {
+		return { regex: new RegExp(selector.slice(REGEX_SELECTOR_PREFIX.length)) };
+	} catch (error) {
+		return { error: error instanceof Error ? error.message : String(error) };
+	}
+}
+
+/** Compile once before previewing catalog models; regexes match case-sensitively. */
+function compilePatternSelectorMatcher(selector: string): (candidate: string) => boolean {
+	if (selectorKind(selector) === "regex") {
+		const compiled = compileSelectorRegex(selector);
+		return "regex" in compiled ? candidate => compiled.regex.test(candidate) : () => false;
+	}
+	const glob = new Bun.Glob(selector.toLowerCase());
+	return candidate => glob.match(candidate.toLowerCase());
+}
+
+/**
+ * Trailing tag for the pattern-entry strip: it names the kind the typed
+ * selector will be saved as and reports a bad `re:` expression while it is
+ * still being typed, so Enter is never the first sign of a broken regex.
+ */
+function patternStripHint(value: string): string {
+	if (!value) return theme.fg("dim", "glob, or re: for regex");
+	const kind = selectorKind(value);
+	if (kind !== "regex") return theme.fg("dim", kind === "glob" ? "glob" : "literal");
+	if (value.length === REGEX_SELECTOR_PREFIX.length) return theme.fg("dim", "regex");
+	const compiled = compileSelectorRegex(value);
+	return "error" in compiled ? theme.fg("error", `regex · ${compiled.error}`) : theme.fg("dim", "regex");
 }
 
 /**
@@ -1232,16 +1281,32 @@ export class ModelHubComponent implements Component {
 
 	#submitSelectorPattern(strip: Extract<StripState, { kind: "pattern" }>): void {
 		const selector = strip.input.getValue().trim();
-		if (!selector || !selector.includes("/") || selector.startsWith("/") || selector.endsWith("/")) {
-			this.#configError = "Enter a provider/model selector or provider/* pattern";
-			return;
+		if (selectorKind(selector) === "regex") {
+			// A regex selector is matched against the whole `provider/model-id`
+			// string, so neither a slash nor a provider prefix is required.
+			if (selector.length === REGEX_SELECTOR_PREFIX.length) {
+				this.#configError = "Enter a regular expression after re:";
+				return;
+			}
+			const compiled = compileSelectorRegex(selector);
+			if ("error" in compiled) {
+				// The engine's own message already reads "Invalid regular expression: …".
+				this.#configError = compiled.error;
+				return;
+			}
+		} else {
+			if (!selector || !selector.includes("/") || selector.startsWith("/") || selector.endsWith("/")) {
+				this.#configError = "Enter a provider/model selector, provider/* glob, or re: regex";
+				return;
+			}
+			try {
+				if (isPatternSelector(selector)) new Bun.Glob(selector);
+			} catch {
+				this.#configError = "Invalid model glob";
+				return;
+			}
 		}
-		try {
-			if (isPatternSelector(selector)) new Bun.Glob(selector);
-		} catch {
-			this.#configError = "Invalid model pattern";
-			return;
-		}
+		this.#configError = undefined;
 		if (strip.target === "rule") {
 			const index = this.#settings.effortRules.findIndex(rule => rule.selector === selector);
 			this.#openEffortLevels({ ruleIndex: index < 0 ? undefined : index, pendingRuleSelector: selector });
@@ -1328,9 +1393,13 @@ export class ModelHubComponent implements Component {
 		) {
 			const delta = matchesKey(data, "shift+up") || extractPrintableText(data) === "[" ? -1 : 1;
 			const rules = [...this.#settings.effortRules];
-			if (!isPatternSelector(rules[this.#effortIndex]?.selector ?? "")) return;
+			// Only listed order within one pattern kind decides precedence: a regex
+			// always outranks a glob, and exact rules outrank both, so a move hops
+			// over rules of any other kind instead of pretending to reorder them.
+			const kind = selectorKind(rules[this.#effortIndex]?.selector ?? "");
+			if (kind === "exact") return;
 			let next = this.#effortIndex + delta;
-			while (next >= 0 && next < count && !isPatternSelector(rules[next]?.selector ?? "")) next += delta;
+			while (next >= 0 && next < count && selectorKind(rules[next]?.selector ?? "") !== kind) next += delta;
 			if (next < 0 || next >= count) return;
 			[rules[this.#effortIndex], rules[next]] = [rules[next], rules[this.#effortIndex]];
 			this.#callbacks.onEffortRulesChange?.(rules);
@@ -1342,17 +1411,18 @@ export class ModelHubComponent implements Component {
 	#renderEffortRules(width: number, rows: number): string[] {
 		const rules = this.#settings.effortRules;
 		const labels = [
-			...rules.map(
-				(rule, i) =>
-					`${isPatternSelector(rule.selector) ? `${i + 1}. pattern` : "exact"}  ${rule.selector}  [${rule.allowed.join(", ")}]`,
-			),
+			...rules.map((rule, i) => {
+				const kind = selectorKind(rule.selector);
+				const prefix = kind === "exact" ? "exact" : `${i + 1}. ${kind}`;
+				return `${prefix}  ${rule.selector}  [${rule.allowed.join(", ")}]`;
+			}),
 			"+ Pick exact model…",
-			"+ Enter model pattern…",
+			"+ Enter glob or re: regex…",
 		];
 		const window = Math.max(1, rows - 2);
 		const start = Math.max(0, Math.min(this.#effortIndex - window + 1, labels.length - window));
 		this.#effortScrollStart = start;
-		const lines = [theme.fg("muted", " Exact rules win; patterns match in listed order")];
+		const lines = [theme.fg("muted", " Exact rules win, then regex, then glob — each in listed order")];
 		for (let index = start; index < Math.min(labels.length, start + window); index++) {
 			const selected = this.#effortIndex === index;
 			const cursor = selected && this.#focus === "list" ? theme.fg("accent", theme.nav.cursor) : " ";
@@ -1380,12 +1450,13 @@ export class ModelHubComponent implements Component {
 		const isRule = options.ruleIndex !== undefined || options.pendingRuleSelector !== undefined;
 		let levels: readonly Effort[];
 		if (!isRule && options.item && isPatternSelector(options.item.selector)) {
-			const matcher = new Bun.Glob(options.item.selector.toLowerCase());
+			const selector = options.item.selector;
+			const matchesSelector = compilePatternSelectorMatcher(selector);
 			const models =
 				this.#scopedModels.length > 0 ? this.#scopedModels.map(entry => entry.model) : this.#registry.getAll("all");
 			const matches = models.filter(
 				model =>
-					matcher.match(`${model.provider}/${model.id}`.toLowerCase()) &&
+					matchesSelector(`${model.provider}/${model.id}`) &&
 					(!options.role || this.#settings.getRoleInfo(options.role).accepts(model)),
 			);
 			levels = THINKING_EFFORTS.filter(effort =>
@@ -1475,7 +1546,9 @@ export class ModelHubComponent implements Component {
 	 * (`google-vertex/claude-opus-4-8@default` is a real model, not a route —
 	 * mirroring the runtime's exact-first precedence); otherwise the routing
 	 * slug is kept verbatim so saves can re-attach it (`openrouter/id@fireworks`
-	 * looks up `openrouter/id` but persists with the route intact).
+	 * looks up `openrouter/id` but persists with the route intact). A `re:`
+	 * selector is never a model reference: its `:`, `@` and `/` belong to the
+	 * expression, so it stays unparsed and takes the pattern path.
 	 */
 	#parseFallbackEntry(raw: string):
 		| {
@@ -1486,6 +1559,7 @@ export class ModelHubComponent implements Component {
 		  }
 		| undefined {
 		const trimmed = raw.trim();
+		if (selectorKind(trimmed) === "regex") return undefined;
 		const parse = (pattern: string) =>
 			parseModelString(pattern, {
 				allowMaxSuffix: true,
@@ -2576,7 +2650,7 @@ export class ModelHubComponent implements Component {
 				text = "Model roles — f adds a retry fallback, cleared roles fall back to auto-selection";
 				break;
 			case "effort":
-				text = "Global implicit effort rules — exact matches win, patterns follow listed order";
+				text = "Global implicit effort rules — exact wins, then regex, then glob, each in listed order";
 				break;
 			case "provider":
 				if (entry.locked) {
@@ -2657,7 +2731,9 @@ export class ModelHubComponent implements Component {
 
 			if (rowDef.kind === "chainKey") {
 				const key = rowDef.role;
-				const slash = key.lastIndexOf("/");
+				// A regex key's slashes belong to the expression, so only a
+				// provider/model key dims its provider half.
+				const slash = selectorKind(key) === "regex" ? -1 : key.lastIndexOf("/");
 				const tail = key.slice(slash + 1);
 				const keyStyled = theme.fg("dim", key.slice(0, slash + 1)) + (selected ? theme.fg("accent", tail) : tail);
 				let line = ` ${cursor} ${theme.fg("dim", theme.status.shadowed)} ${keyStyled}`;
@@ -2890,10 +2966,9 @@ export class ModelHubComponent implements Component {
 						? "Role model pattern:"
 						: "Fallback model pattern:",
 			);
-			return truncateToWidth(
-				`${label} ${strip.input.render(Math.max(8, width - visibleWidth(label) - 3))[0] ?? ""}`,
-				width,
-			);
+			const hint = patternStripHint(strip.input.getValue().trim());
+			const inputWidth = Math.max(8, width - visibleWidth(label) - visibleWidth(hint) - 4);
+			return truncateToWidth(`${label} ${strip.input.render(inputWidth)[0] ?? ""} ${hint}`, width);
 		}
 		if (strip.kind === "effortLevels") {
 			const chips = strip.toggle.options.map(level => ({
