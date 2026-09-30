@@ -74,7 +74,7 @@ async function harness(
 		requireYieldTool: true,
 		toolNames: ["yield"],
 		parentTaskPrefix: "report-child",
-		agentId: "report-child",
+		agentId: `report-child-${roots.length}`,
 		taskDepth: 1,
 		outputSchema: options.outputSchema,
 		extensions: delayed
