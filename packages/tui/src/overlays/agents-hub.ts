@@ -28,7 +28,7 @@ import {
 import type { AgentSource } from "../tools/task";
 import { shortenPath } from "../render/render-utils";
 import { getEditorTheme, theme } from "../theme";
-import { matchesAppFollowUp, matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../keybinding-matchers";
+import { matchesAppFollowUp, matchesSelectCancel, matchesSelectDown, matchesSelectUp, pickerNavigationKey } from "../keybinding-matchers";
 import {
 	buildBrowserItems,
 	ModelBrowser,
@@ -184,6 +184,7 @@ export class AgentsHubComponent implements Component {
 	#rowHover: number | null = null;
 	#listScroll = 0;
 	#searchQuery = "";
+	#filterEditing = false;
 	#notice: string | null = null;
 	#loadError: string | null = null;
 
@@ -659,43 +660,56 @@ export class AgentsHubComponent implements Component {
 	// Input
 	// ═══════════════════════════════════════════════════════════════════════
 
-	handleInput(data: string): void {
-		if (data.startsWith("\x1b[<")) {
-			routeSgrMouseInput(data, event => this.#routeMouseEvent(event));
+	handleInput(rawData: string): void {
+		if (rawData.startsWith("\x1b[<")) {
+			routeSgrMouseInput(rawData, event => this.#routeMouseEvent(event));
 			this.#tui.requestRender();
 			return;
 		}
 
 		if (this.#strip) {
-			this.#handleStripInput(data);
+			this.#handleStripInput(rawData);
 			this.#tui.requestRender();
 			return;
 		}
 
 		if (this.#createActive) {
-			this.#handleCreateInput(data);
+			this.#handleCreateInput(rawData);
 			this.#tui.requestRender();
 			return;
 		}
 
-		if (matchesSelectCancel(data)) {
-			if (this.#assigning) {
-				this.#cancelAssign();
-				return;
-			}
-			if (this.#searchQuery.length > 0) {
-				this.#searchQuery = "";
+		if (this.#filterEditing) {
+			if (matchesSelectCancel(rawData)) {
+				this.#filterEditing = false;
+			} else if (this.#assigning) {
+				this.#browser.handleInput(rawData);
+			} else if (matchesKey(rawData, "backspace")) {
+				this.#searchQuery = this.#searchQuery.slice(0, -1);
 				this.#buildRows();
 				this.#clampRowIndex();
-				this.#tui.requestRender();
-				return;
+			} else if (rawData.length === 1 && rawData >= " " && rawData !== "\x7f") {
+				this.#searchQuery += rawData;
+				this.#buildRows();
+				this.#clampRowIndex();
 			}
+			this.#tui.requestRender();
+			return;
+		}
+		if (matchesKey(rawData, "i")) {
+			this.#filterEditing = true;
+			this.#focus = "list";
+			this.#tui.requestRender();
+			return;
+		}
+		const data = pickerNavigationKey(rawData);
+		if (matchesSelectCancel(data)) {
 			this.#callbacks.onCancel();
 			return;
 		}
 
 		if (this.#assigning) {
-			this.#browser.handleInput(data);
+			if (matchesSelectUp(data) || matchesSelectDown(data) || matchesKey(data, "enter")) this.#browser.handleInput(data);
 			this.#tui.requestRender();
 			return;
 		}
@@ -762,24 +776,6 @@ export class AgentsHubComponent implements Component {
 			const agent = this.#selectedAgent();
 			if (agent) this.#toggleAgent(agent);
 			return;
-		}
-		if (matchesKey(data, "backspace")) {
-			if (this.#searchQuery.length > 0) {
-				this.#searchQuery = this.#searchQuery.slice(0, -1);
-				this.#buildRows();
-				this.#clampRowIndex();
-				this.#tui.requestRender();
-			}
-			return;
-		}
-		// Type-to-filter: any printable character extends the query.
-		if (data.length === 1 && data >= " " && data !== "\x7f") {
-			this.#searchQuery += data;
-			this.#focus = "list";
-			this.#buildRows();
-			this.#rowIndex = 0;
-			this.#listScroll = 0;
-			this.#tui.requestRender();
 		}
 	}
 
@@ -996,7 +992,7 @@ export class AgentsHubComponent implements Component {
 
 	#renderList(width: number, rows: number): string[] {
 		const lines: string[] = [];
-		const searchText = this.#searchQuery ? theme.fg("accent", this.#searchQuery) : theme.fg("dim", "type to filter");
+		const searchText = this.#searchQuery ? theme.fg("accent", this.#searchQuery) : theme.fg("dim", "i to filter");
 		lines.push(truncateToWidth(` ${theme.fg("muted", "search:")} ${searchText}`, width));
 		lines.push("");
 		this.#listRowStart = lines.length;
@@ -1161,17 +1157,18 @@ export class AgentsHubComponent implements Component {
 			return this.#strip.property ? "←/→ choose · Enter apply · Esc back" : "←/→ choose · Enter open · Esc cancel";
 		}
 		if (this.#assigning) {
-			return "Enter pick · ↑/↓ models · type to search · Esc cancel";
+			return this.#filterEditing ? "INSERT filter · hjkl type literally · Esc normal" : "Enter pick · hjkl navigate · i filter · Esc close";
 		}
 		if (this.#createActive) {
 			if (this.#createSpec) return "Enter save · Tab scope · r regenerate · Esc cancel";
 			if (this.#createGenerating) return "Generating…";
 			return "Ctrl+Q/Ctrl+Enter generate · Enter newline · Tab scope · Esc cancel";
 		}
+		if (this.#filterEditing) return "INSERT filter · hjkl type literally · Esc normal";
 		if (this.#focus === "scope") {
-			return "↑/↓ scopes · →/Enter agents · Esc close";
+			return "hjkl navigate · Enter/→ agents · i filter · Esc close";
 		}
-		return "Enter configure · Space enable/disable · ↑/↓ rows · type to search · Ctrl+R reload · Esc close";
+		return "Enter configure · Space enable/disable · hjkl navigate · i filter · Ctrl+R reload · Esc close";
 	}
 
 	#renderFooter(width: number): string {

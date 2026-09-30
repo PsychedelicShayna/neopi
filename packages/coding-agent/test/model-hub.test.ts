@@ -223,6 +223,31 @@ describe("ModelHub", () => {
 		}
 	});
 
+	test("hjkl moves between sidebar and model rows; insert mode types hjkl and double-Esc closes (#35)", () => {
+		const { hub, onCancel, onAssign } = createHub({
+			models: [makeModel("test", "hjkl-model"), makeModel("test", "other-model")],
+			scoped: true,
+		});
+		hub.handleInput("j"); // sidebar: next provider
+		hub.handleInput("k"); // sidebar: back to All models
+		hub.handleInput("l"); // model list
+		hub.handleInput("j"); // second model
+		hub.handleInput("k"); // first model
+		hub.handleInput("i");
+		for (const key of "hjkl") hub.handleInput(key);
+		expect(normalize(hub.render(220))).toContain("hjkl-model");
+		expect(footerLine(hub.render(220))).toContain("INSERT filter");
+		hub.handleInput(ESC);
+		expect(onCancel).not.toHaveBeenCalled();
+		expect(footerLine(hub.render(220))).not.toContain("INSERT filter");
+		hub.handleInput("j");
+		hub.handleInput("h"); // back to sidebar, without typing h
+		expect(normalize(hub.render(220))).toContain("hjkl-model");
+		expect(onAssign).not.toHaveBeenCalled();
+		hub.handleInput(ESC);
+		expect(onCancel).toHaveBeenCalledTimes(1);
+	});
+
 	describe("role chips and roles view", () => {
 		test("separates chat and kind roles and filters role tabs", () => {
 			const chat = makeModel("test", "chat-model");
@@ -420,7 +445,9 @@ describe("ModelHub", () => {
 			const { hub } = createHub({ models: [model] });
 			installTestTheme();
 
+			hub.handleInput("i");
 			for (const ch of "target") hub.handleInput(ch);
+			hub.handleInput(ESC); // return to navigation without losing the query
 			hub.handleInput(LEFT); // switch focus to sidebar
 			hub.handleInput(UP); // skips Roles → wraps to prov-a
 			expect(normalize(hub.render(220))).toContain("prov-a ·");
@@ -445,6 +472,7 @@ describe("ModelHub", () => {
 			});
 			installTestTheme();
 
+			hub.handleInput("i");
 			for (const ch of "free") hub.handleInput(ch);
 
 			const rendered = normalize(hub.render(220));
@@ -511,9 +539,12 @@ describe("ModelHub", () => {
 			expect(footerLine(hub.render(220))).toContain("Enter/→ models · ↑/↓ providers");
 
 			// Type to search
+			hub.handleInput("i");
 			for (const ch of "model") hub.handleInput(ch);
 
 			// Focus is now on the model list
+			expect(footerLine(hub.render(220))).toContain("INSERT filter");
+			hub.handleInput(ESC);
 			expect(footerLine(hub.render(220))).toContain("↑/↓ models · ← providers");
 
 			// Down arrow navigates within the model list (from model-a to model-b)
@@ -535,8 +566,11 @@ describe("ModelHub", () => {
 			expect(footerLine(hub.render(220))).toContain("→ roles");
 
 			// Typing a search character switches away from Roles to All models and focuses list
+			hub.handleInput("i");
 			hub.handleInput("t");
 			expect(normalize(hub.render(220))).toContain("All available models");
+			expect(footerLine(hub.render(220))).toContain("INSERT filter");
+			hub.handleInput(ESC);
 			expect(footerLine(hub.render(220))).toContain("↑/↓ models · ← providers");
 		});
 
@@ -553,8 +587,11 @@ describe("ModelHub", () => {
 			expect(footerLine(hub.render(220))).toContain("Enter log in");
 
 			// Typing a search character switches to All models and focuses list
+			hub.handleInput("i");
 			hub.handleInput("t");
 			expect(normalize(hub.render(220))).toContain("All available models");
+			expect(footerLine(hub.render(220))).toContain("INSERT filter");
+			hub.handleInput(ESC);
 			expect(footerLine(hub.render(220))).toContain("↑/↓ models · ← providers");
 		});
 	});
@@ -959,6 +996,7 @@ describe("ModelHub", () => {
 			const { hub } = createHub({ models: [chat, search], scoped: true });
 			hub.handleInput("\t");
 
+			hub.handleInput("i");
 			for (const ch of "chat-model") hub.handleInput(ch);
 			hub.handleInput("\n");
 			const chatStrip = footerLine(hub.render(400));
@@ -972,7 +1010,7 @@ describe("ModelHub", () => {
 			expect(chatStrip).not.toContain("dictation");
 			hub.handleInput(ESC);
 
-			hub.handleInput(ESC); // clear query
+			hub.handleInput("\x15"); // clear the query while editing
 			for (const ch of "perplexity") hub.handleInput(ch);
 			hub.handleInput("\n");
 			const searchStrip = footerLine(hub.render(400));
@@ -1105,6 +1143,7 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN); // default → its first chain entry (model-a)
 			hub.handleInput("\n"); // exact/pattern choice
 			hub.handleInput("\n"); // exact picker
+			hub.handleInput("i");
 			for (const ch of "model-b") hub.handleInput(ch);
 			hub.handleInput("\n"); // model → effort choices
 			hub.handleInput("\n"); // Inherit
@@ -1442,6 +1481,7 @@ describe("ModelHub", () => {
 			const b = makeModel("test", "model-b");
 			const { hub, onFallbackChainChange } = createHub({ models: [a, b], scoped: true });
 
+			hub.handleInput("i");
 			for (const ch of "model-a") hub.handleInput(ch);
 			hub.handleInput("\n"); // open the strip for model-a
 			hub.handleInput(LEFT); // retry-fallback
@@ -1450,6 +1490,7 @@ describe("ModelHub", () => {
 			hub.handleInput("\n");
 			expect(normalize(hub.render(220))).toContain("Adding fallback for test/model-a");
 
+			hub.handleInput("i");
 			for (const ch of "model-b") hub.handleInput(ch);
 			hub.handleInput("\n");
 			hub.handleInput("\n"); // confirm fallback effort
@@ -1467,6 +1508,7 @@ describe("ModelHub", () => {
 			const b = makeModel("test", "model-b");
 			const { hub, onFallbackChainChange } = createHub({ models: [a, b], scoped: true });
 
+			hub.handleInput("i");
 			for (const ch of "model-a") hub.handleInput(ch);
 			hub.handleInput("\n");
 			hub.handleInput(LEFT); // retry-fallback
@@ -1474,6 +1516,7 @@ describe("ModelHub", () => {
 			hub.handleInput("\n");
 			expect(normalize(hub.render(220))).toContain("Adding fallback for test/*");
 
+			hub.handleInput("i");
 			for (const ch of "model-b") hub.handleInput(ch);
 			hub.handleInput("\n");
 			hub.handleInput("\n"); // confirm fallback effort
@@ -1493,6 +1536,7 @@ describe("ModelHub", () => {
 			hub.handleInput("\n");
 			expect(normalize(hub.render(220))).toContain("New fallback chain");
 
+			hub.handleInput("i");
 			for (const ch of "model-a") hub.handleInput(ch);
 			hub.handleInput("\n"); // pick the protected model
 			const strip = footerLine(hub.render(220));
@@ -1501,6 +1545,7 @@ describe("ModelHub", () => {
 
 			hub.handleInput("\n"); // key by the exact model
 			expect(normalize(hub.render(220))).toContain("Adding fallback for test/model-a");
+			hub.handleInput("i");
 			for (const ch of "model-b") hub.handleInput(ch);
 			hub.handleInput("\n");
 			hub.handleInput("\n"); // confirm fallback effort
@@ -1761,6 +1806,7 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN);
 			expect(normalize(hub.render(220))).toContain("openrouter ·");
 
+			hub.handleInput("i");
 			for (const ch of "glm-5.2") hub.handleInput(ch);
 			hub.handleInput("\n");
 
@@ -1775,6 +1821,7 @@ describe("ModelHub", () => {
 			const { hub } = createHub({ models: [openrouterGlm, customGlm] });
 			installTestTheme();
 
+			hub.handleInput("i");
 			for (const ch of "glm") hub.handleInput(ch);
 			const rendered = normalize(hub.render(220));
 			expect(rendered).toContain("openrouter/z-ai/glm-5.2");
@@ -1789,6 +1836,7 @@ describe("ModelHub", () => {
 
 			hub.handleInput(DOWN);
 			hub.handleInput(DOWN); // openrouter scope
+			hub.handleInput("i");
 			for (const ch of "does-not-exist") hub.handleInput(ch);
 
 			const rendered = normalize(hub.render(220));
@@ -1802,7 +1850,9 @@ describe("ModelHub", () => {
 			const { hub } = createHub({ models: [openrouterGlm, customOther] });
 			installTestTheme();
 
+			hub.handleInput("i");
 			for (const ch of "z-ai") hub.handleInput(ch);
+			hub.handleInput(ESC);
 			hub.handleInput(LEFT); // switch focus to sidebar
 			hub.handleInput(DOWN); // skips custom-provider (0 matches), lands on openrouter
 			expect(normalize(hub.render(220))).toContain("openrouter ·");
@@ -1823,19 +1873,21 @@ describe("ModelHub", () => {
 
 			expect(sidebarIndexOf("aaa-provider")).toBeLessThan(sidebarIndexOf("zzz-provider"));
 
+			hub.handleInput("i");
 			for (const ch of "target") hub.handleInput(ch);
 			expect(sidebarIndexOf("zzz-provider")).toBeLessThan(sidebarIndexOf("aaa-provider"));
 
-			// Clearing the query restores the alphabetical order.
+			// Escape returns to normal mode without clearing the query.
 			hub.handleInput("\x1b");
-			expect(sidebarIndexOf("aaa-provider")).toBeLessThan(sidebarIndexOf("zzz-provider"));
+			expect(sidebarIndexOf("zzz-provider")).toBeLessThan(sidebarIndexOf("aaa-provider"));
 		});
 
-		test("Escape clears an active query before closing the hub", () => {
+		test("Escape returns to normal mode without clearing the query, then closes the hub", () => {
 			const model = makeModel("test", "escape-model");
 			const { hub, onCancel } = createHub({ models: [model] });
 			installTestTheme();
 
+			hub.handleInput("i");
 			for (const ch of "esc") hub.handleInput(ch);
 			hub.handleInput("\x1b");
 			expect(onCancel).not.toHaveBeenCalled();

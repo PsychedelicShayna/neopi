@@ -33,7 +33,7 @@ import type {
 import { AUTO_THINKING, type ConfiguredThinkingLevel, getConfiguredThinkingLevelMetadata } from "../thinking";
 import { thinkingLevelGlyph } from "../render/render-utils";
 import { theme } from "../theme/theme";
-import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../keybinding-matchers";
+import { matchesSelectCancel, matchesSelectDown, matchesSelectUp, pickerNavigationKey } from "../keybinding-matchers";
 import {
 	buildBrowserItems,
 	ModelBrowser,
@@ -317,6 +317,8 @@ export class ModelHubComponent implements Component {
 	 * the model list; Tab toggles; ←/→ switches between sidebar and list.
 	 */
 	#focus: "scope" | "list" = "scope";
+	/** The browser query receives literal keys only after `i`; Escape returns to navigation. */
+	#filterEditing = false;
 
 	#rolesRows: RolesRow[] = [];
 	#roleIndex = 0;
@@ -387,7 +389,10 @@ export class ModelHubComponent implements Component {
 		this.#browser = new ModelBrowser(settings, {
 			emptyText: () => this.#emptyStateMessage(),
 		});
-		this.#browser.onActivate = item => this.#activateItem(item);
+		this.#browser.onActivate = item => {
+			this.#filterEditing = false;
+			this.#activateItem(item);
+		};
 		this.#browser.onCancel = () => this.#callbacks.onCancel();
 		this.#browser.onQueryChange = query => this.#onQueryChanged(query);
 
@@ -1916,31 +1921,38 @@ export class ModelHubComponent implements Component {
 		this.#buildRolesRows();
 	}
 
-	handleInput(data: string): void {
+	handleInput(rawData: string): void {
 		if (this.#assignmentPending) {
-			if (matchesSelectCancel(data)) this.#callbacks.onCancel();
+			if (matchesSelectCancel(rawData)) this.#callbacks.onCancel();
 			return;
 		}
-		if (data.startsWith("\x1b[<")) {
-			routeSgrMouseInput(data, event => this.#routeMouseEvent(event));
+		if (rawData.startsWith("\x1b[<")) {
+			routeSgrMouseInput(rawData, event => this.#routeMouseEvent(event));
 			return;
 		}
 
 		if (this.#strip) {
-			this.#handleStripInput(data);
+			this.#handleStripInput(rawData);
 			return;
 		}
+		if (this.#filterEditing) {
+			if (matchesSelectCancel(rawData)) {
+				this.#filterEditing = false;
+				return;
+			}
+			this.#browser.handleInput(rawData);
+			this.#focus = "list";
+			return;
+		}
+		if (matchesKey(rawData, "i")) {
+			this.#filterEditing = true;
+			this.#focus = "list";
+			if (!this.#isBrowserView(this.#activeEntry())) this.#setActiveEntry("all");
+			return;
+		}
+		const data = pickerNavigationKey(rawData);
 
 		if (matchesSelectCancel(data)) {
-			if (this.#assigning !== null) {
-				this.#cancelAssign();
-				return;
-			}
-			const entry = this.#activeEntry();
-			if (this.#isBrowserView(entry) && this.#browser.query.length > 0) {
-				this.#browser.handleCancel();
-				return;
-			}
 			this.#callbacks.onCancel();
 			return;
 		}
@@ -2003,13 +2015,6 @@ export class ModelHubComponent implements Component {
 		}
 
 		if (rolesView) {
-			const printable = extractPrintableText(data);
-			if (this.#focus === "scope" && printable !== undefined && printable.trim().length > 0) {
-				this.#setActiveEntry("all");
-				this.#focus = "list";
-				this.#browser.handleInput(data);
-				return;
-			}
 			this.#handleRolesViewInput(data);
 			return;
 		}
@@ -2018,13 +2023,7 @@ export class ModelHubComponent implements Component {
 			return;
 		}
 		if (lockedView) {
-			const printable = extractPrintableText(data);
-			if (printable !== undefined && printable.trim().length > 0) {
-				this.#setActiveEntry("all");
-				this.#focus = "list";
-				this.#browser.handleInput(data);
-				return;
-			}
+			// Locked provider scopes have no model rows until credentials are supplied.
 			if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
 				this.#requestLogin(entry);
 			}
@@ -2038,12 +2037,8 @@ export class ModelHubComponent implements Component {
 			return;
 		}
 
-		const beforeQuery = this.#browser.query;
-		const isPrintable = extractPrintableText(data) !== undefined;
+		if (extractPrintableText(data) !== undefined || matchesKey(data, "backspace")) return;
 		this.#browser.handleInput(data);
-		if (isPrintable || this.#browser.query !== beforeQuery) {
-			this.#focus = "list";
-		}
 	}
 
 	#isBrowserView(entry: SidebarEntry): boolean {
@@ -2820,17 +2815,18 @@ export class ModelHubComponent implements Component {
 			if (strip.kind === "scope") return "←/→ save scope · Enter choose · Esc cancel";
 			return "←/→ thinking level · Enter apply · Esc keep";
 		}
+		if (this.#filterEditing) return "INSERT filter · hjkl type literally · Esc normal";
 		if (this.#assigning !== null) {
 			if (this.#focus === "scope") {
-				return "Enter/→ models · ↑/↓ providers · type to search · Alt+←/→ kind · Esc cancel";
+				return "Enter/→ models · ↑/↓ providers · hjkl navigate · i filter · Alt+←/→ kind · Esc close";
 			}
 			switch (this.#assigning.kind) {
 				case "fallback":
-					return "Enter pick fallback · ↑/↓ models · ← providers · type to search · Alt+←/→ kind · Esc cancel";
+					return "Enter pick fallback · hjkl navigate · i filter · Esc close";
 				case "fallbackKey":
-					return "Enter pick the protected model · ↑/↓ models · ← providers · type to search · Alt+←/→ kind · Esc cancel";
+					return "Enter pick the protected model · hjkl navigate · i filter · Esc close";
 				default:
-					return "Enter assign · ↑/↓ models · ← providers · type to search · Alt+←/→ kind · Esc cancel";
+					return "Enter assign · hjkl navigate · i filter · Esc close";
 			}
 		}
 		const entry = this.#activeEntry();
@@ -2860,9 +2856,9 @@ export class ModelHubComponent implements Component {
 		}
 		const refresh = entry.kind === "provider" ? " · F5 refresh" : "";
 		if (this.#focus === "scope") {
-			return `Enter/→ models · ↑/↓ providers · type to search · Alt+←/→ kind${refresh} · Esc close`;
+			return `Enter/→ models · ↑/↓ providers · hjkl navigate · i filter · Alt+←/→ kind${refresh} · Esc close`;
 		}
-		return `Enter assign roles · ↑/↓ models · ← providers · type to search · Alt+←/→ kind${refresh} · Esc close`;
+		return `Enter assign roles · ↑/↓ models · ← providers · hjkl navigate · i filter · Alt+←/→ kind${refresh} · Esc close`;
 	}
 
 	#renderFooter(width: number): string {

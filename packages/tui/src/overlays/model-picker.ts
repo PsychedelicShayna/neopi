@@ -7,6 +7,8 @@
 import type { Model } from "@oh-my-pi/pi-ai";
 import { addKeyAliases, canonicalKeyId } from "../keybindings";
 import { type KeyId, parseKey } from "../keys";
+import { extractPrintableText } from "../keys";
+import { matchesSelectCancel, pickerNavigationKey } from "../keybinding-matchers";
 import type { Component, TUI } from "../tui";
 import { type ThemeColor, theme } from "../theme/theme";
 import { buildSessionModelScope, ModelBrowser, type ModelBrowserItem } from "./model-browser";
@@ -78,9 +80,9 @@ const HEIGHT_FRACTION = 0.4;
 const STATUS_HINT = "Session-only switch — role models stay unchanged";
 const QUICK_ROLE_STATUS_HINT = "Quick role switch — applies its model and thinking for this session";
 const TASK_STATUS_HINT = "Task subagent switch — spawned task agents use this model (session-only)";
-const FOOTER_HINT = "↑/↓ models · Enter use for this session · type to search · @ quick roles · Esc close";
-const QUICK_ROLE_FOOTER_HINT = "↑/↓ roles · Enter apply role model · type to search · Esc close";
-const TASK_FOOTER_HINT = "↑/↓ models · Enter use for Task subagents · type to search · Esc close";
+const FOOTER_HINT = "hjkl navigate · i filter · Enter use for this session · @ via filter · Esc close";
+const QUICK_ROLE_FOOTER_HINT = "hjkl navigate · i filter · Enter apply role model · Esc close";
+const TASK_FOOTER_HINT = "hjkl navigate · i filter · Enter use for Task subagents · Esc close";
 
 /**
  * The alt+p picker component. Hosted as a non-fullscreen bottom-anchored
@@ -104,6 +106,7 @@ export class ModelPickerComponent implements Component {
 	#taskMatchKeys = new Set<string>();
 	#taskModeKeyLabel: string;
 	#taskSelector: string | undefined;
+	#filterEditing = false;
 
 	constructor(
 		tui: TUI,
@@ -243,7 +246,21 @@ export class ModelPickerComponent implements Component {
 				return;
 			}
 		}
-		this.#browser.handleInput(data);
+		if (this.#filterEditing) {
+			if (matchesSelectCancel(data)) this.#filterEditing = false;
+			else this.#browser.handleInput(data);
+			return;
+		}
+		if (data === "i") {
+			this.#filterEditing = true;
+			return;
+		}
+		if (matchesSelectCancel(data)) {
+			this.#browser.onCancel?.();
+			return;
+		}
+		const key = pickerNavigationKey(data);
+		if (extractPrintableText(key) === undefined) this.#browser.handleInput(key);
 	}
 	/** Flip between session-model and Task-subagent targets, repointing the highlight. */
 	#toggleTaskMode(): void {
@@ -268,6 +285,7 @@ export class ModelPickerComponent implements Component {
 
 		const borderColor: ThemeColor | undefined = this.#taskMode ? "error" : undefined;
 		let footer = this.#taskMode ? TASK_FOOTER_HINT : this.#roleMode ? QUICK_ROLE_FOOTER_HINT : FOOTER_HINT;
+		if (this.#filterEditing) footer = "INSERT filter · hjkl type literally · Esc normal";
 		if (this.#taskMatchKeys.size > 0 && !this.#roleMode) {
 			footer += ` · ${this.#taskModeKeyLabel} ${this.#taskMode ? "session model" : "task model"}`;
 		}

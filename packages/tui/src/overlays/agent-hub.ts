@@ -34,7 +34,7 @@ import { shortenPath, truncateToWidth } from "../render/render-utils";
 import { formatLocalDateTimeWithOffset } from "../chrome/local-date";
 import type { ObservableSession, SessionObserverRegistry } from "./session-observer-registry";
 import { theme } from "../theme/theme";
-import { matchesSelectDown, matchesSelectUp } from "../keybinding-matchers";
+import { matchesSelectDown, matchesSelectUp, pickerNavigationKey } from "../keybinding-matchers";
 import {
 	type AgentMetrics,
 	type AggregateMetrics,
@@ -436,6 +436,17 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			this.#handleActivitySearchInput(keyData);
 			return;
 		}
+		if (this.#section === "agents" && this.#agentFilterEditing) {
+			this.#handleTableInput(keyData);
+			return;
+		}
+		if (keyData === "i") {
+			if (this.#section === "activity") this.#activitySearchEditing = true;
+			else this.#agentFilterEditing = true;
+			this.#requestRender();
+			return;
+		}
+		keyData = pickerNavigationKey(keyData);
 		if (keyData === "1") {
 			this.#switchSection("agents");
 			return;
@@ -769,7 +780,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			row(
 				theme.fg(
 					"dim",
-					"1:agents  j/k:select  Enter:transcript  Space:follow  f:filter  s:scope  /:search  Esc:close",
+					"1:agents  h/j/k/l:navigate  Enter:transcript  Space:follow  f:filter  s:scope  i:search  Esc:close",
 				),
 				width,
 			),
@@ -832,19 +843,19 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	#footer(showingNarrowDetails: boolean, availableWidth: number): string {
 		const nextView = this.#viewMode === "roster" ? "by parent" : "flat";
 		const filter =
-			this.#agentFilter.length > 0 ? `/${this.#agentFilter}${this.#agentFilterEditing ? "▌" : ""}  ·  ` : "";
+			this.#agentFilterEditing ? `/${this.#agentFilter}▌  ·  INSERT · Esc:normal  ·  ` : this.#agentFilter ? `/${this.#agentFilter}  ·  ` : "";
 		if (showingNarrowDetails) {
 			return theme.fg(
 				"dim",
-				`${filter}1:agents  2:activity  Tab:roster  PgUp/PgDn:scroll  Enter:open  t:${nextView}  Esc:roster`,
+				`${filter}1:agents  2:activity  Tab:roster  PgUp/PgDn:scroll  Enter:open  t:${nextView}  Esc:close`,
 			);
 		}
 		if (availableWidth < 96) {
-			return theme.fg("dim", `${filter}j/k:select  Enter:open  t:${nextView}  Tab:details  r/x:manage  Esc:close`);
+			return theme.fg("dim", `${filter}hjkl:navigate  i:filter  Enter:open  t:${nextView}  Tab:details  r/x:manage  Esc:close`);
 		}
 		return theme.fg(
 			"dim",
-			`${filter}1:agents  2:activity  j/k/wheel:select  PgUp/PgDn:details  Enter/click:open  t:${nextView}  r:revive  x:kill  Esc:close`,
+			`${filter}1:agents  2:activity  hjkl/wheel:navigate  i:filter  PgUp/PgDn:details  Enter/click:open  t:${nextView}  r:revive  x:kill  Esc:close`,
 		);
 	}
 
@@ -1314,13 +1325,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 
 	#handleActivityInput(keyData: string): void {
 		if (matchesKey(keyData, "escape")) {
-			if (this.#activitySearch) {
-				this.#activitySearch = "";
-				this.#refreshActivityRows();
-				this.#requestRender();
-			} else {
-				this.#onDone();
-			}
+			this.#onDone();
 			return;
 		}
 		if (matchesKey(keyData, "left")) {
@@ -1380,7 +1385,6 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		if (this.#agentFilterEditing) {
 			if (matchesKey(keyData, "escape") || matchesKey(keyData, "enter") || keyData === "\r" || keyData === "\n") {
 				this.#agentFilterEditing = false;
-				if (matchesKey(keyData, "escape")) this.#agentFilter = "";
 			} else if (matchesKey(keyData, "backspace")) {
 				this.#agentFilter = this.#agentFilter.slice(0, -1);
 			} else if (keyData.length === 1 && keyData >= " " && keyData !== "\u007f") {
@@ -1393,16 +1397,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			return;
 		}
 		if (matchesKey(keyData, "escape")) {
-			if (this.#agentFilter) {
-				this.#agentFilter = "";
-				this.#refreshRows();
-				this.#requestRender();
-			} else if (this.#narrowDetailsOpen && this.#split.mode !== "split") {
-				this.#narrowDetailsOpen = false;
-				this.#requestRender();
-			} else {
-				this.#onDone();
-			}
+			this.#onDone();
 			return;
 		}
 		if (keyData === "/") {
@@ -1445,6 +1440,11 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			} else {
 				this.#lastLeftTap = now;
 			}
+			return;
+		}
+		if (matchesKey(keyData, "right")) {
+			if (this.#split.mode !== "split" && this.#rows.length > 0) this.#narrowDetailsOpen = true;
+			this.#requestRender();
 			return;
 		}
 		this.#hoveredRow = null;

@@ -162,16 +162,23 @@ describe("AgentsHub layout", () => {
 		expect(rendered).not.toContain("scout");
 	});
 
-	test("type-to-filter narrows the list and Esc clears the query first", async () => {
+	test("i filters with literal hjkl; Esc restores navigation, then closes without clearing the filter", async () => {
 		const { hub, strip, type, cancelled } = await createHub(createSettings());
+		hub.handleInput("h"); // sidebar
+		hub.handleInput("j"); // project scope
+		hub.handleInput("k"); // all agents
+		hub.handleInput("l"); // rows
+		hub.handleInput("i");
 		type("sco");
 		let rendered = strip();
 		expect(rendered).toContain("scout");
 		expect(rendered).not.toContain("dev");
-		hub.handleInput("\x1b"); // Esc clears the query, not the hub
-		expect(cancelled()).toBe(false);
+		for (const key of "hjkl") hub.handleInput(key);
 		rendered = strip();
-		expect(rendered).toContain("dev");
+		expect(rendered).toContain("search: scohjkl");
+		hub.handleInput("\x1b");
+		expect(cancelled()).toBe(false);
+		expect(strip()).toContain("search: scohjkl");
 		hub.handleInput("\x1b");
 		expect(cancelled()).toBe(true);
 	});
