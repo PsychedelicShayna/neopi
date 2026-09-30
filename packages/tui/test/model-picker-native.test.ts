@@ -174,12 +174,11 @@ test("the model hub describes a data-first picker when the terminal has the kind
 	expect(hub.describe(withPicker)).toBe(root);
 });
 
-test("typing changes the order, hits, counts and head total but never the catalogue", () => {
+test("filter mode narrows the model picker to matching models", () => {
 	const hub = openHub({ assign: [], cancel: 0 });
-	const before = props(hub.describe(withPicker));
+	hub.handleInput("i");
 	for (const ch of "sonnet") hub.handleInput(ch);
 	const after = props(hub.describe(withPicker));
-	expect(after.items).toBe(before.items);
 	expect(after.query).toBe("sonnet");
 	expect(after.order).toEqual(["anthropic/claude-sonnet-5-5"]);
 	expect(after.hits?.["anthropic/claude-sonnet-5-5"]).toEqual([[17, 23]]);
@@ -274,7 +273,9 @@ test("pointer events drive the hub through the same paths as its keys", () => {
 
 	// Esc ladder: close leaves the hub only when nothing else is open.
 	act("scope", "all");
+	hub.handleInput("i");
 	hub.handleInput("x");
+	hub.handleInput("\x1b");
 	act("close");
 	expect(props(hub.describe(withPicker)).query).toBe("");
 	expect(calls.cancel).toBe(0);

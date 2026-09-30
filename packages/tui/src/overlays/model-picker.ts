@@ -7,6 +7,8 @@
 import type { Model } from "@oh-my-pi/pi-ai";
 import { addKeyAliases, canonicalKeyId } from "../keybindings";
 import { type KeyId, parseKey } from "../keys";
+import { extractPrintableText } from "../keys";
+import { matchesSelectCancel, pickerNavigationKey } from "../keybinding-matchers";
 import type { Component, TUI } from "../tui";
 import { type ThemeColor, theme } from "../theme/theme";
 import {
@@ -98,11 +100,11 @@ function footerHint(mode: "session" | "role" | "task"): string {
 	const close = `${editorKey("tui.select.cancel")} close`;
 	switch (mode) {
 		case "role":
-			return `${upDown} roles · ${enter} apply role model · type to search · ${close}`;
+			return `hjkl navigate · i filter · ${enter} apply role model · ${close}`;
 		case "task":
-			return `${upDown} models · ${enter} use for Task subagents · type to search · ${close}`;
+			return `hjkl navigate · i filter · ${enter} use for Task subagents · ${close}`;
 		default:
-			return `${upDown} models · ${enter} use for this session · type to search · @ quick roles · ${close}`;
+			return `hjkl navigate · i filter · ${enter} use for this session · @ via filter · ${close}`;
 	}
 }
 
@@ -128,6 +130,7 @@ export class ModelPickerComponent implements Component {
 	#taskMatchKeys = new Set<string>();
 	#taskModeKey: KeyId | undefined;
 	#taskSelector: string | undefined;
+	#filterEditing = false;
 	#nativeRoot: { memo: string; node: NativeNode } | undefined;
 	#pickerRoot:
 		| {
@@ -282,7 +285,21 @@ export class ModelPickerComponent implements Component {
 				return;
 			}
 		}
-		this.#browser.handleInput(data);
+		if (this.#filterEditing) {
+			if (matchesSelectCancel(data)) this.#filterEditing = false;
+			else this.#browser.handleInput(data);
+			return;
+		}
+		if (data === "i") {
+			this.#filterEditing = true;
+			return;
+		}
+		if (matchesSelectCancel(data)) {
+			this.#browser.onCancel?.();
+			return;
+		}
+		const key = pickerNavigationKey(data);
+		if (extractPrintableText(key) === undefined) this.#browser.handleInput(key);
 	}
 	/** Flip between session-model and Task-subagent targets, repointing the highlight. */
 	#toggleTaskMode(): void {
@@ -307,6 +324,7 @@ export class ModelPickerComponent implements Component {
 
 		const borderColor: ThemeColor | undefined = this.#taskMode ? "error" : undefined;
 		let footer = footerHint(this.#taskMode ? "task" : this.#roleMode ? "role" : "session");
+		if (this.#filterEditing) footer = "INSERT filter · hjkl type literally · Esc normal";
 		if (this.#taskModeKey !== undefined && !this.#roleMode) {
 			footer += ` · ${formatKeyHint(this.#taskModeKey)} ${this.#taskMode ? "session model" : "task model"}`;
 		}

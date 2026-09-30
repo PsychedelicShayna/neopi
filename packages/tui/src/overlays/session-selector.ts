@@ -31,7 +31,7 @@ import { hintsRow, type NativeHint, overlayCard } from "../native/overlay";
 import { plainText } from "../native/spans";
 import { theme } from "../theme/theme";
 import { contentRowWidth } from "../chrome/selector-helpers";
-import { matchesAppInterrupt, matchesSelectDown, matchesSelectUp } from "../keybinding-matchers";
+import { matchesAppInterrupt, matchesSelectDown, matchesSelectUp, pickerNavigationKey } from "../keybinding-matchers";
 /** Session lifecycle status presented by the picker. */
 export type SessionSelectorStatus = "complete" | "interrupted" | "aborted" | "error" | "pending" | "unknown";
 
@@ -519,6 +519,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 	onDeleteRequest?: (session: T) => void;
 	/** Monotonic time of the last Delete/Backspace press, for {@link SESSION_DELETE_REARM_MS}. */
 	#lastEraseKeyAt = Number.NEGATIVE_INFINITY;
+	#filterEditing = false;
 
 	#allSessions: T[];
 	#showCwd: boolean;
@@ -1115,7 +1116,13 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		this.#hitRows = [];
 
 		// Render search input
-		lines.push(...this.#searchInput.render(width));
+		const hint = this.#filterEditing ? "INSERT filter · Esc normal" : "hjkl navigate · i filter · Esc close";
+		lines.push(
+			truncateToWidth(
+				`${theme.fg("dim", hint)} ${this.#searchInput.render(Math.max(1, width - visibleWidth(hint) - 1))[0] ?? ""}`,
+				width,
+			),
+		);
 		lines.push(""); // Blank line after search
 
 		if (this.#menu.visibleItems.length === 0) {
@@ -1241,9 +1248,19 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		return lines;
 	}
 
-	handleInput(keyData: string): void {
-		// Backspace only edits the filter. Delete on an empty filter requests deletion,
-		// but not while repeated erase keys are clearing the previous query.
+	handleInput(rawData: string): void {
+		if (this.#filterEditing && matchesAppInterrupt(rawData)) {
+			this.#filterEditing = false;
+			return;
+		}
+		if (!this.#filterEditing && matchesKey(rawData, "i")) {
+			this.#filterEditing = true;
+			return;
+		}
+		const keyData = this.#filterEditing ? rawData : pickerNavigationKey(rawData);
+		// Backspace only ever edits the filter. Delete forward-deletes filter text; on an empty
+		// filter it requests session deletion, but only as a fresh press — never as the
+		// continuation of Delete/Backspace presses (auto-repeat included) that were erasing text.
 		const isDelete = matchesKey(keyData, "delete");
 		if (isDelete || matchesKey(keyData, "backspace")) {
 			const now = performance.now();
@@ -1256,6 +1273,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 				}
 				return;
 			}
+			if (!this.#filterEditing) return;
 			this.#searchInput.handleInput(keyData);
 			this.#filterSessions(this.#searchInput.getValue());
 			return;
@@ -1306,7 +1324,8 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 			this.onToggleScope?.();
 			return;
 		}
-		// Pass everything else to search input
+		// Only insert mode edits the filter; normal-mode letters are navigation or inert.
+		if (!this.#filterEditing) return;
 		this.#searchInput.handleInput(keyData);
 		this.#filterSessions(this.#searchInput.getValue());
 	}

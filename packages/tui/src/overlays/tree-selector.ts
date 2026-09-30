@@ -21,6 +21,7 @@ import {
 	matchesSelectPageDown,
 	matchesSelectPageUp,
 	matchesSelectUp,
+	pickerNavigationKey,
 } from "../keybinding-matchers";
 import { isUserRequestEntry, type TranscriptEntryLike } from "../chat/transcript-entry";
 
@@ -206,6 +207,7 @@ class TreeList implements Component {
 	#filterMode: FilterMode;
 	/** The search field; its value is the fuzzy query. */
 	readonly searchInput = new Input();
+	#filterEditing = false;
 	#toolCallMap: Map<string, ToolCallInfo> = new Map();
 	#multipleRoots = false;
 	#activePathIds: Set<string> = new Set();
@@ -1145,9 +1147,9 @@ class TreeList implements Component {
 		if (selected && this.onSelect) this.onSelect(selected.entry.id, { summarize });
 	}
 
-	/** Esc: clear the search first, then close. */
+	/** Escape exits filter editing first, then closes the picker. */
 	escape(): void {
-		if (this.getSearchQuery()) this.clearSearch();
+		if (this.#filterEditing) this.#filterEditing = false;
 		else this.onCancel?.();
 	}
 
@@ -1164,13 +1166,28 @@ class TreeList implements Component {
 		this.#applyFilter();
 	}
 
-	/** Shift+L: edit the selected entry's label. */
+	/** e: edit the selected entry's label (L is a Vim right motion). */
 	editLabel(): void {
 		const selected = this.#tree.selectedItem;
 		if (selected && this.onLabelEdit) this.onLabelEdit(selected.entry.id, selected.label);
 	}
 
-	handleInput(keyData: string): void {
+	handleInput(rawData: string): void {
+		if (this.#filterEditing) {
+			if (matchesAppInterrupt(rawData)) {
+				this.#filterEditing = false;
+				return;
+			}
+			const before = this.getSearchQuery();
+			if (this.searchInput.handleInput(rawData)) {
+				if (this.getSearchQuery() !== before) this.#applyFilter();
+				return;
+			}
+		} else if (matchesKey(rawData, "i")) {
+			this.#filterEditing = true;
+			return;
+		}
+		const keyData = this.#filterEditing ? rawData : pickerNavigationKey(rawData);
 		if (matchesSelectUp(keyData)) {
 			this.#tree.moveSelection(-1, true);
 		} else if (matchesSelectDown(keyData)) {
@@ -1230,11 +1247,8 @@ class TreeList implements Component {
 		} else if (matchesKey(keyData, "alt+a")) {
 			this.#filterMode = "all";
 			this.#applyFilter();
-		} else if (matchesKey(keyData, "shift+l") && !this.getSearchQuery()) {
+		} else if (matchesKey(keyData, "e") && !this.getSearchQuery()) {
 			this.editLabel();
-		} else {
-			const before = this.getSearchQuery();
-			if (this.searchInput.handleInput(keyData) && this.getSearchQuery() !== before) this.#applyFilter();
 		}
 	}
 }
@@ -1389,10 +1403,10 @@ export class TreeSelectorComponent extends OverlayPanel {
 						`${editorKeys("tui.select.pageUp", "tui.select.pageDown")} (${formatKeyHints(["left", "right"])}): page.`,
 						`${formatKeyHints(["home", "end"])}: first/last item.`,
 						`${formatKeyHint("shift+enter")}: summarize & switch.`,
-						`${formatKeyHint("shift+l")}: label.`,
+						`${formatKeyHint("e")}: label.`,
 						`${formatKeyHint("ctrl+o")}: filter.`,
 						`${formatKeyHints(["alt+d", "alt+t", "alt+u", "alt+l", "alt+a"])}: filter.`,
-						"Type to search",
+						"hjkl navigate · i filter (Esc normal, Esc close)",
 					].join(" "),
 				),
 				0,
@@ -1464,7 +1478,7 @@ export class TreeSelectorComponent extends OverlayPanel {
 				: [
 						pickerAction("switch", "Switch", "enter", { primary: true }),
 						pickerAction("summarize", "Summarize & switch", "shift+enter"),
-						pickerAction("label", "Label", "shift+l"),
+						pickerAction("label", "Label", "e"),
 						pickerAction("filter", "Filter", "ctrl+o"),
 						CLOSE_ACTION,
 					],
@@ -1545,7 +1559,7 @@ export class TreeSelectorComponent extends OverlayPanel {
 				actionHint(["tui.select.pageUp", "tui.select.pageDown"], "page"),
 				{ keys: ["home", "end"], label: "first/last" },
 				{ keys: ["shift+enter"], label: "summarize & switch" },
-				{ keys: ["shift+l"], label: "label" },
+				{ keys: ["e"], label: "label" },
 				{ keys: ["ctrl+o"], label: "filter" },
 			]),
 		];

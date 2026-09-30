@@ -3,6 +3,7 @@ import { Input } from "./input";
 import { getMenuWindow, MenuSelection } from "./menu-selection";
 import { getKeybindings } from "../keybindings";
 import { extractPrintableText, matchesKey } from "../keys";
+import { pickerNavigationKey } from "../keybinding-matchers";
 import { type MouseRoutable, routeSelectListMouse, type SgrMouseEvent } from "../mouse";
 import { col, node, span } from "../native/describe";
 import { sameItems, sameProps } from "../native/memo";
@@ -178,6 +179,7 @@ export class SelectList implements Component, MouseRoutable {
 	#nativeMark: string | undefined;
 	/** The type-to-filter field; its value is pushed into the selection's query. */
 	readonly #search = new Input();
+	#filterEditing = false;
 
 	onSelect?: (item: SelectItem) => void;
 	onCancel?: () => void;
@@ -486,17 +488,33 @@ export class SelectList implements Component, MouseRoutable {
 		return lines;
 	}
 
-	handleInput(keyData: string): void {
+	handleInput(rawData: string): void {
 		const kb = getKeybindings();
-		if (kb.matches(keyData, "tui.select.cancel")) {
-			if (!this.#selection.cancelConfirmation()) this.onCancel?.();
-			return;
+		if (this.#filterEditing) {
+			if (kb.matches(rawData, "tui.select.cancel")) {
+				this.#filterEditing = false;
+				return;
+			}
+			if (this.#handleSearchInput(rawData)) return;
+			if (extractPrintableText(rawData) !== undefined) return;
+		} else {
+			if (this.#canEditSearch() && matchesKey(rawData, "i")) {
+				this.#filterEditing = true;
+				return;
+			}
+			if (kb.matches(rawData, "tui.select.cancel")) {
+				if (!this.#selection.cancelConfirmation()) this.onCancel?.();
+				return;
+			}
+			if (
+				pickerNavigationKey(rawData) === rawData &&
+				(extractPrintableText(rawData) !== undefined || matchesKey(rawData, "backspace"))
+			)
+				return;
 		}
-
-		// Typed text filters even when it collides with a navigation binding; then
-		// host navigation; every other key is the search field's.
-		if (extractPrintableText(keyData) !== undefined && this.#handleSearchInput(keyData)) return;
+		const keyData = this.#filterEditing ? rawData : pickerNavigationKey(rawData);
 		const wrap = this.layout.wrapNavigation !== false;
+		if (this.#selection.visibleItems.length === 0) return;
 		let selectionChanged = false;
 		if (kb.matches(keyData, "tui.select.up")) {
 			selectionChanged = this.#selection.move(-1, wrap);
@@ -719,7 +737,13 @@ export class SelectList implements Component, MouseRoutable {
 			const label = truncateToWidth("  Search: ", avail, Ellipsis.Omit);
 			const fieldWidth = avail - visibleWidth(label);
 			const styled = this.theme.scrollInfo(label);
-			return fieldWidth > 0 ? styled + this.#search.render(fieldWidth)[0].trimEnd() : styled;
+			if (fieldWidth <= 0) return styled;
+			return (
+				styled +
+				(this.#filterEditing
+					? this.#search.render(fieldWidth)[0].trimEnd()
+					: truncateToWidth(this.#selection.query, fieldWidth))
+			);
 		}
 		return this.theme.scrollInfo(truncateToWidth(this.#statusText(), avail, Ellipsis.Omit));
 	}
@@ -740,7 +764,13 @@ export class SelectList implements Component, MouseRoutable {
 		return this.layout.statusText !== undefined
 			? (custom ?? "")
 			: (pendingItem?.confirmation ??
-					(query ? `  Search: ${query}` : this.#canEditSearch() ? "  Type to search" : ""));
+					(query
+						? `  Search: ${query}${this.#filterEditing ? " (INSERT · Esc normal)" : ""}`
+						: this.#canEditSearch()
+							? this.#filterEditing
+								? "  INSERT · Esc normal"
+								: "  i filter · hjkl navigate"
+							: ""));
 	}
 
 	#shouldRenderSearchStatus(): boolean {

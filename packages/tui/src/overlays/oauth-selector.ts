@@ -12,7 +12,7 @@ import {
 	visibleWidth,
 } from "../index";
 import { theme } from "../theme/theme";
-import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../keybinding-matchers";
+import { matchesSelectCancel, matchesSelectDown, matchesSelectUp, pickerNavigationKey } from "../keybinding-matchers";
 import { OverlayPanel } from "../chrome/overlay-box";
 import { Input } from "../components/input";
 import { MenuSelection } from "../components/menu-selection";
@@ -60,6 +60,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 	#visibleCount = 0;
 	/** Visible list window, shrunk by {@link setMaxHeight} on short screens. */
 	#maxVisible = OAUTH_SELECTOR_MAX_VISIBLE;
+	#filterEditing = false;
 	#mode: "login" | "logout";
 	#authStorage: OAuthSelectorAuthSource;
 	#onSelectCallback: (providerId: string) => void;
@@ -265,9 +266,13 @@ export class OAuthSelectorComponent extends OverlayPanel {
 
 	#renderStatusLine(_total: number): string {
 		const query = this.#menu.query.trim();
-		if (!query) return theme.fg("muted", "Type to search");
+		if (!query)
+			return theme.fg("muted", this.#filterEditing ? "INSERT filter · Esc normal" : "i filter · hjkl navigate");
 		const width = visibleWidth(this.#search.getValue()) + 1;
-		return theme.fg("muted", "Search: ") + (this.#search.render(width)[0] ?? "");
+		return (
+			theme.fg("muted", "Search: ") +
+			(this.#filterEditing ? (this.#search.render(width)[0] ?? "") : this.#menu.query)
+		);
 	}
 
 	#getProviderSearchText(provider: OAuthProviderInfo): string {
@@ -371,14 +376,28 @@ export class OAuthSelectorComponent extends OverlayPanel {
 			this.#listContainer.addChild(new TruncatedText(theme.fg("warning", this.#statusMessage), 0, 0));
 		}
 	}
-	handleInput(keyData: string): void {
-		// Escape or Ctrl+C
-		if (matchesSelectCancel(keyData)) {
-			this.stopValidation();
-			this.#onCancelCallback();
-			return;
+	handleInput(rawData: string): void {
+		if (this.#filterEditing) {
+			if (matchesSelectCancel(rawData)) {
+				this.#filterEditing = false;
+				this.#updateList();
+				return;
+			}
+			if (this.#handleSearchInput(rawData)) return;
+			if (extractPrintableText(rawData) !== undefined) return;
+		} else {
+			if (this.#isSearchEnabled() && matchesKey(rawData, "i")) {
+				this.#filterEditing = true;
+				this.#updateList();
+				return;
+			}
+			if (matchesSelectCancel(rawData)) {
+				this.stopValidation();
+				this.#onCancelCallback();
+				return;
+			}
 		}
-
+		const keyData = this.#filterEditing ? rawData : pickerNavigationKey(rawData);
 		// Up arrow
 		if (matchesSelectUp(keyData)) {
 			this.#menu.move(-1, true);

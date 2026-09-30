@@ -32,7 +32,13 @@ import { formatKeyHint } from "../app-keybindings";
 import { editorKey, editorKeys } from "../chrome/keybinding-hints";
 import { highlightCode, type ThemeColor, theme } from "../theme/theme";
 import { commandFromToolCall, extractBlocks, extractLinks } from "./copy-targets";
-import { matchesAppToolsExpand, matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../keybinding-matchers";
+import {
+	matchesAppToolsExpand,
+	matchesSelectCancel,
+	matchesSelectDown,
+	matchesSelectUp,
+	pickerNavigationKey,
+} from "../keybinding-matchers";
 import { ChatTranscriptBuilder } from "../chat/chat-transcript-builder";
 import { TranscriptBrowser, type TranscriptBrowserFrame } from "../chat/transcript-browser";
 import {
@@ -432,7 +438,8 @@ export class CopySelectorComponent implements Component {
 	// Input
 	// ========================================================================
 
-	handleInput(data: string): void {
+	handleInput(rawData: string): void {
+		const data = pickerNavigationKey(rawData);
 		if (data.startsWith("\x1b[<")) {
 			routeSgrMouseInput(data, event => {
 				if (event.wheel !== null) {
@@ -911,8 +918,8 @@ export class CopySelectorComponent implements Component {
 		const enter = formatKeyHint("enter");
 		const cancel = editorKey("tui.select.cancel");
 		const hint = this.#blocks
-			? `${this.#blockSelected + 1}/${this.#blocks.length}  ${upDown} block  ${formatKeyHint("left")}/${cancel} back  ${enter} ${action}${openHint}  click ${theme.cmd.copy}/${theme.cmd.share}`
-			: `${this.#targets.length > 0 ? `${this.#selected + 1}/${this.#targets.length}  ` : ""}${upDown} step  ${blocks.length > 0 ? `${formatKeyHint("right")} blocks  ` : ""}${enter} ${action}  ${this.#truncated ? `${formatKeyHint("a")} earlier turns  ` : ""}${expandKeyHint()} expand  ${cancel} close`;
+			? `${this.#blockSelected + 1}/${this.#blocks.length}  j/k or ${upDown} block  h/${formatKeyHint("left")}/${cancel} back  ${enter} ${action}${openHint}  click ${theme.cmd.copy}/${theme.cmd.share}`
+			: `${this.#targets.length > 0 ? `${this.#selected + 1}/${this.#targets.length}  ` : ""}j/k or ${upDown} step  ${blocks.length > 0 ? `l/${formatKeyHint("right")} blocks  ` : ""}${enter} ${action}  ${this.#truncated ? `${formatKeyHint("a")} earlier turns  ` : ""}${expandKeyHint()} expand  ${cancel} close`;
 		const anchorId = target
 			? this.#blocks
 				? `copy:${target.turnId}:block:${this.#blockSelected}`

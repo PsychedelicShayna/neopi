@@ -50,7 +50,7 @@ import type {
 import { AUTO_THINKING, type ConfiguredThinkingLevel, getConfiguredThinkingLevelMetadata } from "../thinking";
 import { thinkingLevelGlyph } from "../render/render-utils";
 import { theme } from "../theme/theme";
-import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../keybinding-matchers";
+import { matchesSelectCancel, matchesSelectDown, matchesSelectUp, pickerNavigationKey } from "../keybinding-matchers";
 import {
 	buildBrowserItems,
 	MODEL_PICKER_COLUMNS,
@@ -453,6 +453,8 @@ export class ModelHubComponent implements Component {
 	 * the model list; Tab toggles; ←/→ switches between sidebar and list.
 	 */
 	#focus: "scope" | "list" = "scope";
+	/** The browser query receives literal keys only after `i`; Escape returns to navigation. */
+	#filterEditing = false;
 
 	#rolesRows: RolesRow[] = [];
 	#roleIndex = 0;
@@ -559,7 +561,10 @@ export class ModelHubComponent implements Component {
 		this.#browser = new ModelBrowser(settings, {
 			emptyText: () => this.#emptyStateMessage(),
 		});
-		this.#browser.onActivate = item => this.#activateItem(item);
+		this.#browser.onActivate = item => {
+			this.#filterEditing = false;
+			this.#activateItem(item);
+		};
 		this.#browser.onCancel = () => this.#callbacks.onCancel();
 		this.#browser.onQueryChange = query => this.#onQueryChanged(query);
 
@@ -2207,21 +2212,37 @@ export class ModelHubComponent implements Component {
 		this.#buildRolesRows();
 	}
 
-	handleInput(data: string): void {
+	handleInput(rawData: string): void {
 		this.#nativeVersion++;
 		if (this.#assignmentPending) {
-			if (matchesSelectCancel(data)) this.#callbacks.onCancel();
+			if (matchesSelectCancel(rawData)) this.#callbacks.onCancel();
 			return;
 		}
-		if (data.startsWith("\x1b[<")) {
-			routeSgrMouseInput(data, event => this.#routeMouseEvent(event));
+		if (rawData.startsWith("\x1b[<")) {
+			routeSgrMouseInput(rawData, event => this.#routeMouseEvent(event));
 			return;
 		}
 
 		if (this.#strip) {
-			this.#handleStripInput(data);
+			this.#handleStripInput(rawData);
 			return;
 		}
+		if (this.#filterEditing) {
+			if (matchesSelectCancel(rawData)) {
+				this.#filterEditing = false;
+				return;
+			}
+			this.#browser.handleInput(rawData);
+			this.#focus = "list";
+			return;
+		}
+		if (matchesKey(rawData, "i")) {
+			this.#filterEditing = true;
+			this.#focus = "list";
+			if (!this.#isBrowserView(this.#activeEntry())) this.#setActiveEntry("all");
+			return;
+		}
+		const data = pickerNavigationKey(rawData);
 
 		if (matchesSelectCancel(data)) {
 			this.#cancel();
@@ -2290,13 +2311,6 @@ export class ModelHubComponent implements Component {
 		}
 
 		if (rolesView) {
-			const printable = extractPrintableText(data);
-			if (this.#focus === "scope" && printable !== undefined && printable.trim().length > 0) {
-				this.#setActiveEntry("all");
-				this.#focus = "list";
-				this.#browser.handleInput(data);
-				return;
-			}
 			this.#handleRolesViewInput(data);
 			return;
 		}
@@ -2305,13 +2319,7 @@ export class ModelHubComponent implements Component {
 			return;
 		}
 		if (lockedView) {
-			const printable = extractPrintableText(data);
-			if (printable !== undefined && printable.trim().length > 0) {
-				this.#setActiveEntry("all");
-				this.#focus = "list";
-				this.#browser.handleInput(data);
-				return;
-			}
+			// Locked provider scopes have no model rows until credentials are supplied.
 			if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
 				this.#requestLogin(entry);
 			}
@@ -2359,12 +2367,8 @@ export class ModelHubComponent implements Component {
 			return;
 		}
 
-		const beforeQuery = this.#browser.query;
-		const isPrintable = extractPrintableText(data) !== undefined;
+		if (extractPrintableText(data) !== undefined || matchesKey(data, "backspace")) return;
 		this.#browser.handleInput(data);
-		if (isPrintable || this.#browser.query !== beforeQuery) {
-			this.#focus = "list";
-		}
 	}
 
 	/** The cancel key's ladder: close a strip, leave assign mode, clear the query, then close the hub. */
@@ -2379,10 +2383,6 @@ export class ModelHubComponent implements Component {
 		}
 		if (this.#assigning !== null) {
 			this.#cancelAssign();
-			return;
-		}
-		if (this.#isBrowserView(this.#activeEntry()) && this.#browser.query.length > 0) {
-			this.#browser.handleCancel();
 			return;
 		}
 		this.#callbacks.onCancel();
@@ -3185,11 +3185,12 @@ export class ModelHubComponent implements Component {
 			if (strip.kind === "scope") return `${leftRight} save scope · ${enter} choose · ${cancel} cancel`;
 			return `${leftRight} thinking level · ${enter} apply · ${cancel} keep`;
 		}
+		if (this.#filterEditing) return "INSERT filter · hjkl type literally · Esc normal";
 		if (this.#assigning !== null) {
 			if (this.#focus === "scope") {
-				return `${enterRight} models · ${upDown} providers · type to search · ${altLeftRight} kind · ${cancel} cancel`;
+				return `${enterRight} models · ${upDown} providers · hjkl navigate · i filter · ${altLeftRight} kind · ${cancel} cancel`;
 			}
-			const browse = `${upDown} models · ${left} providers · type to search · ${altLeftRight} kind · ${cancel} cancel`;
+			const browse = `${upDown} models · ${left} providers · hjkl navigate · i filter · ${altLeftRight} kind · ${cancel} cancel`;
 			switch (this.#assigning.kind) {
 				case "fallback":
 					return `${enter} pick fallback · ${browse}`;
@@ -3202,12 +3203,12 @@ export class ModelHubComponent implements Component {
 		const entry = this.#activeEntry();
 		if (entry.kind === "effort") {
 			return this.#focus === "list"
-				? "↑/↓ rules · Enter edit/add · x remove · [/] reorder patterns · ← scopes"
-				: "↑/↓ scopes · Enter/→ effort rules · Esc close";
+				? "↑/↓ rules · hjkl navigate · Enter edit/add · x remove · [/] reorder patterns · ← scopes"
+				: "↑/↓ scopes · hjkl navigate · Enter/→ effort rules · Esc close";
 		}
 		if (entry.kind === "roles") {
 			if (this.#focus !== "list") {
-				return `${upDown} providers · ${enterRight} roles · ${altLeftRight} tabs · ${cancel} close`;
+				return `${upDown} providers · ${enterRight} roles · hjkl navigate · ${altLeftRight} tabs · ${cancel} close`;
 			}
 			const row = this.#rolesRows[this.#roleIndex];
 			if (row?.kind === "fallback") {
@@ -3239,9 +3240,9 @@ export class ModelHubComponent implements Component {
 		}
 		const refresh = entry.kind === "provider" ? ` · ${formatKeyHint("f5")} refresh` : "";
 		if (this.#focus === "scope") {
-			return `${enterRight} models · ${upDown} providers · type to search · ${altLeftRight} kind${refresh} · ${cancel} close`;
+			return `${enterRight} models · ${upDown} providers · hjkl navigate · i filter · ${altLeftRight} kind${refresh} · ${cancel} close`;
 		}
-		return `${enter} assign roles · ${upDown} models · ${left} providers · type to search · ${altLeftRight} kind${refresh} · ${cancel} close`;
+		return `${enter} assign roles · ${upDown} models · ${left} providers · hjkl navigate · i filter · ${altLeftRight} kind${refresh} · ${cancel} close`;
 	}
 
 	#renderFooter(width: number): string {
@@ -4317,7 +4318,16 @@ export class ModelHubComponent implements Component {
 	/** Picker pointer events, each on the path of the key it stands for. */
 	#handlePickerEvent(event: PickerEvent): void {
 		if (event.kind === "action" && event.act === CLOSE_ACTION.id) {
-			this.#cancel();
+			if (
+				!this.#strip &&
+				this.#assigning === null &&
+				this.#isBrowserView(this.#activeEntry()) &&
+				this.#browser.query
+			) {
+				this.#browser.handleCancel();
+			} else {
+				this.#cancel();
+			}
 			return;
 		}
 		// Same gate as the keys: only cancel works while an assignment applies.

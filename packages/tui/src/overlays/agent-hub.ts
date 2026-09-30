@@ -44,7 +44,7 @@ import { formatLocalDateTimeWithOffset } from "../chrome/local-date";
 import { getContextUsageLevel, getContextUsageTone } from "../chrome/context-thresholds";
 import type { ObservableSession, SessionObserverRegistry } from "./session-observer-registry";
 import { theme } from "../theme/theme";
-import { matchesSelectDown, matchesSelectUp } from "../keybinding-matchers";
+import { matchesSelectDown, matchesSelectUp, pickerNavigationKey } from "../keybinding-matchers";
 import {
 	type AgentMetrics,
 	type AggregateMetrics,
@@ -587,6 +587,17 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			this.#handleActivitySearchInput(keyData);
 			return;
 		}
+		if (this.#section === "agents" && this.#agentFilterEditing) {
+			this.#handleTableInput(keyData);
+			return;
+		}
+		if (keyData === "i") {
+			if (this.#section === "activity") this.#activitySearchEditing = true;
+			else this.#agentFilterEditing = true;
+			this.#requestRender();
+			return;
+		}
+		keyData = pickerNavigationKey(keyData);
 		if (keyData === "1") {
 			this.#switchSection("agents");
 			return;
@@ -1746,7 +1757,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			row(
 				theme.fg(
 					"dim",
-					`1:agents  ${formatKeyHints(["j", "k"])}:select  ${formatKeyHint("enter")}:transcript  ${formatKeyHint("space")}:follow  ${formatKeyHint("f")}:filter  ${formatKeyHint("s")}:scope  /:search  ${formatKeyHint("escape")}:close`,
+					`1:agents  hjkl:navigate  ${formatKeyHint("enter")}:transcript  ${formatKeyHint("space")}:follow  ${formatKeyHint("f")}:filter  ${formatKeyHint("s")}:scope  i:search  ${formatKeyHint("escape")}:close`,
 				),
 				width,
 			),
@@ -1822,12 +1833,12 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		if (availableWidth < 96) {
 			return theme.fg(
 				"dim",
-				`${filter}${formatKeyHints(["j", "k"])}:select  ${formatKeyHint("enter")}:open  ${formatKeyHint("t")}:${nextView}  ${formatKeyHint("tab")}:details  ${formatKeyHints(["r", "x"])}:manage  ${formatKeyHint("escape")}:close`,
+				`${filter}hjkl:navigate  i:filter  ${formatKeyHint("enter")}:open  ${formatKeyHint("t")}:${nextView}  ${formatKeyHint("tab")}:details  ${formatKeyHints(["r", "x"])}:manage  ${formatKeyHint("escape")}:close`,
 			);
 		}
 		return theme.fg(
 			"dim",
-			`${filter}1:agents  2:activity  ${formatKeyHints(["j", "k"])}/wheel:select  ${formatKeyHints(["pageUp", "pageDown"])}:details  ${formatKeyHint("enter")}/click:open  ${formatKeyHint("t")}:${nextView}  ${formatKeyHint("r")}:revive  ${formatKeyHint("x")}:kill  ${formatKeyHint("escape")}:close`,
+			`${filter}1:agents  2:activity  hjkl/wheel:navigate  i:filter  ${formatKeyHints(["pageUp", "pageDown"])}:details  ${formatKeyHint("enter")}/click:open  ${formatKeyHint("t")}:${nextView}  ${formatKeyHint("r")}:revive  ${formatKeyHint("x")}:kill  ${formatKeyHint("escape")}:close`,
 		);
 	}
 
@@ -2298,13 +2309,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 
 	#handleActivityInput(keyData: string): void {
 		if (matchesKey(keyData, "escape")) {
-			if (this.#activitySearch.getValue()) {
-				this.#activitySearch.setValue("");
-				this.#refreshActivityRows();
-				this.#requestRender();
-			} else {
-				this.#onDone();
-			}
+			this.#onDone();
 			return;
 		}
 		if (matchesKey(keyData, "left")) {
@@ -2388,7 +2393,6 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		if (this.#agentFilterEditing) {
 			if (matchesKey(keyData, "escape") || matchesKey(keyData, "enter") || keyData === "\r" || keyData === "\n") {
 				this.#agentFilterEditing = false;
-				if (matchesKey(keyData, "escape")) this.#agentFilter.setValue("");
 			} else {
 				const before = this.#agentFilter.getValue();
 				if (!this.#agentFilter.handleInput(keyData)) return;
@@ -2402,11 +2406,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			return;
 		}
 		if (matchesKey(keyData, "escape")) {
-			if (this.#agentFilter.getValue()) {
-				this.#agentFilter.setValue("");
-				this.#refreshRows();
-				this.#requestRender();
-			} else if (this.#narrowDetailsOpen && this.#split.mode !== "split") {
+			if (this.#narrowDetailsOpen && this.#split.mode !== "split") {
 				this.#narrowDetailsOpen = false;
 				this.#requestRender();
 			} else {
@@ -2451,6 +2451,11 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			} else {
 				this.#lastLeftTap = now;
 			}
+			return;
+		}
+		if (matchesKey(keyData, "right")) {
+			if (this.#split.mode !== "split" && this.#rows.length > 0) this.#narrowDetailsOpen = true;
+			this.#requestRender();
 			return;
 		}
 		this.#hoveredRow = null;

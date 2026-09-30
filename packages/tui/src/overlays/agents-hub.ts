@@ -34,7 +34,13 @@ import type { AgentSource } from "../tools/task";
 import { shortenPath } from "../render/render-utils";
 import { sanitizeDisplaySingleLine } from "./extensions/display-text";
 import { getEditorTheme, theme } from "../theme";
-import { matchesAppFollowUp, matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../keybinding-matchers";
+import {
+	matchesAppFollowUp,
+	matchesSelectCancel,
+	matchesSelectDown,
+	matchesSelectUp,
+	pickerNavigationKey,
+} from "../keybinding-matchers";
 import { formatKeyHint, formatKeyHints } from "../app-keybindings";
 import { boundKeys, editorKey, editorKeys } from "../chrome/keybinding-hints";
 import {
@@ -210,6 +216,7 @@ export class AgentsHubComponent implements Component {
 	#listScroll = 0;
 	/** Type-to-filter field for the agent list (chrome-less; the hub draws `search:`). */
 	readonly #search = Object.assign(new Input(), { prompt: "" });
+	#filterEditing = false;
 	#notice: string | null = null;
 	#loadError: string | null = null;
 
@@ -706,18 +713,26 @@ export class AgentsHubComponent implements Component {
 			return;
 		}
 
-		if (matchesSelectCancel(data)) {
-			if (this.#assigning) {
-				this.#cancelAssign();
-				return;
-			}
-			if (this.#search.getValue()) {
-				this.#search.setValue("");
-				this.#buildRows();
-				this.#clampRowIndex();
+		if (this.#filterEditing) {
+			if (matchesSelectCancel(data)) {
+				this.#filterEditing = false;
 				this.#requestRender();
-				return;
+			} else if (this.#assigning) {
+				this.#browser.handleInput(data);
+				this.#requestRender();
+			} else {
+				this.#handleFilterInput(data);
 			}
+			return;
+		}
+		if (matchesKey(data, "i")) {
+			this.#filterEditing = true;
+			this.#focus = "list";
+			this.#requestRender();
+			return;
+		}
+		data = pickerNavigationKey(data);
+		if (matchesSelectCancel(data)) {
 			this.#callbacks.onCancel();
 			return;
 		}
@@ -791,7 +806,9 @@ export class AgentsHubComponent implements Component {
 			if (agent) this.#toggleAgent(agent);
 			return;
 		}
-		// Type-to-filter: every other key edits the search field.
+	}
+
+	#handleFilterInput(data: string): void {
 		const before = this.#search.getValue();
 		if (!this.#search.handleInput(data)) return;
 		const value = this.#search.getValue();
@@ -1032,8 +1049,8 @@ export class AgentsHubComponent implements Component {
 		const lines: string[] = [];
 		const query = this.#search.getValue();
 		const searchText = query
-			? theme.fg("accent", this.#search.render(visibleWidth(query) + 1)[0] ?? "")
-			: theme.fg("dim", "type to filter");
+			? theme.fg("accent", this.#filterEditing ? (this.#search.render(visibleWidth(query) + 1)[0] ?? "") : query)
+			: theme.fg("dim", "i to filter");
 		lines.push(truncateToWidth(` ${theme.fg("muted", "search:")} ${searchText}`, width));
 		lines.push("");
 		this.#listRowStart = lines.length;
@@ -1203,8 +1220,9 @@ export class AgentsHubComponent implements Component {
 				? `${choose} choose · ${enter} apply · ${cancel} back`
 				: `${choose} choose · ${enter} open · ${cancel} cancel`;
 		}
+		if (this.#filterEditing) return "INSERT filter · hjkl type literally · Esc normal";
 		if (this.#assigning) {
-			return `${enter} pick · ${upDown} models · type to search · ${cancel} cancel`;
+			return `${enter} pick · hjkl navigate · i filter · ${cancel} cancel`;
 		}
 		if (this.#createActive) {
 			const tab = formatKeyHint("tab");
@@ -1215,9 +1233,9 @@ export class AgentsHubComponent implements Component {
 			return `${generate} generate · ${enter} newline · ${tab} scope · ${cancel} cancel`;
 		}
 		if (this.#focus === "scope") {
-			return `${upDown} scopes · ${formatKeyHints(["right", "enter"])} agents · ${cancel} close`;
+			return `${upDown} scopes · ${formatKeyHints(["right", "enter"])} agents · hjkl navigate · i filter · ${cancel} close`;
 		}
-		return `${enter} configure · ${formatKeyHint("space")} enable/disable · ${upDown} rows · type to search · ${formatKeyHint("ctrl+r")} reload · ${cancel} close`;
+		return `${enter} configure · ${formatKeyHint("space")} enable/disable · hjkl navigate · i filter · ${formatKeyHint("ctrl+r")} reload · ${cancel} close`;
 	}
 
 	#renderFooter(width: number): string {

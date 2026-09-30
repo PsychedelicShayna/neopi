@@ -2,7 +2,7 @@ import type { UsageResetCreditDetail } from "@oh-my-pi/pi-ai";
 import { Container, matchesKey, ScrollView, Spacer, Text, TruncatedText } from "../index";
 import { formatDuration, sanitizeText } from "@oh-my-pi/pi-utils";
 import { theme } from "../theme/theme";
-import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../keybinding-matchers";
+import { matchesSelectCancel, matchesSelectDown, matchesSelectUp, pickerNavigationKey } from "../keybinding-matchers";
 import { OverlayPanel } from "../chrome/overlay-box";
 import { MenuSelection } from "../components/menu-selection";
 import { centeredViewportRange } from "../components/scroll-viewport";
@@ -155,7 +155,7 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 			? theme.fg("warning", oneLine(this.#confirmationMessage(pending)))
 			: theme.fg(
 					"muted",
-					`${editorKeys("tui.select.up", "tui.select.down")} select · ${formatKeyHint("enter")} spend a reset · ${editorKey("tui.select.cancel")} cancel`,
+					`j/k or ${editorKeys("tui.select.up", "tui.select.down")} select · ${formatKeyHint("enter")} spend a reset · ${editorKey("tui.select.cancel")} cancel`,
 				);
 		this.#listContainer.addChild(new Text(hint, 0, 0));
 
@@ -182,7 +182,8 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 		return messages.join(" ");
 	}
 
-	handleInput(keyData: string): void {
+	handleInput(rawData: string): void {
+		const keyData = pickerNavigationKey(rawData);
 		if (matchesSelectCancel(keyData)) {
 			if (this.#menu.cancelConfirmation()) {
 				this.#statusMessage = undefined;

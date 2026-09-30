@@ -63,6 +63,7 @@ function makeHarness(sessions: SessionInfo[], historyMatcher?: (query: string) =
 	);
 	selector.setOnRequestRender(() => renders++);
 	const list = selector.getSessionList();
+	list.handleInput("i");
 	const filtered = (): SessionInfo[] => {
 		const out: SessionInfo[] = [];
 		list.onSelect = session => {

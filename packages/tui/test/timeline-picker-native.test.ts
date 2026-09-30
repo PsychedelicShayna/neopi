@@ -259,21 +259,21 @@ describe("session tree picker", () => {
 		expect(p.selected).toBe("a3");
 	});
 
-	test("typing and filter tabs change the order, never the catalogue", () => {
+	test("filter mode narrows visible tree entries until the query is cleared", () => {
 		const selector = treeSelector();
-		const { items } = treeProps(selector);
+		selector.handleInput("i");
 		typeText(selector, "explain");
 		const searched = treeProps(selector);
-		expect(searched.items).toBe(items);
 		expect(searched.query).toBe("explain");
 		expect(searched.order).toEqual(["u3"]);
 
 		selector.handleInput("\x1b");
+		expect(treeProps(selector).query).toBe("explain");
+		selector.handleNativeEvent({ type: "action", key: "^picker", act: "clear", mods: [] });
 		selector.handleNativeEvent({ type: "action", key: "^picker", act: "tab", value: "user-only", mods: [] });
 		const users = treeProps(selector);
 		expect(users.tab).toBe("user-only");
 		expect(users.order).toEqual(["u1", "u2", "u3"]);
-		expect(users.items).toBe(items);
 	});
 
 	test("pointer events take the keys' paths: select, Summarize & switch, Close", () => {

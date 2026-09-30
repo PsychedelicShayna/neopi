@@ -40,7 +40,13 @@ import {
 import type { MessageRenderer } from "../chat/extension-types";
 import { recentTranscriptEntries, type TranscriptEntryLike as TranscriptEntry } from "../chat/transcript-entry";
 import { theme } from "../theme/theme";
-import { matchesAppToolsExpand, matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../keybinding-matchers";
+import {
+	matchesAppToolsExpand,
+	matchesSelectCancel,
+	matchesSelectDown,
+	matchesSelectUp,
+	pickerNavigationKey,
+} from "../keybinding-matchers";
 import { ChatTranscriptBuilder } from "../chat/chat-transcript-builder";
 import { TranscriptBrowser, type TranscriptBrowserFrame } from "../chat/transcript-browser";
 import { padToWidth } from "../render/utils";
@@ -307,7 +313,8 @@ export class RewindSelectorComponent implements Component {
 	// Input
 	// ========================================================================
 
-	handleInput(data: string): void {
+	handleInput(rawData: string): void {
+		const data = this.#filter === undefined ? pickerNavigationKey(rawData) : rawData;
 		if (data.startsWith("\x1b[<")) {
 			routeSgrMouseInput(data, event => {
 				if (event.wheel !== null) {
@@ -327,7 +334,7 @@ export class RewindSelectorComponent implements Component {
 			this.deps.onCancel();
 			return;
 		}
-		if (matchesKey(data, "f")) {
+		if (matchesKey(rawData, "f") || matchesKey(rawData, "i")) {
 			this.#openFilter();
 			return;
 		}
@@ -953,7 +960,7 @@ export class RewindSelectorComponent implements Component {
 		const upDown = editorKeys("tui.select.up", "tui.select.down");
 		const leftRight = formatKeyHints(["left", "right"]);
 		const lateral = columns.length > 0 ? `${leftRight} branches` : `${leftRight} user turns`;
-		const keys = `${upDown} step  ${lateral}  ${formatKeyHint("f")} filter  ${formatKeyHint("enter")} rewind  ${this.#truncated ? `${formatKeyHint("a")} earlier turns  ` : ""}${expandKeyHint()} expand  ${editorKey("tui.select.cancel")} cancel`;
+		const keys = `hjkl or ${upDown} step  ${lateral}  i/${formatKeyHint("f")} filter  ${formatKeyHint("enter")} rewind  ${this.#truncated ? `${formatKeyHint("a")} earlier turns  ` : ""}${expandKeyHint()} expand  ${editorKey("tui.select.cancel")} cancel`;
 		return {
 			header: [this.#header()],
 			body: {

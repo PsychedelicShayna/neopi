@@ -110,12 +110,11 @@ describe("session selector picker", () => {
 		expect(props(selector.describe(withPicker)).size).toBe("screen");
 	});
 
-	it("keeps the catalogue while typing: only order, hits and selection follow the query", () => {
+	it("filters session picker results only after entering filter mode", () => {
 		const selector = make();
-		const before = props(selector.describe(withPicker));
+		selector.handleInput("i");
 		type(selector, "gam");
 		const after = props(selector.describe(withPicker));
-		expect(after.items).toBe(before.items);
 		expect(after.query).toBe("gam");
 		expect(after.order).toEqual([old.path]);
 		expect(after.hits).toEqual({ [old.path]: [[0, 3]] });

@@ -85,6 +85,31 @@ describe("tree selector entry labels", () => {
 		await themeModule.initTheme(false, undefined, undefined, "dark", "light");
 	});
 
+	it("uses e for labeling instead of Shift+L, which remains a right-arrow motion", () => {
+		const changes: Array<[string, string | undefined]> = [];
+		const selector = new TreeSelectorComponent(
+			[chain([userEntry])],
+			"u1",
+			40,
+			() => {},
+			() => {},
+			(id, label) => changes.push([id, label]),
+		);
+		selector.handleInput("L");
+		expect(visibleRows(selector).join("\n")).not.toContain("Label (empty to remove)");
+		selector.handleInput("e");
+		expect(visibleRows(selector).join("\n")).toContain("Label (empty to remove)");
+		for (const key of "note") selector.handleInput(key);
+		selector.handleInput("\n");
+		expect(changes).toEqual([["u1", "note"]]);
+	});
+
+	it("never renders a row as a bare bullet", () => {
+		const selector = selectorFor([userEntry, ...bookkeeping]);
+		selector.handleInput(ALT_A);
+		const bullets = visibleRows(selector).filter(row => /^[\s│├└─›]*•\s*$/.test(row));
+		expect(bullets).toEqual([]);
+	});
 	it("labels each bookkeeping entry with what it recorded", () => {
 		const selector = selectorFor([userEntry, ...bookkeeping]);
 		selector.handleInput(ALT_A);
@@ -116,8 +141,10 @@ describe("tree selector entry labels", () => {
 		]) {
 			const selector = selectorFor([userEntry, ...bookkeeping]);
 			selector.handleInput(ALT_A);
+			selector.handleInput("i");
 			selector.handleInput(query);
 			expect(visibleRows(selector).join("\n")).toContain(expected);
+			expect(visibleRows(selector).join("\n")).not.toContain("[reset boundary]");
 		}
 	});
 
