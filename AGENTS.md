@@ -83,6 +83,8 @@ When authorized to create or edit a contributor-submitted PR, follow the checkli
 
 Authorized exception: the Issue Funnel seat (`IssueFunnel` / Rue) may publish and amend issues per `docs/agents/issue-funnel.md`. Other seats still follow the two rules above.
 
+Authorized exception: an owner's standing authorization to babysit a PR covers, on that PR only, the GitHub actions listed in `docs/agents/pr-review-bots.md` › Authorization: requesting bot reviews, and replying to and resolving review-bot threads. Threads from human reviewers still need confirmation under the GitHub rules above.
+
 ## Code Quality
 
 - No `any` unless absolutely necessary.
@@ -413,3 +415,9 @@ Use the five canonical triage labels without aliases. See
 
 Use the multi-context layout rooted at `CONTEXT-MAP.md`. See
 `docs/agents/domain.md`.
+
+### PR review bots
+
+PRs merge only when CI is green and the latest round from every review bot is
+clean. Use the `babysit-pr` skill to get there. See
+`docs/agents/pr-review-bots.md` and `docs/adr/0001-pr-review-bot-merge-gate.md`.
