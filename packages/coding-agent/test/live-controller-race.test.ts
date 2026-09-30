@@ -28,9 +28,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AgentRegistry } from "../src/registry/agent-registry";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
 import type { CustomMessage } from "../src/session/messages";
 import { LiveSessionController } from "../src/live/controller";
+import { LiveIngest } from "../src/live/ingest";
+import {
+	LIVE_INGEST_DEFAULTS,
+	type LiveIngestSettingsSource,
+} from "../src/live/ingest-settings";
+import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, type SubagentLifecyclePayload } from "../src/task/types";
+import { EventBus, emitSubagentFrame } from "../src/utils/event-bus";
 import type { LiveClientMessage, LiveServerEvent } from "../src/live/protocol";
 
 function deferred<T = void>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (cause: unknown) => void } {
@@ -99,6 +107,7 @@ interface DeliveryControl {
 
 interface Harness {
 	controller: LiveSessionController;
+	session: AgentSession;
 	sent: LiveClientMessage[];
 	aborts: Array<Record<string, unknown>>;
 	prompts: string[];
@@ -263,6 +272,7 @@ function makeHarness(options?: {
 	});
 
 	return {
+		session,
 		controller,
 		sent,
 		aborts,
@@ -1261,7 +1271,7 @@ describe("live controller delegation ownership", () => {
 		const h = makeHarness({ speakableIdleMs: 60_000 });
 		const receipts: Array<[number, boolean]> = [];
 		let count = 257;
-		let alertsEnabled = true;
+		const alertsEnabled = true;
 		expect(h.controller.appendSpeakableContext("preconnect report")).toBe(false);
 		h.controller.appendCommentaryContext("preconnect commentary");
 		expect(h.controller.appendOverflowAlertContext(
@@ -1284,6 +1294,67 @@ describe("live controller delegation ownership", () => {
 		h.fireLive(delegation("overflow-release", "")); await settle(40);
 		expect(speakableTexts(h.sent)).toContain("Red alert: 321 deployments; authorization not checked.");
 		expect(receipts).toEqual([[7, true]]);
+		await h.controller.stop();
+	});
+	it("routes a real lifecycle frame through LiveIngest and the connected live controller", async () => {
+		const h = makeHarness();
+		await h.controller.start();
+		const registry = new AgentRegistry();
+		registry.register({ id: "main", displayName: "main", kind: "main", session: h.session, status: "running" });
+		registry.register({ id: "worker", displayName: "worker", kind: "sub", parentId: "main", session: null, status: "running" });
+		const bus = new EventBus();
+		const liveSettings = {
+			...LIVE_INGEST_DEFAULTS,
+			subagentClassifier: false,
+			effortAlerts: false,
+			startAnnounceQuietMs: 0,
+		};
+		const source = {
+			get: () => liveSettings,
+			listen: () => () => {},
+		} as unknown as LiveIngestSettingsSource;
+		const timers = new Map<number, { fn: () => void; ms: number }>();
+		let nextTimer = 0;
+		const ingest = new LiveIngest({
+			session: h.session,
+			registry,
+			subagentEventBus: bus,
+			settings: source,
+			sink: h.controller,
+			extractAssistantText: () => "",
+			setTimer: (fn, ms) => {
+				const id = ++nextTimer;
+				timers.set(id, { fn, ms });
+				return () => { timers.delete(id); };
+			},
+		});
+		ingest.attach();
+		const start = {
+			id: "worker",
+			runToken: "run-1",
+			depth: 1,
+			runKind: "spawn",
+			agent: "Sol",
+			agentSource: "bundled",
+			index: 0,
+			status: "started",
+		} satisfies SubagentLifecyclePayload;
+		emitSubagentFrame(bus, bus, TASK_SUBAGENT_LIFECYCLE_CHANNEL, start);
+		for (const [id, timer] of timers) if (timer.ms === 0) {
+			timers.delete(id);
+			timer.fn();
+		}
+		emitSubagentFrame(bus, bus, TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
+			...start,
+			status: "completed",
+			outcomeExcerpt: "integrated path passed",
+		});
+		await settle();
+		expect(speakableTexts(h.sent)).toEqual([
+			"Subagents started: Sol, depth 1.",
+			"Subagent report from Sol: (completed) integrated path passed",
+		]);
+		ingest.detach();
 		await h.controller.stop();
 	});
 

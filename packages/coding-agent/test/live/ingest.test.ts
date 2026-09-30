@@ -1,5 +1,6 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, vi } from "bun:test";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { logger } from "@oh-my-pi/pi-utils";
 import { Settings } from "../../src/config/settings";
 import type { AgentSession } from "../../src/session/agent-session";
 import { AgentRegistry } from "../../src/registry/agent-registry";
@@ -7,7 +8,7 @@ import { EventBus, emitSubagentFrame } from "../../src/utils/event-bus";
 import { TASK_SUBAGENT_EVENT_CHANNEL, TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL, type SubagentLifecyclePayload } from "../../src/task/types";
 import { LIVE_INGEST_DEFAULTS, type LiveIngestPersonaSettings, type LiveIngestSettingsSource } from "../../src/live/ingest-settings";
 import { LiveIngest } from "../../src/live/ingest";
-import type { ClassifierInput, ClassifierResult } from "../../src/live/ingest-classifier";
+import type { ClassifierInput, ClassifierResult, ClassifierSelection } from "../../src/live/ingest-classifier";
 import type { CatalogIo } from "../../src/live/model-catalog";
 
 const catalog = (recommendation: "never" | "avoid" | "ok" | null = "never") => JSON.stringify({
@@ -15,8 +16,16 @@ const catalog = (recommendation: "never" | "avoid" | "ok" | null = "never") => J
  metrics:Object.fromEntries(["economy","performance","stability","speed"].map(key=>[key,{scale:"0-5",meaning:"operator"}])),
  models:{"openai-codex/gpt-6-astra":{family:"GPT-6",behavior:"",notes:"",efforts:{max:{economy:null,performance:null,stability:null,speed:null,recommendation,reason:""}}}},
 });
+const flush = async () => {
+ for(let index=0;index<8;index++) await Promise.resolve();
+};
 
-function harness(overrides: Partial<LiveIngestPersonaSettings> = {}, classify?: (input:ClassifierInput) => Promise<ClassifierResult>, catalogIo?:CatalogIo) {
+function harness(
+ overrides: Partial<LiveIngestPersonaSettings> = {},
+ classify?: (input:ClassifierInput, options:{signal:AbortSignal;selection:ClassifierSelection;onPromptStart:()=>void}) => Promise<ClassifierResult>,
+ catalogIo?:CatalogIo,
+ classifierRuntime?: { settings?: Settings; models?: ClassifierSelection["model"][] },
+) {
  let now = 10_000;
  const timers = new Map<number,{when:number;fn:()=>void}>(); let nextTimer = 0;
  const advance = async (ms:number) => {
@@ -35,12 +44,14 @@ function harness(overrides: Partial<LiveIngestPersonaSettings> = {}, classify?: 
  const change = (patch:Partial<LiveIngestPersonaSettings>) => { const previous=current; current={...current,...patch}; for (const fn of listeners) fn(current,previous); };
  const sessionListeners = new Set<(event:any)=>void>();
  const haiku = getBundledModel("anthropic","claude-haiku-4-5")!;
- const session = { subscribe:(fn:(event:any)=>void)=>{sessionListeners.add(fn);return()=>sessionListeners.delete(fn);}, messages:[], settings:Settings.isolated({modelRoles:{classifier:"anthropic/claude-haiku-4-5"}}), modelRegistry:{getAvailable:()=>[haiku],standardContextWindow:()=>200000} } as unknown as AgentSession;
+ const classifierSettings = classifierRuntime?.settings ?? Settings.isolated({modelRoles:{classifier:"anthropic/claude-haiku-4-5"}});
+ const models = classifierRuntime?.models ?? [haiku];
+ const session = { subscribe:(fn:(event:any)=>void)=>{sessionListeners.add(fn);return()=>sessionListeners.delete(fn);}, messages:[], settings:classifierSettings, modelRegistry:{getAvailable:()=>models,standardContextWindow:()=>200000} } as unknown as AgentSession;
  const registry = new AgentRegistry(); registry.register({id:"main",displayName:"main",kind:"main",session,status:"running"});
  const bus = new EventBus(); const spoken:Array<{text:string;kind:string;guard:()=>boolean;settle?:()=>void}> = []; const commentary:string[]=[];
  const overflow:Array<{render:()=>{text:string;receiptId:number};guard:()=>boolean;receipt:(id:number,ok:boolean)=>void}> = [];
  const sink = { appendSpeakableContext:(text:string,kind="report",guard=()=>true,settle?:()=>void)=>{spoken.push({text,kind,guard,settle});return true;}, appendCommentaryContext:(text:string)=>{commentary.push(text);}, appendOverflowAlertContext:(render:()=>{text:string;receiptId:number},guard:()=>boolean,receipt:(id:number,ok:boolean)=>void)=>{overflow.push({render,guard,receipt});return true;} };
- const ingest = new LiveIngest({session,registry,subagentEventBus:bus,settings,sink: sink as any,catalogIo,extractAssistantText:m=>m.content.filter(b=>b.type==="text").map(b=>b.text).join(""),now:()=>now,setTimer:(fn,ms)=>{const id=++nextTimer;timers.set(id,{fn,when:now+ms});return()=>{timers.delete(id);};},classify:classify && (async (input)=>classify(input))});
+ const ingest = new LiveIngest({session,registry,subagentEventBus:bus,settings,sink: sink as any,catalogIo,extractAssistantText:m=>m.content.filter(b=>b.type==="text").map(b=>b.text).join(""),now:()=>now,setTimer:(fn,ms)=>{const id=++nextTimer;timers.set(id,{fn,when:now+ms});return()=>{timers.delete(id);};},classify:classify && ((input,options)=>classify(input,options))});
  const child = (id:string,parentId="main",kind:"sub"|"advisor"="sub")=>registry.register({id,displayName:id,kind,parentId,session:null,status:"running"});
  const start=(token:string,id=token,depth=1,model?:string,effort?:string,runKind:"spawn"|"wake"|"followUp"="spawn")=>{
   const frame={id,runToken:token,depth,runKind,agent:id,agentSource:"bundled",index:0,status:"started",runEffectiveModelIdentity:model,runEffectiveThinkingLevel:effort} satisfies SubagentLifecyclePayload;
@@ -49,7 +60,7 @@ function harness(overrides: Partial<LiveIngestPersonaSettings> = {}, classify?: 
  const terminal=(frame:SubagentLifecyclePayload,status:"completed"|"failed"|"aborted"="completed",outcomeExcerpt="done")=>emitSubagentFrame(bus,bus,TASK_SUBAGENT_LIFECYCLE_CHANNEL,{...frame,status,outcomeExcerpt});
  const progress=(token:string,id=token,model?:string,effort?:string,owned=true)=>emitSubagentFrame(bus,bus,TASK_SUBAGENT_PROGRESS_CHANNEL,{runToken:token,owned,agent:id,agentSource:"task",index:0,task:"test",progress:{recentOutput:["new output"],resolvedModel:"historical-max",resolvedThinkingLevel:"max"},runEffectiveModelIdentity:model,runEffectiveThinkingLevel:effort});
  const message=(token:string,type:"message_update"|"message_end",thinking:string,text="",owned=true,stopReason?:string)=>bus.emit(TASK_SUBAGENT_EVENT_CHANNEL,{id:token,runToken:token,owned,event:{type,message:{role:"assistant",content:[{type:"thinking",thinking},{type:"text",text}],stopReason}}});
- return {ingest,bus,registry,session,spoken,commentary,overflow,settings,change,child,start,terminal,progress,message,advance,timers,emit:(event:any)=>{for(const fn of sessionListeners) fn(event);}};
+ return {ingest,bus,registry,session,spoken,commentary,overflow,settings,change,child,start,terminal,progress,message,advance,timers,now:()=>now,emit:(event:any)=>{for(const fn of sessionListeners) fn(event);}};
 }
 
 describe("live ingest",()=>{
@@ -115,6 +126,121 @@ describe("live ingest",()=>{
   expect(inputs.length).toBeGreaterThanOrEqual(2);
   expect(inputs.at(-1)!.agents.map(r=>r.token)).toEqual(["A","B"]);
   expect(h.spoken.some(s=>s.text.includes("Now tracking b") && s.text.includes("released a"))).toBe(true);
+  h.ingest.detach();
+ });
+ test("scores all ten runs before choosing the eight voiced reports",async()=>{
+  const debug=vi.spyOn(logger,"debug").mockImplementation(()=>{});
+  const requests:ClassifierInput[]=[];
+  const h=harness({classifierQuietMs:100,voicedSlotsByDepth:[8],startAnnounceQuietMs:10_000},async input=>{
+   requests.push(input);
+   return {scores:new Map(input.agents.map((agent,index)=>[agent.token,(index+1)/10]))};
+  });
+  h.ingest.attach();
+  const frames:SubagentLifecyclePayload[]=[];
+  for(let index=0;index<10;index++){
+   const id=`worker-${index}`;
+   h.child(id);
+   frames.push(h.start(`T${index}`,id,1,"openai-codex/gpt-6-sol","high"));
+  }
+  await h.advance(100);
+  expect(requests).toHaveLength(1);
+  expect(requests[0].agents.map(agent=>agent.token)).toEqual(frames.map(frame=>frame.runToken));
+  expect(debug).toHaveBeenCalledWith("live ingest: classified 10 subagents");
+  h.terminal(frames[0],"completed","low zero");
+  h.terminal(frames[1],"completed","low one");
+  expect(h.spoken.some(item=>item.text.includes("low zero")||item.text.includes("low one"))).toBe(false);
+  for(const frame of frames.slice(2)) h.terminal(frame,"completed",`accepted ${frame.runToken}`);
+  const reports=h.spoken.filter(item=>item.text.startsWith("Subagent report"));
+  expect(reports).toHaveLength(8);
+  expect(reports.map(item=>item.text)).toEqual(expect.arrayContaining(frames.slice(2).map(frame=>expect.stringContaining(`accepted ${frame.runToken}`))));
+  debug.mockRestore();
+  h.ingest.detach();
+ });
+ test("snapshots active runs and starts a fresh epoch after an aborted classifier drains",async()=>{
+  const first=Promise.withResolvers<ClassifierResult>();
+  const calls:Array<{input:ClassifierInput;signal:AbortSignal}>=[];
+  const h=harness({classifierQuietMs:100},async (input,options)=>{
+   calls.push({input,signal:options.signal});
+   if(calls.length===1)return first.promise;
+   return {scores:new Map(input.agents.map(agent=>[agent.token,.7]))};
+  });
+  h.child("one");
+  h.start("A","one",1,"openai-codex/gpt-6-sol","high");
+  h.ingest.attach();
+  await h.advance(100);
+  expect(calls).toHaveLength(1);
+  expect(calls[0].input.agents.map(agent=>agent.token)).toEqual(["A"]);
+  h.change({subagents:false});
+  expect(calls[0].signal.aborted).toBe(true);
+  h.child("two");
+  h.start("B","two",1,"openai-codex/gpt-6-sol","high");
+  h.change({subagents:true});
+  await h.advance(100);
+  expect(calls).toHaveLength(1);
+  first.resolve({scores:new Map([["A",1]])});
+  await flush();
+  await h.advance(0);
+  expect(calls).toHaveLength(2);
+  expect(calls[1].signal.aborted).toBe(false);
+  expect(calls[1].input.agents.map(agent=>agent.token)).toEqual(["A","B"]);
+  h.ingest.detach();
+ });
+ test("recency activity promotes an older high-score run at the trailing boundary",async()=>{
+  const h=harness({subagentClassifier:false,classifierQuietMs:0,voicedSlotsByDepth:[1]},async input=>({
+   scores:new Map(input.agents.map(agent=>[agent.token,agent.token==="A"?.9:.8])),
+  }));
+  h.ingest.attach();
+  h.child("older");const a=h.start("A","older",1,"openai-codex/gpt-6-sol","high");
+  await h.advance(1_200_000);
+  h.child("fresh");const b=h.start("B","fresh",1,"openai-codex/gpt-6-sol","high");
+  h.change({subagentClassifier:true});
+  await h.advance(0);
+  h.progress("A","older","openai-codex/gpt-6-sol","high");
+  await h.advance(5_000);
+  h.terminal(a,"completed","promoted by activity");
+  expect(h.spoken.some(item=>item.text.includes("promoted by activity"))).toBe(true);
+  h.terminal(b);
+  h.ingest.detach();
+ });
+ test("periodic rescore receives only the retained 512-row journal delta after rollover",async()=>{
+  const calls:ClassifierInput[]=[];
+  const h=harness({classifierQuietMs:0,rescoreIntervalMs:60_000},async input=>{calls.push(input);return {scores:new Map(input.agents.map(agent=>[agent.token,.5]))};});
+  h.ingest.attach();
+  for(let index=0;index<520;index++)h.child(`journal-a-${index}`);
+  h.child("tracked");h.start("T","tracked",1,"openai-codex/gpt-6-sol","high");
+  await h.advance(0);
+  expect(calls).toHaveLength(1);
+  expect(calls[0].journal).toHaveLength(512);
+  expect(calls[0].journal.some(row=>row.id==="journal-a-0")).toBe(false);
+  expect(calls[0].journal.some(row=>row.id==="journal-a-519")).toBe(true);
+  for(let index=0;index<513;index++)h.child(`journal-b-${index}`);
+  await h.advance(60_000);
+  expect(calls).toHaveLength(2);
+  expect(calls[1].journal).toHaveLength(512);
+  expect(calls[1].journal.some(row=>row.id==="journal-b-0")).toBe(false);
+  expect(calls[1].journal.at(-1)?.id).toBe("journal-b-512");
+  h.ingest.detach();
+ });
+ test("retries three times per classifier model and authorizes on the fallback",async()=>{
+  const sonnet=getBundledModel("anthropic","claude-sonnet-4-5")!;
+  const settings=Settings.isolated({
+   modelRoles:{classifier:"anthropic/claude-haiku-4-5"},
+   "retry.fallbackChains":{classifier:["anthropic/claude-sonnet-4-5"]},
+  });
+  const attempted:string[]=[];
+  const io={stat:async()=>({mtimeMs:1,size:5}),readFile:async()=>catalog()};
+  const h=harness({subagentClassifier:false,effortAlerts:true},async (input,options)=>{
+   attempted.push(options.selection.model.id);
+   const authorized=options.selection.model.id===sonnet.id;
+   return {scores:new Map(),alerts:authorized?new Map([[input.alertCandidates[0].token,{authorized:true,reason:"explicit operator approval"}]]):new Map()};
+  },io,{settings,models:[getBundledModel("anthropic","claude-haiku-4-5")!,sonnet]});
+  h.ingest.attach();await flush();
+  h.child("worker");h.start("T","worker",1,"openai-codex/gpt-6-astra","max");
+  await h.advance(5_000);
+  expect(attempted).toEqual([
+   "claude-haiku-4-5","claude-haiku-4-5","claude-haiku-4-5","claude-sonnet-4-5",
+  ]);
+  expect(h.spoken.some(item=>item.text.startsWith("Red alert:"))).toBe(false);
   h.ingest.detach();
  });
  test("source-off stops output and source-on snapshots only active ledger runs",async()=>{

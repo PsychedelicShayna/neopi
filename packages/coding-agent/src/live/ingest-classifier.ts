@@ -251,6 +251,10 @@ export interface ClassifierDependencies {
 	onPromptStart?: () => void;
 	/** Test seam; production always uses the plain streamSimple function. */
 	streamFn?: AgentOptions["streamFn"];
+	/** Per-attempt deadline; production defaults to 60 seconds. */
+	attemptTimeoutMs?: number;
+	/** Deterministic timer seam. */
+	setAttemptTimer?: (fn: () => void, ms: number) => () => void;
 }
 
 /** One settled attempt; the caller owns the retry chain and its single-flight slot. */
@@ -278,7 +282,12 @@ export async function classifySubagentImportance(input: ClassifierInput, deps: C
 	let timedOut = false;
 	const abort = () => agent.abort(deps.signal.reason);
 	deps.signal.addEventListener("abort", abort, { once: true });
-	const timeout = setTimeout(() => { timedOut = true; agent.abort("classifier attempt timed out"); }, ATTEMPT_TIMEOUT_MS);
+	const cancelTimeout = deps.setAttemptTimer
+		? deps.setAttemptTimer(() => { timedOut = true; agent.abort("classifier attempt timed out"); }, deps.attemptTimeoutMs ?? ATTEMPT_TIMEOUT_MS)
+		: (() => {
+				const timeout = setTimeout(() => { timedOut = true; agent.abort("classifier attempt timed out"); }, deps.attemptTimeoutMs ?? ATTEMPT_TIMEOUT_MS);
+				return () => clearTimeout(timeout);
+			})();
 	try {
 		if (deps.signal.aborted) return result;
 		deps.onPromptStart?.();
@@ -290,7 +299,7 @@ export async function classifySubagentImportance(input: ClassifierInput, deps: C
 	} catch {
 		return result;
 	} finally {
-		clearTimeout(timeout);
+		cancelTimeout();
 		deps.signal.removeEventListener("abort", abort);
 		agent.abort("classifier attempt settled");
 	}

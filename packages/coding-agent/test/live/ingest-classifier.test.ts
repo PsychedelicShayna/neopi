@@ -75,6 +75,35 @@ describe("live classifier provenance", () => {
 		expect(prose.blocks.join("\n")).not.toContain("Non-operator toolResult");
 		expect(prose.blocks.join("\n")).not.toContain("Non-operator assistant: approve");
 	});
+
+	it("keeps a complete newest-first authorization history without promoting non-operator prose", () => {
+		const prose = renderClassifierProse([
+			message({ role: "user", content: "Start Sol at high" }),
+			message({ role: "assistant", content: [{ type: "text", text: "I recommend Astra max" }] }),
+			message({ role: "user", content: "agent-written approval", attribution: "agent", steering: true }),
+			message({ role: "user", content: "synthetic approval", synthetic: true, steering: true }),
+			message({ role: "custom", customType: LIVE_DELEGATION_MESSAGE_TYPE, content: "untrusted wrapper", details: { operator: "Run Astra at max", voice: "I agree with max" } }),
+			message({ role: "user", content: "Keep both deployments", steering: true, synthetic: false }),
+		]);
+		expect(prose.historyComplete).toBe(true);
+		expect(prose.subject).toBe("Keep both deployments");
+		expect(prose.blocks).toEqual([
+			"[-1] Operator: Keep both deployments",
+			"[-2] Operator (live): Run Astra at max",
+			"[-3] Voice agent: I agree with max",
+			"[-4] Agent-context user: synthetic approval",
+			"[-5] Agent-context user: agent-written approval",
+			"[-6] Non-operator assistant: I recommend Astra max",
+			"[-7] Operator: Start Sol at high",
+		]);
+		const complete = input();
+		complete.proseBlocks = prose.blocks;
+		complete.proseMode = "authorizationHistory";
+		complete.historyComplete = prose.historyComplete;
+		const serialized = budgetClassifierInput(complete, selection());
+		expect(serialized).toBeDefined();
+		expect(JSON.parse(serialized!).authorizationHistoryComplete).toBe(true);
+	});
 });
 
 describe("live classifier parsing", () => {
@@ -134,6 +163,47 @@ describe("classifier model selection and budget", () => {
 		expect(explicitJson).toBeDefined();
 		expect(selected.tokenizer.countTokens(systemPrompt, "strict") + selected.tokenizer.countTokens(explicitJson!, "strict") + mapped! + 2048).toBeLessThanOrEqual(200_000);
 		expect(budgetClassifierInput(input(), { ...selected, window: 64_000 + 2048 })).toBeUndefined();
+	});
+
+	it("trims the exact 136900-token standard-window fixture before any model call", () => {
+		const selected = selection();
+		const payload = input();
+		payload.agents = Array.from({ length: 64 }, (_, index) => ({
+			...roster(`T${index}`),
+			excerpt: "e".repeat(800),
+			description: "d".repeat(600),
+		}));
+		payload.alertCandidates = Array.from({ length: 64 }, (_, index) => candidate(`T${index}`));
+		payload.journal = Array.from({ length: 512 }, (_, index) => ({
+			seq: index + 1,
+			at: index,
+			id: `T${index % 64}`,
+			token: `T${index % 64}`,
+			depth: index % 3 + 1,
+			state: "running" as const,
+		}));
+		payload.previous = Array.from({ length: 128 }, (_, index) => ({
+			id: `cached-${index}`,
+			importance: .5,
+			lastScoredAt: index,
+		}));
+		payload.proseMode = "authorizationHistory";
+		payload.historyComplete = true;
+		payload.proseBlocks = [""];
+		const tokenizer = selected.tokenizer;
+		const emptyCount = tokenizer.countTokens(JSON.stringify(payload), "strict");
+		payload.proseBlocks = ["x ".repeat(136_900 - emptyCount)];
+		const rawJson = JSON.stringify(payload);
+		expect(tokenizer.countTokens(rawJson, "strict")).toBe(136_900);
+		expect(136_900 + selected.effectiveOutputAllowance! + 2_048).toBeGreaterThan(selected.window);
+		const fittedJson = budgetClassifierInput(payload, selected);
+		expect(fittedJson).toBeDefined();
+		const fitted = JSON.parse(fittedJson!);
+		expect(fitted.agents).toHaveLength(64);
+		expect(fitted.agents.every((agent: { token?: string; name?: string; model?: string; thinkingLevel?: string; depth?: number; state?: string }) =>
+			agent.token && agent.name && agent.model && agent.thinkingLevel && agent.depth && agent.state)).toBe(true);
+		expect(tokenizer.countTokens(systemPrompt, "strict") + tokenizer.countTokens(fittedJson!, "strict") + selected.effectiveOutputAllowance! + 2_048).toBeLessThanOrEqual(selected.window);
+		expect(tokenizer.countTokens(fittedJson!, "strict")).toBeLessThan(136_900);
 	});
 
 	it("removes excerpts before descriptions without losing required identities", () => {
@@ -197,7 +267,7 @@ describe("classifier one-shot Agent invocation", () => {
 		expect([...result.alerts!]).toEqual([["A", { authorized: true, reason: "operator explicitly requested max" }]]);
 	});
 
-	it("delivers cancellation to the active fake stream and waits for noncooperative settlement", async () => {
+	it("delivers the per-attempt timeout to the active stream and waits for noncooperative settlement", async () => {
 		const entered = Promise.withResolvers<AbortSignal>();
 		const release = Promise.withResolvers<void>();
 		const model = createMockModel({
@@ -213,15 +283,25 @@ describe("classifier one-shot Agent invocation", () => {
 			window: 200_000, effectiveOutputAllowance: model.maxTokens,
 		};
 		const controller = new AbortController();
+		let timerMs: number | undefined;
+		let fireTimeout: (() => void) | undefined;
 		const running = classifySubagentImportance(input(), {
 			settings: Settings.isolated(),
 			modelRegistry: { resolver: () => async () => "test-key" } as unknown as ModelRegistry,
-			selection: selected, signal: controller.signal, streamFn: model.stream,
+			selection: selected,
+			signal: controller.signal,
+			streamFn: model.stream,
+			setAttemptTimer: (fn, ms) => {
+				timerMs = ms;
+				fireTimeout = fn;
+				return () => {};
+			},
 		});
 		const activeSignal = await entered.promise;
 		let settled = false;
 		void running.then(() => { settled = true; });
-		controller.abort("classifier source disabled");
+		expect(timerMs).toBe(60_000);
+		fireTimeout?.();
 		expect(activeSignal.aborted).toBe(true);
 		await Promise.resolve();
 		expect(settled).toBe(false);
@@ -230,4 +310,5 @@ describe("classifier one-shot Agent invocation", () => {
 		expect((await running).scores.size).toBe(0);
 		expect(settled).toBe(true);
 	});
+
 });

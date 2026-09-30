@@ -702,7 +702,10 @@ export class LiveIngest {
    this.#abort.signal.removeEventListener("abort",parentAbort);
    if (this.#alertOnlyAbort === controller) this.#alertOnlyAbort = undefined;
    this.#batchInFlight = false;
-   if (sourceEpoch === this.#sourceEpoch && this.#enabled()) { if (reasons.has("periodic")) this.#armPeriodic(); this.#scheduleBatch(); }
+   if (this.#enabled()) {
+    if (sourceEpoch === this.#sourceEpoch && reasons.has("periodic")) this.#armPeriodic();
+    this.#scheduleBatch();
+   }
   }
  }
  #rememberSettled(record: Alert): void {
@@ -721,6 +724,7 @@ export class LiveIngest {
    this.#scoresById.set(id,{importance:score,lastScoredAt:this.#now(),sourceToken:run.token,attributionRevision:run.attributionRevision,model:run.model,thinkingLevel:run.thinkingLevel});
    for (const entry of this.#tracked.values()) if (entry.id === id && pairCompatible(this.#scoresById.get(id),entry)) this.#unscored.delete(entry.token);
   }
+  logger.debug(`live ingest: classified ${choices.size} subagents`);
   while (this.#scoresById.size > 128) { const inactive = [...this.#scoresById.keys()].find(id => ![...this.#tracked.values()].some(run => run.id === id)); this.#scoresById.delete(inactive ?? this.#scoresById.keys().next().value!); }
   for (const [depth,weight] of result.depthWeights ?? []) if (roster.some(({run}) => run.depth === depth)) this.#depthWeights.set(depth,weight);
   this.#recomputeVoiced();
