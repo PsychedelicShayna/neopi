@@ -9,7 +9,11 @@ import { LiveCommandController } from "@oh-my-pi/pi-coding-agent/modes/controlle
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { getEditorTheme } from "@oh-my-pi/pi-tui/theme";
-import { cfgLiveForceDelegateKeyword, cfgLiveSubmitKeyword, cfgLiveSubmitSilenceMs } from "@oh-my-pi/pi-coding-agent/live/settings";
+import {
+	cfgLiveForceDelegateKeyword,
+	cfgLiveSubmitKeyword,
+	cfgLiveSubmitSilenceMs,
+} from "@oh-my-pi/pi-coding-agent/live/settings";
 
 interface Harness {
 	ctx: InteractiveModeContext;

@@ -662,7 +662,10 @@ export class ControlHost {
 					encoded.push(bytes);
 				}
 				for (const bytes of encoded) presenter!.inject(bytes);
-				this.#reply(connection, frame, { success: true, data: { injected: encoded.length, revisions: this.revisions } });
+				this.#reply(connection, frame, {
+					success: true,
+					data: { injected: encoded.length, revisions: this.revisions },
+				});
 				return;
 			}
 			case "paste":

@@ -27,7 +27,8 @@ export const cfgLiveForceDelegateKeyword = register({
 		tab: "providers",
 		group: "Services",
 		label: "Live Force-Delegate Keyword",
-		description: "Phrase at the end of composer text that force-delegates after the configured silence (empty disables)",
+		description:
+			"Phrase at the end of composer text that force-delegates after the configured silence (empty disables)",
 	},
 });
 
