@@ -350,7 +350,7 @@ export function resolveOpenAIRequestSetup(
 export function applyOpenAIServiceTier(
 	params: { service_tier?: ServiceTier | null | undefined },
 	serviceTier: ServiceTier | null | undefined,
-	model: Pick<Model, "provider" | "api" | "identity">,
+	model: Pick<Model, "provider" | "api" | "identity"> & Partial<Pick<Model, "serviceTiers">>,
 ): void {
 	if (!shouldSendServiceTier(serviceTier, model)) return;
 	params.service_tier = serviceTier;

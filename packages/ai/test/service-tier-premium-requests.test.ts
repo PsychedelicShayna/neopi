@@ -80,15 +80,14 @@ describe("resolveModelServiceTier", () => {
 });
 
 describe("shouldSendServiceTier", () => {
-	it("sends every explicit tier on the OpenAI family, omits auto, supported tiers elsewhere", () => {
-		for (const p of ["openai", "openai-codex"] as const) {
-			expect(shouldSendServiceTier("flex", p)).toBe(true);
-			expect(shouldSendServiceTier("scale", p)).toBe(true);
-			expect(shouldSendServiceTier("priority", p)).toBe(true);
-			expect(shouldSendServiceTier("default", p)).toBe(true);
-			// `auto` is OpenAI's implicit default and the Codex endpoint rejects it — never sent.
-			expect(shouldSendServiceTier("auto", p)).toBe(false);
-		}
+	it("sends every explicit tier on first-party OpenAI, omits auto, supported tiers elsewhere", () => {
+		expect(shouldSendServiceTier("flex", "openai")).toBe(true);
+		expect(shouldSendServiceTier("scale", "openai")).toBe(true);
+		expect(shouldSendServiceTier("priority", "openai")).toBe(true);
+		expect(shouldSendServiceTier("default", "openai")).toBe(true);
+		// `auto` is OpenAI's implicit default and the Codex endpoint rejects it — never sent.
+		expect(shouldSendServiceTier("auto", "openai")).toBe(false);
+		expect(shouldSendServiceTier("auto", "openai-codex")).toBe(false);
 		expect(shouldSendServiceTier("auto", codex)).toBe(false);
 		expect(shouldSendServiceTier("auto", customOpenAI)).toBe(false);
 		expect(shouldSendServiceTier("flex", "openrouter")).toBe(true);
@@ -99,6 +98,21 @@ describe("shouldSendServiceTier", () => {
 		for (const model of customOpenAIAliases) {
 			expect(shouldSendServiceTier("priority", model)).toBe(true);
 		}
+	});
+
+	it("omits flex on Codex unless discovery advertises it; first-party OpenAI keeps flex", () => {
+		// Bundled/custom Codex rows and bare provider strings cannot prove flex support.
+		expect(shouldSendServiceTier("flex", "openai-codex")).toBe(false);
+		expect(shouldSendServiceTier("flex", codex)).toBe(false);
+		expect(shouldSendServiceTier("flex", customCodex)).toBe(false);
+		expect(shouldSendServiceTier("flex", { ...codex, serviceTiers: ["priority"] })).toBe(false);
+		expect(shouldSendServiceTier("flex", { ...codex, serviceTiers: [] })).toBe(false);
+		// Discovery that lists flex is the only path that may send it on the Codex backend.
+		expect(shouldSendServiceTier("flex", { ...codex, serviceTiers: ["flex"] })).toBe(true);
+		expect(shouldSendServiceTier("flex", { ...customCodex, serviceTiers: ["priority", "flex"] })).toBe(true);
+		// API-key OpenAI is unaffected.
+		expect(shouldSendServiceTier("flex", openai)).toBe(true);
+		expect(shouldSendServiceTier("flex", "openai")).toBe(true);
 	});
 
 	it("sends flex/priority on direct Google, priority-only on Vertex (no scale)", () => {
@@ -141,10 +155,11 @@ describe("shouldSendServiceTier", () => {
 		expect(shouldSendServiceTier("priority", unreported)).toBe(true);
 		expect(realizesPriorityServiceTier("priority", unreported)).toBe(true);
 		expect(shouldSendServiceTier("ultrafast", unreported)).toBe(false);
-		// Flex is always an accepted request option; `default` is out of this gate's scope.
-		expect(shouldSendServiceTier("flex", unlisted)).toBe(true);
+		// Flex is discovery-gated like ultrafast, not open like default.
+		expect(shouldSendServiceTier("flex", unlisted)).toBe(false);
+		expect(shouldSendServiceTier("flex", unreported)).toBe(false);
 		expect(shouldSendServiceTier("default", unlisted)).toBe(true);
-		// No discovered list (bundled/custom rows): the provider-level answer stands.
+		// No discovered list (bundled/custom rows): the provider-level answer stands for priority.
 		expect(shouldSendServiceTier("priority", codex)).toBe(true);
 		expect(shouldSendServiceTier("priority", customCodex)).toBe(true);
 	});
