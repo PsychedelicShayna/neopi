@@ -137,8 +137,10 @@ describe("session selector picker", () => {
 		selector.handleNativeEvent({ type: "action", key: "", act: "cancel", mods: [] });
 		expect(props(selector.describe(withPicker)).confirm).toBeNull();
 
-		// Backspace on an empty query opens the same confirm strip.
+		// Backspace edits the filter only; the picker Delete action still opens confirmation.
 		selector.handleInput("\x7f");
+		expect(props(selector.describe(withPicker)).confirm).toBeNull();
+		selector.handleNativeEvent({ type: "action", key: "", act: "delete", mods: [] });
 		expect(props(selector.describe(withPicker)).confirm?.text).toBe("Delete “Gamma”? This removes the session file.");
 		const closed = renderedWhen(selector, p => p.confirm === null);
 		selector.handleNativeEvent({ type: "action", key: "", act: "delete-confirm", mods: [] });

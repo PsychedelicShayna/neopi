@@ -1748,7 +1748,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		const loading = message?.kind === "loading";
 		const toggle = list.onToggleScope !== undefined;
 		const actions = [pickerAction("resume", "Resume", "enter", { primary: true })];
-		if (this.#onDelete) actions.push(pickerAction("delete", "Delete", "backspace"));
+		if (this.#onDelete) actions.push(pickerAction("delete", "Delete", "delete"));
 		if (toggle) {
 			actions.push(pickerAction("scope", this.#scope === "all" ? "This folder" : "All projects", "tab"));
 		}
