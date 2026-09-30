@@ -1109,6 +1109,7 @@ function shouldInheritDefaultBeforePriority(role: ModelRole): boolean {
 const ROLE_PRIORITY_ALIAS: Partial<Record<ModelRole, keyof typeof MODEL_PRIO>> = {
 	advisor: "slow",
 	chronicler: "slow",
+	classifier: "slow",
 	prose: "smol",
 	memory: "smol",
 	tiny: "smol",
@@ -1122,6 +1123,7 @@ interface ConfiguredRoleFallback {
 
 const ROLE_CONFIGURED_FALLBACK: Partial<Record<ModelRole, ConfiguredRoleFallback>> = {
 	advisor: { role: "slow", configuredOnly: true },
+	classifier: { role: "slow", configuredOnly: true },
 	memory: { role: "tiny", configuredOnly: false },
 	tiny: { role: "smol", configuredOnly: false },
 	// Chain steps default to @prose; unset, it follows the user's own fast model.
@@ -1743,6 +1745,18 @@ export function resolveChroniclerRoleSelection(
 	availableModels: Model<Api>[],
 ): { model: Model<Api>; thinkingLevel?: ConfiguredThinkingLevel } | undefined {
 	const resolved = resolveModelRoleValue(formatModelRoleAlias("chronicler"), availableModels, {
+		settings,
+		matchPreferences: getModelMatchPreferences(settings),
+	});
+	return resolved.model ? { model: resolved.model, thinkingLevel: resolved.thinkingLevel } : undefined;
+}
+
+/** Resolve the classifier role through the slow priority chain when unset. */
+export function resolveClassifierRoleSelection(
+	settings: Settings,
+	availableModels: Model<Api>[],
+): { model: Model<Api>; thinkingLevel?: ConfiguredThinkingLevel } | undefined {
+	const resolved = resolveModelRoleValue(formatModelRoleAlias("classifier"), availableModels, {
 		settings,
 		matchPreferences: getModelMatchPreferences(settings),
 	});

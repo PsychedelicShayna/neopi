@@ -16,7 +16,11 @@ import { modelKind } from "@oh-my-pi/pi-catalog/types";
 import { finalizeCustomModel } from "@oh-my-pi/pi-coding-agent/config/custom-models";
 import { applyModelPatch, mergeDiscoveredModel } from "@oh-my-pi/pi-coding-agent/config/model-patch";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { resolveRoleChain } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
+import {
+	resolveClassifierRoleSelection,
+	resolveRoleChain,
+	rolePriorityDefaults,
+} from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { roleCandidatePool } from "@oh-my-pi/pi-coding-agent/config/model-roles";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -2513,6 +2517,150 @@ describe("ModelRegistry", () => {
 			await registry.reapplyModelPolicies();
 			expect(registry.find("openai", "gpt-5.6-terra")?.contextWindow).toBe(1_050_000);
 			expect(registry.find("openai-codex", "gpt-5.6-terra")?.contextWindow).toBe(1_000_000);
+		});
+	});
+	describe("authoritative standard context", () => {
+		const windowOf = (registry: ModelRegistry, provider: string, id: string) => {
+			const model = registry.find(provider, id);
+			if (!model) throw new Error(`Missing ${provider}/${id}`);
+			return registry.standardContextWindow(model, 128_000);
+		};
+
+		test("keeps verified Luna capacity without price metadata even after extension", () => {
+			writeRawModelsJson({
+				"luna-proxy": {
+					baseUrl: "https://example.com/v1", api: "openai-responses", auth: "none",
+					models: [{ id: "luna-extended-no-price", contextWindow: 272_000, maxContextWindow: 872_000 }],
+				},
+			});
+			const registry = new ModelRegistry(authStorage, modelsJsonPath, {
+				settings: Settings.isolated({ extendedContext: true }),
+			});
+			const luna = registry.find("luna-proxy", "luna-extended-no-price");
+			expect(luna?.contextWindow).toBe(872_000);
+			expect(luna?.cost.longContext).toBeUndefined();
+			expect(windowOf(registry, "luna-proxy", "luna-extended-no-price")).toBe(272_000);
+		});
+
+		test("smaller effective overrides and paid tiers constrain the baseline, but subscription statistics do not", () => {
+			writeRawModelsJson({
+				"openai-codex": { modelOverrides: { "gpt-5.6-luna": { contextWindow: 96_000 } } },
+			});
+			const registry = new ModelRegistry(authStorage, modelsJsonPath, {
+				settings: Settings.isolated({ extendedContext: true }),
+			});
+			expect(windowOf(registry, "openai-codex", "gpt-5.6-luna")).toBe(96_000);
+			const priced = getBundledModels("openai").find(model => model.id === "gpt-5.6-sol");
+			expect(priced?.contextWindow).toBeGreaterThan(272_000);
+			expect(priced?.cost.longContext?.inputThreshold).toBe(272_000);
+			expect(windowOf(registry, "openai", "gpt-5.6-sol")).toBe(272_000);
+			const xai = registry.find("xai-oauth", "grok-4.20-0309-reasoning");
+			expect(xai?.contextWindow).toBe(2_000_000);
+			expect(xai?.cost.longContext?.inputThreshold).toBe(200_000);
+			expect(windowOf(registry, "xai-oauth", "grok-4.20-0309-reasoning")).toBe(2_000_000);
+		});
+
+		test("unverified materialized rows never promote the fallback to their expanded descriptor", () => {
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const row = registry.find("openai-codex", "gpt-5.6-luna");
+			if (!row) throw new Error("Missing Luna");
+			expect(registry.standardContextWindow({ ...row, contextWindow: 872_000 }, 128_000)).toBe(128_000);
+			expect(registry.standardContextWindow({ ...row, contextWindow: 96_000 }, 128_000)).toBe(96_000);
+			expect(registry.standardContextWindow({ ...row, contextWindow: null }, 128_000)).toBe(128_000);
+		});
+
+		test("cache replacement and refresh select the current winning window source", async () => {
+			const bundled = getBundledModels("openai").find(model => model.id === "gpt-5.6-sol");
+			if (!bundled) throw new Error("Missing bundled Sol");
+			writeModelCache(
+				"openai", Date.now(), [{ ...bundled, contextWindow: 96_000 }], false,
+				fingerprintStaticModels(getBundledModels("openai"), false), path.join(tempDir, "models.db"),
+			);
+			const registry = new ModelRegistry(authStorage, modelsJsonPath, {
+				settings: Settings.isolated({ extendedContext: true }),
+			});
+			expect(windowOf(registry, "openai", bundled.id)).toBe(96_000);
+			writeRawModelsJson({
+				openai: {
+					baseUrl: "https://api.openai.com/v1", api: "openai-responses", auth: "none",
+					models: [{ id: bundled.id, contextWindow: 180_000 }],
+				},
+			});
+			await registry.refresh("offline");
+			expect(windowOf(registry, "openai", bundled.id)).toBe(180_000);
+		});
+		test("runtime discovery replacement updates the verified winning source", async () => {
+			writeRawModelsJson({
+				openai: {
+					baseUrl: "https://proxy.example/v1", apiKey: "TEST_KEY", api: "openai-responses",
+					discovery: { type: "openai-models-list" }, models: [],
+				},
+			});
+			let reportedWindow = 96_000;
+			const fetchMock: FetchImpl = async input => {
+				if (String(input) === "https://proxy.example/v1/models") {
+					return Response.json({ data: [{ id: "gpt-5.6-sol", context_length: reportedWindow }] });
+				}
+				return Response.json({});
+			};
+			const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+			await registry.refreshProvider("openai", "online");
+			expect(windowOf(registry, "openai", "gpt-5.6-sol")).toBe(96_000);
+			reportedWindow = 160_000;
+			await registry.refreshProvider("openai", "online");
+			expect(windowOf(registry, "openai", "gpt-5.6-sol")).toBe(160_000);
+		});
+
+		test("custom overlays and collapsed variants preserve the window-contributing row", async () => {
+			writeRawModelsJson({
+				"newapi": providerConfig("https://newapi.example.com/v1", [
+					{ id: "paired", contextWindow: 90_000 },
+					{ id: "paired-thinking", contextWindow: 160_000 },
+				]),
+			});
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			expect(windowOf(registry, "newapi", "paired")).toBe(160_000);
+			writeRawModelsJson({
+				"newapi": providerConfig("https://newapi.example.com/v1", [
+					{ id: "paired", contextWindow: 90_000 },
+					{ id: "paired-thinking", contextWindow: 76_000 },
+				]),
+			});
+			await registry.refresh("offline");
+			expect(windowOf(registry, "newapi", "paired")).toBe(90_000);
+		});
+	});
+	describe("classifier model role", () => {
+		test("resolves explicit selection and ordered route-deduplicated fallback chain", () => {
+			const available = [
+				sharedBuiltin.find("openai-codex", "gpt-5.6-luna"),
+				sharedBuiltin.find("openai-codex", "gpt-6-astra"),
+			].filter((model): model is NonNullable<typeof model> => model !== undefined);
+			const configured = Settings.isolated({
+				modelRoles: { classifier: "openai-codex/gpt-5.6-luna:high" },
+				"retry.fallbackChains": {
+					classifier: ["openai-codex/gpt-6-astra:medium", "openai-codex/gpt-5.6-luna:low"],
+				},
+			});
+			expect(resolveClassifierRoleSelection(configured, available)).toMatchObject({
+				model: { id: "gpt-5.6-luna" }, thinkingLevel: "high",
+			});
+			expect(resolveRoleChain("classifier", configured, available).map(({ model }) => model.id)).toEqual([
+				"gpt-5.6-luna", "gpt-6-astra",
+			]);
+		});
+
+		test("defaults to slow model priorities with no classifier-specific fallback", () => {
+			expect(rolePriorityDefaults("classifier")).toEqual(rolePriorityDefaults("slow"));
+			const available = sharedBuiltin.getAll();
+			const implicit = Settings.isolated();
+			expect(resolveClassifierRoleSelection(implicit, available)?.model).toEqual(
+				resolveRoleChain("classifier", implicit, available)[0]?.model,
+			);
+			const configuredSlow = Settings.isolated({ modelRoles: { slow: "openai-codex/gpt-5.6-luna:high" } });
+			expect(resolveRoleChain("classifier", configuredSlow, available)[0]).toMatchObject({
+				model: { id: "gpt-5.6-luna" }, thinkingLevel: "high",
+			});
 		});
 	});
 	describe("bundled Anthropic catalog availability", () => {
