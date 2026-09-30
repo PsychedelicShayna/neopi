@@ -19,6 +19,18 @@ export const cfgLiveVoice = register({
 	},
 });
 
+export const cfgLiveModelCatalogPath = register({
+	id: "live.modelCatalogPath",
+	type: "string",
+	default: "~/.bnuuy-agents/skills/model-catalog/catalog.json",
+	ui: {
+		tab: "providers",
+		group: "Services",
+		label: "Live Model Catalog",
+		description: "Path to the operator-editable model catalog JSON used for effort alerts.",
+	},
+});
+
 export const cfgLiveForceDelegateKeyword = register({
 	id: "live.forceDelegateKeyword",
 	type: "string",

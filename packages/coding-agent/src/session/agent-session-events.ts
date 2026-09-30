@@ -1,4 +1,4 @@
-import type { AgentEvent, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import type { AgentEvent, AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Effort } from "@oh-my-pi/pi-ai";
 import type { Rule } from "../capability/rule";
@@ -85,6 +85,8 @@ export type AgentSessionEvent =
 	| { type: "config_warnings_changed" }
 	| { type: "advisor_cost_changed" }
 	| { type: "advisor_yielded" }
+	/** A finalized advisor-agent message (the same data the advisor transcript records). Fork seam for live ingest. */
+	| { type: "advisor_message"; advisor: string; slug: string; message: AgentMessage }
 	| { type: "ttsr_triggered"; rules: Rule[] }
 	| { type: "todo_reminder"; todos: TodoItem[]; attempt: number; maxAttempts: number }
 	| { type: "todo_auto_clear" }

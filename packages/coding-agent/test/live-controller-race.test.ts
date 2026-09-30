@@ -29,6 +29,7 @@ import { join } from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
+import type { CustomMessage } from "../src/session/messages";
 import { LiveSessionController } from "../src/live/controller";
 import type { LiveClientMessage, LiveServerEvent } from "../src/live/protocol";
 
@@ -122,7 +123,9 @@ function makeHarness(options?: {
 	dropAudio?: boolean;
 	playbackQueue?: { queuedMs: number; droppedMs: number };
 	blockDelegateKeyword?: string;
-	ircRelayTransform?: (message: import("../src/session/messages").CustomMessage, body: string) => string | undefined;
+	ircRelayTransform?: (message: CustomMessage, body: string) => string | undefined;
+	ircRelayAllowed?: (message: CustomMessage) => boolean;
+	relayGates?: () => { reasoning: boolean; progress: boolean; finalAnswers: boolean };
 }): Harness {
 	const sent: LiveClientMessage[] = [];
 	const aborts: Array<Record<string, unknown>> = [];
@@ -231,6 +234,8 @@ function makeHarness(options?: {
 		...(options?.thinkingFlushMs !== undefined ? { thinkingFlushMs: options.thinkingFlushMs } : {}),
 		blockDelegateKeyword: options?.blockDelegateKeyword,
 		ircRelayTransform: options?.ircRelayTransform,
+		ircRelayAllowed: options?.ircRelayAllowed,
+		relayGates: options?.relayGates,
 		extractAssistantText: message => (message as unknown as { testText?: string }).testText ?? "",
 		createTransport: transportOptions => {
 			liveCallbacks = transportOptions.callbacks;
@@ -1029,6 +1034,21 @@ describe("live controller delegation ownership", () => {
 		expect(speakableTexts(replaced.sent)).toEqual(["Crew report from A: y"]);
 	});
 
+	it("drops a held crew relay when its source is disabled before release", async () => {
+		let enabled = true;
+		const h = makeHarness({ speakableIdleMs: 60_000, ircRelayAllowed: () => enabled });
+		await h.controller.start();
+		h.controller.noteComposerActivity();
+		h.fireSession(crewMessage("held", "A", "progress"));
+		expect(h.controller.heldContextCount()).toBe(1);
+		enabled = false;
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "release" } });
+		h.fireLive(delegation("crew-release", ""));
+		await settle();
+		expect(speakableTexts(h.sent)).toEqual([]);
+		await h.controller.stop();
+	});
+
 	it("sends typed operator text immediately: addressed to the voice agent, or as silent commentary when shared", async () => {
 		const h = makeHarness({ speakableIdleMs: 60_000 });
 		await h.controller.start();
@@ -1165,6 +1185,125 @@ describe("live controller delegation ownership", () => {
 		h.fireSession(update);
 		await settle();
 		expect(speakableTexts(h.sent)).toHaveLength(1);
+	});
+	it("gates primary reasoning at enqueue and again when operator-held context releases", async () => {
+		let enabled = true;
+		const h = makeHarness({
+			speakableIdleMs: 60_000,
+			thinkingFlushMs: 0,
+			relayGates: () => ({ reasoning: enabled, progress: true, finalAnswers: true }),
+		});
+		await h.controller.start();
+		const thinking = "Consider the available options before settling the result. ".repeat(7);
+		const update = { type: "message_update", message: { role: "assistant", content: [{ type: "thinking", thinking }] } } as unknown as AgentSessionEvent;
+		enabled = false;
+		h.fireSession(update);
+		await settle();
+		expect(speakableTexts(h.sent)).toEqual([]);
+		enabled = true;
+		h.controller.noteComposerActivity();
+		h.fireSession(update);
+		await settle();
+		expect(h.controller.heldContextCount()).toBe(1);
+		enabled = false;
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "release" } });
+		h.fireLive(delegation("d-release", ""));
+		await settle();
+		expect(speakableTexts(h.sent)).toEqual([]);
+		await h.controller.stop();
+	});
+
+	it("gates primary tool progress at enqueue and after a hold without skipping cleanup", async () => {
+		let progress = false;
+		const h = makeHarness({
+			speakableIdleMs: 60_000,
+			relayGates: () => ({ reasoning: true, progress, finalAnswers: true }),
+		});
+		await h.controller.start();
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "run checks" } });
+		h.fireLive(delegation("progress-d", "")); await settle();
+		const tool = { type: "message_end", message: assistant("Running checks now", "toolUse") } as AgentSessionEvent;
+		h.fireSession(tool); await settle();
+		expect(h.sent.some(item => item.type === "delegation.context.append" && item.channel === "commentary")).toBe(false);
+		progress = true;
+		h.controller.noteComposerActivity();
+		h.fireSession(tool); await settle();
+		expect(h.controller.heldContextCount()).toBe(1);
+		progress = false;
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "release" } });
+		h.fireLive(delegation("progress-release", "")); await settle();
+		expect(h.sent.some(item => item.type === "delegation.context.append" && item.channel === "commentary")).toBe(false);
+		await h.controller.stop();
+	});
+
+	it("silences gated final answers but still retires delegation and operator-turn ownership", async () => {
+		let finalAnswers = false;
+		const h = makeHarness({ relayGates: () => ({ reasoning: true, progress: true, finalAnswers }) });
+		await h.controller.start();
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "first" } });
+		h.fireLive(delegation("first-d", "")); await settle();
+		h.fireSession(agentEnd([assistant("hidden delegated answer", "stop")]));
+		await settle();
+		expect(speakableTexts(h.sent)).toEqual([]);
+		h.controller.expectOperatorTurn();
+		h.fireSession(agentEnd([assistant("hidden operator answer", "stop")]));
+		finalAnswers = true;
+		h.fireSession(agentEnd([assistant("unrelated", "stop")]));
+		await settle();
+		expect(speakableTexts(h.sent)).toEqual([]);
+		h.controller.expectOperatorTurn();
+		h.fireSession(agentEnd([assistant("visible", "stop")]));
+		await settle();
+		expect(h.sent.some(item => item.type === "session.context.append" && item.content[0]?.text.includes("visible"))).toBe(true);
+		await h.controller.stop();
+	});
+	it("keeps the protected overflow slot through eight held reports and freezes at delivery", async () => {
+		const h = makeHarness({ speakableIdleMs: 60_000 });
+		const receipts: Array<[number, boolean]> = [];
+		let count = 257;
+		let alertsEnabled = true;
+		expect(h.controller.appendSpeakableContext("preconnect report")).toBe(false);
+		h.controller.appendCommentaryContext("preconnect commentary");
+		expect(h.controller.appendOverflowAlertContext(
+			() => ({ text: `Red alert: ${count} deployments; authorization not checked.`, receiptId: 1 }),
+			() => alertsEnabled,
+			(id, accepted) => receipts.push([id, accepted]),
+		)).toBe(false);
+		await h.controller.start();
+		expect(h.controller.appendSpeakableContext("connected report")).toBe(true);
+		h.controller.noteComposerActivity();
+		for (let i = 0; i < 8; i++) h.controller.appendSpeakableContext(`report ${i}`);
+		expect(h.controller.appendOverflowAlertContext(
+			() => ({ text: `Red alert: ${count} deployments; authorization not checked.`, receiptId: 7 }),
+			() => alertsEnabled,
+			(id, accepted) => receipts.push([id, accepted]),
+		)).toBe(true);
+		count = 321;
+		expect(h.controller.heldContextCount()).toBe(8);
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "release" } });
+		h.fireLive(delegation("overflow-release", "")); await settle(40);
+		expect(speakableTexts(h.sent)).toContain("Red alert: 321 deployments; authorization not checked.");
+		expect(receipts).toEqual([[7, true]]);
+		await h.controller.stop();
+	});
+
+	it("drops guarded held context after its source is turned off", async () => {
+		const h = makeHarness({ speakableIdleMs: 60_000 });
+		await h.controller.start();
+		h.controller.noteComposerActivity();
+		let canDeliver = true;
+		let settled = 0;
+		expect(h.controller.appendSpeakableContext("Subagent report from T: (completed) yes", "report", () => canDeliver, () => { settled++; })).toBe(true);
+		expect(h.controller.appendOverflowAlertContext(
+			() => ({ text: "Red alert: should not escape.", receiptId: 9 }),
+			() => canDeliver, () => { throw new Error("disabled overflow receipt escaped"); },
+		)).toBe(true);
+		canDeliver = false;
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "release" } });
+		h.fireLive(delegation("held-release", "")); await settle();
+		expect(speakableTexts(h.sent)).toEqual([]);
+		expect(settled).toBe(1);
+		await h.controller.stop();
 	});
 });
 

@@ -42,6 +42,20 @@ const DEFAULT_SPEAKABLE_IDLE_MS = 10_000;
 const DEFAULT_THINKING_FLUSH_MS = 3_000;
 /** Voice-triggering items retained while the operator is active. Thinking and progress collapse to one slot each. */
 const HELD_CONTEXT_CAP = 8;
+const ALWAYS_DELIVER = (): boolean => true;
+
+function truncateToChunk(text: string): string {
+	const chunks = chunkLiveContext(text);
+	let item = chunks[0] ?? "";
+	if (chunks.length > 1) {
+		let units = [...item];
+		while (units.length > 0 && Buffer.byteLength(units.join(""), "utf8") > CONTEXT_CHUNK_BYTES - 3) {
+			units = units.slice(0, -4);
+		}
+		item = `${units.join("").trimEnd()}…`;
+	}
+	return item;
+}
 
 interface UserLedgerTurn {
 	turn: number;
@@ -51,11 +65,12 @@ interface UserLedgerTurn {
 	blocked?: boolean;
 }
 
-type HeldContextKind = "report" | "thinking" | "progress";
+type HeldContextKind = "report" | "thinking" | "progress" | "overflow-alert";
 
 interface HeldContextItem {
 	kind: HeldContextKind;
 	send: () => void;
+	onDiscard?: () => void;
 }
 
 /** Distinct states of a realtime call connection. */
@@ -108,8 +123,11 @@ export interface LiveSessionControllerOptions {
 	extractAssistantText(message: AssistantMessage): string;
 	/** Ingest seam: returns a transformed crew IRC body, or suppresses it. */
 	ircRelayTransform?: (message: CustomMessage, body: string) => string | undefined;
+	/** Recheck the current source gate when a held crew report is released. */
+	ircRelayAllowed?: (message: CustomMessage) => boolean;
 	/** Whether a voice-authored note reaches the main agent (read at dispatch). */
 	includeVoiceNote?: () => boolean;
+	relayGates?: () => { reasoning: boolean; progress: boolean; finalAnswers: boolean };
 	/** Realtime output voice, defaulting to sol. */
 	voice?: string;
 	blockDelegateKeyword?: string;
@@ -193,7 +211,9 @@ export class LiveSessionController {
 	readonly #speakableIdleMs: number;
 	readonly #blockDelegateKeyword: string;
 	readonly #ircRelayTransform: (message: CustomMessage, body: string) => string | undefined;
+	readonly #ircRelayAllowed: (message: CustomMessage) => boolean;
 	readonly #includeVoiceNote: () => boolean;
+	readonly #relayGates: () => { reasoning: boolean; progress: boolean; finalAnswers: boolean };
 
 	readonly #createTransport: (options: ConstructorParameters<typeof CodexLiveTransport>[0]) => LiveTransportLike;
 	readonly #createRecorder: (
@@ -304,7 +324,9 @@ export class LiveSessionController {
 		this.#voice = options.voice?.trim() || DEFAULT_LIVE_VOICE;
 		this.#blockDelegateKeyword = options.blockDelegateKeyword ?? "";
 		this.#ircRelayTransform = options.ircRelayTransform ?? ((_, body) => body);
+		this.#ircRelayAllowed = options.ircRelayAllowed ?? (() => true);
 		this.#includeVoiceNote = options.includeVoiceNote ?? (() => true);
+		this.#relayGates = options.relayGates ?? (() => ({ reasoning: true, progress: true, finalAnswers: true }));
 		const speakableIdleMs = options.speakableIdleMs;
 		this.#speakableIdleMs =
 			typeof speakableIdleMs === "number" && Number.isFinite(speakableIdleMs) && speakableIdleMs >= 0
@@ -453,6 +475,7 @@ export class LiveSessionController {
 		clearTimeout(this.#speakableIdleTimer);
 		this.#speakableIdleTimer = undefined;
 		this.#speakableIdleDeadline = 0;
+		for (const item of this.#heldContext) item.onDiscard?.();
 		this.#heldContext = [];
 		this.#voiceNotes.clear();
 		for (const { sent } of this.#pendingOperatorText) sent(false);
@@ -782,10 +805,12 @@ export class LiveSessionController {
 	#appendProgress(message: AssistantMessage): void {
 		const delegationId = this.#activeDelegationId;
 		if (!delegationId) return;
+		if (!this.#relayGates().progress) return;
 		const progress = this.#extractAssistantText(message).trim();
 		if (!progress) return;
 		const chunks = chunkLiveContext(progress);
 		this.#deliverOrHold("progress", () => {
+			if (!this.#relayGates().progress) return;
 			for (const chunk of chunks) {
 				this.#queueSend(buildDelegationContextAppend(delegationId, chunk, "commentary"));
 			}
@@ -821,23 +846,25 @@ export class LiveSessionController {
 		}
 		// A shared operator prompt folded into the delegated turn is answered by this settle.
 		if (options.closeDelegation) this.#operatorTurnPending = false;
-		for (let index = messages.length - 1; index >= 0; index -= 1) {
-			const message = messages[index];
-			if (message?.role !== "assistant") continue;
-			// Already relayed at an earlier pause: a wake that produced no new answer
-			// must not make the relay repeat itself.
-			if (message === this.#lastRelayedResponse) break;
-			const text = this.#extractAssistantText(message).trim();
-			if (!text) continue;
-			this.#lastRelayedResponse = message;
-			const finalContext = prompt.render(agentFinalMessageTemplate, { message: text });
-			// The operator asked for this answer: deliver it now. The speakable hold is for
-			// unsolicited context only; holding a final answer delays it until the next handoff.
-			this.#contextSinceResponse = true;
-			for (const chunk of chunkLiveContext(finalContext)) {
-				this.#queueSend(buildDelegationContextAppend(delegationId, chunk));
+		if (this.#relayGates().finalAnswers) {
+			for (let index = messages.length - 1; index >= 0; index -= 1) {
+				const message = messages[index];
+				if (message?.role !== "assistant") continue;
+				// Already relayed at an earlier pause: a wake that produced no new answer
+				// must not make the relay repeat itself.
+				if (message === this.#lastRelayedResponse) break;
+				const text = this.#extractAssistantText(message).trim();
+				if (!text) continue;
+				this.#lastRelayedResponse = message;
+				const finalContext = prompt.render(agentFinalMessageTemplate, { message: text });
+				// The operator asked for this answer: deliver it now. The speakable hold is for
+				// unsolicited context only; holding a final answer delays it until the next handoff.
+				this.#contextSinceResponse = true;
+				for (const chunk of chunkLiveContext(finalContext)) {
+					this.#queueSend(buildDelegationContextAppend(delegationId, chunk));
+				}
+				break;
 			}
-			break;
 		}
 		if (options.closeDelegation) {
 			this.#activeDelegationId = undefined;
@@ -849,14 +876,16 @@ export class LiveSessionController {
 
 	/** Relay the final answer of an operator-started turn at session level, labeled per chunk. */
 	#relayOperatorTurnResult(messages: readonly AgentMessage[], options: { closeDelegation: boolean }): void {
-		const message = messages.findLast(candidate => candidate?.role === "assistant");
-		const text = message && message !== this.#lastRelayedResponse ? this.#extractAssistantText(message).trim() : "";
-		if (text && message) {
-			this.#lastRelayedResponse = message;
-			const labelBytes = Buffer.byteLength(prompt.render(agentFinalMessageTemplate, { message: "" }), "utf8");
-			this.#contextSinceResponse = true;
-			for (const part of chunkLiveContext(text, CONTEXT_CHUNK_BYTES - labelBytes)) {
-				this.#queueSend(buildSessionContextAppend(prompt.render(agentFinalMessageTemplate, { message: part })));
+		if (this.#relayGates().finalAnswers) {
+			const message = messages.findLast(candidate => candidate?.role === "assistant");
+			const text = message && message !== this.#lastRelayedResponse ? this.#extractAssistantText(message).trim() : "";
+			if (text && message) {
+				this.#lastRelayedResponse = message;
+				const labelBytes = Buffer.byteLength(prompt.render(agentFinalMessageTemplate, { message: "" }), "utf8");
+				this.#contextSinceResponse = true;
+				for (const part of chunkLiveContext(text, CONTEXT_CHUNK_BYTES - labelBytes)) {
+					this.#queueSend(buildSessionContextAppend(prompt.render(agentFinalMessageTemplate, { message: part })));
+				}
 			}
 		}
 		if (options.closeDelegation) {
@@ -962,7 +991,7 @@ export class LiveSessionController {
 		const body = this.#ircRelayTransform(message, raw);
 		if (!body) return;
 		const to = message.customType === "irc:relay" ? details?.to?.trim() : undefined;
-		this.#appendSpeakable(to ? `Crew relay from ${from} to ${to}: ${body}` : `Crew report from ${from}: ${body}`);
+		this.#appendSpeakable(to ? `Crew relay from ${from} to ${to}: ${body}` : `Crew report from ${from}: ${body}`, "report", () => this.#ircRelayAllowed(message));
 	}
 
 	/**
@@ -971,6 +1000,7 @@ export class LiveSessionController {
 	 * agent is currently thinking about…" without presenting it as a result.
 	 */
 	#relayThinkingProgress(message: AssistantMessage): void {
+		if (!this.#relayGates().reasoning) return;
 		let thinking = "";
 		for (const block of message.content) {
 			if ((block as { type?: string }).type !== "thinking") continue;
@@ -986,7 +1016,7 @@ export class LiveSessionController {
 		if (!cut) return;
 		this.#thinkingRelayedLength += boundary + 1;
 		this.#lastThinkingFlushAt = Date.now();
-		this.#appendSpeakable(`Main agent reasoning (live, provisional): ${cut}`, "thinking");
+		this.#appendSpeakable(`Main agent reasoning (live, provisional): ${cut}`, "thinking", () => this.#relayGates().reasoning);
 	}
 
 	/**
@@ -996,20 +1026,9 @@ export class LiveSessionController {
 	 * mid-assembly (the exact failure that killed voicing final-answer chunks),
 	 * so overflow is truncated at the byte cap, never split.
 	 */
-	#appendSpeakable(text: string, kind: HeldContextKind = "report"): void {
-		const chunks = chunkLiveContext(text);
-		let item = chunks[0] ?? "";
-		if (!item) return;
-		if (chunks.length > 1) {
-			// Reserve room for the ellipsis without splitting a surrogate pair:
-			// chunkLiveContext is the code-point-safe truncation primitive.
-			let units = [...item];
-			while (units.length > 0 && Buffer.byteLength(units.join(""), "utf8") > CONTEXT_CHUNK_BYTES - 3) {
-				units = units.slice(0, -4);
-			}
-			item = `${units.join("").trimEnd()}…`;
-		}
-		this.#deliverOrHold(kind, () => this.#sendSpeakable(item));
+	#appendSpeakable(text: string, kind: HeldContextKind = "report", canDeliver: () => boolean = ALWAYS_DELIVER): void {
+		const item = truncateToChunk(text);
+		if (item) this.#deliverOrHold(kind, () => { if (canDeliver()) void this.#sendSpeakable(item); });
 	}
 
 	/**
@@ -1017,16 +1036,17 @@ export class LiveSessionController {
 	 * Held items release in order on the quiet deadline, when the voice agent starts
 	 * speaking anyway, or when it delegates.
 	 */
-	#deliverOrHold(kind: HeldContextKind, send: () => void): void {
+	#deliverOrHold(kind: HeldContextKind, send: () => void, onDiscard?: () => void): void {
 		if (Date.now() < this.#speakableIdleDeadline) {
-			if (kind === "thinking" || kind === "progress") {
+			if (kind === "thinking" || kind === "progress" || kind === "overflow-alert") {
 				const existing = this.#heldContext.findIndex(item => item.kind === kind);
 				if (existing >= 0) {
-					this.#heldContext[existing] = { kind, send };
+					this.#heldContext[existing]?.onDiscard?.();
+					this.#heldContext[existing] = { kind, send, onDiscard };
 					return;
 				}
 			}
-			this.#heldContext.push({ kind, send });
+			this.#heldContext.push({ kind, send, onDiscard });
 			this.#trimHeldContext();
 			return;
 		}
@@ -1038,8 +1058,11 @@ export class LiveSessionController {
 	#trimHeldContext(): void {
 		while (this.#heldContext.length > HELD_CONTEXT_CAP) {
 			const oldestReport = this.#heldContext.findIndex(item => item.kind === "report");
-			if (oldestReport >= 0) this.#heldContext.splice(oldestReport, 1);
-			else this.#heldContext.shift();
+			const evict = oldestReport >= 0
+				? oldestReport
+				: this.#heldContext.findIndex(item => item.kind !== "overflow-alert");
+			if (evict < 0) break;
+			this.#heldContext.splice(evict, 1)[0]?.onDiscard?.();
 		}
 	}
 
@@ -1048,10 +1071,57 @@ export class LiveSessionController {
 		this.#markUserActivity();
 	}
 
-	#sendSpeakable(item: string): void {
+	/** One labeled speakable item, guarded both now and after a hold. */
+	appendSpeakableContext(
+		text: string,
+		kind: "report" | "thinking" | "progress" = "report",
+		canDeliver: () => boolean = ALWAYS_DELIVER,
+		onSettled?: () => void,
+	): boolean {
+		if (this.#stopped || !this.#connected || !canDeliver()) return false;
+		const item = truncateToChunk(text);
+		if (!item) return false;
+		this.#deliverOrHold(kind, () => {
+			try { if (canDeliver()) void this.#sendSpeakable(item); }
+			finally { onSettled?.(); }
+		}, onSettled);
+		return true;
+	}
+
+	/** Reserve one held overflow slot; the rendered batch is frozen at release. */
+	appendOverflowAlertContext(
+		render: () => { text: string; receiptId: number },
+		canDeliver: () => boolean,
+		onReceipt: (receiptId: number, accepted: boolean) => void,
+	): boolean {
+		if (this.#stopped || !this.#connected || !canDeliver()) return false;
+		this.#deliverOrHold("overflow-alert", () => {
+			if (!canDeliver()) return;
+			const rendered = render();
+			const item = truncateToChunk(rendered.text);
+			if (!item) return;
+			void this.#sendSpeakable(item).then(accepted => onReceipt(rendered.receiptId, accepted));
+		});
+		return true;
+	}
+
+	/** Silent awareness; commentary does not trigger speech or enter the held queue. */
+	appendCommentaryContext(text: string): void {
+		if (this.#stopped || !this.#connected) return;
+		const item = truncateToChunk(text);
+		if (!item) return;
+		const delegationId = this.#activeDelegationId;
+		void this.#queueSend(
+			delegationId
+				? buildDelegationContextAppend(delegationId, item, "commentary")
+				: buildSessionContextAppend(item, "commentary"),
+		);
+	}
+
+	#sendSpeakable(item: string): Promise<boolean> {
 		this.#contextSinceResponse = true;
 		const delegationId = this.#activeDelegationId;
-		this.#queueSend(
+		return this.#queueSend(
 			delegationId
 				? buildDelegationContextAppend(delegationId, item, "speakable")
 				: buildSessionContextAppend(item, "speakable"),

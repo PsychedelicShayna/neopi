@@ -1663,6 +1663,9 @@ export class SessionAdvisors {
 			if (event.type !== "message_end") return;
 			if (event.message.role === "assistant") this.#recordAdvisorCost(advisor, event.message);
 			advisor.recorder.record(event.message);
+			void this.#host.emitSessionEvent({
+				type: "advisor_message", advisor: advisor.name, slug: advisor.slug, message: event.message,
+			}).catch(err => logger.debug("advisor message notification failed", { err: String(err) }));
 		});
 	}
 
