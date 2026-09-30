@@ -6,7 +6,7 @@
   ...
 }:
 let
-  cfg = config.programs.omp;
+  cfg = config.programs.omomp;
 in
 {
   options.programs.omp = {

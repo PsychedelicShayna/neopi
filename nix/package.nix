@@ -112,7 +112,7 @@ let
   };
 in
 stdenv.mkDerivation {
-  pname = "omp";
+  pname = "omomp";
   inherit (packageJson) version;
   src = source;
 
