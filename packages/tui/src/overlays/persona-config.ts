@@ -48,6 +48,20 @@ const MODE_DESCRIPTIONS: Record<PersonaConfigMode, string> = {
 	"literal-substitute": "Replace one literal inside the system prompt",
 };
 
+export type PersonaSourceField = {
+	key: string;
+	label: string;
+	description?: string;
+	enabledBy?: string;
+} & (
+	| { kind: "boolean"; value: boolean }
+	| {
+			kind: "choice";
+			value: string;
+			options: ReadonlyArray<{ value: string; label: string; description?: string }>;
+		}
+);
+
 export interface PersonaConfigEntry {
 	name: string;
 	/** Name the entry has on disk; undefined for entries created in this overlay. */
@@ -64,6 +78,10 @@ export interface PersonaConfigEntry {
 	path: string;
 	literal: string;
 	inheritToTasks: boolean;
+	/** `live` variant only: editable context-ingest controls. */
+	sources?: PersonaSourceField[];
+	/** Lossless normalized settings carrier; the TUI does not inspect it. */
+	sourcesRaw?: unknown;
 }
 
 export interface PersonaConfigDoc {
@@ -87,6 +105,11 @@ export interface PersonaConfigDeps {
 	externalEditor?: (text: string) => Promise<string | null>;
 	/** Instructions a new entry starts from (live: the built-in default). */
 	newEntryContent?: string;
+	/** `live` variant only: client protocol text appended on operator request. */
+	protocolLinesText?: string;
+	protocolMarker?: string;
+	/** `live` variant only: defaults for a newly created entry. */
+	newEntrySources?: () => { fields: PersonaSourceField[]; raw: unknown };
 }
 
 const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -103,7 +126,7 @@ function wrap(text: string, width: number): string[] {
 	return Bun.wrapAnsi(text, Math.max(1, width), { trim: false }).split("\n");
 }
 
-type Screen = "list" | "detail" | "name" | "content" | "path" | "literal" | "mode";
+type Screen = "list" | "detail" | "sources" | "name" | "content" | "path" | "literal" | "mode";
 
 export class PersonaConfigOverlayComponent implements Component {
 	#tui: TUI;
@@ -117,6 +140,7 @@ export class PersonaConfigOverlayComponent implements Component {
 	#pendingDelete: number | null = null;
 
 	#screen: Screen = "list";
+	#entryIndex: number | undefined;
 	#active: Component = new SelectList([], 1, getSelectListTheme());
 	#footerHint = "";
 	/** One-shot message (save result, validation error) shown until the next screen change. */
@@ -254,7 +278,19 @@ export class PersonaConfigOverlayComponent implements Component {
 		const list = this.#active;
 		const value = list instanceof SelectList ? (list.getSelectedItem()?.value ?? "") : "";
 		const match = /^entry:(\d+)$/.exec(value);
-		const entry = match ? this.#doc.entries[Number(match[1])] : undefined;
+		const entry = match ? this.#doc.entries[Number(match[1])] : this.#entryIndex === undefined ? undefined : this.#doc.entries[this.#entryIndex];
+		if (entry && this.#screen === "sources") {
+			const field = entry.sources?.find(item => item.key === value);
+			return wrap(field?.description ?? "", bodyWidth).map(line => truncateToWidth(theme.fg("muted", line), bodyWidth));
+		}
+		if (entry && this.#screen === "detail" && value === "sources") {
+			return wrap("Choose which crew activity the voice agent hears about with this persona.", bodyWidth)
+				.map(line => truncateToWidth(theme.fg("muted", line), bodyWidth));
+		}
+		if (entry && this.#screen === "detail" && value === "append-protocol") {
+			return (this.#deps.protocolLinesText ?? "").split("\n").slice(0, 12)
+				.map(line => truncateToWidth(theme.fg("muted", line), bodyWidth));
+		}
 		if (entry) return this.#entryPreview(entry, bodyWidth);
 		const help =
 			value === "add"
@@ -321,6 +357,18 @@ export class PersonaConfigOverlayComponent implements Component {
 		return `${entry.mode} · ${entry.sourceKind === "file" ? entry.path || "(no path)" : "inline"}`;
 	}
 
+	#sourcesSummary(entry: PersonaConfigEntry): string {
+		const labels: string[] = [];
+		let advisor = false;
+		for (const field of entry.sources ?? []) {
+			if (field.kind !== "boolean" || !field.value) continue;
+			if (field.key.startsWith("advisorNotes.")) advisor = true;
+			else labels.push(field.label);
+		}
+		if (advisor) labels.push("Advisor notes");
+		return labels.join(", ") || "none";
+	}
+
 	#validationError(): string | null {
 		const seen = new Set<string>();
 		for (const entry of this.#doc.entries) {
@@ -361,6 +409,7 @@ export class PersonaConfigOverlayComponent implements Component {
 	// ───────────────────────────── list ──────────────────────────────
 
 	#showList(selectedValue?: string): void {
+		this.#entryIndex = undefined;
 		const items: SelectItem[] = this.#doc.entries.map((entry, index) => ({
 			value: `entry:${index}`,
 			label:
@@ -479,7 +528,9 @@ export class PersonaConfigOverlayComponent implements Component {
 		for (let n = 2; ; n++) if (!taken.has(`${base}-${n}`)) return `${base}-${n}`;
 	}
 
-	#showNewEntryEditor(content = this.#deps.newEntryContent ?? "", from?: string): void {
+	#showNewEntryEditor(content = this.#deps.newEntryContent ?? "", from?: string, sourceIndex?: number): void {
+		const sourceEntry = sourceIndex === undefined ? undefined : this.#doc.entries[sourceIndex];
+		const fresh = sourceEntry ? undefined : this.#deps.newEntrySources?.();
 		const input = new Input();
 		input.setValue(this.#uniqueName(from ? `${from}-copy` : `persona-${this.#doc.entries.length + 1}`));
 		input.onSubmit = value => {
@@ -500,6 +551,8 @@ export class PersonaConfigOverlayComponent implements Component {
 				path: "",
 				literal: "",
 				inheritToTasks: false,
+				sources: sourceEntry ? structuredClone(sourceEntry.sources) : fresh?.fields,
+				sourcesRaw: structuredClone(sourceEntry ? sourceEntry.sourcesRaw : fresh?.raw),
 			});
 			this.#dirty = true;
 			this.#showDetail(this.#doc.entries.length - 1);
@@ -516,11 +569,17 @@ export class PersonaConfigOverlayComponent implements Component {
 			this.#showList();
 			return;
 		}
+		this.#entryIndex = index;
 		const items: SelectItem[] = [];
 		if (entry.builtin) {
 			items.push(
 				{ value: "active", label: "Active", description: this.#isActive(entry) ? "● on" : "○ off" },
 				{ value: "view", label: "Instructions", description: "read-only · Enter to view" },
+			);
+			if (this.#deps.variant === "live") {
+				items.push({ value: "sources", label: "Context sources", description: this.#sourcesSummary(entry) });
+			}
+			items.push(
 				{ value: "clone", label: "Clone to customize" },
 				{ value: "back", label: "Back" },
 			);
@@ -548,7 +607,17 @@ export class PersonaConfigOverlayComponent implements Component {
 					description: entry.inheritToTasks ? "● on" : "○ off",
 				});
 			} else {
-				items.push({ value: "content", label: "Instructions", description: previewLineOrNone(entry.content) });
+				items.push(
+					{ value: "content", label: "Instructions", description: previewLineOrNone(entry.content) },
+					{ value: "sources", label: "Context sources", description: this.#sourcesSummary(entry) },
+					{
+						value: "append-protocol",
+						label: "Append client protocol lines",
+						description: entry.content.includes(this.#deps.protocolMarker ?? "<client-protocol>")
+							? "already present"
+							: "adds the label and delegation rules as plain text you can edit",
+					},
+				);
 			}
 			items.push(
 				{ value: "clone", label: "Clone" },
@@ -620,6 +689,26 @@ export class PersonaConfigOverlayComponent implements Component {
 			case "view":
 				this.#showContentEditor(index, true);
 				return;
+			case "sources":
+				this.#showSources(index);
+				return;
+			case "append-protocol": {
+				const marker = this.#deps.protocolMarker ?? "<client-protocol>";
+				const protocol = this.#deps.protocolLinesText;
+				let note: { text: string; tone?: "success" | "warning" };
+				if (!protocol) {
+					note = { text: "Client protocol lines are unavailable." };
+				} else if (entry.content.includes(marker)) {
+					note = { text: "Already present" };
+				} else {
+					entry.content = `${entry.content.trimEnd()}\n\n${protocol.trim()}\n`;
+					this.#dirty = true;
+					note = { text: "Client protocol lines appended — save to apply", tone: "success" };
+				}
+				this.#showDetail(index, field);
+				this.#flash(note.text, note.tone);
+				return;
+			}
 			case "path":
 				this.#showFieldEditor(index, "path", "Path relative to the agent directory");
 				return;
@@ -627,7 +716,7 @@ export class PersonaConfigOverlayComponent implements Component {
 				this.#showFieldEditor(index, "literal", "Literal text in the system prompt to replace");
 				return;
 			case "clone":
-				this.#showNewEntryEditor(entry.content, entry.name);
+				this.#showNewEntryEditor(entry.content, entry.name, index);
 				return;
 			case "delete":
 				this.#pendingDelete = null;
@@ -639,6 +728,82 @@ export class PersonaConfigOverlayComponent implements Component {
 			default:
 				this.#showList(`entry:${index}`);
 		}
+	}
+
+	#showSources(index: number, selectedKey?: string): void {
+		const entry = this.#doc.entries[index];
+		if (!entry) return this.#showList();
+		const fields = entry.sources ?? [];
+		const isEnabled = (field: PersonaSourceField): boolean => {
+			if (!field.enabledBy) return true;
+			const controller = fields.find(candidate => candidate.key === field.enabledBy);
+			return controller?.kind === "boolean" && controller.value;
+		};
+		const choiceOptions = (field: Extract<PersonaSourceField, { kind: "choice" }>) => {
+			if (field.options.some(option => option.value === field.value)) return field.options;
+			return [{ value: field.value, label: `Custom (${field.value})` }, ...field.options];
+		};
+		const items: SelectItem[] = fields.map(field => {
+			const enabled = isEnabled(field);
+			const controller = field.enabledBy ? fields.find(candidate => candidate.key === field.enabledBy) : undefined;
+			const dependency = controller ? `(needs ${controller.label})` : undefined;
+			const selectedLabel =
+				field.kind === "choice"
+					? choiceOptions(field).find(option => option.value === field.value)?.label ?? field.value
+					: undefined;
+			const label =
+				field.kind === "boolean"
+					? `${field.value ? "●" : "○"} ${field.label}`
+					: `${field.label}: ${selectedLabel}`;
+			return {
+				value: field.key,
+				label: enabled ? label : theme.fg("dim", label),
+				description: enabled ? undefined : dependency,
+			};
+		});
+		items.push({ value: "back", label: "Back" });
+		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme());
+		if (selectedKey) {
+			list.setSelectedIndex(Math.max(0, items.findIndex(item => item.value === selectedKey)));
+		}
+		const select = (key: string) => {
+			if (key === "back") {
+				this.#showDetail(index, "sources");
+				return;
+			}
+			const field = fields.find(candidate => candidate.key === key);
+			if (!field || !isEnabled(field)) return;
+			if (field.kind === "boolean") {
+				field.value = !field.value;
+			} else {
+				const options = choiceOptions(field);
+				const current = options.findIndex(option => option.value === field.value);
+				field.value = options[(current + 1) % options.length]?.value ?? field.value;
+			}
+			this.#dirty = true;
+			this.#showSources(index, key);
+		};
+		const handleInput = list.handleInput.bind(list);
+		list.handleInput = data => {
+			if (matchesKey(data, "space")) {
+				const key = list.getSelectedItem()?.value;
+				if (key) select(key);
+				return;
+			}
+			if (matchesKey(data, "s")) {
+				this.#save(() => this.#showSources(index, list.getSelectedItem()?.value));
+				return;
+			}
+			handleInput(data);
+		};
+		list.onSelect = item => select(item.value);
+		list.onCancel = () => this.#showDetail(index, "sources");
+		this.#entryIndex = index;
+		this.#setScreen(
+			"sources",
+			list,
+			"↑↓ move · Space / Enter toggle or cycle · s save & apply · Esc back",
+		);
 	}
 
 	#showNameEditor(index: number): void {
