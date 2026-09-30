@@ -14,7 +14,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { expandWindowsLongPath } from "@oh-my-pi/pi-natives/path";
+import type * as NativePath from "@oh-my-pi/pi-natives/path";
 import { engines, version } from "../package.json" with { type: "json" };
 import { isEexist, isEnoent, isEnotdir } from "./fs-error";
 
@@ -163,7 +163,14 @@ function standardizeMacOSPath(p: string): string {
 
 /** Keep the current directory's spelling while expanding Windows 8.3 aliases. */
 function standardizeProjectPath(p: string): string {
-	return process.platform === "win32" ? expandWindowsLongPath(p) : standardizeMacOSPath(p);
+	// Directory helpers are imported by the CLI before its first frame. Only
+	// Windows needs the native path helper; loading it here would evaluate the
+	// native addon loader on every platform during bootstrap.
+	if (process.platform === "win32") {
+		const { expandWindowsLongPath } = require("@oh-my-pi/pi-natives/path") as typeof NativePath;
+		return expandWindowsLongPath(p);
+	}
+	return standardizeMacOSPath(p);
 }
 
 export function resolveEquivalentPath(inputPath: string): string {
