@@ -1753,7 +1753,12 @@ export class ModelHubComponent implements Component {
 	): void {
 		const saved = previous ? this.#settings.getFallbackEffortSelection(target.role, previous) : undefined;
 		const parsed = previous ? this.#parseFallbackEntry(previous) : undefined;
-		const options = this.#thinkingOptionsFor(item.model);
+		const options: ConfiguredThinkingLevel[] = [
+			ThinkingLevel.Inherit,
+			ThinkingLevel.Off,
+			AUTO_THINKING,
+			...getSupportedEfforts(item.model),
+		];
 		const level =
 			saved?.mode === "auto"
 				? AUTO_THINKING
