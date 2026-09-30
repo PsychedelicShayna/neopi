@@ -844,6 +844,8 @@ export class TUI extends Container {
 	// with the spare each pass, which bounds the memo to one frame of rows.
 	#preparedLineMemo = new Map<string, PreparedLine>();
 	#preparedLineMemoSpare = new Map<string, PreparedLine>();
+	/** Last painted physical rows, including committed history above the mutable viewport. */
+	#visibleScreenRows: string[] = [];
 	#previousFrameLength = 0;
 	#previousWidth = 0;
 	#previousHeight = 0;
@@ -1168,6 +1170,10 @@ export class TUI extends Container {
 		  }
 		| undefined {
 		return this.#debugPaint;
+	}
+	/** Text rows on the last painted normal-buffer screen, including still-visible native history. */
+	getVisibleScreenRows(): readonly string[] {
+		return this.#altActive ? [] : this.#visibleScreenRows;
 	}
 
 	/** Render the current root document at the live terminal width for debug inspection. */
@@ -3335,6 +3341,18 @@ export class TUI extends Container {
 		}
 		buffer += this.#paintEndSequence;
 		this.terminal.write(buffer);
+		// Native history leaves provider plans after acknowledgement but remains
+		// visible above the mutable window until later appends scroll it away.
+		if (!geometryStable || destructiveReset) this.#visibleScreenRows = Array.from({ length: height }, () => "");
+		const visibleRows = this.#visibleScreenRows;
+		if (pushed > 0 && pushed < startTop) visibleRows.copyWithin(0, pushed, startTop);
+		const historyTop = startTop - pushed;
+		for (let index = 0; index < preparedHistory.lines.length; index++) {
+			const row = historyTop + index;
+			if (row >= 0 && row < height) visibleRows[row] = preparedHistory.lines[index]!;
+		}
+		for (let index = 0; index < rows; index++) visibleRows[newTop + index] = prepared.lines[index]!;
+		visibleRows.fill("", newTop + rows, height);
 		this.#debugPaint = {
 			lines: prepared.lines,
 			windowTop: this.#debugNextWindowTop,

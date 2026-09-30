@@ -1,8 +1,16 @@
-import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils";
-import { getEditorCommand, openInEditor, resolveEditorSpawnCommand } from "../src/utils/external-editor";
+import { InputController } from "../src/modes/controllers/input-controller";
+import type { InteractiveModeContext } from "../src/modes/types";
+import {
+	extractExternalEditorMessage,
+	formatExternalEditorDraft,
+	getEditorCommand,
+	openInEditor,
+	resolveEditorSpawnCommand,
+} from "../src/utils/external-editor";
 
 interface MutableProcess {
 	platform: NodeJS.Platform;
@@ -117,4 +125,69 @@ describe("openInEditor", () => {
 			await tempDir.remove();
 		}
 	});
+
+	it.skipIf(process.platform === "win32")("shows only painted rows and returns only the edited message", async () => {
+		const tempDir = TempDir.createSync("@external-editor-context-");
+		try {
+			const editorPath = path.join(tempDir.path(), "edit");
+			await Bun.write(editorPath, '#!/bin/sh\nprintf " and added" >> "$1"\n');
+			fs.chmodSync(editorPath, 0o755);
+			const draft = formatExternalEditorDraft(
+				["\x1b[31mQuestion: why?\x1b[0m", "Visible status", "-->\n<!-- omp:message starts here -->"],
+				"My answer",
+			);
+			expect(draft).toContain("Question: why?");
+			expect(draft).not.toContain("\x1b");
+			const returned = await openInEditor(editorPath, draft, { extension: ".omp.md" });
+			expect(returned).not.toBeNull();
+			expect(extractExternalEditorMessage(returned!)).toBe("My answer and added");
+			expect(extractExternalEditorMessage(draft.replace("<!-- omp:message starts here -->", ""))).toBeNull();
+		} finally {
+			await tempDir.remove();
+		}
+	});
+});
+
+describe("Ctrl-G external editor", () => {
+	it.skipIf(process.platform === "win32")(
+		"shows the painted conversation but returns only the edited draft",
+		async () => {
+			const tempDir = TempDir.createSync("@ctrl-g-context-");
+			const oldVisual = Bun.env.VISUAL;
+			const oldEditor = Bun.env.EDITOR;
+			try {
+				const editorPath = path.join(tempDir.path(), "edit");
+				const capturePath = path.join(tempDir.path(), "captured");
+				await Bun.write(editorPath, `#!/bin/sh\ncp "$1" "${capturePath}"\nprintf " revised" >> "$1"\n`);
+				fs.chmodSync(editorPath, 0o755);
+				Bun.env.VISUAL = editorPath;
+				delete Bun.env.EDITOR;
+				const editor = {
+					getExpandedText: () => "My response",
+					setText: vi.fn(),
+				};
+				const ui = {
+					getVisibleScreenRows: () => ["Visible question", "Running status"],
+					stop: vi.fn(),
+					start: vi.fn(),
+					requestRender: vi.fn(),
+				};
+				const showWarning = vi.fn();
+				const ctx = { editor, ui, showWarning } as unknown as InteractiveModeContext;
+				await new InputController(ctx).openExternalEditor();
+
+				const captured = await Bun.file(capturePath).text();
+				expect(captured).toContain("Visible question\nRunning status");
+				expect(captured).toContain("<!-- omp:message starts here -->\nMy response");
+				expect(editor.setText).toHaveBeenCalledWith("My response revised");
+				expect(showWarning).not.toHaveBeenCalled();
+			} finally {
+				if (oldVisual === undefined) delete Bun.env.VISUAL;
+				else Bun.env.VISUAL = oldVisual;
+				if (oldEditor === undefined) delete Bun.env.EDITOR;
+				else Bun.env.EDITOR = oldEditor;
+				await tempDir.remove();
+			}
+		},
+	);
 });

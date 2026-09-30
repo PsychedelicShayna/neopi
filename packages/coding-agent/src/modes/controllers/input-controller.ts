@@ -66,7 +66,12 @@ import {
 } from "../../utils/clipboard";
 import { commandUsage, hintUsage } from "../../utils/usage-counter";
 import { EnhancedPasteController } from "../../utils/enhanced-paste";
-import { getEditorCommand, openInEditor } from "../../utils/external-editor";
+import {
+	extractExternalEditorMessage,
+	formatExternalEditorDraft,
+	getEditorCommand,
+	openInEditor,
+} from "../../utils/external-editor";
 import { loadImageInput } from "../../utils/image-loading";
 import { ensureSupportedImageInput, ImageInputTooLargeError } from "@oh-my-pi/pi-tui/chat/image-loading";
 import { type ImageAttachmentSource, tagImageAttachmentSource } from "@oh-my-pi/pi-tui/prompt/image-source";
@@ -3295,12 +3300,15 @@ export class InputController {
 		}
 
 		const currentText = this.ctx.editor.getExpandedText?.() ?? this.ctx.editor.getText();
+		const draft = formatExternalEditorDraft(this.ctx.ui.getVisibleScreenRows(), currentText);
 
 		try {
 			this.ctx.ui.stop();
-			const result = await openInEditor(editorCmd, currentText, { extension: ".omp.md" });
+			const result = await openInEditor(editorCmd, draft, { extension: ".omp.md" });
 			if (result !== null) {
-				this.ctx.editor.setText(result);
+				const message = extractExternalEditorMessage(result);
+				if (message === null) this.ctx.showWarning("External editor context marker was removed; draft unchanged.");
+				else this.ctx.editor.setText(message);
 			}
 		} catch (error) {
 			this.ctx.showWarning(

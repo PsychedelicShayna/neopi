@@ -227,6 +227,30 @@ describe("terminal frame plans", () => {
 		expect(terminal.getViewport().map(row => row.trimEnd())).toEqual(["history two", "editor", "status"]);
 		tui.stop();
 	});
+	it("captures painted history and mutable rows in the physical viewport at open time", () => {
+		const terminal = new VirtualTerminal(20, 5);
+		const provider = new Provider({
+			history: { id: 1, rows: ["older", "question", "answer"] },
+			viewport: ["draft", "status"],
+		});
+		const tui = new TUI(terminal, undefined, { renderScheduler: scheduler });
+		tui.setFrameProvider(provider);
+		expect(tui.getVisibleScreenRows().map(row => Bun.stripANSI(row).trimEnd())).toEqual(
+			terminal.getViewport().map(row => row.trimEnd()),
+		);
+
+		provider.plan = {
+			history: { id: 2, rows: ["follow-up", "response"] },
+			viewport: ["updated draft", "updated status"],
+		};
+		tui.requestRender(true);
+		const visible = tui.getVisibleScreenRows().map(row => Bun.stripANSI(row).trimEnd());
+		expect(visible).toEqual(terminal.getViewport().map(row => row.trimEnd()));
+		expect(visible).toContain("answer");
+		expect(visible).not.toContain("older");
+		tui.stop();
+	});
+
 	it("keeps an exact-width live row out of scrollback when ConPTY materializes pending wrap", () => {
 		const terminal = new ConptyPendingWrapTerminal(20, 4);
 		const provider = new Provider({
