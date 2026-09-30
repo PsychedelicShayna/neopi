@@ -2877,8 +2877,17 @@ export class SessionMaintenance {
 			});
 			return COMPACTION_CHECK_BLOCK_AUTOMATIC_CONTINUATION;
 		}
+		// Only provider failures enter overflow recovery. A mixture reports its
+		// outer conversation occupancy, but fits each member's separate envelope;
+		// neither a successful response nor a member's terminal hop error proves
+		// that the synthetic outer model needs compaction.
 		const overflowEvidence =
-			sameModel && !errorIsFromBeforeCompaction && AIError.isContextOverflow(assistantMessage, contextWindow);
+			assistantMessage.stopReason === "error" &&
+			this.#model !== undefined &&
+			!isMixtureModel(this.#model) &&
+			sameModel &&
+			!errorIsFromBeforeCompaction &&
+			AIError.isContextOverflow(assistantMessage, contextWindow);
 		if (overflowEvidence || (payloadRejection && !trustedPayloadRejection)) {
 			this.#host.removeAssistantMessageFromActiveContext(assistantMessage);
 
