@@ -41,7 +41,11 @@ import { createAgentSession } from "../../src/sdk";
 import { AgentSession } from "../../src/session/agent-session";
 import { SecretObfuscator } from "../../src/secrets/obfuscator";
 import { estimateToolSchemaTokens } from "@oh-my-pi/pi-tui/status-line/context-usage";
-import { SessionChronicler, type SessionChroniclerHost } from "../../src/chronicler/session-chronicler";
+import {
+	__sessionChroniclerInternalsForTesting,
+	SessionChronicler,
+	type SessionChroniclerHost,
+} from "../../src/chronicler/session-chronicler";
 import { type CaptureCheckpoint, ChroniclerStore, chroniclerStoreIO } from "../../src/chronicler/store";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 import { cfgChroniclerEnabled } from "@oh-my-pi/pi-coding-agent/chronicler/settings";
@@ -570,6 +574,44 @@ describe("SessionChronicler capture runtime", () => {
 		expect(passSourceIds(passes[1]!)).toEqual([entry]);
 		expect(passConversationText(passes[1]!)).not.toContain("Never finalized");
 	});
+
+	it("aborts a traffic-free stream after 60 minutes and retries the same prefix from scratch", async () => {
+		const manager = await newSessionManager();
+		const entry = appendUser(manager, "Retry this capture if its stream goes completely quiet.");
+		await manager.flush();
+		scripts.push([{ content: ["Too late"], stopReason: "stop", delayMs: 2 * 60 * 60 * 1_000 }]);
+		scripts.push(ackPass());
+
+		const timerIO = __sessionChroniclerInternalsForTesting.chroniclerTimerIO;
+		const originalSetTimeout = timerIO.setTimeout;
+		const originalClearTimeout = timerIO.clearTimeout;
+		const fakeHandle = setTimeout(() => {}, 1);
+		clearTimeout(fakeHandle);
+		let fireWatchdog: (() => void) | undefined;
+		let watchdogDelay: number | undefined;
+		timerIO.setTimeout = (callback, delayMs) => {
+			fireWatchdog = callback;
+			watchdogDelay = delayMs;
+			return fakeHandle;
+		};
+		timerIO.clearTimeout = () => {};
+		try {
+			const harness = startChronicler(manager, newSettings());
+			await waitForPassStart(0);
+			expect(watchdogDelay).toBe(60 * 60 * 1_000);
+			expect(fireWatchdog).toBeDefined();
+
+			fireWatchdog!();
+			await waitForPassStart(1);
+			expect(passes).toHaveLength(2);
+			expect(passSourceIds(passes[1]!)).toEqual([entry]);
+			expect(passConversationText(passes[1]!)).not.toContain("Too late");
+			await waitForCoverage(harness.root, [entry]);
+		} finally {
+			timerIO.setTimeout = originalSetTimeout;
+			timerIO.clearTimeout = originalClearTimeout;
+		}
+	}, 30_000);
 
 	it("publishes nothing when the provider fails after beats were staged", async () => {
 		const manager = await newSessionManager();
