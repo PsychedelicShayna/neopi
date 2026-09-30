@@ -1,4 +1,5 @@
 import { logger } from "@oh-my-pi/pi-utils";
+import type { PersonaSourceField } from "@oh-my-pi/pi-tui/overlays/persona-config";
 import { LivePersonaStore, onLivePersonaStateChanged } from "./personas";
 
 export interface LiveIngestPersonaSettings {
@@ -88,6 +89,151 @@ export function normalizeLiveIngestSettings(partial: unknown): LiveIngestPersona
 		relayReasoning: boolean("relayReasoning"), relayProgress: boolean("relayProgress"),
 		relayFinalAnswers: boolean("relayFinalAnswers"), includeVoiceNote: boolean("includeVoiceNote"),
 	};
+}
+
+const depthOptions = [
+	{ value: "1", label: "Direct children only" },
+	{ value: "2", label: "2" },
+	{ value: "3", label: "3" },
+	{ value: "-1", label: "Unlimited" },
+] as const;
+const slotOptions = [
+	{ value: "1", label: "1" },
+	{ value: "2", label: "2" },
+	{ value: "4", label: "4" },
+	{ value: "8", label: "8" },
+	{ value: "16", label: "16" },
+	{ value: "32", label: "32" },
+	{ value: "-1", label: "All (watch everything)" },
+] as const;
+const classifierQuietOptions = [
+	{ value: "3000", label: "3000" },
+	{ value: "5000", label: "5000" },
+	{ value: "10000", label: "Default" },
+	{ value: "20000", label: "20000" },
+	{ value: "30000", label: "30000" },
+] as const;
+const rescoreOptions = [
+	{ value: "0", label: "Off" },
+	{ value: "300000", label: "5 min" },
+	{ value: "600000", label: "10 min (default)" },
+	{ value: "1800000", label: "30 min" },
+] as const;
+const startQuietOptions = [
+	{ value: "0", label: "Immediately" },
+	{ value: "2000", label: "2000" },
+	{ value: "5000", label: "Default" },
+	{ value: "10000", label: "10000" },
+] as const;
+
+function sourceBoolean(
+	key: string,
+	label: string,
+	value: boolean,
+	description: string,
+	enabledBy?: string,
+): PersonaSourceField {
+	return { key, label, kind: "boolean", value, description, enabledBy };
+}
+
+function sourceChoice(
+	key: string,
+	label: string,
+	value: number,
+	options: ReadonlyArray<{ value: string; label: string; description?: string }>,
+	description: string,
+	enabledBy?: string,
+): PersonaSourceField {
+	const stringValue = String(value);
+	return {
+		key,
+		label,
+		kind: "choice",
+		value: stringValue,
+		options: options.some(option => option.value === stringValue)
+			? options
+			: [{ value: stringValue, label: `Custom (${stringValue})` }, ...options],
+		description,
+		enabledBy,
+	};
+}
+
+export function liveIngestSourceFields(settings: LiveIngestPersonaSettings): PersonaSourceField[] {
+	const fields: PersonaSourceField[] = [
+		sourceBoolean("ircPrimary", "IRC to primary", settings.ircPrimary, "Relays subagent IRC addressed to the primary; default is on."),
+		sourceBoolean("ircPeers", "IRC between subagents", settings.ircPeers, "Relays IRC between subagents; default is on."),
+		sourceBoolean("subagents", "Subagents", settings.subagents, "Tracks and narrates subagent activity; default is on."),
+		sourceChoice("subagentMaxDepth", "Subagent max depth", settings.subagentMaxDepth, depthOptions, "Limits tracked subagent nesting; default is direct children only.", "subagents"),
+	];
+	settings.voicedSlotsByDepth.forEach((value, index, values) => {
+		const depth = index + 1;
+		fields.push(sourceChoice(
+			`voicedSlotsByDepth.${index}`,
+			`Voiced slots: depth ${depth}${index === values.length - 1 ? "+" : ""}`,
+			value,
+			slotOptions,
+			"Limits concurrently narrated subagents at this depth; defaults are 8, 4, and 2.",
+			"subagents",
+		));
+	});
+	fields.push(
+		sourceBoolean("subagentClassifier", "Importance classifier", settings.subagentClassifier, "Ranks tracked subagents for voiced slots; default is on.", "subagents"),
+		sourceChoice("classifierQuietMs", "Classifier quiet time", settings.classifierQuietMs, classifierQuietOptions, "Waits for roster quiet before classification; default is 10000 ms.", "subagentClassifier"),
+		sourceChoice("rescoreIntervalMs", "Periodic rescore", settings.rescoreIntervalMs, rescoreOptions, "Periodically refreshes importance scores; default is 10 minutes.", "subagentClassifier"),
+		sourceChoice("startAnnounceQuietMs", "Start announcement quiet time", settings.startAnnounceQuietMs, startQuietOptions, "Batches start announcements after quiet; default is 5000 ms.", "subagents"),
+		sourceBoolean("voicedChangeCue", "Voiced-set change cue", settings.voicedChangeCue, "Announces changes to the narrated subagent set; default is on.", "subagents"),
+		sourceBoolean("effortAlerts", "Effort red alerts (catalog)", settings.effortAlerts, "Checks catalog-marked effort selections independently; default is on.", "subagents"),
+		sourceBoolean("advisorNotes.nit", "Advisor notes: nit", settings.advisorNotes.nit, "Relays advisor nit notes; default is on."),
+		sourceBoolean("advisorNotes.concern", "Advisor notes: concern", settings.advisorNotes.concern, "Relays advisor concern notes; default is on."),
+		sourceBoolean("advisorNotes.blocker", "Advisor notes: blocker", settings.advisorNotes.blocker, "Relays advisor blocker notes; default is on."),
+		sourceBoolean("advisorThinking", "Advisor thinking", settings.advisorThinking, "Relays finalized advisor reasoning; default is off."),
+		sourceBoolean("relayReasoning", "Primary reasoning narration", settings.relayReasoning, "Relays the primary agent's reasoning narration; default is on."),
+		sourceBoolean("relayProgress", "Primary tool progress", settings.relayProgress, "Relays the primary agent's tool progress; default is on."),
+		sourceBoolean("relayFinalAnswers", "Primary final answers", settings.relayFinalAnswers, "Relays the primary agent's final answers; default is on."),
+		sourceBoolean("includeVoiceNote", "Include voice agent's note in delegations", settings.includeVoiceNote, "Includes voice-agent provenance in delegations; default is on."),
+	);
+	return fields;
+}
+
+export function liveIngestSettingsFromFields(
+	fields: PersonaSourceField[] | undefined,
+	raw: unknown,
+): LiveIngestPersonaSettings {
+	const next = normalizeLiveIngestSettings(raw);
+	for (const field of fields ?? []) {
+		if (field.kind === "boolean") {
+			switch (field.key) {
+				case "ircPrimary": next.ircPrimary = field.value; break;
+				case "ircPeers": next.ircPeers = field.value; break;
+				case "subagents": next.subagents = field.value; break;
+				case "subagentClassifier": next.subagentClassifier = field.value; break;
+				case "voicedChangeCue": next.voicedChangeCue = field.value; break;
+				case "effortAlerts": next.effortAlerts = field.value; break;
+				case "advisorNotes.nit": next.advisorNotes.nit = field.value; break;
+				case "advisorNotes.concern": next.advisorNotes.concern = field.value; break;
+				case "advisorNotes.blocker": next.advisorNotes.blocker = field.value; break;
+				case "advisorThinking": next.advisorThinking = field.value; break;
+				case "relayReasoning": next.relayReasoning = field.value; break;
+				case "relayProgress": next.relayProgress = field.value; break;
+				case "relayFinalAnswers": next.relayFinalAnswers = field.value; break;
+				case "includeVoiceNote": next.includeVoiceNote = field.value; break;
+			}
+			continue;
+		}
+		const value = Number(field.value);
+		if (!Number.isFinite(value)) continue;
+		if (field.key === "subagentMaxDepth") next.subagentMaxDepth = value;
+		else if (field.key === "classifierQuietMs") next.classifierQuietMs = value;
+		else if (field.key === "rescoreIntervalMs") next.rescoreIntervalMs = value;
+		else if (field.key === "startAnnounceQuietMs") next.startAnnounceQuietMs = value;
+		else if (field.key.startsWith("voicedSlotsByDepth.")) {
+			const index = Number(field.key.slice("voicedSlotsByDepth.".length));
+			if (Number.isInteger(index) && index >= 0 && index < next.voicedSlotsByDepth.length) {
+				next.voicedSlotsByDepth[index] = value;
+			}
+		}
+	}
+	return normalizeLiveIngestSettings(next);
 }
 
 export async function resolveLiveIngestSettings(statePath?: string): Promise<LiveIngestPersonaSettings> {

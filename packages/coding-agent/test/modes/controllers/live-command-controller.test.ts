@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
 	type LiveSessionCallbacks,
@@ -10,6 +13,7 @@ import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/typ
 import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { getEditorTheme } from "@oh-my-pi/pi-tui/theme";
 import { cfgLiveForceDelegateKeyword, cfgLiveSubmitKeyword, cfgLiveSubmitSilenceMs } from "@oh-my-pi/pi-coding-agent/live/settings";
+import { __resetDirsFromEnvForTests } from "@oh-my-pi/pi-utils";
 
 interface Harness {
 	ctx: InteractiveModeContext;
@@ -400,5 +404,77 @@ describe("LiveCommandController", () => {
 		expect(h.controller.cycleDestination()).toBe("primary");
 		await h.controller.stop();
 		expect(h.controller.cycleDestination()).toBeUndefined();
+	});
+
+	it("notices each active custom persona without protocol lines once per process", async () => {
+		const previousDir = process.env.PI_CODING_AGENT_DIR;
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "live-protocol-notice-"));
+		process.env.PI_CODING_AGENT_DIR = dir;
+		__resetDirsFromEnvForTests();
+		const statePath = path.join(dir, "neopi-live-personas.json");
+		const h = createHarness();
+		try {
+			await Bun.write(statePath, JSON.stringify({
+				schemaVersion: 1,
+				personas: { alpha: { instructions: "No protocol yet." } },
+				active: "alpha",
+			}));
+			await h.controller.handleCommand();
+			expect(h.ctx.showStatus).toHaveBeenCalledWith(
+				'Live persona "alpha" lacks the client protocol lines; open /persona live → alpha → "Append client protocol lines".',
+			);
+			await h.controller.stop();
+			await h.controller.handleCommand();
+			expect(h.ctx.showStatus).toHaveBeenCalledTimes(1);
+			await h.controller.stop();
+
+			await Bun.write(statePath, JSON.stringify({
+				schemaVersion: 1,
+				personas: { beta: { instructions: "Still missing." } },
+				active: "beta",
+			}));
+			await h.controller.handleCommand();
+			expect(h.ctx.showStatus).toHaveBeenLastCalledWith(
+				'Live persona "beta" lacks the client protocol lines; open /persona live → beta → "Append client protocol lines".',
+			);
+			expect(h.ctx.showStatus).toHaveBeenCalledTimes(2);
+			await h.controller.stop();
+		} finally {
+			await h.controller.stop();
+			if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+			else process.env.PI_CODING_AGENT_DIR = previousDir;
+			__resetDirsFromEnvForTests();
+			await fs.rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("skips the protocol notice for present markers and unreadable persona state", async () => {
+		const previousDir = process.env.PI_CODING_AGENT_DIR;
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "live-protocol-present-"));
+		process.env.PI_CODING_AGENT_DIR = dir;
+		__resetDirsFromEnvForTests();
+		const statePath = path.join(dir, "neopi-live-personas.json");
+		const h = createHarness();
+		try {
+			await Bun.write(statePath, JSON.stringify({
+				schemaVersion: 1,
+				personas: { alpha: { instructions: "<client-protocol>present</client-protocol>" } },
+				active: "alpha",
+			}));
+			await h.controller.handleCommand();
+			expect(h.ctx.showStatus).not.toHaveBeenCalled();
+			await h.controller.stop();
+			await Bun.write(statePath, "{ corrupt");
+			await h.controller.handleCommand();
+			expect(h.controller.active).toBe(true);
+			expect(h.ctx.showStatus).not.toHaveBeenCalled();
+			await h.controller.stop();
+		} finally {
+			await h.controller.stop();
+			if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+			else process.env.PI_CODING_AGENT_DIR = previousDir;
+			__resetDirsFromEnvForTests();
+			await fs.rm(dir, { recursive: true, force: true });
+		}
 	});
 });

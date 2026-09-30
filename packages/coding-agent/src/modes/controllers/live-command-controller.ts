@@ -18,6 +18,7 @@ import { theme } from "@oh-my-pi/pi-tui/theme";
 import { chipLabel } from "@oh-my-pi/pi-tui/prompt/composer-attachments";
 import type { InteractiveModeContext } from "../types";
 import { createAssistantMessageComponent } from "@oh-my-pi/pi-tui/prompt/interactive-context-helpers";
+import { createLivePersonaFeature } from "../../live/personas";
 
 import {
 	cfgLiveBlockDelegateKeyword,
@@ -66,8 +67,8 @@ export class LiveCommandController {
 	readonly #createSession: LiveSessionFactory | undefined;
 
 	#session: LiveSessionController | undefined;
-	#ingest: LiveIngest | undefined;
 	#call: { session: LiveSessionController; ingest: LiveIngest; detachSettings: () => void } | undefined;
+	#protocolNoticeShown = new Set<string>();
 	#settling: Promise<void> | undefined;
 	#utterance: ComposerUtterance | undefined;
 	/** Set while the controller itself edits the draft, so those edits are not operator activity. */
@@ -251,11 +252,11 @@ export class LiveCommandController {
 		this.#resumeVocalizer = vocalizer.suspend();
 
 		const settingsSource = new LiveIngestSettingsSource(LIVE_INGEST_DEFAULTS);
-		let ingest: LiveIngest | undefined;
+		const ingestRef: { current?: LiveIngest } = {};
 		const options: LiveSessionControllerOptions = {
 			session: this.#ctx.session,
 			extractAssistantText: message => this.#ctx.extractAssistantText(message),
-			ircRelayTransform: (message, body) => ingest ? ingest.ircRelayTransform(message, body) : body,
+			ircRelayTransform: (message, body) => ingestRef.current?.ircRelayTransform(message, body) ?? body,
 			ircRelayAllowed: message => {
 				const settings = settingsSource.get();
 				return message.customType === "irc:relay" ? settings.ircPeers : settings.ircPrimary;
@@ -313,7 +314,7 @@ export class LiveCommandController {
 			},
 		};
 		const session = this.#createSession ? this.#createSession(options) : new LiveSessionController(options);
-		ingest = new LiveIngest({
+		const ingest = new LiveIngest({
 			session: this.#ctx.session,
 			registry: AgentRegistry.global(),
 			subagentEventBus: this.#ctx.subagentEventBus,
@@ -322,8 +323,8 @@ export class LiveCommandController {
 			extractAssistantText: message => this.#ctx.extractAssistantText(message),
 			notify: (level, message) => level === "warning" ? this.#ctx.showError(message) : this.#ctx.showStatus(message),
 		});
+		ingestRef.current = ingest;
 		this.#session = session;
-		this.#ingest = ingest;
 		const detachSettings = settingsSource.attach();
 		this.#call = { session, ingest, detachSettings };
 		for (const setting of [cfgLiveForceDelegateKeyword, cfgLiveSubmitKeyword, cfgLiveSubmitSilenceMs]) {
@@ -335,6 +336,8 @@ export class LiveCommandController {
 		try {
 			await settingsSource.refresh();
 			if (this.#session !== session) return;
+			await this.#maybeNoticeProtocolLines(session);
+			if (this.#session !== session) return;
 			await session.start();
 			if (this.#session === session) ingest.attach();
 		} catch (cause) {
@@ -342,6 +345,27 @@ export class LiveCommandController {
 				await session.stop();
 				this.#finish(session, errorFrom(cause));
 			}
+		}
+	}
+
+	async #maybeNoticeProtocolLines(session: LiveSessionController): Promise<void> {
+		try {
+			const data = await createLivePersonaFeature().data();
+			const active = data.items.find(item => item.active);
+			if (
+				this.#session === session
+				&& active
+				&& !active.builtin
+				&& !active.instructions.includes("<client-protocol>")
+				&& !this.#protocolNoticeShown.has(active.name)
+			) {
+				this.#protocolNoticeShown.add(active.name);
+				this.#ctx.showStatus(
+					`Live persona "${active.name}" lacks the client protocol lines; open /persona live → ${active.name} → "Append client protocol lines".`,
+				);
+			}
+		} catch (error) {
+			logger.debug("live persona read failed; skipping protocol notice", { error });
 		}
 	}
 
@@ -443,7 +467,6 @@ export class LiveCommandController {
 			call.ingest.detach();
 			call.detachSettings();
 			this.#call = undefined;
-			this.#ingest = undefined;
 		}
 		// Stop while this session still owns the composer: a handoff accepted
 		// during teardown must still save its final text to history.

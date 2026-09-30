@@ -6,6 +6,11 @@
  * persona, `/persona live …` edits the live voice model's persona.
  */
 import type { PersonaConfigDoc, PersonaConfigEntry } from "@oh-my-pi/pi-tui/overlays/persona-config";
+import {
+	liveIngestSettingsFromFields,
+	liveIngestSourceFields,
+	type LiveIngestPersonaSettings,
+} from "../live/ingest-settings";
 import { createLivePersonaFeature, DEFAULT_LIVE_PERSONA, defaultLiveInstructions } from "../live/personas";
 import type { AgentSession } from "../session/agent-session";
 import {
@@ -150,6 +155,8 @@ export async function loadPersonaConfigDoc(scope: PersonaScope, sessionId: strin
 					originalName: item.builtin ? undefined : item.name,
 					builtin: item.builtin || undefined,
 					content: item.instructions,
+					sources: liveIngestSourceFields(item.ingest),
+					sourcesRaw: structuredClone(item.ingest),
 				}),
 			),
 			active: data.active === DEFAULT_LIVE_PERSONA ? undefined : data.active,
@@ -180,9 +187,14 @@ export async function savePersonaConfigDoc(
 	host: PersonaHost,
 ): Promise<string> {
 	if (scope === "live") {
-		const personas: Record<string, { instructions: string }> = {};
-		for (const item of doc.entries) if (!item.builtin) personas[item.name] = { instructions: item.content };
-		return liveFeature().saveAll(personas, doc.active);
+		const personas: Record<string, { instructions: string; ingest: LiveIngestPersonaSettings }> = {};
+		let defaultIngest: LiveIngestPersonaSettings | undefined;
+		for (const item of doc.entries) {
+			const ingest = liveIngestSettingsFromFields(item.sources, item.sourcesRaw);
+			if (item.builtin) defaultIngest = ingest;
+			else personas[item.name] = { instructions: item.content, ingest };
+		}
+		return liveFeature().saveAll(personas, doc.active, defaultIngest);
 	}
 	const personas: Record<string, PersonaDefinition> = {};
 	const renames = new Map<string, string>();

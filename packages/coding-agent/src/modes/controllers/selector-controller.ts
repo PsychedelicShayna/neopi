@@ -2,6 +2,7 @@ import { trackMountedDialog } from "../../control/dialogs";
 import { cfgControlSecretInput } from "../../control/settings";
 import * as fs from "node:fs";
 import advisorSystemPrompt from "../../prompts/advisor/system.md" with { type: "text" };
+import liveClientProtocolTemplate from "../../live/prompts/live-client-protocol.md" with { type: "text" };
 import { renderChatAdvisorPrompt } from "../../chat/chat-system-prompt";
 import { type AgentMessage, type AgentToolResult, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
@@ -107,6 +108,7 @@ import {
 	savePersonaConfigDoc,
 	sessionPersonaHost,
 } from "../../neopi/persona-config";
+import { LIVE_INGEST_DEFAULTS, liveIngestSourceFields } from "../../live/ingest-settings";
 import { createAgentsHubDeps } from "../agents-hub-deps";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { collapseSharedUsageReports } from "@oh-my-pi/pi-tui/overlays/usage-display";
@@ -622,6 +624,16 @@ export class SelectorController {
 				{
 					variant: scope,
 					newEntryContent: newPersonaContent(scope),
+					...(scope === "live"
+						? {
+								protocolLinesText: liveClientProtocolTemplate,
+								protocolMarker: "<client-protocol>",
+								newEntrySources: () => ({
+									fields: liveIngestSourceFields(LIVE_INGEST_DEFAULTS),
+									raw: structuredClone(LIVE_INGEST_DEFAULTS),
+								}),
+							}
+						: {}),
 					externalEditor: text => {
 						const command = getEditorCommand();
 						return command ? openInEditor(command, text) : Promise.resolve(null);
