@@ -64,6 +64,7 @@ export function renderAdvisorDeltaChunks(
 		formatSessionHistoryMarkdown(chunk, {
 			...ADVISOR_RENDER_OPTIONS,
 			includeThinking: opts.includeThinking,
+			wrapPrimaryThinking: true,
 			toolResultIndex: resultsByCallId,
 			consumedToolCallIds: consumed,
 			watchedRoleState,

@@ -433,7 +433,10 @@ export class SelectorController {
 					const chatMode = this.ctx.session.chatMode;
 					return chatMode
 						? renderChatAdvisorPrompt(chatMode.mode, maxNotesPerUpdate)
-						: prompt.render(advisorSystemPrompt, { max_notes_per_update: maxNotesPerUpdate });
+						: prompt.render(advisorSystemPrompt, {
+								max_notes_per_update: maxNotesPerUpdate,
+								include_thinking: advisor.includeThinking !== false,
+							});
 				},
 				getAvailableModels: () => this.ctx.session.modelRegistry.getAvailable(),
 				browserSource: createModelBrowserSource(this.ctx.settings),

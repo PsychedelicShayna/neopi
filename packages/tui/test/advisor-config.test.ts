@@ -91,6 +91,25 @@ describe("advisor config editor warnings and synthetic default row", () => {
 		expect(saved?.advisors.map(a => [a.name, a.enabled])).toEqual([["alpha", false]]);
 	});
 
+	it("offers a default-on per-advisor reasoning checkbox and saves the disabled implicit advisor", async () => {
+		let saved: WatchdogConfigDoc | undefined;
+		const overlay = buildOverlay({ advisors: [] }, doc => {
+			saved = structuredClone(doc);
+		});
+
+		overlay.handleInput("\r"); // implicit default advisor detail
+		expect(overlay.render(110).join("\n")).toContain("Read primary reasoning stream");
+		overlay.handleInput("\x1b[B"); // Enabled
+		overlay.handleInput("\x1b[B"); // Read primary reasoning stream
+		expect(overlay.render(110).join("\n")).toContain("● on");
+		overlay.handleInput("\r"); // turn off
+		expect(overlay.render(110).join("\n")).toContain("○ off");
+		overlay.handleInput("\x1b"); // return to list
+		overlay.handleInput("s");
+		await Promise.resolve();
+		expect(saved?.advisors).toEqual([{ name: "default", includeThinking: false }]);
+	});
+
 	it("saves with s without applying, and applies saved changes once with a", async () => {
 		const events: string[] = [];
 		const notes: string[] = [];
