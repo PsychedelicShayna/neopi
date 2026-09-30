@@ -1312,7 +1312,14 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				) {
 					return error(id, "set_event_filter", "events must be null or an array of non-empty event type strings");
 				}
-				return success(id, "set_event_filter", { events: sessionEvents.setFilter(events) });
+				const messageUpdates = command.messageUpdates === undefined ? "full" : command.messageUpdates;
+				if (messageUpdates !== "full" && messageUpdates !== "delta") {
+					return error(id, "set_event_filter", `Invalid message update projection: ${String(messageUpdates)}`);
+				}
+				return success(id, "set_event_filter", {
+					events: sessionEvents.setFilter(events, messageUpdates),
+					messageUpdates,
+				});
 			}
 
 			case "set_approval_handler": {
@@ -1458,6 +1465,13 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 			case "set_auto_compaction": {
 				session.setAutoCompactionEnabled(command.enabled);
 				return success(id, "set_auto_compaction");
+			}
+
+			case "set_cache_warming": {
+				if (!CACHE_WARMING_MODES.some(mode => mode === command.mode)) {
+					return error(id, "set_cache_warming", `Invalid cache warming mode: ${String(command.mode)}`);
+				}
+				return success(id, "set_cache_warming", { mode: session.setCacheWarmingMode(command.mode) });
 			}
 
 			// =================================================================
