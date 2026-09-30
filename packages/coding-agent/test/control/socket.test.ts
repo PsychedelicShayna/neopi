@@ -104,10 +104,14 @@ describe("control socket", () => {
 
 		const raw = net.connect(publication.metadata().endpoint);
 		await once(raw, "data"); // challenge
-		raw.write(`${JSON.stringify({ type: "hello", token: publication.token, client: { label: "chunk-test", kind: "cli" }, protocolVersion: 2 })}\n`);
+		raw.write(
+			`${JSON.stringify({ type: "hello", token: publication.token, client: { label: "chunk-test", kind: "cli" }, protocolVersion: 2 })}\n`,
+		);
 		await once(raw, "data"); // authenticated hello
 		const closed = once(raw, "close");
-		raw.write(`${JSON.stringify({ type: "rpc_chunk", chunkId: "interrupted", index: 0, count: 2, byteLength: 2 * 1024 * 1024, data: "e30=" })}\n${JSON.stringify({ type: "get_status" })}\n`);
+		raw.write(
+			`${JSON.stringify({ type: "rpc_chunk", chunkId: "interrupted", index: 0, count: 2, byteLength: 2 * 1024 * 1024, data: "e30=" })}\n${JSON.stringify({ type: "get_status" })}\n`,
+		);
 		await closed;
 		expect(host.budget.inboundBytes).toBe(0);
 		await publication.close();

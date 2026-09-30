@@ -467,7 +467,6 @@ describe("live controller delegation ownership", () => {
 		await h.controller.stop();
 	});
 
-
 	it("builds the prompt from the controller transcript, not delegation content", async () => {
 		const h = makeHarness();
 		await h.controller.start();

@@ -212,8 +212,11 @@ export class LiveCommandController {
 		this.#clearKeywordTimer();
 		if (!this.#session || this.#ctx.editor.chainLocked) return;
 		const text = this.#ctx.editor.getText();
-		if (!stripLiveKeyword(text, cfgLiveForceDelegateKeyword.get(this.#ctx.settings), true).matched &&
-			!stripLiveKeyword(text, cfgLiveSubmitKeyword.get(this.#ctx.settings), true).matched) return;
+		if (
+			!stripLiveKeyword(text, cfgLiveForceDelegateKeyword.get(this.#ctx.settings), true).matched &&
+			!stripLiveKeyword(text, cfgLiveSubmitKeyword.get(this.#ctx.settings), true).matched
+		)
+			return;
 		const delay = cfgLiveSubmitSilenceMs.get(this.#ctx.settings);
 		this.#keywordTimer = setTimeout(() => {
 			this.#keywordTimer = undefined;

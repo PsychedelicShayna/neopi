@@ -852,10 +852,13 @@ export class LiveSessionController {
 		if (!message || this.#stopped || !this.retireComposerSpeech()) return false;
 		const turn: UserLedgerTurn = { turn: ++this.#userLedgerTurn, text: message, final: true };
 		this.#putTurn(turn);
-		void this.#handleDelegation({
-			type: "delegation.created",
-			item: { type: "delegation", target: "client", id: `forced-${crypto.randomUUID()}`, content: [] },
-		}, true).catch(cause => this.#reportFailure(errorFrom(cause)));
+		void this.#handleDelegation(
+			{
+				type: "delegation.created",
+				item: { type: "delegation", target: "client", id: `forced-${crypto.randomUUID()}`, content: [] },
+			},
+			true,
+		).catch(cause => this.#reportFailure(errorFrom(cause)));
 		return true;
 	}
 
@@ -867,7 +870,10 @@ export class LiveSessionController {
 		this.#answeredTurns = undefined;
 		if (!answered?.length) return;
 		const turns = this.#turnsWhere(turn => turn.claim === undefined && answered.includes(turn.turn));
-		const text = turns.map(turn => turn.text).join("\n\n").trim();
+		const text = turns
+			.map(turn => turn.text)
+			.join("\n\n")
+			.trim();
 		if (text) this.#callbacks.onSpeechSent?.(text);
 		this.#deleteTurns(turn => turn.claim === undefined && answered.includes(turn.turn));
 	}
@@ -1154,7 +1160,6 @@ export class LiveSessionController {
 			if (block.matched) {
 				current.text = block.text;
 				current.blocked = true;
-
 			}
 		}
 		this.#emitUserSpeech({ role: "user", turn: current.turn, text: current.text, final: current.final });

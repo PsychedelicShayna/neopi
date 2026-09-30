@@ -103,7 +103,9 @@ const fixtures: Record<string, () => Promise<Record<string, unknown>>> = {
 	export_html: async () => ({ outputPath: `${process.env.PARITY_DIR ?? "/tmp"}/parity-export.html` }),
 	switch_session: async () => ({ sessionPath: state?.sessionFile ?? "" }),
 	branch: async () => {
-		const entries = (await call("get_entries")).data as { entries?: { id: string; type: string; message?: { role?: string } }[] };
+		const entries = (await call("get_entries")).data as {
+			entries?: { id: string; type: string; message?: { role?: string } }[];
+		};
 		const user = entries?.entries?.find(entry => entry.type === "message" && entry.message?.role === "user");
 		return { entryId: user?.id ?? "" };
 	},
@@ -116,7 +118,14 @@ const fixtures: Record<string, () => Promise<Record<string, unknown>>> = {
 
 // Replace sessions only after all operations that read the active transcript.
 const late = new Set(["branch", "switch_session", "new_session", "open_session", "login"]);
-const ordered = [...RPC_COMMAND_TYPES.filter(type => !late.has(type)), "branch", "switch_session", "new_session", "open_session", "login"];
+const ordered = [
+	...RPC_COMMAND_TYPES.filter(type => !late.has(type)),
+	"branch",
+	"switch_session",
+	"new_session",
+	"open_session",
+	"login",
+];
 let rpcPassed = 0;
 for (const type of ordered) {
 	const params = (await fixtures[type]?.()) ?? {};
@@ -124,10 +133,20 @@ for (const type of ordered) {
 	const expected = refusal[type];
 	const ok =
 		!unrouted(reply) &&
-		(expected ? reply.success === true || expected.test(`${reply.code ?? ""} ${reply.error ?? ""}`) : reply.success === true);
+		(expected
+			? reply.success === true || expected.test(`${reply.code ?? ""} ${reply.error ?? ""}`)
+			: reply.success === true);
 	if (ok) rpcPassed++;
 	record(`rpc ${ok ? "ok" : "FAIL"} ${type} ${JSON.stringify(reply).slice(0, 400)}`);
-	if (type === "prompt" || type === "steer" || type === "follow_up" || type === "abort_and_prompt" || type === "compact" || type === "handoff" || type === "bash") {
+	if (
+		type === "prompt" ||
+		type === "steer" ||
+		type === "follow_up" ||
+		type === "abort_and_prompt" ||
+		type === "compact" ||
+		type === "handoff" ||
+		type === "bash"
+	) {
 		await waitSettled();
 	}
 }
@@ -209,7 +228,9 @@ for (const name of expectedSlash) {
 	if (ok) slashPassed++;
 	else record(`slash FAIL /${name} not listed by the pane`);
 }
-record(`slash builtins=${BUILTIN_SLASH_COMMANDS_INTERNAL.length} aliases=${expectedSlash.length - BUILTIN_SLASH_COMMANDS_INTERNAL.length}`);
+record(
+	`slash builtins=${BUILTIN_SLASH_COMMANDS_INTERNAL.length} aliases=${expectedSlash.length - BUILTIN_SLASH_COMMANDS_INTERNAL.length}`,
+);
 gate("slash", slashPassed, expectedSlash.length);
 
 // ---------------------------------------------------------------- actions
