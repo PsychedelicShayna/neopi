@@ -12,6 +12,7 @@ import {
 } from "@oh-my-pi/pi-tui/thinking";
 import { resolveConfiguredModelPatterns, resolveModelRoleValue } from "../config/model-resolver";
 import { getRoleInfo, isKindRole } from "../config/model-roles";
+import { compileSelectorRegex, isRegexSelectorPattern, matchesSelectorPattern } from "../config/selector-pattern";
 
 import { cfgRetryFallbackChains, cfgRetryFallbackRevertPolicy } from "./settings";
 
@@ -33,6 +34,7 @@ export interface RetryFallbackSelector {
 export interface RetryFallbackModelLookup {
 	find(provider: string, id: string): Model | undefined;
 	hasProvider(provider: string): boolean;
+	getAll(kind: "all"): Model[];
 }
 
 /**
@@ -125,7 +127,7 @@ export function parseRetryFallbackSelector(
 
 /** Whether a fallback-chain key is a model selector rather than a role. */
 export function isRetryFallbackModelKey(key: string): boolean {
-	return key.includes("/");
+	return key.includes("/") || isRegexSelectorPattern(key);
 }
 
 /** Whether a fallback-chain key or entry is a provider wildcard. */
@@ -201,7 +203,7 @@ export function getFallbackEffortSelection(
 		[]) {
 		if (
 			(entry.endsWith("/*") && candidate.raw.startsWith(entry.slice(0, -1))) ||
-			(/[*?[\]{}]/.test(entry) && new Bun.Glob(entry).match(candidate.raw))
+			matchesSelectorPattern(entry, candidate.raw)
 		) {
 			if (Object.hasOwn(selections, entry)) return selections[entry];
 		}
@@ -256,7 +258,9 @@ export function validateRetryFallbackChains(
 	for (const key in configuredChains) {
 		const chain = configuredChains[key];
 		const keyKind = isRetryFallbackModelKey(key) ? "model" : "role";
-		if (keyKind === "model") {
+		if (isRegexSelectorPattern(key)) {
+			if (!compileSelectorRegex(key)) report(`Invalid regex key in retry.fallbackChains: ${key}`);
+		} else if (keyKind === "model") {
 			if (isRetryFallbackWildcardKey(key)) {
 				const { provider } = parseRetryFallbackWildcard(key, candidate =>
 					isKnownProvider(modelRegistry, candidate),
@@ -293,6 +297,17 @@ export function validateRetryFallbackChains(
 		for (const selectorStr of chain) {
 			if (typeof selectorStr !== "string") {
 				report(`Fallback chain for ${keyKind} '${key}' contains a non-string selector.`);
+				continue;
+			}
+			if (isRegexSelectorPattern(selectorStr)) {
+				if (!compileSelectorRegex(selectorStr)) {
+					report(`Invalid regex fallback entry in retry.fallbackChains for '${key}': ${selectorStr}`);
+				} else {
+					const catalog = modelRegistry.getAll("all");
+					if (!resolveModelRoleValue(selectorStr, kindRole ? catalog.filter(kindRole.accepts) : catalog, { settings }).model) {
+						report(`Fallback chain for ${keyKind} '${key}' references unknown model: ${selectorStr}`);
+					}
+				}
 				continue;
 			}
 			if (kindRole) {
@@ -348,7 +363,7 @@ function getRetryFallbackPrimarySelector(
 	context: RetryFallbackResolutionContext,
 	chainKey: string,
 ): RetryFallbackSelector | undefined {
-	if (isRetryFallbackWildcardKey(chainKey)) return undefined;
+	if (isRetryFallbackWildcardKey(chainKey) || isRegexSelectorPattern(chainKey)) return undefined;
 	if (isRetryFallbackModelKey(chainKey)) return parseRetryFallbackSelector(chainKey, context.modelLookup);
 	const configuredSelector = context.getModelRole(chainKey);
 	return configuredSelector ? parseRetryFallbackSelector(configuredSelector, context.modelLookup) : undefined;
@@ -401,9 +416,8 @@ function selectorMatchKind(
 }
 
 /**
- * Resolve the chain key for a concrete selector by specificity: exact model,
- * longest matching wildcard, hinted role, then matching role keys with
- * `default` preferred over other shared assignments, then default.
+ * Resolve the chain key by specificity: exact model, first matching regex,
+ * longest matching wildcard, hinted role, matching role, then default.
  */
 export function resolveRetryFallbackChainKey(
 	context: RetryFallbackResolutionContext,
@@ -434,7 +448,7 @@ export function resolveRetryFallbackChainKey(
 	let normalizedModelKey: string | undefined;
 	let baseModelKey: string | undefined;
 	for (const key in context.chains) {
-		if (!isRetryFallbackModelKey(key) || isRetryFallbackWildcardKey(key)) continue;
+		if (!isRetryFallbackModelKey(key) || isRetryFallbackWildcardKey(key) || isRegexSelectorPattern(key)) continue;
 		const kind = selectorMatchKind(
 			getRetryFallbackPrimarySelector(context, key),
 			parsedCurrent,
@@ -447,8 +461,17 @@ export function resolveRetryFallbackChainKey(
 	}
 	if (normalizedModelKey) return normalizedModelKey;
 	if (baseModelKey) return baseModelKey;
+	// 2. Regex keys match the entire configured selector (including effort).
+	//    On routed models, also allow the plain catalog selector.
+	for (const key in context.chains) {
+		if (!isRegexSelectorPattern(key) || !Array.isArray(context.chains[key])) continue;
+		const regex = compileSelectorRegex(key);
+		if (regex && (regex.test(currentSelector) || (currentPlainSelector && regex.test(currentPlainSelector)))) {
+			return key;
+		}
+	}
 
-	// 2. Provider wildcards — an id-prefixed key (`openrouter/google/*`)
+	// 3. Provider wildcards — an id-prefixed key (`openrouter/google/*`)
 	//    beats the plain `provider/*` key for ids under its prefix.
 	let wildcardMatch: string | undefined;
 	let wildcardPrefixLength = -1;
@@ -467,7 +490,7 @@ export function resolveRetryFallbackChainKey(
 	}
 	if (wildcardMatch) return wildcardMatch;
 
-	// 3. The hinted role, then role keys matched by their assigned model.
+	// 4. The hinted role, then role keys matched by their assigned model.
 	// A shared assignment (default and vision both the same model) must not
 	// let yaml insertion order steal the live role's chain. Prefer the hint,
 	// then `default` when it also matches.
@@ -489,7 +512,7 @@ export function resolveRetryFallbackChainKey(
 	}
 	if (matchedRole) return matchedRole;
 
-	// 4. The default chain. Use it even when `default` has an explicit role
+	// 5. The default chain. Use it even when `default` has an explicit role
 	//    primary that is a *different* model than the live one (#12421): a
 	//    /model switch or a mid-chain hop onto Fable/Astra must still reach
 	//    glm/grok/… instead of resolving no key and aborting on wait > maxDelayMs.
@@ -513,6 +536,16 @@ function parseRetryFallbackChainEntry(
 	entry: string,
 	current: RetryFallbackSelector | undefined,
 ): RetryFallbackSelector | undefined {
+	if (isRegexSelectorPattern(entry)) {
+		if (!compileSelectorRegex(entry)) return undefined;
+		const resolved = resolveModelRoleValue(entry, context.modelLookup.getAll("all"));
+		return resolved.model
+			? parseRetryFallbackSelector(
+					formatRetryFallbackSelector(resolved.model, concreteThinkingLevel(resolved.thinkingLevel)),
+					context.modelLookup,
+				)
+			: undefined;
+	}
 	if (!isRetryFallbackWildcardKey(entry)) return parseRetryFallbackSelector(entry, context.modelLookup);
 	if (!current) return undefined;
 	const { provider, idPrefix } = parseRetryFallbackWildcard(entry, candidate =>
@@ -555,9 +588,8 @@ function getRetryFallbackEffectiveChain(
 			: undefined);
 	const seen = new Set<string>();
 	const chain: RetryFallbackSelector[] = [];
-	if (isRetryFallbackWildcardKey(chainKey)) {
-		// A wildcard key has no fixed primary: the active model is the
-		// primary, followed by the configured provider-level fallbacks.
+	if (isRetryFallbackWildcardKey(chainKey) || isRegexSelectorPattern(chainKey)) {
+		// A pattern key has no fixed primary: the active model leads the chain.
 		if (parsedCurrent) {
 			chain.push(parsedCurrent);
 			seen.add(parsedCurrent.raw);

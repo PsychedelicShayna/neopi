@@ -1193,6 +1193,46 @@ describe("ModelHub", () => {
 			});
 		});
 
+		test("re: entry stores a regex fallback verbatim instead of parsing it as a model", () => {
+			const settings = Settings.isolated({});
+			const { hub } = createHub({ models: [makeModel("test", "model-a")], scoped: true, settings });
+			enterRolesView(hub);
+			hub.handleInput("f");
+			hub.handleInput("\x1b[C"); // pattern…
+			hub.handleInput("\n");
+			for (const ch of "re:^test/model-a$") hub.handleInput(ch);
+			expect(footerLine(hub.render(220))).toContain("regex");
+			hub.handleInput("\n"); // regex → effort options
+			hub.handleInput("\x1b[C"); // Off
+			hub.handleInput("\x1b[C"); // Auto
+			hub.handleInput("\n"); // allowed levels
+			hub.handleInput(" "); // exclude minimal
+			hub.handleInput("\n"); // save
+			expect(cfgRetryFallbackChains.get(settings).default).toEqual(["re:^test/model-a$"]);
+			expect(cfgFallbackEffortSelections.get(settings).default?.["re:^test/model-a$"]).toEqual({
+				mode: "auto",
+				allowed: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
+			});
+			expect(normalize(hub.render(220))).toContain("↳ re:^test/model-a$");
+		});
+
+		test("a malformed re: fallback keeps the strip open until the expression compiles", () => {
+			const settings = Settings.isolated({});
+			const { hub } = createHub({ models: [makeModel("test", "model-a")], scoped: true, settings });
+			enterRolesView(hub);
+			hub.handleInput("f");
+			hub.handleInput("\x1b[C"); // pattern…
+			hub.handleInput("\n");
+			for (const ch of "re:^test/(model") hub.handleInput(ch);
+			hub.handleInput("\n"); // rejected: unterminated group
+			expect(cfgRetryFallbackChains.get(settings).default).toBeUndefined();
+			expect(normalize(hub.render(220))).toContain("Invalid regular expression");
+			hub.handleInput(")"); // same strip, now a valid expression
+			hub.handleInput("\n"); // regex → effort options
+			hub.handleInput("\n"); // inherit
+			expect(cfgRetryFallbackChains.get(settings).default).toEqual(["re:^test/(model)"]);
+		});
+
 		test("x removes a chain entry and Enter on an entry replaces it", () => {
 			const a = makeModel("test", "model-a");
 			const b = makeModel("test", "model-b");
@@ -1670,6 +1710,33 @@ describe("ModelHub", () => {
 				allowed: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
 			});
 			expect(cfgRetryFallbackChains.get(settings).default).toEqual(["test/*"]);
+		});
+
+		test("a regex-keyed chain lists its expression and edits the regex entry's effort", () => {
+			const settings = Settings.isolated({
+				"retry.fallbackChains": { "re:^test/model-a$": ["re:^test/model-b$"] },
+			});
+			const models = [makeModel("test", "model-a"), makeModel("test", "model-b")];
+			const { hub } = createHub({ models, scoped: true, settings });
+
+			enterRolesView(hub);
+			const rendered = normalize(hub.render(220));
+			expect(rendered).toContain("re:^test/model-a$");
+			expect(rendered).toContain("↳ re:^test/model-b$");
+
+			hub.handleInput(UP); // + New fallback…
+			hub.handleInput(UP); // ↳ re:^test/model-b$
+			hub.handleInput("t");
+			hub.handleInput("\x1b[C"); // Off
+			hub.handleInput("\x1b[C"); // Auto
+			hub.handleInput("\n");
+			hub.handleInput(" "); // disable minimal
+			hub.handleInput("\n");
+			expect(cfgFallbackEffortSelections.get(settings)["re:^test/model-a$"]?.["re:^test/model-b$"]).toEqual({
+				mode: "auto",
+				allowed: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
+			});
+			expect(cfgRetryFallbackChains.get(settings)["re:^test/model-a$"]).toEqual(["re:^test/model-b$"]);
 		});
 
 		test("editing a legacy suffixed pattern retains its authored effort", () => {
@@ -2170,6 +2237,45 @@ describe("ModelHub", () => {
 			});
 		});
 
+		test("a role accepts a re: selector and keeps the expression as its stored value", () => {
+			const model = getBundledModel("openai", "gpt-5.5");
+			if (!model) throw new Error("Expected bundled reasoning model");
+			const { hub, onAssign } = createHub({ models: [model], scoped: true });
+			hub.handleInput(UP); // All → Roles
+			hub.handleInput("\n"); // focus role rows
+			hub.handleInput("\n"); // selector choices
+			hub.handleInput("\x1b[C");
+			hub.handleInput("\n");
+			for (const ch of "re:^openai/gpt-5\\.5$") hub.handleInput(ch);
+			hub.handleInput("\n"); // regex resolves to a compatible model; opens effort
+			expect(onAssign).not.toHaveBeenCalled();
+			hub.handleInput("\x1b[C"); // Off
+			hub.handleInput("\x1b[C"); // Auto
+			hub.handleInput("\n"); // toggle menu
+			hub.handleInput("\n"); // save all permitted
+			expect(onAssign.mock.calls[0]?.[3]).toBe("re:^openai/gpt-5\\.5$");
+			expect(onAssign.mock.calls[0]?.[5]).toEqual({
+				mode: "auto",
+				allowed: [...getSupportedEfforts(model)],
+				selector: "re:^openai/gpt-5\\.5$",
+			});
+		});
+
+		test("a role re: selector that matches nothing is refused without an assignment", () => {
+			const model = getBundledModel("openai", "gpt-5.5");
+			if (!model) throw new Error("Expected bundled reasoning model");
+			const { hub, onAssign } = createHub({ models: [model], scoped: true });
+			hub.handleInput(UP); // All → Roles
+			hub.handleInput("\n"); // focus role rows
+			hub.handleInput("\n"); // selector choices
+			hub.handleInput("\x1b[C");
+			hub.handleInput("\n");
+			for (const ch of "re:^nowhere/") hub.handleInput(ch);
+			hub.handleInput("\n");
+			expect(onAssign).not.toHaveBeenCalled();
+			expect(normalize(hub.render(220))).toContain("does not resolve");
+		});
+
 		test("global pattern rules reject empty sets and retain prior rules on cancel", () => {
 			const model = getBundledModel("openai", "gpt-5.5");
 			if (!model) throw new Error("Expected bundled reasoning model");
@@ -2219,6 +2325,82 @@ describe("ModelHub", () => {
 				"*/gpt-5.?",
 				"openai/gpt-5.5",
 				"openai/*",
+			]);
+		});
+
+		test("rule rows name their selector kind: exact, regex, or glob", () => {
+			const model = getBundledModel("openai", "gpt-5.5");
+			if (!model) throw new Error("Expected bundled reasoning model");
+			const settings = Settings.isolated({});
+			cfgEffortRules.set(settings, [
+				{ selector: "openai/gpt-5.5", allowed: [Effort.High] },
+				{ selector: "re:^openai/gpt-5\\.\\d$", allowed: [Effort.Medium] },
+				{ selector: "openai/*", allowed: [Effort.Low] },
+			]);
+			const { hub } = createHub({ models: [model], scoped: true, settings });
+			hub.handleInput(UP);
+			hub.handleInput(UP); // global effort menu
+			const rendered = normalize(hub.render(220));
+			expect(rendered).toContain("exact openai/gpt-5.5 [high]");
+			expect(rendered).toContain("2. regex re:^openai/gpt-5\\.\\d$ [medium]");
+			expect(rendered).toContain("3. glob openai/* [low]");
+		});
+
+		test("a re: rule saves its expression and a broken one reports the compile error", () => {
+			const model = getBundledModel("openai", "gpt-5.5");
+			if (!model) throw new Error("Expected bundled reasoning model");
+			const settings = Settings.isolated({});
+			const { hub } = createHub({ models: [model], scoped: true, settings });
+			hub.handleInput(UP);
+			hub.handleInput(UP); // global effort menu
+			hub.handleInput("\n"); // rules list
+			hub.handleInput(DOWN); // pattern entry
+			hub.handleInput("\n");
+			for (const ch of "re:^openai/(gpt") hub.handleInput(ch);
+			expect(footerLine(hub.render(220))).toContain("regex ·");
+			hub.handleInput("\n"); // rejected before any rule is written
+			expect(cfgEffortRules.get(settings)).toEqual([]);
+			expect(normalize(hub.render(220))).toContain("Invalid regular expression");
+			hub.handleInput(")"); // close the group and retry from the same strip
+			hub.handleInput("\n"); // enabled-level editor
+			hub.handleInput(" "); // exclude minimal
+			hub.handleInput("\n");
+			expect(cfgEffortRules.get(settings)).toEqual([
+				{
+					selector: "re:^openai/(gpt)",
+					allowed: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
+				},
+			]);
+			expect(normalize(hub.render(220))).toContain("1. regex re:^openai/(gpt)");
+		});
+
+		test("reordering a regex rule hops over glob rules, which always rank below it", () => {
+			const model = getBundledModel("openai", "gpt-5.5");
+			if (!model) throw new Error("Expected bundled reasoning model");
+			const settings = Settings.isolated({});
+			cfgEffortRules.set(settings, [
+				{ selector: "re:^openai/gpt-5\\.5$", allowed: [Effort.Low] },
+				{ selector: "openai/*", allowed: [Effort.Medium] },
+				{ selector: "re:^openai/o3$", allowed: [Effort.High] },
+			]);
+			const { hub } = createHub({ models: [model], scoped: true, settings });
+			hub.handleInput(UP);
+			hub.handleInput(UP); // global effort menu
+			hub.handleInput("\n"); // rules list
+			hub.handleInput(DOWN);
+			hub.handleInput(DOWN); // second regex, with a glob row between
+			hub.handleInput("[");
+			expect(cfgEffortRules.get(settings).map(rule => rule.selector)).toEqual([
+				"re:^openai/o3$",
+				"openai/*",
+				"re:^openai/gpt-5\\.5$",
+			]);
+			// The cursor followed the moved rule, so the next move returns it.
+			hub.handleInput("]");
+			expect(cfgEffortRules.get(settings).map(rule => rule.selector)).toEqual([
+				"re:^openai/gpt-5\\.5$",
+				"openai/*",
+				"re:^openai/o3$",
 			]);
 		});
 	});
