@@ -309,6 +309,11 @@ Fields:
 
 In `/advisor configure`, open an advisor and select **System prompt**, directly below **Instructions**. Enter opens the shared multiline editor, prefilled with the current override or the bundled default. Ctrl+G opens your external editor; Ctrl+Q / Ctrl+Enter accepts the text, and Esc cancels without changing the override. Backspace while **System prompt** is highlighted in the list clears the override; Backspace inside the editor only edits text. **Save & apply** persists the change and rebuilds the live advisors. Clearing removes `systemPrompt` from the saved YAML.
 
+Saves stage and sync the complete `WATCHDOG.yml` beside its destination,
+then publish it under the existing file lock. Readers see either the previous
+complete YAML or the new one, never a truncated write. Existing symlinks to
+a shared roster keep pointing at that roster after a save.
+
 ### Discovery locations
 
 `WATCHDOG.yml`/`WATCHDOG.yaml` share the same user + project search path as `WATCHDOG.md`: the user-level `<active agent dir>/WATCHDOG.yml` plus every `WATCHDOG.yml`/`.omp/WATCHDOG.yml` encountered while walking from `cwd` up to the repository root (or the home directory when no repo root is found). All discovered files are loaded together; a more-specific file (project leaf > project ancestor > user) replaces an earlier entry with the same advisor slug.
