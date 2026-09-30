@@ -99,6 +99,7 @@ export type SymbolKey =
 	| "icon.advisorClosed"
 	| "icon.time"
 	| "icon.omp"
+	| "icon.esc"
 	| "icon.ghost"
 	| "icon.agents"
 	| "icon.job"
@@ -480,6 +481,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"icon.advisorClosed": "🙈",
 	"icon.time": "⏱",
 	"icon.omp": "π",
+	"icon.esc": "⎋",
 	"icon.ghost": "👻",
 	"icon.agents": "👥",
 	"icon.job": "⚙",
@@ -1261,6 +1263,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"icon.advisorClosed": "(adv)",
 	"icon.time": "t:",
 	"icon.omp": "pi",
+	"icon.esc": "Esc",
 	"icon.ghost": "@",
 	"icon.agents": "AG",
 	"icon.job": "bg",

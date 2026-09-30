@@ -67,6 +67,13 @@ function source(roles: Record<string, string>, mru: string[]): ModelHubSource {
 		getProjectModelRole: () => undefined,
 		getGlobalModelRole: role => roles[role],
 		getModelRoleSource: () => "global",
+		effortRules: [],
+		permittedEfforts: () => [],
+		getProjectRoleEffortSelection: () => undefined,
+		getGlobalRoleEffortSelection: () => undefined,
+		getRoleEffortSelection: () => undefined,
+		getFallbackEffortSelection: () => undefined,
+		formatModelSelector: selected => `${selected.provider}/${selected.id}`,
 	};
 }
 
@@ -238,10 +245,12 @@ test("pointer events drive the hub through the same paths as its keys", () => {
 	expect(p.focus).toBe("strip");
 	expect(p.strip?.items.map(chip => chip.label).slice(0, 2)).toEqual(["default", "smol"]);
 	act("strip", "1");
+	// A reasoning model's role change is staged until an effort choice is committed.
+	expect(calls.assign).toEqual([]);
+	act("strip", "0"); // inherit thinking
 	expect(calls.assign).toEqual(["smol=openai/gpt-5.6"]);
 
 	// The kind tab and scope clicks land where alt+→ and the sidebar do.
-	act("close");
 	act("tab", "image");
 	expect(props(hub.describe(withPicker)).tab).toBe("image");
 	act("tab", "all");

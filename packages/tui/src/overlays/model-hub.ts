@@ -32,7 +32,7 @@ import { fuzzyFilter } from "../fuzzy";
 import { formatKeyHint, formatKeyHints } from "../app-keybindings";
 import { boundKeys, editorKey, editorKeys } from "../chrome/keybinding-hints";
 import type { KeyName } from "../key-hint-format";
-import { col, compact, kbd, md, node, span, text } from "../native/describe";
+import { col, compact, kbd, md, node, row, span, text } from "../native/describe";
 import { CLOSE_ACTION, type PickerEvent, picker, pickerAction, pickerEvent } from "../native/picker";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
 import { actionHint, hintsRow, type NativeHint } from "../native/overlay";
@@ -2389,6 +2389,7 @@ export class ModelHubComponent implements Component {
 			this.#runRolesAction("later");
 			return;
 		}
+		const row = this.#rolesRows[this.#roleIndex];
 		const printable = extractPrintableText(data);
 		if (printable === "y") {
 			if (row?.kind === "role") {
@@ -3243,9 +3244,19 @@ export class ModelHubComponent implements Component {
 					// A chip click picks and applies it, like the footer mouse path.
 					const strip = this.#strip;
 					const index = Number(event.item);
-					if (!strip || strip.kind === "roleName" || !Number.isInteger(index) || !strip.chips[index]) return;
-					strip.index = index;
-					this.#activateStripChip();
+					if (!strip || !Number.isInteger(index)) return;
+					if (strip.kind === "effortLevels") {
+						const level = strip.toggle.options[index];
+						if (!level) return;
+						strip.index = index;
+						strip.toggle.toggle(level);
+						this.#configError = undefined;
+					} else {
+						if (strip.kind === "roleName" || strip.kind === "pattern" || !strip.chips[index]) return;
+						strip.index = index;
+						if (strip.kind === "selectorChoice") this.#activateSelectorChoice(strip);
+						else this.#activateStripChip();
+					}
 					break;
 				}
 				default:
@@ -3302,6 +3313,8 @@ export class ModelHubComponent implements Component {
 		if (assigning !== null) {
 			if (assigning.kind === "fallbackKey") {
 				spans = [span("New fallback chain — pick the model it protects", "accent")];
+			} else if (assigning.kind === "effortRule") {
+				spans = [span("New exact effort rule — pick a model", "accent")];
 			} else {
 				const info = this.#settings.getRoleInfo(assigning.role);
 				const label = info.tag ?? info.name ?? assigning.role;
@@ -3634,6 +3647,7 @@ export class ModelHubComponent implements Component {
 		const assigning = this.#assigning;
 		if (assigning !== null) {
 			if (assigning.kind === "fallbackKey") return "New fallback chain — pick the model it protects";
+			if (assigning.kind === "effortRule") return "New exact effort rule — pick a model";
 			const info = this.#settings.getRoleInfo(assigning.role);
 			const label = info.tag ?? info.name ?? assigning.role;
 			const verb =
@@ -3763,7 +3777,17 @@ export class ModelHubComponent implements Component {
 					? pickerAction("roleName", "Create role", "enter", { primary: true })
 					: pickerAction(
 							"stripApply",
-							strip.kind === "thinking" ? "Apply" : strip.kind === "scope" ? "Save to scope" : "Assign / clear",
+							strip.kind === "thinking" || strip.kind === "patternEffort"
+								? "Apply"
+								: strip.kind === "scope"
+									? "Save to scope"
+									: strip.kind === "effortLevels"
+										? "Save efforts"
+										: strip.kind === "pattern"
+											? "Continue to effort"
+											: strip.kind === "selectorChoice"
+												? "Select"
+												: "Assign / clear",
 							"enter",
 							{ primary: true },
 						);
@@ -3777,7 +3801,9 @@ export class ModelHubComponent implements Component {
 					? "Pick fallback"
 					: this.#assigning.kind === "fallbackKey"
 						? "Pick protected model"
-						: "Assign";
+						: this.#assigning.kind === "effortRule"
+							? "Pick rule model"
+							: "Assign";
 			return compact([pickerAction("assign", label, "enter", { primary: true }), refresh, cancel("Cancel")]);
 		}
 		if (rolesView) {
@@ -3841,10 +3867,41 @@ export class ModelHubComponent implements Component {
 
 	/** The open strip as the picker's chip strip (role assignment, save scope, thinking level, new role name). */
 	#pickerStrip(strip: StripState): NonNullable<TspPickerProps["strip"]> {
-		if (strip.kind === "roleName") {
+		if (strip.kind === "roleName" || strip.kind === "pattern") {
 			return {
-				label: [span("New role name ", "muted"), span(strip.input.getValue(), "mono"), span("▏", "accent")],
+				label: [
+					span(
+						strip.kind === "roleName"
+							? "New role name "
+							: strip.target === "rule"
+								? "Model effort pattern "
+								: strip.target === "role"
+									? "Role model pattern "
+									: "Fallback model pattern ",
+						"muted",
+					),
+					span(strip.input.getValue(), "mono"),
+					span("▏", "accent"),
+				],
 				items: [],
+			};
+		}
+		if (strip.kind === "effortLevels") {
+			return {
+				label: [span(strip.pendingRuleSelector ?? strip.selector ?? strip.item?.id ?? "Effort", "accent")],
+				items: strip.toggle.options.map((level, index) => ({
+					id: String(index),
+					label: level,
+					on: strip.toggle.selected.has(level),
+				})),
+				selected: String(strip.index),
+			};
+		}
+		if (strip.kind === "selectorChoice" || strip.kind === "patternEffort") {
+			return {
+				label: [span(strip.kind === "selectorChoice" ? strip.target.role : strip.selector, "accent")],
+				items: strip.chips.map((chip, index) => ({ id: String(index), label: chip.label })),
+				selected: String(strip.index),
 			};
 		}
 		let label: TspSpan[];
@@ -4137,14 +4194,29 @@ export class ModelHubComponent implements Component {
 			case "strip": {
 				const strip = this.#strip;
 				const index = Number(value);
-				if (!strip || strip.kind === "roleName" || !Number.isInteger(index) || !strip.chips[index]) return;
-				strip.index = index;
-				this.#activateStripChip();
+				if (!strip || !Number.isInteger(index)) return;
+				if (strip.kind === "effortLevels") {
+					const level = strip.toggle.options[index];
+					if (!level) return;
+					strip.index = index;
+					strip.toggle.toggle(level);
+					this.#configError = undefined;
+				} else {
+					if (strip.kind === "roleName" || strip.kind === "pattern" || !strip.chips[index]) return;
+					strip.index = index;
+					if (strip.kind === "selectorChoice") this.#activateSelectorChoice(strip);
+					else this.#activateStripChip();
+				}
 				return;
 			}
-			case "stripApply":
-				this.#activateStripChip();
+			case "stripApply": {
+				const strip = this.#strip;
+				if (strip?.kind === "pattern") this.#submitSelectorPattern(strip);
+				else if (strip?.kind === "effortLevels") this.#confirmEffortLevels(strip);
+				else if (strip?.kind === "selectorChoice") this.#activateSelectorChoice(strip);
+				else this.#activateStripChip();
 				return;
+			}
 			case "roleName":
 				this.#submitRoleName();
 				return;
@@ -4209,8 +4281,26 @@ export class ModelHubComponent implements Component {
 				"roleName",
 			);
 		}
+		if (strip.kind === "pattern") {
+			return row([
+				text([span(strip.target === "rule" ? "Model effort pattern:" : strip.target === "role" ? "Role model pattern:" : "Fallback model pattern:", "accent")]),
+				col([strip.input], { grow: 1 }),
+			]);
+		}
+		if (strip.kind === "effortLevels") {
+			return node("tabs", {
+				items: strip.toggle.options.map((level, index) => ({
+					id: String(index),
+					label: [span(strip.toggle.selected.has(level) ? "● " : "○ ", strip.toggle.selected.has(level) ? "success" : "dim"), span(level)],
+				})),
+				active: String(strip.index),
+				actions: { click: "activate" },
+			}, undefined, "strip");
+		}
 		let prefix: TspSpan[];
-		if (strip.kind === "role") {
+		if (strip.kind === "selectorChoice" || strip.kind === "patternEffort") {
+			prefix = [span(strip.kind === "selectorChoice" ? strip.target.role : strip.selector, "accent"), span(" →", "dim")];
+		} else if (strip.kind === "role") {
 			prefix = [span(strip.item.id, "accent"), span(" →", "dim")];
 		} else {
 			const info = this.#settings.getRoleInfo(strip.role ?? "");
@@ -4251,6 +4341,14 @@ export class ModelHubComponent implements Component {
 			switch (strip.kind) {
 				case "roleName":
 					return [keys("create + pick model", "enter"), cancel("cancel")];
+				case "pattern":
+					return [keys("continue to effort", "enter"), cancel("cancel")];
+				case "effortLevels":
+					return [keys("choose", "left", "right"), keys("toggle", "space"), keys("save", "enter"), cancel("discard")];
+				case "selectorChoice":
+					return [keys("exact or pattern", "left", "right"), keys("select", "enter"), cancel("cancel")];
+				case "patternEffort":
+					return [keys("thinking level", "left", "right"), keys("apply", "enter"), cancel("keep")];
 				case "role":
 					return [keys("choose", "left", "right"), keys("assign/clear", "enter"), cancel("cancel")];
 				case "scope":
@@ -4268,7 +4366,9 @@ export class ModelHubComponent implements Component {
 					? "pick fallback"
 					: this.#assigning.kind === "fallbackKey"
 						? "pick the protected model"
-						: "assign";
+						: this.#assigning.kind === "effortRule"
+							? "pick rule model"
+							: "assign";
 			return [keys(pick, "enter"), upDown("models"), keys("providers", "left"), search, kind, cancel("cancel")];
 		}
 		const entry = this.#activeEntry();

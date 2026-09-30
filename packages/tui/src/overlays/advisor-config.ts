@@ -234,6 +234,7 @@ function screenHints(screen: Screen): (NativeHint | undefined)[] {
 				actionHint("tui.select.cancel", "apply"),
 			];
 		case "instructions":
+		case "systemPrompt":
 			return [];
 	}
 }

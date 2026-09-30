@@ -240,7 +240,7 @@ describe("AgentsHub configuration strips", () => {
 	});
 
 	test("model pattern entry persists a selectable subagent override", async () => {
-		const settings = createSettings();
+		const settings = new TestSettings();
 		const { hub, type, strip } = await createHub(settings);
 		hub.handleInput("\r"); // agent properties
 		hub.handleInput("\r"); // model choices
@@ -250,7 +250,7 @@ describe("AgentsHub configuration strips", () => {
 		hub.handleInput("\r");
 		type("anthropic/claude-*");
 		hub.handleInput("\r");
-		expect(settings.get("task.agentModelOverrides")).toEqual({ dev: "anthropic/claude-*" });
+		expect(settings.records.get("task.agentModelOverrides")).toEqual({ dev: "anthropic/claude-*" });
 	});
 
 	test("clear override chip removes an existing model override", async () => {

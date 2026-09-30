@@ -291,6 +291,16 @@ const liveSegment: StatusLineSegment = {
 		}
 		return { content, visible: content.length > 0 };
 	},
+	describe(ctx) {
+		if (!ctx.live) return null;
+		const muted = ctx.live.phase === "muted";
+		const color = LIVE_PHASE_COLORS[ctx.live.phase];
+		return segView(
+			ctx.live.destination === "primary" ? [] : [span(ctx.live.destination, color)],
+			muted ? "micMuted" : "mic",
+			toneOf(color),
+		);
+	},
 };
 
 /** Display name of the active model (`Claude ` prefix dropped). */

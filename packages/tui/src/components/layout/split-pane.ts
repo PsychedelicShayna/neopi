@@ -103,8 +103,9 @@ export class SplitPane implements Component, MouseRoutable {
 	#rowLeftWidth = -1;
 	#native:
 		| {
-				leftSize: SplitPaneSize;
-				rightMinWidth: number;
+				constrained: PaneSide;
+				size: SplitPaneSize;
+				otherMinWidth: number;
 				narrowPane: PaneSide | undefined;
 				divider: LayoutDecoration | undefined;
 				height: number | undefined;
@@ -313,36 +314,36 @@ export class SplitPane implements Component, MouseRoutable {
 	}
 
 	/**
-	 * Two flex slots in a `row`: the left pane fixed (`ch`) or a fraction of
-	 * the width within its bounds, the right pane growing from its minimum.
-	 * With a narrow pane configured the row may wrap, stacking the panes on
-	 * narrow terminals instead of hiding one.
+	 * Two flex slots in a `row`: the constrained pane fixed (`ch`) or a fraction
+	 * of the width within its bounds; the other pane grows from its minimum.
+	 * With a narrow pane configured the row may wrap.
 	 */
 	describe(_cx: DescribeContext): NativeNode {
 		const cached = this.#native;
 		if (
-			cached?.leftSize === this.#leftSize &&
-			cached.rightMinWidth === this.#rightMinWidth &&
+			cached?.constrained === this.#constrained &&
+			cached.size === this.#size &&
+			cached.otherMinWidth === this.#otherMinWidth &&
 			cached.narrowPane === this.#narrowPane &&
 			cached.divider === this.#divider &&
 			cached.height === this.#height
 		) {
 			return cached.node;
 		}
-		const size = this.#leftSize;
-		const leftProps: TspProps<"col"> =
+		const size = this.#size;
+		const constrainedProps: TspProps<"col"> =
 			size.fixed !== undefined
 				? nativeSlotProps("w", { fixed: size.fixed })
 				: {
 						...nativeSlotProps("w", { grow: 0, min: size.min, max: size.max }),
 						basis: layoutRatio(size.ratio, 0.5),
 					};
-		const rightProps = nativeSlotProps("w", { grow: 1, min: this.#rightMinWidth });
+		const otherProps = nativeSlotProps("w", { grow: 1, min: this.#otherMinWidth });
 		const height = this.#height;
 		const described = row(
 			[
-				node("col", leftProps, [nativeLayoutChild(this.#left)], "left"),
-				node("col", rightProps, [nativeLayoutChild(this.#right)], "right"),
+				node("col", this.#constrained === "left" ? constrainedProps : otherProps, [nativeLayoutChild(this.#left)], "left"),
+				node("col", this.#constrained === "right" ? constrainedProps : otherProps, [nativeLayoutChild(this.#right)], "right"),
 			],
 			{ gap: nativeLayoutGap(this.#divider), align: this.#align, wrap: this.#narrowPane !== undefined },
 		);
@@ -351,8 +352,9 @@ export class SplitPane implements Component, MouseRoutable {
 				? described
 				: col([described], { min: { h: `${height}lines` }, max: { h: `${height}lines` } });
 		this.#native = {
-			leftSize: size,
-			rightMinWidth: this.#rightMinWidth,
+			constrained: this.#constrained,
+			size,
+			otherMinWidth: this.#otherMinWidth,
 			narrowPane: this.#narrowPane,
 			divider: this.#divider,
 			height,
