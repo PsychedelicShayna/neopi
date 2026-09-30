@@ -62,22 +62,4 @@ Files live beneath that session’s own artifacts directory, in `chronicler/`:
 
 Distinct sessions in one working directory have distinct artifact roots. Copied-artifact forks (`SessionManager.forkFrom` and `AgentSession.fork`) retain ancestor beat provenance and committed coverage. Interactive `AgentSession.branch` uses `createBranchedSession`, which records the source session file as its parent but does **not** copy artifacts: its fresh root captures the branch’s transcript under the child session identity. A plain in-process `SessionManager.fork()` does not copy artifacts either. These existing branch/fork semantics are unchanged.
 
-### Backfilling stored sessions
-
-`npi chronicle backfill` captures sessions that were recorded before Chronicler existed or while it was off, without resuming them. It loads each transcript read-only and runs the same capture passes as a live session. No user turn is added and the transcript file is not rewritten. MCP servers, extensions, and advisors are not loaded.
-
-```sh
-npi chronicle backfill --all --dry-run        # list uncovered sessions; no model calls
-npi chronicle backfill 01a0ee26               # one session, by id prefix or transcript path
-npi chronicle backfill --project ~/src/app --since 2026-09-01 --until 2026-09-07 --min-size 64k
-npi chronicle backfill --all -j 2 --timeout 30m --drain 5m
-```
-
-- Selection: session ids (the same prefixes `--resume` accepts) or transcript paths, `--project <dir>`, or `--all`. `--since` and `--until` keep sessions whose activity overlaps the range; a date-only value is a whole local day. `--min-size` filters by transcript size.
-- Each session runs until committed batches cover every message entry or capture halts. `--timeout` bounds that wait (default 2h), then `--drain` bounds the final drain (default 10m). At the drain deadline in-flight model work is aborted. `--concurrency`/`-j` sets how many sessions run at once (default 4).
-- Coverage is the committed-batch cursor described above. An interrupted or timed-out run resumes where it stopped, and entries already covered are never sent again.
-- A session whose Chronicler lease is held by a live process is skipped, not shared. Legacy v1 transcripts, which have no persisted entry ids, are skipped; resume one once to migrate it.
-- It uses the effective `chronicler` role for each session's project. It refuses to run when `chronicler.enabled` is false unless `--force` is passed; `--force` turns capture on for this run only.
-- Output is one line per session start, committed-coverage change, and result, followed by a summary. The exit status is non-zero when any session halts, resolves no model, or fails to read.
-
-This feature provides capture only. It adds no default recall injection, cross-session index, hierarchical recall, refinement, or reflection pipeline.
+Capture itself injects nothing into sessions. `npi chronicle index` derives a cross-session year/month/week/day/hour view from the committed beats, and `npi chronicle recall` or the opt-in `chronicle_recall` tool (`chronicler.recall.enabled`) searches it coarse to fine and returns canonical beats with transcript provenance; see [docs/chronicle.md](../../docs/chronicle.md). There is still no default recall injection, refinement, or reflection pipeline.

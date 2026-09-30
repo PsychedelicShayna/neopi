@@ -14,6 +14,8 @@ export default class Chronicle extends Command {
 
 	static subcommands: Record<string, () => Promise<CommandCtor>> = {
 		backfill: () => import("./chronicle-backfill").then(m => m.default),
+		index: () => import("./chronicle-index").then(m => m.default),
+		recall: () => import("./chronicle-recall").then(m => m.default),
 	};
 
 	async run(): Promise<void> {

@@ -68,6 +68,7 @@ import { LearnTool } from "./learn";
 import { ManageSkillTool } from "./manage-skill";
 import { MemoryEditTool } from "./memory-edit";
 import { MemoryRecallTool } from "./memory-recall";
+import { ChronicleRecallTool } from "./chronicle-recall";
 import { MemoryReflectTool } from "./memory-reflect";
 import { MemoryRetainTool } from "./memory-retain";
 import { wrapToolWithMetaNotice } from "./output-meta";
@@ -99,6 +100,7 @@ import {
 	cfgWebSearchEnabled,
 } from "./settings";
 import { cfgAutolearnEnabled } from "../autolearn/settings";
+import { cfgChroniclerRecallEnabled } from "../chronicler/settings";
 import { cfgBashEnabled } from "../exec/settings";
 import { cfgCompactionExperimentalContextManagement } from "../session/context-settings";
 import { cfgPythonInterpreter } from "../eval/settings";
@@ -605,6 +607,7 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	retain: MemoryRetainTool.createIf,
 	recall: MemoryRecallTool.createIf,
 	reflect: MemoryReflectTool.createIf,
+	chronicle_recall: ChronicleRecallTool.createIf,
 	learn: LearnTool.createIf,
 	manage_skill: ManageSkillTool.createIf,
 	ctl: () => new CtlTool(),
@@ -800,6 +803,13 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 			return ["hindsight", "mnemopi"].includes(cfgMemoryBackend.get(session.settings));
 		}
 		if (name === "memory_edit") return cfgMemoryBackend.get(session.settings) === "mnemopi";
+		// Chronicler recall is a capability grant, independent of memory.backend:
+		// top-level sessions only, unless a subagent's explicit list names it.
+		if (name === "chronicle_recall")
+			return (
+				cfgChroniclerRecallEnabled.get(session.settings) &&
+				((session.taskDepth ?? 0) === 0 || requestedTools !== undefined)
+			);
 		if (name === "manage_skill")
 			return (
 				cfgAutolearnEnabled.get(session.settings) &&
