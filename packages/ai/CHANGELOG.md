@@ -5,6 +5,10 @@
 ### Added
 
 - Added native xAI audio transcription through the shared transcription API.
+### Added
+
+- `AuthStorage.keys.setConfig(provider, value, { fallback: true })` registers a key that is used only when no stored OAuth or `/login` credential exists, instead of overriding them; `removeConfig`/`clearConfig` also clear these fallbacks ([#13815](https://github.com/can1357/oh-my-pi/pull/13815) by [@H4vC](https://github.com/H4vC))
+
 ## [18.4.4] - 2026-09-29
 
 ### Added
