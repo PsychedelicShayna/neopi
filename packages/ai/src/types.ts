@@ -252,14 +252,16 @@ export function resolveModelServiceTier(
  * realizes only its Priority serving path. Anthropic is absent because it
  * realizes `priority` via `speed: "fast"`.
  *
- * Codex-backend models (`openai-codex-responses`): `ultrafast` is sent only
- * when the model's discovered `service_tiers` lists it. `priority`/`scale`
- * are dropped only when that list is non-empty and omits them (codex-rs
- * `service_tier_for_request`); an empty or missing list counts as "not
- * reported" — accounts whose `/models` lists no tiers keep `/fast` — so the
- * provider-level answer stands. `flex` and `default` are never gated.
- * First-party OpenAI takes `ultrafast` as-is. A bare provider string cannot
- * carry the list, so it answers for the provider alone.
+ * Codex-backend models (`openai-codex-responses`): `flex` and `ultrafast` are
+ * sent only when the model's discovered `service_tiers` lists them (Codex
+ * rejects an unlisted `flex` with `Unsupported service_tier`). `priority`/
+ * `scale` are dropped only when that list is non-empty and omits them
+ * (codex-rs `service_tier_for_request`); an empty or missing list counts as
+ * "not reported" — accounts whose `/models` lists no tiers keep `/fast` — so
+ * the provider-level answer stands. `default` is never gated by the list.
+ * First-party OpenAI takes `flex`/`ultrafast` as-is. A bare `openai-codex`
+ * provider string cannot prove flex support without a discovered list, so flex
+ * is omitted there; bare-provider ultrafast still answers at the provider level.
  */
 export function shouldSendServiceTier(
 	serviceTier: ServiceTier | null | undefined,
@@ -267,19 +269,20 @@ export function shouldSendServiceTier(
 ): boolean {
 	if (!serviceTier || serviceTier === "auto") return false;
 	const provider = typeof target === "string" ? target : target?.provider;
-	if (
-		typeof target !== "string" &&
-		target?.api === "openai-codex-responses" &&
-		serviceTier !== "flex" &&
-		serviceTier !== "default"
-	) {
+	if (typeof target !== "string" && target?.api === "openai-codex-responses" && serviceTier !== "default") {
 		const advertised = target.serviceTiers;
-		if (serviceTier === "ultrafast") return advertised?.includes(serviceTier) === true;
+		// flex/ultrafast: discovery must explicitly list them (missing/empty → omit).
+		if (serviceTier === "ultrafast" || serviceTier === "flex") {
+			return advertised?.includes(serviceTier) === true;
+		}
+		// priority/scale: drop only when a non-empty list omits them.
 		if (advertised !== undefined && advertised.length > 0) return advertised.includes(serviceTier);
 	}
 	if (serviceTier === "ultrafast") {
 		return provider === "openai" || (typeof target === "string" && provider === "openai-codex");
 	}
+	// Bare openai-codex has no discovered list — never claim flex is supported.
+	if (serviceTier === "flex" && provider === "openai-codex") return false;
 	if (provider === "openai" || provider === "openai-codex") return true;
 	if (provider === "openrouter") {
 		return serviceTier === "flex" || serviceTier === "scale" || serviceTier === "priority";

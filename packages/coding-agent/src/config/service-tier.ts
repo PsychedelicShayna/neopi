@@ -110,7 +110,11 @@ export const SERVICE_TIER_OPENAI_OPTIONS: ReadonlyArray<SubmenuOption<ServiceTie
 	{ value: "none", label: "None", description: "Omit service_tier (standard processing)" },
 	{ value: "auto", label: "Auto", description: "Provider default tier selection" },
 	{ value: "default", label: "Default", description: "Standard priority processing" },
-	{ value: "flex", label: "Flex", description: "Lower cost, higher latency when available" },
+	{
+		value: "flex",
+		label: "Flex",
+		description: "Lower cost, higher latency on OpenAI API; Codex only when discovery advertises it",
+	},
 	{ value: "scale", label: "Scale", description: "Scale Tier credits when available" },
 	{ value: "priority", label: "Priority", description: "Faster, higher cost (premium request)" },
 	{
@@ -140,7 +144,11 @@ export const SERVICE_TIER_INHERIT_OPTIONS: ReadonlyArray<SubmenuOption<ServiceTi
 	{ value: "none", label: "None", description: "Standard processing" },
 	{ value: "auto", label: "Auto", description: "Provider default tier selection (OpenAI family)" },
 	{ value: "default", label: "Default", description: "Standard priority processing (OpenAI family)" },
-	{ value: "flex", label: "Flex", description: "Flexible capacity tier (OpenAI/Google families)" },
+	{
+		value: "flex",
+		label: "Flex",
+		description: "Flexible capacity (OpenAI API / Google; Codex only when discovery advertises it)",
+	},
 	{ value: "scale", label: "Scale", description: "Scale Tier credits (OpenAI family)" },
 	{ value: "priority", label: "Priority", description: "Priority on every supported family of the spawned model" },
 	{ value: "ultrafast", label: "Ultrafast", description: "Ultrafast serving (OpenAI family, where available)" },

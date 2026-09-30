@@ -123,7 +123,7 @@ describe("Codex model discovery", () => {
 		expect(legacy?.useResponsesLite).toBeUndefined();
 	});
 
-	it("gates Ultrafast on the discovered service_tiers list", async () => {
+	it("gates Ultrafast and flex on the discovered service_tiers list", async () => {
 		const fetchFn: typeof fetch = Object.assign(
 			async () =>
 				Response.json({
@@ -133,6 +133,7 @@ describe("Codex model discovery", () => {
 							service_tiers: [
 								{ id: "priority", name: "Fast", description: "1.5x speed, increased usage" },
 								{ id: "ultrafast", name: "Ultrafast", description: "The fastest available responses." },
+								{ id: "flex", name: "Flex", description: "Lower cost when available" },
 							],
 						},
 						{ slug: "gpt-6-sol", service_tiers: [{ id: "priority", name: "Fast", description: "" }] },
@@ -146,6 +147,11 @@ describe("Codex model discovery", () => {
 			result!.models.map(spec => [spec.id, shouldSendServiceTier("ultrafast", buildModel(spec))]),
 		);
 		expect(ultrafastBySlug).toEqual({ "gpt-6.1-sol": true, "gpt-6-sol": false, "gpt-5.5": false });
+		const flexBySlug = Object.fromEntries(
+			result!.models.map(spec => [spec.id, shouldSendServiceTier("flex", buildModel(spec))]),
+		);
+		// flex is discovery-gated like ultrafast (#207); only the model that lists it may send it.
+		expect(flexBySlug).toEqual({ "gpt-6.1-sol": true, "gpt-6-sol": false, "gpt-5.5": false });
 	});
 
 	it("floors GPT-5.6 luna/sol/terra at the 1M window when upstream omits context_window (#5705)", async () => {
