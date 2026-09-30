@@ -126,6 +126,9 @@ describe("session selector picker", () => {
 		const resumed: string[] = [];
 		const deleted: string[] = [];
 		const selector = make({ resumed, deleted });
+		expect(props(selector.describe(withPicker)).actions?.find(action => action.id === "delete")?.keys).toEqual([
+			"delete",
+		]);
 
 		selector.handleNativeEvent({ type: "select", key: "", item: old.path });
 		expect(props(selector.describe(withPicker)).selected).toBe(old.path);
