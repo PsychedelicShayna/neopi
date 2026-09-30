@@ -44,7 +44,8 @@ export function ConnectScreen({ defaultName, error, onConnect }: ConnectScreenPr
 				<div className="sh-connect-head">
 					<h1 className="sh-connect-title">Join a live session</h1>
 					<p className="sh-connect-sub">
-						Watch a NeoPi agent work in real time — transcript, tool calls and subagents — and prompt it from here.
+						Watch a NeoPi agent work in real time — transcript, tool calls and subagents — and prompt it from
+						here.
 					</p>
 				</div>
 				<label className="sh-field">

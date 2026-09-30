@@ -342,8 +342,18 @@ export class SplitPane implements Component, MouseRoutable {
 		const height = this.#height;
 		const described = row(
 			[
-				node("col", this.#constrained === "left" ? constrainedProps : otherProps, [nativeLayoutChild(this.#left)], "left"),
-				node("col", this.#constrained === "right" ? constrainedProps : otherProps, [nativeLayoutChild(this.#right)], "right"),
+				node(
+					"col",
+					this.#constrained === "left" ? constrainedProps : otherProps,
+					[nativeLayoutChild(this.#left)],
+					"left",
+				),
+				node(
+					"col",
+					this.#constrained === "right" ? constrainedProps : otherProps,
+					[nativeLayoutChild(this.#right)],
+					"right",
+				),
 			],
 			{ gap: nativeLayoutGap(this.#divider), align: this.#align, wrap: this.#narrowPane !== undefined },
 		);

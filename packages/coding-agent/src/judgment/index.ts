@@ -472,19 +472,22 @@ export class ChainJudge implements Judge {
 		return {
 			resolveReasoning: async (text, options) => {
 				try {
-					const result = await classifyDifficulty({ request: text.user }, {
-						settings: this.#deps.settings,
-						registry: this.#deps.registry,
-						model: candidate.model,
-						allowedEfforts: decision.candidates,
-						sessionManager: this.#deps.sessionManager,
-						sessionId: this.#deps.sessionId,
-						signal: options.signal,
-						metadataResolver: this.#deps.metadataResolver,
-						onUsage: this.#deps.onUsage,
-						onContextFallback: this.#deps.onEffortDisclosure,
-						onEffortDisclosure: this.#deps.onEffortDisclosure,
-					});
+					const result = await classifyDifficulty(
+						{ request: text.user },
+						{
+							settings: this.#deps.settings,
+							registry: this.#deps.registry,
+							model: candidate.model,
+							allowedEfforts: decision.candidates,
+							sessionManager: this.#deps.sessionManager,
+							sessionId: this.#deps.sessionId,
+							signal: options.signal,
+							metadataResolver: this.#deps.metadataResolver,
+							onUsage: this.#deps.onUsage,
+							onContextFallback: this.#deps.onEffortDisclosure,
+							onEffortDisclosure: this.#deps.onEffortDisclosure,
+						},
+					);
 					if (result) return result;
 					throw new Error("@effort returned no concrete level");
 				} catch (error) {

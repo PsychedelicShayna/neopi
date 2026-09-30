@@ -1445,7 +1445,9 @@ export class Agent {
 		return this.#runningPrompt ?? Promise.resolve();
 	}
 
-	#queuedSteeringInterruptMode(messages: readonly AgentMessage[] = this.#steeringQueue): "immediate" | "wait" | undefined {
+	#queuedSteeringInterruptMode(
+		messages: readonly AgentMessage[] = this.#steeringQueue,
+	): "immediate" | "wait" | undefined {
 		let hasDefault = false;
 		for (const message of messages) {
 			const mode = this.#steeringInterruptModes.get(message);

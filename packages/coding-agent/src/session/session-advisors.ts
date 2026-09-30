@@ -1332,15 +1332,18 @@ export class SessionAdvisors {
 							if (decision?.disclosure) this.#host.emitNotice("warning", decision.disclosure, "effort-policy");
 							let effort: Effort | undefined;
 							try {
-								effort = await classifyDifficulty({ request: currentAdvisorInput }, {
-									settings: this.#host.settings,
-									registry: this.#host.modelRegistry,
-									model,
-									sessionManager: this.#host.sessionManager,
-									allowedEfforts: candidates,
-									onEffortDisclosure: message => this.#host.emitNotice("warning", message, "effort-policy"),
-									onContextFallback: message => this.#host.emitNotice("warning", message, "effort-policy"),
-								});
+								effort = await classifyDifficulty(
+									{ request: currentAdvisorInput },
+									{
+										settings: this.#host.settings,
+										registry: this.#host.modelRegistry,
+										model,
+										sessionManager: this.#host.sessionManager,
+										allowedEfforts: candidates,
+										onEffortDisclosure: message => this.#host.emitNotice("warning", message, "effort-policy"),
+										onContextFallback: message => this.#host.emitNotice("warning", message, "effort-policy"),
+									},
+								);
 							} catch {
 								// A failed classifier must not fail the advisor's review.
 							}

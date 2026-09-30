@@ -906,12 +906,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		// item's agent type against the session's actual default agent.
 		const defaultAgent = this.#defaultAgent();
 		const batchEnabled = this.#isBatchEnabled();
-		const plan = planSpawns(
-			rawParams,
-			batchEnabled,
-			defaultAgent,
-			cfgEffortPolicyMode.get(this.session.settings),
-		);
+		const plan = planSpawns(rawParams, batchEnabled, defaultAgent, cfgEffortPolicyMode.get(this.session.settings));
 		if (typeof plan === "string") {
 			return createTaskModeError(plan);
 		}

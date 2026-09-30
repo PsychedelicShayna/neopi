@@ -47,7 +47,14 @@ async function seedPriorSession(cwd: string, agentDir: string): Promise<string> 
 }
 
 function launchArgs(overrides: Partial<Args>): Args {
-	return { messages: [], fileArgs: [], unknownFlags: new Map(), unrecognizedFlags: [], invalidFlagValues: [], ...overrides };
+	return {
+		messages: [],
+		fileArgs: [],
+		unknownFlags: new Map(),
+		unrecognizedFlags: [],
+		invalidFlagValues: [],
+		...overrides,
+	};
 }
 
 describe("autoResume versus --new-session and protocol modes", () => {

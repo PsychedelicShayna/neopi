@@ -108,12 +108,15 @@ describe("on-demand effort classification", () => {
 					},
 				}) as never,
 		);
-		const effort = await classifyDifficulty({ request: "solve the bug" }, {
-			settings,
-			registry: registry(),
-			model,
-			allowedEfforts: [Effort.Low, Effort.High],
-		});
+		const effort = await classifyDifficulty(
+			{ request: "solve the bug" },
+			{
+				settings,
+				registry: registry(),
+				model,
+				allowedEfforts: [Effort.Low, Effort.High],
+			},
+		);
 		expect(effort).toBe(Effort.High);
 		expect(call).toHaveBeenCalledTimes(1);
 		expect(call.mock.calls[0]?.[0].id).toBe("classifier");
@@ -127,12 +130,15 @@ describe("on-demand effort classification", () => {
 
 	it("returns a singleton without contacting the classifier", async () => {
 		const call = vi.spyOn(ai, "completeSimple");
-		const effort = await classifyDifficulty({ request: "anything" }, {
-			settings: Settings.isolated({}),
-			registry: registry(),
-			model,
-			allowedEfforts: [Effort.High],
-		});
+		const effort = await classifyDifficulty(
+			{ request: "anything" },
+			{
+				settings: Settings.isolated({}),
+				registry: registry(),
+				model,
+				allowedEfforts: [Effort.High],
+			},
+		);
 		expect(effort).toBe(Effort.High);
 		expect(call).not.toHaveBeenCalled();
 	});
@@ -141,12 +147,15 @@ describe("on-demand effort classification", () => {
 		const settings = Settings.isolated({ modelRoles: { effort: "mock/classifier:auto" } });
 		const call = vi.spyOn(ai, "completeSimple");
 		await expect(
-			classifyDifficulty({ request: "anything" }, {
-				settings,
-				registry: registry(),
-				model,
-				allowedEfforts: [Effort.Low, Effort.High],
-			}),
+			classifyDifficulty(
+				{ request: "anything" },
+				{
+					settings,
+					registry: registry(),
+					model,
+					allowedEfforts: [Effort.Low, Effort.High],
+				},
+			),
 		).rejects.toThrow("Auto");
 		expect(call).not.toHaveBeenCalled();
 	});

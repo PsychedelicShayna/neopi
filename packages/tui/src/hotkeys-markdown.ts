@@ -278,5 +278,4 @@ export class HotkeysSheetComponent implements Component {
 	handleNativeEvent(event: NativeUiEvent): void {
 		if (event.type === "action" && event.act === "close") this.#onClose();
 	}
-
 }

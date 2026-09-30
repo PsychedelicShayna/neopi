@@ -878,7 +878,6 @@ export function formatUsageHistory(
 	return lines.join("\n");
 }
 
-
 /** Apply a redaction mask to an optional identity field. */
 function maskIdentity(redaction: Map<string, string>, value: string | undefined): string | undefined {
 	return value === undefined ? undefined : (redaction.get(value) ?? value);

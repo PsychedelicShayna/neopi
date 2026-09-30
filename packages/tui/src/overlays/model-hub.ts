@@ -2726,7 +2726,10 @@ export class ModelHubComponent implements Component {
 			const enter = formatKeyHint("enter");
 			const cancel = editorKey("tui.select.cancel");
 			if (this.#assigning.kind === "effortRule") {
-				return truncateToWidth(theme.fg("accent", ` New exact effort rule — ${enter} picks model, ${cancel} cancels`), width);
+				return truncateToWidth(
+					theme.fg("accent", ` New exact effort rule — ${enter} picks model, ${cancel} cancels`),
+					width,
+				);
 			}
 			if (this.#assigning.kind === "fallbackKey") {
 				return truncateToWidth(
@@ -3012,8 +3015,10 @@ export class ModelHubComponent implements Component {
 		if (strip) {
 			if (strip.kind === "roleName") return `${enter} create + pick model · ${cancel} cancel`;
 			if (strip.kind === "pattern") return `${enter} continue to effort · ${cancel} cancel`;
-			if (strip.kind === "effortLevels") return `${leftRight} choose · ${formatKeyHint("space")} toggle · ${enter} save · ${cancel} discard`;
-			if (strip.kind === "selectorChoice") return `${leftRight} exact or pattern · ${enter} select · ${cancel} cancel`;
+			if (strip.kind === "effortLevels")
+				return `${leftRight} choose · ${formatKeyHint("space")} toggle · ${enter} save · ${cancel} discard`;
+			if (strip.kind === "selectorChoice")
+				return `${leftRight} exact or pattern · ${enter} select · ${cancel} cancel`;
 			if (strip.kind === "role") return `${leftRight} choose · ${enter} assign/clear · ${cancel} cancel`;
 			if (strip.kind === "scope") return `${leftRight} save scope · ${enter} choose · ${cancel} cancel`;
 			return `${leftRight} thinking level · ${enter} apply · ${cancel} keep`;
@@ -4288,23 +4293,46 @@ export class ModelHubComponent implements Component {
 		}
 		if (strip.kind === "pattern") {
 			return row([
-				text([span(strip.target === "rule" ? "Model effort pattern:" : strip.target === "role" ? "Role model pattern:" : "Fallback model pattern:", "accent")]),
+				text([
+					span(
+						strip.target === "rule"
+							? "Model effort pattern:"
+							: strip.target === "role"
+								? "Role model pattern:"
+								: "Fallback model pattern:",
+						"accent",
+					),
+				]),
 				col([strip.input], { grow: 1 }),
 			]);
 		}
 		if (strip.kind === "effortLevels") {
-			return node("tabs", {
-				items: strip.toggle.options.map((level, index) => ({
-					id: String(index),
-					label: [span(strip.toggle.selected.has(level) ? "● " : "○ ", strip.toggle.selected.has(level) ? "success" : "dim"), span(level)],
-				})),
-				active: String(strip.index),
-				actions: { click: "activate" },
-			}, undefined, "strip");
+			return node(
+				"tabs",
+				{
+					items: strip.toggle.options.map((level, index) => ({
+						id: String(index),
+						label: [
+							span(
+								strip.toggle.selected.has(level) ? "● " : "○ ",
+								strip.toggle.selected.has(level) ? "success" : "dim",
+							),
+							span(level),
+						],
+					})),
+					active: String(strip.index),
+					actions: { click: "activate" },
+				},
+				undefined,
+				"strip",
+			);
 		}
 		let prefix: TspSpan[];
 		if (strip.kind === "selectorChoice" || strip.kind === "patternEffort") {
-			prefix = [span(strip.kind === "selectorChoice" ? strip.target.role : strip.selector, "accent"), span(" →", "dim")];
+			prefix = [
+				span(strip.kind === "selectorChoice" ? strip.target.role : strip.selector, "accent"),
+				span(" →", "dim"),
+			];
 		} else if (strip.kind === "role") {
 			prefix = [span(strip.item.id, "accent"), span(" →", "dim")];
 		} else {
@@ -4349,7 +4377,12 @@ export class ModelHubComponent implements Component {
 				case "pattern":
 					return [keys("continue to effort", "enter"), cancel("cancel")];
 				case "effortLevels":
-					return [keys("choose", "left", "right"), keys("toggle", "space"), keys("save", "enter"), cancel("discard")];
+					return [
+						keys("choose", "left", "right"),
+						keys("toggle", "space"),
+						keys("save", "enter"),
+						cancel("discard"),
+					];
 				case "selectorChoice":
 					return [keys("exact or pattern", "left", "right"), keys("select", "enter"), cancel("cancel")];
 				case "patternEffort":

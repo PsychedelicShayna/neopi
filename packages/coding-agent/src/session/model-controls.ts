@@ -827,10 +827,7 @@ export class ModelControls {
 							this.#host.emitNotice(reason.includes("unreadable") ? "warning" : "info", reason, "effort-policy"),
 						onEffortDisclosure: message => this.#host.emitNotice("warning", message, "effort-policy"),
 						onUsage: usage => {
-							const entryId = this.#host.sessionManager.appendModelUsage(
-								usage,
-								usageOwner,
-							);
+							const entryId = this.#host.sessionManager.appendModelUsage(usage, usageOwner);
 							if (entryId) usageOwner.parentId = entryId;
 						},
 						telemetry: this.#host.agent.telemetry,
