@@ -62,6 +62,9 @@ describe("coworkFetch response cancellation", () => {
 describe("coworkFetch premature response close", () => {
 	async function streamingResponse(signal?: AbortSignal) {
 		const message = new http.IncomingMessage(new net.Socket());
+		// No socket is feeding this synthetic message: keep its body open until cutOff()
+		// rather than letting IncomingMessage's default _read finish it before the reset.
+		message._read = () => {};
 		message.statusCode = 200;
 		message.statusMessage = "OK";
 		message.headers = { "content-type": "text/event-stream" };
