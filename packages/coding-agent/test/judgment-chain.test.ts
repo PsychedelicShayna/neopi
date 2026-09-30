@@ -98,6 +98,7 @@ describe("pinned mixture judges", () => {
 		});
 		const judge = new ChainJudge({
 			settings,
+			purpose: "test",
 			registry,
 			candidates: [
 				{ model: ONLINE_BACKUP, explicit: true, selector: `${ONLINE_BACKUP.provider}/${ONLINE_BACKUP.id}` },

@@ -217,6 +217,7 @@ export function createSessionMixtureHost(deps: SessionMixtureHostDeps): SessionM
 		judge(plan, onAttempt) {
 			return resolveJudge({
 				settings,
+				purpose: MIXTURE_USAGE_PURPOSE,
 				registry: modelRegistry,
 				sessionId: sessionManager.getSessionId(),
 				candidates: plan,
