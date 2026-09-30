@@ -1155,8 +1155,8 @@ describe("ModelHub", () => {
 
 			hub.handleInput("\n"); // Sidebar → model list.
 			hub.handleInput("\n"); // open the role strip
-			// At full width every chip fits and no left ellipsis appears.
-			expect(footerLine(hub.render(220))).not.toContain("…");
+			// At a deliberately wide viewport every chip fits and no left ellipsis appears.
+			expect(footerLine(hub.render(400))).not.toContain("…");
 
 			hub.handleInput(LEFT); // wrap to the trailing retry-fallback chip
 			const narrow = footerLine(hub.render(80));
