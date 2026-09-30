@@ -61,10 +61,10 @@ function agentEnd(
 	return { type: "agent_end", messages, ...flags } as unknown as AgentSessionEvent;
 }
 
-function delegation(id: string, text: string): LiveServerEvent {
+function delegation(id: string, _text: string): LiveServerEvent {
 	return {
 		type: "delegation.created",
-		item: { type: "delegation", target: "client", id, content: [{ type: "input_text", text }] },
+		item: { type: "delegation", target: "client", id, content: [] },
 	};
 }
 

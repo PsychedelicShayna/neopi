@@ -9,6 +9,12 @@ import type { CustomMessageDelivery } from "../session/agent-session";
 import type { AgentSessionEvent } from "../session/agent-session-events";
 import { type CustomMessage, LIVE_DELEGATION_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../session/messages";
 import { sharedAudioCapture } from "../stt/shared-audio-capture";
+import {
+	buildLiveDelegationMessage,
+	LIVE_VOICE_NOTE_ENTRY_TYPE,
+	type LiveDelegationDetails,
+	type LiveVoiceNoteEntry,
+} from "./delegation-note";
 import { stripLiveKeyword } from "./keywords";
 import { resolveLiveInstructions } from "./personas";
 import agentFinalMessageTemplate from "./prompts/agent-final-message.md" with { type: "text" };
@@ -102,6 +108,8 @@ export interface LiveSessionControllerOptions {
 	extractAssistantText(message: AssistantMessage): string;
 	/** Ingest seam: returns a transformed crew IRC body, or suppresses it. */
 	ircRelayTransform?: (message: CustomMessage, body: string) => string | undefined;
+	/** Whether a voice-authored note reaches the main agent (read at dispatch). */
+	includeVoiceNote?: () => boolean;
 	/** Realtime output voice, defaulting to sol. */
 	voice?: string;
 	blockDelegateKeyword?: string;
@@ -120,6 +128,10 @@ export interface LiveSessionControllerOptions {
 
 function errorFrom(cause: unknown): Error {
 	return cause instanceof Error ? cause : new Error(String(cause));
+}
+
+function joinDelegationContent(content: Extract<LiveServerEvent, { type: "delegation.created" }>["item"]["content"]): string {
+	return content.map(item => item.text).join("\n").trim();
 }
 
 function clampLevel(level: number): number {
@@ -181,6 +193,7 @@ export class LiveSessionController {
 	readonly #speakableIdleMs: number;
 	readonly #blockDelegateKeyword: string;
 	readonly #ircRelayTransform: (message: CustomMessage, body: string) => string | undefined;
+	readonly #includeVoiceNote: () => boolean;
 
 	readonly #createTransport: (options: ConstructorParameters<typeof CodexLiveTransport>[0]) => LiveTransportLike;
 	readonly #createRecorder: (
@@ -245,9 +258,11 @@ export class LiveSessionController {
 				forced: boolean;
 				dispatchEnabled: boolean;
 				dispatching: boolean;
+				voiceText: string;
 		  }
 		| undefined;
 	#pendingDelivery: CustomMessageDelivery | undefined;
+	#voiceNotes = new Set<{ noteId: string; consumed: boolean }>();
 	/** Coalesced in-flight live abort, so rapid handoffs never overlap AgentSession.abort(). */
 	#liveAbortPromise: Promise<void> | undefined;
 	/**
@@ -289,6 +304,7 @@ export class LiveSessionController {
 		this.#voice = options.voice?.trim() || DEFAULT_LIVE_VOICE;
 		this.#blockDelegateKeyword = options.blockDelegateKeyword ?? "";
 		this.#ircRelayTransform = options.ircRelayTransform ?? ((_, body) => body);
+		this.#includeVoiceNote = options.includeVoiceNote ?? (() => true);
 		const speakableIdleMs = options.speakableIdleMs;
 		this.#speakableIdleMs =
 			typeof speakableIdleMs === "number" && Number.isFinite(speakableIdleMs) && speakableIdleMs >= 0
@@ -438,6 +454,7 @@ export class LiveSessionController {
 		this.#speakableIdleTimer = undefined;
 		this.#speakableIdleDeadline = 0;
 		this.#heldContext = [];
+		this.#voiceNotes.clear();
 		for (const { sent } of this.#pendingOperatorText) sent(false);
 		this.#pendingOperatorText = [];
 		this.#unsubscribeSession?.();
@@ -543,6 +560,14 @@ export class LiveSessionController {
 		if (this.#seenDelegationIds.has(event.item.id)) return;
 		this.#seenDelegationIds.add(event.item.id);
 
+		const voiceText = joinDelegationContent(event.item.content);
+		// A claimed turn belongs to an earlier handoff; it cannot authorize superseding it.
+		const newOperatorWork = this.#turnsWhere(turn => !turn.blocked && turn.claim === undefined).length > 0;
+		if (!newOperatorWork) {
+			this.#dispatchVoiceOnly(voiceText);
+			return;
+		}
+
 		const generation = ++this.#delegationGeneration;
 		const previousPending = this.#pendingDelegation;
 		const previousGeneration = previousPending?.generation;
@@ -579,6 +604,7 @@ export class LiveSessionController {
 			generation,
 			forced,
 			turns: claimed.map(turn => turn.turn),
+			voiceText,
 			dispatchEnabled: false,
 			dispatching: false,
 		};
@@ -621,12 +647,14 @@ export class LiveSessionController {
 			.trim();
 		if (!merged) return;
 		pending.dispatching = true;
+		const { content, details } = buildLiveDelegationMessage(merged, pending.voiceText, this.#includeVoiceNote());
 		const delivery = this.#session.sendCustomMessageWithReceipt(
 			{
 				customType: LIVE_DELEGATION_MESSAGE_TYPE,
-				content: merged,
+				content,
 				display: true,
 				attribution: "agent",
+				details,
 			},
 			{ triggerTurn: true },
 		);
@@ -665,6 +693,43 @@ export class LiveSessionController {
 		}
 	}
 
+	#dispatchVoiceOnly(voiceText: string): void {
+		if (!voiceText) return;
+		if (!this.#includeVoiceNote()) {
+			this.#session.sessionManager.appendCustomEntry(LIVE_VOICE_NOTE_ENTRY_TYPE, {
+				voice: voiceText,
+				operator: "",
+				delivered: false,
+				timestamp: Date.now(),
+			} satisfies LiveVoiceNoteEntry);
+			return;
+		}
+		const noteId = crypto.randomUUID();
+		const { content, details } = buildLiveDelegationMessage("", voiceText, true);
+		details.noteId = noteId;
+		const record = { noteId, consumed: false };
+		this.#voiceNotes.add(record);
+		const delivery = this.#session.sendCustomMessageWithReceipt(
+			{ customType: LIVE_DELEGATION_MESSAGE_TYPE, content, display: true, attribution: "agent", details },
+			this.#session.isStreaming
+				? { deliverAs: "steer", steeringInterruptMode: "wait", triggerTurn: true }
+				: { triggerTurn: true },
+		);
+		void delivery.completed.catch(() => {});
+		void delivery.accepted.catch(() => {
+			this.#voiceNotes.delete(record);
+		});
+	}
+
+	#hasConsumedVoiceNote(): boolean {
+		for (const record of this.#voiceNotes) if (record.consumed) return true;
+		return false;
+	}
+
+	#retireConsumedVoiceNotes(): void {
+		for (const record of this.#voiceNotes) if (record.consumed) this.#voiceNotes.delete(record);
+	}
+
 	#acceptSpeech(text: string, forced: boolean): void {
 		if (!text) return;
 		this.#callbacks.onSpeechSent?.(text);
@@ -672,6 +737,15 @@ export class LiveSessionController {
 	}
 
 	#handleSessionEvent(event: AgentSessionEvent): void {
+		if (
+			event.type === "message_start" &&
+			event.message.role === "custom" &&
+			event.message.customType === LIVE_DELEGATION_MESSAGE_TYPE
+		) {
+			const noteId = (event.message.details as LiveDelegationDetails | undefined)?.noteId;
+			if (noteId) for (const record of this.#voiceNotes) if (record.noteId === noteId) record.consumed = true;
+			return;
+		}
 		if (event.type === "irc_message") {
 			this.#relayCrewMessage(event.message);
 			return;
@@ -742,7 +816,7 @@ export class LiveSessionController {
 	#appendFinalResponse(messages: readonly AgentMessage[], options: { closeDelegation: boolean }): void {
 		const delegationId = this.#activeDelegationId;
 		if (!delegationId) {
-			if (this.#operatorTurnPending) this.#relayOperatorTurnResult(messages, options);
+			if (this.#operatorTurnPending || this.#hasConsumedVoiceNote()) this.#relayOperatorTurnResult(messages, options);
 			return;
 		}
 		// A shared operator prompt folded into the delegated turn is answered by this settle.
@@ -768,6 +842,7 @@ export class LiveSessionController {
 		if (options.closeDelegation) {
 			this.#activeDelegationId = undefined;
 			this.#lastRelayedResponse = undefined;
+			this.#retireConsumedVoiceNotes();
 		}
 		this.#refreshAudioPhase();
 	}
@@ -787,6 +862,7 @@ export class LiveSessionController {
 		if (options.closeDelegation) {
 			this.#operatorTurnPending = false;
 			this.#lastRelayedResponse = undefined;
+			this.#retireConsumedVoiceNotes();
 		}
 	}
 
