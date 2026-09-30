@@ -525,6 +525,42 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 		const forwarded = spy.mock.calls[0]?.[0];
 		expect(forwarded?.thinkingLevel).toBe(ThinkingLevel.Low);
 	});
+	it("resolves a regex model override including its effort suffix ahead of a glob fallback", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const fallback = getBundledModel("anthropic", "claude-opus-4-5");
+		if (!model || !fallback) throw new Error("Expected bundled Anthropic models");
+		const session = yieldEmittingSession();
+		const spy = vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
+
+		const result = await runSubprocess({
+			...baseOptions,
+			id: "subagent-regex-model-override",
+			modelOverride: ["re:^anthropic/claude-sonnet-4-5:high$", "anthropic/claude-opus-*"],
+			modelRegistry: createModelRegistry([fallback, model]),
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(spy.mock.calls[0]?.[0]?.model).toMatchObject({ provider: "anthropic", id: "claude-sonnet-4-5" });
+		expect(spy.mock.calls[0]?.[0]?.thinkingLevel).toBe(ThinkingLevel.High);
+	});
+
+	it("retains Bun glob model overrides when no regex matches", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected bundled Anthropic model");
+		const session = yieldEmittingSession();
+		const spy = vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
+
+		const result = await runSubprocess({
+			...baseOptions,
+			id: "subagent-glob-model-override",
+			modelOverride: ["re:[", "anthropic/claude-sonnet-*"],
+			modelRegistry: createModelRegistry(model),
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(spy.mock.calls[0]?.[0]?.model).toMatchObject({ provider: "anthropic", id: "claude-sonnet-4-5" });
+	});
+
 	it("persists an explicit role from a caller model override", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");

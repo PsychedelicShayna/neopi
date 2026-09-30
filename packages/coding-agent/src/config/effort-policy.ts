@@ -1,7 +1,9 @@
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { Effort, THINKING_EFFORTS, type Model } from "@oh-my-pi/pi-ai";
 import { getSupportedEfforts, requireSupportedEffort } from "@oh-my-pi/pi-catalog/model-thinking";
+import { logger } from "@oh-my-pi/pi-utils";
 import { register } from "./registry";
+import { compileSelectorRegex, isRegexSelectorPattern, matchesSelectorPattern } from "./selector-pattern";
 import { cfgProvidersAutoThinkingMaxEffort } from "../session/settings";
 import type { Settings } from "./settings";
 
@@ -93,14 +95,20 @@ export const cfgEffortRules = register({
 			) {
 				throw new Error("Each effort rule must name a model selector");
 			}
-			const slash = rule.selector.indexOf("/");
-			if (slash < 1 || slash === rule.selector.length - 1) {
-				throw new Error(`Effort rule ${rule.selector} must use a provider/model selector`);
+			if (!isRegexSelectorPattern(rule.selector)) {
+				const slash = rule.selector.indexOf("/");
+				if (slash < 1 || slash === rule.selector.length - 1) {
+					throw new Error(`Effort rule ${rule.selector} must use a provider/model selector`);
+				}
 			}
 			if (seen.has(rule.selector.toLowerCase())) throw new Error(`Duplicate effort rule ${rule.selector}`);
 			seen.add(rule.selector.toLowerCase());
 			assertEfforts(rule.allowed, `Effort rule ${rule.selector}`);
-			if (isPatternSelector(rule.selector)) new Bun.Glob(rule.selector);
+			if (isRegexSelectorPattern(rule.selector) && !compileSelectorRegex(rule.selector)) {
+				logger.warn("Settings: skipping invalid effort rule regex", { selector: rule.selector });
+			} else if (isPatternSelector(rule.selector) && !isRegexSelectorPattern(rule.selector)) {
+				new Bun.Glob(rule.selector);
+			}
 		}
 	},
 });
@@ -175,14 +183,18 @@ function isPatternSelector(selector: string): boolean {
 	return /[*?[\]{}]/.test(selector);
 }
 
-/** Exact provider/model identifiers beat all wildcard rules; wildcard rules retain operator order. */
+/** Exact provider/model identifiers beat regex rules, then globs; patterns retain declaration order within a tier. */
 export function matchEffortRule(settings: Settings, model: Model): EffortRule | undefined {
 	const rules = cfgEffortRules.get(settings);
-	const identity = `${model.provider}/${model.id}`.toLowerCase();
-	const exact = rules.find(rule => !isPatternSelector(rule.selector) && rule.selector.toLowerCase() === identity);
+	const identity = `${model.provider}/${model.id}`;
+	const exact = rules.find(
+		rule => !isRegexSelectorPattern(rule.selector) && !isPatternSelector(rule.selector) && rule.selector.toLowerCase() === identity.toLowerCase(),
+	);
 	if (exact) return exact;
+	const regex = rules.find(rule => isRegexSelectorPattern(rule.selector) && matchesSelectorPattern(rule.selector, identity));
+	if (regex) return regex;
 	return rules.find(
-		rule => isPatternSelector(rule.selector) && new Bun.Glob(rule.selector.toLowerCase()).match(identity),
+		rule => !isRegexSelectorPattern(rule.selector) && isPatternSelector(rule.selector) && matchesSelectorPattern(rule.selector.toLowerCase(), identity.toLowerCase()),
 	);
 }
 
@@ -213,9 +225,9 @@ export function resolveImplicitEffort(
 	const staleAuto =
 		selection?.mode === "auto" &&
 		selection.selector &&
-		(isPatternSelector(selection.selector)
-			? !new Bun.Glob(selection.selector.toLowerCase()).match(`${model.provider}/${model.id}`.toLowerCase())
-			: selection.selector.toLowerCase() !== `${model.provider}/${model.id}`.toLowerCase());
+		!(isRegexSelectorPattern(selection.selector)
+			? matchesSelectorPattern(selection.selector, `${model.provider}/${model.id}`)
+			: matchesSelectorPattern(selection.selector.toLowerCase(), `${model.provider}/${model.id}`.toLowerCase()));
 	const activeSelection = staleAuto ? { mode: "auto" as const } : selection;
 	if (activeSelection?.mode === "fixed" && activeSelection.level === ThinkingLevel.Off) {
 		return { level: ThinkingLevel.Off, candidates: permitted, rule, origin };

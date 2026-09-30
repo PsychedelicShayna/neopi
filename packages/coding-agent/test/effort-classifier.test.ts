@@ -16,7 +16,9 @@ import { ModelRegistry } from "../src/config/model-registry";
 import { Settings } from "../src/config/settings";
 import {
 	EffortPolicyError,
+	cfgEffortRules,
 	cfgFallbackEffortSelections,
+	matchEffortRule,
 	resolveImplicitEffort,
 	type EffortSelection,
 } from "../src/config/effort-policy";
@@ -426,6 +428,51 @@ describe("implicit effort policy resolution", () => {
 		const fixed = resolveImplicitEffort(settings, model, { mode: "fixed", level: Effort.XHigh }, "role");
 		expect(fixed.level).toBe(Effort.High);
 		expect(fixed.disclosure).toContain("mock/classifier");
+	});
+
+	it("prioritizes exact over regex over glob and uses the first matching regex", () => {
+		const settings = Settings.isolated({
+			"effort.rules": [
+				{ selector: "mock/*", allowed: [Effort.Low] },
+				{ selector: "re:^mock/class", allowed: [Effort.Medium] },
+				{ selector: "re:^mock/classifier$", allowed: [Effort.High] },
+				{ selector: "mock/classifier", allowed: [Effort.XHigh] },
+			],
+		});
+		expect(matchEffortRule(settings, model)?.allowed).toEqual([Effort.XHigh]);
+		const regexSettings = Settings.isolated({
+			"effort.rules": [
+				{ selector: "mock/*", allowed: [Effort.Low] },
+				{ selector: "re:^mock/class", allowed: [Effort.Medium] },
+				{ selector: "re:^mock/classifier$", allowed: [Effort.High] },
+			],
+		});
+		expect(matchEffortRule(regexSettings, model)?.allowed).toEqual([Effort.Medium]);
+		expect(resolveImplicitEffort(regexSettings, model, { mode: "auto" }, "role").candidates).toEqual([Effort.Medium]);
+	});
+
+	it("retains case-insensitive Bun glob matching and skips invalid regex before glob fallback", () => {
+		const settings = Settings.isolated({
+			"effort.rules": [
+				{ selector: "re:[", allowed: [Effort.XHigh] },
+				{ selector: "MOCK/{CLASSIFIER,OTHER}", allowed: [Effort.Low] },
+			],
+		});
+		expect(matchEffortRule(settings, model)?.allowed).toEqual([Effort.Low]);
+		expect(resolveImplicitEffort(settings, model, { mode: "auto", selector: "MOCK/CLASS*" }, "role").candidates).toEqual([
+			Effort.Low,
+		]);
+		expect(resolveImplicitEffort(settings, model, { mode: "auto", selector: "re:^mock/classifier$" }, "role").candidates).toEqual([
+			Effort.Low,
+		]);
+		expect(
+			resolveImplicitEffort(
+				settings,
+				model,
+				{ mode: "auto", selector: "re:^mock/other$", allowed: [Effort.High] },
+				"role",
+			).candidates,
+		).toEqual([Effort.Low]);
 	});
 
 	it("does not promote a saved role default to an explicit override, even when both request the same level", () => {
