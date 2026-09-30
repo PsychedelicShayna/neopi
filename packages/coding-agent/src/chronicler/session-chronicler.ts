@@ -44,13 +44,24 @@ import { renderChronicleDelta } from "./render";
 import { type CaptureBatch, type CaptureSource, ChroniclerStore, isChroniclerCorruption } from "./store";
 
 /**
+ * The slice of a session the runtime reads. {@link AgentSession} passes its
+ * live SessionManager; the headless backfill passes a read-only view over a
+ * stored transcript whose persistence members are no-ops.
+ */
+export type ChroniclerSessionView = Pick<
+	SessionManager,
+	"getSessionId" | "getSessionFile" | "getArtifactsDir" | "getEntries" | "ensureOnDisk" | "isSessionOnDisk" | "flush"
+>;
+
+/**
  * Host seam the runtime binds against. The two persistence-order callbacks and
  * `isCaptureEligible` are wired by {@link AgentSession}; everything else mirrors
  * the advisor host surface.
  */
 export interface SessionChroniclerHost {
-	agent: Agent;
-	sessionManager: SessionManager;
+	/** Source of telemetry inherited by the capture Agent. */
+	agent: Pick<Agent, "telemetry">;
+	sessionManager: ChroniclerSessionView;
 	settings: Settings;
 	modelRegistry: ModelRegistry;
 	obfuscator: SecretObfuscator | undefined;
@@ -257,6 +268,19 @@ export class SessionChronicler {
 		this.#pendingRendezvous = undefined;
 		this.#scheduleWake(true, true);
 		this.#stopping = true;
+	}
+
+	/**
+	 * Resolve once the owner chain holds no queued or running work. A headless
+	 * host waits on this for the construction-time backlog walk to finish
+	 * (covered, halted, unresolved model, or contended lease) before draining.
+	 */
+	async idle(): Promise<void> {
+		let chain: Promise<void>;
+		do {
+			chain = this.#chain;
+			await chain;
+		} while (chain !== this.#chain);
 	}
 
 	/**

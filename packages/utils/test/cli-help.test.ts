@@ -185,3 +185,61 @@ describe("run() usage errors", () => {
 		expect(out).toContain("$ omp bench MODELS... [FLAGS]");
 	});
 });
+
+describe("run() nested subcommands", () => {
+	const received: { argv: string[]; runs: string[] } = { argv: [], runs: [] };
+
+	class ChildCommand extends Command {
+		static description = "child does the work";
+		static args = { target: Args.string({ description: "what to act on" }) };
+		static flags = { depth: Flags.integer({ description: "how deep" }) };
+		async run(): Promise<void> {
+			const { args, flags } = await this.parse(ChildCommand);
+			received.runs.push("child");
+			received.argv = [String(args.target), String(flags.depth)];
+		}
+	}
+
+	class ParentCommand extends Command {
+		static description = "parent groups children";
+		static strict = false;
+		static subcommands = { child: async () => ChildCommand };
+		async run(): Promise<void> {
+			received.runs.push("parent");
+		}
+	}
+
+	const commands: CommandEntry[] = [{ name: "parent", load: async () => ParentCommand }];
+
+	// Contract: `<bin> parent child ...` runs the child with only its own argv,
+	// and `--help` there documents the child, not the parent.
+	it("dispatches to and documents the named subcommand", async () => {
+		received.runs = [];
+		await run({ bin: "omp", version: "0.0.0", argv: ["parent", "child", "x", "--depth", "3"], commands });
+		expect(received.runs).toEqual(["child"]);
+		expect(received.argv).toEqual(["x", "3"]);
+
+		const writes: string[] = [];
+		const stdoutSpy = spyOn(process.stdout, "write").mockImplementation(chunk => {
+			writes.push(String(chunk));
+			return true;
+		});
+		try {
+			await run({ bin: "omp", version: "0.0.0", argv: ["parent", "child", "--help"], commands });
+			await run({ bin: "omp", version: "0.0.0", argv: ["parent", "--help"], commands });
+		} finally {
+			stdoutSpy.mockRestore();
+		}
+		const [childHelp, parentHelp] = [writes[0]!, writes[1]!];
+		expect(childHelp).toContain("$ omp parent child [TARGET] [FLAGS]");
+		expect(childHelp).toContain("--depth=<int>");
+		expect(parentHelp).toContain("$ omp parent <child>");
+	});
+
+	// Contract: an argv head that names no subcommand still reaches the parent.
+	it("runs the parent when no subcommand is named", async () => {
+		received.runs = [];
+		await run({ bin: "omp", version: "0.0.0", argv: ["parent", "nope"], commands });
+		expect(received.runs).toEqual(["parent"]);
+	});
+});

@@ -804,7 +804,8 @@ export async function getRecentSessions(
 	return recent;
 }
 
-function sessionMatchesResumeArg(session: SessionInfo, sessionArg: string): boolean {
+/** `--resume` selector semantics: a case-insensitive prefix of the session id or file name. */
+export function sessionMatchesResumeArg(session: SessionInfo, sessionArg: string): boolean {
 	const normalizedArg = sessionArg.toLowerCase();
 	const normalizedId = session.id.toLowerCase();
 	if (normalizedId.startsWith(normalizedArg)) {
