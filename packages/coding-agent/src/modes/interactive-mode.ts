@@ -7169,6 +7169,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#selectorController.showChainConfigure();
 	}
 
+	showMixtureConfigure(name?: string): void {
+		this.#selectorController.showMixtureConfigure(name);
+	}
+
 	showHistorySearch(): void {
 		this.#selectorController.showHistorySearch();
 	}

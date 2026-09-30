@@ -16,7 +16,8 @@ import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { MessageOrigin } from "@oh-my-pi/pi-ai";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
-import { $env, isRecord, logger, Snowflake } from "@oh-my-pi/pi-utils";
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
+import { $env, getAgentDir, isRecord, logger, Snowflake } from "@oh-my-pi/pi-utils";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
 import {
 	type ExtensionUIContext,
@@ -33,6 +34,8 @@ import {
 	type SkillPromptInput,
 } from "../../extensibility/skills";
 import { type Theme, theme } from "@oh-my-pi/pi-tui/theme";
+import { discoverMixtures, mixturesConfigFilePath } from "../../moa/config";
+import { checkMixture, readMixtureDefinitionFile, saveMixtureDefinition } from "../../moa/registration";
 import type { AgentSession } from "../../session/agent-session";
 import { findMostRecentNonEmptySession } from "../../session/session-listing";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
@@ -1371,6 +1374,79 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				await session.modelRegistry.awaitBackgroundRefresh();
 				const models = session.getAvailableModels();
 				return success(id, "get_available_models", { models });
+			}
+
+			case "list_mixtures": {
+				const cwd = session.sessionManager.getCwd();
+				const agentDir = session.getMixtureAgentDir() ?? getAgentDir();
+				const discovered = await discoverMixtures(cwd, agentDir);
+				const names = discovered.mixtures.map(item => item.definition.name);
+				const context = { cwd, agentDir, registry: session.modelRegistry, settings: session.settings };
+				return success(id, "list_mixtures", {
+					mixtures: discovered.mixtures.map(item => ({
+						name: item.definition.name,
+						path: item.path,
+						registered: session.getRegisteredMixture(item.definition.name) !== undefined,
+						errors: checkMixture(item.definition, context, item.preparedPresets, names).errors,
+					})),
+					warnings: discovered.warnings,
+				});
+			}
+
+			case "create_mixture": {
+				if (command.scope !== "project" && command.scope !== "user")
+					return error(id, "create_mixture", "scope must be project or user");
+				const definition = command.definition;
+				if (
+					!isRecord(definition) ||
+					typeof definition.name !== "string" ||
+					!Array.isArray(definition.members) ||
+					!Array.isArray(definition.edges)
+				)
+					return error(id, "create_mixture", "definition needs a name, members, and edges");
+				const cwd = session.sessionManager.getCwd();
+				const agentDir = session.getMixtureAgentDir() ?? getAgentDir();
+				const discovered = await discoverMixtures(cwd, agentDir);
+				if (
+					discovered.mixtures.some(item => item.definition.name === definition.name) ||
+					session.modelRegistry.find("mixture", definition.name)
+				)
+					return error(id, "create_mixture", `mixture/${definition.name} already exists`);
+				let projectDir = cwd;
+				try {
+					projectDir = vcs.repo(cwd)?.root() ?? cwd;
+				} catch {
+					// A directory outside a repository is its own project scope.
+				}
+				const filePath = mixturesConfigFilePath(command.scope, { projectDir, agentDir });
+				try {
+					const { doc, hash: baseHash } = await readMixtureDefinitionFile(filePath);
+					doc.mixtures.push(definition);
+					const saved = await saveMixtureDefinition({
+						cwd,
+						agentDir,
+						registry: session.modelRegistry,
+						settings: session.settings,
+						sourcePath: filePath,
+						doc,
+						baseHash,
+						apply: true,
+					});
+					if (!saved.registered)
+						return error(id, "create_mixture", `mixture/${definition.name} could not register in this workspace`);
+					return success(id, "create_mixture", { name: definition.name, path: filePath });
+				} catch (err) {
+					return error(id, "create_mixture", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "select_mixture": {
+				if (!session.getRegisteredMixture(command.name))
+					return error(id, "select_mixture", `mixture/${command.name} is not registered in this workspace`);
+				const model = session.modelRegistry.find("mixture", command.name);
+				if (!model) return error(id, "select_mixture", `mixture/${command.name} is unavailable`);
+				await session.setModel(model);
+				return success(id, "select_mixture", model);
 			}
 
 			case "get_roles": {

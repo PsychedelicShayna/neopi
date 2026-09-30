@@ -8,7 +8,7 @@
  * request is re-assembled and checked against the window before it is returned.
  */
 import { Tokenizer } from "@oh-my-pi/pi-agent-core";
-import type { Api, Message, Model } from "@oh-my-pi/pi-ai";
+import type { Api, ImageContent, Message, Model, TextContent } from "@oh-my-pi/pi-ai";
 
 export interface HopParts {
 	output?: string;
@@ -16,6 +16,7 @@ export interface HopParts {
 	reasoning?: string;
 	toolTrace?: string;
 	conversation?: string;
+	transcript?: string;
 }
 
 export interface FitHopRequest {
@@ -28,6 +29,8 @@ export interface FitHopRequest {
 	parts: HopParts;
 	/** The hop's own messages (tool rounds): irreducible. */
 	hopMessages: readonly Message[];
+	/** Blocks appended after the envelope text (snapcompact frames): irreducible, counted once. */
+	attachments?: readonly (TextContent | ImageContent)[];
 	/** `moa.part_budget_tokens`. */
 	partBudgetTokens: number;
 }
@@ -38,7 +41,12 @@ export type FitHopResult =
 
 const DEFAULT_RESERVE = 16_384;
 /** Priority order after the hop's own messages. */
-const PRIORITY: (keyof HopParts)[][] = [["output"], ["input", "reasoning", "toolTrace"], ["conversation"]];
+const PRIORITY: (keyof HopParts)[][] = [
+	["output"],
+	["input", "reasoning", "toolTrace"],
+	["conversation"],
+	["transcript"],
+];
 /** Refits after the assembled request overflowed; each pass shrinks the parts by the overflow. */
 const MAX_FIT_PASSES = 4;
 
@@ -91,7 +99,11 @@ export function fitHopRequest(request: FitHopRequest): FitHopResult {
 	const window = request.target.contextWindow;
 	const budget = window ? window - reserveOutput : Number.POSITIVE_INFINITY;
 	const hopTokens = tokenizer.countMessages(request.hopMessages);
-	const measure = (envelope: string) => tokenizer.countTokens([...request.systemPrompt, envelope]) + hopTokens;
+	const attachmentTokens = request.attachments?.length
+		? tokenizer.countMessages([{ role: "user", content: [...request.attachments], timestamp: 0 }])
+		: 0;
+	const measure = (envelope: string) =>
+		tokenizer.countTokens([...request.systemPrompt, envelope]) + hopTokens + attachmentTokens;
 	const fixed = measure(request.assemble({}));
 	if (fixed > budget) return { ok: false, neededTokens: fixed, availableTokens: Math.max(0, budget) };
 

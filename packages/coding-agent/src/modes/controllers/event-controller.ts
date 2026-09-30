@@ -314,6 +314,7 @@ export class EventController {
 			run_owners_joined: async () => {},
 			run_owners_skipped: async () => {},
 			mixture_hop_end: async e => this.#showMixtureTrace(e.details),
+			mixture_decision: async e => this.#showMixtureTrace(e.details),
 			mixture_limit: async e => this.#showMixtureTrace(e.details),
 			mixture_checkpoint: async e => this.#showMixtureTrace(e.details),
 			mixture_run_end: async () => {

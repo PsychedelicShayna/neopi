@@ -4,7 +4,7 @@
  * spreads its whole config into the options, so anything not named here stays
  * with the outer call.
  */
-import type { ProviderSessionState, SimpleStreamOptions, ToolChoice } from "@oh-my-pi/pi-ai";
+import type { Api, Model, ProviderSessionState, SimpleStreamOptions, ToolChoice } from "@oh-my-pi/pi-ai";
 import { resetAccountScopedProviderSessionState } from "@oh-my-pi/pi-ai/provider-session-state";
 import type { MixtureRunEntry } from "./run-store";
 import type { MixtureHost, MixtureRun, OuterStreamOptions, ResolvedModelMember, ToolRequirement } from "./types";
@@ -42,8 +42,35 @@ export function prepareMemberCall(
 	host: MixtureHost,
 	entry: MixtureRunEntry,
 ): SimpleStreamOptions {
-	const sessionId = memberSessionId(run, member.id);
-	const providerSessionState = memberProviderState(entry, member.id);
+	const options = prepareCall(outer, run, member.model, member.id, host, entry);
+	options.reasoning = member.effort ?? outer.reasoning;
+	options.maxTokens = member.maxTokens ?? outer.maxTokens;
+	if (member.reasoningOff) options.disableReasoning = true;
+	return options;
+}
+
+/** A summary uses its own provider session and the caller's thinking/output limits. */
+export function prepareHelperCall(
+	outer: OuterStreamOptions,
+	run: MixtureRun,
+	model: Model<Api>,
+	purpose: "summary",
+	host: MixtureHost,
+	entry: MixtureRunEntry,
+): SimpleStreamOptions {
+	return prepareCall(outer, run, model, purpose, host, entry);
+}
+
+function prepareCall(
+	outer: OuterStreamOptions,
+	run: MixtureRun,
+	model: Model<Api>,
+	memberId: string,
+	host: MixtureHost,
+	entry: MixtureRunEntry,
+): SimpleStreamOptions {
+	const sessionId = memberSessionId(run, memberId);
+	const providerSessionState = memberProviderState(entry, memberId);
 	const options: SimpleStreamOptions = {
 		// Preserved from the caller.
 		signal: outer.signal,
@@ -68,16 +95,13 @@ export function prepareMemberCall(
 		streamIdleTimeoutMs: outer.streamIdleTimeoutMs,
 		cursorExternalToolExecutor: outer.cursorExternalToolExecutor,
 		// Recomputed per member.
-		apiKey: host.resolver(member.model, sessionId, () =>
-			resetAccountScopedProviderSessionState(providerSessionState),
-		),
+		apiKey: host.resolver(model, sessionId, () => resetAccountScopedProviderSessionState(providerSessionState)),
 		sessionId,
 		promptCacheKey: sessionId,
 		providerSessionState,
-		metadata: outer.metadataResolver?.(member.model.provider) ?? outer.metadata,
-		reasoning: member.effort ?? outer.reasoning,
-		maxTokens: member.maxTokens ?? outer.maxTokens,
+		metadata: outer.metadataResolver?.(model.provider) ?? outer.metadata,
+		reasoning: outer.reasoning,
+		maxTokens: outer.maxTokens,
 	};
-	if (member.reasoningOff) options.disableReasoning = true;
 	return options;
 }

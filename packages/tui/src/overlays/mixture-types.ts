@@ -197,6 +197,8 @@ export type MixtureCheckpointReason = "hop" | "decision" | "steering" | "abort" 
 
 export interface MixtureDecision {
 	kind: "route" | "terminate" | "steering" | "verdict";
+	/** The decision's short phrase for the trace title. */
+	outcome: string;
 	answer: Answer;
 	confidence?: number;
 	/** `${provider}/${model}` of the judge that answered. */
