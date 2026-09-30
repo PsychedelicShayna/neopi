@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { __internalsForTesting, withFileLock } from "../src/file-lock";
+import { __internalsForTesting, acquireFileLock, type FileLockHandle, withFileLock } from "../src/file-lock";
 import { isEnoent } from "../src/fs-error";
 import { removeWithRetries } from "../src/temp";
 
@@ -54,6 +54,50 @@ describe("native file-lock ownership", () => {
 			entered = true;
 		});
 		expect(entered).toBe(true);
+	});
+
+	test("a live process takes over from a SIGSTOPped owner and fences its stale lease", async () => {
+		const root = await mkRoot();
+		const target = path.join(root, "stopped-owner.json");
+		const originalPid = __internalsForTesting.cooperativeLockIO.pid;
+		const originalReadProcessStat = __internalsForTesting.cooperativeLockIO.readProcessStat;
+		let currentPid = 101;
+		const states = new Map<number, string>([
+			[101, "S"],
+			[202, "S"],
+		]);
+		const starts = new Map<number, string>([
+			[101, "1001"],
+			[202, "2002"],
+		]);
+		const stat = (pid: number) => {
+			const fields = Array.from({ length: 20 }, () => "0");
+			fields[0] = states.get(pid) ?? "X";
+			fields[19] = starts.get(pid) ?? "0";
+			return `${pid} (fake process) ${fields.join(" ")}`;
+		};
+		__internalsForTesting.cooperativeLockIO.pid = () => currentPid;
+		__internalsForTesting.cooperativeLockIO.readProcessStat = async pid => stat(pid);
+
+		let originalOwner: FileLockHandle | undefined;
+		let successor: FileLockHandle | undefined;
+		try {
+			originalOwner = await acquireFileLock(target, { retries: 1, takeoverStoppedOwner: true });
+			currentPid = 202;
+			await expect(acquireFileLock(target, { retries: 1, takeoverStoppedOwner: true })).rejects.toThrow(
+				"Failed to acquire lock",
+			);
+
+			states.set(101, "T");
+			successor = await acquireFileLock(target, { retries: 1, takeoverStoppedOwner: true });
+			expect(originalOwner.isOwner?.()).toBe(false);
+			expect(successor.isOwner?.()).toBe(true);
+		} finally {
+			successor?.release();
+			originalOwner?.release();
+			__internalsForTesting.cooperativeLockIO.pid = originalPid;
+			__internalsForTesting.cooperativeLockIO.readProcessStat = originalReadProcessStat;
+		}
 	});
 
 	test("process death hands ownership to B while excluding C", async () => {

@@ -1203,6 +1203,11 @@ export class Agent {
 		this.#state.tools = t;
 	}
 
+	/** Set the absolute wall-clock deadline used by subsequent model calls. */
+	setDeadline(deadline: number | undefined): void {
+		this.#deadline = deadline;
+	}
+
 	replaceMessages(ms: AgentMessage[]) {
 		// New array assignment is intentional: caller-owned `ms` may be mutated
 		// after handoff; snapshot it so external mutations cannot leak in.

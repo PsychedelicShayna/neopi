@@ -560,13 +560,14 @@ export class ChroniclerStore {
 	 * together. Everything before the rename leaves the batch's entries
 	 * unprocessed; nothing after it can turn a committed batch into a retry.
 	 */
-	async commitBatch(batch: CaptureBatch): Promise<void> {
+	async commitBatch(batch: CaptureBatch, assertPublicationOwner?: () => void): Promise<void> {
 		this.#assertUsable();
 		this.#assertOwned(batch);
 		if (this.#committedBatches.has(batch)) {
 			throw new Error(`Chronicler batch ${batch.id} is already committed`);
 		}
 		if (batch.revoked) throw new Error(`Chronicler batch ${batch.id} was revoked`);
+		assertPublicationOwner?.();
 		if (!batch.finalized) throw new Error(`Chronicler batch ${batch.id} was not finalized by the capture pass`);
 		if (this.#committedBatchIds.has(batch.id)) {
 			throw new ChroniclerCorruptionError(`batch id ${batch.id} is already committed on disk`, batch.id);
@@ -591,6 +592,7 @@ export class ChroniclerStore {
 				`${JSON.stringify(checkpoint, null, "\t")}\n`,
 			);
 			await this.#publish(staging, destination, checkpoint, () => {
+				assertPublicationOwner?.();
 				if (batch.revoked) {
 					throw new Error(`Chronicler batch ${batch.id} was revoked before publication`);
 				}

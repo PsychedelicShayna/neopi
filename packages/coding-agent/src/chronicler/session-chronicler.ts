@@ -155,6 +155,17 @@ const CONTEXT_BUDGET_FRACTION = 0.7;
 const MAX_CONSECUTIVE_FAILURES = 3;
 /** Backoff before each retry of the same unseen prefix. */
 const RETRY_BACKOFF_MS = [2_000, 4_000];
+/** Abort a model attempt after this long without any streamed assistant event. */
+const STREAM_STALL_MS = 60 * 60 * 1_000;
+/** Hard per-attempt deadline, slightly beyond the resettable idle watchdog. */
+const ATTEMPT_DEADLINE_MS = 65 * 60 * 1_000;
+
+const chroniclerTimerIO = {
+	setTimeout: (callback: () => void, delayMs: number): Timer => setTimeout(callback, delayMs),
+	clearTimeout: (timer: Timer | undefined): void => clearTimeout(timer),
+};
+
+export const __sessionChroniclerInternalsForTesting = { chroniclerTimerIO };
 /** Default drain deadline for model work at shutdown. */
 const DEFAULT_DRAIN_MS = 20_000;
 /** Recent persisted-message identities kept for the turn-end rendezvous. */
@@ -630,7 +641,7 @@ export class SessionChronicler {
 
 		let attempt = 0;
 		while (true) {
-			if (this.#generation !== binding.gen) return "revoked";
+			if (this.#generation !== binding.gen || !this.#ownsLease(binding)) return "revoked";
 
 			const outcome = await this.#runAttempt(binding, selected.entries, selected.requestText);
 			if (outcome.kind === "committed") return "committed";
@@ -697,14 +708,36 @@ export class SessionChronicler {
 				timestamp: Date.now(),
 			};
 
+			let stalled = false;
+			let watchdog: Timer | undefined;
+			const armWatchdog = () => {
+				chroniclerTimerIO.clearTimeout(watchdog);
+				watchdog = chroniclerTimerIO.setTimeout(() => {
+					stalled = true;
+					binding.agent.abort("Chronicler stream stalled");
+				}, STREAM_STALL_MS);
+			};
+			const stopWatching = binding.agent.subscribe(event => {
+				if (event.type === "message_update") armWatchdog();
+			});
+			binding.agent.setDeadline(Date.now() + ATTEMPT_DEADLINE_MS);
+			armWatchdog();
 			try {
 				await Promise.race([binding.agent.prompt([request]), this.#deadlineSignal.promise]);
 			} catch (error) {
-				if (this.#generation !== binding.gen || batch.revoked) return { kind: "revoked" };
-				return { kind: "failed", error: errorText(error) };
+				if (this.#generation !== binding.gen || batch.revoked || !this.#ownsLease(binding)) {
+					return { kind: "revoked" };
+				}
+				return { kind: "failed", error: stalled ? "model stream stalled" : errorText(error) };
+			} finally {
+				chroniclerTimerIO.clearTimeout(watchdog);
+				stopWatching();
+				binding.agent.setDeadline(undefined);
 			}
 
-			if (this.#generation !== binding.gen || batch.revoked) return { kind: "revoked" };
+			if (this.#generation !== binding.gen || batch.revoked || !this.#ownsLease(binding)) {
+				return { kind: "revoked" };
+			}
 
 			const failure = this.#passFailure(binding.agent, batch);
 			if (failure) return { kind: "failed", error: failure };
@@ -712,7 +745,9 @@ export class SessionChronicler {
 			// Publication starts here. A fence landing before the store's pre-rename
 			// check revokes this batch and the rename never happens; a fence landing
 			// after it settles in this frozen root and is never turned into a retry.
-			const publication = binding.store.commitBatch(batch);
+			const publication = binding.store.commitBatch(batch, () => {
+				if (!this.#ownsLease(binding)) throw new Error("Chronicler ownership was taken over");
+			});
 			try {
 				await publication;
 			} catch (error) {
@@ -721,7 +756,9 @@ export class SessionChronicler {
 				// batch never published, so this is retryable — unless the committed
 				// data itself disagrees, which halts.
 				if (isChroniclerCorruption(error)) return { kind: "corruption", error: errorText(error) };
-				if (this.#generation !== binding.gen || batch.revoked) return { kind: "revoked" };
+				if (this.#generation !== binding.gen || batch.revoked || !this.#ownsLease(binding)) {
+					return { kind: "revoked" };
+				}
 				return { kind: "failed", error: errorText(error) };
 			}
 			return { kind: "committed" };
@@ -911,7 +948,8 @@ export class SessionChronicler {
 			!current ||
 			current.gen !== this.#generation ||
 			!this.#sameDescriptor(current.descriptor, descriptor) ||
-			current.modelString !== selection.modelString;
+			current.modelString !== selection.modelString ||
+			!this.#ownsLease(current);
 		if (!rebind) return current;
 
 		// Serialized on the owner chain, so any previous prompt/publication has
@@ -923,7 +961,7 @@ export class SessionChronicler {
 		const storeRoot = `${descriptor.artifactsDir}/chronicler`;
 		let lease: FileLockHandle;
 		try {
-			lease = await acquireFileLock(storeRoot, { retries: 1 });
+			lease = await acquireFileLock(storeRoot, { retries: 1, takeoverStoppedOwner: true });
 		} catch {
 			// Another process owns this session's store; retry on the next scan so
 			// capture resumes here once that process exits (the OS drops its lease).
@@ -953,6 +991,10 @@ export class SessionChronicler {
 		} finally {
 			if (!bound) lease.release();
 		}
+	}
+
+	#ownsLease(binding: ChroniclerBinding): boolean {
+		return binding.lease.isOwner?.() ?? true;
 	}
 
 	#completeBinding(
@@ -1000,7 +1042,7 @@ export class SessionChronicler {
 			lease,
 		};
 		agent.addBeforeModelCallHook(() => {
-			if (this.#generation !== gen || this.#deadlineExpired || this.#cleanedUp) {
+			if (this.#generation !== gen || this.#deadlineExpired || this.#cleanedUp || !this.#ownsLease(binding)) {
 				throw new Error("Chronicler binding was revoked");
 			}
 		});
