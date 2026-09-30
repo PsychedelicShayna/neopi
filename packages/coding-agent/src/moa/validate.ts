@@ -15,14 +15,14 @@ import {
 } from "@oh-my-pi/pi-tui/overlays/mixture-types";
 import type { Settings } from "../config/settings";
 import { DEFAULT_EDGE_ENVELOPE, type EnvelopeContext, isInlineTemplate, renderEnvelope } from "./envelopes";
-import { cfgMoaHardMaxHops } from "./settings";
+import { cfgMoaHardMaxHops, cfgMoaOnLimit } from "./settings";
 import type { MixtureIssue, ResolvedMixture } from "./types";
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
 const MEMBER_ID_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
 const KNOWN_PARTS = new Set<string>(TRANSIT_PART_NAMES);
 /** The milestone this build implements; the gate names the one that adds a feature. */
-const IMPLEMENTED_MILESTONE = "M1";
+const IMPLEMENTED_MILESTONE = "M2";
 
 // E23 size bounds (spec §11). Code constants, never settings: a project file must not be able to
 // raise them. Registration validates every discovered definition at startup, so the work a
@@ -299,7 +299,7 @@ export function hasCycle(successors: ReadonlyMap<string, readonly string[]>): bo
 	return false;
 }
 
-function capabilityGate(resolved: ResolvedMixture, graph: MixtureGraph, errors: MixtureIssue[]): void {
+function capabilityGate(resolved: ResolvedMixture, errors: MixtureIssue[]): void {
 	const definition = resolved.definition;
 	const gate = (path: string, feature: string, milestone: string) =>
 		errors.push({
@@ -308,39 +308,85 @@ function capabilityGate(resolved: ResolvedMixture, graph: MixtureGraph, errors: 
 			message: `${feature} arrives with ${milestone}; this build implements ${IMPLEMENTED_MILESTONE}`,
 		});
 	definition.members.forEach((member, index) => {
-		const path = `members[${index}]`;
-		if (member.kind === "verdict") {
-			gate(path, `verdict member ${member.id}`, "M2");
-			return;
-		}
-		if (member.route) gate(`${path}.route`, `route on member ${member.id}`, "M2");
-		if (member.terminate) gate(`${path}.terminate`, `terminate on member ${member.id}`, "M2");
+		if (member.kind === "verdict") return;
 		const resolvedMember = resolved.members[member.id];
 		if (resolvedMember?.kind === "model" && resolvedMember.toolPolicy !== false) {
-			gate(`${path}.tools`, `tools on member ${member.id} (set tools = false)`, "M3");
-		}
-		if ((graph.outgoing.get(member.id)?.length ?? 0) > 1) {
-			gate(path, `more than one outgoing edge from ${member.id} (routing)`, "M2");
+			gate(`members[${index}].tools`, `tools on member ${member.id} (set tools = false)`, "M3");
 		}
 	});
 	definition.edges.forEach((edge, index) => {
-		const path = `edges[${index}]`;
-		const id = mixtureEdgeId(edge);
-		if (isFanoutEdge(edge)) gate(path, `fan-out edge ${id}`, "M4");
-		if (edge.x.transcript) gate(`${path}.x.transcript`, `x.transcript on edge ${id}`, "M2");
-		if (edge.x.toolTrace) gate(`${path}.x.tool_trace`, `x.tool_trace on edge ${id}`, "M2");
-		if (edge.maxTraversals !== undefined) gate(`${path}.max_traversals`, `max_traversals on edge ${id}`, "M2");
+		if (isFanoutEdge(edge)) gate(`edges[${index}]`, `fan-out edge ${mixtureEdgeId(edge)}`, "M4");
 	});
-	if (hasCycle(graph.successors)) gate("edges", "back-edges (cycles)", "M2");
 	if (definition.steering) gate("steering", "steering targets", "M3");
-	const limits = definition.limits;
-	if (limits) {
-		if (limits.budgetUsd !== undefined) gate("limits.budget_usd", "limits.budget_usd", "M2");
-		if (limits.wallClockMinutes !== undefined) gate("limits.wall_clock_minutes", "limits.wall_clock_minutes", "M2");
-		if (limits.onLimit !== undefined) gate("limits.on_limit", "limits.on_limit", "M2");
-		if (limits.limitTarget !== undefined) gate("limits.limit_target", "limits.limit_target", "M2");
-	}
 	if (definition.serve) gate("serve", "serving a mixture through the auth-gateway", "M6");
+}
+
+/** Iterative Tarjan walk: cycles warn only if they have no exit control. */
+function unboundedCycles(graph: MixtureGraph, edges: readonly MixtureEdge[]): string[][] {
+	const order = new Map<string, number>();
+	const low = new Map<string, number>();
+	const active = new Set<string>();
+	const nodes: string[] = [];
+	const cycles: string[][] = [];
+	let nextOrder = 0;
+	for (const root of graph.members.keys()) {
+		if (order.has(root)) continue;
+		const frames: { id: string; cursor: number; parent?: string }[] = [{ id: root, cursor: 0 }];
+		while (frames.length > 0) {
+			const frame = frames[frames.length - 1]!;
+			if (!order.has(frame.id)) {
+				order.set(frame.id, nextOrder);
+				low.set(frame.id, nextOrder++);
+				nodes.push(frame.id);
+				active.add(frame.id);
+			}
+			const successors = graph.successors.get(frame.id) ?? [];
+			if (frame.cursor < successors.length) {
+				const target = successors[frame.cursor++]!;
+				if (!graph.members.has(target)) continue;
+				if (!order.has(target)) {
+					frames.push({ id: target, cursor: 0, parent: frame.id });
+				} else if (active.has(target)) {
+					low.set(frame.id, Math.min(low.get(frame.id)!, order.get(target)!));
+				}
+				continue;
+			}
+			frames.pop();
+			if (frame.parent) low.set(frame.parent, Math.min(low.get(frame.parent)!, low.get(frame.id)!));
+			if (low.get(frame.id) !== order.get(frame.id)) continue;
+			const component: string[] = [];
+			let id: string;
+			do {
+				id = nodes.pop()!;
+				active.delete(id);
+				component.push(id);
+			} while (id !== frame.id);
+			if (component.length === 1 && !successors.includes(frame.id)) continue;
+			const members = new Set(component);
+			const bounded =
+				component.some(id => {
+					const member = graph.members.get(id);
+					return member?.kind !== "verdict" && member?.terminate !== undefined;
+				}) ||
+				edges.some(
+					edge =>
+						members.has(edge.from) &&
+						edgeTargets(edge).some(target => members.has(target)) &&
+						edge.maxTraversals !== undefined,
+				) ||
+				component.some(id => {
+					const member = graph.members.get(id);
+					return (
+						member !== undefined &&
+						member.kind !== "verdict" &&
+						member.route !== undefined &&
+						(graph.successors.get(id) ?? []).some(target => !members.has(target))
+					);
+				});
+			if (!bounded) cycles.push(component);
+		}
+	}
+	return cycles;
 }
 
 function templateIssues(template: string, path: string, errors: MixtureIssue[]): boolean {
@@ -537,6 +583,88 @@ export function validateMixture(resolved: ResolvedMixture, ctx: ValidateMixtureC
 			});
 		});
 	}
+	// E11/E12/E18: decisions must have a valid graph and meaningful rubrics.
+	definition.members.forEach((member, index) => {
+		const outgoing = graph.outgoing.get(member.id) ?? [];
+		const path = `members[${index}]`;
+		if (member.kind === "verdict") {
+			if (
+				(member.question.type === "choice" && Object.keys(member.question.criteria).length < 2) ||
+				(member.question.type === "score" && member.question.criteria.length < 2)
+			) {
+				errors.push({
+					code: "verdict.question",
+					path: `${path}.question`,
+					message: `verdict ${member.id}: choice or score criteria require at least two options`,
+				});
+			}
+			return;
+		}
+		if (outgoing.length > 1 && !member.route) {
+			errors.push({
+				code: "route.required",
+				path,
+				message: `member ${member.id} needs a route for multiple outgoing edges`,
+			});
+		}
+		if (!member.route) return;
+		if (outgoing.length === 0) {
+			errors.push({
+				code: "route.options",
+				path: `${path}.route`,
+				message: `member ${member.id} has no edges to route to`,
+			});
+		}
+		const fallback = member.route.fallback;
+		if (fallback && fallback !== "pause" && !outgoing.some(edge => mixtureEdgeId(edge) === fallback)) {
+			errors.push({
+				code: "route.fallback",
+				path: `${path}.route.fallback`,
+				message: `route fallback "${fallback}" is not an outgoing edge or pause`,
+			});
+		}
+		if (outgoing.length > 1) {
+			for (const edge of outgoing) {
+				if (edge.when !== undefined) continue;
+				warnings.push({
+					code: "route.when.missing",
+					path: `edges[${definition.edges.indexOf(edge)}].when`,
+					message: `edge ${mixtureEdgeId(edge)} has no route rubric`,
+				});
+			}
+		}
+	});
+
+	// E13: each unbounded strongly connected component gets one warning.
+	for (const ids of unboundedCycles(graph, definition.edges)) {
+		warnings.push({ code: "cycle.unbounded", path: "edges", message: `cycle ${ids.join(", ")} has no exit control` });
+	}
+
+	// E14: snapcompact frames require vision at the target.
+	definition.edges.forEach((edge, index) => {
+		if (typeof edge.x.transcript !== "object" || edge.x.transcript.optimize !== "snapcompact") return;
+		if (isFanoutEdge(edge)) return;
+		const member = resolved.members[edge.to];
+		if (member?.kind === "model" && !member.model.input.includes("image")) {
+			errors.push({
+				code: "x.transcript.snapcompact.vision",
+				path: `edges[${index}].x.transcript`,
+				message: `target ${edge.to} does not accept images for snapcompact`,
+			});
+		}
+	});
+
+	// E15: judge-on-limit must name the final model member explicitly.
+	if ((definition.limits?.onLimit ?? cfgMoaOnLimit.get(ctx.settings)) === "judge") {
+		const target = definition.limits?.limitTarget;
+		if (!target || !graph.members.has(target) || graph.members.get(target)?.kind === "verdict") {
+			errors.push({
+				code: "limits.target",
+				path: "limits.limit_target",
+				message: `on_limit = judge requires a model-member limits.limit_target`,
+			});
+		}
+	}
 
 	// E15 limits.exceeds
 	const maxHops = definition.limits?.maxHops;
@@ -563,6 +691,6 @@ export function validateMixture(resolved: ResolvedMixture, ctx: ValidateMixtureC
 		}
 	});
 
-	capabilityGate(resolved, graph, errors);
+	capabilityGate(resolved, errors);
 	return { errors, warnings };
 }

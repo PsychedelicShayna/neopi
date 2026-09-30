@@ -188,6 +188,7 @@ function createHub(options: {
 			},
 			onUnassign: options.callbacks?.onUnassign ?? onUnassign,
 			onLoginRequest: options.callbacks?.onLoginRequest ?? onLoginRequest,
+			onDefineMixture: options.callbacks?.onDefineMixture,
 			onCycleOrderChange: options.callbacks?.onCycleOrderChange,
 			onFallbackChainChange: options.callbacks?.onFallbackChainChange ?? onFallbackChainChange,
 			onEffortRulesChange:
@@ -221,6 +222,59 @@ describe("ModelHub", () => {
 		for (const hub of openHubs.splice(0)) {
 			hub.dispose();
 		}
+	});
+
+	test("keeps the mixture provider available with zero models and opens its creation action", () => {
+		const create = vi.fn();
+		const { hub } = createHub({
+			models: [],
+			hub: {
+				initialProviderId: "mixture",
+				pinnedProviders: [
+					{
+						id: "mixture",
+						label: "Mixture of Agents",
+						action: { label: "+ Define mixture model…", onSelect: create },
+					},
+				],
+			},
+		});
+		expect(normalize(hub.render(120))).toContain("Mixture of Agents");
+		expect(normalize(hub.render(120))).toContain("+ Define mixture model");
+		hub.handleInput("\r");
+		hub.handleInput("\r");
+		expect(create).toHaveBeenCalledTimes(1);
+	});
+
+	test("edits a mixture row without assigning it and still allows model assignment", () => {
+		const edit = vi.fn();
+		const create = vi.fn();
+		const { hub, onAssign } = createHub({
+			models: [makeModel("mixture", "graph")],
+			hub: {
+				initialProviderId: "mixture",
+				pinnedProviders: [
+					{
+						id: "mixture",
+						label: "Mixture of Agents",
+						action: { label: "+ Define mixture model…", onSelect: create },
+					},
+				],
+			},
+			callbacks: { onDefineMixture: edit },
+		});
+		hub.handleInput("\r");
+		hub.handleInput(DOWN);
+		hub.handleInput("\r");
+		expect(create).toHaveBeenCalledTimes(1);
+		hub.handleInput(UP);
+		hub.handleInput("e");
+		expect(edit).toHaveBeenCalledWith("graph");
+		expect(onAssign).not.toHaveBeenCalled();
+		hub.handleInput("\r");
+		hub.handleInput("\r");
+		hub.handleInput("\r");
+		expect(onAssign).toHaveBeenCalled();
 	});
 
 	describe("role chips and roles view", () => {

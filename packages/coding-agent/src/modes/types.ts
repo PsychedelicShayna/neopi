@@ -517,6 +517,8 @@ export interface InteractiveModeContext {
 	showUsageDashboard(reports: UsageReport[]): void;
 	showAdvisorConfigure(): void;
 	showChainConfigure(): void;
+	/** Edit, save, apply, and activate mixtures in the fullscreen graph configurator. */
+	showMixtureConfigure(name?: string): void;
 	/** Fullscreen persona editor: main system-prompt personas or live-voice personas. */
 	showPersonaConfigure(scope: PersonaScope): void;
 	/** Point the composer at a REPL kernel, or back at the agent. */

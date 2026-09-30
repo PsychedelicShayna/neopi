@@ -8,10 +8,12 @@ import { isPromise } from "node:util/types";
 import type { AgentEvent, AgentMessage, AgentToolResult, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
+import type { MixtureConfigScope, MixtureDefinition } from "@oh-my-pi/pi-tui/overlays/mixture-types";
 import { isRecord, ptree, readJsonl } from "@oh-my-pi/pi-utils";
 import type { FileSink } from "bun";
 import type { ChatModeSetting, ChatModeState } from "../../chat/chat-mode";
 import type { BashResult } from "../../exec/bash-executor";
+import type { MixtureIssue } from "../../moa/types";
 import type { AgentSessionEvent, SessionStats } from "../../session/agent-session";
 import type { CacheWarmingMode } from "../../session/cache-warmer";
 import type { SessionEntry, SessionTreeNode } from "../../session/session-entries";
@@ -932,6 +934,30 @@ export class RpcClient {
 	async getAvailableModels(): Promise<ModelInfo[]> {
 		const response = await this.#send({ type: "get_available_models" });
 		return this.#getData<{ models: ModelInfo[] }>(response).models;
+	}
+
+	/** Create and immediately register a mixture in this RPC session's workspace. */
+	async createMixture(
+		scope: MixtureConfigScope,
+		definition: MixtureDefinition,
+	): Promise<{ name: string; path: string }> {
+		const response = await this.#send({ type: "create_mixture", scope, definition });
+		return this.#getData(response);
+	}
+
+	/** Include invalid definitions and their validation issues, not only selectable models. */
+	async listMixtures(): Promise<{
+		mixtures: Array<{ name: string; path: string; registered: boolean; errors: MixtureIssue[] }>;
+		warnings: string[];
+	}> {
+		const response = await this.#send({ type: "list_mixtures" });
+		return this.#getData(response);
+	}
+
+	/** Select a registered mixture scoped to this session's workspace. */
+	async selectMixture(name: string): Promise<Model> {
+		const response = await this.#send({ type: "select_mixture", name });
+		return this.#getData(response);
 	}
 
 	/**

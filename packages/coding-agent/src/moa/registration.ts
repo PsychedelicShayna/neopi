@@ -3,14 +3,26 @@
  * validated; one with errors (or refused by the capability gate) is logged
  * and never becomes a selectable model.
  */
-import { logger } from "@oh-my-pi/pi-utils";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import type { MixtureDefinition, MixturesConfigDoc } from "@oh-my-pi/pi-tui/overlays/mixture-types";
+import { isEnoent, logger, withFileLock } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
-import { discoverMixtures } from "./config";
+import { configCandidatePaths } from "../advisor/watchdog";
+import { replaceFileAtomically } from "../utils/atomic-file";
+import { discoverMixtures, MIXTURES_FILE_NAME, parseMixturesDoc } from "./config";
 import { MixtureCatalog, type MixtureScope } from "./provider";
 import { resolveMixture } from "./resolve";
-import type { ResolvedMixture } from "./types";
-import { validateMixture } from "./validate";
+import { serializeMixturesConfig } from "./toml";
+import type { MixtureIssue, ResolvedMixture } from "./types";
+import {
+	prepareDocumentPresets,
+	type PreparedDocumentPresets,
+	type MixtureValidation,
+	validateMixture,
+	MAX_FILE_BYTES,
+} from "./validate";
 
 export interface MixtureRegistrationContext {
 	cwd: string;
@@ -19,18 +31,141 @@ export interface MixtureRegistrationContext {
 	settings: Settings;
 }
 
+export function checkMixture(
+	definition: MixtureDefinition,
+	ctx: MixtureRegistrationContext,
+	preparedPresets: PreparedDocumentPresets,
+	names: readonly string[],
+): MixtureValidation & { resolved: ResolvedMixture } {
+	const resolved = resolveMixture(definition, {
+		registry: ctx.registry,
+		settings: ctx.settings,
+		preparedPresets,
+	});
+	return { resolved, ...validateMixture(resolved, { settings: ctx.settings, names }) };
+}
+
+export interface MixtureDocValidation {
+	/** Definitions that passed all registration checks. */
+	resolved: ResolvedMixture[];
+	errors: MixtureIssue[];
+	warnings: MixtureIssue[];
+}
+
+/** Validate the exact draft being saved; never replace a file with an unregisterable definition. */
+export function validateMixturesConfigDoc(
+	doc: MixturesConfigDoc,
+	ctx: MixtureRegistrationContext,
+): MixtureDocValidation {
+	const prepared = prepareDocumentPresets(doc.envelopes, doc.roles);
+	const names = doc.mixtures.map(mixture => mixture.name);
+	const result: MixtureDocValidation = { resolved: [], errors: [], warnings: [] };
+	if (names.length === 0 && prepared.sizeIssue) result.errors.push(prepared.sizeIssue);
+	for (const [index, definition] of doc.mixtures.entries()) {
+		const checked = checkMixture(definition, ctx, prepared, names);
+		for (const issue of checked.errors) result.errors.push({ ...issue, path: `mixtures[${index}].${issue.path}` });
+		for (const issue of checked.warnings)
+			result.warnings.push({ ...issue, path: `mixtures[${index}].${issue.path}` });
+		if (checked.errors.length === 0) result.resolved.push(checked.resolved);
+	}
+	return result;
+}
+
+/** Read the exact source bytes without following a file symlink; missing files have a null CAS hash. */
+export async function readMixtureDefinitionFile(
+	sourcePath: string,
+): Promise<{ doc: MixturesConfigDoc; hash: string | null }> {
+	let handle: fs.FileHandle;
+	try {
+		handle = await fs.open(sourcePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+	} catch (error) {
+		if (isEnoent(error)) return { doc: { mixtures: [] }, hash: null };
+		throw error;
+	}
+	try {
+		const stat = await handle.stat();
+		if (!stat.isFile() || stat.size > MAX_FILE_BYTES)
+			throw new Error(`${sourcePath}: expected a regular MIXTURES.toml under ${MAX_FILE_BYTES} bytes`);
+		const bytes = await handle.readFile();
+		const hash = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+		const doc = parseMixturesDoc(Bun.TOML.parse(bytes.toString("utf8")), sourcePath);
+		if (doc.warnings?.length) throw new Error(`${sourcePath}: ${doc.warnings.join("; ")}`);
+		return { doc, hash };
+	} finally {
+		await handle.close();
+	}
+}
+
+/**
+ * Validate and publish a source document as one locked compare-and-swap.
+ * TUI callers save only; headless/deck callers can apply the new roster immediately.
+ */
+export async function saveMixtureDefinition(
+	args: MixtureRegistrationContext & {
+		sourcePath: string;
+		doc: MixturesConfigDoc;
+		baseHash: string | null;
+		apply?: boolean;
+	},
+): Promise<{ hash: string | null; validation: MixtureDocValidation; registered: boolean }> {
+	const { sourcePath, doc, baseHash, apply = false, ...ctx } = args;
+	const resolvedPath = path.resolve(sourcePath);
+	if (!configCandidatePaths(ctx.cwd, ctx.agentDir, [MIXTURES_FILE_NAME]).candidates.includes(resolvedPath))
+		throw new Error(`${sourcePath} is not on this workspace's mixture config search path`);
+	if (doc.warnings?.length) throw new Error(`${sourcePath}: ${doc.warnings.join("; ")}`);
+	const validation = validateMixturesConfigDoc(doc, ctx);
+	if (validation.errors.length > 0) {
+		const issue = validation.errors[0]!;
+		throw new Error(`${issue.path}: ${issue.message}`);
+	}
+	const content = serializeMixturesConfig(doc);
+	if (Buffer.byteLength(content, "utf8") > MAX_FILE_BYTES)
+		throw new Error(`${sourcePath}: serialized mixture config exceeds ${MAX_FILE_BYTES} bytes`);
+	await fs.mkdir(path.dirname(resolvedPath), { recursive: true });
+	const hash = await withFileLock(resolvedPath, async () => {
+		const current = await readMixtureDefinitionFile(resolvedPath);
+		if (current.hash !== baseHash) throw new Error(`${sourcePath} changed since it was loaded; reload before saving`);
+		if (!content) {
+			if (current.hash !== null) await fs.unlink(resolvedPath);
+			return null;
+		}
+		const staged = `${resolvedPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+		try {
+			const handle = await fs.open(
+				staged,
+				fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW,
+				0o600,
+			);
+			try {
+				await handle.writeFile(content);
+				await handle.sync();
+			} finally {
+				await handle.close();
+			}
+			await replaceFileAtomically(staged, resolvedPath);
+		} finally {
+			await fs.rm(staged, { force: true });
+		}
+		return new Bun.CryptoHasher("sha256").update(content).digest("hex");
+	});
+	if (!apply) return { hash, validation, registered: false };
+	const roster = await discoverRegistrableMixtures(ctx);
+	const scope = MixtureCatalog.for(ctx.registry).scope(ctx.cwd, ctx.agentDir);
+	scope.setRoster(roster);
+	return {
+		hash,
+		validation,
+		registered: validation.resolved.every(item => scope.find(item.definition.name)?.revision === item.revision),
+	};
+}
+
 /** Discover, resolve, and validate; returns the mixtures that may be registered. */
 export async function discoverRegistrableMixtures(ctx: MixtureRegistrationContext): Promise<ResolvedMixture[]> {
 	const discovered = await discoverMixtures(ctx.cwd, ctx.agentDir);
 	const names = discovered.mixtures.map(entry => entry.definition.name);
 	const registrable: ResolvedMixture[] = [];
 	for (const entry of discovered.mixtures) {
-		const resolved = resolveMixture(entry.definition, {
-			registry: ctx.registry,
-			settings: ctx.settings,
-			preparedPresets: entry.preparedPresets,
-		});
-		const { errors, warnings } = validateMixture(resolved, { settings: ctx.settings, names });
+		const { resolved, errors, warnings } = checkMixture(entry.definition, ctx, entry.preparedPresets, names);
 		const mixture = entry.definition.name;
 		for (const issue of warnings) {
 			logger.warn("Mixture definition warning", { mixture, file: entry.path, ...issue });
@@ -116,6 +251,11 @@ export class MixtureWorkspace {
 	/** The scope of the workspace the session is in now. */
 	get scope(): MixtureScope {
 		return this.#scope;
+	}
+
+	/** Config search root retained by this session, including SDK-supplied agent directories. */
+	get agentDir(): string | undefined {
+		return this.#ctx.agentDir;
 	}
 
 	/** Keep the live session's selected model in sync with shared registry metadata. */

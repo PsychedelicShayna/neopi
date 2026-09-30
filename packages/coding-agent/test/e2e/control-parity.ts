@@ -71,6 +71,8 @@ const refusal: Record<string, RegExp> = {
 	handoff: /Nothing to hand off/i,
 	login: /provider|unknown|not/i,
 	open_session: /session|not found|no such|ENOENT/i,
+	create_mixture: /scope must be project or user/,
+	select_mixture: /is not registered in this workspace/,
 };
 
 const fixtures: Record<string, () => Promise<Record<string, unknown>>> = {
@@ -90,6 +92,8 @@ const fixtures: Record<string, () => Promise<Record<string, unknown>>> = {
 	set_approval_handler: async () => ({ handler: "host" }),
 	get_subagent_messages: async () => ({ subagentId: "parity-none" }),
 	set_model: async () => ({ provider: "fake", modelId: "echo-2" }),
+	create_mixture: async () => ({ scope: "parity-invalid", definition: {} }),
+	select_mixture: async () => ({ name: "parity-no-such-mixture" }),
 	set_role: async () => ({ role: "default" }),
 	set_thinking_level: async () => ({ level: "off" }),
 	set_steering_mode: async () => ({ mode: "one-at-a-time" }),

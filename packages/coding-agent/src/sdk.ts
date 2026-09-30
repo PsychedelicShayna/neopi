@@ -5055,6 +5055,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		}
 		credentialNoticeSession = session;
 		session.attachMixtureHost(sessionMixtureHost);
+		sessionMixtureHost.restoreConversation();
 		// A caller-supplied store belongs to the caller (the CLI keeps it in sync itself).
 		if (ownsAuthStorage) createAuthStorageSettingsSync(session, authStorage);
 		// One coalesced prompt rebuild for every prompt input (rule bucketing, the

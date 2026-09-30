@@ -34,6 +34,11 @@ import type { AdvisorConfigScope } from "@oh-my-pi/pi-tui/overlays/advisor-confi
 import { type ChainConfigDeps, ChainConfigOverlayComponent } from "@oh-my-pi/pi-tui/overlays/chain-config";
 import type { ChainConfigScope } from "@oh-my-pi/pi-tui/overlays/chain-types";
 import { chainsConfigFilePath, discoverChains, loadChainsConfigFile, saveChainsConfigFile } from "../../chains/config";
+import { discoverMixtures, mixturesConfigFilePath } from "../../moa/config";
+import { MixtureCatalog } from "../../moa/provider";
+import { discoverRegistrableMixtures, readMixtureDefinitionFile, saveMixtureDefinition } from "../../moa/registration";
+import { type MixtureConfigDeps, MixtureConfigOverlayComponent } from "@oh-my-pi/pi-tui/overlays/mixture-config";
+import type { MixtureConfigScope } from "@oh-my-pi/pi-tui/overlays/mixture-types";
 import { CHAIN_DEFAULT_ROLE, CHAIN_SYSTEM_PROMPT } from "../../chains/runner";
 import { formatModelRoleAlias } from "../../config/model-roles";
 import { showGitOverlay } from "../../cli/git-tui";
@@ -602,6 +607,107 @@ export class SelectorController {
 		})();
 	}
 
+	showMixtureConfigure(name?: string, returnToModelHub = false): void {
+		const cwd = this.ctx.sessionManager.getCwd();
+		const agentDir = this.ctx.session.getMixtureAgentDir() ?? getAgentDir() ?? getProjectDir();
+		void (async () => {
+			let projectDir = cwd;
+			try {
+				projectDir = vcs.repo(cwd)?.root() ?? cwd;
+			} catch {
+				projectDir = cwd;
+			}
+			const dirs = { projectDir, agentDir };
+			const discovered = await discoverMixtures(cwd, agentDir);
+			const selected = name ? discovered.mixtures.find(item => item.definition.name === name) : undefined;
+			const initialScope: MixtureConfigScope =
+				selected?.path === mixturesConfigFilePath("user", dirs) ? "user" : "project";
+			const snapshots = new Map<MixtureConfigScope, string | null>();
+			const readScope = async (scope: MixtureConfigScope) => {
+				const snapshot = await readMixtureDefinitionFile(mixturesConfigFilePath(scope, dirs));
+				snapshots.set(scope, snapshot.hash);
+				return snapshot.doc;
+			};
+			const initialDoc = await readScope(initialScope);
+			const registration = {
+				cwd,
+				agentDir,
+				registry: this.ctx.session.modelRegistry,
+				settings: this.ctx.settings,
+			};
+			const deps: MixtureConfigDeps = {
+				getAvailableModels: () => this.ctx.session.getAvailableModels(),
+				browserSource: createModelBrowserSource(this.ctx.settings),
+				externalEditor: text => {
+					const command = getEditorCommand();
+					return command ? openInEditor(command, text) : Promise.resolve(null);
+				},
+				availableToolNames: this.ctx.session.getAdvisorAvailableToolNames(),
+				activeName: () => (this.ctx.session.model?.api === "mixture" ? this.ctx.session.model.id : undefined),
+			};
+			const overlay = new MixtureConfigOverlayComponent(
+				this.ctx.ui,
+				deps,
+				initialScope,
+				initialDoc,
+				{
+					loadDoc: readScope,
+					save: async (scope, doc) => {
+						const result = await saveMixtureDefinition({
+							...registration,
+							sourcePath: mixturesConfigFilePath(scope, dirs),
+							doc,
+							baseHash: snapshots.get(scope) ?? null,
+						});
+						snapshots.set(scope, result.hash);
+						if (result.validation.warnings.length)
+							this.ctx.showWarning(result.validation.warnings.map(issue => issue.message).join("; "));
+						this.ctx.showStatus(`Saved ${scope} MIXTURES.toml; press a to apply changes.`);
+					},
+					apply: async () => {
+						const roster = await discoverRegistrableMixtures(registration);
+						const current = this.ctx.session.model;
+						if (current?.api === "mixture" && !roster.some(item => item.definition.name === current.id)) {
+							const fallback = this.ctx.session.getAvailableModels().find(model => model.api !== "mixture");
+							if (!fallback) throw new Error("Select a physical model before removing the active mixture.");
+							await this.ctx.session.setModel(fallback);
+						}
+						MixtureCatalog.for(registration.registry).scope(cwd, agentDir).setRoster(roster);
+						this.ctx.session.emitNotice("info", `${roster.length} mixtures registered`);
+						this.ctx.ui.requestRender();
+					},
+					activate: async selectedName => {
+						if (!this.ctx.session.getRegisteredMixture(selectedName))
+							throw new Error(`Mixture ${selectedName} is not registered in this workspace.`);
+						const model = registration.registry.find("mixture", selectedName);
+						if (!model) throw new Error(`Mixture ${selectedName} is unavailable in the model picker.`);
+						await this.ctx.session.setModel(model);
+						this.ctx.showStatus(`Using mixture/${selectedName}`);
+					},
+					close: () => {
+						handle.hide();
+						this.focusActiveEditorArea();
+						this.ctx.ui.requestRender();
+						if (returnToModelHub) this.#showModelHub({ initialProviderId: "mixture" });
+					},
+					requestRender: () => this.ctx.ui.requestRender(),
+					notify: message => this.ctx.showStatus(message),
+					warn: message => this.ctx.showWarning(message),
+				},
+				name,
+			);
+			const handle = this.ctx.ui.showOverlay(overlay, {
+				anchor: "bottom-center",
+				width: "100%",
+				maxHeight: "100%",
+				margin: 0,
+				fullscreen: true,
+			});
+			this.ctx.ui.setFocus(overlay);
+			this.ctx.ui.requestRender();
+		})().catch(error => this.ctx.showError(error instanceof Error ? error.message : String(error)));
+	}
+
 	showPersonaConfigure(scope: PersonaScope): void {
 		void (async () => {
 			const host = sessionPersonaHost(this.ctx.session, {
@@ -1151,6 +1257,10 @@ export class SelectorController {
 					}
 				},
 
+				onDefineMixture: name => {
+					done();
+					this.showMixtureConfigure(name, true);
+				},
 				onLoginRequest: providerId => {
 					done();
 					void this.#loginThenReopenModelHub(providerId);
@@ -1172,6 +1282,19 @@ export class SelectorController {
 				currentSelector: this.ctx.session.model
 					? `${this.ctx.session.model.provider}/${this.ctx.session.model.id}`
 					: undefined,
+				pinnedProviders: [
+					{
+						id: "mixture",
+						label: "Mixture of Agents",
+						action: {
+							label: "+ Define mixture model…",
+							onSelect: () => {
+								done();
+								this.showMixtureConfigure(undefined, true);
+							},
+						},
+					},
+				],
 			},
 		);
 		const overlayHandle = this.#showFullscreenMenu(hub);

@@ -86,6 +86,33 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
+describe("pinned mixture judges", () => {
+	it("uses the pinned online candidate instead of the live judge role", async () => {
+		const settings = Settings.isolated({ modelRoles: { judge: `${LOCAL.provider}/${LOCAL.id}` } });
+		const registry = makeRegistry([LOCAL, ONLINE_BACKUP], { [ONLINE_BACKUP.provider]: "online-key" });
+		const local = vi.spyOn(tinyModelClient, "complete").mockRejectedValue(new Error("unrelated live role"));
+		vi.spyOn(ai, "completeSimple").mockImplementation(async (model, _context, options) => {
+			const response = reply(model, "level: high");
+			options?.onAttempt?.(response);
+			return response;
+		});
+		const judge = new ChainJudge({
+			settings,
+			registry,
+			candidates: [
+				{ model: ONLINE_BACKUP, explicit: true, selector: `${ONLINE_BACKUP.provider}/${ONLINE_BACKUP.id}` },
+			],
+		});
+		const selected = await judge.withCandidate(async (candidate, kind) => {
+			expect(kind).toBe("online");
+			const result = await candidate.judge({ state: "choose level", questions: { level: TIER_QUESTION } });
+			return { model: result.model, answer: result.answers.level.choice };
+		});
+		expect(selected).toEqual({ model: ONLINE_BACKUP.id, answer: "high" });
+		expect(local).not.toHaveBeenCalled();
+	});
+});
+
 describe("ChainJudge", () => {
 	it("falls from a coarse local question to a tiered online question", async () => {
 		const settings = Settings.isolated({

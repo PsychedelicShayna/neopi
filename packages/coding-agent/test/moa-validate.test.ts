@@ -17,6 +17,7 @@ import {
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import type { MixtureDefinition, MixturesConfigDoc } from "@oh-my-pi/pi-tui/overlays/mixture-types";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { COURTROOM_TOML } from "./helpers/moa-setup";
 
 const ENV_KEYS = ["OPENROUTER_API_KEY", "TYPESAFE_API_KEY"];
 const savedEnv = new Map<string, string | undefined>();
@@ -53,6 +54,7 @@ beforeEach(async () => {
 			fakeModel("writer"),
 			fakeModel("editor"),
 			fakeModel("plain", { reasoning: false, supportsTools: false }),
+			fakeModel("other"),
 		],
 	});
 });
@@ -128,7 +130,7 @@ function linear(): MixtureDefinition {
 	return parseDoc(LINEAR).mixtures[0]!;
 }
 
-/** The linear fixture with a route on the writer: a routed graph, gated at M1 but resolved with a judge plan. */
+/** The linear fixture with a route on the writer and a pinned judge plan. */
 function routed(): MixtureDefinition {
 	const definition = linear();
 	const writer = definition.members[0]!;
@@ -231,6 +233,43 @@ describe("validateMixture error codes", () => {
 			"E9",
 			definition => definition.edges.push({ ...definition.edges[0]!, x: { output: true } }),
 		],
+		[
+			"route.required",
+			"members[0]",
+			"E11",
+			definition => definition.edges.push({ id: "alternate", from: "writer", to: "editor", x: { output: true } }),
+		],
+		[
+			"route.options",
+			"members[1].route",
+			"E11",
+			definition => Object.assign(definition.members[1]!, { route: { instructions: "Where?" } }),
+		],
+		[
+			"route.fallback",
+			"members[0].route.fallback",
+			"E11",
+			definition =>
+				Object.assign(definition.members[0]!, { route: { instructions: "Where?", fallback: "nowhere" } }),
+		],
+		[
+			"x.transcript.snapcompact.vision",
+			"edges[0].x.transcript",
+			"E14",
+			definition => (definition.edges[0]!.x = { transcript: { optimize: "snapcompact" } }),
+		],
+		["limits.target", "limits.limit_target", "E15", definition => (definition.limits = { onLimit: "judge" })],
+		[
+			"verdict.question",
+			"members[1].question",
+			"E18",
+			definition =>
+				(definition.members[1] = {
+					kind: "verdict",
+					id: "editor",
+					question: { type: "choice", instructions: "Which?", criteria: { one: null } },
+				}),
+		],
 	];
 
 	it.each(cases)("reports %s at %s (%s)", (code, path, _rule, mutate) => {
@@ -306,29 +345,38 @@ describe("validateMixture warnings", () => {
 		definition.edges.push({ from: "editor", to: "judge", x: { output: true } });
 		expect(codes(check(definition).warnings)).toContain("fanout.branch.controls");
 	});
+
+	it("warns when a routed edge has no rubric", () => {
+		const definition = routed();
+		definition.edges.push({ id: "alternate", from: "writer", to: "editor", x: { output: true }, when: "done" });
+		expect(codes(check(definition).warnings)).toEqual(["route.when.missing"]);
+	});
+
+	it("warns on an unbounded cycle but not a termination, traversal bound, or exit route", () => {
+		const definition = linear();
+		definition.edges.push({ id: "retry", from: "editor", to: "writer", x: { output: true } });
+		expect(codes(check(definition).warnings)).toEqual(["cycle.unbounded"]);
+		Object.assign(definition.members[1]!, { terminate: { instructions: "Stop?" } });
+		expect(codes(check(definition).warnings)).not.toContain("cycle.unbounded");
+		Object.assign(definition.members[1]!, { terminate: undefined });
+		definition.edges[1]!.maxTraversals = 2;
+		expect(codes(check(definition).warnings)).not.toContain("cycle.unbounded");
+		definition.edges[1]!.maxTraversals = undefined;
+		definition.members.push({ id: "final", model: "fake/plain", systemPrompt: "Answer", tools: false });
+		definition.edges.push({ id: "exit", from: "editor", to: "final", x: { output: true }, when: "done" });
+		definition.edges[1]!.when = "continue";
+		Object.assign(definition.members[1]!, { route: { instructions: "Where?" } });
+		expect(codes(check(definition).warnings)).not.toContain("cycle.unbounded");
+	});
 });
 
 describe("capability gate", () => {
-	it("refuses route with unsupported.feature naming M2", () => {
-		const result = check(routed());
-		const gated = result.errors.filter(issue => issue.code === "unsupported.feature");
-		expect(gated.map(issue => issue.path)).toEqual(["members[0].route"]);
-		expect(gated[0]!.message).toContain("M2");
-	});
-
 	it.each([
 		[
 			"tools on the terminal member",
 			(definition: MixtureDefinition) => Object.assign(definition.members[1]!, { tools: undefined }),
 		],
-		[
-			"a back-edge",
-			(definition: MixtureDefinition) =>
-				definition.edges.push({ from: "editor", to: "writer", x: { output: true } }),
-		],
-		["x.transcript", (definition: MixtureDefinition) => (definition.edges[0]!.x = { transcript: true })],
 		["serve", (definition: MixtureDefinition) => (definition.serve = true)],
-		["a budget limit", (definition: MixtureDefinition) => (definition.limits = { budgetUsd: 1 })],
 		["steering", (definition: MixtureDefinition) => (definition.steering = { target: "entry" })],
 	])("refuses %s", (_label, mutate) => {
 		const definition = linear();
@@ -342,36 +390,28 @@ describe("capability gate", () => {
 		expect(check(definition).errors).toEqual([]);
 	});
 
-	it("marks the M2 courtroom fixture unsupported", () => {
-		const doc = parseDoc(`
-[[mixtures]]
-name = "courtroom"
-entry = "prosecution"
-[[mixtures.members]]
-id = "prosecution"
-model = "fake/writer"
-system_prompt = "prosecute"
-tools = false
-[[mixtures.members]]
-id = "defense"
-model = "fake/editor"
-system_prompt = "defend"
-tools = false
-[mixtures.members.terminate]
-instructions = "Conceded?"
-[[mixtures.edges]]
-id = "open"
-from = "prosecution"
-to = "defense"
-x = { output = true }
-[[mixtures.edges]]
-id = "rebut"
-from = "defense"
-to = "prosecution"
-x = { output = true }
-max_traversals = 3
-`);
-		expect(codes(check(doc.mixtures[0]!).errors)).toContain("unsupported.feature");
+	it("accepts a bounded courtroom cycle with a judge and a route fallback", () => {
+		const definition = linear();
+		const writer = definition.members[0]!;
+		if (writer.kind === "verdict") throw new Error("expected writer model");
+		writer.route = { instructions: "Continue or finish?", fallback: "finish" };
+		definition.edges.push({ id: "finish", from: "writer", to: "editor", when: "done", x: { output: true } });
+		definition.edges[0]!.when = "needs more work";
+		definition.edges.push({ id: "retry", from: "editor", to: "writer", maxTraversals: 3, x: { output: true } });
+		expect(check(definition, Settings.isolated({ modelRoles: { judge: "fake/plain" } })).errors).toEqual([]);
+	});
+
+	it("accepts the bundled M2 courtroom graph and its pinned helpers", () => {
+		const doc = parseDoc(COURTROOM_TOML);
+		const settings = Settings.isolated({
+			"moa.summary_model": "fake/plain",
+			modelRoles: { judge: "fake/plain" },
+		});
+		const result = check(doc.mixtures[0]!, settings, doc);
+		expect(result.errors).toEqual([]);
+		expect(result.resolved.summaryModel?.id).toBe("plain");
+		const defense = result.resolved.members.defense;
+		expect(defense?.kind === "model" && defense.rolePrompt).toContain("rebut");
 	});
 });
 
@@ -406,7 +446,7 @@ describe("recursion", () => {
 			routed(),
 			Settings.isolated({ modelRoles: { default: "mixture/loop", smol: "fake/editor" } }),
 		);
-		expect(codes(result.errors)).toEqual(["unsupported.feature"]);
+		expect(result.errors).toEqual([]);
 		const plan = result.resolved.judgePlan?.map(candidate => `${candidate.model.provider}/${candidate.model.id}`);
 		expect(plan).toContain("fake/editor");
 		expect(plan).not.toContain("mixture/loop");
@@ -421,7 +461,7 @@ describe("model allow-list", () => {
 			routed(),
 			Settings.isolated({ enabledModels: ALLOWED, modelRoles: { default: "fake/plain", smol: "fake/editor" } }),
 		);
-		expect(codes(result.errors)).toEqual(["unsupported.feature"]);
+		expect(result.errors).toEqual([]);
 		const plan = result.resolved.judgePlan?.map(candidate => `${candidate.model.provider}/${candidate.model.id}`);
 		expect(plan).toContain("fake/editor");
 		expect(plan).not.toContain("fake/plain");
@@ -435,6 +475,25 @@ describe("model allow-list", () => {
 		const issue = result.errors.find(candidate => candidate.code === "helper.unresolved");
 		expect([issue?.path, issue?.message]).toEqual(["judge", expect.stringContaining("excluded by enabledModels")]);
 		expect(result.resolved.judgePlan).toBeUndefined();
+	});
+
+	it("pins a summary model and rejects an excluded or missing selector", () => {
+		const definition = linear();
+		definition.edges[0]!.x = { transcript: { optimize: "compact" } };
+		const available = check(definition, Settings.isolated({ "moa.summary_model": "fake/plain" }));
+		expect(available.errors).toEqual([]);
+		expect(available.resolved.summaryModel?.id).toBe("plain");
+		const excluded = check(
+			definition,
+			Settings.isolated({ "moa.summary_model": "fake/plain", enabledModels: ALLOWED }),
+		);
+		expect(excluded.errors.map(issue => [issue.code, issue.path, issue.message])).toEqual([
+			["helper.unresolved", "summary", expect.stringContaining("excluded by enabledModels")],
+		]);
+		const missing = check(definition, Settings.isolated({ "moa.summary_model": "fake/missing" }));
+		expect(missing.errors.map(issue => [issue.code, issue.path, issue.message])).toEqual([
+			["helper.unresolved", "summary", expect.stringContaining("does not resolve")],
+		]);
 	});
 });
 

@@ -109,6 +109,37 @@ describe("mixture trace cards in the transcript", () => {
 		]);
 	});
 
+	it("shows a routed decision's outcome and judge identity in the live trace card", async () => {
+		const ctx = createInteractiveModeContext();
+		const header = hopTrace(3, "defense", undefined);
+		const decision: Extract<MixtureTraceDetails, { kind: "decision" }> = {
+			v: header.v,
+			runId: header.runId,
+			mixture: header.mixture,
+			seq: header.seq,
+			at: header.at,
+			run: header.run,
+			kind: "decision",
+			hop: 3,
+			memberId: "defense",
+			decision: {
+				kind: "route",
+				answer: {
+					type: "choice",
+					choice: "rebut",
+					probabilities: { rebut: 0.71, verdict: 0.29 },
+					confidence: 0.71,
+				},
+				confidence: 0.71,
+				judge: "fake/jev",
+				judgeKind: "native",
+				outcome: "→ rebut 0.71",
+			},
+		};
+		await new EventController(ctx).handleEvent({ type: "mixture_decision", details: decision });
+		expect(text(ctx.chatContainer.children[0]!)).toContain("hop 3 · route → rebut 0.71 · fake/jev (native)");
+	});
+
 	it("hides live cards when moa.show_trace_cards is off", async () => {
 		const streamingComponent = new AssistantMessageComponent();
 		const ctx = createInteractiveModeContext({
