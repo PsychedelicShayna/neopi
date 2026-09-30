@@ -293,13 +293,13 @@ export function validateRetryFallbackChains(
 				continue;
 			}
 			if (isRegexSelectorPattern(selectorStr)) {
-				const regex = compileSelectorRegex(selectorStr);
-				if (!regex) {
+				if (!compileSelectorRegex(selectorStr)) {
 					report(`Invalid regex fallback entry in retry.fallbackChains for '${key}': ${selectorStr}`);
-				} else if (!modelRegistry.getAll("all").some(model =>
-					regex.test(formatModelStringWithRouting(model)) && (!kindRole || kindRole.accepts(model)),
-				)) {
-					report(`Fallback chain for ${keyKind} '${key}' references unknown model: ${selectorStr}`);
+				} else {
+					const catalog = modelRegistry.getAll("all");
+					if (!resolveModelRoleValue(selectorStr, kindRole ? catalog.filter(kindRole.accepts) : catalog, { settings }).model) {
+						report(`Fallback chain for ${keyKind} '${key}' references unknown model: ${selectorStr}`);
+					}
 				}
 				continue;
 			}
@@ -530,10 +530,14 @@ function parseRetryFallbackChainEntry(
 	current: RetryFallbackSelector | undefined,
 ): RetryFallbackSelector | undefined {
 	if (isRegexSelectorPattern(entry)) {
-		const regex = compileSelectorRegex(entry);
-		if (!regex) return undefined;
-		const matched = context.modelLookup.getAll("all").find(model => regex.test(formatModelStringWithRouting(model)));
-		return matched ? parseRetryFallbackSelector(formatModelStringWithRouting(matched), context.modelLookup) : undefined;
+		if (!compileSelectorRegex(entry)) return undefined;
+		const resolved = resolveModelRoleValue(entry, context.modelLookup.getAll("all"));
+		return resolved.model
+			? parseRetryFallbackSelector(
+					formatRetryFallbackSelector(resolved.model, concreteThinkingLevel(resolved.thinkingLevel)),
+					context.modelLookup,
+				)
+			: undefined;
 	}
 	if (!isRetryFallbackWildcardKey(entry)) return parseRetryFallbackSelector(entry, context.modelLookup);
 	if (!current) return undefined;

@@ -108,6 +108,13 @@ describe("retry fallback selector resolution", () => {
 		]);
 	});
 
+	it("resolves a regex entry that selects a model at a fixed effort", () => {
+		const context = createContext({ default: ["re:^google/gemini-2\\.5-flash:high$"] });
+		const candidates = findRetryFallbackCandidates(context, "default", "openai/gpt-4o-mini");
+		expect(candidates.map(candidate => candidate.raw)).toEqual(["google/gemini-2.5-flash:high"]);
+		expect(candidates[0]?.thinkingLevel).toBe(ThinkingLevel.High);
+	});
+
 	it("ignores invalid regex keys and entries without throwing", () => {
 		const context = createContext({
 			"re:(": ["openai/gpt-4o-mini"],
@@ -409,5 +416,19 @@ describe("retry fallback regex diagnostics", () => {
 		const warnings: string[] = [];
 		validateRetryFallbackChains(settings, registry, warning => warnings.push(warning));
 		expect(warnings).toEqual(["Invalid regex key in retry.fallbackChains: re:("]);
+	});
+
+	it("validates a regex entry with an explicit thinking suffix", () => {
+		const google = getBundledModel("google", "gemini-2.5-flash");
+		if (!google) throw new Error("Expected bundled Gemini test model");
+		const settings = Settings.isolated({
+			"retry.fallbackChains": { default: ["re:^google/gemini-2\\.5-flash:high$"] },
+		});
+		const warnings: string[] = [];
+		validateRetryFallbackChains(settings, {
+			...registry,
+			getAll: () => [model, google],
+		}, warning => warnings.push(warning));
+		expect(warnings).toEqual([]);
 	});
 });

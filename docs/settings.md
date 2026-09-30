@@ -586,6 +586,8 @@ In `/models` → Roles, press `y` on a role's displayed primary model or a fallb
 
 When the active chat model keeps failing (429s, quota walls, provider outages) and `retry.modelFallback` is on, the session picks the chain that owns the failing model: exact key, first matching regex key, longest matching provider wildcard, current role, then `default`. `default` also owns a live model that belongs to no role (`/model` switch, ephemeral hop). The effective chain begins with the owner's primary and continues with its entries; a live selector appearing nowhere in it is offered the whole chain. If several roles assign the same model, the live session role wins, and `default` wins over other matching chat roles when the session is not on those roles.
 
+A regex fallback entry searches catalog model selectors in catalog order. It can also include an effort suffix, for example `re:^google/gemini-2\.5-flash:high$`; that selects the matching model with fixed `high` effort. An entry matching a bare catalog selector inherits the failing turn's effort, as a bare literal entry does.
+
 ### Tools and approvals
 
 ```yaml
