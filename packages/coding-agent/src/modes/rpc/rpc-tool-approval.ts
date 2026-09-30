@@ -129,8 +129,10 @@ export class RpcToolApprovalBridge {
 		this.#pending.set(id, {
 			resolve: frame => {
 				cleanup();
-				if ("decision" in frame && frame.decision === "allow_session") this.#allowForSession(request.toolName);
-				resolve(toVerdict(frame));
+				const verdict = toVerdict(frame);
+				if (verdict.approved && "decision" in frame && frame.decision === "allow_session")
+					this.#allowForSession(request.toolName);
+				resolve(verdict);
 			},
 			reject: error => {
 				cleanup();
