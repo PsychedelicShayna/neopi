@@ -10,7 +10,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/tools/browser/launch";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { computeExecutablePath, detectBrowserPlatform } from "@oh-my-pi/pi-utils/browsers";
-import { APP_NAME } from "@oh-my-pi/pi-utils/dirs";
+import { XDG_DIR_NAME } from "@oh-my-pi/pi-utils/dirs";
 import { PUPPETEER_REVISIONS } from "puppeteer-core/internal/revisions.js";
 
 const EXECUTABLE_PROBE = path.resolve(import.meta.dir, "../fixtures/browser-executable-probe.ts");
@@ -231,10 +231,13 @@ describe("browser executable selection", () => {
 				// root when its `<XDG>/omp` dir already exists, so create them to pin
 				// the child's puppeteer cache to this isolated location.
 				for (const xdg of [xdgCache, path.join(tempDir.path(), "data"), path.join(tempDir.path(), "state")]) {
-					fs.mkdirSync(path.join(xdg, APP_NAME), { recursive: true });
+					fs.mkdirSync(path.join(xdg, XDG_DIR_NAME), { recursive: true });
 				}
 				const env = {
 					...process.env,
+					// The test preload sets a custom agent dir, which disables XDG
+					// resolution. Use the default agent dir for this child.
+					PI_CODING_AGENT_DIR: "",
 					HOME: home,
 					XDG_CACHE_HOME: xdgCache,
 					XDG_DATA_HOME: path.join(tempDir.path(), "data"),
@@ -252,7 +255,7 @@ describe("browser executable selection", () => {
 				// Seed the isolated Chrome for Testing binary in the child's cache so the
 				// probe resolves it without a network download. getPuppeteerDir() resolves
 				// to `<XDG_CACHE_HOME>/omp/puppeteer` given the dirs created above.
-				const cacheDir = path.join(xdgCache, APP_NAME, "puppeteer");
+				const cacheDir = path.join(xdgCache, XDG_DIR_NAME, "puppeteer");
 				const platform = detectBrowserPlatform();
 				if (!platform) throw new Error("unsupported host platform for Chrome-for-Testing selection test");
 				const buildId = PUPPETEER_REVISIONS.chrome;
