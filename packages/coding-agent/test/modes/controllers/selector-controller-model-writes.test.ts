@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { mkdir } from "node:fs/promises";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
@@ -81,7 +82,18 @@ describe("SelectorController model hub writes", () => {
 	it("saves only the edited fallback chain, never the chains a --config overlay supplies", async () => {
 		const agentDir = tempDir.join("agent");
 		const overlayPath = tempDir.join("overlay.yml");
-		await Bun.write(overlayPath, YAML.stringify({ retry: { fallbackChains: { smol: ["overlay/cheap"] } } }));
+		await Bun.write(
+			overlayPath,
+			YAML.stringify({
+				retry: {
+					fallbackChains: { smol: ["overlay/cheap"] },
+					fallbackEffortSelections: {
+						smol: { "overlay/cheap": { mode: "inherit" } },
+						slow: { "user/slow-fallback": { mode: "inherit" } },
+					},
+				},
+			}),
+		);
 		// The global instance, as in the app: the hub's status text reads the global settings.
 		const settings = await Settings.init({ agentDir, cwd: tempDir.path(), configFiles: [overlayPath] });
 		const { controller, showError } = start(settings, model("claude-sonnet-4-5"));
@@ -92,5 +104,45 @@ describe("SelectorController model hub writes", () => {
 		expect(showError).not.toHaveBeenCalled();
 		const saved = YAML.parse(await Bun.file(path.join(agentDir, "config.yml")).text()) as RawSettings;
 		expect(saved).toEqual({ retry: { fallbackChains: { slow: ["user/slow-fallback"] } } });
+	});
+
+	it("preserves other persisted chains and drops emptied effort selections when editing a chain", async () => {
+		const agentDir = tempDir.join("agent");
+		await mkdir(agentDir, { recursive: true });
+		await Bun.write(
+			path.join(agentDir, "config.yml"),
+			YAML.stringify({
+				retry: {
+					fallbackChains: { default: ["user/default"], slow: ["user/old"] },
+					fallbackEffortSelections: {
+						default: { "user/default": { mode: "inherit" } },
+						slow: { "user/old": { mode: "inherit" } },
+					},
+				},
+			}),
+		);
+		const settings = await Settings.init({ agentDir, cwd: tempDir.path() });
+		const { controller, showError } = start(settings, model("claude-sonnet-4-5"));
+
+		openModelHub(controller).onFallbackChainChange?.("slow", ["user/new"]);
+		await settings.flush();
+
+		expect(showError).not.toHaveBeenCalled();
+		const saved = YAML.parse(await Bun.file(path.join(agentDir, "config.yml")).text()) as RawSettings;
+		expect(saved).toEqual({
+			retry: {
+				fallbackChains: { default: ["user/default"], slow: ["user/new"] },
+				fallbackEffortSelections: { default: { "user/default": { mode: "inherit" } } },
+			},
+		});
+
+		openModelHub(controller).onFallbackChainChange?.("slow", []);
+		await settings.flush();
+		expect(YAML.parse(await Bun.file(path.join(agentDir, "config.yml")).text())).toEqual({
+			retry: {
+				fallbackChains: { default: ["user/default"] },
+				fallbackEffortSelections: { default: { "user/default": { mode: "inherit" } } },
+			},
+		});
 	});
 });

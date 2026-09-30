@@ -1946,23 +1946,37 @@ export class Settings {
 		this.#queueSave();
 	}
 
+	/** Get one role's persisted fallback effort metadata without including config overlays. */
+	getGlobalFallbackEffortSelections(role: string): Record<string, EffortSelection> | undefined {
+		const entries = getByPath(this.#global, cfgFallbackEffortSelections.segments);
+		return (
+			((isRecord(entries) ? entries[role] : undefined) as Record<string, EffortSelection> | undefined) ??
+			this.#parent?.getGlobalFallbackEffortSelections(role)
+		);
+	}
+
 	/** Validate and persist a fallback chain with all its per-entry effort selections together. */
 	setFallbackChainAndEfforts(role: string, chain: string[], selections: Record<string, EffortSelection>): void {
 		if (!role.trim()) throw new Error("Fallback chain must name a role");
-		const chains = { ...cfgRetryFallbackChains.get(this) };
-		const allSelections = { ...cfgFallbackEffortSelections.get(this) };
+		const globalChains = getByPath(this.#global, cfgRetryFallbackChains.segments);
+		const chains = isRecord(globalChains) ? { ...globalChains } : {};
+		const globalSelections = getByPath(this.#global, cfgFallbackEffortSelections.segments);
+		const allSelections = isRecord(globalSelections) ? { ...globalSelections } : {};
 		if (chain.length === 0) {
 			delete chains[role];
 			delete allSelections[role];
 		} else {
 			chains[role] = chain;
-			allSelections[role] = selections;
+			if (Object.keys(selections).length > 0) allSelections[role] = selections;
+			else delete allSelections[role];
 		}
 		cfgRetryFallbackChains.assertWritable(chains);
 		cfgFallbackEffortSelections.assertWritable(allSelections);
 		const staged: RawSettings = structuredClone(this.#global);
-		setByPath(staged, cfgRetryFallbackChains.segments, chains);
-		setByPath(staged, cfgFallbackEffortSelections.segments, allSelections);
+		if (Object.keys(chains).length > 0) setByPath(staged, cfgRetryFallbackChains.segments, chains);
+		else deleteByPath(staged, cfgRetryFallbackChains.segments);
+		if (Object.keys(allSelections).length > 0) setByPath(staged, cfgFallbackEffortSelections.segments, allSelections);
+		else deleteByPath(staged, cfgFallbackEffortSelections.segments);
 		this.#validateAll(
 			this.#mergeOverParent(
 				this.#mergeOwnLayers({

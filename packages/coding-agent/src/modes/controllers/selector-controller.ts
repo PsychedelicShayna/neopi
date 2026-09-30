@@ -1124,7 +1124,7 @@ export class SelectorController {
 				},
 				onFallbackChainChange: (role, chain, effort, copiedSelections) => {
 					try {
-						const selections = { ...cfgFallbackEffortSelections.get(this.ctx.settings)[role] };
+						const selections = { ...this.ctx.settings.getGlobalFallbackEffortSelections(role) };
 						for (const selector of Object.keys(selections))
 							if (!chain.includes(selector)) delete selections[selector];
 						if (effort) selections[effort.selector] = effort.selection;
