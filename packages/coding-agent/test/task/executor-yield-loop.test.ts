@@ -64,7 +64,7 @@ function createMockSession(
 	};
 
 	const session: Partial<AgentSession> = {
-		...createSessionDefaults(),
+		...createSessionDefaults(emit),
 		state: { messages: [] } as never,
 		agent: { state: { systemPrompt: ["test"] } } as never,
 		model: { api: "anthropic-messages" } as never,

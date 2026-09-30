@@ -24,8 +24,14 @@ import type { ToolCall } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
+import { LiveIngest } from "@oh-my-pi/pi-coding-agent/live/ingest";
+import {
+	LIVE_INGEST_DEFAULTS,
+	type LiveIngestSettingsSource,
+} from "@oh-my-pi/pi-coding-agent/live/ingest-settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm, USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
@@ -384,6 +390,35 @@ describe("AgentSession advisor auto-resume suppression", () => {
 				advisorStreamFn: advisorMock.stream,
 				extensionRunner: extensionRunner as never,
 			});
+			const spokenAdvice: string[] = [];
+			const ingestSettings = {
+				get: () => ({ ...LIVE_INGEST_DEFAULTS, subagents: false }),
+				listen: () => () => {},
+			} as unknown as LiveIngestSettingsSource;
+			const liveRegistry = new AgentRegistry();
+			liveRegistry.register({
+				id: "main-live-advisor-test",
+				displayName: "main",
+				kind: "main",
+				session,
+				status: "running",
+			});
+			const liveIngest = new LiveIngest({
+				session,
+				registry: liveRegistry,
+				subagentEventBus: undefined,
+				settings: ingestSettings,
+				sink: {
+					appendSpeakableContext: text => {
+						spokenAdvice.push(text);
+						return true;
+					},
+					appendCommentaryContext: () => {},
+					appendOverflowAlertContext: () => false,
+				},
+				extractAssistantText: () => "",
+			});
+			liveIngest.attach();
 			expect(session.setAdvisorEnabled(true)).toBe(true);
 			agent.subscribe(event => {
 				if (
@@ -457,9 +492,11 @@ describe("AgentSession advisor auto-resume suppression", () => {
 					expect(continuedContext).toContain("The terminal result needs its missing correction.");
 					expect(continuedContext).not.toContain(note);
 				}
+				expect(spokenAdvice.some(text => text.includes(note))).toBe(true);
 			} finally {
 				release.resolve();
 				releaseCardHook.resolve();
+				liveIngest.detach();
 			}
 		});
 	}

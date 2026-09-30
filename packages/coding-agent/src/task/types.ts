@@ -37,6 +37,8 @@ export const TASK_SUBAGENT_EVENT_CHANNEL = "task:subagent:event";
 /** Payload emitted on TASK_SUBAGENT_EVENT_CHANNEL */
 export interface SubagentEventPayload {
 	id: string;
+	runToken: string;
+	owned: boolean;
 	event: AgentSessionEvent;
 }
 

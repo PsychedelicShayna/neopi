@@ -1146,6 +1146,7 @@ const ROLE_PRIORITY_ALIAS: Partial<Record<ModelRole, keyof typeof MODEL_PRIO>> =
 	advisor: "slow",
 	chronicler: "slow",
 	"chronicler-summary": "slow",
+	classifier: "slow",
 	prose: "smol",
 	memory: "smol",
 	tiny: "smol",
@@ -1159,6 +1160,7 @@ interface ConfiguredRoleFallback {
 
 const ROLE_CONFIGURED_FALLBACK: Partial<Record<ModelRole, ConfiguredRoleFallback>> = {
 	advisor: { role: "slow", configuredOnly: true },
+	classifier: { role: "slow", configuredOnly: true },
 	memory: { role: "tiny", configuredOnly: false },
 	// Temporal summaries and recall ranking follow the capture role unless configured.
 	"chronicler-summary": { role: "chronicler", configuredOnly: false },
@@ -1800,6 +1802,17 @@ export function resolveChronicleSummaryRoleSelection(
 	return resolved.model ? { model: resolved.model, thinkingLevel: resolved.thinkingLevel } : undefined;
 }
 
+/** Resolve the classifier role through the slow priority chain when unset. */
+export function resolveClassifierRoleSelection(
+	settings: Settings,
+	availableModels: Model<Api>[],
+): { model: Model<Api>; thinkingLevel?: ConfiguredThinkingLevel } | undefined {
+	const resolved = resolveModelRoleValue(formatModelRoleAlias("classifier"), availableModels, {
+		settings,
+		matchPreferences: getModelMatchPreferences(settings),
+	});
+	return resolved.model ? { model: resolved.model, thinkingLevel: resolved.thinkingLevel } : undefined;
+}
 /**
  * Resolve model patterns to actual Model objects with optional thinking levels
  * Format: "pattern:level" where :level is optional

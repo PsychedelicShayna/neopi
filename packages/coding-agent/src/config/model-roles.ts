@@ -72,6 +72,7 @@ export const MODEL_ROLES: Record<ModelRole, ModelRoleInfo> = {
 		section: "chat",
 		accepts: acceptsChat,
 	},
+	classifier: { tag: "CLASSIFY", name: "Classifier", color: "muted", section: "chat", accepts: acceptsChat },
 	effort: { tag: "EFFORT", name: "Effort classifier", color: "accent", section: "chat", accepts: acceptsChat },
 	prose: { tag: "PROSE", name: "Prose", color: "warning", section: "chat", accepts: acceptsChat },
 	image: {

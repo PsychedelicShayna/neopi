@@ -69,6 +69,7 @@ function makeProgress(overrides: Partial<AgentProgress> & { id: string }): Agent
 function makeLifecycle(id: string, index: number, description: string, detached?: boolean): SubagentLifecyclePayload {
 	return {
 		id,
+		runToken: `${id}:${index}`,
 		index,
 		agent: "task",
 		agentSource: "bundled",
@@ -86,6 +87,8 @@ function makeProgressPayload(
 	detached?: boolean,
 ): SubagentProgressPayload {
 	return {
+		runToken: `${id}:${index}`,
+		owned: true,
 		index,
 		agent: "task",
 		agentSource: "bundled",

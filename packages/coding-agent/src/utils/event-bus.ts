@@ -1,4 +1,48 @@
 import { logger } from "@oh-my-pi/pi-utils";
+import {
+	TASK_SUBAGENT_LIFECYCLE_CHANNEL,
+	TASK_SUBAGENT_PROGRESS_CHANNEL,
+	type SubagentLifecyclePayload,
+	type SubagentProgressPayload,
+} from "@oh-my-pi/pi-tui/overlays/session-observer-registry";
+
+export const ACTIVE_RUN_LEDGER_MAX = 512;
+const activeRuns = new WeakMap<EventBus, Map<string, SubagentLifecyclePayload>>();
+
+/** Snapshot the current starts; callers cannot mutate the producer's ledger. */
+export function activeSubagentRuns(bus: EventBus): ReadonlyMap<string, SubagentLifecyclePayload> {
+	const runs = activeRuns.get(bus);
+	return new Map(runs ? [...runs].map(([token, frame]) => [token, { ...frame }]) : []);
+}
+
+function recordSubagentFrame(bus: EventBus, channel: string, payload: unknown): void {
+	if (channel !== TASK_SUBAGENT_LIFECYCLE_CHANNEL && channel !== TASK_SUBAGENT_PROGRESS_CHANNEL) return;
+	let runs = activeRuns.get(bus);
+	if (!runs) {
+		runs = new Map();
+		activeRuns.set(bus, runs);
+	}
+	if (channel === TASK_SUBAGENT_LIFECYCLE_CHANNEL) {
+		const frame = payload as SubagentLifecyclePayload;
+		if (!frame.runToken) return;
+		if (frame.status === "started") {
+			runs.set(frame.runToken, { ...frame });
+			if (runs.size > ACTIVE_RUN_LEDGER_MAX) runs.delete(runs.keys().next().value!);
+		} else {
+			runs.delete(frame.runToken);
+		}
+	} else {
+		const frame = payload as SubagentProgressPayload;
+		const start = runs.get(frame.runToken);
+		if (start && frame.owned && frame.runEffectiveModelIdentity && frame.runEffectiveThinkingLevel) {
+			runs.set(frame.runToken, {
+				...start,
+				runEffectiveModelIdentity: frame.runEffectiveModelIdentity,
+				runEffectiveThinkingLevel: frame.runEffectiveThinkingLevel,
+			});
+		}
+	}
+}
 
 export class EventBus {
 	readonly #listeners = new Map<string, Set<(data: unknown) => void>>();
@@ -43,8 +87,12 @@ export function emitSubagentFrame(
 	channel: string,
 	payload: unknown,
 ): void {
-	eventBus?.emit(channel, payload);
+	if (eventBus) {
+		recordSubagentFrame(eventBus, channel, payload);
+		eventBus.emit(channel, payload);
+	}
 	if (subagentEventBus && subagentEventBus !== eventBus) {
+		recordSubagentFrame(subagentEventBus, channel, payload);
 		subagentEventBus.emit(channel, payload);
 	}
 }

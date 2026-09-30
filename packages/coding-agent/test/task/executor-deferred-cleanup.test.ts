@@ -62,7 +62,7 @@ function mockSession(opts: {
 		for (const l of [...listeners]) l(event);
 	};
 	return {
-		...createSessionDefaults(),
+		...createSessionDefaults(emit),
 		state,
 		agent: { state: { systemPrompt: ["test"] } },
 		model: undefined,

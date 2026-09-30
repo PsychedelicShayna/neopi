@@ -1,11 +1,14 @@
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { logger, sanitizeText } from "@oh-my-pi/pi-utils";
+import { AgentRegistry } from "../../registry/agent-registry";
 import {
 	type LivePhase,
 	LiveSessionController,
 	type LiveSessionControllerOptions,
 	type LiveTranscript,
 } from "../../live/controller";
+import { LiveIngest } from "../../live/ingest";
+import { LIVE_INGEST_DEFAULTS, LiveIngestSettingsSource } from "../../live/ingest-settings";
 import { stripLiveKeyword } from "../../live/keywords";
 import { LIVE_MODEL } from "../../live/protocol";
 import { vocalizer } from "../../tts/vocalizer";
@@ -81,6 +84,8 @@ export class LiveCommandController {
 	readonly #createSession: LiveSessionFactory | undefined;
 
 	#session: LiveSessionController | undefined;
+	#ingest: LiveIngest | undefined;
+	#call: { session: LiveSessionController; ingest: LiveIngest; detachSettings: () => void } | undefined;
 	#settling: Promise<void> | undefined;
 	#utterance: ComposerUtterance | undefined;
 	/** Set while the controller itself edits the draft, so those edits are not operator activity. */
@@ -269,9 +274,25 @@ export class LiveCommandController {
 		this.#assistantCaption = undefined;
 		this.#resumeVocalizer = vocalizer.suspend();
 
+		const settingsSource = new LiveIngestSettingsSource(LIVE_INGEST_DEFAULTS);
+		let ingest: LiveIngest | undefined;
 		const options: LiveSessionControllerOptions = {
 			session: this.#ctx.session,
 			extractAssistantText: message => this.#ctx.extractAssistantText(message),
+			ircRelayTransform: (message, body) => ingest ? ingest.ircRelayTransform(message, body) : body,
+			ircRelayAllowed: message => {
+				const settings = settingsSource.get();
+				return message.customType === "irc:relay" ? settings.ircPeers : settings.ircPrimary;
+			},
+			includeVoiceNote: () => settingsSource.get().includeVoiceNote,
+			relayGates: () => {
+				const settings = settingsSource.get();
+				return {
+					reasoning: settings.relayReasoning,
+					progress: settings.relayProgress,
+					finalAnswers: settings.relayFinalAnswers,
+				};
+			},
 			voice: cfgLiveVoice.get(this.#ctx.settings),
 			blockDelegateKeyword: cfgLiveBlockDelegateKeyword.get(this.#ctx.settings),
 			callbacks: {
@@ -316,7 +337,19 @@ export class LiveCommandController {
 			},
 		};
 		const session = this.#createSession ? this.#createSession(options) : new LiveSessionController(options);
+		ingest = new LiveIngest({
+			session: this.#ctx.session,
+			registry: AgentRegistry.global(),
+			subagentEventBus: this.#ctx.subagentEventBus,
+			settings: settingsSource,
+			sink: session,
+			extractAssistantText: message => this.#ctx.extractAssistantText(message),
+			notify: (level, message) => level === "warning" ? this.#ctx.showError(message) : this.#ctx.showStatus(message),
+		});
 		this.#session = session;
+		this.#ingest = ingest;
+		const detachSettings = settingsSource.attach();
+		this.#call = { session, ingest, detachSettings };
 		for (const setting of [cfgLiveForceDelegateKeyword, cfgLiveSubmitKeyword, cfgLiveSubmitSilenceMs]) {
 			this.#keywordSettingsUnsubscribe.push(setting.listen(this.#ctx.settings, () => this.#scheduleKeyword()));
 		}
@@ -324,7 +357,10 @@ export class LiveCommandController {
 		this.#ctx.ui.requestRender();
 
 		try {
+			await settingsSource.refresh();
+			if (this.#session !== session) return;
 			await session.start();
+			if (this.#session === session) ingest.attach();
 		} catch (cause) {
 			if (this.#session === session) {
 				await session.stop();
@@ -426,6 +462,13 @@ export class LiveCommandController {
 
 	#finish(session: LiveSessionController, error?: Error): void {
 		if (this.#session !== session) return;
+		const call = this.#call;
+		if (call?.session === session) {
+			call.ingest.detach();
+			call.detachSettings();
+			this.#call = undefined;
+			this.#ingest = undefined;
+		}
 		// Stop while this session still owns the composer: a handoff accepted
 		// during teardown must still save its final text to history.
 		const stopping = session.stop();

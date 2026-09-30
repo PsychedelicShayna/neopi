@@ -15,7 +15,7 @@ import {
 	runSubprocess,
 	SUBAGENT_WARNING_MISSING_YIELD,
 } from "@oh-my-pi/pi-coding-agent/task/executor";
-import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
+import { TASK_SUBAGENT_EVENT_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL, type AgentDefinition, type SubagentEventPayload, type SubagentProgressPayload } from "@oh-my-pi/pi-coding-agent/task/types";
 import { YieldTool } from "@oh-my-pi/pi-coding-agent/tools/yield";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { logger } from "@oh-my-pi/pi-utils";
@@ -59,7 +59,7 @@ function createMockSession(
 	};
 
 	const session = {
-		...createSessionDefaults(),
+		...createSessionDefaults(emit),
 		state,
 		agent: { state: { systemPrompt: ["test"] } },
 		model: undefined,
@@ -247,6 +247,11 @@ describe("runSubprocess yield reminders", () => {
 		let prompts = 0;
 		let wakeEmitted = false;
 		let emitWake: ((event: AgentSessionEvent) => void) | undefined;
+		const bus = new EventBus();
+		const envelopes: SubagentEventPayload[] = [];
+		const progressFrames: SubagentProgressPayload[] = [];
+		bus.on(TASK_SUBAGENT_EVENT_CHANNEL, payload => envelopes.push(payload as SubagentEventPayload));
+		bus.on(TASK_SUBAGENT_PROGRESS_CHANNEL, payload => progressFrames.push(payload as SubagentProgressPayload));
 		const yieldTool = new YieldTool({
 			cwd: "/tmp",
 			hasUI: false,
@@ -259,7 +264,20 @@ describe("runSubprocess yield reminders", () => {
 			emitWake ??= emit;
 			prompts++;
 			// An IRC wake owns the session when the follow-up first dispatches.
-			if (prompts === 1) throw new AgentBusyError("wake turn is running");
+			if (prompts === 1) {
+				emit({ type: "agent_start", runOwners: ["competing-wake"] });
+				emit({
+					type: "message_update",
+					message: createAssistantStopMessage("foreign wake text"),
+					assistantMessageEvent: { type: "text_delta", delta: "foreign wake text" },
+				} as AgentSessionEvent);
+				throw new AgentBusyError("wake turn is running");
+			}
+			emit({
+				type: "message_update",
+				message: createAssistantStopMessage("owned batch text"),
+				assistantMessageEvent: { type: "text_delta", delta: "owned batch text" },
+			} as AgentSessionEvent);
 			emit({
 				type: "tool_execution_end",
 				toolCallId: "tool-batch",
@@ -302,11 +320,19 @@ describe("runSubprocess yield reminders", () => {
 			session,
 		});
 		try {
-			const result = await runSubagentFollowUpTurn({ ...baseOptions, id: "subagent-race", message: "batch work" });
+			const result = await runSubagentFollowUpTurn({ ...baseOptions, id: "subagent-race", message: "batch work", eventBus: bus });
 			expect(prompts).toBe(2);
 			expect(result.exitCode).toBe(0);
 			expect(result.output).toContain('"batch": true');
 			expect(result.output).not.toContain("intruder");
+			expect(envelopes.find(frame => frame.event.type === "message_update" &&
+				frame.event.message.role === "assistant" &&
+				frame.event.message.content.some(block => block.type === "text" && block.text === "foreign wake text"))?.owned).toBe(false);
+			expect(envelopes.find(frame => frame.event.type === "message_update" &&
+				frame.event.message.role === "assistant" &&
+				frame.event.message.content.some(block => block.type === "text" && block.text === "owned batch text"))?.owned).toBe(true);
+			expect(progressFrames.find(frame => frame.owned && frame.progress.recentOutput.includes("owned batch text"))?.progress.recentOutput)
+				.not.toContain("foreign wake text");
 			await expect(yieldTool.execute("empty-after-race", { type: "result" })).rejects.toThrow(
 				/no text \(thinking only\)/,
 			);

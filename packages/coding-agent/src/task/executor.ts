@@ -37,6 +37,7 @@ import {
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import {
 	extractExplicitThinkingSelector,
+	formatModelString,
 	formatModelStringWithRouting,
 	resolveAgentAdvisorSelection,
 	resolveAgentPrewalkPattern,
@@ -117,6 +118,7 @@ import { subprocessToolRegistry } from "./subprocess-tool-registry";
 import type { WorkPoolYieldItem } from "./workpool-yield";
 import {
 	type AgentDefinition,
+	type SubagentLifecyclePayload,
 	MAX_OUTPUT_BYTES,
 	MAX_OUTPUT_LINES,
 	TASK_SUBAGENT_EVENT_CHANNEL,
@@ -1149,6 +1151,8 @@ const MAX_YIELD_TOOL_ERRORS = 6;
 interface RunMonitorArgs {
 	index: number;
 	id: string;
+	runToken: string;
+	ownership: "runOwner" | "lease";
 	agent: AgentDefinition;
 	task: string;
 	assignment?: string;
@@ -1237,6 +1241,8 @@ interface SubagentRunMonitor {
 	takeActiveSession(): AgentSession | null;
 	/** Subscribe the monitor to a session's events. Returns the unsubscribe function. */
 	attach(session: AgentSession): () => void;
+	/** Lease ownership ends at wake completion, including recovery continuations. */
+	releaseOwnership(): void;
 	/** Best-effort capture of the last assistant text for cancelled-run salvage. */
 	captureSalvage(session: AgentSession): void;
 	lastAssistantSalvageText(): string | undefined;
@@ -1275,6 +1281,15 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 		maxRuntimeMs,
 	} = args;
 	const startTime = Date.now();
+	let owned = args.ownership === "lease";
+	let runEffectiveModelIdentity: string | undefined;
+	let runEffectiveThinkingLevel: string | undefined;
+	const loseOwnership = () => {
+		owned = false;
+		runEffectiveModelIdentity = undefined;
+		runEffectiveThinkingLevel = undefined;
+		resetRecentOutput();
+	};
 
 	const progress: AgentProgress = {
 		index,
@@ -1539,6 +1554,10 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 			progress.lastIntent ?? (progress.currentTool ? `running ${progress.currentTool}` : undefined);
 		if (activityGist) AgentRegistry.global().setActivity(id, activityGist);
 		const progressPayload = {
+			runToken: args.runToken,
+			owned,
+			runEffectiveModelIdentity: owned ? runEffectiveModelIdentity : undefined,
+			runEffectiveThinkingLevel: owned ? runEffectiveThinkingLevel : undefined,
 			index,
 			agent: agent.name,
 			agentSource: agent.source,
@@ -1615,7 +1634,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 	};
 
 	const appendRecentOutputTail = (text: string) => {
-		if (!text) return;
+		if (!owned || !text) return;
 		recentOutputTail += text;
 		if (recentOutputTail.length > RECENT_OUTPUT_TAIL_BYTES) {
 			recentOutputTail = recentOutputTail.slice(-RECENT_OUTPUT_TAIL_BYTES);
@@ -1627,6 +1646,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 	};
 
 	const replaceRecentOutputFromContent = (content: unknown[]) => {
+		if (!owned) return;
 		recentOutputTail = "";
 		for (const block of content) {
 			if (!block || typeof block !== "object") continue;
@@ -1648,7 +1668,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 	};
 
 	const emitSubagentEvent = (event: AgentSessionEvent) => {
-		const payload = { id, event };
+		const payload = { id, runToken: args.runToken, owned, event };
 		emitSubagentFrame(args.eventBus, args.subagentEventBus, TASK_SUBAGENT_EVENT_CHANNEL, payload);
 	};
 
@@ -2030,6 +2050,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 	};
 
 	const attach = (session: AgentSession): (() => void) => {
+		if (args.ownership === "runOwner") loseOwnership();
 		// The session owns attribution: it knows which model produced its output
 		// and withholds an armed-but-unproven fallback. Re-deriving that here from
 		// the event stream got it wrong twice over — the stream also carries
@@ -2062,7 +2083,40 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 			scheduleProgress(true);
 		};
 		return session.subscribe(event => {
+			if (args.ownership === "runOwner" && event.type === "agent_start") {
+				owned = Array.isArray(event.runOwners) && event.runOwners.includes(args.runToken);
+				runEffectiveModelIdentity = undefined;
+				runEffectiveThinkingLevel = undefined;
+				resetRecentOutput();
+			}
 			emitSubagentEvent(event);
+			if (owned && (event.type === "message_update" || event.type === "message_end") && event.message.role === "assistant") {
+				const message = event.message;
+				const generated = event.type === "message_update"
+					? ((event.assistantMessageEvent?.type === "text_delta" || event.assistantMessageEvent?.type === "thinking_delta") &&
+						Boolean(event.assistantMessageEvent.delta)) || event.assistantMessageEvent?.type === "toolcall_end"
+					: message.content.some(block =>
+						(block.type === "text" && Boolean(block.text)) ||
+						(block.type === "thinking" && Boolean(block.thinking)) ||
+						block.type === "toolCall");
+				if (generated) {
+					if (
+						event.requestModelProvider === message.provider &&
+						event.requestModelId === message.model &&
+						(!message.upstreamModel || message.upstreamModel === message.model) &&
+						event.requestDisableReasoning !== true &&
+						event.requestEffectiveThinkingLevel
+					) {
+						const identity = `${message.provider}/${message.model}`;
+						const level = event.requestEffectiveThinkingLevel;
+						if (runEffectiveModelIdentity !== identity || runEffectiveThinkingLevel !== level) {
+							runEffectiveModelIdentity = identity;
+							runEffectiveThinkingLevel = level;
+							scheduleProgress(true);
+						}
+					}
+				}
+			}
 			publishAdvisorState(session);
 			publishServingModel();
 			if (event.type === "auto_retry_start") {
@@ -2089,7 +2143,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 				scheduleProgress(true);
 				return;
 			}
-			if (isAgentEvent(event)) {
+			if (owned && isAgentEvent(event)) {
 				// Breadcrumb the synchronous subagent event handling so the loop
 				// watchdog can attribute any block to this in-process subagent.
 				pushLoopPhase(`subagent:${id}`);
@@ -2104,6 +2158,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 					popLoopPhase();
 				}
 			}
+			if (args.ownership === "runOwner" && event.type === "agent_end" && owned) loseOwnership();
 		});
 	};
 
@@ -2191,6 +2246,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 			return session;
 		},
 		attach,
+		releaseOwnership: loseOwnership,
 		captureSalvage,
 		lastAssistantSalvageText: () => lastAssistantSalvageText,
 		lastReportTurnText: () => lastReportTurnText,
@@ -2236,6 +2292,7 @@ async function driveSessionToYield(
 	monitor: SubagentRunMonitor,
 	task: string,
 	options: {
+		runToken: string;
 		/** Open-endedness description forwarded to the session's `auto` thinking classifier. */
 		solutionSpace?: string;
 		/**
@@ -2244,7 +2301,7 @@ async function driveSessionToYield(
 		 * while backing off. Absent, the busy error keeps the old path.
 		 */
 		onPromptBusy?: () => Promise<void>;
-	} = {},
+	},
 ): Promise<DriveOutcome> {
 	const { solutionSpace, onPromptBusy } = options;
 	using _keepalive = new EventLoopKeepalive();
@@ -2296,7 +2353,8 @@ async function driveSessionToYield(
 		for (let attempt = 1; attempt <= MAX_PROMPT_DISPATCH_ATTEMPTS; attempt++) {
 			if (forceFinalYield) monitor.markFinalYieldForced(true);
 			try {
-				await awaitAbortable(session.prompt(text, { ...promptOptions, runCommands: false, throwOnDrop: true }));
+				await awaitAbortable(session.withRunOwner(options.runToken, () =>
+					session.prompt(text, { ...promptOptions, runCommands: false, throwOnDrop: true })));
 				return;
 			} catch (err) {
 				if (!(err instanceof PromptDroppedError)) throw err;
@@ -2566,9 +2624,46 @@ async function driveSessionToYield(
 	return { exitCode, error, aborted, abortReasonText };
 }
 
+export const SUBAGENT_OUTCOME_EXCERPT_CHARS = 1_200;
+
+function outcomeExcerpt(text: string): string {
+	return Array.from(text).slice(0, SUBAGENT_OUTCOME_EXCERPT_CHARS).join("").trim();
+}
+
+function provisionalRunEffort(session: AgentSession): string | undefined {
+	if (session.isAutoThinking) return undefined;
+	const level = session.thinkingLevel;
+	return level === ThinkingLevel.Inherit || level === ThinkingLevel.Off ? undefined : level;
+}
+
+function startRunLifecycle(
+	eventBus: EventBus | undefined,
+	rootBus: EventBus | undefined,
+	frame: Omit<SubagentLifecyclePayload, "status" | "outcomeExcerpt">,
+) {
+	const startedPayload: SubagentLifecyclePayload = { ...frame, status: "started" };
+	let terminalEmitted = false;
+	const emitTerminal = (status: "completed" | "failed" | "aborted", excerpt: string): void => {
+		if (terminalEmitted) return;
+		emitSubagentFrame(eventBus, rootBus, TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
+			...startedPayload,
+			status,
+			outcomeExcerpt: excerpt,
+		});
+		terminalEmitted = true;
+	};
+	emitSubagentFrame(eventBus, rootBus, TASK_SUBAGENT_LIFECYCLE_CHANNEL, startedPayload);
+	return {
+		emitTerminal,
+		fallback: () => emitTerminal("failed", ""),
+	};
+}
+
 interface FinalizeRunArgs {
 	monitor: SubagentRunMonitor;
 	done: { exitCode: number; error?: string; aborted?: boolean; abortReason?: string; durationMs: number };
+	emitTerminal?: (status: "completed" | "failed" | "aborted", excerpt: string) => void;
+	outcomeText?: string;
 	index: number;
 	id: string;
 	agent: AgentDefinition;
@@ -2753,19 +2848,9 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 	progress.status = wasAborted ? "aborted" : exitCode === 0 ? "completed" : "failed";
 	monitor.scheduleProgress(true);
 
-	// Emit lifecycle end event after finalization so yield status is reflected
-	const settledPayload = {
-		id,
-		agent: agent.name,
-		parentToolCallId: args.parentToolCallId,
-		detached: args.detached,
-		agentSource: agent.source,
-		description: progress.description,
-		status: progress.status as "completed" | "failed" | "aborted",
-		sessionFile: args.sessionFile,
-		index,
-	};
-	emitSubagentFrame(args.eventBus, args.subagentEventBus, TASK_SUBAGENT_LIFECYCLE_CHANNEL, settledPayload);
+	// The accepted outcome is the finalized (possibly salvaged) output, not
+	// a progress tail or a previously persisted artifact.
+	args.emitTerminal?.(progress.status as "completed" | "failed" | "aborted", outcomeExcerpt(args.outcomeText ?? truncatedOutput));
 
 	return {
 		index,
@@ -2809,6 +2894,7 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 export interface IrcWakeTurnMonitorOptions {
 	/** Registry id of the kept-alive subagent whose autonomous IRC wake turns are monitored. */
 	id: string;
+	taskDepth?: number;
 	index?: number;
 	agent: AgentDefinition;
 	description?: string;
@@ -3041,9 +3127,12 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 				});
 			}
 		};
+		const runToken = crypto.randomUUID();
 		const turnMonitor = createSubagentRunMonitor({
 			index,
 			id,
+			runToken,
+			ownership: "lease",
 			agent,
 			task: ircTask,
 			description: options.description,
@@ -3060,22 +3149,24 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 			onYieldAccepted: registerWakeJob,
 		});
 
-		const startedPayload = {
-			id,
-			agent: agent.name,
-			parentToolCallId: options.parentToolCallId,
-			detached: true,
-			agentSource: agent.source,
-			description: options.description,
-			status: "started",
-			sessionFile,
-			index,
-		} as const;
-		emitSubagentFrame(options.eventBus, options.subagentEventBus, TASK_SUBAGENT_LIFECYCLE_CHANNEL, startedPayload);
-
-		turnMonitor.setActiveSession(session);
-		const unsubscribeTurn = turnMonitor.attach(session);
+		const lifecycle = startRunLifecycle(options.eventBus, options.subagentEventBus, {
+			id, runToken, depth: options.taskDepth, runKind: "wake",
+			model: session.model ? formatModelString(session.model) : undefined,
+			thinkingLevel: provisionalRunEffort(session),
+			agent: agent.name, agentSource: agent.source, description: options.description,
+			parentToolCallId: options.parentToolCallId, detached: true, sessionFile, index,
+		});
+		let unsubscribeTurn: () => void;
+		try {
+			turnMonitor.setActiveSession(session);
+			unsubscribeTurn = turnMonitor.attach(session);
+		} catch (error) {
+			turnMonitor.finish();
+			lifecycle.fallback();
+			throw error;
+		}
 		return async turnError => {
+			try {
 			unsubscribeTurn();
 			const activeSession = turnMonitor.takeActiveSession();
 			if (activeSession) turnMonitor.captureSalvage(activeSession);
@@ -3140,6 +3231,8 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 					parentToolCallId: options.parentToolCallId,
 					detached: true,
 					followUpTurn: true,
+					emitTerminal: lifecycle.emitTerminal,
+					outcomeText: yielded ? undefined : turnText,
 					sessionFile,
 					startTime: turnStartTime,
 				});
@@ -3190,6 +3283,10 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 				} finally {
 					relay.resolve();
 				}
+			}
+			} finally {
+				turnMonitor.releaseOwnership();
+				lifecycle.fallback();
 			}
 		};
 	});
@@ -3372,6 +3469,19 @@ export interface FollowUpTurnOptions {
  * stays adopted by the {@link AgentLifecycleManager} (idle → TTL park →
  * revive), and an aborted turn only aborts the in-flight turn.
  */
+function registeredRunDepth(id: string): number | undefined {
+	const registry = AgentRegistry.global();
+	let ref = registry.get(id);
+	let depth = 0;
+	const seen = new Set<string>();
+	while (ref?.parentId && !seen.has(ref.id)) {
+		seen.add(ref.id);
+		depth++;
+		ref = registry.get(ref.parentId);
+	}
+	return ref && !ref.parentId ? depth : undefined;
+}
+
 export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Promise<SingleResult> {
 	const { id, agent, message, signal } = options;
 	const index = options.index ?? 0;
@@ -3426,9 +3536,12 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 	const ref = AgentRegistry.global().get(id);
 	const sessionFile = ref?.sessionFile ?? undefined;
 
+	const runToken = crypto.randomUUID();
 	const monitor = createSubagentRunMonitor({
 		index,
 		id,
+		runToken,
+		ownership: "runOwner",
 		agent,
 		task: message,
 		description: options.description,
@@ -3445,19 +3558,15 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 		maxRuntimeMs: options.maxRuntimeMs ?? 0,
 	});
 
-	const startedPayload = {
-		id,
-		agent: agent.name,
-		parentToolCallId: options.parentToolCallId,
-		detached: true,
-		agentSource: agent.source,
-		description: options.description,
-		status: "started",
-		sessionFile,
-		index,
-	} as const;
-	emitSubagentFrame(options.eventBus, options.subagentEventBus, TASK_SUBAGENT_LIFECYCLE_CHANNEL, startedPayload);
+	const lifecycle = startRunLifecycle(options.eventBus, options.subagentEventBus, {
+		id, runToken, depth: registeredRunDepth(id), runKind: "followUp",
+		model: session.model ? formatModelString(session.model) : undefined,
+		thinkingLevel: provisionalRunEffort(session),
+		agent: agent.name, agentSource: agent.source, description: options.description,
+		parentToolCallId: options.parentToolCallId, detached: true, sessionFile, index,
+	});
 
+	try {
 	monitor.setActiveSession(session);
 	// The batch monitor attaches per attempt; the hook below detaches before each
 	// backoff and reattaches for the retry, so the teardown always releases the
@@ -3472,6 +3581,7 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 	let attemptUnsubscribe = monitor.attach(session);
 	try {
 		outcome = await driveSessionToYield(session, monitor, message, {
+			runToken,
 			onPromptBusy: async () => {
 				attemptUnsubscribe();
 				logger.debug("Subagent follow-up lost the prompt race to an IRC wake; backing off", { id });
@@ -3503,8 +3613,9 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 		monitor.finish();
 	}
 
-	return finalizeRunResult({
+	return await finalizeRunResult({
 		monitor,
+		emitTerminal: lifecycle.emitTerminal,
 		done: { ...outcome, abortReason: outcome.abortReasonText, durationMs: Date.now() - startTime },
 		index,
 		id,
@@ -3524,6 +3635,9 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 		sessionFile,
 		startTime,
 	});
+	} finally {
+		lifecycle.fallback();
+	}
 }
 
 /**
@@ -3606,9 +3720,12 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					);
 		deadlineTimer?.unref();
 		const externalSignal = signal ? AbortSignal.any([signal, deadlineController.signal]) : deadlineController.signal;
+		const runToken = crypto.randomUUID();
 		const monitor = createSubagentRunMonitor({
 			index,
 			id,
+			runToken,
+			ownership: "lease",
 			agent,
 			task,
 			assignment,
@@ -3618,25 +3735,19 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			modelOverride,
 			signal: externalSignal,
 			onProgress,
+			eventBus: options.eventBus,
+			subagentEventBus: options.subagentEventBus,
+			parentToolCallId: options.parentToolCallId,
+			detached: options.detached,
 			softRequestBudget: 0,
 			softRequestBudgetNotice: false,
 			maxRuntimeMs,
 		});
-		const emitExternalLifecycle = (status: "started" | "completed" | "failed" | "aborted"): void => {
-			options.eventBus?.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
-				id,
-				agent: agent.name,
-				parentToolCallId: options.parentToolCallId,
-				detached: options.detached,
-				agentSource: agent.source,
-				description: options.description,
-				status,
-				sessionFile: undefined,
-				index,
-			});
-		};
-		let externalTerminalEmitted = false;
-		emitExternalLifecycle("started");
+		const lifecycle = startRunLifecycle(options.eventBus, options.subagentEventBus, {
+			id, runToken, depth: (options.taskDepth ?? 0) + 1, runKind: "spawn",
+			agent: agent.name, agentSource: agent.source, description: options.description,
+			parentToolCallId: options.parentToolCallId, detached: options.detached, index,
+		});
 		try {
 			const result = await externalAdapter.execute({
 				agent,
@@ -3697,19 +3808,19 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				startTime,
 				rawOutputOverride: result.output,
 			});
-			emitExternalLifecycle(finalized.aborted ? "aborted" : finalized.exitCode === 0 ? "completed" : "failed");
-			externalTerminalEmitted = true;
+			lifecycle.emitTerminal(
+				finalized.aborted ? "aborted" : finalized.exitCode === 0 ? "completed" : "failed",
+				outcomeExcerpt(finalized.output),
+			);
 			return {
 				...finalized,
 				description: options.description,
 				usage: result.usage,
 			};
-		} catch (error) {
-			if (!externalTerminalEmitted) emitExternalLifecycle(externalSignal.aborted ? "aborted" : "failed");
-			throw error;
 		} finally {
 			if (deadlineTimer) clearTimeout(deadlineTimer);
 			monitor.finish();
+			lifecycle.fallback();
 		}
 	}
 
@@ -3807,9 +3918,13 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	const lspEnabled = enableLsp ?? true;
 	const skipPythonPreflight = Array.isArray(toolNames) && !toolNames.includes("eval");
 
+	const runToken = crypto.randomUUID();
+	let lifecycle: ReturnType<typeof startRunLifecycle> | undefined;
 	const monitor = createSubagentRunMonitor({
 		index,
 		id,
+		runToken,
+		ownership: "runOwner",
 		agent,
 		task,
 		assignment,
@@ -3838,6 +3953,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		attachIrcWakeTurnMonitor(target, {
 			id,
 			index,
+			taskDepth: childDepth,
 			agent,
 			description: options.description,
 			modelOverride,
@@ -4451,18 +4567,14 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			}
 
 			// Emit lifecycle start event
-			const startedPayload = {
-				id,
-				agent: agent.name,
-				parentToolCallId: options.parentToolCallId,
-				detached: options.detached,
-				agentSource: agent.source,
-				description: options.description,
-				status: "started" as const,
-				sessionFile: subtaskSessionFile,
-				index,
-			};
-			emitSubagentFrame(options.eventBus, options.subagentEventBus, TASK_SUBAGENT_LIFECYCLE_CHANNEL, startedPayload);
+			lifecycle = startRunLifecycle(options.eventBus, options.subagentEventBus, {
+				id, runToken, depth: childDepth, runKind: "spawn",
+				model: session.model ? formatModelString(session.model) : undefined,
+				thinkingLevel: provisionalRunEffort(session),
+				agent: agent.name, agentSource: agent.source, description: options.description,
+				parentToolCallId: options.parentToolCallId, detached: options.detached,
+				sessionFile: subtaskSessionFile, index,
+			});
 
 			// Todos are parent-owned bookkeeping and stripped from subagents —
 			// except under prewalk, whose plan nudge + todo gate require the
@@ -4604,7 +4716,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			}
 
 			readyAt = performance.now();
-			const outcome = await driveSessionToYield(session, monitor, task, { solutionSpace: options.solutionSpace });
+			const outcome = await driveSessionToYield(session, monitor, task, { runToken, solutionSpace: options.solutionSpace });
 			// Acceptance boundary (#11079): the run's final result is settled, so
 			// stamp the lifecycle and terminalize a ref the run-state mirror left
 			// `running` before the (possibly slow) cleanup below.
@@ -4785,10 +4897,12 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		};
 	};
 
+	try {
 	const done = await runSubagent();
 	monitor.finish();
 
 	const result = await finalizeRunResult({
+		emitTerminal: lifecycle?.emitTerminal,
 		monitor,
 		done,
 		index,
@@ -4822,4 +4936,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		};
 	AgentRegistry.global().setHistory(id, { outputPath: result.outputPath });
 	return result;
+	} finally {
+		lifecycle?.fallback();
+	}
 }

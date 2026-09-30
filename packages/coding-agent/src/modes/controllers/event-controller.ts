@@ -372,6 +372,8 @@ export class EventController {
 				this.ctx.statusLine.invalidate();
 				this.ctx.ui.requestRender();
 			},
+			// The live ingest subscriber handles finalized advisor reasoning.
+			advisor_message: async () => {},
 			thinking_level_changed: async () => {
 				this.ctx.statusLine.invalidate();
 				this.ctx.updateEditorBorderColor();

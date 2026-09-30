@@ -9,7 +9,7 @@ import {
 	TOOL_RESULT_ADDITIONAL_CONTEXT,
 	type ToolResultWithAdditionalContext,
 } from "@oh-my-pi/pi-agent-core";
-import type { Context, SimpleStreamOptions, ToolResultMessage } from "@oh-my-pi/pi-ai";
+import { Effort, type Context, type SimpleStreamOptions, type ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { kCursorExecResolved } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
@@ -634,6 +634,45 @@ describe("Agent", () => {
 		await Promise.resolve();
 		expect(predecessorIdleResolved).toBe(true);
 		expect(agent.state.isStreaming).toBe(false);
+	});
+
+	it("keeps request effort on delayed same-model output after a live switch", async () => {
+		const mock = createMockModel({ reasoning: true, responses: [{ content: ["high response"] }, { content: ["low response"] }] });
+		Object.assign(mock.model, { thinking: { mode: "effort", efforts: [Effort.Low, Effort.High] } });
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		let requests = 0;
+		const events: AgentEvent[] = [];
+		const agent = new Agent({
+			initialState: { model: mock.model },
+			streamFn: async (model, context, options) => {
+				if (++requests === 1) {
+					entered.resolve();
+					await release.promise;
+				}
+				return mock.stream(model, context, options);
+			},
+		});
+		agent.subscribe(event => events.push(event));
+		agent.setThinkingLevel("high");
+		const first = agent.prompt("first");
+		await entered.promise;
+		agent.setThinkingLevel("low");
+		release.resolve();
+		await first;
+		await agent.prompt("second");
+
+		const generated = events.filter((event): event is Extract<AgentEvent, { type: "message_end" }> =>
+			event.type === "message_end" && event.message.role === "assistant" &&
+			event.message.content.some(block => block.type === "text" && Boolean(block.text)));
+		expect(generated).toHaveLength(2);
+		expect(generated.map(event => event.requestReasoning)).toEqual(["high", "low"]);
+		expect(generated.map(event => event.requestEffectiveThinkingLevel)).toEqual([Effort.High, Effort.Low]);
+		expect(generated.map(event => event.requestModelId)).toEqual([mock.model.id, mock.model.id]);
+		expect(events.filter((event): event is Extract<AgentEvent, { type: "message_update" }> =>
+			event.type === "message_update" &&
+			event.message.content.some(block => block.type === "text" && Boolean(block.text)))
+			.map(event => event.requestReasoning)).toContain("high");
 	});
 
 	it("classifies an in-flight continuation cancellation as aborted", async () => {

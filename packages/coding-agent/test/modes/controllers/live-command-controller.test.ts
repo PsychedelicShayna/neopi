@@ -40,11 +40,17 @@ function createHarness(): Harness {
 	let liveStatus: unknown = null;
 	const sentToVoice: Array<[string, string]> = [];
 	const presented: unknown[] = [];
+	const settings = Settings.isolated({ "live.voice": "vale" });
 	const chatContainer = new TranscriptContainer();
 	const liveTranscriptContainer = new Container();
-	const primarySession = { isStreaming: false };
+	const primarySession = {
+		isStreaming: false,
+		settings,
+		messages: [],
+		subscribe: () => () => {},
+	};
 	const ctx = {
-		settings: Settings.isolated({ "live.voice": "vale" }),
+		settings,
 		keybindings: { getKeys: vi.fn(() => ["ctrl+l"]) },
 		session: primarySession,
 		viewSession: {},
