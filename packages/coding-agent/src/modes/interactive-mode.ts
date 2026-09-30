@@ -169,6 +169,7 @@ import { StreamPublisher } from "../stream/publisher";
 import { newRecordingPath, SessionRecorder } from "../stream/recording";
 import { StreamRedactor } from "../stream/redactor";
 import {
+	formatMoreItems,
 	FEED_MODEL_BADGE_WIDTH,
 	formatFeedModelBadge,
 	isFeedModelBadgeEnabled,
@@ -189,14 +190,16 @@ import {
 	type TodoHudStateEntryData,
 } from "../tools/todo";
 import {
+	formatPhaseDisplayName,
 	isClosedTodo,
+	selectCollapsedTodos,
 	setActiveTodoDescriptionsProvider,
 	todoMatchesAnyDescription,
 } from "@oh-my-pi/pi-tui/tools/todo";
 import { vocalizer } from "../tts/vocalizer";
 import { applyHyperlinkSetting, fileHyperlink } from "@oh-my-pi/pi-tui/render/hyperlink";
 import { renderTreeList } from "@oh-my-pi/pi-tui/render/tree-list";
-import { formatTodoLine, renderTodoLines, TODO_LINE_BUDGET, TodoSection } from "./side-panel/todo-section";
+import { activePhase, formatTodoLine, renderTodoLines, TODO_LINE_BUDGET, TodoSection } from "./side-panel/todo-section";
 import { SidePanelController } from "./controllers/side-panel-controller";
 import { formatStartupChangelogSummary, type StartupChangelogSelection } from "../utils/changelog";
 import { copyToClipboard } from "../utils/clipboard";
@@ -3965,7 +3968,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.#todoHudHidden || phases.length === 0) return;
 		const expanded = this.todoExpanded;
 		const multiPhase = phases.length > 1;
-		const activeIdx = phases.indexOf(this.#getActivePhase(phases) ?? phases[0]);
+		const activeIdx = phases.indexOf(activePhase(phases) ?? phases[0]);
 		const subsequentStageCap = 4;
 		const activeTaskCap = 5;
 		// A pending todo "lights up" (accent) when an in-flight subagent is doing

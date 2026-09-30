@@ -206,6 +206,11 @@ export declare class LiveWebRtcPeer {
   acceptAnswer(sdp: string): Promise<void>
   /** Wait until the `oai-events` data channel is open. */
   waitForOpen(timeoutMs?: number | undefined | null): Promise<void>
+  /**
+   * Queued speaker backlog and audio dropped to stay within about two
+   * seconds.
+   */
+  playbackQueueStats(): PlaybackQueueStats
   /** Queue 16 kHz mono floating-point PCM; false means the queue dropped it. */
   pushAudio(samples: Float32Array): boolean
   /**
@@ -2438,6 +2443,17 @@ export interface PdfMarkdownResult {
  * be parsed or converted.
  */
 export declare function pdfToMarkdown(input: Uint8Array): Promise<PdfMarkdownResult>
+
+/**
+ * Speaker backlog still waiting to play, and audio already dropped to keep it
+ * near two seconds.
+ */
+export interface PlaybackQueueStats {
+  /** Milliseconds of audio still queued for the speaker. */
+  queuedMs: number
+  /** Milliseconds of audio dropped so playback could catch up to live. */
+  droppedMs: number
+}
 
 export interface PointerOptions {
   button?: string

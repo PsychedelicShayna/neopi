@@ -9187,6 +9187,7 @@ export class AgentSession implements SettingsScope {
 			index = selected.findIndex(message => isUserAuthoredQueuedMessage(message) && queueChipText(message) === text);
 		}
 		if (index < 0) return false;
+		this.sessionManager.releaseEntryId(getMessageEntryId(selected[index]));
 
 		this.agent.replaceQueue(queue, this.#withoutQueuedUserMessage(selected, index));
 		this.#reconcileQueuedMessageDrain();

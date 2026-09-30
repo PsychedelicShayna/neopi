@@ -40,9 +40,10 @@ export class EvalRunner {
 	#activeExecutions = new Set<Promise<unknown>>();
 	#disposing = false;
 
-	constructor(host: EvalRunnerHost, options: { kernelOwnerId: string }) {
+	constructor(host: EvalRunnerHost, options: { kernelOwnerId: string; parentSessionId?: string }) {
 		this.#host = host;
 		this.#kernelOwnerId = options.kernelOwnerId;
+		this.#parentSessionId = options.parentSessionId;
 	}
 
 	async execute(
@@ -76,9 +77,7 @@ export class EvalRunner {
 
 			const session = this.#host.toolSession();
 			const backend = await this.#resolveBackend(language, session);
-			const sessionId =
-				this.getSessionId() ??
-				defaultEvalSessionId({ cwd, getSessionFile: () => this.#host.sessionManager.getSessionFile() ?? null });
+			const sessionId = this.getSessionId();
 			const result = await invokeEvalCell(backend, code, {
 				cwd,
 				sessionId,
@@ -178,7 +177,7 @@ export class EvalRunner {
 	getKernelOwnerId(): string {
 		return this.#kernelOwnerId;
 	}
-	getSessionId(): string | null {
+	getSessionId(): string {
 		if (this.#parentSessionId !== undefined) return this.#parentSessionId;
 		return defaultEvalSessionId({
 			cwd: this.#host.sessionManager.getCwd(),
