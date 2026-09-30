@@ -108,7 +108,7 @@ describe("on-demand effort classification", () => {
 					},
 				}) as never,
 		);
-		const effort = await classifyDifficulty("solve the bug", {
+		const effort = await classifyDifficulty({ request: "solve the bug" }, {
 			settings,
 			registry: registry(),
 			model,
@@ -127,7 +127,7 @@ describe("on-demand effort classification", () => {
 
 	it("returns a singleton without contacting the classifier", async () => {
 		const call = vi.spyOn(ai, "completeSimple");
-		const effort = await classifyDifficulty("anything", {
+		const effort = await classifyDifficulty({ request: "anything" }, {
 			settings: Settings.isolated({}),
 			registry: registry(),
 			model,
@@ -141,7 +141,7 @@ describe("on-demand effort classification", () => {
 		const settings = Settings.isolated({ modelRoles: { effort: "mock/classifier:auto" } });
 		const call = vi.spyOn(ai, "completeSimple");
 		await expect(
-			classifyDifficulty("anything", {
+			classifyDifficulty({ request: "anything" }, {
 				settings,
 				registry: registry(),
 				model,
@@ -164,6 +164,7 @@ describe("on-demand effort classification", () => {
 		} as never);
 		const notices: string[] = [];
 		const judge = resolveJudge({
+			purpose: "direct-judgment-test",
 			settings,
 			registry: registry(),
 			onEffortDisclosure: notice => notices.push(notice),
@@ -211,6 +212,7 @@ describe("on-demand effort classification", () => {
 			} as never);
 		const notices: string[] = [];
 		const judge = resolveJudge({
+			purpose: "direct-judgment-test",
 			settings,
 			registry: registry([model, backup]),
 			onEffortDisclosure: notice => notices.push(notice),
@@ -241,7 +243,7 @@ describe("on-demand effort classification", () => {
 			stopReason: "stop",
 			content: [{ type: "text", text: "high" }],
 		} as never);
-		const judge = resolveJudge({ settings, registry: registry() });
+		const judge = resolveJudge({ settings, registry: registry(), purpose: "direct-judgment-test" });
 		await judge.judge({
 			state: "a hard debugging request",
 			questions: {
@@ -270,6 +272,7 @@ describe("on-demand effort classification", () => {
 			} as never);
 		const notices: string[] = [];
 		const judge = resolveJudge({
+			purpose: "direct-judgment-test",
 			settings,
 			registry: registry(),
 			onEffortDisclosure: notice => notices.push(notice),

@@ -9,6 +9,7 @@ import * as downloader from "@oh-my-pi/pi-coding-agent/stt/downloader";
 import { STTController, type STTControllerDependencies } from "@oh-my-pi/pi-coding-agent/stt/stt-controller";
 import { getTinyModelsCacheDir, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
+import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
 const WHISPER_BASE_REPO = "onnx-community/whisper-base";
 const PARAKEET_REPO = "csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8";
@@ -19,6 +20,7 @@ const DICTATION_MODELS = [
 	getBundledModel("local", "parakeet-tdt-0.6b-v3"),
 ];
 const registry: STTControllerDependencies["registry"] = {
+	authStorage: createInMemoryAuthStorage(),
 	getError: () => undefined,
 	getAvailable: () => DICTATION_MODELS,
 	getAll: () => DICTATION_MODELS,
@@ -188,6 +190,7 @@ describe("STTController preflight", () => {
 	it("falls back to the full parakeet id when the dictation chain is empty", async () => {
 		settings.setModelRole("dictation", "missing/model");
 		const emptyRegistry: STTControllerDependencies["registry"] = {
+			authStorage: createInMemoryAuthStorage(),
 			getError: () => undefined,
 			getAvailable: () => [],
 			getAll: () => [],

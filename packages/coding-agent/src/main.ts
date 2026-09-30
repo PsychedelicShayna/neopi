@@ -25,7 +25,6 @@ import { fuzzyFilter } from "@oh-my-pi/pi-tui/fuzzy";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { reset as resetCapabilities } from "./capability";
 import { readChatModeEntry, resolveChatMode } from "./chat/chat-mode";
-import { type Args, reportUnrecognizedFlags, validateToolNames } from "./cli/args";
 import { type Args, reportInvalidFlagValues, reportUnrecognizedFlags, validateToolNames } from "./cli/args";
 import { applyExtensionFlags, type ExtensionFlagSink } from "./cli/extension-flags";
 import { processFileArguments } from "./cli/file-processor";
@@ -139,7 +138,6 @@ import {
 import { EventBus } from "./utils/event-bus";
 import { LAUNCH_PARENT_PID } from "./utils/launch-parent";
 import { resolveFirstLaunchPythonEvalWarning } from "./eval/startup-warning";
-import { CliUsageError } from "./cli/usage-error";
 
 import { cfgAdvisorEnabled } from "./advisor/settings";
 import { cfgToolsApprovalMode } from "./tools/settings";

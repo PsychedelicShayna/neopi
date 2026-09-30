@@ -6,11 +6,13 @@ import * as downloader from "../src/stt/downloader";
 import { STTController, type STTControllerDependencies } from "../src/stt/stt-controller";
 import { evaluateSubmitTrigger, type SttSubmitTrigger } from "../src/stt/submit-trigger";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
+import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
 import { cfgSttSubmitTrigger } from "@oh-my-pi/pi-coding-agent/stt/settings";
 
 const DICTATION_MODELS = [getBundledModel("local", "whisper-base")];
 const registry: STTControllerDependencies["registry"] = {
+	authStorage: createInMemoryAuthStorage(),
 	getError: () => undefined,
 	getAvailable: () => DICTATION_MODELS,
 	getAll: () => DICTATION_MODELS,

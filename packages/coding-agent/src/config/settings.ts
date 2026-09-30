@@ -1976,11 +1976,11 @@ export class Settings {
 		const previousEfforts = cfgFallbackEffortSelections.get(this);
 		for (const setting of [cfgRetryFallbackChains, cfgFallbackEffortSelections]) {
 			this.#captureGlobalMutation(
-				setting.id,
+				JSON.stringify(setting.segments),
 				this.#modifiedPathMutations,
 				getByPath(this.#global, setting.segments),
 			);
-			this.#modified.add(setting.id);
+			this.#modified.set(JSON.stringify(setting.segments), setting.segments);
 			this.#releaseSoftPin(setting);
 		}
 		this.#global = staged;
@@ -3965,7 +3965,7 @@ export class Settings {
 				}
 				if (shouldWrite) {
 					const changedPaths = [
-						...appliedPaths.map(path => path.split(".")),
+						...writtenPaths,
 						...[...new Set([...rolesToApply, ...rolesToPreserve])].map(role => ["modelRoles", role]),
 						...[...new Set([...effortsToApply, ...effortsToPreserve])].map(role => [
 							"roleEffortSelections",

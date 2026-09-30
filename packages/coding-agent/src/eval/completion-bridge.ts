@@ -425,7 +425,7 @@ async function executeCompletion(
 				if (decision.disclosure) disclose(decision.disclosure);
 				if (selection?.mode === "auto") {
 					try {
-						reasoning = await classifyDifficulty(prompt, {
+						reasoning = await classifyDifficulty({ request: prompt }, {
 							settings: session.settings,
 							registry,
 							model,

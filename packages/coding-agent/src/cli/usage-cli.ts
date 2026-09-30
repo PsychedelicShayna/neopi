@@ -10,6 +10,7 @@
 import {
 	ANTHROPIC_OAUTH_GRANT_TTL_MS,
 	type AuthAccountPolicy,
+	type AuthStorage,
 	type DisabledCredentialSummary,
 	type OAuthAccountIdentity,
 	resolveUsedFraction,

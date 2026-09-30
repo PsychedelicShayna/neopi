@@ -62,7 +62,7 @@ describe("InteractiveMode quit while docked", () => {
 		const composer = new Composer({
 			terminal: term,
 			tuiOptions: { renderScheduler: scheduler },
-			preferences: { ...COMPOSER_DEFAULTS, quiet: true, spellingTypoDetection: false, spellingAutocomplete: false },
+			preferences: { ...COMPOSER_DEFAULTS, quiet: true, spellingTypoDetection: false, spellingAutocomplete: "off" },
 		});
 		composer.start();
 		const mode = new InteractiveMode(

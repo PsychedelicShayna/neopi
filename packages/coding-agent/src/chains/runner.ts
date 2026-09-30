@@ -249,7 +249,7 @@ export async function runChainStep(
 		ThinkingLevel.Inherit;
 	if (selection?.mode === "auto" && decision) {
 		try {
-			const classified = await classifyDifficulty(input, {
+			const classified = await classifyDifficulty({ request: input }, {
 				settings: options.settings,
 				registry: options.modelRegistry,
 				model: resolved.model,

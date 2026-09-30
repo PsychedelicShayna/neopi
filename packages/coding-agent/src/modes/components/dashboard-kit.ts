@@ -6,6 +6,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
+import type { KeyName } from "@oh-my-pi/pi-tui/app-keybindings";
 import { theme } from "@oh-my-pi/pi-tui/theme/theme";
 import {
 	matchesSelectCancel,
@@ -213,17 +214,17 @@ export function dashboardKeyHint(action: Keybinding, description: string): strin
 }
 
 /** Render a non-configurable key (arrows, page keys) with the same hint styling. */
-export function dashboardRawKeyHint(key: string, description: string): string {
+export function dashboardRawKeyHint(key: KeyName | readonly KeyName[], description: string): string {
 	return rawKeyHint(key, description);
 }
 
 /** The two navigation hints every dashboard footer carries. */
 export function dashboardMoveHint(): string {
-	return rawKeyHint("↑↓", "move");
+	return rawKeyHint(["up", "down"], "move");
 }
 
 export function dashboardPageHint(): string {
-	return rawKeyHint("PgUp/PgDn", "page");
+	return rawKeyHint(["pageUp", "pageDown"], "page");
 }
 
 /** Join footer hints with the house dim separator. */

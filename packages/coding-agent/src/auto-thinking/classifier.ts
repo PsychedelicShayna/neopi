@@ -147,7 +147,7 @@ export async function classifyDifficulty(
 		deps.signal?.throwIfAborted();
 		if (candidates.length === 1) return candidates[0];
 		const solutionSpace = input.solutionSpace?.trim();
-		const state = solutionSpace
+		const state: Record<string, string> = solutionSpace
 			? { solution_space: preprocessTinyMessage(solutionSpace) }
 			: { request: await readEffortContext(input.request, deps.sessionManager, deps.onContextFallback) };
 		deps.signal?.throwIfAborted();
@@ -172,6 +172,7 @@ export async function classifyDifficulty(
 			settings: deps.settings,
 			registry: deps.registry,
 			sessionId: deps.sessionId,
+			purpose: "auto-thinking",
 			metadataResolver: deps.metadataResolver,
 			onUsage: deps.onUsage,
 			onEffortDisclosure: deps.onEffortDisclosure,

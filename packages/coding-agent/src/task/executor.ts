@@ -634,6 +634,8 @@ export interface ExecutorOptions {
 	 * passes its own `getAgentId()`).
 	 */
 	parentAgentId?: string;
+	/** Parent eval kernel session for external adapter ownership; distinct from the agent registry id. */
+	parentEvalSessionId?: string;
 	/**
 	 * Async-job domain of the spawning root. The child session inherits it so
 	 * its own background jobs, completion delivery, and teardown reaping stay in

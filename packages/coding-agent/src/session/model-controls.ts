@@ -828,7 +828,7 @@ export class ModelControls {
 						onEffortDisclosure: message => this.#host.emitNotice("warning", message, "effort-policy"),
 						onUsage: usage => {
 							const entryId = this.#host.sessionManager.appendModelUsage(
-								{ purpose: "auto-thinking", ...usage },
+								usage,
 								usageOwner,
 							);
 							if (entryId) usageOwner.parentId = entryId;

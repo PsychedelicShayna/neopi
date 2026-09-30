@@ -23,7 +23,7 @@ export interface XAIHttpTransport {
 /** Registry operations used to resolve an already-selected xAI model's transport. */
 export type XAIHttpTransportRegistry = Pick<
 	ModelRegistry,
-	"getAll" | "getProviderBaseUrl" | "find" | "resolveModelHeaders" | "getProviderHeaders"
+	"authStorage" | "getAll" | "getProviderBaseUrl" | "find" | "resolveModelHeaders" | "getProviderHeaders"
 >;
 
 /**

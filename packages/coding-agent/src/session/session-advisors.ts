@@ -1332,7 +1332,7 @@ export class SessionAdvisors {
 							if (decision?.disclosure) this.#host.emitNotice("warning", decision.disclosure, "effort-policy");
 							let effort: Effort | undefined;
 							try {
-								effort = await classifyDifficulty(currentAdvisorInput, {
+								effort = await classifyDifficulty({ request: currentAdvisorInput }, {
 									settings: this.#host.settings,
 									registry: this.#host.modelRegistry,
 									model,

@@ -12,6 +12,7 @@ import * as downloader from "@oh-my-pi/pi-coding-agent/stt/downloader";
 import { STTController } from "@oh-my-pi/pi-coding-agent/stt/stt-controller";
 import { setAgentDir } from "@oh-my-pi/pi-utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
+import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
 import { cfgSttLanguage, cfgSttSubmitTrigger } from "@oh-my-pi/pi-coding-agent/stt/settings";
 
@@ -45,6 +46,7 @@ function makeOptions() {
 
 function registryFor(model: Model) {
 	return {
+		authStorage: createInMemoryAuthStorage(),
 		getError: () => undefined,
 		getAvailable: () => [model],
 		getAll: () => [model],
