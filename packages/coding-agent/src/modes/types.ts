@@ -117,6 +117,8 @@ export interface InteractiveModeContext {
 	ui: TUI;
 	chatContainer: TranscriptContainer;
 	pendingMessagesContainer: Container;
+	/** Single-row live assistant caption, outside transcript scrollback while a voice turn streams. */
+	liveTranscriptContainer: Container;
 	statusContainer: Container;
 	/** Whether the status/working row rendered lines in the latest frame; the band composer's editor top gap collapses only then. */
 	readonly statusRowOccupied: boolean;
@@ -306,11 +308,12 @@ export interface InteractiveModeContext {
 	 */
 	present(content: Component | readonly Component[]): void;
 	/**
-	 * Mount command output immediately while idle, or defer it until the active
-	 * agent turn ends so a growing live block cannot push duplicate rows into
-	 * native scrollback.
+	 * Mount output immediately while idle, or defer it until the active agent
+	 * turn ends so a growing live block cannot push duplicate rows into native
+	 * scrollback. Voice replies use `preview: false`: their one-row caption
+	 * already shows progress while the complete reply waits for the settle.
 	 */
-	presentCommandOutput(content: Component | readonly Component[]): void;
+	presentCommandOutput(content: Component | readonly Component[], options?: { preview?: boolean }): void;
 	/** Show session information in a focused transient overlay; `context` adds a context-window meter natively. */
 	showSessionInfo(info: string, context?: ContextUsage): void;
 	/** Mount command output deferred by {@link presentCommandOutput}. */

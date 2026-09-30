@@ -14,6 +14,8 @@ import {
 	cfgLiveSubmitKeyword,
 	cfgLiveSubmitSilenceMs,
 } from "@oh-my-pi/pi-coding-agent/live/settings";
+import { Container, type Component } from "@oh-my-pi/pi-tui/tui";
+import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 
 interface Harness {
 	ctx: InteractiveModeContext;
@@ -38,10 +40,19 @@ function createHarness(): Harness {
 	let liveStatus: unknown = null;
 	const sentToVoice: Array<[string, string]> = [];
 	const presented: unknown[] = [];
+	const chatContainer = new TranscriptContainer();
+	const liveTranscriptContainer = new Container();
+	const primarySession = { isStreaming: false };
 	const ctx = {
 		settings: Settings.isolated({ "live.voice": "vale" }),
 		keybindings: { getKeys: vi.fn(() => ["ctrl+l"]) },
-		session: {},
+		session: primarySession,
+		viewSession: {},
+		effectiveHideThinkingBlock: false,
+		proseOnlyThinking: false,
+		assistantImagesVisible: false,
+		hideToolActivity: false,
+		toolOutputExpanded: false,
 		extractAssistantText: vi.fn(() => ""),
 		editor,
 		editorContainer: {
@@ -56,8 +67,18 @@ function createHarness(): Harness {
 		showError: vi.fn(),
 		showStatus: vi.fn(),
 		showWarning: vi.fn(),
-		chatContainer: { children: [] },
-		present: vi.fn((component: unknown) => presented.push(component)),
+		chatContainer,
+		liveTranscriptContainer,
+		present: vi.fn((component: Component) => {
+			presented.push(component);
+			chatContainer.addChild(component);
+		}),
+		presentCommandOutput: vi.fn((component: Component) => {
+			if (!primarySession.isStreaming) {
+				presented.push(component);
+				chatContainer.addChild(component);
+			}
+		}),
 		statusLine: {
 			setLiveStatus: vi.fn((status: unknown) => {
 				liveStatus = status;
@@ -371,6 +392,53 @@ describe("LiveCommandController", () => {
 		expect(h.liveStatus()).toEqual({ phase: "connecting", destination: "primary" });
 		await h.controller.stop();
 		expect(h.liveStatus()).toBeNull();
+	});
+
+	it("keeps an in-flight primary block visible while many voice turns finish mid-turn", async () => {
+		const h = createHarness();
+		(h.ctx.session as { isStreaming: boolean }).isStreaming = true;
+		const primary = {
+			render: () => ["PRIMARY STREAM"],
+			isTranscriptBlockFinalized: () => false,
+		};
+		h.ctx.chatContainer.addChild(primary);
+		await h.controller.handleCommand();
+		try {
+			for (let turn = 1; turn <= 12; turn++) {
+				h.callbacks().onTranscript?.({ role: "assistant", turn, text: `Voice turn ${turn}`, final: false });
+				h.callbacks().onTranscript?.({ role: "assistant", turn, text: `Voice turn ${turn} final`, final: true });
+			}
+			const rows = h.ctx.chatContainer.renderViewport(80, 6, { tick: 1, now: 1 });
+			expect(rows).toContain("PRIMARY STREAM");
+			expect(h.ctx.liveTranscriptContainer.render(80).join(" ")).toContain("Voice turn 12 final");
+			expect(h.ctx.chatContainer.render(80)).toEqual(["PRIMARY STREAM"]);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	it("keeps one safe voice caption row while streaming and archives the full reply when idle", async () => {
+		const h = createHarness();
+		await h.controller.handleCommand();
+		try {
+			h.callbacks().onTranscript?.({
+				role: "assistant",
+				turn: 1,
+				text: "A\tlong reply\nwith enough words to exceed the short terminal and keep growing",
+				final: false,
+			});
+			const caption = h.ctx.liveTranscriptContainer.render(24);
+			expect(caption).toHaveLength(1);
+			expect(Bun.stringWidth(caption[0]!, { countAnsiEscapeCodes: false })).toBeLessThanOrEqual(24);
+			expect(caption[0]).toContain("Voice:");
+			expect(h.ctx.chatContainer.render(80)).toEqual([]);
+
+			h.callbacks().onTranscript?.({ role: "assistant", turn: 1, text: "Voice completed", final: true });
+			expect(h.ctx.liveTranscriptContainer.render(24)).toEqual([]);
+			expect(Bun.stripANSI(h.ctx.chatContainer.render(80).join(" "))).toContain("Voice completed");
+		} finally {
+			await h.controller.stop();
+		}
 	});
 
 	it("routes Enter by destination: primary untouched, voice consumed, both shared, images to primary", async () => {

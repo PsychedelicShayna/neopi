@@ -175,6 +175,7 @@ import {
 	formatFeedModelBadge,
 	isFeedModelBadgeEnabled,
 	previewLine,
+	PREVIEW_LIMITS,
 	replaceTabs,
 	shortenEmbeddedPaths,
 	shortenPath,
@@ -654,6 +655,24 @@ class DescribedComponent implements Component {
 	}
 }
 
+/** Keep queued operator output from pushing a live voice caption and the primary stream off-screen. */
+class PendingLiveOutputContainer extends AnchoredLiveContainer {
+	constructor(private readonly mode: InteractiveMode) {
+		super();
+	}
+
+	override render(width: number): readonly string[] {
+		const rows = super.render(width);
+		if (this.mode.liveTranscriptContainer.children.length === 0 || rows.length <= PREVIEW_LIMITS.COLLAPSED_LINES) {
+			return rows;
+		}
+		const hidden = rows.length - PREVIEW_LIMITS.COLLAPSED_LINES;
+		return [
+			theme.fg("dim", `Operator output: ${hidden} earlier rows hidden`),
+			...rows.slice(-PREVIEW_LIMITS.COLLAPSED_LINES),
+		];
+	}
+}
 class TodoHudContainer extends AnchoredLiveContainer {
 	constructor(private readonly mode: InteractiveMode) {
 		super();
@@ -1202,6 +1221,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	errorBannerContainer: Container;
 	modelCycleContainer: Container;
 	deferredCommandContainer: Container;
+	liveTranscriptContainer: Container;
 	editor: CustomEditor;
 	editorContainer: Container;
 	/** Composer attachment band (chip cards) rendered directly above the prompt box. */
@@ -1489,6 +1509,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#recorderStarting = false;
 
 	#pendingCommandOutput: Component[] = [];
+	#pendingCommandPreview: Component[] = [];
 	#pendingCommandOutputSessionId: string | undefined;
 	/** Commands (not components) queued while streaming, for the deferral hint. */
 	#pendingCommandOutputCommands = 0;
@@ -1657,12 +1678,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.statusContainer.disposeChildren();
 		this.pendingMessagesContainer.disposeChildren();
+		this.liveTranscriptContainer.disposeChildren();
 		this.#clearJudgmentBatchProgress();
 		this.#cancelModelCycleClearTimer();
 		this.modelCycleContainer.disposeChildren();
 		this.deferredCommandContainer.disposeChildren();
 		this.#pendingCommandOutput = [];
 		this.#pendingCommandOutputSessionId = undefined;
+		this.#pendingCommandPreview = [];
 		this.#pendingCommandOutputCommands = 0;
 		this.compactionQueuedMessages = [];
 		this.streamingComponent = undefined;
@@ -1808,7 +1831,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		);
 		this.ui.setInlineMouseTrackingProvider(() => this.#mouseCapture);
 		this.chatContainer = new TranscriptContainer();
-		this.pendingMessagesContainer = new AnchoredLiveContainer();
+		this.pendingMessagesContainer = new PendingLiveOutputContainer(this);
+		this.liveTranscriptContainer = new AnchoredLiveContainer();
 		this.progressHudContainer = new AnchoredLiveContainer();
 		this.progressHudContainer.addChild(this.#judgmentBatchProgressHud);
 		this.progressHudContainer.addChild(this.#downloadActivityHud);
@@ -2152,6 +2176,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.errorBannerContainer,
 				this.modelCycleContainer,
 				this.deferredCommandContainer,
+				this.liveTranscriptContainer,
 				// Judge batches and automatic downloads stay editor-anchored and update
 				// independently of transcript output, directly above the working/throughput/title row.
 				this.progressHudContainer,
@@ -6977,9 +7002,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * Defer transcript command panels while the agent is streaming, then mount
 	 * them at the next settle, terminal or not. A non-terminal settle is only a
 	 * scheduling pause, so resumed streaming can still land below a panel
-	 * flushed there. That is preferred over leaving it queued behind a command
-	 * the user runs during the pause, which mounts immediately and would put the
-	 * older panel out of order.
+	 * flushed there. If a new voice reply or operator command arrives after
+	 * streaming stops but before the settle event, flush older panels first so
+	 * the transcript remains in arrival order.
 	 *
 	 * The deferral is acknowledged in {@link deferredCommandContainer}, an
 	 * anchored container above the editor. Nothing is mounted into the
@@ -6988,8 +7013,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * anchored container is cleared and rebuilt in place without adding history
 	 * rows — the same reason the ctrl+p role-cycle track lives there.
 	 */
-	presentCommandOutput(content: Component | readonly Component[]): void {
+	presentCommandOutput(content: Component | readonly Component[], options?: { preview?: boolean }): void {
 		if (!this.session.isStreaming) {
+			if (this.#pendingCommandOutput.length > 0) this.flushPendingCommandOutput();
 			this.present(content);
 			return;
 		}
@@ -6997,11 +7023,15 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.#pendingCommandOutput.length > 0 && this.#pendingCommandOutputSessionId !== sessionId) {
 			this.#pendingCommandOutput = [];
 			this.#pendingCommandOutputCommands = 0;
+			this.#pendingCommandPreview = [];
 		}
 		this.#pendingCommandOutputSessionId = sessionId;
 		const items = Array.isArray(content) ? content : [content as Component];
 		this.#pendingCommandOutput.push(...items);
-		this.#pendingCommandOutputCommands += 1;
+		if (options?.preview !== false) {
+			this.#pendingCommandPreview.push(...items);
+			this.#pendingCommandOutputCommands += 1;
+		}
 		this.#renderDeferredCommandNotice();
 		this.ui.requestRender();
 	}
@@ -7040,14 +7070,14 @@ export class InteractiveMode implements InteractiveModeContext {
 	 */
 	#renderDeferredCommandNotice(): void {
 		this.deferredCommandContainer.clear();
-		if (this.#pendingCommandOutput.length === 0) return;
+		if (this.#pendingCommandPreview.length === 0) return;
 		const maxRows = Math.max(
 			DEFERRED_PREVIEW_MIN_ROWS,
 			Math.floor(this.ui.terminal.rows * DEFERRED_PREVIEW_VIEWPORT_FRACTION),
 		);
 		this.deferredCommandContainer.addChild(new Spacer(1));
 		this.deferredCommandContainer.addChild(
-			new DeferredCommandPreview([...this.#pendingCommandOutput], maxRows, this.#pendingCommandOutputCommands),
+			new DeferredCommandPreview([...this.#pendingCommandPreview], maxRows, this.#pendingCommandOutputCommands),
 		);
 	}
 
@@ -7057,6 +7087,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const pending = this.#pendingCommandOutput;
 		const pendingSessionId = this.#pendingCommandOutputSessionId;
 		this.#pendingCommandOutput = [];
+		this.#pendingCommandPreview = [];
 		this.#pendingCommandOutputSessionId = undefined;
 		this.#pendingCommandOutputCommands = 0;
 		this.#renderDeferredCommandNotice();
