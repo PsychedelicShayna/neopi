@@ -3,7 +3,12 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "../src/config/settings";
-import { cfgLiveBlockDelegateKeyword, cfgLiveForceDelegateKeyword, cfgLiveSubmitKeyword, cfgLiveSubmitSilenceMs } from "../src/live/settings";
+import {
+	cfgLiveBlockDelegateKeyword,
+	cfgLiveForceDelegateKeyword,
+	cfgLiveSubmitKeyword,
+	cfgLiveSubmitSilenceMs,
+} from "../src/live/settings";
 import { stripLiveKeyword } from "../src/live/keywords";
 
 describe("live keyword normalization", () => {
