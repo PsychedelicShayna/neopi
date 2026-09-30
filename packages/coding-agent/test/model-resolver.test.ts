@@ -2140,6 +2140,49 @@ describe("resolveModelScope", () => {
 		expect(scoped[0].thinkingLevel).toBeUndefined();
 		expect(scoped[0].explicitThinkingLevel).toBe(false);
 	});
+
+	test("resolves regex scopes across providers without altering glob or literal scopes", async () => {
+		const models = allModels.filter(model =>
+			(model.provider === "openai" && model.id === "gpt-4o") ||
+			(model.provider === "anthropic" && model.id === "claude-sonnet-4-5"),
+		);
+		const registry = { getAvailable: () => models };
+		const regex = await resolveModelScope(["re:^(openai/gpt-4o|anthropic/claude-sonnet-4-5)$"], registry);
+		expect(regex.map(({ model }) => `${model.provider}/${model.id}`).sort()).toEqual([
+			"anthropic/claude-sonnet-4-5",
+			"openai/gpt-4o",
+		]);
+		const glob = await resolveModelScope(["anthropic/claude-*"], registry);
+		expect(glob.map(({ model }) => model.id)).toEqual(["claude-sonnet-4-5"]);
+		const literal = await resolveModelScope(["openai/gpt-4o"], registry);
+		expect(literal.map(({ model }) => model.id)).toEqual(["gpt-4o"]);
+	});
+
+	test("resolves regex role selectors and enabled-model filters", async () => {
+		const models = allModels.filter(model =>
+			(model.provider === "openai" && model.id === "gpt-4o") ||
+			(model.provider === "anthropic" && model.id === "claude-sonnet-4-5"),
+		);
+		const settings = Settings.isolated({
+			modelRoles: { fable: "re:^anthropic/claude-sonnet-4-5:high$" },
+		});
+		const selected = await resolveModelScope(["@fable"], { getAvailable: () => models }, undefined, settings);
+		expect(selected.map(({ model, thinkingLevel }) => [model.id, thinkingLevel])).toEqual([
+			["claude-sonnet-4-5", Effort.High],
+		]);
+		const direct = await resolveModelScope(
+			["re:^anthropic/claude-sonnet-4-5:high$"],
+			{ getAvailable: () => models },
+		);
+		expect(direct.map(({ model, thinkingLevel, explicitThinkingLevel }) => [model.id, thinkingLevel, explicitThinkingLevel])).toEqual([
+			["claude-sonnet-4-5", Effort.High, true],
+		]);
+		expect(
+			filterAvailableModelsByEnabledPatterns(models, ["re:^openai/gpt-4o$"]).map(model => model.id),
+		).toEqual(["gpt-4o"]);
+		expect(resolveModelRoleValue("anthropic/claude-*", models).model?.id).toBe("claude-sonnet-4-5");
+		expect(resolveModelRoleValue("re:^openai/gpt-4o$", models).model?.id).toBe("gpt-4o");
+	});
 });
 
 describe("parseModelString", () => {

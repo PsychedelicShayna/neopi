@@ -1,5 +1,6 @@
 import { PRODUCT_NAME } from "@oh-my-pi/pi-utils";
 import { combine, effect, register, type SettingValueOf } from "../config/registry";
+import { compileSelectorRegex, isRegexSelectorPattern } from "../config/selector-pattern";
 import { cfgEditMode } from "../edit/settings";
 import { cfgEvalJs } from "../eval/settings";
 import {
@@ -792,6 +793,16 @@ export const cfgRetryFallbackChains = register({
 	id: "retry.fallbackChains",
 	type: "record",
 	default: EMPTY_STRING_ARRAYS_RECORD,
+	validate(raw) {
+		if (!raw || typeof raw !== "object" || Array.isArray(raw)) return;
+		for (const [key, entries] of Object.entries(raw)) {
+			if (isRegexSelectorPattern(key)) compileSelectorRegex(key);
+			if (!Array.isArray(entries)) continue;
+			for (const entry of entries) {
+				if (typeof entry === "string" && isRegexSelectorPattern(entry)) compileSelectorRegex(entry);
+			}
+		}
+	},
 	ui: {
 		tab: "model",
 		group: "Retry & Fallback",

@@ -54,6 +54,7 @@ import {
 	MODEL_ROLE_IDS,
 	type ModelRole,
 } from "./model-roles";
+import { compileSelectorRegex, isGlobSelectorPattern, isRegexSelectorPattern } from "./selector-pattern";
 import type { Settings } from "./settings";
 
 import { cfgDisabledProviders, cfgEnabledModels, cfgModelProviderOrder } from "./model-settings";
@@ -129,6 +130,21 @@ function matchingGlobModels(pattern: string, availableModels: readonly Model<Api
 		const fullId = `${model.provider}/${model.id}`;
 		return glob.match(fullId.toLowerCase()) || glob.match(model.id.toLowerCase());
 	});
+}
+
+/** Test the full model selector first; only a suffix-specific regex selects a fixed effort. */
+function matchRegexModel(
+	regex: RegExp,
+	model: Model<Api>,
+): { thinkingLevel?: ThinkingLevel; explicitThinkingLevel: boolean } | undefined {
+	const fullId = `${model.provider}/${model.id}`;
+	if (regex.test(fullId)) return { explicitThinkingLevel: false };
+	for (const level of [ThinkingLevel.Off, ...(model.thinking?.efforts ?? [])]) {
+		if (regex.test(`${fullId}:${level}`)) {
+			return { thinkingLevel: level, explicitThinkingLevel: true };
+		}
+	}
+	return undefined;
 }
 
 function resolveGlobScopePattern(
@@ -890,6 +906,26 @@ function parseModelPatternWithContext(
 	context: ModelPreferenceContext,
 	options?: { allowInvalidThinkingSelectorFallback?: boolean },
 ): ParsedModelResult {
+	if (isRegexSelectorPattern(pattern)) {
+		const regex = compileSelectorRegex(pattern);
+		if (!regex) {
+			return {
+				model: undefined,
+				thinkingLevel: undefined,
+				warning: `Invalid regex model selector: ${pattern}`,
+				explicitThinkingLevel: false,
+			};
+		}
+		for (const model of availableModels) {
+			const match = matchRegexModel(regex, model);
+			if (match) return { model, ...match, warning: undefined };
+		}
+		return { model: undefined, thinkingLevel: undefined, warning: undefined, explicitThinkingLevel: false };
+	}
+	if (isGlobSelectorPattern(pattern)) {
+		const { models, thinkingLevel, explicitThinkingLevel } = resolveGlobScopePattern(pattern, availableModels);
+		return { model: models[0], thinkingLevel, explicitThinkingLevel, warning: undefined };
+	}
 	// Exact match on the full pattern first (no fuzzy): a literal id that
 	const exactMatch = matchModel(pattern, availableModels, context, { exactOnly: true });
 	if (exactMatch) {
@@ -1780,7 +1816,22 @@ export async function resolveModelScope(
 	};
 
 	for (const pattern of patterns) {
-		// Check if pattern contains glob characters
+		if (isRegexSelectorPattern(pattern)) {
+			const regex = compileSelectorRegex(pattern);
+			if (!regex) {
+				logger.warn(`Invalid regex model selector: ${pattern}`);
+				continue;
+			}
+			let matched = false;
+			for (const model of availableModels) {
+				const match = matchRegexModel(regex, model);
+				if (!match) continue;
+				matched = true;
+				addScopedModel(model, match.thinkingLevel, match.explicitThinkingLevel);
+			}
+			if (!matched) logger.warn(`No models match pattern "${pattern}"`);
+			continue;
+		}
 		if (pattern.includes("*") || pattern.includes("?") || pattern.includes("[")) {
 			// Extract optional thinking level suffix (e.g., "provider/*:high") only
 			// after literal `:max` globs had a chance to match real model IDs.
@@ -1909,6 +1960,11 @@ export function filterAvailableModelsByEnabledPatterns(
 	};
 
 	for (const pattern of patterns) {
+		if (isRegexSelectorPattern(pattern)) {
+			const regex = compileSelectorRegex(pattern);
+			if (regex) for (const model of available) if (matchRegexModel(regex, model)) addAllowed(model);
+			continue;
+		}
 		if (pattern.includes("*") || pattern.includes("?") || pattern.includes("[")) {
 			for (const model of resolveGlobScopePattern(pattern, available).models) {
 				addAllowed(model);
