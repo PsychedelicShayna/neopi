@@ -46,6 +46,7 @@ export type ModelRole =
 	| "task"
 	| "advisor"
 	| "chronicler"
+	| "chronicler-summary"
 	| "effort"
 	| "prose"
 	| "image"
@@ -65,6 +66,7 @@ export const MODEL_ROLE_IDS: ModelRole[] = [
 	"task",
 	"advisor",
 	"chronicler",
+	"chronicler-summary",
 	"effort",
 	"prose",
 	"image",
@@ -85,6 +87,7 @@ export const CHAT_MODEL_ROLE_IDS: ModelRole[] = [
 	"task",
 	"advisor",
 	"chronicler",
+	"chronicler-summary",
 	"effort",
 	"prose",
 ];
