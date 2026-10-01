@@ -34,6 +34,7 @@ import {
 } from "../../extensibility/skills";
 import { type Theme, theme } from "@oh-my-pi/pi-tui/theme";
 import type { AgentSession } from "../../session/agent-session";
+import { CACHE_WARMING_MODES } from "../../session/cache-warmer";
 import { findMostRecentNonEmptySession } from "../../session/session-listing";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
 import { executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
@@ -148,6 +149,7 @@ export type RpcSkillCommandResult = { agentInvoked: true; userEntryId?: string }
 
 export interface RpcSkillInvocation extends SkillPromptInput {
 	skill: Skill;
+	queueChipText: string;
 }
 
 /**
@@ -161,7 +163,7 @@ export function resolveRpcSkillInvocation(session: RpcSkillCommandSession, text:
 	if (!parsed) return null;
 	const skill = session.skills.find(candidate => candidate.name === parsed.name);
 	if (!skill) return null;
-	return { skill, args: parsed.args, prompt: parsed.prompt };
+	return { skill, args: parsed.args, prompt: parsed.prompt, queueChipText: text };
 }
 
 /**
@@ -188,7 +190,7 @@ export async function runRpcSkillCommand(
 			details: built.details,
 			attribution: "user",
 		},
-		{ streamingBehavior, entryId, runOwner },
+		{ streamingBehavior, entryId, runOwner, queueChipText: invocation.queueChipText },
 	);
 }
 
@@ -864,9 +866,9 @@ export function registerRpcPersistenceSurface(
 
 /** Startup options for {@link runRpcMode}. */
 export interface RpcModeOptions {
-	/** `--mode rpc-ui`: route tool UI (ask, tool cards) over the protocol as well. */
+	/** `--mode rpc-ui`: route tool UI (e.g. ask) over the protocol, independently of headless extensions. */
 	setToolUIContext?: (uiContext: ExtensionUIContext, hasUI: boolean) => void;
-	/** `--no-ui`: extensions run with `hasUI=false`; no dialog or presentation `extension_ui_request` frames are emitted. */
+	/** `--no-ui`: extensions run with `hasUI=false` and no UI frames; tool UI and host-issued login are unaffected. */
 	headless?: boolean;
 	subagentEventBus?: EventBus;
 	input?: ReadableStream<Uint8Array>;
@@ -1085,6 +1087,18 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				}
 			}
 
+			case "remove_queued_message": {
+				if (typeof command.message !== "string") {
+					return error(id, "remove_queued_message", "message must be a string");
+				}
+				if (command.queue !== "steering" && command.queue !== "followUp") {
+					return error(id, "remove_queued_message", "queue must be steering or followUp");
+				}
+				return success(id, "remove_queued_message", {
+					removed: session.removeQueuedMessage(command.message, command.queue),
+				});
+			}
+
 			case "abort": {
 				await session.abort({ reason: USER_INTERRUPT_LABEL });
 				return success(id, "abort");
@@ -1178,6 +1192,7 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 					sessionName: session.sessionName,
 					autoCompactionEnabled: session.autoCompactionEnabled,
 					queuedMessageCount: session.queuedMessageCount,
+					queuedMessages: session.getQueuedMessages(),
 					hasPendingAsyncWork: session.hasPendingAsyncWork(),
 					isSettled: isRpcSessionSettled(session),
 					todoPhases: session.getTodoPhases(),
@@ -1297,7 +1312,14 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				) {
 					return error(id, "set_event_filter", "events must be null or an array of non-empty event type strings");
 				}
-				return success(id, "set_event_filter", { events: sessionEvents.setFilter(events) });
+				const messageUpdates = command.messageUpdates === undefined ? "full" : command.messageUpdates;
+				if (messageUpdates !== "full" && messageUpdates !== "delta") {
+					return error(id, "set_event_filter", `Invalid message update projection: ${String(messageUpdates)}`);
+				}
+				return success(id, "set_event_filter", {
+					events: sessionEvents.setFilter(events, messageUpdates),
+					messageUpdates,
+				});
 			}
 
 			case "set_approval_handler": {
@@ -1443,6 +1465,13 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 			case "set_auto_compaction": {
 				session.setAutoCompactionEnabled(command.enabled);
 				return success(id, "set_auto_compaction");
+			}
+
+			case "set_cache_warming": {
+				if (!CACHE_WARMING_MODES.some(mode => mode === command.mode)) {
+					return error(id, "set_cache_warming", `Invalid cache warming mode: ${String(command.mode)}`);
+				}
+				return success(id, "set_cache_warming", { mode: session.setCacheWarmingMode(command.mode) });
 			}
 
 			// =================================================================
@@ -2050,9 +2079,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	// TypeScript/MCP command may also consume the prompt without writing one.
 	const reservePromptEntryId = (message: string): string | undefined =>
 		session.isExtensionCommand(message) ? undefined : session.sessionManager.reserveEntryId();
-	// Run ownership (#171): every prompt-family request schedules its work under a
-	// handle that the run's enriched `agent_start.runOwners` carries back, so the
-	// correlator binds receipts to runs instead of counting them.
+	// Bind prompt receipts to run ownership instead of counting them.
 	let runOwnerSeq = 0;
 	const ownPrompt = (ticket: RpcPromptTicket): string => {
 		const owner = ticket.requestHandle ?? `rpc-${++runOwnerSeq}`;

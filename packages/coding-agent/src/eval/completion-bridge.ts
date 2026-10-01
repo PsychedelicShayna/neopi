@@ -425,17 +425,20 @@ async function executeCompletion(
 				if (decision.disclosure) disclose(decision.disclosure);
 				if (selection?.mode === "auto") {
 					try {
-						reasoning = await classifyDifficulty(prompt, {
-							settings: session.settings,
-							registry,
-							model,
-							sessionId: session.getSessionId?.() ?? undefined,
-							signal,
-							allowedEfforts: decision.candidates,
-							sessionManager: session.sessionManager,
-							onContextFallback: disclose,
-							onEffortDisclosure: disclose,
-						});
+						reasoning = await classifyDifficulty(
+							{ request: prompt },
+							{
+								settings: session.settings,
+								registry,
+								model,
+								sessionId: session.getSessionId?.() ?? undefined,
+								signal,
+								allowedEfforts: decision.candidates,
+								sessionManager: session.sessionManager,
+								onContextFallback: disclose,
+								onEffortDisclosure: disclose,
+							},
+						);
 					} catch (error) {
 						if (signal.aborted) throw error;
 						reasoning = undefined;

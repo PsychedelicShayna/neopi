@@ -248,6 +248,8 @@ describe("computeNonMessageTokens / computeNonMessageBreakdown memoization", () 
  * are absent at runtime (issue #9331).
  */
 describe("non-message estimates tolerate a missing description", () => {
+	const readTool = { name: "read", description: "read files", parameters: {} };
+
 	it("estimateToolSchemaTokens does not throw on an undefined tool description", () => {
 		const tokens = estimateToolSchemaTokens(
 			[{ name: "lens_tool", description: undefined, parameters: {} } as never],
@@ -257,6 +259,16 @@ describe("non-message estimates tolerate a missing description", () => {
 		expect(tokens).toBeGreaterThanOrEqual(0);
 	});
 
+	it("computeNonMessageBreakdown does not throw on an undefined skill description", () => {
+		const session = {
+			systemPrompt: ["You are an agent."],
+			agent: { state: { tools: [readTool] } },
+			skills: [{ name: "lens", description: undefined, filePath: "/s/l.md" }],
+		} as never;
+		const b = computeNonMessageBreakdown(session, tokenizer);
+		expect(Number.isFinite(b.skillsTokens)).toBe(true);
+		expect(b.skillsTokens).toBeGreaterThanOrEqual(0);
+	});
 	it("computeNonMessageBreakdown does not throw on an undefined system-context section", () => {
 		const session = {
 			systemPrompt: ["primary prompt", undefined, "trailing context"],

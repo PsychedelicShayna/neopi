@@ -1,5 +1,6 @@
 import { Args, type CommandMetadata, Flags } from "@oh-my-pi/pi-utils/cli";
 import { APP_NAME } from "@oh-my-pi/pi-utils/dirs";
+import { formatKeyHint } from "@oh-my-pi/pi-tui/key-hint-format";
 import { CLI_THINKING_LEVELS } from "@oh-my-pi/pi-tui/thinking";
 import { SERVICE_TIER_OPENAI_VALUES } from "../config/service-tier";
 
@@ -71,7 +72,7 @@ export const launchHelp = {
 		"new-session": Flags.boolean({
 			description: "Start a new session in the default session directory, ignoring autoResume",
 		}),
-		models: Flags.string({ description: "Comma-separated model patterns for Ctrl+P cycling" }),
+		models: Flags.string({ description: `Comma-separated model patterns for ${formatKeyHint("ctrl+p")} cycling` }),
 		"no-tools": Flags.boolean({ description: "Disable all built-in tools" }),
 		"no-lsp": Flags.boolean({ description: "Disable LSP tools, formatting, and diagnostics" }),
 		"no-pty": Flags.boolean({ description: "Disable PTY-based interactive bash execution" }),
@@ -116,7 +117,7 @@ export const launchHelp = {
 		export: Flags.string({ description: "Export session file to HTML and exit" }),
 		"no-title": Flags.boolean({ description: "Disable title auto-generation" }),
 		"no-ui": Flags.boolean({
-			description: "With --mode rpc: run extensions headless (no extension_ui_request dialogs for the host)",
+			description: "With --mode rpc or rpc-ui: run extensions headless (rpc-ui tool UI remains enabled)",
 		}),
 		"print-thoughts": Flags.boolean({ description: "Include thinking blocks in print mode text output" }),
 		"max-time": Flags.string({ description: "Stop the session after this duration (e.g., 600, 10m, 1h)" }),

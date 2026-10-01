@@ -635,7 +635,16 @@ export function buildSessionContext(
 					sourceEntry.timestamp,
 				);
 				setMessageEntryId(notesMessage, sourceEntry.id);
-				messages.unshift(notesMessage);
+				// Native Anthropic compaction must remain the first request block.
+				// Do not split it from the retained assistant turn and tool results.
+				const head = messages[0];
+				let insertAt = 0;
+				if (head?.role === "compactionSummary" && head.providerPayload?.type === "anthropicCompaction") {
+					insertAt = 1;
+					if (messages[insertAt]?.role === "assistant") insertAt++;
+					while (messages[insertAt]?.role === "toolResult") insertAt++;
+				}
+				messages.splice(insertAt, 0, notesMessage);
 			}
 		}
 	}

@@ -11,6 +11,8 @@ import type { OAuthProvider } from "@oh-my-pi/pi-ai/oauth/types";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import type { Component, OverlayHandle } from "@oh-my-pi/pi-tui";
 import { Loader, Spacer, Text } from "@oh-my-pi/pi-tui";
+import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
+import { appKey, editorKey } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
 import {
 	getAgentDbPath,
 	getAgentDir,
@@ -73,6 +75,12 @@ import { toLogoutAccounts } from "../../slash-commands/helpers/logout";
 import type { LogoutAccount } from "@oh-my-pi/pi-tui/overlays/logout-account-selector";
 import { describeRedeemOutcome, toResetUsageAccounts } from "../../slash-commands/helpers/reset-usage";
 import { toSessionPinAccounts } from "../../slash-commands/helpers/session-pin";
+import {
+	accountIdentityLabel,
+	collectStoredAccounts,
+	collectUnreportedAccounts,
+	selectReportableAccounts,
+} from "../../slash-commands/helpers/usage-accounts";
 import { loadDailyActivity } from "../../stats/activity-client";
 import {
 	AUTO_THINKING,
@@ -124,7 +132,6 @@ import type { OAuthSelectorComponent as OAuthSelectorComponentType } from "@oh-m
 import { PluginSelectorComponent } from "@oh-my-pi/pi-tui/overlays/plugin-selector";
 import { type ResetUsageAccount, ResetUsageSelectorComponent } from "@oh-my-pi/pi-tui/overlays/reset-usage-selector";
 import { type BranchVariantPath, RewindSelectorComponent } from "@oh-my-pi/pi-tui/overlays/rewind-selector";
-import { renderSegmentTrack } from "@oh-my-pi/pi-tui/chrome/segment-track";
 import { SessionAccountSelectorComponent } from "@oh-my-pi/pi-tui/overlays/session-account-selector";
 import { SessionSelectorComponent, type SessionSelectorOptions } from "@oh-my-pi/pi-tui/overlays/session-selector";
 import { SettingsSelectorComponent } from "@oh-my-pi/pi-tui/overlays/settings-selector";
@@ -153,8 +160,6 @@ import {
 } from "../settings";
 import { cfgTaskAgentModelOverrides } from "../../task/settings";
 import { cfgAdvisorMaxNotesPerUpdate } from "../../advisor/settings";
-
-const MANUAL_LOGIN_PROMPT = "Paste the authorization code (or full redirect URL), then press Enter:";
 
 interface ModelOverlayModules {
 	ModelHubComponent: typeof ModelHubComponentType;
@@ -326,6 +331,7 @@ export class SelectorController {
 						const availableWidth = this.ctx.editor.getTopBorderAvailableWidth(this.ctx.ui.terminal.columns);
 						return this.ctx.statusLine.getPreviewLines(availableWidth).join("\n");
 					},
+					describeStatusLinePreview: () => this.ctx.statusLine.describePreview(),
 					onPluginsChanged: async () => {
 						const projectPath = await resolveActiveProjectRegistryPath(this.ctx.sessionManager.getCwd());
 						clearPluginRootsAndCaches(projectPath ? [projectPath] : undefined);
@@ -363,6 +369,19 @@ export class SelectorController {
 	 * classic full report one keypress away. Takes no transcript space.
 	 */
 	showUsageDashboard(reports: UsageReport[]): void {
+		const authStorage = this.ctx.session.modelRegistry.authStorage;
+		const accounts = selectReportableAccounts(
+			collectStoredAccounts(authStorage),
+			provider => authStorage.usage.providerFor(provider) !== undefined,
+		);
+		if (reports.length === 0 && accounts.length === 0) {
+			this.ctx.showWarning("No usage data available.");
+			return;
+		}
+		const unavailableAccounts = collectUnreportedAccounts(reports, accounts).map(account => ({
+			provider: account.provider,
+			label: accountIdentityLabel(account),
+		}));
 		const currentProvider = this.ctx.session.model?.provider;
 		const activeAccount = currentProvider
 			? this.ctx.session.modelRegistry.authStorage.oauth.identity(currentProvider, this.ctx.session.sessionId)
@@ -375,16 +394,19 @@ export class SelectorController {
 		};
 		const dashboard = new UsageDashboardComponent({
 			reports,
-			renderDetail: width =>
+			unavailableAccounts,
+			renderDetail: (width, current) =>
 				renderUsageReports(
-					reports,
+					current,
 					theme,
 					Date.now(),
 					width,
 					provider => (provider === currentProvider ? activeAccount : undefined),
 					usageModelSelectors,
+					unavailableAccounts,
 				),
 			loadActivity: loadDailyActivity,
+			refresh: () => this.ctx.session.fetchUsageReports(),
 			requestRender: () => this.ctx.ui.requestRender(),
 			onClose: done,
 		});
@@ -793,7 +815,7 @@ export class SelectorController {
 			await this.ctx.session.setModelTemporary(model, level);
 			this.ctx.statusLine.invalidate();
 			this.ctx.updateEditorBorderColor();
-			const roleSelectorHint = this.ctx.keybindings.getKeys("app.model.select")[0] ?? "Alt+M";
+			const roleSelectorHint = appKey(this.ctx.keybindings, "app.model.select") || formatKeyHint("alt+m");
 			this.ctx.showStatus(`Session-only model: ${selector}. Use ${roleSelectorHint} or /model for roles.`);
 		};
 		if (!compactFirst) {
@@ -857,10 +879,8 @@ export class SelectorController {
 						this.ctx.statusLine.invalidate();
 						this.ctx.updateEditorBorderColor();
 						this.ctx.showModelCycleTrack(
-							renderSegmentTrack(
-								quickRoleOrder.map(role => ({ label: role })),
-								quickRoleOrder.indexOf(entry.role),
-							),
+							quickRoleOrder.map(role => ({ label: role })),
+							quickRoleOrder.indexOf(entry.role),
 						);
 						done();
 					} catch (error) {
@@ -883,7 +903,6 @@ export class SelectorController {
 				currentContextTokens,
 				currentSelector,
 				taskModeKeys: this.ctx.keybindings.getKeys("app.model.selectTemporary"),
-				taskModeKeyLabel: this.ctx.keybindings.getDisplayString("app.model.selectTemporary") || "alt+p",
 				taskSelector,
 				quickRoles: quickRoleCycle?.models,
 				quickRoleOrder,
@@ -1105,7 +1124,7 @@ export class SelectorController {
 				},
 				onFallbackChainChange: (role, chain, effort, copiedSelections) => {
 					try {
-						const selections = { ...cfgFallbackEffortSelections.get(this.ctx.settings)[role] };
+						const selections = { ...this.ctx.settings.getGlobalFallbackEffortSelections(role) };
 						for (const selector of Object.keys(selections))
 							if (!chain.includes(selector)) delete selections[selector];
 						if (effort) selections[effort.selector] = effort.selection;
@@ -1147,6 +1166,9 @@ export class SelectorController {
 			},
 			{
 				initialProviderId: hubOptions.initialProviderId,
+				currentSelector: this.ctx.session.model
+					? `${this.ctx.session.model.provider}/${this.ctx.session.model.id}`
+					: undefined,
 			},
 		);
 		const overlayHandle = this.#showFullscreenMenu(hub);
@@ -1527,7 +1549,7 @@ export class SelectorController {
 							this.ctx.ui,
 							spinner => theme.fg("accent", spinner),
 							text => theme.fg("muted", text),
-							"Summarizing branch... (esc to cancel)",
+							`Summarizing branch... (${appKey(this.ctx.keybindings, "app.interrupt")} to cancel)`,
 							getSymbolTheme().spinnerFrames,
 						);
 						this.ctx.statusContainer.addChild(summaryLoader);
@@ -1614,6 +1636,7 @@ export class SelectorController {
 					this.ctx.ui.requestRender();
 				},
 				cfgTreeFilterMode.get(settings),
+				this.ctx.sessionManager.getSessionName(),
 			);
 			return { component: selector, focus: selector };
 		});
@@ -2088,7 +2111,11 @@ export class SelectorController {
 				// editor's `/login <url>` path is unreachable while the dialog holds
 				// focus (#5339).
 				onManualCodeInput: useManualInput
-					? signal => dialog.showManualInput(MANUAL_LOGIN_PROMPT, signal)
+					? signal =>
+							dialog.showManualInput(
+								`Paste the authorization code (or full redirect URL), then press ${editorKey("tui.input.submit")}:`,
+								signal,
+							)
 					: undefined,
 			});
 			// Scope the post-login refresh to the just-authenticated provider with an

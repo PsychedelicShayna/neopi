@@ -10,6 +10,7 @@ import { STTController, type STTControllerDependencies } from "@oh-my-pi/pi-codi
 import { setAgentDir } from "@oh-my-pi/pi-utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 import { cfgSttLanguage } from "@oh-my-pi/pi-coding-agent/stt/settings";
+import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
 const ZERO_USAGE = {
 	input: 0,
@@ -38,6 +39,7 @@ function xaiSttModel(): Model<"xai-stt"> {
 
 function registryFor(model: Model): STTControllerDependencies["registry"] {
 	return {
+		authStorage: createInMemoryAuthStorage(),
 		getError: () => undefined,
 		getAvailable: () => [model],
 		getAll: () => [model],

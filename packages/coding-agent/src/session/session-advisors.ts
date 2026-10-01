@@ -1336,15 +1336,18 @@ export class SessionAdvisors {
 							if (decision?.disclosure) this.#host.emitNotice("warning", decision.disclosure, "effort-policy");
 							let effort: Effort | undefined;
 							try {
-								effort = await classifyDifficulty(currentAdvisorInput, {
-									settings: this.#host.settings,
-									registry: this.#host.modelRegistry,
-									model,
-									sessionManager: this.#host.sessionManager,
-									allowedEfforts: candidates,
-									onEffortDisclosure: message => this.#host.emitNotice("warning", message, "effort-policy"),
-									onContextFallback: message => this.#host.emitNotice("warning", message, "effort-policy"),
-								});
+								effort = await classifyDifficulty(
+									{ request: currentAdvisorInput },
+									{
+										settings: this.#host.settings,
+										registry: this.#host.modelRegistry,
+										model,
+										sessionManager: this.#host.sessionManager,
+										allowedEfforts: candidates,
+										onEffortDisclosure: message => this.#host.emitNotice("warning", message, "effort-policy"),
+										onContextFallback: message => this.#host.emitNotice("warning", message, "effort-policy"),
+									},
+								);
 							} catch {
 								// A failed classifier must not fail the advisor's review.
 							}
@@ -1804,12 +1807,12 @@ export class SessionAdvisors {
 
 		const accountPolicyDenial = AIError.is(errorId, AIError.Flag.AccountPolicy);
 		if (accountPolicyDenial) {
-			const switched = await this.#host.modelRegistry.authStorage.limits.rotate(
+			const rotation = await this.#host.modelRegistry.authStorage.limits.rotate(
 				currentModel.provider,
 				advisor.providerSessionId,
 				{ error: message, modelId: currentModel.id, signal },
 			);
-			if (switched) return true;
+			if (rotation.switched) return true;
 		}
 
 		const retryAfterMs = extractProviderRetryHint(currentModel.provider, message);

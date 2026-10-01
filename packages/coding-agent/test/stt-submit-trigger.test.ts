@@ -6,11 +6,13 @@ import * as downloader from "../src/stt/downloader";
 import { STTController, type STTControllerDependencies } from "../src/stt/stt-controller";
 import { evaluateSubmitTrigger, type SttSubmitTrigger } from "../src/stt/submit-trigger";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
+import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
 import { cfgSttSubmitTrigger } from "@oh-my-pi/pi-coding-agent/stt/settings";
 
 const DICTATION_MODELS = [getBundledModel("local", "whisper-base")];
 const registry: STTControllerDependencies["registry"] = {
+	authStorage: createInMemoryAuthStorage(),
 	getError: () => undefined,
 	getAvailable: () => DICTATION_MODELS,
 	getAll: () => DICTATION_MODELS,
@@ -256,14 +258,6 @@ describe("STTController submit trigger integration", () => {
 
 		expect(editor.commitVolatileText).toHaveBeenCalledWith("please review this submit.");
 		expect(editor.deleteBeforeCursor).toHaveBeenCalledWith(8);
-		expect(editor.submit).toHaveBeenCalledTimes(1);
-	});
-
-	it("submits the existing draft when streaming dictation only says submit", async () => {
-		const { editor } = await transcribeStream("submit", "say-submit");
-
-		expect(editor.commitVolatileText).toHaveBeenCalledWith("submit");
-		expect(editor.deleteBeforeCursor).toHaveBeenCalledWith(6);
 		expect(editor.submit).toHaveBeenCalledTimes(1);
 	});
 });

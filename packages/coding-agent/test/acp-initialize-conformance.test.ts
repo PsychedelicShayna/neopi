@@ -230,6 +230,7 @@ describe("ACP initialize conformance", () => {
 		const response = await agent.initialize(buildInitializeRequest());
 		const pkgPath = path.join(import.meta.dir, "..", "package.json");
 		const pkg = (await Bun.file(pkgPath).json()) as { version: string };
+
 		expect(response.agentInfo!.version).toBe(pkg.version);
 	});
 

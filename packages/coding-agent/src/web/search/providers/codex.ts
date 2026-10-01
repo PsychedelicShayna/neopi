@@ -15,7 +15,7 @@ import {
 	OPENAI_HEADERS,
 } from "@oh-my-pi/pi-catalog/wire/codex";
 import { readSseJson, USER_AGENT } from "@oh-my-pi/pi-utils";
-import type { SearchResponse, SearchSource } from "@oh-my-pi/pi-tui/tools/web-search";
+import type { SearchResponse, SearchSource } from "@oh-my-pi/pi-tui/tools/web-search-types";
 import { SearchProviderError } from "../../../web/search/types";
 import { formatQuery, GOOGLE_QUERY_SYNTAX, parseSearchQuery } from "../query";
 import type { SearchParams } from "./base";
