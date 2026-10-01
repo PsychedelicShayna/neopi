@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { setAgentDir } from "@oh-my-pi/pi-utils";
 import { Settings, settings } from "../src/config/settings";
 import { XaiSTTController, type XaiSTTControllerDependencies } from "../src/stt/xai-stt-controller";
+import { WavFileRecorder } from "../src/stt/wav-file-recorder";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 import { cfgSttEnabled } from "@oh-my-pi/pi-coding-agent/stt/settings";
 import { cfgSttSubmitTrigger } from "@oh-my-pi/pi-coding-agent/stt/settings";
@@ -114,6 +115,30 @@ describe("independent xAI whole-recording input", () => {
 		expect(editor.text).toBe("Existing draft. ");
 		expect(editor.submit).not.toHaveBeenCalled();
 		expect(options.showWarning).not.toHaveBeenCalled();
+	});
+
+	it("keeps the original WAV available for transcription when padding fails", async () => {
+		vi.spyOn(WavFileRecorder.prototype, "appendSilence").mockImplementation(() => {
+			throw new Error("No space for padding");
+		});
+		let recording: ArrayBuffer | undefined;
+		const { editor, options, controller } = setup(async audio => {
+			recording = await audio.arrayBuffer();
+			return "Final word.";
+		});
+		await controller.toggle(editor, options);
+		onAudio!(null, new Float32Array([0.5]));
+		await controller.toggle(editor, options);
+
+		const wav = new DataView(recording!);
+		expect(wav.byteLength).toBe(46);
+		expect(wav.getUint32(40, true)).toBe(2);
+		expect(wav.getInt16(44, true)).toBe(16384);
+		expect(editor.text).toBe("Existing draft. Final word.");
+		expect(options.showWarning).not.toHaveBeenCalled();
+		const files = await fs.readdir(path.join(tmp, "stt-recordings"));
+		expect(files).toHaveLength(1);
+		expect(controller.state).toBe("idle");
 	});
 
 	it("preserves the complete audio and reports its recovery path after a provider failure", async () => {
