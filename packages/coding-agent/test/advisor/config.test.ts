@@ -324,6 +324,38 @@ describe("WATCHDOG.yml file round-trip", () => {
 		expect(advisors.find(a => a.name === "Default Tools")?.tools).toBeUndefined();
 	});
 
+	it("round-trips primary reasoning visibility and preserves the omitted default across edits", async () => {
+		const file = path.join(tmp, "WATCHDOG.yml");
+		await Bun.write(
+			file,
+			"advisors:\n  - name: Legacy\n  - name: Private\n    includeThinking: false\n  - name: Explicit\n    includeThinking: true\n",
+		);
+		const loaded = await loadWatchdogConfigFile(file);
+		expect(loaded.advisors).toEqual([
+			{ name: "Legacy" },
+			{ name: "Private", includeThinking: false },
+			{ name: "Explicit", includeThinking: true },
+		]);
+		loaded.advisors[1].instructions = "Review without primary reasoning.";
+		await saveWatchdogConfigFile(file, loaded);
+		expect((await discoverAdvisorConfigs(tmp, tmp)).advisors.map(a => a.includeThinking)).toEqual([
+			undefined,
+			false,
+			true,
+		]);
+		expect(await loadWatchdogConfigFile(file)).toEqual(loaded);
+		expect(serializeWatchdogConfig(loaded)).toContain("    includeThinking: false");
+		expect(serializeWatchdogConfig(loaded)).toContain("    includeThinking: true");
+
+		loaded.advisors[1].includeThinking = true;
+		await saveWatchdogConfigFile(file, loaded);
+		expect((await discoverAdvisorConfigs(tmp, tmp)).advisors.map(a => a.includeThinking)).toEqual([
+			undefined,
+			true,
+			true,
+		]);
+	});
+
 	it("preserves custom and empty base prompts through save, discovery, and reset", async () => {
 		const file = path.join(tmp, "WATCHDOG.yml");
 		const custom = '  Literal base: "quoted"\n\nDo not expand @missing.md\n\n';

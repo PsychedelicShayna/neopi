@@ -51,6 +51,8 @@ export interface AdvisorConfig {
 	systemPrompt?: string;
 	/** Defaults to true; false retains the advisor in the roster and status displays without building its runtime. */
 	enabled?: boolean;
+	/** Include the primary assistant's reasoning in this advisor's updates; defaults to true. */
+	includeThinking?: boolean;
 	/** Maximum non-blocker notes per advisor prompt update (default 4); blockers are exempt. */
 	maxNotesPerUpdate?: number;
 }
@@ -416,6 +418,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 			theme.bold(advisor.name || "(unnamed)"),
 			"",
 			`${theme.fg("dim", "Enabled:")} ${advisor.enabled === false ? "○ off" : "● on"}`,
+			`${theme.fg("dim", "Read primary reasoning stream:")} ${advisor.includeThinking === false ? "○ off" : "● on"}`,
 			`${theme.fg("dim", "Model:")} ${model}`,
 			`${theme.fg("dim", "Tools:")} ${tools}`,
 			"",
@@ -486,6 +489,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 			!advisor.instructions?.trim() &&
 			advisor.systemPrompt === undefined &&
 			advisor.enabled !== false &&
+			advisor.includeThinking === undefined &&
 			advisor.maxNotesPerUpdate === undefined
 		);
 	}
@@ -652,6 +656,11 @@ export class AdvisorConfigOverlayComponent implements Component {
 				label: "Enabled",
 				description: advisor.enabled === false ? "○ off" : "● on",
 			},
+			{
+				value: "toggleIncludeThinking",
+				label: "Read primary reasoning stream",
+				description: advisor.includeThinking === false ? "○ off" : "● on",
+			},
 			{ value: "model", label: "Model", description: modelDescription },
 		];
 		if (advisor.model?.trim()) {
@@ -699,6 +708,13 @@ export class AdvisorConfigOverlayComponent implements Component {
 				a.enabled = a.enabled === false ? undefined : false;
 				this.#dirty = true;
 				this.#showDetail(index);
+				return;
+			}
+			case "toggleIncludeThinking": {
+				const advisor = this.#doc.advisors[index];
+				advisor.includeThinking = advisor.includeThinking === false ? true : false;
+				this.#dirty = true;
+				this.#showDetail(index, "toggleIncludeThinking");
 				return;
 			}
 			case "name":

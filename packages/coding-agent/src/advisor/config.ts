@@ -20,6 +20,7 @@ const WATCHDOG_ADVISOR_KEYS = [
 	"instructions",
 	"systemPrompt",
 	"enabled",
+	"includeThinking",
 	"maxNotesPerUpdate",
 ] as const;
 
@@ -77,6 +78,7 @@ const advisorEntrySchema = type({
 	"instructions?": "string",
 	"systemPrompt?": "string",
 	"enabled?": "boolean",
+	"includeThinking?": "boolean",
 	"maxNotesPerUpdate?": "number",
 });
 
@@ -89,6 +91,7 @@ function editableAdvisorConfig(entry: AdvisorYamlEntry): AdvisorConfig {
 	if (entry.instructions?.trim()) advisor.instructions = entry.instructions;
 	if (entry.systemPrompt !== undefined) advisor.systemPrompt = entry.systemPrompt;
 	if (entry.enabled !== undefined) advisor.enabled = entry.enabled;
+	if (entry.includeThinking !== undefined) advisor.includeThinking = entry.includeThinking;
 	if (
 		typeof entry.maxNotesPerUpdate === "number" &&
 		Number.isFinite(entry.maxNotesPerUpdate) &&
@@ -285,6 +288,7 @@ export async function discoverAdvisorConfigs(cwd: string, agentDir?: string): Pr
 						? Math.trunc(entry.maxNotesPerUpdate)
 						: undefined,
 				enabled: entry.enabled,
+				includeThinking: entry.includeThinking,
 				instructions: entryInstructions,
 			});
 		}
@@ -490,6 +494,7 @@ export function serializeWatchdogConfig(doc: WatchdogConfigDoc): string {
 				appendYamlString(lines, "    ", "systemPrompt", advisor.systemPrompt);
 			}
 			if (advisor.enabled !== undefined) lines.push(`    enabled: ${advisor.enabled}`);
+			if (advisor.includeThinking !== undefined) lines.push(`    includeThinking: ${advisor.includeThinking}`);
 			if (
 				typeof advisor.maxNotesPerUpdate === "number" &&
 				Number.isFinite(advisor.maxNotesPerUpdate) &&
@@ -510,6 +515,7 @@ function watchdogAdvisorValues(advisor: AdvisorConfig): Record<(typeof WATCHDOG_
 		instructions: advisor.instructions?.trim() ? advisor.instructions : undefined,
 		systemPrompt: advisor.systemPrompt,
 		enabled: advisor.enabled,
+		includeThinking: advisor.includeThinking,
 		maxNotesPerUpdate:
 			typeof advisor.maxNotesPerUpdate === "number" &&
 			Number.isFinite(advisor.maxNotesPerUpdate) &&
