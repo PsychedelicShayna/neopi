@@ -53,7 +53,7 @@ async function formatChainingStatus(cwd: string): Promise<string> {
 		`Active chain: ${active || "(none; you will be asked)"}`,
 	];
 	if (chains.length === 0) {
-		lines.push("No chains defined. Create one with /chaining configure.");
+		lines.push("No chains defined. Create one with /chain configure.");
 	} else {
 		lines.push("Chains:");
 		for (const chain of chains) {
@@ -65,11 +65,11 @@ async function formatChainingStatus(cwd: string): Promise<string> {
 	return lines.join("\n");
 }
 
-/** Apply a /chaining verb that does not need the TUI; returns the message, or undefined for an unknown verb. */
+/** Apply a /chain verb that does not need the TUI; returns the message, or undefined for an unknown verb. */
 async function applyChainingVerb(verb: string, rest: string, cwd: string): Promise<string | undefined> {
 	if (verb === "on") {
 		const { chains } = await discoverChains(cwd, getAgentDir());
-		if (chains.length === 0) return "No chains defined. Create one with /chaining configure first.";
+		if (chains.length === 0) return "No chains defined. Create one with /chain configure first.";
 		cfgChainingAuto.set(settings, true);
 		const active = cfgChainingActive.get(settings);
 		return chains.some(chain => chain.name === active)
@@ -97,7 +97,7 @@ async function applyChainingVerb(verb: string, rest: string, cwd: string): Promi
 	return undefined;
 }
 
-const CHAINING_USAGE = "Usage: /chaining [on|off|status|use [name]|configure]";
+const CHAINING_USAGE = "Usage: /chain [on|off|status|use [name]|configure]";
 function showCollabQrCode(ctx: InteractiveModeContext, webLink: string): void {
 	try {
 		ctx.present([new Spacer(1), new CollabQrCodeComponent(webLink)]);
@@ -230,7 +230,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		},
 	},
 	{
-		name: "chaining",
+		name: "chain",
 		icon: "advisor",
 		description: "Post-processing chains that rewrite a prompt through ordered model steps before it is sent",
 		acpDescription: "Manage post-processing chains",
@@ -252,7 +252,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 			const { verb, rest } = parseSubcommand(command.args);
 			if (verb === "configure") {
 				await runtime.output(
-					"/chaining configure opens an interactive editor and is only available in the interactive TUI.",
+					"/chain configure opens an interactive editor and is only available in the interactive TUI.",
 				);
 				return commandConsumed();
 			}

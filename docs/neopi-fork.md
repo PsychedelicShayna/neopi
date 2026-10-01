@@ -53,7 +53,7 @@ Each store is schema-v1 JSON written atomically with a `.bak` of the previous fi
 
 ### Personas
 
-`/persona` opens a fullscreen editor in the style of `/chaining configure`: personas on the left, the highlighted definition on the right. Keys are listed in the footer: Enter edits, Space makes the highlighted persona active (again to turn it off), Delete twice removes, `s` saves and applies, and Esc closes (it asks once before discarding unsaved changes). A persona has a mode (replace, prepend, append, or literal-substitute), an inline text or a file path inside the agent directory, and an inherit-to-tasks flag.
+`/persona` opens a fullscreen editor in the style of `/chain configure`: personas on the left, the highlighted definition on the right. Keys are listed in the footer: Enter edits, Space makes the highlighted persona active (again to turn it off), Delete twice removes, `s` saves and applies, and Esc closes (it asks once before discarding unsaved changes). A persona has a mode (replace, prepend, append, or literal-substitute), an inline text or a file path inside the agent directory, and an inherit-to-tasks flag.
 
 `/persona live` opens the same editor for the live voice model. The bundled default is read-only; clone it to customize. A new live persona starts from the default instructions.
 
@@ -132,9 +132,9 @@ Cloud dictation keeps hold-to-talk behavior and writes audio to disk-backed WAV 
 A chain rewrites a composer prompt through ordered model steps before it is sent. Each step's output is the next step's input, and the last output is what gets sent. Voice input needs nothing special: Ctrl+Space puts the transcript in the composer, and chaining happens when that text is sent.
 
 - **Alt+C** (`app.message.chain`) sends the composer text through the active chain once.
-- **`/chaining on`** runs every prompt through it; **`/chaining off`** stops that (Alt+C still works).
-- **`/chaining use <name>`** sets the active chain; with no name it clears it. With no active chain, a chained send asks which chain to use (or to send unchanged), and the pick becomes active.
-- **`/chaining status`** lists the mode, the active chain, and every chain's steps; **`/chaining configure`** opens the editor.
+- **`/chain on`** runs every prompt through it; **`/chain off`** stops that (Alt+C still works).
+- **`/chain use <name>`** sets the active chain; with no name it clears it. With no active chain, a chained send asks which chain to use (or to send unchanged), and the pick becomes active.
+- **`/chain status`** lists the mode, the active chain, and every chain's steps; **`/chain configure`** opens the editor.
 
 Only plain prompts are chained; slash commands, skills, `!bash`, eval input, and continue shortcuts are not. Up-arrow history keeps the typed text, not the rewrite. `chaining.auto` and `chaining.active` are settings, so a project can override them in its `.omp/config.yml`.
 
@@ -144,10 +144,10 @@ While a chain runs, the composer is locked: the draft stays visible with every l
 - **Esc Esc Esc** (within the same 3 s) or **Ctrl+C** aborts the chain and puts the typed draft back, nothing sent.
 - A failing step stops the chain and leaves the last completed output in the composer, editable and unsent.
 
-Chains live in `CHAINS.yml` beside advisors' `WATCHDOG.yml`: `<agent dir>/CHAINS.yml` (global) and the project root's `CHAINS.yml`; a project chain shadows a global chain with the same name. `/chaining configure` edits either scope. Each step has a name, a prompt (step instructions; the incoming text is the user message), an optional model (`provider/id`, `provider/id:level`, or `@role`), optional tools (none by default), and two optional keys:
+Chains live in `CHAINS.yml` beside advisors' `WATCHDOG.yml`: `<agent dir>/CHAINS.yml` (global) and the project root's `CHAINS.yml`; a project chain shadows a global chain with the same name. `/chain configure` edits either scope. Each step has a name, a prompt (step instructions; the incoming text is the user message), an optional model (`provider/id`, `provider/id:level`, or `@role`), optional tools (none by default), and two optional keys:
 
 - **`context: true`** gives the step the live session transcript (thinking elided, tool calls collapsed) wrapped in `<transcript>`, with the text to rewrite in `<draft>`, so references like "remove mine" resolve against the conversation. Both tags carry a per-run boundary so tag-like text inside them cannot close a block. The transcript keeps only the newest messages that fit after the step prompt, granted tool schemas, framing, and the provider's maximum output are reserved; the output reserve includes provider-added reasoning tokens when enabled. Off by default; the configure screen's "Transcript context" row toggles it.
-- **`systemPrompt`** replaces the bundled chain system prompt, which tells the model it is rewriting a draft and to output only the rewrite, with no notes about what changed. The step `prompt` is always appended after it. In `/chaining configure` the "System prompt" row shows `(bundled default)`, Enter opens the current text, and Backspace on the row resets an override.
+- **`systemPrompt`** replaces the bundled chain system prompt, which tells the model it is rewriting a draft and to output only the rewrite, with no notes about what changed. The step `prompt` is always appended after it. In `/chain configure` the "System prompt" row shows `(bundled default)`, Enter opens the current text, and Backspace on the row resets an override.
 
 ```yaml
 chains:
