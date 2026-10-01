@@ -77,12 +77,16 @@ describe("independent xAI whole-recording input", () => {
 
 		expect(transcribe).toHaveBeenCalledTimes(1);
 		const wav = new DataView(recording!);
-		expect(wav.byteLength).toBe(44 + (pause.length + 3) * 2);
-		expect(wav.getUint32(40, true)).toBe((pause.length + 3) * 2);
+		const trailingSamples = 12_000; // 750 ms at 16 kHz
+		expect(wav.byteLength).toBe(44 + (pause.length + 3 + trailingSamples) * 2);
+		expect(wav.getUint32(40, true)).toBe((pause.length + 3 + trailingSamples) * 2);
 		expect(wav.getInt16(44, true)).toBe(8192);
 		expect(wav.getInt16(46, true)).toBe(-8192);
 		expect(new Int16Array(recording!, 48, pause.length).every(sample => sample === 0)).toBe(true);
-		expect(wav.getInt16(wav.byteLength - 2, true)).toBe(16384);
+		expect(wav.getInt16(48 + pause.length * 2, true)).toBe(16384);
+		expect(new Int16Array(recording!, 50 + pause.length * 2, trailingSamples).every(sample => sample === 0)).toBe(
+			true,
+		);
 		expect(editor.text).toBe("Existing draft. One complete thought.");
 		expect(editor.submit).not.toHaveBeenCalled();
 		expect(controller.state).toBe("idle");

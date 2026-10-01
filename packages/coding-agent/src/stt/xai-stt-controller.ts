@@ -146,6 +146,9 @@ export class XaiSTTController {
 
 		let recordingPath: string | undefined;
 		try {
+			// The recognizer needs an utterance boundary after the final spoken word.
+			// Add silence only to a nonempty xAI capture; never keep the microphone open.
+			if (!file.empty) file.appendSilence(750);
 			recordingPath = file.finalize();
 			this.#file = null;
 			this.#retain(file);
