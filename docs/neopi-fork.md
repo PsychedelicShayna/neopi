@@ -117,7 +117,7 @@ Early binary and deployment work is recorded by `da8bb86645`, `e795702ff4`, `643
 
 ## Whole-recording xAI speech input
 
-`Ctrl+Space` (`app.stt.toggle`) starts an independent xAI recording; press it again to stop and transcribe the complete WAV through native `grok-stt`. Pauses and silence remain in the recording. Nothing is segmented, streamed, or transcribed while recording. Existing xAI OAuth credentials are preferred, with xAI API-key credentials as the fallback; no Dictation model selection, `stt.enabled` setting, local speech model, or helper executable is required.
+`Ctrl+Space` (`app.stt.toggle`) starts an independent xAI recording; press it again to stop and transcribe the complete WAV through native `grok-stt`. Pauses and silence remain in the recording, and 750 ms of synthetic silence is appended after nonempty captures so the recognizer hears the end of the utterance. Nothing is segmented, streamed, or transcribed while recording. Existing xAI OAuth credentials are preferred, with xAI API-key credentials as the fallback; no Dictation model selection, `stt.enabled` setting, local speech model, or helper executable is required.
 
 Configured upstream dictation remains separate: `Ctrl+Alt+Space` (`app.dictation.toggle`) or the Space-hold gesture uses the **Dictation** model role and `stt.enabled`. The xAI models remain available there as `xai-oauth/grok-stt` and `xai/grok-stt`, but that pipeline does not own Ctrl+Space. Pressing Backspace while holding Space latches the recording so it survives releasing the bar; a later Space or Backspace tap stops it, and other keys type normally meanwhile.
 

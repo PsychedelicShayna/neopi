@@ -42,6 +42,15 @@ export class WavFileRecorder {
 		this.#sampleCount += samples.length;
 	}
 
+	/** Append PCM16 silence without allocating or quantizing a Float32 capture chunk. */
+	appendSilence(durationMs: number): void {
+		if (this.#closed) return;
+		const samples = Math.round((SAMPLE_RATE * durationMs) / 1000);
+		if (samples <= 0) return;
+		writeSync(this.#fd, Buffer.alloc(samples * 2));
+		this.#sampleCount += samples;
+	}
+
 	finalize(): string {
 		if (!this.#closed) {
 			const dataBytes = this.#sampleCount * 2;
