@@ -301,6 +301,7 @@ Fields:
 - `instructions` (top level): shared prompt prepended to every advisor's system prompt alongside `WATCHDOG.md`. Concatenated across all discovered `WATCHDOG.yml` files.
 - `advisors[].name`: human label; slugified for the session id and its `__advisor.<slug>.jsonl` filename. Duplicate slugs across files are resolved by the same specificity rule as `WATCHDOG.md` discovery (project leaf > project ancestor > user).
 - `advisors[].enabled`: optional per-advisor switch, default `true`. `false` leaves the advisor visible as paused in status/configuration.
+- `advisors[].includeThinking`: optional per-advisor **Read primary reasoning stream** switch, default `true`. When enabled, readable primary thinking appears in escaped `<primary-thinking>` blocks in advisor updates; `false` omits thinking while retaining assistant text and tool activity. Redacted or unavailable reasoning is never forwarded. Human hide-thinking controls do not affect this setting.
 - `advisors[].model`: optional model selector with optional `:level` thinking suffix (e.g. `x-ai/grok-code-fast:high`). Omitted → the advisor uses `modelRoles.advisor`.
 - `advisors[].tools`: optional list of built-in tool names to grant. Omitted → the default `read`/`grep`/`glob` subset; explicit `[]` → no investigative tools. Any name in [`BUILTIN_TOOL_NAMES`](../packages/coding-agent/src/tools/builtin-names.ts) is accepted, including mutating tools. Legacy aliases (`search`→`grep`, `find`→`glob`) are normalized. Unknown names are dropped with a warning; if that leaves a nonempty input with no valid names, the implementation currently treats the result as omitted and uses the default subset.
 - `maxNotesPerUpdate` (top level or per advisor): accepted non-blocker notes per prompt update, default `4`. A per-advisor value overrides the top-level value, which overrides the `advisor.maxNotesPerUpdate` setting.
@@ -308,6 +309,8 @@ Fields:
 - `advisors[].systemPrompt`: optional literal base prompt that replaces the bundled advisor system prompt. Project context, memory instructions, `WATCHDOG.md`, shared instructions, and per-advisor instructions still append in their normal order. Omitted uses the bundled default; an explicit empty string is an empty base, not a reset. Unlike the instruction fields, this field does not expand `@path` imports.
 
 In `/advisor configure`, open an advisor and select **System prompt**, directly below **Instructions**. Enter opens the shared multiline editor, prefilled with the current override or the bundled default. Ctrl+G opens your external editor; Ctrl+Q / Ctrl+Enter accepts the text, and Esc cancels without changing the override. Backspace while **System prompt** is highlighted in the list clears the override; Backspace inside the editor only edits text. **Save & apply** persists the change and rebuilds the live advisors. Clearing removes `systemPrompt` from the saved YAML.
+
+The **Read primary reasoning stream** checkbox sits beside **Enabled** in each advisor's detail screen. Save & apply writes an explicit `false` to `WATCHDOG.yml` and rebuilds that advisor; turning it back on restores readable primary reasoning for future updates.
 
 ### Discovery locations
 

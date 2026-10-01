@@ -997,6 +997,7 @@ export class SessionAdvisors {
 			tools,
 			instructions,
 			JSON.stringify(config.systemPrompt ?? null),
+			config.includeThinking !== false,
 			budget,
 			this.#advisorSharedInstructions ?? "",
 			this.#advisorWatchdogPrompt ?? "",
@@ -1112,7 +1113,10 @@ export class SessionAdvisors {
 				config.systemPrompt ??
 					(this.#chatMode
 						? renderChatAdvisorPrompt(this.#chatMode, budgetPerUpdate)
-						: prompt.render(advisorSystemPrompt, { max_notes_per_update: budgetPerUpdate })),
+						: prompt.render(advisorSystemPrompt, {
+								max_notes_per_update: budgetPerUpdate,
+								include_thinking: config.includeThinking !== false,
+							})),
 			];
 			if (this.#advisorContextPrompt) systemPrompt.push(this.#advisorContextPrompt);
 			if (this.#advisorMemoryPrompt) systemPrompt.push(this.#advisorMemoryPrompt);
@@ -1407,65 +1411,70 @@ export class SessionAdvisors {
 					? Promise.all([this.#advisorRecorderClosed, this.#advisorCostSnapshotBarrier])
 					: this.#advisorRecorderClosed,
 			);
-			const runtime = new AdvisorRuntime(advisorAgentFacade, {
-				snapshotMessages: () => this.#host.agent.state.messages,
-				maintainContext: (incoming, signal) => this.#maintainAdvisorContext(advisorRef, incoming, signal),
-				obfuscator: this.#host.obfuscator(),
-				getModelIdentity: () => formatModelString(advisorRef.agent.state.model),
-				beginAdvisorUpdate: () => {
-					advisorRef.recorder.beginTurn();
-					// A model stop is provisional until the primary session finishes
-					// queue draining and recovery. Only its final end releases nits.
-					advisorRef.adviseTool.beginUpdate(this.#primaryTurnActive);
+			const runtime = new AdvisorRuntime(
+				advisorAgentFacade,
+				{
+					snapshotMessages: () => this.#host.agent.state.messages,
+					maintainContext: (incoming, signal) => this.#maintainAdvisorContext(advisorRef, incoming, signal),
+					obfuscator: this.#host.obfuscator(),
+					getModelIdentity: () => formatModelString(advisorRef.agent.state.model),
+					beginAdvisorUpdate: () => {
+						advisorRef.recorder.beginTurn();
+						// A model stop is provisional until the primary session finishes
+						// queue draining and recovery. Only its final end releases nits.
+						advisorRef.adviseTool.beginUpdate(this.#primaryTurnActive);
+					},
+					onTurnError: (error, failedMessages, signal) =>
+						this.#recoverAdvisorTurn(advisorRef, error, failedMessages, signal),
+					onTurnSuccess: async () => {
+						// Commit the delivered batch so retries of a failed turn stay deduped
+						// while this successful turn's context is persisted once (issue #9553).
+						advisorRef.recorder.commitTurn();
+						// A completed turn ended the usage-limit episode — start the next
+						// block's bounded wait budget fresh.
+						advisorRef.usageLimitRetries = 0;
+						const fallback = advisorRef.retryFallback;
+						if (!advisorRef.retryFallbackPendingSuccess || !fallback) return;
+						advisorRef.retryFallbackPendingSuccess = false;
+						await this.#host.emitSessionEvent({
+							type: "retry_fallback_succeeded",
+							model: formatRetryFallbackSelector(advisorRef.agent.state.model, advisorRef.thinkingLevel),
+							role: fallback.role,
+						});
+					},
+					onTurnAbandoned: () => advisorRef.recorder.abandonTurn(),
+					notifyFailure: error => {
+						this.#advisorStatuses.set(slug, { name: advisorName, status: "error" });
+						const message = error instanceof Error ? error.message : String(error);
+						this.#host.emitNotice(
+							"warning",
+							`Advisor${slug ? ` "${advisorName}"` : ""} unavailable for ${formatModelString(advisorAgent.state.model)}: ${message}`,
+							"advisor",
+						);
+					},
+					notifyQuotaExhausted: () => {
+						this.#advisorStatuses.set(slug, { name: advisorName, status: "quota_exhausted" });
+						this.#host.emitNotice(
+							"warning",
+							`Advisor "${advisorName}" quota exhausted — pausing until reset.`,
+							"advisor",
+						);
+					},
+					notifyIdle: () => {
+						// Repaint on every idle transition, streaming or not: the status
+						// line masks `yielded` back to open while the primary streams, so
+						// mid-turn drain completions stay open, while post-yield
+						// completions — including the quota/halt latches, which can land
+						// after the agent_end repaint — close the eye without waiting for
+						// an unrelated event.
+						void this.#host
+							.emitSessionEvent({ type: "advisor_yielded" })
+							.catch(err => logger.debug("advisor yield notification failed", { err: String(err) }));
+					},
 				},
-				onTurnError: (error, failedMessages, signal) =>
-					this.#recoverAdvisorTurn(advisorRef, error, failedMessages, signal),
-				onTurnSuccess: async () => {
-					// Commit the delivered batch so retries of a failed turn stay deduped
-					// while this successful turn's context is persisted once (issue #9553).
-					advisorRef.recorder.commitTurn();
-					// A completed turn ended the usage-limit episode — start the next
-					// block's bounded wait budget fresh.
-					advisorRef.usageLimitRetries = 0;
-					const fallback = advisorRef.retryFallback;
-					if (!advisorRef.retryFallbackPendingSuccess || !fallback) return;
-					advisorRef.retryFallbackPendingSuccess = false;
-					await this.#host.emitSessionEvent({
-						type: "retry_fallback_succeeded",
-						model: formatRetryFallbackSelector(advisorRef.agent.state.model, advisorRef.thinkingLevel),
-						role: fallback.role,
-					});
-				},
-				onTurnAbandoned: () => advisorRef.recorder.abandonTurn(),
-				notifyFailure: error => {
-					this.#advisorStatuses.set(slug, { name: advisorName, status: "error" });
-					const message = error instanceof Error ? error.message : String(error);
-					this.#host.emitNotice(
-						"warning",
-						`Advisor${slug ? ` "${advisorName}"` : ""} unavailable for ${formatModelString(advisorAgent.state.model)}: ${message}`,
-						"advisor",
-					);
-				},
-				notifyQuotaExhausted: () => {
-					this.#advisorStatuses.set(slug, { name: advisorName, status: "quota_exhausted" });
-					this.#host.emitNotice(
-						"warning",
-						`Advisor "${advisorName}" quota exhausted — pausing until reset.`,
-						"advisor",
-					);
-				},
-				notifyIdle: () => {
-					// Repaint on every idle transition, streaming or not: the status
-					// line masks `yielded` back to open while the primary streams, so
-					// mid-turn drain completions stay open, while post-yield
-					// completions — including the quota/halt latches, which can land
-					// after the agent_end repaint — close the eye without waiting for
-					// an unrelated event.
-					void this.#host
-						.emitSessionEvent({ type: "advisor_yielded" })
-						.catch(err => logger.debug("advisor yield notification failed", { err: String(err) }));
-				},
-			});
+				1000,
+				config.includeThinking !== false,
+			);
 
 			const advisorRef: ActiveAdvisor = {
 				name: advisorName,

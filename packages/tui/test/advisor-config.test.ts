@@ -58,6 +58,30 @@ describe("advisor config editor warnings and synthetic default row", () => {
 		expect(saved?.advisors).toEqual([]);
 	});
 
+	it("toggles primary reasoning in detail and saves an override on the implicit default", async () => {
+		let saved: WatchdogConfigDoc | undefined;
+		const overlay = buildOverlay({ advisors: [] }, doc => {
+			saved = structuredClone(doc);
+		});
+		const strip = (lines: readonly string[]) => lines.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+
+		expect(strip(overlay.render(120))).toContain("Read primary reasoning stream: ● on");
+		overlay.handleInput("\r"); // Open the seeded default.
+		expect(strip(overlay.render(120))).toContain("Read primary reasoning stream");
+		overlay.handleInput("\x1b[B");
+		overlay.handleInput("\x1b[B");
+		overlay.handleInput("\r"); // Off.
+		expect(strip(overlay.render(120))).toContain("○ off");
+		overlay.handleInput("\r"); // Back on.
+		expect(strip(overlay.render(120))).toContain("● on");
+		overlay.handleInput("\r"); // Off again.
+		overlay.handleInput("\x1b"); // Roster.
+		expect(strip(overlay.render(120))).toContain("Read primary reasoning stream: ○ off");
+		overlay.handleInput("s");
+		await Bun.sleep(0);
+		expect(saved?.advisors).toEqual([{ name: "default", includeThinking: false }]);
+	});
+
 	it("toggles the highlighted advisor with Space and saves it with s, all from the list", async () => {
 		let saved: WatchdogConfigDoc | undefined;
 		const overlay = buildOverlay({ advisors: [{ name: "alpha" }, { name: "beta" }] }, doc => {
