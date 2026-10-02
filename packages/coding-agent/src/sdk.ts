@@ -46,6 +46,7 @@ import {
 	formatActiveRepoWatchdogPrompt,
 	formatAdvisorContextPrompt,
 	formatAdvisorMemoryPrompt,
+	watchAdvisorConfigs,
 } from "./advisor";
 import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, AsyncJobManager } from "./async";
 import { AutoLearnController, buildAutoLearnInstructions } from "./autolearn/controller";
@@ -4853,6 +4854,18 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			);
 		}
 		hasSession = true;
+		if (!isSubagentSession) {
+			session.addDisposer(
+				watchAdvisorConfigs(cwd, agentDir, discovered => {
+					if (session.isDisposed) return;
+					session.applyAdvisorConfigs(
+						discovered.advisors,
+						discovered.sharedInstructions,
+						discovered.sharedMaxNotesPerUpdate,
+					);
+				}),
+			);
+		}
 		credentialNoticeSession = session;
 		session.attachMixtureHost(sessionMixtureHost);
 		// A caller-supplied store belongs to the caller (the CLI keeps it in sync itself).
