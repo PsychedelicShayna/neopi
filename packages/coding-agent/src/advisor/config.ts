@@ -21,6 +21,7 @@ const WATCHDOG_ADVISOR_KEYS = [
 	"instructions",
 	"systemPrompt",
 	"enabled",
+	"includeThinking",
 	"maxNotesPerUpdate",
 	"includeThinking",
 ] as const;

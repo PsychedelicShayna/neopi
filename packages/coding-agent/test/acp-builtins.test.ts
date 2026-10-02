@@ -276,6 +276,13 @@ describe("ACP builtin slash commands", () => {
 		expect(output).toEqual(["Fast mode is off."]);
 	});
 
+	it("dispatches /chain and no longer recognizes the old /chaining command", async () => {
+		const { output, runtime } = createRuntime();
+		expect(await executeAcpBuiltinSlashCommand("/chain configure", runtime)).toEqual({ consumed: true });
+		expect(output[0]).toContain("interactive TUI");
+		expect(await executeAcpBuiltinSlashCommand("/chaining off", runtime)).toBe(false);
+	});
+
 	it("toggles extended context with explicit controls and reports state", async () => {
 		const { output, runtime } = createRuntime();
 

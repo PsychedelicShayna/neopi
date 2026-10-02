@@ -27,8 +27,8 @@ export interface HistoryFormatOptions {
 	title?: string;
 	/** Render assistant thinking blocks (default: elided). */
 	includeThinking?: boolean;
-	/** Advisor deltas only: distinguish provisional primary reasoning from decided output. */
-	wrapPrimaryThinking?: boolean;
+	/** In advisor deltas, wrap included readable thinking in escaped XML. */
+	primaryThinkingXml?: boolean;
 	/** Render tool intent comment before tool call lines. */
 	includeToolIntent?: boolean;
 	/** Retain call/result correlation IDs when entries are rendered independently. */
@@ -518,7 +518,7 @@ export function formatSessionHistoryMarkdown(messages: unknown[], opts?: History
 						);
 					} else if (opts?.includeThinking && block.type === "thinking" && block.thinking.trim()) {
 						body.push(
-							opts.wrapPrimaryThinking
+							opts.primaryThinkingXml
 								? `<primary-thinking>\n${escapeXmlText(block.thinking)}\n</primary-thinking>`
 								: `_thinking:_ ${block.thinking}`,
 						);

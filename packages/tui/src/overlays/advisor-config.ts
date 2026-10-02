@@ -57,7 +57,7 @@ export interface AdvisorConfig {
 	systemPrompt?: string;
 	/** Defaults to true; false retains the advisor in the roster and status displays without building its runtime. */
 	enabled?: boolean;
-	/** Read the primary model's stored reasoning blocks (default true). */
+	/** Include the primary assistant's reasoning in this advisor's updates; defaults to true. */
 	includeThinking?: boolean;
 	/** Maximum non-blocker notes per advisor prompt update (default 4); blockers are exempt. */
 	maxNotesPerUpdate?: number;
@@ -909,7 +909,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 			!advisor.instructions?.trim() &&
 			advisor.systemPrompt === undefined &&
 			advisor.enabled !== false &&
-			advisor.includeThinking !== false &&
+			advisor.includeThinking === undefined &&
 			advisor.maxNotesPerUpdate === undefined
 		);
 	}
@@ -1079,7 +1079,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 				description: advisor.enabled === false ? "○ off" : "● on",
 			},
 			{
-				value: "toggleThinking",
+				value: "toggleIncludeThinking",
 				label: "Read primary reasoning stream",
 				description: advisor.includeThinking === false ? "○ off" : "● on",
 			},
@@ -1132,11 +1132,11 @@ export class AdvisorConfigOverlayComponent implements Component {
 				this.#showDetail(index);
 				return;
 			}
-			case "toggleThinking": {
+			case "toggleIncludeThinking": {
 				const advisor = this.#doc.advisors[index];
-				advisor.includeThinking = advisor.includeThinking === false ? undefined : false;
+				advisor.includeThinking = advisor.includeThinking === false ? true : false;
 				this.#dirty = true;
-				this.#showDetail(index, field);
+				this.#showDetail(index, "toggleIncludeThinking");
 				return;
 			}
 			case "name":

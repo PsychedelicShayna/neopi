@@ -11,6 +11,7 @@ import { getThemeByName, setThemeInstance } from "../src/theme";
 const deps: MixtureConfigDeps = {
 	getAvailableModels: () => [],
 	browserSource: {
+		revision: 0,
 		defaultThinkingLevel: "high",
 		modelProviderOrder: [],
 		knownRoleIds: [],

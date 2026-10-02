@@ -777,7 +777,7 @@ export class AdvisorRuntime {
 		const probeMd = formatSessionHistoryMarkdown(delta, {
 			...ADVISOR_RENDER_OPTIONS,
 			includeThinking: this.#includeThinking,
-			wrapPrimaryThinking: true,
+			primaryThinkingXml: this.#includeThinking,
 		});
 		if (obfuscator?.hasSecrets()) {
 			this.#collectAdvisorSecrets(obfuscator, delta, probeMd);
@@ -844,7 +844,7 @@ export class AdvisorRuntime {
 		let md = formatSessionHistoryMarkdown(delta, {
 			...ADVISOR_RENDER_OPTIONS,
 			includeThinking: this.#includeThinking,
-			wrapPrimaryThinking: true,
+			primaryThinkingXml: this.#includeThinking,
 		});
 		if (!md.trim()) return null;
 		if (obfuscator?.hasSecrets()) {
@@ -852,7 +852,7 @@ export class AdvisorRuntime {
 			md = formatSessionHistoryMarkdown(this.#obfuscatePrimaryContextMessages(obfuscator, delta), {
 				...ADVISOR_RENDER_OPTIONS,
 				includeThinking: this.#includeThinking,
-				wrapPrimaryThinking: true,
+				primaryThinkingXml: this.#includeThinking,
 				transformExpandedToolIO: text => obfuscator.obfuscate(text, this.#advisorRegexSecretValues),
 			});
 			md = obfuscator.obfuscate(md, this.#advisorRegexSecretValues);

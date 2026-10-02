@@ -72,6 +72,39 @@ describe("renderAdvisorDeltaChunks (delta-split)", () => {
 		expect(chunksToText(chunks)).toBe(old);
 	});
 
+	it("gates escaped primary reasoning in split advisor updates while retaining text and tools", () => {
+		const msgs = [
+			{
+				role: "assistant",
+				content: [
+					{ type: "thinking", thinking: "Consider <untrusted> & retry" },
+					{ type: "redactedThinking", data: "hidden-secret" },
+					{ type: "text", text: "Decision: proceed" },
+					{ type: "toolCall", id: "c1", name: "read", arguments: { path: "a.ts" } },
+				],
+				timestamp: 1,
+			} as unknown as AgentMessage,
+			toolResult("c1", 2),
+		];
+		const enabled = chunksToText(
+			renderAdvisorDeltaChunks(msgs, { wip: false, includeThinking: true, advisorRegexSecretValues: new Set() }),
+		)!;
+		const disabled = chunksToText(
+			renderAdvisorDeltaChunks(msgs, { wip: false, includeThinking: false, advisorRegexSecretValues: new Set() }),
+		)!;
+		expect(enabled).toBe(
+			`### Session update\n\n${formatSessionHistoryMarkdown(msgs, { ...OPTS, primaryThinkingXml: true })}`,
+		);
+		expect(enabled).toContain("<primary-thinking>\nConsider &lt;untrusted&gt; &amp; retry\n</primary-thinking>");
+		expect(disabled).not.toContain("primary-thinking");
+		expect(disabled).not.toContain("Consider");
+		for (const output of [enabled, disabled]) {
+			expect(output).toContain("Decision: proceed");
+			expect(output).toContain("→ read(a.ts)");
+			expect(output).not.toContain("hidden-secret");
+		}
+	});
+
 	it("wip marker lands on LAST chunk only", () => {
 		const msgs = [user("u1", 1), agent("a1", 2), user("u2", 3)];
 		const chunks = renderAdvisorDeltaChunks(msgs, {

@@ -1,5 +1,5 @@
 /**
- * Fullscreen `/chaining configure` overlay: a mouse- and keyboard-driven editor
+ * Fullscreen `/chain configure` overlay: a mouse- and keyboard-driven editor
  * for the `CHAINS.yml` post-processing chains at project or user level.
  *
  * It mirrors {@link ./advisor-config} one level deeper: the list screen is a

@@ -1808,7 +1808,7 @@ export class InputController {
 		const { chains, warnings } = await discoverChains(this.ctx.sessionManager.getCwd(), getAgentDir());
 		if (warnings.length > 0) this.ctx.showWarning(`CHAINS.yml: ${warnings.join("; ")}`);
 		if (chains.length === 0) {
-			this.ctx.showWarning("No post-processing chains defined. Create one with /chaining configure.");
+			this.ctx.showWarning("No post-processing chains defined. Create one with /chain configure.");
 			return undefined;
 		}
 		const activeName = cfgChainingActive.get(settings);
