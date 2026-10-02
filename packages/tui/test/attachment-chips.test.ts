@@ -119,6 +119,8 @@ describe("AttachmentChipsBand — Kitty placeholder thumbnails", () => {
 			// inside the card. Every row must measure exactly the card width.
 			for (const row of rows) {
 				expect(visibleWidth(row)).toBe(14);
+				// Independent measurement catches self-consistent but wrong padding.
+				expect(Bun.stringWidth(Bun.stripANSI(row), { ambiguousIsNarrow: true })).toBe(14);
 			}
 		} finally {
 			mutable.imageProtocol = originalProtocol;
@@ -151,8 +153,9 @@ describe("AttachmentChipsBand — Kitty placeholder thumbnails", () => {
 			expect(rows.some(row => row.includes("\x1b_Ga=p,U=1"))).toBe(true);
 			const transmits = budget.takeTransmits();
 			expect(transmits).toHaveLength(1);
-			const payload = transmits[0]!.slice(transmits[0]!.indexOf(";") + 1);
-			expect(payload.startsWith("iVBOR")).toBe(true);
+			// A tmux session wraps Kitty APCs in a DCS envelope with its own
+			// semicolon, so inspect the Kitty payload rather than the first one.
+			expect(transmits[0]).toContain(";iVBOR");
 		} finally {
 			mutable.imageProtocol = originalProtocol;
 			setKittyGraphics({ unicodePlaceholders: false });

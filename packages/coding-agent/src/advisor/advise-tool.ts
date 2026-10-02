@@ -256,11 +256,11 @@ export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails>
 	}
 
 	/**
-	 * Mark the primary no longer mid-turn and flush the withheld backlog
+	 * Mark the primary no longer active and flush the withheld backlog
 	 * WITHOUT starting a new advisor update or resetting the guard's budget.
-	 * Called at the primary's terminal boundary (final yield), where no advisor
-	 * review follows but reserved notes must still reach the primary. Flushed
-	 * notes stay charged to their originating update as routed deliveries.
+	 * Called only after the primary run rules out further continuations, so
+	 * nits cannot enter model context during an advisor-triggered continuation.
+	 * Flushed notes stay charged to their originating update as routed deliveries.
 	 */
 	flushDeferredNotes(): void {
 		this.#inProgressUpdate = false;

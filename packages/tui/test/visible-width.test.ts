@@ -12,6 +12,7 @@
  */
 import { afterEach, describe, expect, it } from "bun:test";
 import { visibleWidth as nativeVisibleWidth } from "@oh-my-pi/pi-natives";
+import { wrapTmuxPassthrough } from "@oh-my-pi/pi-tui/tmux";
 import {
 	DEFAULT_TAB_WIDTH,
 	Ellipsis,
@@ -99,6 +100,12 @@ describe("visibleWidth — parity with the native width engine", () => {
 		const cells = "\u{10eeee}\u0305\u030d".repeat(9);
 		const line = `${ESC}_Ga=p,U=1,q=2,i=123,p=123,c=9,r=4${ST}${ESC}[38;2;1;2;3m${cells}${ESC}[39m`;
 		expect(visibleWidth(line)).toBe(9);
+	});
+
+	it("excludes the tmux envelope without consuming decorated image cells or trailing text", () => {
+		const cells = "\u{10eeee}\u0305\u030d".repeat(9);
+		const placement = wrapTmuxPassthrough(`${ESC}_Ga=p,U=1,q=2,i=123,p=123,c=9,r=4${ST}`);
+		expect(visibleWidth(`${placement}${cells}xy`)).toBe(11);
 	});
 });
 

@@ -131,6 +131,7 @@ export async function visitEntriesFromFileStream(
 	const yieldEveryBytes = Math.max(0, options.yieldEveryBytes ?? STREAM_YIELD_BYTES);
 	const yieldEveryEntries = Math.max(0, options.yieldEveryEntries ?? STREAM_YIELD_ENTRIES);
 	const maxBytes = Math.max(0, options.maxBytes ?? Number.POSITIVE_INFINITY);
+	let remainingBytes = Number.isFinite(maxBytes) ? Math.trunc(maxBytes) : Number.POSITIVE_INFINITY;
 	// Bytes, not text: a multibyte UTF-8 sequence straddling a chunk boundary
 	// stays intact, and Bun.JSONL.parseChunk takes typed arrays directly. Only
 	// the unconsumed remainder is held (≤ one record + a chunk), so the ≥8MiB
@@ -235,9 +236,12 @@ export async function visitEntriesFromFileStream(
 
 	try {
 		const file = Bun.file(filePath);
-		const source = Number.isFinite(maxBytes) ? file.slice(0, maxBytes) : file;
-		for await (const chunk of source.stream()) {
-			if (stopped) break;
+		// A sliced BunFile stream can yield its byte limit without reaching EOF.
+		// Cap each chunk from the ordinary stream and cancel once the budget is spent.
+		for await (const sourceChunk of file.stream()) {
+			if (stopped || remainingBytes === 0) break;
+			const chunk = sourceChunk.byteLength <= remainingBytes ? sourceChunk : sourceChunk.subarray(0, remainingBytes);
+			remainingBytes -= chunk.byteLength;
 			bytesSinceYield += chunk.byteLength;
 			options.onBytesConsumed?.(chunk.byteLength);
 			// Parsing before the chunk closes a line re-scans the unfinished record
@@ -252,6 +256,7 @@ export async function visitEntriesFromFileStream(
 				}
 				sink.append(chunk);
 				await yieldToMacrotask();
+				if (remainingBytes === 0) break;
 				continue;
 			}
 			sink.append(chunk);
@@ -279,6 +284,7 @@ export async function visitEntriesFromFileStream(
 			// sink keeps that remainder for the next chunk.
 			await drain();
 			await yieldToMacrotask();
+			if (remainingBytes === 0) break;
 		}
 		// A trailing record without a final newline: terminate it so the parser
 		// can complete it (readline yielded it; parseChunk needs the delimiter).

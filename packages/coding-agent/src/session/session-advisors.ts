@@ -646,12 +646,6 @@ export class SessionAdvisors {
 		// turn against completed work.
 		this.#advisorTerminalBoundaryOpen = !this.#advisorPrimaryWillContinue;
 		try {
-			if (!this.#advisorPrimaryWillContinue) {
-				// Flush notes deferred during tool-loop steps at every terminal boundary.
-				// Delivery never pauses: advice already produced against work the
-				// reviewers saw still reaches the primary during an advisor continuation.
-				for (const advisor of this.#advisors) advisor.adviseTool.flushDeferredNotes();
-			}
 			// A boundary of a continuation the advisor itself started is captured but
 			// never schedules a review: the next genuinely started boundary reviews it.
 			const continuation = this.#advisorContinuation;
