@@ -1,10 +1,11 @@
 import { sanitizeDisplayWarnings } from "@oh-my-pi/pi-tui/render/render-utils";
+import { APP_NAME } from "@oh-my-pi/pi-utils/dirs";
 import type { Args } from "../cli/args";
 import type { Settings } from "../config/settings";
 import { checkPythonKernelAvailability } from "./py/kernel";
 import { cfgEvalJs, cfgEvalPy, cfgPythonInterpreter } from "./settings";
 
-const PYTHON_FIX_HINT = "Install Python 3.8+ or set python.interpreter, then verify with `omp setup python --check`.";
+const PYTHON_FIX_HINT = `Install Python 3.8+ or set python.interpreter, then verify with \`${APP_NAME} setup python --check\`.`;
 
 /**
  * Warning for an enabled Python eval backend with no working interpreter.

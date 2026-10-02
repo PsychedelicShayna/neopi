@@ -98,13 +98,13 @@ afterEach(() => {
 	for (const hub of hubs.splice(0)) hub.dispose();
 });
 
-function openHub(calls: { assign: string[]; cancel: number }): ModelHubComponent {
+function openHub(calls: { assign: string[]; cancel: number }, models: Model[] = MODELS): ModelHubComponent {
 	const hub = new ModelHubComponent(
 		ui,
 		source({ default: "demo/demo" }, ["demo/demo"]),
-		registry(MODELS),
+		registry(models),
 		// A `--models` scope skips the background online refresh.
-		MODELS.map(entry => ({ model: entry })),
+		models.map(entry => ({ model: entry })),
 		{
 			onAssign: (_model, role, _level, selector) => {
 				calls.assign.push(`${role}=${selector}`);
@@ -174,7 +174,21 @@ test("the model hub describes a data-first picker when the terminal has the kind
 	expect(hub.describe(withPicker)).toBe(root);
 });
 
-test("filter mode narrows the model picker to matching models", () => {
+test("Factory Droid rows carry the base credit rate and a credit-only model is never free", () => {
+	const priced = { ...model("factory-droid", "claude-opus-5"), factoryDroidCredits: 2 };
+	const creditOnly = {
+		...model("factory-droid", "preview-credit-model", { cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }),
+		factoryDroidCredits: 0.5,
+	};
+	const hub = openHub({ assign: [], cancel: 0 }, [...MODELS, priced, creditOnly]);
+	const items = props(hub.describe(withPicker)).items ?? [];
+	const row = (id: string) => items.find(entry => entry.id === `factory-droid/${id}`);
+	expect(row("claude-opus-5")?.facts?.price).toBe("$3·15 2×");
+	expect(row("preview-credit-model")?.facts?.price).toBe("0.5×");
+	expect(row("preview-credit-model")?.badges ?? []).not.toContainEqual({ text: "free", tone: "success" });
+});
+
+test("typing changes the order, hits, counts and head total but never the catalogue", () => {
 	const hub = openHub({ assign: [], cancel: 0 });
 	hub.handleInput("i");
 	for (const ch of "sonnet") hub.handleInput(ch);

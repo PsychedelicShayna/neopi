@@ -9,6 +9,7 @@ export const RPC_COMMAND_TYPES = [
 	"prompt",
 	"steer",
 	"remove_queued_message",
+	"promote_queued_message",
 	"follow_up",
 	"abort",
 	"abort_and_prompt",
@@ -16,6 +17,7 @@ export const RPC_COMMAND_TYPES = [
 	"open_session",
 	"get_state",
 	"set_fast_mode",
+	"set_ask_dialog",
 	"set_chat_mode",
 	"set_mode",
 	"get_available_commands",
@@ -29,6 +31,8 @@ export const RPC_COMMAND_TYPES = [
 	"set_approval_handler",
 	"get_subagents",
 	"get_subagent_messages",
+	"cancel_subagent",
+	"steer_subagent",
 	"set_model",
 	"cycle_model",
 	"get_available_models",
@@ -63,6 +67,8 @@ export const RPC_COMMAND_TYPES = [
 	"get_messages_page",
 	"get_login_providers",
 	"login",
+	"predict_word",
+	"predict_word_feedback",
 ] as const satisfies readonly RpcCommand["type"][];
 
 type MissingRpcCommand = Exclude<RpcCommand["type"], (typeof RPC_COMMAND_TYPES)[number]>;

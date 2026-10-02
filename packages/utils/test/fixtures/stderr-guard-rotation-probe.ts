@@ -20,7 +20,7 @@ const sink = new RotatingFileSink({
 	directory,
 	filenamePrefix: "npi",
 	filenameSuffix: String(process.pid),
-	auditFile: path.join(directory, `.npi.${process.pid}-audit.json`),
+
 	maxBytes: 10 * 1024 * 1024,
 	maxFiles: 5,
 	onRotate: setStderrRedirectTarget,

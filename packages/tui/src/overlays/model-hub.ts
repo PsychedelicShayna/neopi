@@ -237,6 +237,8 @@ export interface ModelHubCallbacks {
 	onLoginRequest?: (providerId: string) => void;
 	/** Open the mixture graph editor from a selected mixture model. */
 	onDefineMixture?: (name?: string) => void;
+	/** Save the current role assignments and default thinking level as a named model preset. */
+	onSavePreset?: (name: string) => void;
 	/** Persist a new quick-switch cycle order (the ctrl+p role cycle). */
 	onCycleOrderChange?: (order: string[]) => void;
 	onCancel: () => void;
@@ -295,8 +297,9 @@ type StripState =
 			fallbackSelector?: string;
 	  })
 	| {
-			/** Footer text input naming a new custom role. */
-			kind: "roleName";
+			/** Footer text input naming a new role, or saving a model preset. */
+			kind: "name";
+			purpose: "role" | "preset";
 			input: Input;
 	  }
 	| {
@@ -335,7 +338,7 @@ type StripState =
 	  };
 
 /** A Roles-view command; keys and the picker's action bar both run {@link ModelHubComponent}'s `#runRolesAction`. */
-type RolesAction = "pick" | "clear" | "fallback" | "cycle" | "earlier" | "later" | "new" | "thinking";
+type RolesAction = "pick" | "clear" | "fallback" | "cycle" | "earlier" | "later" | "new" | "thinking" | "save";
 
 /** Printable keys of the Roles view and the command each runs. */
 const ROLES_ACTION_KEYS: Record<string, RolesAction> = {
@@ -346,6 +349,7 @@ const ROLES_ACTION_KEYS: Record<string, RolesAction> = {
 	"]": "later",
 	n: "new",
 	t: "thinking",
+	s: "save",
 };
 
 /** Picker fact columns of the Roles view. */
@@ -1932,7 +1936,7 @@ export class ModelHubComponent implements Component {
 
 	#activateStripChip(): void {
 		const strip = this.#strip;
-		if (!strip || strip.kind === "roleName" || strip.kind === "pattern" || strip.kind === "effortLevels") return;
+		if (!strip || strip.kind === "name" || strip.kind === "pattern" || strip.kind === "effortLevels") return;
 		const chip = strip.chips[strip.index];
 		if (!chip) return;
 		if (strip.kind === "patternEffort") {
@@ -2175,21 +2179,44 @@ export class ModelHubComponent implements Component {
 		this.#refreshAfterMutation();
 	}
 
-	/** Open the footer name input that creates a new custom role. */
-	#openRoleNameStrip(): void {
-		this.#strip = { kind: "roleName", input: new Input() };
+	/** Open the footer name input: a new custom role, or saving the current setup as a model preset. */
+	#openNameStrip(purpose: "role" | "preset"): void {
+		this.#strip = { kind: "name", purpose, input: new Input() };
+	}
+
+	/** Validate and commit the name strip: a new role jumps into assigning it, a preset name saves it. */
+	#submitNameStrip(): void {
+		const strip = this.#strip;
+		if (strip?.kind !== "name") return;
+		if (strip.purpose === "preset") {
+			this.#submitPresetName();
+			return;
+		}
+		this.#submitRoleName();
 	}
 
 	/** Validate and commit the new-role name: jump straight into assigning it. */
 	#submitRoleName(): void {
 		const strip = this.#strip;
-		if (strip?.kind !== "roleName") return;
+		if (strip?.kind !== "name" || strip.purpose !== "role") return;
 		const name = strip.input.getValue().trim();
 		if (!/^[a-zA-Z][\w-]*$/.test(name)) return;
 		if (this.#visibleRoleIds().includes(name)) return;
 		this.#strip = null;
 		this.#frame.chipRanges = [];
 		this.#startAssign(name);
+	}
+
+	/** Validate and commit the preset name: save the current setup under it (overwrites). */
+	#submitPresetName(): void {
+		const strip = this.#strip;
+		if (strip?.kind !== "name" || strip.purpose !== "preset") return;
+		const name = strip.input.getValue().trim();
+		if (!/^[a-zA-Z][\w-]*$/.test(name)) return;
+		this.#strip = null;
+		this.#frame.chipRanges = [];
+		this.#callbacks.onSavePreset?.(name);
+		this.#refreshAfterMutation();
 	}
 
 	// ═══════════════════════════════════════════════════════════════════════
@@ -2400,9 +2427,9 @@ export class ModelHubComponent implements Component {
 			this.#closeStrip();
 			return;
 		}
-		if (strip.kind === "roleName" || strip.kind === "pattern") {
+		if (strip.kind === "name" || strip.kind === "pattern") {
 			if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
-				if (strip.kind === "roleName") this.#submitRoleName();
+				if (strip.kind === "name") this.#submitNameStrip();
 				else this.#submitSelectorPattern(strip);
 				return;
 			}
@@ -2471,7 +2498,7 @@ export class ModelHubComponent implements Component {
 				this.#startAssignFallbackKey();
 				return;
 			case "newRole":
-				this.#openRoleNameStrip();
+				this.#openNameStrip("role");
 				return;
 			case "separator":
 				return;
@@ -2632,7 +2659,10 @@ export class ModelHubComponent implements Component {
 				return;
 			}
 			case "new":
-				this.#openRoleNameStrip();
+				this.#openNameStrip("role");
+				return;
+			case "save":
+				if (this.#callbacks.onSavePreset) this.#openNameStrip("preset");
 				return;
 			case "thinking":
 				if (role) {
@@ -2678,7 +2708,7 @@ export class ModelHubComponent implements Component {
 			} else if (
 				event.leftClick &&
 				strip.kind !== "effortLevels" &&
-				strip.kind !== "roleName" &&
+				strip.kind !== "name" &&
 				strip.kind !== "pattern" &&
 				this.#frame.selectChipAt(strip, footerColumn)
 			) {
@@ -3175,7 +3205,12 @@ export class ModelHubComponent implements Component {
 		const altLeftRight = formatKeyHints(["alt+left", "alt+right"]);
 		const strip = this.#strip;
 		if (strip) {
-			if (strip.kind === "roleName") return `${enter} create + pick model · ${cancel} cancel`;
+			if (strip.kind === "name") {
+				if (strip.purpose === "preset") {
+					return `${enter} save preset · ${cancel} cancel`;
+				}
+				return `${enter} create + pick model · ${cancel} cancel`;
+			}
 			if (strip.kind === "pattern") return `${enter} continue to effort · ${cancel} cancel`;
 			if (strip.kind === "effortLevels")
 				return `${leftRight} choose · ${formatKeyHint("space")} toggle · ${enter} save · ${cancel} discard`;
@@ -3226,7 +3261,8 @@ export class ModelHubComponent implements Component {
 			// Thinking is editable only when the assigned model has reasoning levels.
 			const editable = row?.kind === "role" && this.#roleThinkingTarget(row.role) !== undefined;
 			const thinking = editable ? ` · ${formatKeyHint("t")} thinking` : "";
-			return `${upDown} rows · ${enter} pick · ${formatKeyHint("f")} fallback · ${formatKeyHint("y")} yank · ${formatKeyHint("p")} append · ${formatKeyHint("x")} clear${thinking} · ${formatKeyHint("c")} cycle · [/] reorder · ${formatKeyHint("n")} new`;
+			const savePreset = this.#callbacks.onSavePreset ? ` · ${formatKeyHint("s")} save preset` : "";
+			return `${upDown} rows · ${enter} pick · ${formatKeyHint("f")} fallback · ${formatKeyHint("y")} yank · ${formatKeyHint("p")} append · ${formatKeyHint("x")} clear${thinking} · ${formatKeyHint("c")} cycle · [/] reorder · ${formatKeyHint("n")} new${savePreset}`;
 		}
 		if (entry.kind === "provider" && entry.locked) {
 			return entry.oauth
@@ -3255,9 +3291,11 @@ export class ModelHubComponent implements Component {
 	}
 
 	#renderStrip(width: number, strip: StripState): string {
-		if (strip.kind === "roleName") {
-			const label = theme.fg("accent", "New role name:");
-			const inputWidth = Math.max(8, Math.min(32, width - visibleWidth("New role name:") - 24));
+		if (strip.kind === "name") {
+			const preset = strip.purpose === "preset";
+			const labelText = preset ? "Preset name:" : "New role name:";
+			const label = theme.fg("accent", labelText);
+			const inputWidth = Math.max(8, Math.min(32, width - visibleWidth(labelText) - 24));
 			const inputLine = strip.input.render(inputWidth)[0] ?? "";
 			return truncateToWidth(`${label} ${inputLine} ${theme.fg("dim", "(letters, digits, - and _)")}`, width);
 		}
@@ -3429,7 +3467,7 @@ export class ModelHubComponent implements Component {
 						strip.toggle.toggle(level);
 						this.#configError = undefined;
 					} else {
-						if (strip.kind === "roleName" || strip.kind === "pattern" || !strip.chips[index]) return;
+						if (strip.kind === "name" || strip.kind === "pattern" || !strip.chips[index]) return;
 						strip.index = index;
 						if (strip.kind === "selectorChoice") this.#activateSelectorChoice(strip);
 						else this.#activateStripChip();
@@ -3950,8 +3988,13 @@ export class ModelHubComponent implements Component {
 		if (this.#assignmentPending) return [CLOSE_ACTION];
 		if (strip) {
 			const apply =
-				strip.kind === "roleName"
-					? pickerAction("roleName", "Create role", "enter", { primary: true })
+				strip.kind === "name"
+					? pickerAction(
+							strip.purpose === "preset" ? "presetName" : "roleName",
+							strip.purpose === "preset" ? "Save preset" : "Create role",
+							"enter",
+							{ primary: true },
+						)
 					: pickerAction(
 							"stripApply",
 							strip.kind === "thinking" || strip.kind === "patternEffort"
@@ -3998,6 +4041,7 @@ export class ModelHubComponent implements Component {
 						this.#roleThinkingTarget(row.role) ? roleAction("thinking", "Thinking", "t") : undefined,
 						roleAction("cycle", this.#cycleOrder().includes(row.role) ? "Leave cycle" : "Add to cycle", "c"),
 						roleAction("new", "New role", "n"),
+						this.#callbacks.onSavePreset ? roleAction("save", "Save preset", "s") : undefined,
 					);
 					break;
 				}
@@ -4044,12 +4088,14 @@ export class ModelHubComponent implements Component {
 
 	/** The open strip as the picker's chip strip (role assignment, save scope, thinking level, new role name). */
 	#pickerStrip(strip: StripState): NonNullable<TspPickerProps["strip"]> {
-		if (strip.kind === "roleName" || strip.kind === "pattern") {
+		if (strip.kind === "name" || strip.kind === "pattern") {
 			return {
 				label: [
 					span(
-						strip.kind === "roleName"
-							? "New role name "
+						strip.kind === "name"
+							? strip.purpose === "preset"
+								? "Preset name "
+								: "New role name "
 							: strip.target === "rule"
 								? "Model effort pattern "
 								: strip.target === "role"
@@ -4388,7 +4434,7 @@ export class ModelHubComponent implements Component {
 					strip.toggle.toggle(level);
 					this.#configError = undefined;
 				} else {
-					if (strip.kind === "roleName" || strip.kind === "pattern" || !strip.chips[index]) return;
+					if (strip.kind === "name" || strip.kind === "pattern" || !strip.chips[index]) return;
 					strip.index = index;
 					if (strip.kind === "selectorChoice") this.#activateSelectorChoice(strip);
 					else this.#activateStripChip();
@@ -4405,6 +4451,9 @@ export class ModelHubComponent implements Component {
 			}
 			case "roleName":
 				this.#submitRoleName();
+				return;
+			case "presetName":
+				this.#submitPresetName();
 				return;
 			case "cancel":
 				if (this.#strip) this.#closeStrip();
@@ -4455,16 +4504,17 @@ export class ModelHubComponent implements Component {
 	#describeStrip(): NativeNode | undefined {
 		const strip = this.#strip;
 		if (!strip) return undefined;
-		if (strip.kind === "roleName") {
+		if (strip.kind === "name") {
+			const preset = strip.purpose === "preset";
 			return node(
 				"row",
 				{ gap: "sm", align: "center" },
 				[
-					text([span("New role name:", "accent")]),
+					text([span(preset ? "Preset name:" : "New role name:", "accent")]),
 					col([strip.input], { grow: 1 }),
 					text([span("(letters, digits, - and _)", "dim")]),
 				],
-				"roleName",
+				preset ? "presetName" : "roleName",
 			);
 		}
 		if (strip.kind === "pattern") {
@@ -4548,8 +4598,10 @@ export class ModelHubComponent implements Component {
 		const strip = this.#strip;
 		if (strip) {
 			switch (strip.kind) {
-				case "roleName":
-					return [keys("create + pick model", "enter"), cancel("cancel")];
+				case "name":
+					return strip.purpose === "preset"
+						? [keys("save preset", "enter"), cancel("cancel")]
+						: [keys("create + pick model", "enter"), cancel("cancel")];
 				case "pattern":
 					return [keys("continue to effort", "enter"), cancel("cancel")];
 				case "effortLevels":
@@ -4630,6 +4682,7 @@ export class ModelHubComponent implements Component {
 				keys("cycle", "c"),
 				reorder,
 				keys("new", "n"),
+				this.#callbacks.onSavePreset ? keys("save preset", "s") : undefined,
 			];
 		}
 		if (entry.kind === "provider" && entry.locked) {

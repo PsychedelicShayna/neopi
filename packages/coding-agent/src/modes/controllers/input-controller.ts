@@ -747,6 +747,8 @@ export class InputController {
 				this.ctx.showAgentHub({ requireContent: true, armCloseTap: true });
 			}
 		};
+		// The native composer's viewing header: an ancestor crumb, or back to main.
+		this.ctx.editor.onFocusAgent = id => this.#focusResolvedAgent(id);
 
 		this.#setupEnhancedPaste();
 
@@ -2892,7 +2894,7 @@ export class InputController {
 			// No usable image-file URL (pure bitmap pasteboard: screenshots,
 			// browser copies, or a non-image Finder selection). Fall to the
 			// image representation. The text bridge starts alongside the image
-			// bridge: on Windows each is a cold powershell.exe spawn (~100ms+),
+			// bridge: either can shell out (WSL's powershell.exe, wl-paste, xclip),
 			// so serial awaits stall an empty clipboard by their sum before
 			// "Clipboard is empty" can surface. Image precedence is preserved —
 			// a resolved text payload is discarded unused when an image is present.

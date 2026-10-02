@@ -24,8 +24,8 @@
  * for plain host iteration. Bazel is opt-in for host via
  * `OMP_NATIVE_BUILD_BACKEND=bazel` or by passing extra bazel args after `--`;
  * explicit //:natives-* targets and aggregates always build through bazel.
- * Release CI uses that path except for Windows ARM64, which builds `host`
- * natively on its GitHub-hosted runner.
+ * Release CI requests explicit Bazel targets; the Windows ARM64 addon
+ * cross-builds on Linux and is smoke-tested on native Windows hardware.
  *
  * Windows hosts: the msvc cc toolchain in bazel/toolchains/msvc only supports
  * linux/mac exec hosts (its clang-cl+xwin wrappers replace the MSVC a Windows

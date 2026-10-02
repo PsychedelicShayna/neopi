@@ -42,7 +42,14 @@ function getLockPath(filePath: string): string {
 
 function tryAcquireLock(lockPath: string): NativeFileLock | null {
 	const lock = NativeFileLock.tryAcquire(lockPath);
-	return lock.acquired ? lock : null;
+	if (lock.acquired) return lock;
+	lock.release();
+	return null;
+}
+
+/** Acquire an exclusive lease without waiting; `null` while another holder owns it. */
+export function tryAcquireFileLock(filePath: string): FileLockHandle | null {
+	return tryAcquireLock(getLockPath(filePath));
 }
 
 interface CooperativeOwner {
