@@ -55,6 +55,8 @@ app.history.search: []
 | `app.live.destination.cycle` | `Ctrl+Alt+L`                                                          | During live voice mode, cycle where Enter sends composer text: main agent (default) → voice agent only → both. Slash, `!`, and `$` commands always go to the harness. The status-line mic shows `voice` or `both` when not sending to the main agent. |
 | `app.agents.hub`             | `Alt+A`                                                               | [Open the Agent Hub](./agent-hub.md)                                                                                                                                                 |
 
+`Ctrl+G` opens `$VISUAL` / `$EDITOR` with the currently painted terminal viewport above `<!-- omp:message starts here -->`. The visible conversation and status are reference only: saving sends just the text below that marker back to the composer. Keep the marker intact; removing it leaves the original draft unchanged.
+
 ## Recover a cleared prompt
 
 Press `Ctrl+C` to clear an unsent composer draft, then `Up` to recall it. Older drafts and submitted prompts share the existing Up/Down navigation. Recalled drafts remain editable and are never sent until you submit them.
