@@ -145,6 +145,12 @@ export interface CommandCtor extends CommandMetadata {
 	new (argv: string[], config: CliConfig): Command;
 	strict?: boolean;
 	aliases?: string[];
+	/**
+	 * Nested commands keyed by the first positional (`<bin> <cmd> <sub>`). When
+	 * argv names one, {@link run} dispatches to it with the remaining argv and
+	 * renders its help for `--help`; otherwise the parent command runs.
+	 */
+	subcommands?: Record<string, () => Promise<CommandCtor>>;
 }
 
 /** Configuration passed to every command instance and help renderers. */
@@ -340,7 +346,8 @@ function formatUsageArgs(Cmd: CommandCtor): string {
 /** Build the single USAGE line for a command (without the leading label). */
 export function commandUsageLine(bin: string, id: string, Cmd: CommandCtor): string {
 	const hasFlags = Object.keys(Cmd.flags ?? {}).length > 0;
-	return `$ ${bin} ${id}${formatUsageArgs(Cmd)}${hasFlags ? " [FLAGS]" : ""}`;
+	const subcommands = Cmd.subcommands ? ` <${Object.keys(Cmd.subcommands).join("|")}>` : "";
+	return `$ ${bin} ${id}${subcommands}${formatUsageArgs(Cmd)}${hasFlags ? " [FLAGS]" : ""}`;
 }
 
 /** Render help for a single command. */
@@ -349,6 +356,7 @@ export function renderCommandHelp(bin: string, id: string, Cmd: CommandCtor): vo
 	if (Cmd.description) lines.push(`${Cmd.description}\n`);
 	lines.push("USAGE");
 	lines.push(`  ${commandUsageLine(bin, id, Cmd)}\n`);
+	if (Cmd.subcommands) lines.push(`Run \`${bin} ${id} <subcommand> --help\` for subcommand flags.\n`);
 	renderCommandBody(lines, Cmd);
 	process.stdout.write(lines.join("\n"));
 }
@@ -468,8 +476,8 @@ export async function run(opts: RunOptions): Promise<void> {
 	if (commandArgv.includes("--help") || commandArgv.includes("-h")) {
 		const entry = findEntry(opts.commands, commandId);
 		if (entry) {
-			const Cmd = await loadEntry(entry);
-			renderCommandHelp(bin, entry.name, Cmd);
+			const target = await resolveTarget(entry, commandArgv);
+			renderCommandHelp(bin, target.id, target.Cmd);
 		} else {
 			process.stderr.write(`Unknown command: ${commandId}\n`);
 		}
@@ -485,9 +493,9 @@ export async function run(opts: RunOptions): Promise<void> {
 		return;
 	}
 
-	const Cmd = await loadEntry(entry);
-	const config: CliConfig = { bin, version, commands: new Map([[entry.name, Cmd]]) };
-	const instance = new Cmd(commandArgv, config);
+	const target = await resolveTarget(entry, commandArgv);
+	const config: CliConfig = { bin, version, commands: new Map([[target.id, target.Cmd]]) };
+	const instance = new target.Cmd(target.argv, config);
 	try {
 		await instance.run();
 	} catch (error) {
@@ -497,13 +505,28 @@ export async function run(opts: RunOptions): Promise<void> {
 		// plain argument error (issue #5369).
 		if (error instanceof CliUsageError) {
 			process.stderr.write(`error: ${error.message}\n\n`);
-			process.stderr.write(`USAGE\n  ${commandUsageLine(bin, entry.name, Cmd)}\n`);
-			process.stderr.write(`\nRun \`${bin} ${entry.name} --help\` for details.\n`);
+			process.stderr.write(`USAGE\n  ${commandUsageLine(bin, target.id, target.Cmd)}\n`);
+			process.stderr.write(`\nRun \`${bin} ${target.id} --help\` for details.\n`);
 			process.exitCode = 1;
 			return;
 		}
 		throw error;
 	}
+}
+
+interface ResolvedTarget {
+	id: string;
+	Cmd: CommandCtor;
+	argv: string[];
+}
+
+/** Load the entry, then descend into a nested subcommand named by the first argv token. */
+async function resolveTarget(entry: CommandEntry, argv: string[]): Promise<ResolvedTarget> {
+	const Cmd = await loadEntry(entry);
+	const name = argv[0];
+	const load = name && Cmd.subcommands && Object.hasOwn(Cmd.subcommands, name) ? Cmd.subcommands[name] : undefined;
+	if (!load) return { id: entry.name, Cmd, argv };
+	return { id: `${entry.name} ${name}`, Cmd: await load(), argv: argv.slice(1) };
 }
 
 /** Load one command module, leaving streaming markers around the import. */
