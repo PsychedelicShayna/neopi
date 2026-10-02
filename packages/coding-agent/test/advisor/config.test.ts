@@ -599,6 +599,42 @@ describe("WATCHDOG.yml file round-trip", () => {
 		});
 	});
 
+	it("keeps untouched scalar-alias advisors when saving another advisor's cadence", async () => {
+		const file = path.join(tmp, "WATCHDOG.yml");
+		await Bun.write(
+			file,
+			[
+				"advisors:",
+				"  - name: Reviewer",
+				"    model: &reviewModel test/shared",
+				"    reviewMode: turn",
+				"    reviewInterval: 1",
+				"    syncBacklog: 3",
+				"    includeThinking: false",
+				"  - name: Untouched",
+				"    model: *reviewModel",
+				"    enabled: false",
+				"",
+			].join("\n"),
+		);
+		const loaded = await loadWatchdogConfigFile(file);
+		Object.assign(loaded.advisors[0], { reviewMode: "agent-end", reviewInterval: 4, syncBacklog: "5" });
+		await saveWatchdogConfigFile(file, loaded);
+
+		expect((await loadWatchdogConfigFile(file)).advisors).toEqual([
+			{
+				name: "Reviewer",
+				model: "test/shared",
+				reviewMode: "agent-end",
+				reviewInterval: 4,
+				syncBacklog: "5",
+				includeThinking: false,
+			},
+			{ name: "Untouched", model: "test/shared", enabled: false },
+		]);
+		expect(await Bun.file(file).text()).toContain("*reviewModel");
+	});
+
 	it("materializes an aliased advisor sequence before applying edits", async () => {
 		const file = path.join(tmp, "WATCHDOG.yml");
 		await Bun.write(

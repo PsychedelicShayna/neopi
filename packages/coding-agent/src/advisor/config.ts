@@ -4,7 +4,7 @@ import { type } from "@oh-my-pi/omptype";
 import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import { YAML } from "bun";
-import { isMap, isNode, isSeq, type YAMLMap, type YAMLSeq } from "yaml";
+import { type Document, isMap, isNode, isSeq, type ParsedNode, type YAMLMap, type YAMLSeq } from "yaml";
 import { expandAtImports } from "../discovery/at-imports";
 import { BUILTIN_TOOL_NAMES, normalizeToolNames } from "../tools/builtin-names";
 import { writeFileAtomically } from "../utils/atomic-file";
@@ -96,6 +96,11 @@ function normalizeSyncBacklog(
 	value: AdvisorSyncBacklog | keyof typeof SYNC_BACKLOG_NUMERIC_THRESHOLDS,
 ): AdvisorSyncBacklog {
 	return typeof value === "number" ? SYNC_BACKLOG_NUMERIC_THRESHOLDS[value] : value;
+}
+
+function assertAdvisorCadence(advisor: AdvisorConfig): void {
+	if (advisor.reviewInterval !== undefined) reviewIntervalSchema.assert(advisor.reviewInterval);
+	if (advisor.syncBacklog !== undefined) syncBacklogSchema.assert(advisor.syncBacklog);
 }
 
 const advisorEntrySchema = type({
@@ -523,6 +528,7 @@ export function serializeWatchdogConfig(doc: WatchdogConfigDoc): string {
 	if (doc.advisors.length > 0) {
 		lines.push("advisors:");
 		for (const advisor of doc.advisors) {
+			assertAdvisorCadence(advisor);
 			lines.push(`  - name: ${YAML.stringify(advisor.name)}`);
 			if (advisor.model?.trim()) lines.push(`    model: ${YAML.stringify(advisor.model)}`);
 			if (advisor.tools !== undefined) {
@@ -537,7 +543,6 @@ export function serializeWatchdogConfig(doc: WatchdogConfigDoc): string {
 			}
 			if (advisor.reviewMode !== undefined) lines.push(`    reviewMode: ${YAML.stringify(advisor.reviewMode)}`);
 			if (advisor.syncBacklog !== undefined) {
-				syncBacklogSchema.assert(advisor.syncBacklog);
 				lines.push(`    syncBacklog: ${YAML.stringify(advisor.syncBacklog)}`);
 			}
 			if (advisor.instructions?.trim()) {
@@ -556,7 +561,6 @@ export function serializeWatchdogConfig(doc: WatchdogConfigDoc): string {
 				lines.push(`    maxNotesPerUpdate: ${Math.trunc(advisor.maxNotesPerUpdate)}`);
 			}
 			if (advisor.reviewInterval !== undefined) {
-				reviewIntervalSchema.assert(advisor.reviewInterval);
 				lines.push(`    reviewInterval: ${advisor.reviewInterval}`);
 			}
 		}
@@ -586,40 +590,43 @@ function watchdogAdvisorValues(advisor: AdvisorConfig): Record<(typeof WATCHDOG_
 }
 
 function findWatchdogAdvisor(
+	document: Document.Parsed<ParsedNode>,
 	sequence: YAMLSeq<unknown>,
 	name: string,
 	occurrence: number,
 ): { index: number; map: YAMLMap<unknown, unknown> } | undefined {
 	let seen = 0;
 	for (const [index, item] of sequence.items.entries()) {
-		if (!isMap(item) || item.get("name") !== name) continue;
+		if (!isMap(item) || watchdogAdvisorMapValues(document, item)?.name !== name) continue;
 		if (seen === occurrence) return { index, map: item };
 		seen++;
 	}
 	return undefined;
 }
 
-function removeMalformedWatchdogAdvisors(sequence: YAMLSeq<unknown>): void {
+function removeMalformedWatchdogAdvisors(document: Document.Parsed<ParsedNode>, sequence: YAMLSeq<unknown>): void {
 	for (let index = sequence.items.length - 1; index >= 0; index--) {
 		const item = sequence.items[index];
-		const value: unknown = isNode(item) ? item.toJSON() : item;
+		const value: unknown = isNode(item) ? item.toJS(document) : item;
 		if (!(advisorEntrySchema(value) instanceof type.errors)) continue;
 		sequence.delete(index);
 	}
 }
 
 function resolveWatchdogAdvisorOrigin(
+	document: Document.Parsed<ParsedNode>,
 	sequence: YAMLSeq<unknown>,
 	origin: WatchdogAdvisorOrigin,
 	origins: readonly WatchdogAdvisorOrigin[],
 ): { index: number; map: YAMLMap<unknown, unknown> } | undefined {
 	const candidates: { index: number; map: YAMLMap<unknown, unknown> }[] = [];
 	for (const [index, item] of sequence.items.entries()) {
-		if (isMap(item) && item.get("name") === origin.name) candidates.push({ index, map: item });
+		if (isMap(item) && watchdogAdvisorMapValues(document, item)?.name === origin.name)
+			candidates.push({ index, map: item });
 	}
 	if (origin.fingerprint !== undefined) {
 		const exact = candidates.filter(
-			candidate => watchdogAdvisorFingerprint(candidate.map.toJSON()) === origin.fingerprint,
+			candidate => watchdogAdvisorFingerprint(candidate.map.toJS(document)) === origin.fingerprint,
 		);
 		if (exact.length === 1) return exact[0];
 		if (exact.length > 1) return undefined;
@@ -630,26 +637,36 @@ function resolveWatchdogAdvisorOrigin(
 }
 
 function watchdogAdvisorMapValues(
+	document: Document.Parsed<ParsedNode>,
 	map: YAMLMap<unknown, unknown>,
 ): Record<(typeof WATCHDOG_ADVISOR_KEYS)[number], unknown> | undefined {
-	const parsed = advisorEntrySchema(map.toJSON());
+	const parsed = advisorEntrySchema(map.toJS(document));
 	return parsed instanceof type.errors ? undefined : watchdogAdvisorValues(editableAdvisorConfig(parsed));
 }
 
-function watchdogAdvisorOriginUnchanged(map: YAMLMap<unknown, unknown>, origin: WatchdogAdvisorOrigin): boolean {
+function watchdogAdvisorOriginUnchanged(
+	document: Document.Parsed<ParsedNode>,
+	map: YAMLMap<unknown, unknown>,
+	origin: WatchdogAdvisorOrigin,
+): boolean {
 	if (origin.fingerprint !== undefined) {
-		return watchdogAdvisorFingerprint(map.toJSON()) === origin.fingerprint;
+		return watchdogAdvisorFingerprint(map.toJS(document)) === origin.fingerprint;
 	}
-	const currentValues = watchdogAdvisorMapValues(map);
+	const currentValues = watchdogAdvisorMapValues(document, map);
 	if (!currentValues) return false;
 	const expectedValues = watchdogAdvisorValues(origin.base);
 	return WATCHDOG_ADVISOR_KEYS.every(key => Bun.deepEquals(currentValues[key], expectedValues[key]));
 }
 
-function patchWatchdogAdvisor(map: YAMLMap<unknown, unknown>, advisor: AdvisorConfig, base?: AdvisorConfig): void {
+function patchWatchdogAdvisor(
+	document: Document.Parsed<ParsedNode>,
+	map: YAMLMap<unknown, unknown>,
+	advisor: AdvisorConfig,
+	base?: AdvisorConfig,
+): void {
 	const values = watchdogAdvisorValues(advisor);
 	const baseValues = base ? watchdogAdvisorValues(base) : undefined;
-	const currentValues = baseValues ? watchdogAdvisorMapValues(map) : undefined;
+	const currentValues = baseValues ? watchdogAdvisorMapValues(document, map) : undefined;
 	for (const key of WATCHDOG_ADVISOR_KEYS) {
 		if (baseValues && Bun.deepEquals(values[key], baseValues[key])) continue;
 		if (baseValues && currentValues && !Bun.deepEquals(currentValues[key], baseValues[key])) continue;
@@ -661,6 +678,7 @@ function patchWatchdogAdvisor(map: YAMLMap<unknown, unknown>, advisor: AdvisorCo
 
 function patchWatchdogDocument(source: string, doc: WatchdogConfigDoc, baseline?: WatchdogBaseline): string {
 	if (!source.trim() && (!baseline || !baseline.sourceWasPresent)) return serializeWatchdogConfig(doc);
+	for (const advisor of doc.advisors) assertAdvisorCadence(advisor);
 	const document = parseYamlMappingDocument(source);
 	const root = yamlDocumentRoot(document);
 	const topLevelValues = {
@@ -713,9 +731,9 @@ function patchWatchdogDocument(source: string, doc: WatchdogConfigDoc, baseline?
 			for (const advisor of doc.advisors) {
 				const occurrence = occurrences.get(advisor.name) ?? 0;
 				occurrences.set(advisor.name, occurrence + 1);
-				const existing = findWatchdogAdvisor(existingSequence, advisor.name, occurrence);
+				const existing = findWatchdogAdvisor(document, existingSequence, advisor.name, occurrence);
 				if (existing) {
-					patchWatchdogAdvisor(existing.map, advisor);
+					patchWatchdogAdvisor(document, existing.map, advisor);
 					items.push(existing.map);
 				} else {
 					items.push(document.createNode(watchdogAdvisorValues(advisor)));
@@ -737,11 +755,11 @@ function patchWatchdogDocument(source: string, doc: WatchdogConfigDoc, baseline?
 	for (let index = 0; index < sequence.items.length; index++) {
 		materializeYamlAlias(document, ["advisors", index]);
 	}
-	removeMalformedWatchdogAdvisors(sequence);
+	removeMalformedWatchdogAdvisors(document, sequence);
 
 	const resolvedOrigins = baseline.origins.map(origin => ({
 		origin,
-		existing: resolveWatchdogAdvisorOrigin(sequence, origin, baseline.origins),
+		existing: resolveWatchdogAdvisorOrigin(document, sequence, origin, baseline.origins),
 	}));
 	const matches = new Map<AdvisorConfig, (typeof resolvedOrigins)[number]>();
 	const claimedOrigins = new Set<WatchdogAdvisorOrigin>();
@@ -778,7 +796,7 @@ function patchWatchdogDocument(source: string, doc: WatchdogConfigDoc, baseline?
 			continue;
 		}
 		if (!resolved.existing) continue;
-		patchWatchdogAdvisor(resolved.existing.map, advisor, resolved.origin.base);
+		patchWatchdogAdvisor(document, resolved.existing.map, advisor, resolved.origin.base);
 	}
 
 	const removals = resolvedOrigins
@@ -786,7 +804,7 @@ function patchWatchdogDocument(source: string, doc: WatchdogConfigDoc, baseline?
 			resolved =>
 				!claimedOrigins.has(resolved.origin) &&
 				resolved.existing &&
-				watchdogAdvisorOriginUnchanged(resolved.existing.map, resolved.origin),
+				watchdogAdvisorOriginUnchanged(document, resolved.existing.map, resolved.origin),
 		)
 		.map(resolved => resolved.existing!)
 		.sort((left, right) => right.index - left.index);

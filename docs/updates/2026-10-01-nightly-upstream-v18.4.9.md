@@ -161,7 +161,13 @@ Origin-to-nightly merge: eight conflicted files resolved personally and recorded
 - The first grouped RPC run failed to import the advisor module because two auto-merged private-method calls no longer existed; Bun then crashed while loading the next file. Those calls are repaired. The crash is not counted as a passing test or classified as a pre-existing failure.
 - Native input hook scenarios passed: four tests, 0 failures. Initial runs hit the default five-second setup timeout while other capped checks ran; a 30-second test startup allowance passed without changing runtime behavior.
 - Rebuilt the v18.4.10 host native addon from reviewed local sources: local optimized profile completed in 6m57s, 130 exports generated and 15 const enums normalized; installed into this worktree only.
-- Remaining latest-release type/package/native/build/staged-install and rollout gates are still pending. v18.4.9 evidence above is not substituted for them.
+- Workspace type-check groups passed, including the repaired TUI apply fixture; coding-agent types also passed after document-aware alias conversion.
+- Rust formatting and native-only Clippy (`-p pi-natives --no-deps -- -D warnings`, six jobs) passed. Nextest passed all 3,090 tests across 33 binaries, six skipped; doctest phase passed.
+- Signed v18.4.10 merge snapshot: `16f9ca5d95`. Official `./build.sh` built `npi/18.4.10`; its native-input stamp required an incremental rebuild (6.58s), which completed.
+- The first isolated staged install failed its five-second computer-worker ping deadline; installer did not replace a live binary. A compiled RPC diagnostic subsequently received `ready` at 999ms and both immediate and after-ready pongs at 1004ms. Cause of the initial timeout is not yet established.
+- Lossless cadence-save smoke exposed deletion of an untouched advisor whose model was a scalar YAML alias. Resolve nodes with their YAML document instead of context-free `toJSON`; preserve aliases during validation and origin matching. Standalone smoke now preserves the untouched advisor, explicit reasoning opt-out, comments, unknown fields and aliases while updating cadence.
+- Advisor config regressions passed: 55 tests, 0 failures, including the new scalar-alias/cadence regression. Initial run also exposed that the lossless existing-file path skipped upstream cadence validation; both serialization and patching now reuse one cadence assertion, and invalid interval/backlog writes reject without replacing the roster.
+- Remaining full TypeScript-suite, rebuilt repaired binary, staged-install and rollout gates are pending. v18.4.9 evidence above is not substituted for them.
 
 ## Binary
 
