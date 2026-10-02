@@ -11,7 +11,11 @@ export interface OverflowObservation {
 	/** True while the active ledger or any bounded replay capture retains this token. */
 	replayable?: boolean;
 }
-export interface OverflowEpochs { call: number; source: number; alert: number }
+export interface OverflowEpochs {
+	call: number;
+	source: number;
+	alert: number;
+}
 interface Contribution {
 	category: OverflowCategory;
 	slug?: string;
@@ -25,9 +29,22 @@ interface Marker {
 	replayable: boolean;
 	contribution: Contribution;
 }
-interface CohortMember extends Marker { frozenFingerprint: string; pendingChangedSelection?: OverflowObservation }
-interface Representative { token: string; slug: string; letter: OverflowClass; firstSeq: number; nonLowBase: boolean }
-interface Bucket { count: number; representative?: Representative; hasNonLowBase: boolean }
+interface CohortMember extends Marker {
+	frozenFingerprint: string;
+	pendingChangedSelection?: OverflowObservation;
+}
+interface Representative {
+	token: string;
+	slug: string;
+	letter: OverflowClass;
+	firstSeq: number;
+	nonLowBase: boolean;
+}
+interface Bucket {
+	count: number;
+	representative?: Representative;
+	hasNonLowBase: boolean;
+}
 type Buckets = Record<OverflowClass, Bucket>;
 interface Burst {
 	id: number;
@@ -48,34 +65,79 @@ interface Receipt {
 }
 const letters: OverflowClass[] = ["L", "M", "H", "E", "X"];
 const lowBase = (slug: string) => /luna|haiku|glm/i.test(slug);
-const buckets = (): Buckets => ({ L: { count: 0, hasNonLowBase: false }, M: { count: 0, hasNonLowBase: false }, H: { count: 0, hasNonLowBase: false }, E: { count: 0, hasNonLowBase: false }, X: { count: 0, hasNonLowBase: false } });
+const buckets = (): Buckets => ({
+	L: { count: 0, hasNonLowBase: false },
+	M: { count: 0, hasNonLowBase: false },
+	H: { count: 0, hasNonLowBase: false },
+	E: { count: 0, hasNonLowBase: false },
+	X: { count: 0, hasNonLowBase: false },
+});
 function better(a: Representative, b?: Representative): boolean {
-	return !b || (a.nonLowBase !== b.nonLowBase ? a.nonLowBase : a.firstSeq !== b.firstSeq ? a.firstSeq < b.firstSeq : a.token < b.token);
+	return (
+		!b ||
+		(a.nonLowBase !== b.nonLowBase
+			? a.nonLowBase
+			: a.firstSeq !== b.firstSeq
+				? a.firstSeq < b.firstSeq
+				: a.token < b.token)
+	);
 }
 function contribution(observation: OverflowObservation, seq: number): Contribution {
-	if (observation.category === "known" && observation.slug && observation.letter) return {
-		category: "known", slug: observation.slug, letter: observation.letter,
-		nonLowBase: !lowBase(observation.slug), firstSeq: seq,
-	};
+	if (observation.category === "known" && observation.slug && observation.letter)
+		return {
+			category: "known",
+			slug: observation.slug,
+			letter: observation.letter,
+			nonLowBase: !lowBase(observation.slug),
+			firstSeq: seq,
+		};
 	return { category: "unknown", nonLowBase: false, firstSeq: seq };
 }
-function neutral(c: Contribution): Contribution { return { category: "unknown", nonLowBase: false, firstSeq: c.firstSeq }; }
+function neutral(c: Contribution): Contribution {
+	return { category: "unknown", nonLowBase: false, firstSeq: c.firstSeq };
+}
 function retire(burst: Burst, token: string, c: Contribution): void {
-	if (c.category === "unknown" || !c.letter || !c.slug) { burst.retiredUnknownCount++; return; }
+	if (c.category === "unknown" || !c.letter || !c.slug) {
+		burst.retiredUnknownCount++;
+		return;
+	}
 	const bucket = burst.retiredByClass[c.letter];
 	bucket.count++;
 	bucket.hasNonLowBase ||= c.nonLowBase;
-	const candidate: Representative = { token, slug: c.slug, letter: c.letter, firstSeq: c.firstSeq, nonLowBase: c.nonLowBase };
+	const candidate: Representative = {
+		token,
+		slug: c.slug,
+		letter: c.letter,
+		firstSeq: c.firstSeq,
+		nonLowBase: c.nonLowBase,
+	};
 	if (better(candidate, bucket.representative)) bucket.representative = candidate;
 }
 function newBurst(id: number, at: number, generation: number, revision: number): Burst {
-	return { id, firstAt: at, policyGeneration: generation, policyRevision: revision,
-		retiredUnknownCount: 0, retiredByClass: buckets(), live: new Map(), mixed: false };
+	return {
+		id,
+		firstAt: at,
+		policyGeneration: generation,
+		policyRevision: revision,
+		retiredUnknownCount: 0,
+		retiredByClass: buckets(),
+		live: new Map(),
+		mixed: false,
+	};
 }
 function total(burst: Burst): number {
-	return burst.retiredUnknownCount + letters.reduce((n, letter) => n + burst.retiredByClass[letter].count, 0) + burst.live.size;
+	return (
+		burst.retiredUnknownCount +
+		letters.reduce((n, letter) => n + burst.retiredByClass[letter].count, 0) +
+		burst.live.size
+	);
 }
-function overview(burst: Burst): { known: number; unknown: number; representative?: Representative; hasNonLowBaseX: boolean } {
+function overview(burst: Burst): {
+	known: number;
+	unknown: number;
+	representative?: Representative;
+	hasNonLowBaseX: boolean;
+} {
 	let unknown = burst.retiredUnknownCount;
 	let known = 0;
 	let representative: Representative | undefined;
@@ -84,21 +146,42 @@ function overview(burst: Burst): { known: number; unknown: number; representativ
 		const bucket = burst.retiredByClass[letter];
 		known += bucket.count;
 		const candidate = bucket.representative;
-		if (candidate && (!representative || letters.indexOf(candidate.letter) > letters.indexOf(representative.letter) || (candidate.letter === representative.letter && better(candidate, representative)))) representative = candidate;
+		if (
+			candidate &&
+			(!representative ||
+				letters.indexOf(candidate.letter) > letters.indexOf(representative.letter) ||
+				(candidate.letter === representative.letter && better(candidate, representative)))
+		)
+			representative = candidate;
 	}
 	for (const [token, marker] of burst.live) {
 		const c = marker.contribution;
-		if (c.category === "unknown" || !c.letter || !c.slug) { unknown++; continue; }
+		if (c.category === "unknown" || !c.letter || !c.slug) {
+			unknown++;
+			continue;
+		}
 		known++;
 		if (c.letter === "X") hasNonLowBaseX ||= c.nonLowBase;
-		const candidate: Representative = { token, slug: c.slug, letter: c.letter, firstSeq: c.firstSeq, nonLowBase: c.nonLowBase };
-		if (!representative || letters.indexOf(candidate.letter) > letters.indexOf(representative.letter) || (candidate.letter === representative.letter && better(candidate, representative))) representative = candidate;
+		const candidate: Representative = {
+			token,
+			slug: c.slug,
+			letter: c.letter,
+			firstSeq: c.firstSeq,
+			nonLowBase: c.nonLowBase,
+		};
+		if (
+			!representative ||
+			letters.indexOf(candidate.letter) > letters.indexOf(representative.letter) ||
+			(candidate.letter === representative.letter && better(candidate, representative))
+		)
+			representative = candidate;
 	}
 	return { known, unknown, representative, hasNonLowBaseX };
 }
 function line(burst: Burst): string {
 	const { known, unknown, representative, hasNonLowBaseX } = overview(burst);
-	if (!known || !representative) return `Attention: ${known + unknown} deployments' catalog status and authorization not checked.`;
+	if (!known || !representative)
+		return `Attention: ${known + unknown} deployments' catalog status and authorization not checked.`;
 	const prefix = known >= 10 || hasNonLowBaseX ? "A tidal wave of" : "A surge of";
 	const suffix = unknown ? ` ${unknown} other deployments' catalog status and authorization not checked.` : "";
 	const end = `, exceeded the alert queue; authorization not checked.${suffix}`;
@@ -127,20 +210,31 @@ export class LiveIngestOverflow {
 		this.#now = now;
 		this.#unrendered = newBurst(this.#nextBurst++, now(), 0, 0);
 	}
-	get hasPending(): boolean { return total(this.#unrendered) > 0; }
-	get hasReceipt(): boolean { return !!this.#receipt; }
-	get firstPendingAt(): number | undefined { return this.hasPending ? this.#unrendered.firstAt : undefined; }
+	get hasPending(): boolean {
+		return total(this.#unrendered) > 0;
+	}
+	get hasReceipt(): boolean {
+		return !!this.#receipt;
+	}
+	get firstPendingAt(): number | undefined {
+		return this.hasPending ? this.#unrendered.firstAt : undefined;
+	}
 	get stats() {
 		const current = overview(this.#unrendered);
 		return {
-			knownCount: current.known, unknownCount: current.unknown,
+			knownCount: current.known,
+			unknownCount: current.unknown,
 			retiredUnknownCount: this.#unrendered.retiredUnknownCount,
 			retiredByClass: structuredClone(this.#unrendered.retiredByClass),
-			representative: current.representative, hasNonLowBaseX: current.hasNonLowBaseX,
-			liveMarkers: this.#unrendered.live.size + this.#seen.size, receiptCohort: this.#receipt?.cohort.size ?? 0,
+			representative: current.representative,
+			hasNonLowBaseX: current.hasNonLowBaseX,
+			liveMarkers: this.#unrendered.live.size + this.#seen.size,
+			receiptCohort: this.#receipt?.cohort.size ?? 0,
 			contributors: this.#unrendered.live.size + (this.#receipt?.cohort.size ?? 0),
-			count: total(this.#unrendered), frozenCount: this.#receipt ? total(this.#receipt.burst) : 0,
-			inactiveDedupe: this.#inactive.size, mixed: this.#unrendered.mixed,
+			count: total(this.#unrendered),
+			frozenCount: this.#receipt ? total(this.#receipt.burst) : 0,
+			inactiveDedupe: this.#inactive.size,
+			mixed: this.#unrendered.mixed,
 		};
 	}
 	#remember(token: string): void {
@@ -153,9 +247,13 @@ export class LiveIngestOverflow {
 		if (!old && burst.live.size + this.#seen.size >= 712) {
 			retire(burst, observation.token, c);
 			this.#remember(observation.token);
-		} else burst.live.set(observation.token, { fingerprint: observation.fingerprint,
-			observationRevision: observation.observationRevision, replayable: observation.replayable ?? old?.replayable ?? true,
-			contribution: c });
+		} else
+			burst.live.set(observation.token, {
+				fingerprint: observation.fingerprint,
+				observationRevision: observation.observationRevision,
+				replayable: observation.replayable ?? old?.replayable ?? true,
+				contribution: c,
+			});
 		burst.mixed ||= total(burst) > 1 || !!old;
 	}
 	observe(observation: OverflowObservation): void {
@@ -182,17 +280,28 @@ export class LiveIngestOverflow {
 		const marker = this.#unrendered.live.get(observation.token);
 		if (!marker || observation.observationRevision < marker.observationRevision) return;
 		if (observation.replayable !== undefined) marker.replayable = observation.replayable;
-		if (observation.fingerprint !== marker.fingerprint ||
-			(marker.contribution.category === "unknown" && observation.category === "known")) {
+		if (
+			observation.fingerprint !== marker.fingerprint ||
+			(marker.contribution.category === "unknown" && observation.category === "known")
+		) {
 			this.#assign(this.#unrendered, observation, marker);
 		} else marker.observationRevision = observation.observationRevision;
 	}
 	count(observation: OverflowObservation): void {
 		const cohort = this.#receipt?.cohort.get(observation.token);
-		if (cohort) { this.observe(observation); return; }
+		if (cohort) {
+			this.observe(observation);
+			return;
+		}
 		const marker = this.#unrendered.live.get(observation.token);
-		if (marker) { this.observe(observation); return; }
-		if (this.#seen.has(observation.token)) { this.observe(observation); return; }
+		if (marker) {
+			this.observe(observation);
+			return;
+		}
+		if (this.#seen.has(observation.token)) {
+			this.observe(observation);
+			return;
+		}
 		if (this.#inactive.has(observation.token)) return;
 		if (!this.hasPending) this.#unrendered.firstAt = this.#now();
 		this.#assign(this.#unrendered, observation);
@@ -200,9 +309,15 @@ export class LiveIngestOverflow {
 	}
 	setReplayable(token: string, replayable: boolean): void {
 		const cohort = this.#receipt?.cohort.get(token);
-		if (cohort) { cohort.replayable = replayable; return; }
+		if (cohort) {
+			cohort.replayable = replayable;
+			return;
+		}
 		if (this.#seen.has(token)) {
-			if (!replayable) { this.#seen.delete(token); this.#remember(token); }
+			if (!replayable) {
+				this.#seen.delete(token);
+				this.#remember(token);
+			}
 			return;
 		}
 		const marker = this.#unrendered.live.get(token);
@@ -230,7 +345,12 @@ export class LiveIngestOverflow {
 		if (this.#receipt || !this.hasPending) return undefined;
 		const burst = this.#unrendered;
 		const cohort = new Map<string, CohortMember>();
-		for (const [token, marker] of burst.live) cohort.set(token, { ...marker, frozenFingerprint: marker.fingerprint, contribution: { ...marker.contribution } });
+		for (const [token, marker] of burst.live)
+			cohort.set(token, {
+				...marker,
+				frozenFingerprint: marker.fingerprint,
+				contribution: { ...marker.contribution },
+			});
 		const text = line(burst);
 		this.#receipt = { id: this.#nextReceipt++, epochs: { ...epochs }, burst, cohort, text };
 		this.#unrendered = newBurst(this.#nextBurst++, this.#now(), this.#generation, this.#revision);
@@ -244,7 +364,11 @@ export class LiveIngestOverflow {
 			for (const [token, member] of receipt.cohort) {
 				const changed = member.pendingChangedSelection;
 				if (!changed || changed.fingerprint === member.frozenFingerprint) {
-					if (member.replayable) this.#seen.set(token, { fingerprint: member.frozenFingerprint, observationRevision: member.observationRevision });
+					if (member.replayable)
+						this.#seen.set(token, {
+							fingerprint: member.frozenFingerprint,
+							observationRevision: member.observationRevision,
+						});
 					else this.#remember(token);
 					continue;
 				}
@@ -266,16 +390,24 @@ export class LiveIngestOverflow {
 		current.mixed ||= frozen.mixed;
 		current.retiredUnknownCount += frozen.retiredUnknownCount;
 		for (const letter of letters) {
-			const from = frozen.retiredByClass[letter], into = current.retiredByClass[letter];
+			const from = frozen.retiredByClass[letter],
+				into = current.retiredByClass[letter];
 			into.count += from.count;
 			into.hasNonLowBase ||= from.hasNonLowBase;
-			if (from.representative && better(from.representative, into.representative)) into.representative = from.representative;
+			if (from.representative && better(from.representative, into.representative))
+				into.representative = from.representative;
 		}
 		for (const [token, member] of receipt.cohort) {
 			const changed = member.pendingChangedSelection;
-			const c = changed && changed.fingerprint !== member.frozenFingerprint ? contribution(changed, member.contribution.firstSeq) : member.contribution;
+			const c =
+				changed && changed.fingerprint !== member.frozenFingerprint
+					? contribution(changed, member.contribution.firstSeq)
+					: member.contribution;
 			if (member.replayable) current.live.set(token, { ...member, contribution: c });
-			else { retire(current, token, c); this.#remember(token); }
+			else {
+				retire(current, token, c);
+				this.#remember(token);
+			}
 		}
 	}
 	clear(): void {

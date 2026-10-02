@@ -59,7 +59,7 @@ export type PersonaSourceField = {
 			kind: "choice";
 			value: string;
 			options: ReadonlyArray<{ value: string; label: string; description?: string }>;
-		}
+	  }
 );
 
 export interface PersonaConfigEntry {
@@ -278,17 +278,26 @@ export class PersonaConfigOverlayComponent implements Component {
 		const list = this.#active;
 		const value = list instanceof SelectList ? (list.getSelectedItem()?.value ?? "") : "";
 		const match = /^entry:(\d+)$/.exec(value);
-		const entry = match ? this.#doc.entries[Number(match[1])] : this.#entryIndex === undefined ? undefined : this.#doc.entries[this.#entryIndex];
+		const entry = match
+			? this.#doc.entries[Number(match[1])]
+			: this.#entryIndex === undefined
+				? undefined
+				: this.#doc.entries[this.#entryIndex];
 		if (entry && this.#screen === "sources") {
 			const field = entry.sources?.find(item => item.key === value);
-			return wrap(field?.description ?? "", bodyWidth).map(line => truncateToWidth(theme.fg("muted", line), bodyWidth));
+			return wrap(field?.description ?? "", bodyWidth).map(line =>
+				truncateToWidth(theme.fg("muted", line), bodyWidth),
+			);
 		}
 		if (entry && this.#screen === "detail" && value === "sources") {
-			return wrap("Choose which crew activity the voice agent hears about with this persona.", bodyWidth)
-				.map(line => truncateToWidth(theme.fg("muted", line), bodyWidth));
+			return wrap("Choose which crew activity the voice agent hears about with this persona.", bodyWidth).map(line =>
+				truncateToWidth(theme.fg("muted", line), bodyWidth),
+			);
 		}
 		if (entry && this.#screen === "detail" && value === "append-protocol") {
-			return (this.#deps.protocolLinesText ?? "").split("\n").slice(0, 12)
+			return (this.#deps.protocolLinesText ?? "")
+				.split("\n")
+				.slice(0, 12)
 				.map(line => truncateToWidth(theme.fg("muted", line), bodyWidth));
 		}
 		if (entry) return this.#entryPreview(entry, bodyWidth);
@@ -579,10 +588,7 @@ export class PersonaConfigOverlayComponent implements Component {
 			if (this.#deps.variant === "live") {
 				items.push({ value: "sources", label: "Context sources", description: this.#sourcesSummary(entry) });
 			}
-			items.push(
-				{ value: "clone", label: "Clone to customize" },
-				{ value: "back", label: "Back" },
-			);
+			items.push({ value: "clone", label: "Clone to customize" }, { value: "back", label: "Back" });
 		} else {
 			items.push(
 				{ value: "name", label: "Name", description: entry.name },
@@ -749,12 +755,10 @@ export class PersonaConfigOverlayComponent implements Component {
 			const dependency = controller ? `(needs ${controller.label})` : undefined;
 			const selectedLabel =
 				field.kind === "choice"
-					? choiceOptions(field).find(option => option.value === field.value)?.label ?? field.value
+					? (choiceOptions(field).find(option => option.value === field.value)?.label ?? field.value)
 					: undefined;
 			const label =
-				field.kind === "boolean"
-					? `${field.value ? "●" : "○"} ${field.label}`
-					: `${field.label}: ${selectedLabel}`;
+				field.kind === "boolean" ? `${field.value ? "●" : "○"} ${field.label}` : `${field.label}: ${selectedLabel}`;
 			return {
 				value: field.key,
 				label: enabled ? label : theme.fg("dim", label),
@@ -764,7 +768,12 @@ export class PersonaConfigOverlayComponent implements Component {
 		items.push({ value: "back", label: "Back" });
 		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme());
 		if (selectedKey) {
-			list.setSelectedIndex(Math.max(0, items.findIndex(item => item.value === selectedKey)));
+			list.setSelectedIndex(
+				Math.max(
+					0,
+					items.findIndex(item => item.value === selectedKey),
+				),
+			);
 		}
 		const select = (key: string) => {
 			if (key === "back") {
@@ -799,11 +808,7 @@ export class PersonaConfigOverlayComponent implements Component {
 		list.onSelect = item => select(item.value);
 		list.onCancel = () => this.#showDetail(index, "sources");
 		this.#entryIndex = index;
-		this.#setScreen(
-			"sources",
-			list,
-			"↑↓ move · Space / Enter toggle or cycle · s save & apply · Esc back",
-		);
+		this.#setScreen("sources", list, "↑↓ move · Space / Enter toggle or cycle · s save & apply · Esc back");
 	}
 
 	#showNameEditor(index: number): void {

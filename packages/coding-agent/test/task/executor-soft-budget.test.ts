@@ -549,7 +549,8 @@ describe("runSubprocess soft request budget", () => {
 				frame.type === "subagent_lifecycle" &&
 				frame.payload.id === grandchildId &&
 				frame.payload.status !== "started"
-			) grandchildTerminal.resolve();
+			)
+				grandchildTerminal.resolve();
 		});
 		rpcRegistry.setSubscriptionLevel("events");
 

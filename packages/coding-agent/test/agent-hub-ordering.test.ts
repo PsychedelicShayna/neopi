@@ -220,7 +220,7 @@ describe("Agent hub row ordering", () => {
 		}
 	});
 
-	it("filters agents with a fuzzy query and clears on Escape", () => {
+	it("keeps an applied fuzzy filter after Escape and clears it through the search field", () => {
 		vi.useFakeTimers();
 		let hub: AgentHubOverlayComponent | undefined;
 		try {
@@ -238,6 +238,11 @@ describe("Agent hub row ordering", () => {
 			hub.handleInput("p");
 			expect(renderedAgentIds(hub)).toEqual(["alpha-one"]);
 			hub.handleInput("\u001b");
+			expect(renderedAgentIds(hub)).toEqual(["alpha-one"]);
+			hub.handleInput("/");
+			hub.handleInput("\x7f");
+			hub.handleInput("\x7f");
+			hub.handleInput("\r");
 			expect(renderedAgentIds(hub)).toEqual(["alpha-one", "beta-two"]);
 		} finally {
 			hub?.dispose();

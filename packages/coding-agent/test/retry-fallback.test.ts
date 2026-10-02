@@ -20,6 +20,7 @@ function createContext(
 		getBundledModel("google-vertex", "gemini-2.5-flash"),
 		getBundledModel("openrouter", "google/gemini-2.5-flash"),
 		getBundledModel("openai", "gpt-4o-mini"),
+		getBundledModel("xai-oauth", "grok-4.7"),
 	].filter(model => model !== undefined);
 	return {
 		chains,
@@ -86,16 +87,25 @@ describe("retry fallback selector resolution", () => {
 		const selector = "openrouter/google/gemini-2.5-flash:high";
 		const first = "re:^openrouter/google/gemini-2\\.5-flash:high$";
 		const second = "re:^openrouter/.*:high$";
-		const context = createContext({
-			"openrouter/google/*": ["google-vertex/*"],
-			[first]: ["openai/gpt-4o-mini"],
-			[second]: ["google/gemini-2.5-flash"],
-			task: ["google-vertex/*"],
-		}, { task: selector });
+		const context = createContext(
+			{
+				"openrouter/google/*": ["google-vertex/*"],
+				[first]: ["openai/gpt-4o-mini"],
+				[second]: ["google/gemini-2.5-flash"],
+				task: ["google-vertex/*"],
+			},
+			{ task: selector },
+		);
 		expect(resolveRetryFallbackChainKey(context, selector, undefined, "task")).toBe(first);
-		expect(findRetryFallbackCandidates(context, first, selector).map(item => item.raw)).toEqual(["openai/gpt-4o-mini"]);
-		expect(resolveRetryFallbackChainKey(createContext({ ...context.chains, [selector]: [] }), selector)).toBe(selector);
-		expect(resolveRetryFallbackChainKey(context, "openrouter/google/gemini-2.5-flash:low")).toBe("openrouter/google/*");
+		expect(findRetryFallbackCandidates(context, first, selector).map(item => item.raw)).toEqual([
+			"openai/gpt-4o-mini",
+		]);
+		expect(resolveRetryFallbackChainKey(createContext({ ...context.chains, [selector]: [] }), selector)).toBe(
+			selector,
+		);
+		expect(resolveRetryFallbackChainKey(context, "openrouter/google/gemini-2.5-flash:low")).toBe(
+			"openrouter/google/*",
+		);
 	});
 
 	it("resolves regex entries against the catalog, retaining glob entries", () => {
@@ -121,9 +131,11 @@ describe("retry fallback selector resolution", () => {
 			"openrouter/*": ["re:(", "google/gemini-2.5-flash"],
 		});
 		expect(resolveRetryFallbackChainKey(context, "openrouter/google/gemini-2.5-flash")).toBe("openrouter/*");
-		expect(findRetryFallbackCandidates(context, "openrouter/*", "openrouter/google/gemini-2.5-flash").map(item => item.raw)).toEqual([
-			"google/gemini-2.5-flash",
-		]);
+		expect(
+			findRetryFallbackCandidates(context, "openrouter/*", "openrouter/google/gemini-2.5-flash").map(
+				item => item.raw,
+			),
+		).toEqual(["google/gemini-2.5-flash"]);
 	});
 
 	it("does not let a later shared-assignment role steal the default chain", () => {
@@ -293,6 +305,30 @@ describe("retry fallback selector resolution", () => {
 			"openai/gpt-4o-mini",
 		]);
 	});
+
+	it("keeps a role's chain when the live effort differs from the role's explicit effort (#13789)", () => {
+		const model = getBundledModel("xai-oauth", "grok-4.7");
+		const high = "xai-oauth/grok-4.7:high";
+		const xhigh = "xai-oauth/grok-4.7:xhigh";
+
+		// A spawn `effort` or `/thinking` moved the session off the role's effort.
+		const roleOnly = createContext({ task: ["openai/gpt-4o-mini"] }, { task: high });
+		expect(resolveRetryFallbackChainKey(roleOnly, xhigh, model)).toBe("task");
+		expect(findRetryFallbackCandidates(roleOnly, "task", xhigh, model).map(candidate => candidate.raw)).toEqual([
+			"openai/gpt-4o-mini",
+		]);
+
+		// A role assigned the live effort still outranks one assigned another effort.
+		const exactRole = createContext(
+			{ task: ["openai/gpt-4o-mini"], slow: ["openai/gpt-4o-mini:high"] },
+			{ task: high, slow: xhigh },
+		);
+		expect(resolveRetryFallbackChainKey(exactRole, xhigh, model)).toBe("slow");
+
+		// Model-selector keys stay effort-exact.
+		const modelKey = createContext({ [high]: ["openai/gpt-4o-mini"] });
+		expect(resolveRetryFallbackChainKey(modelKey, xhigh, model)).toBeUndefined();
+	});
 });
 
 describe("retry fallback kind-role validation", () => {
@@ -399,8 +435,8 @@ describe("retry fallback regex diagnostics", () => {
 	if (!model) throw new Error("Expected bundled OpenAI test model");
 	const registry = {
 		getAll: () => [model],
-		getProviderModels: (provider: string) => provider === model.provider ? [model] : [],
-		find: (provider: string, id: string) => provider === model.provider && id === model.id ? model : undefined,
+		getProviderModels: (provider: string) => (provider === model.provider ? [model] : []),
+		find: (provider: string, id: string) => (provider === model.provider && id === model.id ? model : undefined),
 		hasProvider: (provider: string) => provider === model.provider,
 	};
 
@@ -425,10 +461,14 @@ describe("retry fallback regex diagnostics", () => {
 			"retry.fallbackChains": { default: ["re:^google/gemini-2\\.5-flash:high$"] },
 		});
 		const warnings: string[] = [];
-		validateRetryFallbackChains(settings, {
-			...registry,
-			getAll: () => [model, google],
-		}, warning => warnings.push(warning));
+		validateRetryFallbackChains(
+			settings,
+			{
+				...registry,
+				getAll: () => [model, google],
+			},
+			warning => warnings.push(warning),
+		);
 		expect(warnings).toEqual([]);
 	});
 });

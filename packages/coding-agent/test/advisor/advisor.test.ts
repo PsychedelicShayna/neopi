@@ -6,7 +6,7 @@ import {
 	createCompactionSummaryMessage,
 	defaultConvertToLlm,
 } from "@oh-my-pi/pi-agent-core/compaction";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import type {
 	ResponseFileSearchToolCall,
 	ResponseFunctionWebSearch,
@@ -26,6 +26,7 @@ import {
 	type AdvisorRuntimeHost,
 	advisorTranscriptFilename,
 	buildAdvisorQuarantineSourceText,
+	compareAdvisorNotes,
 	deriveAdvisorTelemetry,
 	formatAdvisorBatchContent,
 	formatAdvisorContextPrompt,
@@ -146,6 +147,29 @@ describe("advisor", () => {
 			expect(md).toContain(thinking);
 			expect(md).toContain("_thinking:_");
 		});
+		it("renders advisor thinking as escaped XML without changing regular history", () => {
+			const assistantMsg = {
+				role: "assistant",
+				content: [
+					{ type: "thinking", thinking: 'Maybe <tag attr="x"> & done' },
+					{ type: "redactedThinking", data: "hidden-secret" },
+					{ type: "text", text: "Final answer" },
+					{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "a.ts" } },
+				],
+				timestamp: 1,
+			} as unknown as AgentMessage;
+			const advisor = formatSessionHistoryMarkdown([assistantMsg], {
+				includeThinking: true,
+				primaryThinkingXml: true,
+			});
+			expect(advisor).toContain('<primary-thinking>\nMaybe &lt;tag attr="x"&gt; &amp; done\n</primary-thinking>');
+			expect(advisor).not.toContain("hidden-secret");
+			expect(advisor).toContain("Final answer");
+			expect(advisor).toContain("→ read(a.ts)");
+			const ordinary = formatSessionHistoryMarkdown([assistantMsg], { includeThinking: true });
+			expect(ordinary).toContain('_thinking:_ Maybe <tag attr="x"> & done');
+			expect(formatSessionHistoryMarkdown([assistantMsg])).not.toContain("primary-thinking");
+		});
 
 		it("elides thinking text by default", () => {
 			const thinking = "I should check the edge case first.";
@@ -170,7 +194,7 @@ describe("advisor", () => {
 			} as AgentMessage;
 			const advisor = formatSessionHistoryMarkdown([assistantMsg], {
 				includeThinking: true,
-				wrapPrimaryThinking: true,
+				primaryThinkingXml: true,
 			});
 			expect(advisor).toContain(
 				"<primary-thinking>\nBefore &lt;/primary-thinking&gt; &amp; after\n</primary-thinking>",
@@ -715,7 +739,7 @@ describe("advisor", () => {
 			await tool.execute("tc-2", { note, severity: "nit" });
 
 			expect(onAdvice).toHaveBeenCalledTimes(1);
-			expect(onAdvice).toHaveBeenCalledWith(note, "nit");
+			expect(onAdvice).toHaveBeenCalledWith(note, "nit", undefined);
 		});
 
 		it("allows the same advice after delivered-note memory resets", async () => {
@@ -728,8 +752,8 @@ describe("advisor", () => {
 			await tool.execute("tc-2", { note, severity: "nit" });
 
 			expect(onAdvice).toHaveBeenCalledTimes(2);
-			expect(onAdvice).toHaveBeenNthCalledWith(1, note, "nit");
-			expect(onAdvice).toHaveBeenNthCalledWith(2, note, "nit");
+			expect(onAdvice).toHaveBeenNthCalledWith(1, note, "nit", undefined);
+			expect(onAdvice).toHaveBeenNthCalledWith(2, note, "nit", undefined);
 		});
 
 		it("forwards escalations of an already-delivered note and suppresses downgrades", async () => {
@@ -745,9 +769,9 @@ describe("advisor", () => {
 			await tool.execute("tc-5", { note, severity: "nit" });
 
 			expect(onAdvice).toHaveBeenCalledTimes(3);
-			expect(onAdvice).toHaveBeenNthCalledWith(1, note, "nit");
-			expect(onAdvice).toHaveBeenNthCalledWith(2, note, "concern");
-			expect(onAdvice).toHaveBeenNthCalledWith(3, note, "blocker");
+			expect(onAdvice).toHaveBeenNthCalledWith(1, note, "nit", undefined);
+			expect(onAdvice).toHaveBeenNthCalledWith(2, note, "concern", undefined);
+			expect(onAdvice).toHaveBeenNthCalledWith(3, note, "blocker", undefined);
 		});
 
 		it("routes a same-text blocker escalation of an already-delivered note with the production guard", async () => {
@@ -792,7 +816,7 @@ describe("advisor", () => {
 
 			// Deferred notes are NOT delivered mid-turn; blocker still goes through.
 			expect(onAdvice).toHaveBeenCalledTimes(1);
-			expect(onAdvice).toHaveBeenCalledWith("A destructive command is running.", "blocker");
+			expect(onAdvice).toHaveBeenCalledWith("A destructive command is running.", "blocker", undefined);
 			// The tool tells the advisor the note is deferred, not silently "Recorded.".
 			expect(JSON.stringify(deferred.content)).toContain("Queued for the end of the turn");
 
@@ -804,8 +828,8 @@ describe("advisor", () => {
 			// oldest first — no reliance on the advisor model re-raising them.
 			tool.beginUpdate(false);
 			expect(onAdvice).toHaveBeenCalledTimes(3);
-			expect(onAdvice).toHaveBeenNthCalledWith(2, note, "nit");
-			expect(onAdvice).toHaveBeenNthCalledWith(3, "Minor naming cleanup.", "nit");
+			expect(onAdvice).toHaveBeenNthCalledWith(2, note, "nit", undefined);
+			expect(onAdvice).toHaveBeenNthCalledWith(3, "Minor naming cleanup.", "nit", undefined);
 
 			// A later explicit re-raise of the same note is deduped (already delivered).
 			await tool.execute("tc-4", { note, severity: "nit" });
@@ -825,7 +849,7 @@ describe("advisor", () => {
 			tool.beginUpdate(false);
 			// Identical note queued once, flushed once.
 			expect(onAdvice).toHaveBeenCalledTimes(1);
-			expect(onAdvice).toHaveBeenCalledWith(note, "nit");
+			expect(onAdvice).toHaveBeenCalledWith(note, "nit", undefined);
 		});
 
 		it("routes an escalating deferred nit immediately at concern severity without replay", async () => {
@@ -836,10 +860,10 @@ describe("advisor", () => {
 			await tool.execute("tc-1", { note: "Same point raised repeatedly.", severity: "nit" });
 			await tool.execute("tc-2", { note: "Same   point raised repeatedly.", severity: "concern" });
 
-			expect(onAdvice).toHaveBeenCalledWith("Same   point raised repeatedly.", "concern");
+			expect(onAdvice).toHaveBeenCalledWith("Same   point raised repeatedly.", "concern", undefined);
 			tool.flushDeferredNotes();
 			expect(onAdvice).toHaveBeenCalledTimes(1);
-			expect(onAdvice).toHaveBeenCalledWith("Same   point raised repeatedly.", "concern");
+			expect(onAdvice).toHaveBeenCalledWith("Same   point raised repeatedly.", "concern", undefined);
 		});
 
 		it("flushes one deferred nit per update past the per-update emission budget on a late catch-up", async () => {
@@ -1402,6 +1426,24 @@ describe("advisor", () => {
 			expect(content.split('advisor="').length - 1).toBe(1);
 			expect(content).toContain("default note");
 		});
+
+		it("orders merged notes newest-turn-first then severity, marking age", () => {
+			// Merged boundary batches surface the newest review first — it describes
+			// the current state of the work — with `turns_ago` marking how stale each
+			// older note is, so the primary can discount superseded ones.
+			const notes = [
+				{ note: "old blocker", severity: "blocker" as const, turn: 3 },
+				{ note: "new nit", severity: "nit" as const, turn: 5 },
+				{ note: "new blocker", severity: "blocker" as const, turn: 5 },
+			].sort(compareAdvisorNotes);
+			const content = formatAdvisorBatchContent(notes, { currentTurn: 6 });
+			expect(content.indexOf("new blocker")).toBeLessThan(content.indexOf("new nit"));
+			expect(content.indexOf("new nit")).toBeLessThan(content.indexOf("old blocker"));
+			expect(content).toContain('turns_ago="3"');
+			// Both current-turn-5 notes are one turn old at delivery turn 6.
+			expect(content.match(/turns_ago="1"/g)?.length).toBe(2);
+			expect(content.split("turns_ago=").length - 1).toBe(3);
+		});
 	});
 
 	describe("deriveAdvisorTelemetry", () => {
@@ -1645,6 +1687,84 @@ describe("advisor", () => {
 			releasePrompt.resolve();
 			await settleUntil(() => runtime.backlog === 0);
 		});
+		it("waits without a wall-clock deadline until abort releases strict catch-up", async () => {
+			const promptStarted = Promise.withResolvers<void>();
+			const releasePrompt = Promise.withResolvers<void>();
+			const messages: AgentMessage[] = [{ role: "user", content: "first", timestamp: 1 } as AgentMessage];
+			const agent: AdvisorAgent = {
+				prompt: async () => {
+					promptStarted.resolve();
+					await releasePrompt.promise;
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const runtime = new AdvisorRuntime(agent, {
+				snapshotMessages: () => messages,
+			});
+
+			runtime.onTurnEnd();
+			await promptStarted.promise;
+			const controller = new AbortController();
+			let settled = false;
+			vi.useFakeTimers();
+			try {
+				const catchup = runtime.waitForCatchup(undefined, 1, controller.signal).then(caughtUp => {
+					settled = true;
+					return caughtUp;
+				});
+				vi.advanceTimersByTime(60_000);
+				await Promise.resolve();
+				expect(settled).toBe(false);
+
+				controller.abort();
+				expect(await catchup).toBe(false);
+			} finally {
+				releasePrompt.resolve();
+				vi.useRealTimers();
+			}
+			await settleUntil(() => runtime.backlog === 0);
+		});
+
+		it("reviews a cadence-held tool result as the primary saw it after an in-place prune", async () => {
+			const promptInputs: Array<string | AgentMessage[]> = [];
+			const agent = makeAgent(promptInputs);
+			const readResult = {
+				role: "toolResult",
+				toolCallId: "read-1",
+				toolName: "read",
+				content: [{ type: "text", text: "export const retries = 3;" }],
+				isError: false,
+				timestamp: 2,
+			} as unknown as ToolResultMessage;
+			const messages: AgentMessage[] = [
+				{ role: "user", content: "inspect the retry config", timestamp: 1 } as AgentMessage,
+				readResult as AgentMessage,
+			];
+			const runtime = new AdvisorRuntime(agent, { snapshotMessages: () => messages });
+
+			runtime.onTurnEnd(messages, { willContinue: true, dispatch: false });
+			await Promise.resolve();
+			expect(promptInputs).toHaveLength(0);
+
+			// The primary's per-turn prune blanks the superseded result in place and
+			// realigns delivered prefixes before the scheduled review renders.
+			readResult.content = [{ type: "text", text: "[superseded by a newer read]" }];
+			readResult.prunedAt = Date.now();
+			runtime.rebaseDeliveredPrefix("prune-stale-tool-results");
+			messages.push({ role: "user", content: "now raise the limit", timestamp: 3 } as AgentMessage);
+			runtime.onTurnEnd(messages);
+			await runtime.waitForCatchup(1_000, 1);
+
+			expect(promptInputs).toHaveLength(1);
+			const review = promptText(promptInputs[0]);
+			expect(review).toContain("export const retries = 3;");
+			expect(review).not.toContain("superseded by a newer read");
+			expect(review).toContain("inspect the retry config");
+			expect(review).toContain("now raise the limit");
+		});
+
 		it("preserves the next user turn when an accepted empty stop is pruned", async () => {
 			const promptInputs: Array<string | AgentMessage[]> = [];
 			const agent = makeAgent(promptInputs);
@@ -1980,6 +2100,49 @@ describe("advisor", () => {
 			expect(promptInputs).toHaveLength(1);
 			expect(promptText(promptInputs[0])).toContain("[in progress — more steps follow]");
 			expect(updateStates).toEqual([true]);
+		});
+
+		it("applies advisor reasoning preference to in-progress deltas", async () => {
+			for (const includeThinking of [true, false]) {
+				const promptInputs: Array<string | AgentMessage[]> = [];
+				const state: { messages: AgentMessage[] } = { messages: [] };
+				const agent: AdvisorAgent = {
+					prompt: async input => {
+						promptInputs.push(input);
+						state.messages.push({
+							role: "assistant",
+							content: [],
+							stopReason: "stop",
+							timestamp: 2,
+						} as unknown as AgentMessage);
+					},
+					abort: () => {},
+					reset: () => {},
+					state,
+				};
+				const messages: AgentMessage[] = [
+					{
+						role: "assistant",
+						content: [
+							{ type: "thinking", thinking: "Check <edge> & proceed" },
+							{ type: "text", text: "Answer" },
+						],
+						timestamp: 1,
+					} as AgentMessage,
+				];
+				const runtime = new AdvisorRuntime(agent, { snapshotMessages: () => messages, includeThinking }, 0);
+				runtime.onTurnEnd(messages, { willContinue: true });
+				await settleUntil(() => runtime.backlog === 0);
+				const update = promptText(promptInputs[0]);
+				expect(update).toContain("[in progress — more steps follow]");
+				expect(update).toContain("Answer");
+				if (includeThinking) {
+					expect(update).toContain("<primary-thinking>\nCheck &lt;edge&gt; &amp; proceed\n</primary-thinking>");
+				} else {
+					expect(update).not.toContain("Check <edge>");
+					expect(update).not.toContain("<primary-thinking>");
+				}
+			}
 		});
 
 		it("uses plain heading when willContinue is false or absent", async () => {
@@ -3155,6 +3318,7 @@ describe("advisor", () => {
 
 			expect(promptInputs).toHaveLength(1);
 			const prompt = promptText(promptInputs[0]!);
+			expect(prompt).toContain("<primary-thinking>");
 			expect(prompt).not.toContain("OTHERSECRET");
 			expect(prompt).not.toContain("tok_abc123");
 			expect(prompt).not.toContain("TOKABC123_");
@@ -4963,6 +5127,7 @@ describe("advisor", () => {
 			// The first model refuses every time; the host's fallback hook swaps in a
 			// model that answers, exactly as `#recoverAdvisorTurn` does for a session.
 			let modelRefuses = true;
+			let identity = "model/refusing";
 			const agent: AdvisorAgent = {
 				prompt: async input => {
 					promptInputs.push(input);
@@ -5010,9 +5175,11 @@ describe("advisor", () => {
 				{
 					snapshotMessages: () => messages,
 					notifyFailure: error => failures.push(error),
+					getModelIdentity: () => identity,
 					onTurnError: async () => {
 						fallbackCalls++;
 						modelRefuses = false;
+						identity = "model/accepting";
 						return true;
 					},
 				},
@@ -5025,6 +5192,71 @@ describe("advisor", () => {
 			// Refuse, strip-and-resend, refuse again, then the swapped model answers.
 			expect(fallbackCalls).toBe(1);
 			expect(promptInputs).toHaveLength(3);
+			expect(promptText(promptInputs[0])).toContain("<primary-thinking>");
+			expect(promptText(promptInputs[1])).not.toContain("<primary-thinking>");
+			expect(promptText(promptInputs[2])).toContain("<primary-thinking>");
+			expect(failures).toEqual([]);
+		});
+
+		it("never re-enables user-disabled reasoning after refusal and model fallback", async () => {
+			const promptInputs: Array<string | AgentMessage[]> = [];
+			const failures: unknown[] = [];
+			const state: { messages: AgentMessage[]; error?: string } = { messages: [] };
+			let identity = "model/refusing";
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					const refuses = identity === "model/refusing";
+					state.error = refuses ? "Refusal (cyber): blocked under Anthropic's Usage Policy" : undefined;
+					state.messages.push({
+						role: "assistant",
+						content: [],
+						stopReason: refuses ? "error" : "stop",
+						...(refuses
+							? { stopDetails: { type: "refusal", category: "cyber" }, errorMessage: state.error }
+							: {}),
+						timestamp: promptInputs.length + 1,
+					} as unknown as AgentMessage);
+				},
+				abort: () => {},
+				reset: () => {},
+				rollbackTo: count => {
+					state.messages.length = count;
+					state.error = undefined;
+				},
+				state,
+			};
+			const messages: AgentMessage[] = [
+				{
+					role: "assistant",
+					content: [
+						{ type: "thinking", thinking: "private reasoning" },
+						{ type: "text", text: "answer" },
+					],
+					timestamp: 1,
+				} as AgentMessage,
+			];
+			const runtime = new AdvisorRuntime(
+				agent,
+				{
+					snapshotMessages: () => messages,
+					getModelIdentity: () => identity,
+					includeThinking: false,
+					notifyFailure: error => failures.push(error),
+					onTurnError: async () => {
+						identity = "model/accepting";
+						return true;
+					},
+				},
+				0,
+			);
+			runtime.onTurnEnd(messages);
+			await settleUntil(() => runtime.backlog === 0);
+			expect(promptInputs).toHaveLength(2);
+			for (const input of promptInputs) {
+				expect(promptText(input)).not.toContain("private reasoning");
+				expect(promptText(input)).toContain("answer");
+			}
 			expect(failures).toEqual([]);
 		});
 
@@ -6603,6 +6835,39 @@ describe("advisor", () => {
 			).toBe("steer");
 		});
 
+		it("opts a late concern into steering without bypassing stop or preservation guards", () => {
+			expect(
+				resolveAdvisorDeliveryChannel({
+					severity: "concern",
+					autoResumeSuppressed: false,
+					streaming: false,
+					aborting: false,
+					terminalAnswerNoQueuedWork: true,
+					allowTerminalConcernSteering: true,
+				}),
+			).toBe("steer");
+			expect(
+				resolveAdvisorDeliveryChannel({
+					severity: "concern",
+					autoResumeSuppressed: true,
+					streaming: false,
+					aborting: false,
+					terminalAnswerNoQueuedWork: true,
+					allowTerminalConcernSteering: true,
+				}),
+			).toBe("preserve");
+			expect(
+				resolveAdvisorDeliveryChannel({
+					severity: "concern",
+					autoResumeSuppressed: false,
+					streaming: false,
+					aborting: false,
+					terminalAnswerNoQueuedWork: true,
+					allowTerminalConcernSteering: true,
+					preserveOnly: true,
+				}),
+			).toBe("preserve");
+		});
 		it("preserves an interrupting note while suppressed AND idle (no auto-resume of a stopped run)", () => {
 			for (const severity of ["concern", "blocker"] as const) {
 				expect(

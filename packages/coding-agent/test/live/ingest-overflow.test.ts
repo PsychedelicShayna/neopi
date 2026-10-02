@@ -2,7 +2,13 @@ import { describe, expect, it } from "bun:test";
 import { LiveIngestOverflow, type OverflowClass, type OverflowObservation } from "../../src/live/ingest-overflow";
 
 const epochs = { call: 1, source: 1, alert: 1 };
-function known(token: string, slug = "model-e", letter: OverflowClass = "E", revision = 1, replayable = true): OverflowObservation {
+function known(
+	token: string,
+	slug = "model-e",
+	letter: OverflowClass = "E",
+	revision = 1,
+	replayable = true,
+): OverflowObservation {
 	return { token, fingerprint: slug, observationRevision: revision, category: "known", slug, letter, replayable };
 }
 function unknown(token: string, revision = 1, replayable = true): OverflowObservation {
@@ -15,7 +21,8 @@ describe("bounded overflow contributions", () => {
 		for (let n = 0; n < 321; n++) overflow.count(known(String(n)));
 		for (let n = 0; n < 321; n++) {
 			const token = String(n);
-			for (let revision = 2; revision < 9; revision++) overflow.observe(known(token, revision % 2 ? "model-e" : "model-l", revision % 2 ? "E" : "L", revision));
+			for (let revision = 2; revision < 9; revision++)
+				overflow.observe(known(token, revision % 2 ? "model-e" : "model-l", revision % 2 ? "E" : "L", revision));
 			overflow.count(known(token, "model-e", "E", 9));
 		}
 		expect(overflow.stats.count).toBe(321);

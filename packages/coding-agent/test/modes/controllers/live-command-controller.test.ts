@@ -487,11 +487,14 @@ describe("LiveCommandController", () => {
 		const statePath = path.join(dir, "neopi-live-personas.json");
 		const h = createHarness();
 		try {
-			await Bun.write(statePath, JSON.stringify({
-				schemaVersion: 1,
-				personas: { alpha: { instructions: "No protocol yet." } },
-				active: "alpha",
-			}));
+			await Bun.write(
+				statePath,
+				JSON.stringify({
+					schemaVersion: 1,
+					personas: { alpha: { instructions: "No protocol yet." } },
+					active: "alpha",
+				}),
+			);
 			await h.controller.handleCommand();
 			expect(h.ctx.showStatus).toHaveBeenCalledWith(
 				'Live persona "alpha" lacks the client protocol lines; open /persona live → alpha → "Append client protocol lines".',
@@ -501,11 +504,14 @@ describe("LiveCommandController", () => {
 			expect(h.ctx.showStatus).toHaveBeenCalledTimes(1);
 			await h.controller.stop();
 
-			await Bun.write(statePath, JSON.stringify({
-				schemaVersion: 1,
-				personas: { beta: { instructions: "Still missing." } },
-				active: "beta",
-			}));
+			await Bun.write(
+				statePath,
+				JSON.stringify({
+					schemaVersion: 1,
+					personas: { beta: { instructions: "Still missing." } },
+					active: "beta",
+				}),
+			);
 			await h.controller.handleCommand();
 			expect(h.ctx.showStatus).toHaveBeenLastCalledWith(
 				'Live persona "beta" lacks the client protocol lines; open /persona live → beta → "Append client protocol lines".',
@@ -529,11 +535,14 @@ describe("LiveCommandController", () => {
 		const statePath = path.join(dir, "neopi-live-personas.json");
 		const h = createHarness();
 		try {
-			await Bun.write(statePath, JSON.stringify({
-				schemaVersion: 1,
-				personas: { alpha: { instructions: "<client-protocol>present</client-protocol>" } },
-				active: "alpha",
-			}));
+			await Bun.write(
+				statePath,
+				JSON.stringify({
+					schemaVersion: 1,
+					personas: { alpha: { instructions: "<client-protocol>present</client-protocol>" } },
+					active: "alpha",
+				}),
+			);
 			await h.controller.handleCommand();
 			expect(h.ctx.showStatus).not.toHaveBeenCalled();
 			await h.controller.stop();

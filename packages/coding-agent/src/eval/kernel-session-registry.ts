@@ -10,6 +10,7 @@ import {
 	type SessionOwners,
 	waitForPromiseWithCancellation,
 } from "./executor-base";
+import { OwnerScopedSessionKeys } from "./session-owner-keys";
 
 interface KernelSessionRegistryOptions {
 	sessionId?: string;
@@ -142,6 +143,21 @@ export function createKernelSessionRegistry<
 	const startingSessions = new Map<string, StartingKernelSession<TSession>>();
 	const resettingSessions = new Map<string, Promise<void>>();
 	const replacingSessionKernels = new Map<TSession, { kernel: TKernel; promise: Promise<TKernel> }>();
+	const ownerSessionKeys = new OwnerScopedSessionKeys();
+
+	function getSessionOwners(sessionKey: string): SessionOwners | undefined {
+		return sessions.get(sessionKey) ?? startingSessions.get(sessionKey);
+	}
+
+	function resolveSessionKey(cwd: string, options: TOptions, reset: boolean): string {
+		const sessionId = options.sessionId ?? `session:${cwd}`;
+		return ownerSessionKeys.resolve(
+			descriptor.buildSessionKey(sessionId, cwd, options.interpreter),
+			options.kernelOwnerId,
+			reset,
+			getSessionOwners,
+		);
+	}
 
 	const context: KernelSessionRegistryContext<TKernel, TOptions, TSession> = {
 		sessions,
@@ -321,6 +337,7 @@ export function createKernelSessionRegistry<
 	}
 
 	async function disposeAll(): Promise<void> {
+		ownerSessionKeys.clear();
 		const pending = [...startingSessions.values()].map(starting => starting.promise);
 		startingSessions.clear();
 		if (descriptor.clearResetsOnDisposeAll) resettingSessions.clear();
@@ -357,6 +374,7 @@ export function createKernelSessionRegistry<
 	}
 
 	async function disposeByOwner(ownerId: string): Promise<void> {
+		ownerSessionKeys.disposeByOwner(ownerId);
 		const toShutdown: TSession[] = [];
 		const startingToShutdown: StartingKernelSession<TSession>[] = [];
 		for (const session of Array.from(sessions.values())) {
@@ -410,20 +428,18 @@ export function createKernelSessionRegistry<
 	}
 
 	function peekLiveKernel(cwd: string, options: TOptions): TKernel | undefined {
-		const sessionId = options.sessionId ?? `session:${cwd}`;
-		const sessionKey = descriptor.buildSessionKey(sessionId, cwd, options.interpreter);
+		const sessionKey = resolveSessionKey(cwd, options, false);
 		const kernel = sessions.get(sessionKey)?.kernel;
 		return kernel?.isAlive() ? kernel : undefined;
 	}
 
 	function getPresentSession(cwd: string, options: TOptions): TSession | undefined {
-		const sessionId = options.sessionId ?? `session:${cwd}`;
-		return sessions.get(descriptor.buildSessionKey(sessionId, cwd, options.interpreter));
+		return sessions.get(resolveSessionKey(cwd, options, false));
 	}
 
 	async function executeOnSession(code: string, cwd: string, options: TOptions): Promise<R> {
 		const sessionId = options.sessionId ?? `session:${cwd}`;
-		const sessionKey = descriptor.buildSessionKey(sessionId, cwd, options.interpreter);
+		const sessionKey = resolveSessionKey(cwd, options, options.reset === true);
 		if (options.bridge && !options.bridgeSessionId) {
 			options.bridgeSessionId = sessionId;
 		}

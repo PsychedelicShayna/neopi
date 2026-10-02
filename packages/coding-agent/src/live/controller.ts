@@ -148,8 +148,13 @@ function errorFrom(cause: unknown): Error {
 	return cause instanceof Error ? cause : new Error(String(cause));
 }
 
-function joinDelegationContent(content: Extract<LiveServerEvent, { type: "delegation.created" }>["item"]["content"]): string {
-	return content.map(item => item.text).join("\n").trim();
+function joinDelegationContent(
+	content: Extract<LiveServerEvent, { type: "delegation.created" }>["item"]["content"],
+): string {
+	return content
+		.map(item => item.text)
+		.join("\n")
+		.trim();
 }
 
 function clampLevel(level: number): number {
@@ -841,7 +846,8 @@ export class LiveSessionController {
 	#appendFinalResponse(messages: readonly AgentMessage[], options: { closeDelegation: boolean }): void {
 		const delegationId = this.#activeDelegationId;
 		if (!delegationId) {
-			if (this.#operatorTurnPending || this.#hasConsumedVoiceNote()) this.#relayOperatorTurnResult(messages, options);
+			if (this.#operatorTurnPending || this.#hasConsumedVoiceNote())
+				this.#relayOperatorTurnResult(messages, options);
 			return;
 		}
 		// A shared operator prompt folded into the delegated turn is answered by this settle.
@@ -878,7 +884,8 @@ export class LiveSessionController {
 	#relayOperatorTurnResult(messages: readonly AgentMessage[], options: { closeDelegation: boolean }): void {
 		if (this.#relayGates().finalAnswers) {
 			const message = messages.findLast(candidate => candidate?.role === "assistant");
-			const text = message && message !== this.#lastRelayedResponse ? this.#extractAssistantText(message).trim() : "";
+			const text =
+				message && message !== this.#lastRelayedResponse ? this.#extractAssistantText(message).trim() : "";
 			if (text && message) {
 				this.#lastRelayedResponse = message;
 				const labelBytes = Buffer.byteLength(prompt.render(agentFinalMessageTemplate, { message: "" }), "utf8");
@@ -997,7 +1004,11 @@ export class LiveSessionController {
 		const body = this.#ircRelayTransform(message, raw);
 		if (!body) return;
 		const to = message.customType === "irc:relay" ? details?.to?.trim() : undefined;
-		this.#appendSpeakable(to ? `Crew relay from ${from} to ${to}: ${body}` : `Crew report from ${from}: ${body}`, "report", () => this.#ircRelayAllowed(message));
+		this.#appendSpeakable(
+			to ? `Crew relay from ${from} to ${to}: ${body}` : `Crew report from ${from}: ${body}`,
+			"report",
+			() => this.#ircRelayAllowed(message),
+		);
 	}
 
 	/**
@@ -1022,7 +1033,11 @@ export class LiveSessionController {
 		if (!cut) return;
 		this.#thinkingRelayedLength += boundary + 1;
 		this.#lastThinkingFlushAt = Date.now();
-		this.#appendSpeakable(`Main agent reasoning (live, provisional): ${cut}`, "thinking", () => this.#relayGates().reasoning);
+		this.#appendSpeakable(
+			`Main agent reasoning (live, provisional): ${cut}`,
+			"thinking",
+			() => this.#relayGates().reasoning,
+		);
 	}
 
 	/**
@@ -1034,7 +1049,10 @@ export class LiveSessionController {
 	 */
 	#appendSpeakable(text: string, kind: HeldContextKind = "report", canDeliver: () => boolean = ALWAYS_DELIVER): void {
 		const item = truncateToChunk(text);
-		if (item) this.#deliverOrHold(kind, () => { if (canDeliver()) void this.#sendSpeakable(item); });
+		if (item)
+			this.#deliverOrHold(kind, () => {
+				if (canDeliver()) void this.#sendSpeakable(item);
+			});
 	}
 
 	/**
@@ -1064,9 +1082,8 @@ export class LiveSessionController {
 	#trimHeldContext(): void {
 		while (this.#heldContext.length > HELD_CONTEXT_CAP) {
 			const oldestReport = this.#heldContext.findIndex(item => item.kind === "report");
-			const evict = oldestReport >= 0
-				? oldestReport
-				: this.#heldContext.findIndex(item => item.kind !== "overflow-alert");
+			const evict =
+				oldestReport >= 0 ? oldestReport : this.#heldContext.findIndex(item => item.kind !== "overflow-alert");
 			if (evict < 0) break;
 			this.#heldContext.splice(evict, 1)[0]?.onDiscard?.();
 		}
@@ -1087,10 +1104,17 @@ export class LiveSessionController {
 		if (this.#stopped || !this.#connected || !canDeliver()) return false;
 		const item = truncateToChunk(text);
 		if (!item) return false;
-		this.#deliverOrHold(kind, () => {
-			try { if (canDeliver()) void this.#sendSpeakable(item); }
-			finally { onSettled?.(); }
-		}, onSettled);
+		this.#deliverOrHold(
+			kind,
+			() => {
+				try {
+					if (canDeliver()) void this.#sendSpeakable(item);
+				} finally {
+					onSettled?.();
+				}
+			},
+			onSettled,
+		);
 		return true;
 	}
 

@@ -42,7 +42,14 @@ function getLockPath(filePath: string): string {
 
 function tryAcquireLock(lockPath: string): NativeFileLock | null {
 	const lock = NativeFileLock.tryAcquire(lockPath);
-	return lock.acquired ? lock : null;
+	if (lock.acquired) return lock;
+	lock.release();
+	return null;
+}
+
+/** Acquire an exclusive lease without waiting; `null` while another holder owns it. */
+export function tryAcquireFileLock(filePath: string): FileLockHandle | null {
+	return tryAcquireLock(getLockPath(filePath));
 }
 
 interface CooperativeOwner {
@@ -55,7 +62,10 @@ interface CooperativeOwner {
 function parseProcessStat(stat: string): { state: string; startTime: string } | undefined {
 	const commandEnd = stat.lastIndexOf(")");
 	if (commandEnd < 0) return undefined;
-	const fields = stat.slice(commandEnd + 1).trim().split(/\s+/);
+	const fields = stat
+		.slice(commandEnd + 1)
+		.trim()
+		.split(/\s+/);
 	const state = fields[0];
 	const startTime = fields[19];
 	return state && startTime ? { state, startTime } : undefined;

@@ -238,7 +238,9 @@ const OSC66_PREFIX = "\x1b]66;";
 // BEL-terminated cursor marker. `Bun.stringWidth` strips CSI/OSC but counts APC
 // payloads as printable text, so they are removed before measuring (they occupy
 // zero cells — matching the native width engine in pi-natives/text.rs).
-const APC_SPAN_REGEX = /\x1b_[\s\S]*?(?:\x07|\x1b\\)/g;
+// Remove the outer tmux envelope first: doubled ESC bytes belong to its
+// payload, and stripping only the inner APC leaves printable wrapper bytes.
+const APC_SPAN_REGEX = /\x1bPtmux;(?:[^\x1b]|\x1b\x1b)*\x1b\\|\x1b_[\s\S]*?(?:\x07|\x1b\\)/g;
 const APC_PREFIX = "\x1b_";
 const PRINTABLE_ASCII_REGEX = /^[\u0020-\u007e]*$/;
 // Keep native escape parsing: a JS SGR parser costs more than Bun's scanner.
@@ -316,7 +318,7 @@ let visibleWidthCacheEpoch = widthConfigEpoch;
  * `Bun.stringWidth` does the heavy lifting (UAX#11 width tables + ANSI/OSC
  * stripping); this adds the corrections it omits — tabs (expanded to
  * `tabWidth` cells), OSC 66 text-sizing payloads (scaled by `s=`), and APC
- * sequences (counted as printable by Bun, actually zero cells).
+ * sequences (including tmux passthrough envelopes, all zero cells).
  */
 export function visibleWidth(str: string): number {
 	if (!str) return 0;

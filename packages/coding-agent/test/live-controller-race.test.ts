@@ -33,10 +33,7 @@ import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-
 import type { CustomMessage } from "../src/session/messages";
 import { LiveSessionController } from "../src/live/controller";
 import { LiveIngest } from "../src/live/ingest";
-import {
-	LIVE_INGEST_DEFAULTS,
-	type LiveIngestSettingsSource,
-} from "../src/live/ingest-settings";
+import { LIVE_INGEST_DEFAULTS, type LiveIngestSettingsSource } from "../src/live/ingest-settings";
 import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, type SubagentLifecyclePayload } from "../src/task/types";
 import { EventBus, emitSubagentFrame } from "../src/utils/event-bus";
 import type { LiveClientMessage, LiveServerEvent } from "../src/live/protocol";
@@ -1020,8 +1017,13 @@ describe("live controller delegation ownership", () => {
 		h.fireSession({
 			type: "irc_message",
 			message: {
-				role: "custom", customType: "irc:relay", content: "", display: true,
-				details: { from: "A", to: "B", body: "x" }, attribution: "agent", timestamp: 1,
+				role: "custom",
+				customType: "irc:relay",
+				content: "",
+				display: true,
+				details: { from: "A", to: "B", body: "x" },
+				attribution: "agent",
+				timestamp: 1,
 			},
 		} as unknown as AgentSessionEvent);
 		await settle();
@@ -1204,7 +1206,10 @@ describe("live controller delegation ownership", () => {
 		});
 		await h.controller.start();
 		const thinking = "Consider the available options before settling the result. ".repeat(7);
-		const update = { type: "message_update", message: { role: "assistant", content: [{ type: "thinking", thinking }] } } as unknown as AgentSessionEvent;
+		const update = {
+			type: "message_update",
+			message: { role: "assistant", content: [{ type: "thinking", thinking }] },
+		} as unknown as AgentSessionEvent;
 		enabled = false;
 		h.fireSession(update);
 		await settle();
@@ -1230,18 +1235,26 @@ describe("live controller delegation ownership", () => {
 		});
 		await h.controller.start();
 		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "run checks" } });
-		h.fireLive(delegation("progress-d", "")); await settle();
+		h.fireLive(delegation("progress-d", ""));
+		await settle();
 		const tool = { type: "message_end", message: assistant("Running checks now", "toolUse") } as AgentSessionEvent;
-		h.fireSession(tool); await settle();
-		expect(h.sent.some(item => item.type === "delegation.context.append" && item.channel === "commentary")).toBe(false);
+		h.fireSession(tool);
+		await settle();
+		expect(h.sent.some(item => item.type === "delegation.context.append" && item.channel === "commentary")).toBe(
+			false,
+		);
 		progress = true;
 		h.controller.noteComposerActivity();
-		h.fireSession(tool); await settle();
+		h.fireSession(tool);
+		await settle();
 		expect(h.controller.heldContextCount()).toBe(1);
 		progress = false;
 		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "release" } });
-		h.fireLive(delegation("progress-release", "")); await settle();
-		expect(h.sent.some(item => item.type === "delegation.context.append" && item.channel === "commentary")).toBe(false);
+		h.fireLive(delegation("progress-release", ""));
+		await settle();
+		expect(h.sent.some(item => item.type === "delegation.context.append" && item.channel === "commentary")).toBe(
+			false,
+		);
 		await h.controller.stop();
 	});
 
@@ -1250,7 +1263,8 @@ describe("live controller delegation ownership", () => {
 		const h = makeHarness({ relayGates: () => ({ reasoning: true, progress: true, finalAnswers }) });
 		await h.controller.start();
 		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "first" } });
-		h.fireLive(delegation("first-d", "")); await settle();
+		h.fireLive(delegation("first-d", ""));
+		await settle();
 		h.fireSession(agentEnd([assistant("hidden delegated answer", "stop")]));
 		await settle();
 		expect(speakableTexts(h.sent)).toEqual([]);
@@ -1263,7 +1277,9 @@ describe("live controller delegation ownership", () => {
 		h.controller.expectOperatorTurn();
 		h.fireSession(agentEnd([assistant("visible", "stop")]));
 		await settle();
-		expect(h.sent.some(item => item.type === "session.context.append" && item.content[0]?.text.includes("visible"))).toBe(true);
+		expect(
+			h.sent.some(item => item.type === "session.context.append" && item.content[0]?.text.includes("visible")),
+		).toBe(true);
 		await h.controller.stop();
 	});
 	it("keeps the protected overflow slot through eight held reports and freezes at delivery", async () => {
@@ -1273,24 +1289,29 @@ describe("live controller delegation ownership", () => {
 		const alertsEnabled = true;
 		expect(h.controller.appendSpeakableContext("preconnect report")).toBe(false);
 		h.controller.appendCommentaryContext("preconnect commentary");
-		expect(h.controller.appendOverflowAlertContext(
-			() => ({ text: `Red alert: ${count} deployments; authorization not checked.`, receiptId: 1 }),
-			() => alertsEnabled,
-			(id, accepted) => receipts.push([id, accepted]),
-		)).toBe(false);
+		expect(
+			h.controller.appendOverflowAlertContext(
+				() => ({ text: `Red alert: ${count} deployments; authorization not checked.`, receiptId: 1 }),
+				() => alertsEnabled,
+				(id, accepted) => receipts.push([id, accepted]),
+			),
+		).toBe(false);
 		await h.controller.start();
 		expect(h.controller.appendSpeakableContext("connected report")).toBe(true);
 		h.controller.noteComposerActivity();
 		for (let i = 0; i < 8; i++) h.controller.appendSpeakableContext(`report ${i}`);
-		expect(h.controller.appendOverflowAlertContext(
-			() => ({ text: `Red alert: ${count} deployments; authorization not checked.`, receiptId: 7 }),
-			() => alertsEnabled,
-			(id, accepted) => receipts.push([id, accepted]),
-		)).toBe(true);
+		expect(
+			h.controller.appendOverflowAlertContext(
+				() => ({ text: `Red alert: ${count} deployments; authorization not checked.`, receiptId: 7 }),
+				() => alertsEnabled,
+				(id, accepted) => receipts.push([id, accepted]),
+			),
+		).toBe(true);
 		count = 321;
 		expect(h.controller.heldContextCount()).toBe(8);
 		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "release" } });
-		h.fireLive(delegation("overflow-release", "")); await settle(40);
+		h.fireLive(delegation("overflow-release", ""));
+		await settle(40);
 		expect(speakableTexts(h.sent)).toContain("Red alert: 321 deployments; authorization not checked.");
 		expect(receipts).toEqual([[7, true]]);
 		await h.controller.stop();
@@ -1300,7 +1321,14 @@ describe("live controller delegation ownership", () => {
 		await h.controller.start();
 		const registry = new AgentRegistry();
 		registry.register({ id: "main", displayName: "main", kind: "main", session: h.session, status: "running" });
-		registry.register({ id: "worker", displayName: "worker", kind: "sub", parentId: "main", session: null, status: "running" });
+		registry.register({
+			id: "worker",
+			displayName: "worker",
+			kind: "sub",
+			parentId: "main",
+			session: null,
+			status: "running",
+		});
 		const bus = new EventBus();
 		const liveSettings = {
 			...LIVE_INGEST_DEFAULTS,
@@ -1324,7 +1352,9 @@ describe("live controller delegation ownership", () => {
 			setTimer: (fn, ms) => {
 				const id = ++nextTimer;
 				timers.set(id, { fn, ms });
-				return () => { timers.delete(id); };
+				return () => {
+					timers.delete(id);
+				};
 			},
 		});
 		ingest.attach();
@@ -1339,10 +1369,11 @@ describe("live controller delegation ownership", () => {
 			status: "started",
 		} satisfies SubagentLifecyclePayload;
 		emitSubagentFrame(bus, bus, TASK_SUBAGENT_LIFECYCLE_CHANNEL, start);
-		for (const [id, timer] of timers) if (timer.ms === 0) {
-			timers.delete(id);
-			timer.fn();
-		}
+		for (const [id, timer] of timers)
+			if (timer.ms === 0) {
+				timers.delete(id);
+				timer.fn();
+			}
 		emitSubagentFrame(bus, bus, TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
 			...start,
 			status: "completed",
@@ -1363,14 +1394,29 @@ describe("live controller delegation ownership", () => {
 		h.controller.noteComposerActivity();
 		let canDeliver = true;
 		let settled = 0;
-		expect(h.controller.appendSpeakableContext("Subagent report from T: (completed) yes", "report", () => canDeliver, () => { settled++; })).toBe(true);
-		expect(h.controller.appendOverflowAlertContext(
-			() => ({ text: "Red alert: should not escape.", receiptId: 9 }),
-			() => canDeliver, () => { throw new Error("disabled overflow receipt escaped"); },
-		)).toBe(true);
+		expect(
+			h.controller.appendSpeakableContext(
+				"Subagent report from T: (completed) yes",
+				"report",
+				() => canDeliver,
+				() => {
+					settled++;
+				},
+			),
+		).toBe(true);
+		expect(
+			h.controller.appendOverflowAlertContext(
+				() => ({ text: "Red alert: should not escape.", receiptId: 9 }),
+				() => canDeliver,
+				() => {
+					throw new Error("disabled overflow receipt escaped");
+				},
+			),
+		).toBe(true);
 		canDeliver = false;
 		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "release" } });
-		h.fireLive(delegation("held-release", "")); await settle();
+		h.fireLive(delegation("held-release", ""));
+		await settle();
 		expect(speakableTexts(h.sent)).toEqual([]);
 		expect(settled).toBe(1);
 		await h.controller.stop();

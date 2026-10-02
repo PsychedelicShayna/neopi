@@ -913,6 +913,13 @@ export interface AfterToolCallResult {
 	isError?: boolean;
 	/** If provided, replaces the contextually-useless flag carried with the tool result. */
 	useless?: boolean;
+	/**
+	 * Trusted post-tool instructions for the next provider request. Delivered
+	 * outside the tool result, after all calls in the batch settle. Unlike
+	 * `BeforeToolCallResult.additionalContext`, this is retained for error
+	 * results because the callback receives the finalized outcome.
+	 */
+	additionalContext?: string;
 }
 
 /** Context passed to `beforeToolCall`. */
@@ -1253,8 +1260,11 @@ export type AgentEvent =
 	// Message lifecycle - emitted for user, assistant, and toolResult messages
 	| ({ type: "message_start"; message: AgentMessage } & Partial<AgentRequestAttribution>)
 	// Only emitted for assistant messages during streaming
-	| ({ type: "message_update"; message: AgentMessage; assistantMessageEvent: AssistantMessageEvent } &
-			Partial<AgentRequestAttribution>)
+	| ({
+			type: "message_update";
+			message: AgentMessage;
+			assistantMessageEvent: AssistantMessageEvent;
+	  } & Partial<AgentRequestAttribution>)
 	| ({ type: "message_end"; message: AgentMessage } & Partial<AgentRequestAttribution>)
 	// Tool execution lifecycle
 	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: any; intent?: string }

@@ -471,12 +471,12 @@ describe("implicit effort policy resolution", () => {
 			],
 		});
 		expect(matchEffortRule(settings, model)?.allowed).toEqual([Effort.Low]);
-		expect(resolveImplicitEffort(settings, model, { mode: "auto", selector: "MOCK/CLASS*" }, "role").candidates).toEqual([
-			Effort.Low,
-		]);
-		expect(resolveImplicitEffort(settings, model, { mode: "auto", selector: "re:^mock/classifier$" }, "role").candidates).toEqual([
-			Effort.Low,
-		]);
+		expect(
+			resolveImplicitEffort(settings, model, { mode: "auto", selector: "MOCK/CLASS*" }, "role").candidates,
+		).toEqual([Effort.Low]);
+		expect(
+			resolveImplicitEffort(settings, model, { mode: "auto", selector: "re:^mock/classifier$" }, "role").candidates,
+		).toEqual([Effort.Low]);
 		expect(
 			resolveImplicitEffort(
 				settings,

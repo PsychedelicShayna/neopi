@@ -46,6 +46,7 @@ type FakeEditor = {
 	pendingImages: ImageContent[];
 	pendingImageLinks: (string | undefined)[];
 	clearDraft(historyText?: string): void;
+	clearSubmittedDraft(): void;
 };
 
 type InputListenerResult = { consume: boolean } | undefined;
@@ -160,6 +161,7 @@ async function createContext() {
 			this.pendingImages = [];
 			this.pendingImageLinks = [];
 		},
+		clearSubmittedDraft: vi.fn(),
 	};
 	focused = editor;
 	const ctx = {
@@ -340,6 +342,25 @@ describe("InputController keybinding setup", () => {
 		expect(spies.showModelSelector).toHaveBeenNthCalledWith(1, { temporaryOnly: true });
 		expect(spies.showModelSelector).toHaveBeenNthCalledWith(2);
 		expect(spies.resetDisplayAfterAppearanceRefresh).toHaveBeenCalledTimes(1);
+	});
+
+	it("enters Python mode only when a supported sigil has non-empty code", async () => {
+		const { InputController, ctx, editor } = await createContext();
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+
+		for (const draft of ["$", "$H", "$$", "$$a", "$ ", "$  "]) {
+			editor.onChange?.(draft);
+			expect(ctx.isPythonMode).toBe(false);
+		}
+		expect(ctx.updateEditorBorderColor).not.toHaveBeenCalled();
+
+		editor.onChange?.("$ print(1)");
+		expect(ctx.isPythonMode).toBe(true);
+		editor.onChange?.("$ print(2)");
+		expect(ctx.isPythonMode).toBe(true);
+		expect(ctx.updateEditorBorderColor).toHaveBeenCalledTimes(1);
 	});
 
 	it("does not mark pasted shell prompts as Python mode while editing", async () => {
@@ -721,6 +742,7 @@ describe("InputController keybinding setup", () => {
 
 		expect(onInput).not.toHaveBeenCalled();
 		expect(spies.prompt).toHaveBeenCalledWith("c", { streamingBehavior: "steer", images: undefined });
+		expect(editor.clearSubmittedDraft).toHaveBeenCalledTimes(1);
 	});
 });
 

@@ -146,6 +146,18 @@ export class XaiSTTController {
 
 		let recordingPath: string | undefined;
 		try {
+			// The recognizer needs an utterance boundary after the final spoken word.
+			// A failed padding write must not discard the original recording.
+			if (!file.empty) {
+				try {
+					file.appendSilence(750);
+				} catch (error) {
+					logger.warn("xAI STT silence padding failed; transcribing original recording", {
+						error: error instanceof Error ? error.message : String(error),
+						path: file.path,
+					});
+				}
+			}
 			recordingPath = file.finalize();
 			this.#file = null;
 			this.#retain(file);

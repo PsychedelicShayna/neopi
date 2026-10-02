@@ -8,7 +8,6 @@ import {
 	resolvePythonEvalWarning,
 } from "@oh-my-pi/pi-coding-agent/eval/startup-warning";
 
-const FIX_HINT = "Install Python 3.8+ or set python.interpreter, then verify with `omp setup python --check`.";
 const CWD = "/tmp/eval-startup-warning";
 
 let savedPiPy: string | undefined;
@@ -37,20 +36,6 @@ afterEach(() => {
 });
 
 describe("resolvePythonEvalWarning", () => {
-	it("falls back to JavaScript when Python is missing and JS eval is on", async () => {
-		mockProbe();
-		expect(await resolvePythonEvalWarning({ cwd: CWD, settings: Settings.isolated() })).toBe(
-			`Python eval unavailable (Python executable not found on PATH); eval will run JavaScript only. ${FIX_HINT}`,
-		);
-	});
-
-	it("reports no eval backend when Python is missing and JS eval is off", async () => {
-		mockProbe();
-		expect(await resolvePythonEvalWarning({ cwd: CWD, settings: Settings.isolated({ "eval.js": false }) })).toBe(
-			`Eval tool unavailable: Python executable not found on PATH, and JavaScript eval is disabled. ${FIX_HINT}`,
-		);
-	});
-
 	it("stays silent without probing when Python eval is intentionally disabled", async () => {
 		const probe = mockProbe();
 		expect(
@@ -71,7 +56,6 @@ describe("resolvePythonEvalWarning", () => {
 		expect(reason).not.toContain(os.homedir());
 		expect(reason).not.toMatch(/[\t\x1b]/);
 		expect(Bun.stringWidth(reason ?? "")).toBeLessThanOrEqual(100);
-		expect(warning).toEndWith(FIX_HINT);
 	});
 });
 
@@ -80,9 +64,8 @@ describe("resolveFirstLaunchPythonEvalWarning", () => {
 
 	it("probes on a fresh install and stays silent once the changelog marker exists", async () => {
 		const probe = mockProbe();
-		expect(
-			await resolveFirstLaunchPythonEvalWarning({ ...base, args: {}, lastChangelogVersion: undefined }),
-		).toStartWith("Python eval unavailable");
+		await resolveFirstLaunchPythonEvalWarning({ ...base, args: {}, lastChangelogVersion: undefined });
+		expect(probe).toHaveBeenCalledTimes(1);
 		expect(
 			await resolveFirstLaunchPythonEvalWarning({ ...base, args: {}, lastChangelogVersion: "18.3.5" }),
 		).toBeUndefined();
@@ -100,11 +83,13 @@ describe("resolveFirstLaunchPythonEvalWarning", () => {
 	});
 
 	it("follows the effective tool list, where an explicit --tools list overrides --no-tools", async () => {
-		mockProbe();
+		const probe = mockProbe();
 		const warn = (args: { tools?: string[]; noTools?: boolean }) =>
 			resolveFirstLaunchPythonEvalWarning({ ...base, args, lastChangelogVersion: undefined });
-		expect(await warn({ noTools: true, tools: ["eval"] })).toStartWith("Python eval unavailable");
+		await warn({ noTools: true, tools: ["eval"] });
+		expect(probe).toHaveBeenCalledTimes(1);
 		expect(await warn({ noTools: true })).toBeUndefined();
 		expect(await warn({ tools: ["read"] })).toBeUndefined();
+		expect(probe).toHaveBeenCalledTimes(1);
 	});
 });

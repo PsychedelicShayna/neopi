@@ -13,6 +13,7 @@ import { safeSend as safeSendIpc } from "../../utils/ipc";
 import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP } from "../bridge-timeout";
 import { getEnabledEvalPreludes } from "../preludes";
 import { attachSessionOwner, EvalKernelNotRunningError, type SessionOwners } from "../executor-base";
+import { OwnerScopedSessionKeys } from "../session-owner-keys";
 import { shouldDetachKernel } from "../py/spawn-options";
 import { updateEvalState } from "../state";
 import type { EvalShadowCellSession } from "../speculation/cell-session";
@@ -114,6 +115,15 @@ interface StartingJsSession extends SessionOwners {
 const sessions = new Map<string, JsSession>();
 const startingSessions = new Map<string, StartingJsSession>();
 const resettingSessions = new Map<string, Promise<void>>();
+const ownerSessionKeys = new OwnerScopedSessionKeys();
+
+function getSessionOwners(sessionKey: string): SessionOwners | undefined {
+	return sessions.get(sessionKey) ?? startingSessions.get(sessionKey);
+}
+
+function resolveSessionKey(sessionKey: string, ownerId: string | undefined, reset = false): string {
+	return ownerSessionKeys.resolve(sessionKey, ownerId, reset, getSessionOwners);
+}
 // Worker startup (module-graph import + WorkerCore construction) is infrastructure
 // cost, not user compute. Floor it independently of Bun's 5s default per-test timeout
 // so a slow cold-start under load isn't aborted mid-init — terminating a still-
@@ -147,7 +157,7 @@ export function setJsEvalWorkerFactoriesForTests(factories: JsEvalWorkerFactorie
 export async function executeInVmContext(options: {
 	sessionKey: string;
 	sessionId: string;
-	/** Logical owner identifier; scopes retained-worker cleanup via {@link disposeVmContextsByOwner}. */
+	/** Logical owner identifier; scopes shared-context resets and retained-worker cleanup. */
 	ownerId?: string;
 	cwd: string;
 	session: ToolSession;
@@ -162,7 +172,11 @@ export async function executeInVmContext(options: {
 	timeoutMs?: number;
 	runState: VmRunState;
 }): Promise<{ value: unknown }> {
-	const { sessionKey } = options;
+	const sessionKey = resolveSessionKey(
+		options.sessionKey,
+		options.ownerId ?? options.session.getEvalKernelOwnerId?.() ?? undefined,
+		options.reset === true,
+	);
 	if (options.reset) {
 		// Coalesce concurrent resets: an existing in-flight reset already
 		// produces a fresh context, so a follow-up `reset: true` cell should
@@ -198,7 +212,7 @@ export async function executeInVmContext(options: {
 		},
 		options.session,
 		options.timeoutMs,
-		options.ownerId,
+		options.ownerId ?? options.session.getEvalKernelOwnerId?.() ?? undefined,
 	);
 	const result = await runOnce(session, options);
 	if (session.state === "alive" && path.isAbsolute(options.filename)) {
@@ -221,11 +235,14 @@ export async function invokeJsTool(
 	request: JsToolRequest,
 	options: {
 		sessionKey: string;
+		ownerId?: string;
 		session: ToolSession;
 		signal?: AbortSignal;
 	},
 ): Promise<EvalToolInvokeResult | { ok: true; tools: EvalToolDescriptor[]; missing: string[] }> {
-	const session = sessions.get(options.sessionKey);
+	const session = sessions.get(
+		resolveSessionKey(options.sessionKey, options.ownerId ?? options.session.getEvalKernelOwnerId?.() ?? undefined),
+	);
 	if (!session || session.state !== "alive") throw new EvalKernelNotRunningError("JavaScript");
 
 	const runId = `tool-${crypto.randomUUID()}`;
@@ -298,12 +315,13 @@ export async function invokeJsTool(
  */
 export async function snapshotVmContext(options: {
 	sessionKey: string;
+	ownerId?: string;
 	cwd: string;
 	sessionId: string;
 	localRoots?: Record<string, string>;
 	timeoutMs?: number;
 }): Promise<ShadowSnapshot | null> {
-	const session = sessions.get(options.sessionKey);
+	const session = sessions.get(resolveSessionKey(options.sessionKey, options.ownerId));
 	if (session?.state !== "alive") return null;
 	const id = `snapshot-${Snowflake.next()}`;
 	const deferred = Promise.withResolvers<Extract<WorkerOutbound, { type: "shadow-snapshot" }>>();
@@ -343,6 +361,7 @@ export interface JavaScriptShadowPlanningResult {
  */
 export async function shadowPlanIfPresent(options: {
 	sessionKey: string;
+	ownerId?: string;
 	cwd: string;
 	sessionId: string;
 	code: string;
@@ -368,6 +387,7 @@ export async function shadowPlanIfPresent(options: {
  */
 export async function runIfSnapshotMatches(options: {
 	sessionKey: string;
+	ownerId?: string;
 	sessionId: string;
 	cwd: string;
 	session: ToolSession;
@@ -378,7 +398,9 @@ export async function runIfSnapshotMatches(options: {
 	expectedRevision: number;
 	expectedDigest: string;
 }): Promise<{ value: unknown } | null> {
-	const session = sessions.get(options.sessionKey);
+	const session = sessions.get(
+		resolveSessionKey(options.sessionKey, options.ownerId ?? options.session.getEvalKernelOwnerId?.() ?? undefined),
+	);
 	if (session?.state !== "alive") return null;
 	try {
 		return await runOnce(session, options);
@@ -396,6 +418,7 @@ export async function resetVmContext(sessionKey: string): Promise<void> {
 }
 
 export async function disposeAllVmContexts(): Promise<void> {
+	ownerSessionKeys.clear();
 	const pending = [...startingSessions.values()].map(starting => starting.promise);
 	startingSessions.clear();
 	const started = await Promise.allSettled(pending);
@@ -413,6 +436,7 @@ export async function disposeAllVmContexts(): Promise<void> {
  * owners (e.g. an in-memory session keyed only by cwd) just drop the registration.
  */
 export async function disposeVmContextsByOwner(ownerId: string): Promise<void> {
+	ownerSessionKeys.disposeByOwner(ownerId);
 	const toKill: JsSession[] = [];
 	for (const session of Array.from(sessions.values())) {
 		if (!session.ownerIds.has(ownerId)) continue;

@@ -116,11 +116,10 @@ describe("PersonaConfigOverlayComponent", () => {
 
 	it("appends client protocol lines once on a custom live persona", async () => {
 		const protocol = "<client-protocol>\nFollow the labels.\n</client-protocol>\n";
-		const first = makeOverlay(
-			{ entries: [entry("custom", { content: "Be concise.  \n" })] },
-			"live",
-			{ protocolLinesText: protocol, protocolMarker: "<client-protocol>" },
-		);
+		const first = makeOverlay({ entries: [entry("custom", { content: "Be concise.  \n" })] }, "live", {
+			protocolLinesText: protocol,
+			protocolMarker: "<client-protocol>",
+		});
 		first.press(ENTER, DOWN, DOWN, DOWN, DOWN, ENTER);
 		expect(first.frame()).toContain("Client protocol lines appended");
 		first.press("s");
@@ -128,11 +127,10 @@ describe("PersonaConfigOverlayComponent", () => {
 		expect(first.saved.at(-1)?.entries[0]?.content).toBe(`Be concise.\n\n${protocol}`);
 
 		const existing = `Be concise.\n\n${protocol}`;
-		const second = makeOverlay(
-			{ entries: [entry("custom", { content: existing })] },
-			"live",
-			{ protocolLinesText: protocol, protocolMarker: "<client-protocol>" },
-		);
+		const second = makeOverlay({ entries: [entry("custom", { content: existing })] }, "live", {
+			protocolLinesText: protocol,
+			protocolMarker: "<client-protocol>",
+		});
 		second.press(ENTER, DOWN, DOWN, DOWN, DOWN, ENTER);
 		expect(second.frame()).toContain("Already present");
 		second.press("s");
@@ -149,7 +147,10 @@ describe("PersonaConfigOverlayComponent", () => {
 					label: "Subagent max depth",
 					kind: "choice",
 					value: "1",
-					options: [{ value: "1", label: "Direct children only" }, { value: "2", label: "2" }],
+					options: [
+						{ value: "1", label: "Direct children only" },
+						{ value: "2", label: "2" },
+					],
 					enabledBy: "subagents",
 				},
 				{
@@ -173,20 +174,16 @@ describe("PersonaConfigOverlayComponent", () => {
 	it("creates and clones independent live source data", async () => {
 		let factoryCalls = 0;
 		const raw = { nested: { value: 1 } };
-		const created = makeOverlay(
-			{ entries: [] },
-			"live",
-			{
-				newEntryContent: "instructions",
-				newEntrySources: () => {
-					factoryCalls++;
-					return {
-						fields: [{ key: "subagents", label: "Subagents", kind: "boolean", value: false }],
-						raw,
-					};
-				},
+		const created = makeOverlay({ entries: [] }, "live", {
+			newEntryContent: "instructions",
+			newEntrySources: () => {
+				factoryCalls++;
+				return {
+					fields: [{ key: "subagents", label: "Subagents", kind: "boolean", value: false }],
+					raw,
+				};
 			},
-		);
+		});
 		created.press(ENTER, ENTER, "s");
 		await Bun.sleep(0);
 		expect(factoryCalls).toBe(1);

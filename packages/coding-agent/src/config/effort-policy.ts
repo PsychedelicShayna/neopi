@@ -188,13 +188,21 @@ export function matchEffortRule(settings: Settings, model: Model): EffortRule | 
 	const rules = cfgEffortRules.get(settings);
 	const identity = `${model.provider}/${model.id}`;
 	const exact = rules.find(
-		rule => !isRegexSelectorPattern(rule.selector) && !isPatternSelector(rule.selector) && rule.selector.toLowerCase() === identity.toLowerCase(),
+		rule =>
+			!isRegexSelectorPattern(rule.selector) &&
+			!isPatternSelector(rule.selector) &&
+			rule.selector.toLowerCase() === identity.toLowerCase(),
 	);
 	if (exact) return exact;
-	const regex = rules.find(rule => isRegexSelectorPattern(rule.selector) && matchesSelectorPattern(rule.selector, identity));
+	const regex = rules.find(
+		rule => isRegexSelectorPattern(rule.selector) && matchesSelectorPattern(rule.selector, identity),
+	);
 	if (regex) return regex;
 	return rules.find(
-		rule => !isRegexSelectorPattern(rule.selector) && isPatternSelector(rule.selector) && matchesSelectorPattern(rule.selector.toLowerCase(), identity.toLowerCase()),
+		rule =>
+			!isRegexSelectorPattern(rule.selector) &&
+			isPatternSelector(rule.selector) &&
+			matchesSelectorPattern(rule.selector.toLowerCase(), identity.toLowerCase()),
 	);
 }
 

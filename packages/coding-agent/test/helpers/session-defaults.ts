@@ -19,5 +19,27 @@ export function createSessionDefaults(emit?: (event: AgentSessionEvent) => void)
 		setIrcWakeTurnObserver: () => {},
 		isAdvisorActive: () => false,
 		subscribeRunState: () => () => {},
+		addDisposer: () => {},
 	} satisfies Partial<AgentSession>;
+}
+
+/** Buffer fake events until the executor has started their owning run. */
+export function ownFakeSessionEvents(session: AgentSession): void {
+	const subscribe = session.subscribe.bind(session);
+	let listener: ((event: AgentSessionEvent) => void) | undefined;
+	let ownerStarted = false;
+	const pending: AgentSessionEvent[] = [];
+	session.subscribe = callback => {
+		listener = callback;
+		return subscribe(event => {
+			if (!ownerStarted) pending.push(event);
+			else callback(event);
+		});
+	};
+	session.withRunOwner = <T>(owner: string | undefined, fn: () => T): T => {
+		ownerStarted = true;
+		listener?.({ type: "agent_start", runOwners: owner ? [owner] : [] });
+		for (const event of pending.splice(0)) listener?.(event);
+		return fn();
+	};
 }

@@ -15,7 +15,13 @@ import {
 	runSubprocess,
 	SUBAGENT_WARNING_MISSING_YIELD,
 } from "@oh-my-pi/pi-coding-agent/task/executor";
-import { TASK_SUBAGENT_EVENT_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL, type AgentDefinition, type SubagentEventPayload, type SubagentProgressPayload } from "@oh-my-pi/pi-coding-agent/task/types";
+import {
+	TASK_SUBAGENT_EVENT_CHANNEL,
+	TASK_SUBAGENT_PROGRESS_CHANNEL,
+	type AgentDefinition,
+	type SubagentEventPayload,
+	type SubagentProgressPayload,
+} from "@oh-my-pi/pi-coding-agent/task/types";
 import { YieldTool } from "@oh-my-pi/pi-coding-agent/tools/yield";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { logger } from "@oh-my-pi/pi-utils";
@@ -320,19 +326,38 @@ describe("runSubprocess yield reminders", () => {
 			session,
 		});
 		try {
-			const result = await runSubagentFollowUpTurn({ ...baseOptions, id: "subagent-race", message: "batch work", eventBus: bus });
+			const result = await runSubagentFollowUpTurn({
+				...baseOptions,
+				id: "subagent-race",
+				message: "batch work",
+				eventBus: bus,
+			});
 			expect(prompts).toBe(2);
 			expect(result.exitCode).toBe(0);
 			expect(result.output).toContain('"batch": true');
 			expect(result.output).not.toContain("intruder");
-			expect(envelopes.find(frame => frame.event.type === "message_update" &&
-				frame.event.message.role === "assistant" &&
-				frame.event.message.content.some(block => block.type === "text" && block.text === "foreign wake text"))?.owned).toBe(false);
-			expect(envelopes.find(frame => frame.event.type === "message_update" &&
-				frame.event.message.role === "assistant" &&
-				frame.event.message.content.some(block => block.type === "text" && block.text === "owned batch text"))?.owned).toBe(true);
-			expect(progressFrames.find(frame => frame.owned && frame.progress.recentOutput.includes("owned batch text"))?.progress.recentOutput)
-				.not.toContain("foreign wake text");
+			expect(
+				envelopes.find(
+					frame =>
+						frame.event.type === "message_update" &&
+						frame.event.message.role === "assistant" &&
+						frame.event.message.content.some(
+							block => block.type === "text" && block.text === "foreign wake text",
+						),
+				)?.owned,
+			).toBe(false);
+			expect(
+				envelopes.find(
+					frame =>
+						frame.event.type === "message_update" &&
+						frame.event.message.role === "assistant" &&
+						frame.event.message.content.some(block => block.type === "text" && block.text === "owned batch text"),
+				)?.owned,
+			).toBe(true);
+			expect(
+				progressFrames.find(frame => frame.owned && frame.progress.recentOutput.includes("owned batch text"))
+					?.progress.recentOutput,
+			).not.toContain("foreign wake text");
 			await expect(yieldTool.execute("empty-after-race", { type: "result" })).rejects.toThrow(
 				/no text \(thinking only\)/,
 			);

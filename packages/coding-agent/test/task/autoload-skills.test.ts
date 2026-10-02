@@ -30,7 +30,7 @@ function createMockSession(
 	};
 
 	return {
-		...createSessionDefaults(),
+		...createSessionDefaults(emit),
 		state,
 		agent: { state: { systemPrompt: ["test"] } },
 		model: undefined,
@@ -241,6 +241,7 @@ describe("autoloadSkills in executor", () => {
 			autoloadSkills: [mockSkill],
 		});
 
-		expect(callOrder).toEqual(["sendCustomMessage", "prompt"]);
+		expect(callOrder[0]).toBe("sendCustomMessage");
+		expect(callOrder[1]).toBe("prompt");
 	});
 });

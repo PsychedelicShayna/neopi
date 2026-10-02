@@ -53,7 +53,7 @@ Each store is schema-v1 JSON written atomically with a `.bak` of the previous fi
 
 ### Personas
 
-`/persona` opens a fullscreen editor in the style of `/chaining configure`: personas on the left, the highlighted definition on the right. Keys are listed in the footer: Enter edits, Space makes the highlighted persona active (again to turn it off), Delete twice removes, `s` saves and applies, and Esc closes (it asks once before discarding unsaved changes). A persona has a mode (replace, prepend, append, or literal-substitute), an inline text or a file path inside the agent directory, and an inherit-to-tasks flag.
+`/persona` opens a fullscreen editor in the style of `/chain configure`: personas on the left, the highlighted definition on the right. Keys are listed in the footer: Enter edits, Space makes the highlighted persona active (again to turn it off), Delete twice removes, `s` saves and applies, and Esc closes (it asks once before discarding unsaved changes). A persona has a mode (replace, prepend, append, or literal-substitute), an inline text or a file path inside the agent directory, and an inherit-to-tasks flag.
 
 `/persona live` opens the same editor for the live voice model. The bundled default is read-only; clone it to customize. A new live persona starts from the default instructions.
 
@@ -95,6 +95,7 @@ Iris's in-flight reply appears in a single-row **Voice:** caption above the stat
 
 - `/persona live` stores context-source defaults per live persona. Open a persona's **Context sources** pane to choose IRC, subagent depth and voiced slots, classifier timing, catalog effort alerts, advisor notes, reasoning/progress/final-answer relays, and delegation provenance; the built-in default has editable source settings too. **Importance classifier** and **Effort red alerts (catalog)** are independent switches: disabling ranking does not disable authorization checks. Turning **Primary final answers** (`relayFinalAnswers`) off also silences delegated answers returned to Iris.
 - Importance scoring uses the `classifier` model role followed by the configured global fallback chain. Effort alerts consult the schema-v1 model catalog (the configured path supports `~` expansion): a present `null` model/effort slot means no policy recommendation, while an absent model or slot is reported as missing metadata. Authorization attempts each candidate model up to three times before falling through. Cooperative timeout/backoff arithmetic does not bound real latency because provider setup, prior single-flight work, and streams that ignore abort may wait indefinitely. When alert bookkeeping overflows, Iris receives a counted `authorization not checked` notice; the client never blocks or kills those agents.
+- Catalog schema-v1 effort levels are `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; the live loader accepts the operator catalog's complete effort list.
 - Classifier requests preserve every agent identity and state. If a request does not fit, they trim optional transcript excerpts first and task descriptions second, without dropping agents, against the model's **standard** context window minus its actual mapped output allowance, system/framing tokens, and reserve. A candidate may still not fit and is then skipped for the next fallback.
 - Returned context uses stable prefixes: `Crew relay from`, `Subagents started` (optionally `Priority:` or `High priority:`), `Now tracking`/`released`, `Red alert:`, `Subagent report from`, subagent/advisor reasoning and progress labels, and `Advisor note from`. Delegations keep the operator transcript verbatim and carry Iris's separate prose in `<voice-agent-note>` provenance; Iris may also ask the primary a voice-only question as a non-interrupting note whose answer returns as `Agent Final Message`.
 
@@ -124,7 +125,7 @@ Early binary and deployment work is recorded by `da8bb86645`, `e795702ff4`, `643
 
 ## Whole-recording xAI speech input
 
-`Ctrl+Space` (`app.stt.toggle`) starts an independent xAI recording; press it again to stop and transcribe the complete WAV through native `grok-stt`. Pauses and silence remain in the recording. Nothing is segmented, streamed, or transcribed while recording. Existing xAI OAuth credentials are preferred, with xAI API-key credentials as the fallback; no Dictation model selection, `stt.enabled` setting, local speech model, or helper executable is required.
+`Ctrl+Space` (`app.stt.toggle`) starts an independent xAI recording; press it again to stop and transcribe the complete WAV through native `grok-stt`. Pauses and silence remain in the recording, and 750 ms of synthetic silence is appended after nonempty captures so the recognizer hears the end of the utterance. Nothing is segmented, streamed, or transcribed while recording. Existing xAI OAuth credentials are preferred, with xAI API-key credentials as the fallback; no Dictation model selection, `stt.enabled` setting, local speech model, or helper executable is required.
 
 Configured upstream dictation remains separate: `Ctrl+Alt+Space` (`app.dictation.toggle`) or the Space-hold gesture uses the **Dictation** model role and `stt.enabled`. The xAI models remain available there as `xai-oauth/grok-stt` and `xai/grok-stt`, but that pipeline does not own Ctrl+Space. Pressing Backspace while holding Space latches the recording so it survives releasing the bar; a later Space or Backspace tap stops it, and other keys type normally meanwhile.
 
@@ -139,9 +140,9 @@ Cloud dictation keeps hold-to-talk behavior and writes audio to disk-backed WAV 
 A chain rewrites a composer prompt through ordered model steps before it is sent. Each step's output is the next step's input, and the last output is what gets sent. Voice input needs nothing special: Ctrl+Space puts the transcript in the composer, and chaining happens when that text is sent.
 
 - **Alt+C** (`app.message.chain`) sends the composer text through the active chain once.
-- **`/chaining on`** runs every prompt through it; **`/chaining off`** stops that (Alt+C still works).
-- **`/chaining use <name>`** sets the active chain; with no name it clears it. With no active chain, a chained send asks which chain to use (or to send unchanged), and the pick becomes active.
-- **`/chaining status`** lists the mode, the active chain, and every chain's steps; **`/chaining configure`** opens the editor.
+- **`/chain on`** runs every prompt through it; **`/chain off`** stops that (Alt+C still works).
+- **`/chain use <name>`** sets the active chain; with no name it clears it. With no active chain, a chained send asks which chain to use (or to send unchanged), and the pick becomes active.
+- **`/chain status`** lists the mode, the active chain, and every chain's steps; **`/chain configure`** opens the editor.
 
 Only plain prompts are chained; slash commands, skills, `!bash`, eval input, and continue shortcuts are not. Up-arrow history keeps the typed text, not the rewrite. `chaining.auto` and `chaining.active` are settings, so a project can override them in its `.omp/config.yml`.
 
@@ -151,10 +152,10 @@ While a chain runs, the composer is locked: the draft stays visible with every l
 - **Esc Esc Esc** (within the same 3 s) or **Ctrl+C** aborts the chain and puts the typed draft back, nothing sent.
 - A failing step stops the chain and leaves the last completed output in the composer, editable and unsent.
 
-Chains live in `CHAINS.yml` beside advisors' `WATCHDOG.yml`: `<agent dir>/CHAINS.yml` (global) and the project root's `CHAINS.yml`; a project chain shadows a global chain with the same name. `/chaining configure` edits either scope. Each step has a name, a prompt (step instructions; the incoming text is the user message), an optional model (`provider/id`, `provider/id:level`, or `@role`), optional tools (none by default), and two optional keys:
+Chains live in `CHAINS.yml` beside advisors' `WATCHDOG.yml`: `<agent dir>/CHAINS.yml` (global) and the project root's `CHAINS.yml`; a project chain shadows a global chain with the same name. `/chain configure` edits either scope. Each step has a name, a prompt (step instructions; the incoming text is the user message), an optional model (`provider/id`, `provider/id:level`, or `@role`), optional tools (none by default), and two optional keys:
 
 - **`context: true`** gives the step the live session transcript (thinking elided, tool calls collapsed) wrapped in `<transcript>`, with the text to rewrite in `<draft>`, so references like "remove mine" resolve against the conversation. Both tags carry a per-run boundary so tag-like text inside them cannot close a block. The transcript keeps only the newest messages that fit after the step prompt, granted tool schemas, framing, and the provider's maximum output are reserved; the output reserve includes provider-added reasoning tokens when enabled. Off by default; the configure screen's "Transcript context" row toggles it.
-- **`systemPrompt`** replaces the bundled chain system prompt, which tells the model it is rewriting a draft and to output only the rewrite, with no notes about what changed. The step `prompt` is always appended after it. In `/chaining configure` the "System prompt" row shows `(bundled default)`, Enter opens the current text, and Backspace on the row resets an override.
+- **`systemPrompt`** replaces the bundled chain system prompt, which tells the model it is rewriting a draft and to output only the rewrite, with no notes about what changed. The step `prompt` is always appended after it. In `/chain configure` the "System prompt" row shows `(bundled default)`, Enter opens the current text, and Backspace on the row resets an override.
 
 ```yaml
 chains:

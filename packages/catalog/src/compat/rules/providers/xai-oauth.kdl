@@ -4,6 +4,8 @@ provider "xai-oauth" {
 	default-model "grok-4.6"
 	env "XAI_OAUTH_TOKEN" "XAI_API_KEY"
 	discovery label="xAI Grok OAuth (SuperGrok)" oauth-provider="xai-oauth"
+	// SuperGrok subscription capacity is not constrained by its reference price tiers.
+	context-window-authoritative #true
 	kind-apis {
 		image "openai-images"
 		tts "xai-tts"

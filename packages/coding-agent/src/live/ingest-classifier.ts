@@ -1,6 +1,17 @@
 import { Agent, type AgentMessage, type AgentOptions, ThinkingLevel, Tokenizer } from "@oh-my-pi/pi-agent-core";
-import { getSimpleStreamMaxTokens, streamSimple, type Api, type Model, type ProviderSessionState } from "@oh-my-pi/pi-ai";
-import { concreteThinkingLevel, resolveThinkingLevelForModel, shouldDisableReasoning, toReasoningEffort } from "@oh-my-pi/pi-tui/thinking";
+import {
+	getSimpleStreamMaxTokens,
+	streamSimple,
+	type Api,
+	type Model,
+	type ProviderSessionState,
+} from "@oh-my-pi/pi-ai";
+import {
+	concreteThinkingLevel,
+	resolveThinkingLevelForModel,
+	shouldDisableReasoning,
+	toReasoningEffort,
+} from "@oh-my-pi/pi-tui/thinking";
 import type { Settings } from "../config/settings";
 import type { ModelRegistry } from "../config/model-registry";
 import { resolveRoleChain } from "../config/model-resolver";
@@ -90,12 +101,15 @@ export interface ClassifierProse {
 function textOf(content: unknown): string {
 	if (typeof content === "string") return content;
 	if (!Array.isArray(content)) return "";
-	return content.map(block => {
-		if (!block || typeof block !== "object") return "";
-		if (block.type === "text" && typeof block.text === "string") return block.text;
-		if (block.type === "image") return "[image]";
-		return typeof block.type === "string" ? `[${block.type}]` : "";
-	}).filter(Boolean).join("\n");
+	return content
+		.map(block => {
+			if (!block || typeof block !== "object") return "";
+			if (block.type === "text" && typeof block.text === "string") return block.text;
+			if (block.type === "image") return "[image]";
+			return typeof block.type === "string" ? `[${block.type}]` : "";
+		})
+		.filter(Boolean)
+		.join("\n");
 }
 
 /** Render the captured primary conversation without promoting assistant/agent prose to operator evidence. */
@@ -107,25 +121,45 @@ export function renderClassifierProse(messages: readonly AgentMessage[]): Classi
 		const message = messages[index];
 		let authored: Array<{ label: string; text: string; operator: boolean }> = [];
 		if (message.role === "toolResult" || message.role === "bashExecution") continue;
-		if (message.role === "branchSummary" || message.role === "compactionSummary" || (message.role === "user" && message.providerPayload?.type === "anthropicCompaction")) {
+		if (
+			message.role === "branchSummary" ||
+			message.role === "compactionSummary" ||
+			(message.role === "user" && message.providerPayload?.type === "anthropicCompaction")
+		) {
 			historyComplete = false;
-			authored = [{ label: "Summary (not operator speech)", text: "summary" in message ? message.summary : textOf(message.content), operator: false }];
+			authored = [
+				{
+					label: "Summary (not operator speech)",
+					text: "summary" in message ? message.summary : textOf(message.content),
+					operator: false,
+				},
+			];
 		} else if (message.role === "custom" && message.customType === LIVE_DELEGATION_MESSAGE_TYPE) {
 			const details = message.details;
 			if (details && typeof details === "object" && "operator" in details && typeof details.operator === "string") {
 				authored = [
 					{ label: "Operator (live)", text: details.operator, operator: true },
-					...("voice" in details && typeof details.voice === "string" ? [{ label: "Voice agent", text: details.voice, operator: false }] : []),
+					...("voice" in details && typeof details.voice === "string"
+						? [{ label: "Voice agent", text: details.voice, operator: false }]
+						: []),
 				];
 			} else {
 				historyComplete = false;
-				authored = [{ label: "Legacy live delegation (authorship unknown)", text: textOf(message.content), operator: false }];
+				authored = [
+					{ label: "Legacy live delegation (authorship unknown)", text: textOf(message.content), operator: false },
+				];
 			}
 		} else if (message.role === "user") {
 			const operator = message.synthetic !== true && message.attribution !== "agent";
 			authored = [{ label: operator ? "Operator" : "Agent-context user", text: textOf(message.content), operator }];
 		} else if (message.role === "assistant") {
-			authored = [{ label: "Non-operator assistant", text: textOf(message.content.filter(block => block.type === "text")), operator: false }];
+			authored = [
+				{
+					label: "Non-operator assistant",
+					text: textOf(message.content.filter(block => block.type === "text")),
+					operator: false,
+				},
+			];
 		} else if ("content" in message) {
 			authored = [{ label: `Non-operator ${message.role}`, text: textOf(message.content), operator: false }];
 		}
@@ -142,7 +176,10 @@ export function resolveClassifierSelections(settings: Settings, registry: ModelR
 	return resolveRoleChain("classifier", settings, registry.getAvailable()).map(candidate => {
 		const requested = concreteThinkingLevel(candidate.thinkingLevel) ?? ThinkingLevel.Medium;
 		const thinkingLevel = resolveThinkingLevelForModel(candidate.model, requested) ?? ThinkingLevel.Inherit;
-		const options = { reasoning: toReasoningEffort(thinkingLevel), disableReasoning: shouldDisableReasoning(thinkingLevel) };
+		const options = {
+			reasoning: toReasoningEffort(thinkingLevel),
+			disableReasoning: shouldDisableReasoning(thinkingLevel),
+		};
 		return {
 			model: candidate.model,
 			thinkingLevel,
@@ -154,10 +191,22 @@ export function resolveClassifierSelections(settings: Settings, registry: ModelR
 }
 
 /** Exact serialized-input check against the selected model's standard, not extended, context. */
-export function budgetClassifierInput(input: ClassifierInput, selection: ClassifierSelection, systemText = systemPrompt): string | undefined {
+export function budgetClassifierInput(
+	input: ClassifierInput,
+	selection: ClassifierSelection,
+	systemText = systemPrompt,
+): string | undefined {
 	const { effectiveOutputAllowance: output, window, tokenizer } = selection;
-	if (!Number.isSafeInteger(output) || output === undefined || output <= 0 || !Number.isSafeInteger(window) || window <= 0) return undefined;
-	const count = (text: string): number => tokenizer.encoding === null ? Buffer.byteLength(text) : tokenizer.countTokens(text, "strict");
+	if (
+		!Number.isSafeInteger(output) ||
+		output === undefined ||
+		output <= 0 ||
+		!Number.isSafeInteger(window) ||
+		window <= 0
+	)
+		return undefined;
+	const count = (text: string): number =>
+		tokenizer.encoding === null ? Buffer.byteLength(text) : tokenizer.countTokens(text, "strict");
 	const remaining = window - output - FRAMING_RESERVE - count(systemText);
 	if (remaining < 0) return undefined;
 	const { proseBlocks, proseMode, historyComplete, ...base } = input;
@@ -172,7 +221,8 @@ export function budgetClassifierInput(input: ClassifierInput, selection: Classif
 	delete payload.seed;
 	delete payload.authorizationHistory;
 	delete payload.recentProse;
-	if (input.alertCandidates.length > 0) payload.authorizationHistoryComplete = Boolean(historyComplete ?? input.authorizationHistoryComplete);
+	if (input.alertCandidates.length > 0)
+		payload.authorizationHistoryComplete = Boolean(historyComplete ?? input.authorizationHistoryComplete);
 	else delete payload.authorizationHistoryComplete;
 	const measure = (): number => count(JSON.stringify(payload));
 	if (measure() > remaining) {
@@ -182,7 +232,15 @@ export function budgetClassifierInput(input: ClassifierInput, selection: Classif
 		for (const agent of payload.agents) delete agent.description;
 	}
 	if (measure() > remaining) return undefined;
-	const mode = proseMode ?? (input.seed !== undefined ? "seed" : input.authorizationHistory !== undefined ? "authorizationHistory" : input.recentProse !== undefined ? "recentProse" : undefined);
+	const mode =
+		proseMode ??
+		(input.seed !== undefined
+			? "seed"
+			: input.authorizationHistory !== undefined
+				? "authorizationHistory"
+				: input.recentProse !== undefined
+					? "recentProse"
+					: undefined);
 	const blocks = proseBlocks ?? (mode && typeof input[mode] === "string" ? [input[mode]] : []);
 	if (mode && blocks.length > 0) {
 		const original = measure();
@@ -205,17 +263,29 @@ export function budgetClassifierInput(input: ClassifierInput, selection: Classif
 }
 
 /** Independently parse each captured score, depth and authorization decision. */
-export function parseClassifierReply(text: string, input: ClassifierInput, historyComplete = input.authorizationHistoryComplete === true): ClassifierResult | undefined {
-	const json = text.trim().replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/, "");
+export function parseClassifierReply(
+	text: string,
+	input: ClassifierInput,
+	historyComplete = input.authorizationHistoryComplete === true,
+): ClassifierResult | undefined {
+	const json = text
+		.trim()
+		.replace(/^```(?:json)?\s*\n?/i, "")
+		.replace(/\n?```\s*$/, "");
 	let data: unknown;
-	try { data = JSON.parse(json); } catch { return undefined; }
+	try {
+		data = JSON.parse(json);
+	} catch {
+		return undefined;
+	}
 	if (!data || typeof data !== "object" || Array.isArray(data)) return undefined;
 	const object = data as Record<string, unknown>;
 	const scores = new Map<string, number>();
 	const tokens = new Set(input.agents.map(agent => agent.token));
 	if (object.scores && typeof object.scores === "object" && !Array.isArray(object.scores)) {
 		for (const [token, value] of Object.entries(object.scores)) {
-			if (tokens.has(token) && typeof value === "number" && Number.isFinite(value)) scores.set(token, Math.max(0, Math.min(1, value)));
+			if (tokens.has(token) && typeof value === "number" && Number.isFinite(value))
+				scores.set(token, Math.max(0, Math.min(1, value)));
 		}
 	}
 	const depths = new Set(input.agents.map(agent => agent.depth));
@@ -223,7 +293,8 @@ export function parseClassifierReply(text: string, input: ClassifierInput, histo
 	if (object.depthWeights && typeof object.depthWeights === "object" && !Array.isArray(object.depthWeights)) {
 		for (const [depth, value] of Object.entries(object.depthWeights)) {
 			const numeric = Number(depth);
-			if (depths.has(numeric) && typeof value === "number" && Number.isFinite(value)) depthWeights.set(numeric, Math.max(0.05, Math.min(1, value)));
+			if (depths.has(numeric) && typeof value === "number" && Number.isFinite(value))
+				depthWeights.set(numeric, Math.max(0.05, Math.min(1, value)));
 		}
 	}
 	const alerts = new Map<string, { authorized: boolean; reason: string }>();
@@ -232,7 +303,11 @@ export function parseClassifierReply(text: string, input: ClassifierInput, histo
 		for (const [token, value] of Object.entries(object.alerts)) {
 			if (!candidates.has(token) || !value || typeof value !== "object" || Array.isArray(value)) continue;
 			const decision = value as Record<string, unknown>;
-			if (typeof decision.authorized === "boolean" && typeof decision.reason === "string" && (decision.authorized || historyComplete)) {
+			if (
+				typeof decision.authorized === "boolean" &&
+				typeof decision.reason === "string" &&
+				(decision.authorized || historyComplete)
+			) {
 				alerts.set(token, { authorized: decision.authorized, reason: decision.reason });
 			}
 		}
@@ -258,7 +333,10 @@ export interface ClassifierDependencies {
 }
 
 /** One settled attempt; the caller owns the retry chain and its single-flight slot. */
-export async function classifySubagentImportance(input: ClassifierInput, deps: ClassifierDependencies): Promise<ClassifierResult> {
+export async function classifySubagentImportance(
+	input: ClassifierInput,
+	deps: ClassifierDependencies,
+): Promise<ClassifierResult> {
 	const result: ClassifierResult = { scores: new Map() };
 	const finalJson = budgetClassifierInput(input, deps.selection);
 	if (!finalJson || deps.signal.aborted) return result;
@@ -283,9 +361,15 @@ export async function classifySubagentImportance(input: ClassifierInput, deps: C
 	const abort = () => agent.abort(deps.signal.reason);
 	deps.signal.addEventListener("abort", abort, { once: true });
 	const cancelTimeout = deps.setAttemptTimer
-		? deps.setAttemptTimer(() => { timedOut = true; agent.abort("classifier attempt timed out"); }, deps.attemptTimeoutMs ?? ATTEMPT_TIMEOUT_MS)
+		? deps.setAttemptTimer(() => {
+				timedOut = true;
+				agent.abort("classifier attempt timed out");
+			}, deps.attemptTimeoutMs ?? ATTEMPT_TIMEOUT_MS)
 		: (() => {
-				const timeout = setTimeout(() => { timedOut = true; agent.abort("classifier attempt timed out"); }, deps.attemptTimeoutMs ?? ATTEMPT_TIMEOUT_MS);
+				const timeout = setTimeout(() => {
+					timedOut = true;
+					agent.abort("classifier attempt timed out");
+				}, deps.attemptTimeoutMs ?? ATTEMPT_TIMEOUT_MS);
 				return () => clearTimeout(timeout);
 			})();
 	try {
@@ -294,8 +378,15 @@ export async function classifySubagentImportance(input: ClassifierInput, deps: C
 		await agent.prompt([{ role: "user", content: [{ type: "text", text: finalJson }], timestamp: Date.now() }]);
 		if (deps.signal.aborted || timedOut || agent.state.error) return result;
 		const reply = [...agent.state.messages].reverse().find(message => message.role === "assistant");
-		if (!reply || reply.role !== "assistant" || reply.stopReason === "aborted" || reply.stopReason === "error") return result;
-		return parseClassifierReply(textOf(reply.content.filter(block => block.type === "text")), input, JSON.parse(finalJson).authorizationHistoryComplete === true) ?? result;
+		if (!reply || reply.role !== "assistant" || reply.stopReason === "aborted" || reply.stopReason === "error")
+			return result;
+		return (
+			parseClassifierReply(
+				textOf(reply.content.filter(block => block.type === "text")),
+				input,
+				JSON.parse(finalJson).authorizationHistoryComplete === true,
+			) ?? result
+		);
 	} catch {
 		return result;
 	} finally {
