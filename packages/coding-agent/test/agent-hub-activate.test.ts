@@ -134,11 +134,12 @@ describe("Agent hub Enter activation", () => {
 
 	it("navigates with hjkl and keeps literal filter text through insert Esc until normal Esc closes (#35)", () => {
 		const { hub, doneCalls } = makeHub(async () => {}, true);
-		expect(renderedRosterEntry(hub, "Worker", 120)).toContain("❯");
+		const [firstId, secondId] = renderedRosterIds(hub, 120);
+		expect(renderedRosterEntry(hub, firstId!, 120)).toContain("❯");
 		hub.handleInput("j");
-		expect(renderedRosterEntry(hub, "Worker2", 120)).toContain("❯");
+		expect(renderedRosterEntry(hub, secondId!, 120)).toContain("❯");
 		hub.handleInput("k");
-		expect(renderedRosterEntry(hub, "Worker", 120)).toContain("❯");
+		expect(renderedRosterEntry(hub, firstId!, 120)).toContain("❯");
 		hub.handleInput("l");
 		hub.handleInput("h");
 		hub.handleInput("i");
