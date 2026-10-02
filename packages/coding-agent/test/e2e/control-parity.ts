@@ -108,6 +108,7 @@ const fixtures: Record<string, () => Promise<Record<string, unknown>>> = {
 	set_follow_up_mode: async () => ({ mode: "one-at-a-time" }),
 	set_interrupt_mode: async () => ({ mode: "immediate" }),
 	set_auto_compaction: async () => ({ enabled: false }),
+	set_cache_warming: async () => ({ mode: "off" }),
 	set_auto_retry: async () => ({ enabled: false }),
 	compact: async () => ({}),
 	bash: async () => ({ command: "echo parity-bash" }),

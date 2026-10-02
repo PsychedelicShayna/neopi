@@ -15,8 +15,8 @@ interface OtherProcessState {
 }
 
 /**
- * A second omp-like process that resumes `sessionFile` (which writes nothing)
- * and then runs one command per line: `append <text>`, `rewrite`, or `close`.
+ * A second process that opens the transcript either as its exclusive writer
+ * or as a read-only inspector, then accepts append/rewrite/close commands.
  */
 class OtherProcess {
 	readonly #child: Bun.Subprocess<"pipe", "pipe", "pipe">;
@@ -31,13 +31,14 @@ class OtherProcess {
 	static async resume(
 		tempDir: TempDir,
 		sessionFile: string,
+		readOnly = false,
 	): Promise<{ other: OtherProcess; opened: OtherProcessState }> {
 		const script = tempDir.join("other-process.ts");
 		await Bun.write(
 			script,
 			[
 				`import { SessionManager } from ${JSON.stringify(SESSION_MANAGER_MODULE)};`,
-				"const manager = await SessionManager.open(process.argv[2], undefined, undefined, { suppressBreadcrumb: true });",
+				`const manager = await SessionManager.${readOnly ? "openReadOnly" : "open"}(process.argv[2], undefined, undefined, { suppressBreadcrumb: true });`,
 				"const notices = [];",
 				"const errors = [];",
 				"manager.onPersistenceNotice(notice => notices.push(notice));",
@@ -99,13 +100,15 @@ function userTurn(content: string) {
 	return { role: "user" as const, content, timestamp: Date.now() };
 }
 
-async function userTurnsIn(sessionFile: string, sessionDir: string): Promise<unknown[]> {
-	const reader = await SessionManager.open(sessionFile, sessionDir, new FileSessionStorage(), {
-		suppressBreadcrumb: true,
-	});
-	return reader
-		.getEntries()
-		.flatMap(entry => (entry.type === "message" && entry.message.role === "user" ? [entry.message.content] : []));
+async function userTurnsIn(sessionFile: string): Promise<unknown[]> {
+	const reader = await SessionManager.openReadOnly(sessionFile);
+	try {
+		return reader
+			.getEntries()
+			.flatMap(entry => (entry.type === "message" && entry.message.role === "user" ? [entry.message.content] : []));
+	} finally {
+		await reader.close();
+	}
 }
 
 /** Resume `sessionFile` here, append one turn, and report where it saved and what it was told. */
@@ -142,54 +145,32 @@ function sessionFilesIn(dir: string): string[] {
 }
 
 describe("SessionManager on a session file another omp process writes", () => {
-	it("keeps the file with the process that wrote it first and moves the other to one sibling", async () => {
+	it("rejects another writer without moving or mixing either process's transcript", async () => {
 		using tempDir = TempDir.createSync("@omp-shared-session-file-");
 		const original = await createSession(tempDir);
 
 		const owner = await SessionManager.open(original, tempDir.path(), new FileSessionStorage(), {
 			suppressBreadcrumb: true,
 		});
-		const ownerNotices: SessionPersistenceNotice[] = [];
-		const ownerErrors: Error[] = [];
-		owner.onPersistenceNotice(notice => ownerNotices.push(notice));
-		owner.onPersistenceError(error => ownerErrors.push(error));
 		owner.appendMessage(userTurn("owner 1"));
-
-		const { other } = await OtherProcess.resume(tempDir, original);
-		let otherState: OtherProcessState;
 		try {
-			// Both append and both rewrite, interleaved.
-			otherState = await other.run("append other 1");
-			owner.appendMessage(userTurn("owner 2"));
-			otherState = await other.run("rewrite");
+			await expect(OtherProcess.resume(tempDir, original)).rejects.toThrow("SessionInUseError");
 			await owner.rewriteEntries();
-			otherState = await other.run("append other 2");
+			owner.appendMessage(userTurn("owner 2"));
 			await owner.flush();
+			expect(sessionFilesIn(tempDir.path())).toEqual([original]);
 		} finally {
-			await other.close();
+			await owner.close();
 		}
-
-		const sibling = otherState.sessionFile;
-		expect(owner.getSessionFile()).toBe(original);
-		expect(path.dirname(sibling)).toBe(path.dirname(original));
-		expect(sessionFilesIn(tempDir.path())).toEqual([original, sibling].sort());
-		expect(otherState.notices).toEqual([{ reason: "open-elsewhere", from: original, to: sibling }]);
-		expect(otherState.errors).toEqual([]);
-		expect(ownerNotices).toEqual([]);
-		expect(ownerErrors).toEqual([]);
-		await owner.close();
-
-		// Neither process's entries leak into the other's file.
-		expect(await userTurnsIn(original, tempDir.path())).toEqual(["before", "owner 1", "owner 2"]);
-		expect(await userTurnsIn(sibling, tempDir.path())).toEqual(["before", "owner 1", "other 1", "other 2"]);
+		expect(await userTurnsIn(original)).toEqual(["before", "owner 1", "owner 2"]);
 	}, 30_000);
 
 	it("does not count a process that only opened the session as its owner", async () => {
 		using tempDir = TempDir.createSync("@omp-shared-session-file-");
 		const original = await createSession(tempDir);
 
-		// `omp share`, `--export`, and `render` open a session the same way and never write it.
-		const { other: inspector } = await OtherProcess.resume(tempDir, original);
+		// Read-only inspection must not acquire a writer lease.
+		const { other: inspector } = await OtherProcess.resume(tempDir, original, true);
 		try {
 			expect(await resumeAndAppend(original, tempDir.path())).toEqual({ savedTo: original, notices: [] });
 		} finally {

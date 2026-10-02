@@ -23,7 +23,7 @@ import type { CatalogIo } from "../../src/live/model-catalog";
 const catalog = (recommendation: "never" | "avoid" | "ok" | null = "never") =>
 	JSON.stringify({
 		schemaVersion: 1,
-		effortLevels: ["low", "medium", "high", "xhigh", "max"],
+		effortLevels: ["minimal", "low", "medium", "high", "xhigh", "max"],
 		metrics: Object.fromEntries(
 			["economy", "performance", "stability", "speed"].map(key => [key, { scale: "0-5", meaning: "operator" }]),
 		),

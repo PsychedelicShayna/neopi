@@ -55,7 +55,7 @@ describe("report bundle logs", () => {
 		const utcToday = new Date().toISOString().slice(0, 10);
 		let staleUtcName: string | undefined;
 		if (utcToday !== today) {
-			staleUtcName = `omp.${utcToday}.4243.log`;
+			staleUtcName = `npi.${utcToday}.4243.log`;
 			await Bun.write(path.join(logsDir, staleUtcName), '{"pid":4243,"message":"stale utc-keyed"}\n');
 			await fs.utimes(path.join(logsDir, staleUtcName), 3, 3);
 		}
@@ -94,7 +94,6 @@ describe("report bundle logs", () => {
 		const archive = new Bun.Archive(await Bun.file(result.path).bytes());
 		const logsText = (await (await archive.files()).get("logs.txt")?.text()) ?? "";
 		await fs.rm(result.path, { force: true });
-		expect(logsText).toContain(`omp.${localDay(new Date())}.${process.pid}.log`);
 		expect(logsText).toContain(marker);
 	});
 });

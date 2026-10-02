@@ -51,7 +51,7 @@ describe("AdvisorConfigOverlayComponent", () => {
 		overlay.handleInput("\r");
 		const detail = strip(overlay.render(200));
 		expect(detail.indexOf("System prompt")).toBeGreaterThan(detail.indexOf("Instructions"));
-		for (let i = 0; i < 6; i++) overlay.handleInput("\x1b[B");
+		for (let i = 0; i < 9; i++) overlay.handleInput("\x1b[B");
 		overlay.handleInput("\r");
 		overlay.handleInput("\x7f"); // Inside the editor: ordinary deletion, not reset.
 		overlay.handleInput("\x1b");
@@ -79,7 +79,7 @@ describe("AdvisorConfigOverlayComponent", () => {
 		const doc: WatchdogConfigDoc = { advisors: [{ name: "Prompt" }] };
 		const overlay = make(doc);
 		overlay.handleInput("\r");
-		for (let i = 0; i < 6; i++) overlay.handleInput("\x1b[B");
+		for (let i = 0; i < 9; i++) overlay.handleInput("\x1b[B");
 		overlay.handleInput("\r");
 		overlay.handleInput("\x1b");
 		expect(doc.advisors[0].systemPrompt).toBeUndefined();
@@ -114,7 +114,7 @@ describe("AdvisorConfigOverlayComponent", () => {
 		expect(saved).toEqual([{ advisors: [{ name: "default", systemPrompt: "" }] }]);
 
 		overlay.handleInput("\r");
-		for (let i = 0; i < 6; i++) overlay.handleInput("\x1b[B");
+		for (let i = 0; i < 9; i++) overlay.handleInput("\x1b[B");
 		overlay.handleInput("\x7f");
 		overlay.handleInput("\x1b");
 		for (let i = 0; i < 4; i++) overlay.handleInput("\x1b[B");

@@ -14,6 +14,13 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
+function selectAnthropic(tab: SignInScene): void {
+	tab.handleInput("i"); // The provider picker starts in navigation mode.
+	for (const char of "anthropic") tab.handleInput(char);
+	tab.handleInput("\x1b"); // Keep the filtered selection and leave insert mode.
+	tab.handleInput("\n");
+}
+
 describe("SignInScene", () => {
 	it("masks secret input and keeps the OSC8 login link and manual-code prompt above clipped rows", async () => {
 		const url = `https://example.com/oauth/authorize?client_id=omp&redirect_uri=http%3A%2F%2Flocalhost%3A45454%2Fcallback&state=${"a".repeat(96)}`;
@@ -60,10 +67,7 @@ describe("SignInScene", () => {
 
 		const tab = new SignInScene(host);
 		try {
-			for (const char of "anthropic") {
-				tab.handleInput(char);
-			}
-			tab.handleInput("\n");
+			selectAnthropic(tab);
 
 			expect(focusTarget).toBeDefined();
 			focusTarget?.handleInput?.(secretValue);
@@ -133,8 +137,7 @@ describe("SignInScene", () => {
 
 		const tab = new SignInScene(host);
 		try {
-			for (const char of "anthropic") tab.handleInput(char);
-			tab.handleInput("\n");
+			selectAnthropic(tab);
 			await loginCompleted.promise;
 			await Promise.resolve();
 
@@ -176,10 +179,7 @@ describe("SignInScene", () => {
 
 		const tab = new SignInScene(host);
 		try {
-			for (const char of "anthropic") {
-				tab.handleInput(char);
-			}
-			tab.handleInput("\n");
+			selectAnthropic(tab);
 			await Promise.resolve();
 			expect(copySpy).toHaveBeenCalledTimes(1);
 

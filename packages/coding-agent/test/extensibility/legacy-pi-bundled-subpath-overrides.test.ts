@@ -14,11 +14,14 @@ async function runRegistryProbe(entries: BundledPiEntry[], source: string): Prom
 	// Bare package imports in the generated registry need the workspace links.
 	const packageRoot = path.join(path.dirname(url.fileURLToPath(import.meta.url)), "..", "..");
 	const registryPath = path.join(packageRoot, `.probe-legacy-pi-${Bun.randomUUIDv7()}.ts`);
-	await Bun.write(registryPath, `${__renderLegacyPiVirtualModule(entries)}\n${source}\n`);
+	await Bun.write(
+		registryPath,
+		`${__renderLegacyPiVirtualModule(entries)}\nexport async function observe() {\n${source}\n}\n`,
+	);
 	try {
 		// Runtime-selected registry filename: static imports cannot exercise its generated module.
 		const registry = await import(url.pathToFileURL(registryPath).href);
-		return registry.observed;
+		return await registry.observe();
 	} finally {
 		await fs.rm(registryPath, { force: true });
 	}
@@ -48,14 +51,17 @@ describe("legacy pi compat compiled-mode subpath overrides (issue #3442)", () =>
 		await Bun.write(
 			registryPath,
 			`${registry}
-export const beforeAlpha = Reflect.get(globalThis, "__alphaLoads") ?? 0;
-export const beforeBeta = Reflect.get(globalThis, "__betaLoads") ?? 0;
+export async function observe() {
+const beforeAlpha = Reflect.get(globalThis, "__alphaLoads") ?? 0;
+const beforeBeta = Reflect.get(globalThis, "__betaLoads") ?? 0;
 await BUNDLED_PI_MODULE_LOADERS.alpha();
-export const afterAlpha = Reflect.get(globalThis, "__alphaLoads") ?? 0;
-export const betaAfterAlpha = Reflect.get(globalThis, "__betaLoads") ?? 0;
+const afterAlpha = Reflect.get(globalThis, "__alphaLoads") ?? 0;
+const betaAfterAlpha = Reflect.get(globalThis, "__betaLoads") ?? 0;
 await BUNDLED_PI_MODULE_LOADERS.beta();
-export const finalAlpha = Reflect.get(globalThis, "__alphaLoads") ?? 0;
-export const finalBeta = Reflect.get(globalThis, "__betaLoads") ?? 0;
+const finalAlpha = Reflect.get(globalThis, "__alphaLoads") ?? 0;
+const finalBeta = Reflect.get(globalThis, "__betaLoads") ?? 0;
+return [beforeAlpha, beforeBeta, afterAlpha, betaAfterAlpha, finalAlpha, finalBeta];
+}
 `,
 		);
 		Reflect.deleteProperty(globalThis, "__alphaLoads");
@@ -63,14 +69,7 @@ export const finalBeta = Reflect.get(globalThis, "__betaLoads") ?? 0;
 		try {
 			// The generated registry has a runtime-selected temp path; importing it is the loading boundary under test.
 			const observed = await import(url.pathToFileURL(registryPath).href);
-			expect([
-				observed.beforeAlpha,
-				observed.beforeBeta,
-				observed.afterAlpha,
-				observed.betaAfterAlpha,
-				observed.finalAlpha,
-				observed.finalBeta,
-			]).toEqual([0, 0, 1, 0, 1, 1]);
+			expect(await observed.observe()).toEqual([0, 0, 1, 0, 1, 1]);
 		} finally {
 			Reflect.deleteProperty(globalThis, "__alphaLoads");
 			Reflect.deleteProperty(globalThis, "__betaLoads");
@@ -115,7 +114,7 @@ export const finalBeta = Reflect.get(globalThis, "__betaLoads") ?? 0;
 			await runRegistryProbe(
 				[entry!],
 				`const mod = await BUNDLED_PI_MODULE_LOADERS[${JSON.stringify(key)}]();
-export const observed = [mod.piEscapeRegexLiteral("a.b*c"), mod.piJoinPath("src", "*.ts")];`,
+return [mod.piEscapeRegexLiteral("a.b*c"), mod.piJoinPath("src", "*.ts")];`,
 			),
 		).toEqual(["a\\.b\\*c", path.join("src", "*.ts")]);
 
@@ -133,7 +132,7 @@ export const observed = [mod.piEscapeRegexLiteral("a.b*c"), mod.piJoinPath("src"
 			`const catalog = await BUNDLED_PI_MODULE_LOADERS["@oh-my-pi/pi-catalog"]();
 const providers = await BUNDLED_PI_MODULE_LOADERS["@oh-my-pi/pi-catalog/provider-models"]();
 const result = await catalog.createModelManager(providers.anthropicModelManagerOptions()).refresh("offline");
-export const observed = result.models.some(model => model.id === "claude-3-5-sonnet-20240620");`,
+return result.models.some(model => model.id === "claude-3-5-sonnet-20240620");`,
 		);
 		expect(observed).toBe(true);
 	});

@@ -48,7 +48,9 @@ function createYieldingSession(
 ): AgentSession {
 	const listeners: Array<(event: { type: string; [key: string]: unknown }) => void> = [];
 	const session = {
-		...createSessionDefaults(),
+		...createSessionDefaults(event => {
+			for (const listener of listeners) listener(event as unknown as { type: string; [key: string]: unknown });
+		}),
 		agent: { state: { systemPrompt: ["test"] } },
 		state: { messages: [] },
 		model: model("primary", "bad-runtime-model"),
@@ -133,6 +135,8 @@ describe("subagent runtime model resolution", () => {
 					activeModel = model("custom", "unserved-candidate");
 				});
 				Object.defineProperty(session, "servingModel", { get: () => recovery.servingModel });
+				// The session's actual serving identity must survive an armed but unserved route.
+				// The executor consumes this getter during its yield event, not the speculative `model`.
 				expect(recovery.servingModel?.modelIdentity).toBe("custom/coding-router:max");
 				expect(recovery.servingModel?.thinkingLevel).toBe(level);
 				return { session, extensionsResult: {}, setToolUIContext: () => {} } as never;
