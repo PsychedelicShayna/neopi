@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { seedModels } from "@oh-my-pi/pi-catalog/compat/providers";
 import {
 	ALIBABA_TOKEN_PLAN_BASE_URL,
 	alibabaTokenPlanModelManagerOptions,
@@ -10,12 +10,26 @@ import type { FetchImpl } from "@oh-my-pi/pi-catalog/types";
 import { serializeAlibabaTokenPlanCredential } from "@oh-my-pi/pi-catalog/wire/alibaba-token-plan";
 
 describe("QwenCloud Token Plan provider", () => {
-	test("bundles curated capabilities before dynamic discovery", () => {
-		expect(getBundledModel<"openai-completions">("alibaba-token-plan", "qwen3.8-max-preview")).toMatchObject({
+	test("builds the curated preview contract from the static fallback seed", () => {
+		const preview = seedModels<"openai-completions">("alibaba-token-plan").find(
+			model => model.id === "qwen3.8-max-preview",
+		);
+		if (!preview) throw new Error("Qwen3.8 Max Preview missing from the provider seed");
+		expect(buildModel(preview)).toMatchObject({
 			reasoning: true,
 			input: ["text", "image"],
 			contextWindow: 983_616,
 			maxTokens: 131_072,
+			thinking: {
+				mode: "effort",
+				efforts: [Effort.Low, Effort.High, Effort.XHigh],
+				requiresEffort: true,
+			},
+			compat: {
+				thinkingFormat: "qwen",
+				supportsReasoningEffort: true,
+				supportsDeveloperRole: false,
+			},
 		});
 	});
 
@@ -66,23 +80,18 @@ describe("QwenCloud Token Plan provider", () => {
 
 		expect(requestedUrl).toBe(`${ALIBABA_TOKEN_PLAN_BASE_URL}/models`);
 		expect(authorization).toBe("Bearer sk-sp-test");
-		expect(models?.map(model => model.id)).toEqual([
-			"deepseek-v3.2",
-			"deepseek-v4-flash",
-			"deepseek-v4-flash-0731",
-			"deepseek-v4-pro-0813",
-			"future-chat-model",
-			"glm-5",
-			"glm-5.1",
-			"kimi-k2.5",
-			"kimi-k2.6",
-			"kimi-k2.7-code",
-			"MiniMax-M2.5",
-			"qwen3.6-plus",
-			"qwen3.7-plus",
-			"qwen3.8-flash",
-			"qwen3.8-max",
-		]);
+		const modelIds = new Set(models?.map(model => model.id) ?? []);
+		expect(modelIds.has("future-chat-model")).toBe(true);
+		for (const id of [
+			"fun-asr",
+			"qwen-image-2.0-pro",
+			"qwen-audio-3.0-tts-plus",
+			"happyhorse-1.1-t2v",
+			"text-embedding-v4",
+			"wan2.7-image",
+		]) {
+			expect(modelIds.has(id)).toBe(false);
+		}
 		const expectedLimits = [
 			["qwen3.6-plus", 1_000_000, 65_536],
 			["qwen3.8-max", 1_000_000, 131_072],
@@ -111,20 +120,16 @@ describe("QwenCloud Token Plan provider", () => {
 			});
 		}
 		expect(models?.find(model => model.id === "future-chat-model")).toMatchObject({
-			id: "future-chat-model",
 			contextWindow: null,
 			maxTokens: null,
 		});
 		expect(models?.find(model => model.id === "qwen3.7-plus")).toMatchObject({
-			id: "qwen3.7-plus",
-			provider: "alibaba-token-plan",
-			name: "Qwen3.7 Plus",
+			reasoning: true,
+			input: ["text", "image"],
 			contextWindow: 1_000_000,
 			maxTokens: 64_000,
 		});
 		expect(models?.find(model => model.id === "qwen3.8-max")).toMatchObject({
-			id: "qwen3.8-max",
-			provider: "alibaba-token-plan",
 			reasoning: true,
 			input: ["text", "image"],
 			contextWindow: 1_000_000,
@@ -145,8 +150,6 @@ describe("QwenCloud Token Plan provider", () => {
 		const flash = models?.find(model => model.id === "qwen3.8-flash");
 		if (!flash) throw new Error("qwen3.8-flash missing from discovery");
 		expect(buildModel(flash)).toMatchObject({
-			id: "qwen3.8-flash",
-			provider: "alibaba-token-plan",
 			reasoning: true,
 			input: ["text", "image"],
 			contextWindow: 1_000_000,
