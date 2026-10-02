@@ -2,6 +2,7 @@
  * Settings declared by this domain (see `config/registry.ts`). Declaration order is the
  * settings-panel order; `config/all-settings.ts` registers every domain.
  */
+import { ADVISOR_REVIEW_MODES, ADVISOR_SYNC_BACKLOG_MODES } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { register } from "../config/registry";
 import { ADVISOR_DEFAULT_BUDGET_PER_UPDATE } from "./emission-guard";
 
@@ -25,18 +26,59 @@ export const cfgAdvisorSyncBacklog = register({
 	id: "advisor.syncBacklog",
 	protocolDefault: ["rpc", "acp"],
 	type: "enum",
-	values: ["off", "1", "3", "5"] as const,
+	values: ADVISOR_SYNC_BACKLOG_MODES,
 	default: "off",
 	ui: {
 		tab: "model",
 		group: "Advisor",
 		label: "Advisor Sync Backlog",
 		description:
-			"Pause the main agent for up to 30 seconds if the advisor falls behind by this many turns. Off disables catch-up delays.",
+			"Pause main agent until advisor backlog falls below threshold. Numeric values cap wait at 30 seconds; strict waits for all scheduled reviews without a wall-clock cap. Off disables catch-up delays. Abort, failure, and disposal release waits.",
 		condition: "advisorEnabled",
 	},
 });
 
+export const cfgAdvisorReviewMode = register({
+	id: "advisor.reviewMode",
+	protocolDefault: ["rpc", "acp"],
+	type: "enum",
+	values: ADVISOR_REVIEW_MODES,
+	default: "turn",
+	ui: {
+		tab: "model",
+		group: "Advisor",
+		label: "Advisor Review Mode",
+		description:
+			"Default advisor cadence when no WATCHDOG.yml roster is present. turn reviews every primary turn; agent-end reviews only final yields.",
+		options: [
+			{ value: "turn", label: "Every turn", description: "Review every primary update (tool-call round)." },
+			{ value: "agent-end", label: "Agent end", description: "Review only at final yields (once per run)." },
+		],
+		condition: "advisorEnabled",
+	},
+});
+
+export const cfgAdvisorReviewInterval = register({
+	id: "advisor.reviewInterval",
+	protocolDefault: ["rpc", "acp"],
+	type: "number",
+	default: 1,
+	ui: {
+		tab: "model",
+		group: "Advisor",
+		label: "Advisor Review Interval",
+		description:
+			"Default advisor cadence when no WATCHDOG.yml roster is present: review every Nth eligible primary update. 1 = every update. Skipped updates are sent with the next scheduled review.",
+		options: [
+			{ value: "1", label: "Every eligible update", description: "Default." },
+			{ value: "2", label: "Every 2nd" },
+			{ value: "3", label: "Every 3rd" },
+			{ value: "5", label: "Every 5th" },
+			{ value: "10", label: "Every 10th" },
+		],
+		condition: "advisorEnabled",
+	},
+});
 export const cfgAdvisorMaxNotesPerUpdate = register({
 	id: "advisor.maxNotesPerUpdate",
 	protocolDefault: ["rpc", "acp"],
@@ -52,7 +94,7 @@ export const cfgAdvisorMaxNotesPerUpdate = register({
 			{ value: "1", label: "1 note", description: "Anti-flood (strict)." },
 			{ value: "2", label: "2 notes" },
 			{ value: "3", label: "3 notes" },
-			{ value: "4", label: "4 notes", description: "Default." },
+			{ value: "4", label: "4 notes", description: "Frontier reasoning models. Default." },
 			{ value: "5", label: "5 notes" },
 		],
 		condition: "advisorEnabled",

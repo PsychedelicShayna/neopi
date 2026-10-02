@@ -19,5 +19,6 @@ export function createSessionDefaults(emit?: (event: AgentSessionEvent) => void)
 		setIrcWakeTurnObserver: () => {},
 		isAdvisorActive: () => false,
 		subscribeRunState: () => () => {},
+		addDisposer: () => {},
 	} satisfies Partial<AgentSession>;
 }

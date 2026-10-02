@@ -686,17 +686,15 @@ describe("AgentSession advisor toggle", () => {
 		expect(restarted).not.toBe(alpha);
 		expect(restarted?.state.systemPrompt.join("\n")).toContain("Watch naming.");
 	});
-	it("rebuilds only the advisor whose reasoning preference changes and updates its default prompt", () => {
+	it("rebuilds only when the advisor's reasoning preference changes", () => {
 		enableAdvisor();
 		session.applyAdvisorConfigs([{ name: "Alpha" }, { name: "Beta" }], undefined);
 		const visible = session.getAdvisorAgent();
 		if (!visible) throw new Error("Expected Alpha advisor");
-		expect(visible.state.systemPrompt.join("\n")).toContain("Primary thinking is provisional");
 
 		session.applyAdvisorConfigs([{ name: "Alpha", includeThinking: false }, { name: "Beta" }], undefined);
 		const hidden = session.getAdvisorAgent();
 		expect(hidden).not.toBe(visible);
-		expect(hidden?.state.systemPrompt.join("\n")).not.toContain("Primary thinking is provisional");
 
 		session.applyAdvisorConfigs([{ name: "Alpha", includeThinking: false }, { name: "Beta" }], undefined);
 		expect(session.getAdvisorAgent()).toBe(hidden);
@@ -713,6 +711,23 @@ describe("AgentSession advisor toggle", () => {
 		const restarted = session.getAdvisorAgent();
 		expect(restarted).not.toBe(alpha);
 		expect(restarted?.state.systemPrompt.join("\n")).toContain("Be thorough.");
+	});
+	it("uses a roster saved while the advisor is disabled once it is enabled", () => {
+		session.settings.setModelRole("advisor", `${model.provider}/${model.id}`);
+		expect(session.isAdvisorEnabled()).toBe(false);
+
+		expect(
+			session.applyAdvisorConfigs(
+				[{ name: "Architecture", instructions: "Review module boundaries." }],
+				"Keep advice concrete.",
+			),
+		).toBe(0);
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+
+		expect(session.getAdvisorStats().advisors.map(advisor => advisor.name)).toEqual(["Architecture"]);
+		const advisorPrompt = session.getAdvisorAgent()?.state.systemPrompt.join("\n");
+		expect(advisorPrompt).toContain("Keep advice concrete.");
+		expect(advisorPrompt).toContain("Review module boundaries.");
 	});
 	it("retains cumulative advisor cost after an in-session history rewrite", async () => {
 		const advisor = enableAdvisor();

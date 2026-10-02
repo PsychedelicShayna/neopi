@@ -12,18 +12,29 @@ import { ADVISOR_DEFAULT_BUDGET_PER_UPDATE, ADVISOR_MAX_BUDGET_PER_UPDATE } from
 import { collectConfigCandidates } from "./watchdog";
 import { materializeYamlAlias, parseYamlMappingDocument, yamlDocumentRoot } from "../config/yaml-document";
 
-import type { AdvisorConfig, AdvisorConfigScope, WatchdogConfigDoc } from "@oh-my-pi/pi-tui/overlays/advisor-config";
+import {
+	ADVISOR_SYNC_BACKLOG_MODES,
+	type AdvisorConfig,
+	type AdvisorConfigScope,
+	type AdvisorSyncBacklog,
+	type WatchdogConfigDoc,
+} from "@oh-my-pi/pi-tui/overlays/advisor-config";
+
+export { ADVISOR_REVIEW_MODES, ADVISOR_SYNC_BACKLOG_MODES } from "@oh-my-pi/pi-tui/overlays/advisor-config";
+export type { AdvisorReviewMode, AdvisorSyncBacklog } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 
 const WATCHDOG_ADVISOR_KEYS = [
 	"name",
 	"model",
 	"tools",
+	"reviewMode",
+	"reviewInterval",
+	"syncBacklog",
 	"instructions",
 	"systemPrompt",
 	"enabled",
 	"includeThinking",
 	"maxNotesPerUpdate",
-	"includeThinking",
 ] as const;
 
 interface WatchdogAdvisorOrigin {
@@ -75,10 +86,25 @@ export interface DiscoveredAdvisors {
 	unsafeToReconcile: boolean;
 }
 
+const reviewIntervalSchema = type("1 <= number.integer <= 9007199254740991");
+const syncBacklogSchema = type.enumerated(...ADVISOR_SYNC_BACKLOG_MODES);
+/** Unquoted `syncBacklog: 3` parses as a number; accept the numeric thresholds alongside the string enum. */
+const syncBacklogEntrySchema = type.enumerated(...ADVISOR_SYNC_BACKLOG_MODES, 1, 3, 5);
+const SYNC_BACKLOG_NUMERIC_THRESHOLDS = { 1: "1", 3: "3", 5: "5" } as const;
+
+function normalizeSyncBacklog(
+	value: AdvisorSyncBacklog | keyof typeof SYNC_BACKLOG_NUMERIC_THRESHOLDS,
+): AdvisorSyncBacklog {
+	return typeof value === "number" ? SYNC_BACKLOG_NUMERIC_THRESHOLDS[value] : value;
+}
+
 const advisorEntrySchema = type({
 	name: "string",
 	"model?": "string",
 	"tools?": "string[]",
+	"reviewMode?": "'turn' | 'agent-end'",
+	"reviewInterval?": reviewIntervalSchema,
+	"syncBacklog?": syncBacklogEntrySchema,
 	"instructions?": "string",
 	"systemPrompt?": "string",
 	"enabled?": "boolean",
@@ -92,6 +118,9 @@ function editableAdvisorConfig(entry: AdvisorYamlEntry): AdvisorConfig {
 	const advisor: AdvisorConfig = { name: entry.name };
 	if (entry.model?.trim()) advisor.model = entry.model;
 	if (entry.tools !== undefined) advisor.tools = [...entry.tools];
+	if (entry.reviewMode !== undefined) advisor.reviewMode = entry.reviewMode;
+	if (entry.reviewInterval !== undefined) advisor.reviewInterval = entry.reviewInterval;
+	if (entry.syncBacklog !== undefined) advisor.syncBacklog = normalizeSyncBacklog(entry.syncBacklog);
 	if (entry.instructions?.trim()) advisor.instructions = entry.instructions;
 	if (entry.systemPrompt !== undefined) advisor.systemPrompt = entry.systemPrompt;
 	if (entry.enabled !== undefined) advisor.enabled = entry.enabled;
@@ -296,6 +325,9 @@ export async function discoverAdvisorConfigs(cwd: string, agentDir?: string): Pr
 				model: entry.model?.trim() || undefined,
 				tools: filterAdvisorTools(entry.tools, item.path),
 				systemPrompt: entry.systemPrompt,
+				reviewMode: entry.reviewMode,
+				reviewInterval: entry.reviewInterval,
+				syncBacklog: entry.syncBacklog === undefined ? undefined : normalizeSyncBacklog(entry.syncBacklog),
 				maxNotesPerUpdate:
 					typeof entry.maxNotesPerUpdate === "number" &&
 					Number.isFinite(entry.maxNotesPerUpdate) &&
@@ -503,6 +535,11 @@ export function serializeWatchdogConfig(doc: WatchdogConfigDoc): string {
 					}
 				}
 			}
+			if (advisor.reviewMode !== undefined) lines.push(`    reviewMode: ${YAML.stringify(advisor.reviewMode)}`);
+			if (advisor.syncBacklog !== undefined) {
+				syncBacklogSchema.assert(advisor.syncBacklog);
+				lines.push(`    syncBacklog: ${YAML.stringify(advisor.syncBacklog)}`);
+			}
 			if (advisor.instructions?.trim()) {
 				appendYamlString(lines, "    ", "instructions", advisor.instructions);
 			}
@@ -518,6 +555,10 @@ export function serializeWatchdogConfig(doc: WatchdogConfigDoc): string {
 			) {
 				lines.push(`    maxNotesPerUpdate: ${Math.trunc(advisor.maxNotesPerUpdate)}`);
 			}
+			if (advisor.reviewInterval !== undefined) {
+				reviewIntervalSchema.assert(advisor.reviewInterval);
+				lines.push(`    reviewInterval: ${advisor.reviewInterval}`);
+			}
 		}
 	}
 	return lines.length === 0 ? "" : `${lines.join("\n")}\n`;
@@ -532,6 +573,9 @@ function watchdogAdvisorValues(advisor: AdvisorConfig): Record<(typeof WATCHDOG_
 		systemPrompt: advisor.systemPrompt,
 		enabled: advisor.enabled,
 		includeThinking: advisor.includeThinking,
+		reviewMode: advisor.reviewMode,
+		reviewInterval: advisor.reviewInterval,
+		syncBacklog: advisor.syncBacklog,
 		maxNotesPerUpdate:
 			typeof advisor.maxNotesPerUpdate === "number" &&
 			Number.isFinite(advisor.maxNotesPerUpdate) &&

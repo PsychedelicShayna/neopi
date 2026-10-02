@@ -66,6 +66,21 @@ This follows the same rules as the primary's fallback: `retry.enabled` and `retr
 
 `tier.advisor` controls service tier for all advisors. It defaults to `none` (standard processing); `inherit` follows the primary's live per-family tier, including `/fast` changes. Concrete values (`auto`, `default`, `flex`, `scale`, `priority`, `ultrafast`) are applied only when the advisor model's provider family supports them.
 
+### Default advisor settings
+
+When no `WATCHDOG.yml` roster is present, the default advisor uses these settings from the Model tab:
+
+- `advisor.reviewMode` — review cadence: `turn` (default) reviews every primary turn; `agent-end` reviews only final yields.
+- `advisor.reviewInterval` — review every Nth eligible update (default `1`). Skipped updates are captured as the primary saw them and sent with the next scheduled review.
+- `advisor.maxNotesPerUpdate` — maximum non-blocker advice notes accepted per advisor update (default `4`, range 1–32). Blockers are exempt.
+- `advisor.syncBacklog` — catch-up policy (default `off`); numeric thresholds are bounded, while `strict` waits without a wall-clock cap.
+
+Edits to these settings apply to the running advisor at its next primary boundary without rebuilding it.
+
+Roster entries set their own cadence: an omitted `reviewMode` means `turn` and an omitted `reviewInterval` means `1`, regardless of the settings above. An omitted `syncBacklog` inherits `advisor.syncBacklog`, and an omitted `maxNotesPerUpdate` inherits the shared `WATCHDOG.yml` top-level value, then `advisor.maxNotesPerUpdate`. An explicit `syncBacklog: off` overrides a global `strict`.
+
+Rebuilding advisors (saving `/advisor configure`, model-role or context changes) keeps updates the cadence skipped: each rebuilt advisor receives them with its next scheduled review.
+
 ### Headless runs
 
 Use `--advisor` to enable the advisor for one print-mode process without
@@ -75,7 +90,7 @@ persisting `advisor.enabled`:
 omp -p --advisor "Review this task."
 ```
 
-While a primary prompt is running, eligible advisor notes can steer that run. After the final prompt settles, print mode preserves late advisor notes without starting hidden primary turns, then waits up to ten minutes for final reviews before disposing the session. That wait covers a failing advisor's retries and [backup reviewer](#backup-reviewer) switch, so a review that fails on the advisor's model finishes on its fallback instead of being abandoned. Error exits use a 30-second drain budget so failed automation can terminate. If either deadline expires, or the advisor stops for good (halted or quota-paused), OMP logs the reviews that disposal will abandon; completed reviews retain their transcript and token/cost usage.
+While a primary prompt is running, eligible advisor notes can steer that run. After the final prompt settles, print mode preserves late advisor notes without starting hidden primary turns, sends updates the review cadence skipped (so an `agent-end` or interval reviewer still reviews the final answer), then waits up to ten minutes for final reviews before disposing the session. That wait covers a failing advisor's retries and [backup reviewer](#backup-reviewer) switch, so a review that fails on the advisor's model finishes on its fallback instead of being abandoned. Error exits use a 30-second drain budget so failed automation can terminate. An advisor whose catch-up policy is `strict` is waited on without either budget; aborts, halts, and quota pauses still end its wait. If a budget expires, or the advisor stops for good (halted or quota-paused), OMP logs the reviews that disposal will abandon; completed reviews retain their transcript and token/cost usage.
 
 Slash commands:
 
@@ -132,7 +147,7 @@ The `advise` tool accepts one note and an optional severity:
 | Severity        | Delivery                                                                                                                                                             | Intended use                                                                 |
 | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | omitted / `nit` | Held until the full primary turn ends; never interrupts or starts a new primary turn. | Cleanup, simplification, low-risk edge cases. |
-| `concern` | Queued steering delivered at the next tool-batch boundary without aborting running tools, regardless of the user's interrupt mode. A late terminal-answer concern is preserved as a visible card. | Material risk, likely wrong direction, missing constraint, hallucinated API. |
+| `concern` | Queued steering delivered at the next tool-batch boundary without aborting running tools, regardless of the user's interrupt mode. After a terminal answer, only an `agent-end` reviewer may request continuation; a turn reviewer leaves a visible card. | Material risk, likely wrong direction, missing constraint, hallucinated API. |
 | `blocker` | Immediate steering interruption, even when the user's interrupt mode is `wait`. Interruptible tools are cancelled; non-interruptible tools retain their execution guarantees. A terminal answer alone does not prevent a triggered turn. | A concrete issue that cannot wait for the running tool to finish. |
 
 Accepted notes are rendered into the primary transcript as XML-escaped `<advisory>` elements. Named roster advisors add an `advisor` attribute:
@@ -149,10 +164,10 @@ A normal yield the agent drove itself is treated differently from a deliberate i
 
 - **While the loop is still streaming**, a concern queues for the next tool-batch boundary; a blocker requests immediate interruption.
 - **Once the loop has yielded and gone idle**, delivery keys on how the turn ended:
-  - If the primary's tail is a **terminal text answer with no queued work**, a late `concern` is preserved as a visible card rather than waking the agent to restate a completed turn (#4840) — it re-enters context on the next resume (a new message, `.`/`c`, or a steer/follow-up), exactly like the interrupt case. A `blocker` is the exception: it normally steers a triggered turn, because it means the agent handed off broken or unexercised work that must be acknowledged before the turn is considered done (#5628).
+  - If the primary's tail is a **terminal text answer with no queued work**, a late turn-mode `concern` is preserved as a visible card rather than waking the agent to restate a completed turn (#4840). A `blocker`, or a concern from an `agent-end` reviewer, can request a continuation instead. All stop, plan-mode, and client constraints still apply.
   - Otherwise (the agent yielded mid-work, no terminal answer), an idle `concern`/`blocker` normally triggers a fresh turn so the advice is acted on immediately.
 
-Two session/client constraints can still preserve a note whose normal delivery path is steering:
+Session/client constraints can preserve a note whose normal delivery path is steering:
 
 - **Plan mode:** every would-be advisor steer is preserved as a visible card, even while the primary loop is streaming, because only user-driven turns converge on ask/resolve.
 - **ACP with deferred agent-initiated turns:** when `deferAgentInitiatedTurns` is enabled and the bridge has not allowed agent-initiated turns, an idle would-be steer is preserved because the client cannot represent the triggered turn as busy. Advice raised while the primary loop is already streaming can still steer into that live turn.
@@ -160,6 +175,8 @@ Two session/client constraints can still preserve a note whose normal delivery p
 When the current mode/client prohibits steering, the note is preserved as a card rather than waking the agent. Otherwise severity determines timing: concerns wait only for the current tool batch, blockers interrupt, and nits wait for the full turn. The obsolete `advisor.immuneTurns` setting has been removed; repeated concerns no longer fall back to end-of-turn delivery.
 
 While an advisor update reviews work still in progress, only nits are deferred until the definitive full-run end. Concerns enter steering at the next tool boundary; blockers request immediate interruption. Later concerns remain actionable without an immunity window.
+
+Deferred notes pass the emission guard before reservation. A higher-severity note may displace a pending lower-severity note from the same review, but cannot displace notes from earlier reviews or retract routed advice. A final boundary flushes pending notes even when cadence skips a new review, without resetting the current review's budget.
 
 ### Emission guard
 
@@ -174,31 +191,48 @@ Acknowledgments distinguish acceptance, conditional deferral, duplicates, noise,
 
 The guard's full state — dedupe history and per-update gate — clears on every advisor reset (compaction, session switch, `/new`), so a re-primed reviewer can re-raise issues it already raised against the rewritten transcript.
 
-## Bounded catch-up with `advisor.syncBacklog`
+## Catch-up with `advisor.syncBacklog`
 
-`advisor.syncBacklog` is not lockstep turn execution. It is a bounded catch-up delay for the primary agent when the advisor falls behind.
+Catch-up policy controls how long the primary waits for each scheduled advisor, not how often that advisor reviews. Each `WATCHDOG.yml` entry may set `syncBacklog`; omission inherits the current global `advisor.syncBacklog` setting.
 
 Allowed values:
 
-- `off` — never wait for advisor catch-up
+- `off` — never wait for advisor catch-up (default)
 - `1`
 - `3`
 - `5`
+- `strict` — wait until scheduled advisor reviews finish; no wall-clock timeout, but aborts and advisor failures still release the primary
 
 On primary turn end:
 
-1. the primary turn delta is queued for the advisor
+1. every advisor captures the primary delta; an advisor whose review is scheduled queues it together with any updates its cadence held since its last review
 2. the advisor drain loop starts or continues in the background
-3. if `advisor.syncBacklog` is not `off`, the primary agent waits only while advisor backlog is at or above the configured threshold
-4. the wait is capped at 30 seconds
+3. each scheduled advisor resolves its own override or the global policy; unless it is `off`, the primary waits while that advisor's backlog is at or above its threshold
+4. bounded values cap the wait at 30 seconds; `strict` waits without a wall-clock cap
 5. if the advisor catches up below the threshold, the primary continues immediately
-6. if the cap expires, the primary continues anyway
+6. abort, failure, quota pause, session-transition pause, or disposal releases waiters; paused transitions also reject new waits
 
 Practical interpretation:
 
 - `off` favors maximum primary throughput.
 - `1` is the closest mode to synchronous review: after each queued advisor delta, the primary waits up to 30 seconds for backlog to return to zero.
 - `3` and `5` allow more advisor lag before the primary pauses.
+
+`strict` with an `agent-end` advisor provides synchronous final review: the primary reaches its final boundary, the advisor reviews the accumulated run, then the primary can finish. Notes delivered at that boundary merge into one message, ordered newest turn first, then severity (`blocker` → `concern` → `nit`). Notes about earlier turns carry a `turns_ago` attribute and a dim `T-N` transcript marker between severity and advisor name. The first merged delivery, then at most once every 50 primary turns, includes guidance that findings may be outdated or wrong and may be ignored.
+
+A batch containing a blocker or an `agent-end` concern can request at most one permitted continuation, even when several advisors report findings together. Stop/abort suppression, concern cooldown, plan-mode policy, and client preservation constraints apply to both buffered and live delivery. Otherwise the notes remain visible without restarting the primary. A continuation an advisor delivery starts does not schedule another review or advance cadence; its updates are captured and sent with the next review, without feeding advisor notes back into them.
+
+Keep turn reviews asynchronous while waiting for final reviews:
+
+```yaml
+advisors:
+  - name: Turn reviewer
+    reviewMode: turn
+    syncBacklog: off
+  - name: Final reviewer
+    reviewMode: agent-end
+    syncBacklog: strict
+```
 
 Advisor failures do not permanently stall the primary. The host first attempts its credential/fallback recovery. Retriable failures are attempted up to three times before that backlog is dropped; three dropped-backlog cycles halt the runtime until an explicit reset, and a permanent request rejection can halt it after one cycle. A quota/usage-limit failure that cannot recover through credential rotation, model fallback, or a bounded cooldown wait pauses the advisor with its batch retained until `/advisor` rebuilds it, configuration is reloaded, a new session starts, or the process restarts. The primary's catch-up waiters (`advisor.syncBacklog`) are released as soon as an advisor is failing; only the headless shutdown drain waits through recovery.
 
@@ -310,6 +344,17 @@ advisors:
       You may edit and run tests to prove a fix locally, then advise.
 ```
 
+For a final-yield reviewer that runs every third completed primary turn:
+
+```yaml
+advisors:
+  - name: Final reviewer
+    reviewMode: agent-end
+    reviewInterval: 3
+    instructions: |
+      Review the complete turn. Stay silent unless concrete evidence shows a material problem.
+```
+
 Fields:
 
 - `instructions` (top level): shared prompt prepended to every advisor's system prompt alongside `WATCHDOG.md`. Concatenated across all discovered `WATCHDOG.yml` files.
@@ -318,6 +363,9 @@ Fields:
 - `advisors[].includeThinking`: optional per-advisor **Read primary reasoning stream** switch, default `true`. When enabled, readable primary thinking appears in escaped `<primary-thinking>` blocks in advisor updates; `false` omits thinking while retaining assistant text and tool activity. Redacted or unavailable reasoning is never forwarded. Human hide-thinking controls do not affect this setting.
 - `advisors[].model`: optional model selector with optional `:level` thinking suffix (e.g. `x-ai/grok-code-fast:high`). Omitted → the advisor uses `modelRoles.advisor`.
 - `advisors[].tools`: optional list of built-in tool names to grant. Omitted → `read`/`grep`/`glob`, plus `recall` when the active memory backend provides it; explicit `[]` → no investigative tools. Any name in [`BUILTIN_TOOL_NAMES`](../packages/coding-agent/src/tools/builtin-names.ts) is accepted, including mutating tools. Legacy aliases (`search`→`grep`, `find`→`glob`) are normalized. Unknown names are dropped with a warning; if that leaves a nonempty input with no valid names, the implementation currently treats the result as omitted and uses the default subset.
+- `advisors[].reviewMode`: optional cadence mode. `turn` (default) reviews every primary turn — every tool-call round, including `willContinue: true` tool-loop continuations; `agent-end` reviews only final yields where `willContinue` is not true, i.e. once per run.
+- `advisors[].reviewInterval`: optional positive safe integer (at most `9007199254740991`), default `1`. Reviews every Nth eligible update; skipped updates accumulate and are sent in the next scheduled review. For a review every Nth completed run, combine `reviewMode: agent-end` with this field. Deferred advice still becomes eligible for delivery at final boundaries even when cadence skips that review.
+- `advisors[].syncBacklog`: optional `off`, `1`, `3`, `5`, or `strict`. Numeric thresholds may be unquoted YAML numbers. Omitted → inherit the current global `advisor.syncBacklog`; explicit `off` always disables waiting for this advisor. The editor shows the effective policy and offers `inherit` to remove an override.
 - `maxNotesPerUpdate` (top level or per advisor): accepted non-blocker notes per prompt update, default `4`. A per-advisor value overrides the top-level value, which overrides the `advisor.maxNotesPerUpdate` setting.
 - `advisors[].instructions`: this advisor's specialization, appended after the shared baseline. Both instruction fields expand `@path` imports like `WATCHDOG.md`.
 - `advisors[].systemPrompt`: optional literal base prompt that replaces the bundled advisor system prompt. Project context, memory instructions, `WATCHDOG.md`, shared instructions, and per-advisor instructions still append in their normal order. Omitted uses the bundled default; an explicit empty string is an empty base, not a reset. Unlike the instruction fields, this field does not expand `@path` imports.
@@ -332,6 +380,8 @@ complete YAML or the new one, never a truncated write. Existing symlinks to
 a shared roster keep pointing at that roster after a save.
 
 The **Read primary reasoning stream** checkbox sits beside **Enabled** in each advisor's detail screen. Save & apply writes an explicit `false` to `WATCHDOG.yml` and rebuilds that advisor; turning it back on restores readable primary reasoning for future updates.
+
+A continuation an advisor delivery itself starts — a steer while the primary is idle or past its final boundary — neither schedules reviews nor advances interval counters through its own final boundary, so advisor deliveries cannot re-wake reviewers into an advisor→primary→advisor cascade. Its updates are still captured and reach the next scheduled review. Continuations started by anything else (todo reminders, async job wakes, live delegations, user input) are reviewed under the normal cadence, so an `agent-end` reviewer also reviews the run a todo reminder resumes. Delivery itself never pauses: advice already produced still steers, flushes, or rides asides to the primary.
 
 ### Discovery locations
 
