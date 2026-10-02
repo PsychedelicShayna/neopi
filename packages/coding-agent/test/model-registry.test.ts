@@ -2529,7 +2529,9 @@ describe("ModelRegistry", () => {
 		test("keeps verified Luna capacity without price metadata even after extension", () => {
 			writeRawModelsJson({
 				"luna-proxy": {
-					baseUrl: "https://example.com/v1", api: "openai-responses", auth: "none",
+					baseUrl: "https://example.com/v1",
+					api: "openai-responses",
+					auth: "none",
 					models: [{ id: "luna-extended-no-price", contextWindow: 272_000, maxContextWindow: 872_000 }],
 				},
 			});
@@ -2573,8 +2575,12 @@ describe("ModelRegistry", () => {
 			const bundled = getBundledModels("openai").find(model => model.id === "gpt-5.6-sol");
 			if (!bundled) throw new Error("Missing bundled Sol");
 			writeModelCache(
-				"openai", Date.now(), [{ ...bundled, contextWindow: 96_000 }], false,
-				fingerprintStaticModels(getBundledModels("openai"), false), path.join(tempDir, "models.db"),
+				"openai",
+				Date.now(),
+				[{ ...bundled, contextWindow: 96_000 }],
+				false,
+				fingerprintStaticModels(getBundledModels("openai"), false),
+				path.join(tempDir, "models.db"),
 			);
 			const registry = new ModelRegistry(authStorage, modelsJsonPath, {
 				settings: Settings.isolated({ extendedContext: true }),
@@ -2582,7 +2588,9 @@ describe("ModelRegistry", () => {
 			expect(windowOf(registry, "openai", bundled.id)).toBe(96_000);
 			writeRawModelsJson({
 				openai: {
-					baseUrl: "https://api.openai.com/v1", api: "openai-responses", auth: "none",
+					baseUrl: "https://api.openai.com/v1",
+					api: "openai-responses",
+					auth: "none",
 					models: [{ id: bundled.id, contextWindow: 180_000 }],
 				},
 			});
@@ -2592,8 +2600,11 @@ describe("ModelRegistry", () => {
 		test("runtime discovery replacement updates the verified winning source", async () => {
 			writeRawModelsJson({
 				openai: {
-					baseUrl: "https://proxy.example/v1", apiKey: "TEST_KEY", api: "openai-responses",
-					discovery: { type: "openai-models-list" }, models: [],
+					baseUrl: "https://proxy.example/v1",
+					apiKey: "TEST_KEY",
+					api: "openai-responses",
+					discovery: { type: "openai-models-list" },
+					models: [],
 				},
 			});
 			let reportedWindow = 96_000;
@@ -2613,7 +2624,7 @@ describe("ModelRegistry", () => {
 
 		test("custom overlays and collapsed variants preserve the window-contributing row", async () => {
 			writeRawModelsJson({
-				"newapi": providerConfig("https://newapi.example.com/v1", [
+				newapi: providerConfig("https://newapi.example.com/v1", [
 					{ id: "paired", contextWindow: 90_000 },
 					{ id: "paired-thinking", contextWindow: 160_000 },
 				]),
@@ -2621,7 +2632,7 @@ describe("ModelRegistry", () => {
 			const registry = new ModelRegistry(authStorage, modelsJsonPath);
 			expect(windowOf(registry, "newapi", "paired")).toBe(160_000);
 			writeRawModelsJson({
-				"newapi": providerConfig("https://newapi.example.com/v1", [
+				newapi: providerConfig("https://newapi.example.com/v1", [
 					{ id: "paired", contextWindow: 90_000 },
 					{ id: "paired-thinking", contextWindow: 76_000 },
 				]),
@@ -2643,10 +2654,12 @@ describe("ModelRegistry", () => {
 				},
 			});
 			expect(resolveClassifierRoleSelection(configured, available)).toMatchObject({
-				model: { id: "gpt-5.6-luna" }, thinkingLevel: "high",
+				model: { id: "gpt-5.6-luna" },
+				thinkingLevel: "high",
 			});
 			expect(resolveRoleChain("classifier", configured, available).map(({ model }) => model.id)).toEqual([
-				"gpt-5.6-luna", "gpt-6-astra",
+				"gpt-5.6-luna",
+				"gpt-6-astra",
 			]);
 		});
 
@@ -2659,7 +2672,8 @@ describe("ModelRegistry", () => {
 			);
 			const configuredSlow = Settings.isolated({ modelRoles: { slow: "openai-codex/gpt-5.6-luna:high" } });
 			expect(resolveRoleChain("classifier", configuredSlow, available)[0]).toMatchObject({
-				model: { id: "gpt-5.6-luna" }, thinkingLevel: "high",
+				model: { id: "gpt-5.6-luna" },
+				thinkingLevel: "high",
 			});
 		});
 	});

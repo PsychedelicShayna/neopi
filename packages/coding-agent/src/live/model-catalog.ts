@@ -49,32 +49,56 @@ export function parseModelCatalog(text: string): ModelCatalog {
 		throw new Error("Unsupported or malformed model catalog schema version");
 	}
 	const levels = data.effortLevels;
-	if (!Array.isArray(levels) || levels.length !== effortLevels.length ||
-		!effortLevels.every((level, index) => levels[index] === level) || !isObject(data.metrics)) {
+	if (
+		!Array.isArray(levels) ||
+		levels.length !== effortLevels.length ||
+		!effortLevels.every((level, index) => levels[index] === level) ||
+		!isObject(data.metrics)
+	) {
 		throw new Error("Malformed model catalog metadata");
 	}
 	for (const metric of ["economy", "performance", "stability", "speed"]) {
 		const legend = data.metrics[metric];
-		if (!isObject(legend) || typeof legend.scale !== "string" || !legend.scale ||
-			typeof legend.meaning !== "string" || !legend.meaning) {
+		if (
+			!isObject(legend) ||
+			typeof legend.scale !== "string" ||
+			!legend.scale ||
+			typeof legend.meaning !== "string" ||
+			!legend.meaning
+		) {
 			throw new Error(`Malformed model catalog metric ${metric}`);
 		}
 	}
 	for (const [slug, model] of Object.entries(data.models)) {
-		if (!/^[^/]+\/.+$/.test(slug) || !isObject(model) || typeof model.family !== "string" || !model.family ||
-			typeof model.behavior !== "string" || typeof model.notes !== "string" ||
-			!isObject(model.efforts) || !Object.keys(model.efforts).length) {
+		if (
+			!/^[^/]+\/.+$/.test(slug) ||
+			!isObject(model) ||
+			typeof model.family !== "string" ||
+			!model.family ||
+			typeof model.behavior !== "string" ||
+			typeof model.notes !== "string" ||
+			!isObject(model.efforts) ||
+			!Object.keys(model.efforts).length
+		) {
 			throw new Error(`Malformed model catalog entry ${slug}`);
 		}
 		for (const [effort, slot] of Object.entries(model.efforts)) {
-			if (!effortLevels.includes(effort) || !isObject(slot) ||
-				!Object.hasOwn(slot, "recommendation") || !recommendations.has(slot.recommendation as CatalogRecommendation) ||
-				typeof slot.reason !== "string" || slot.reason.length > 280) {
+			if (
+				!effortLevels.includes(effort) ||
+				!isObject(slot) ||
+				!Object.hasOwn(slot, "recommendation") ||
+				!recommendations.has(slot.recommendation as CatalogRecommendation) ||
+				typeof slot.reason !== "string" ||
+				slot.reason.length > 280
+			) {
 				throw new Error(`Malformed model catalog slot ${slug} at ${effort}`);
 			}
 			for (const metric of ["economy", "performance", "stability", "speed"]) {
 				const rating = slot[metric];
-				if (rating !== null && (typeof rating !== "number" || !Number.isInteger(rating) || rating < 0 || rating > 5)) {
+				if (
+					rating !== null &&
+					(typeof rating !== "number" || !Number.isInteger(rating) || rating < 0 || rating > 5)
+				) {
 					throw new Error(`Malformed model catalog rating ${slug} at ${effort}`);
 				}
 			}
@@ -98,12 +122,14 @@ export class LiveModelCatalogLoader {
 	#pending: Promise<void> | undefined;
 	#disposed = false;
 
-	constructor(options: {
-		io?: CatalogIo;
-		now?: () => number;
-		onChange?: (previous: CatalogSnapshot, current: CatalogSnapshot) => void;
-		onWarning?: (message: string) => void;
-	} = {}) {
+	constructor(
+		options: {
+			io?: CatalogIo;
+			now?: () => number;
+			onChange?: (previous: CatalogSnapshot, current: CatalogSnapshot) => void;
+			onWarning?: (message: string) => void;
+		} = {},
+	) {
 		this.#io = options.io ?? { stat, readFile };
 		this.#now = options.now ?? Date.now;
 		this.#onChange = options.onChange;
@@ -189,7 +215,9 @@ export class LiveModelCatalogLoader {
 		};
 		const pending = work();
 		this.#pending = pending;
-		void pending.finally(() => { if (this.#pending === pending) this.#pending = undefined; });
+		void pending.finally(() => {
+			if (this.#pending === pending) this.#pending = undefined;
+		});
 		return pending;
 	}
 

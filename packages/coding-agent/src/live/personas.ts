@@ -61,11 +61,14 @@ export function validateLivePersonaState(v: unknown): LivePersonaState {
 		try {
 			normalizeLiveIngestSettings(value);
 		} catch (error) {
-			throw new Error(`Invalid schema-v1 neopi-live-personas.json: ${field} ${error instanceof Error ? error.message : String(error)}`);
+			throw new Error(
+				`Invalid schema-v1 neopi-live-personas.json: ${field} ${error instanceof Error ? error.message : String(error)}`,
+			);
 		}
 	};
 	validateIngest(state.defaultIngest, "defaultIngest");
-	for (const [name, persona] of Object.entries(state.personas)) validateIngest(persona.ingest, `personas.${name}.ingest`);
+	for (const [name, persona] of Object.entries(state.personas))
+		validateIngest(persona.ingest, `personas.${name}.ingest`);
 	return v as unknown as LivePersonaState;
 }
 
@@ -117,13 +120,18 @@ const stateListeners = new Set<() => void>();
 
 export function onLivePersonaStateChanged(listener: () => void): () => void {
 	stateListeners.add(listener);
-	return () => { stateListeners.delete(listener); };
+	return () => {
+		stateListeners.delete(listener);
+	};
 }
 
 function notifyLivePersonaStateChanged(): void {
 	for (const listener of stateListeners) {
-		try { listener(); }
-		catch (error) { logger.debug("live persona state listener failed", { error: String(error) }); }
+		try {
+			listener();
+		} catch (error) {
+			logger.debug("live persona state listener failed", { error: String(error) });
+		}
 	}
 }
 
@@ -205,9 +213,10 @@ export function createLivePersonaFeature(store: LivePersonaStore = new LivePerso
 			if (state.personas[name]) throw new Error(`Live persona already exists: ${name}`);
 			state.personas[name] = {
 				instructions: instructionsOf(state, source),
-				ingest: source === DEFAULT_LIVE_PERSONA
-					? state.defaultIngest && normalizeLiveIngestSettings(state.defaultIngest)
-					: state.personas[source]?.ingest && normalizeLiveIngestSettings(state.personas[source]?.ingest),
+				ingest:
+					source === DEFAULT_LIVE_PERSONA
+						? state.defaultIngest && normalizeLiveIngestSettings(state.defaultIngest)
+						: state.personas[source]?.ingest && normalizeLiveIngestSettings(state.personas[source]?.ingest),
 			};
 			await store.write(state);
 			notifyLivePersonaStateChanged();

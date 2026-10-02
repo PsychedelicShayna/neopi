@@ -55,7 +55,10 @@ interface CooperativeOwner {
 function parseProcessStat(stat: string): { state: string; startTime: string } | undefined {
 	const commandEnd = stat.lastIndexOf(")");
 	if (commandEnd < 0) return undefined;
-	const fields = stat.slice(commandEnd + 1).trim().split(/\s+/);
+	const fields = stat
+		.slice(commandEnd + 1)
+		.trim()
+		.split(/\s+/);
 	const state = fields[0];
 	const startTime = fields[19];
 	return state && startTime ? { state, startTime } : undefined;

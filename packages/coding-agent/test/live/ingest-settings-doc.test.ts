@@ -14,10 +14,7 @@ import {
 	LivePersonaStore,
 	onLivePersonaStateChanged,
 } from "@oh-my-pi/pi-coding-agent/live/personas";
-import {
-	loadPersonaConfigDoc,
-	savePersonaConfigDoc,
-} from "@oh-my-pi/pi-coding-agent/neopi/persona-config";
+import { loadPersonaConfigDoc, savePersonaConfigDoc } from "@oh-my-pi/pi-coding-agent/neopi/persona-config";
 import type { PersonaHost } from "@oh-my-pi/pi-coding-agent/neopi/persona";
 
 const FIELD_KEYS = [
@@ -68,16 +65,19 @@ function changed(overrides: Record<string, unknown>) {
 
 describe("live ingest persona documents", () => {
 	test("loads every live entry with ordered, resolved source fields", async () => {
-		await Bun.write(statePath, JSON.stringify({
-			schemaVersion: 1,
-			defaultIngest: changed({ relayProgress: false }),
-			personas: {
-				short: { instructions: "short", ingest: changed({ voicedSlotsByDepth: [8], subagentMaxDepth: 4 }) },
-				long: { instructions: "long", ingest: changed({ voicedSlotsByDepth: [8, 4, 2, 1, 32] }) },
-				legacy: { instructions: "legacy" },
-			},
-			active: "short",
-		}));
+		await Bun.write(
+			statePath,
+			JSON.stringify({
+				schemaVersion: 1,
+				defaultIngest: changed({ relayProgress: false }),
+				personas: {
+					short: { instructions: "short", ingest: changed({ voicedSlotsByDepth: [8], subagentMaxDepth: 4 }) },
+					long: { instructions: "long", ingest: changed({ voicedSlotsByDepth: [8, 4, 2, 1, 32] }) },
+					legacy: { instructions: "legacy" },
+				},
+				active: "short",
+			}),
+		);
 
 		const doc = await loadPersonaConfigDoc("live", "unused");
 		const builtin = doc.entries.find(entry => entry.builtin);
@@ -89,10 +89,7 @@ describe("live ingest persona documents", () => {
 		expect(long?.sources).toHaveLength(23);
 		expect(legacy?.sources).toHaveLength(21);
 		expect(builtin?.sources?.map(field => field.key)).toEqual(FIELD_KEYS);
-		expect(short?.sources?.map(field => field.key)).toEqual([
-			...FIELD_KEYS.slice(0, 5),
-			...FIELD_KEYS.slice(7),
-		]);
+		expect(short?.sources?.map(field => field.key)).toEqual([...FIELD_KEYS.slice(0, 5), ...FIELD_KEYS.slice(7)]);
 		expect(builtin?.sources?.find(field => field.key === "relayProgress")?.value).toBe(false);
 		expect(legacy?.sources?.find(field => field.key === "relayProgress")?.value).toBe(true);
 		const depth = short?.sources?.find(field => field.key === "subagentMaxDepth");
@@ -104,15 +101,18 @@ describe("live ingest persona documents", () => {
 	test("saves only edited fields while retaining depth tails and built-in settings", async () => {
 		const alpha = changed({ voicedSlotsByDepth: [8, 4, 2, 1, 32], relayProgress: false });
 		const beta = changed({ voicedSlotsByDepth: [8] });
-		await Bun.write(statePath, JSON.stringify({
-			schemaVersion: 1,
-			defaultIngest: changed({ advisorThinking: true }),
-			personas: {
-				alpha: { instructions: "alpha", ingest: alpha },
-				beta: { instructions: "beta", ingest: beta },
-			},
-			active: "alpha",
-		}));
+		await Bun.write(
+			statePath,
+			JSON.stringify({
+				schemaVersion: 1,
+				defaultIngest: changed({ advisorThinking: true }),
+				personas: {
+					alpha: { instructions: "alpha", ingest: alpha },
+					beta: { instructions: "beta", ingest: beta },
+				},
+				active: "alpha",
+			}),
+		);
 		const doc = await loadPersonaConfigDoc("live", "unused");
 		const alphaEntry = doc.entries.find(entry => entry.name === "alpha");
 		const builtin = doc.entries.find(entry => entry.builtin);
@@ -148,11 +148,14 @@ describe("live ingest persona documents", () => {
 describe("live ingest settings resolution and notifications", () => {
 	test("resolves active, built-in, and corrupt stores", async () => {
 		const custom = changed({ relayReasoning: false });
-		await Bun.write(statePath, JSON.stringify({
-			schemaVersion: 1,
-			personas: { iris: { instructions: "iris", ingest: custom } },
-			active: "iris",
-		}));
+		await Bun.write(
+			statePath,
+			JSON.stringify({
+				schemaVersion: 1,
+				personas: { iris: { instructions: "iris", ingest: custom } },
+				active: "iris",
+			}),
+		);
 		expect(await resolveLiveIngestSettings(statePath)).toEqual(custom);
 		await Bun.write(statePath, JSON.stringify({ schemaVersion: 1, personas: {} }));
 		expect(await resolveLiveIngestSettings(statePath)).toEqual(LIVE_INGEST_DEFAULTS);

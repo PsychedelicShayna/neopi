@@ -1253,8 +1253,11 @@ export type AgentEvent =
 	// Message lifecycle - emitted for user, assistant, and toolResult messages
 	| ({ type: "message_start"; message: AgentMessage } & Partial<AgentRequestAttribution>)
 	// Only emitted for assistant messages during streaming
-	| ({ type: "message_update"; message: AgentMessage; assistantMessageEvent: AssistantMessageEvent } &
-			Partial<AgentRequestAttribution>)
+	| ({
+			type: "message_update";
+			message: AgentMessage;
+			assistantMessageEvent: AssistantMessageEvent;
+	  } & Partial<AgentRequestAttribution>)
 	| ({ type: "message_end"; message: AgentMessage } & Partial<AgentRequestAttribution>)
 	// Tool execution lifecycle
 	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: any; intent?: string }

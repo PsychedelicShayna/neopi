@@ -9,24 +9,38 @@ import {
 } from "../../src/live/model-catalog";
 
 const slot = (recommendation: string | null) => ({
-	economy: null, performance: null, stability: null, speed: null, recommendation, reason: "",
+	economy: null,
+	performance: null,
+	stability: null,
+	speed: null,
+	recommendation,
+	reason: "",
 });
-const fixture = (recommendation: string | null = "never") => JSON.stringify({
-	schemaVersion: 1,
-	effortLevels: ["minimal", "low", "medium", "high", "xhigh", "max"],
-	metrics: Object.fromEntries(["economy", "performance", "stability", "speed"].map(metric =>
-		[metric, { scale: "0-5", meaning: "Operator rating" }])),
-	models: {
-		"openai-codex/gpt-6-astra": {
-			family: "GPT-6", behavior: "", notes: "",
-			efforts: { max: slot(recommendation), high: slot(null), xhigh: slot("ok") },
+const fixture = (recommendation: string | null = "never") =>
+	JSON.stringify({
+		schemaVersion: 1,
+		effortLevels: ["minimal", "low", "medium", "high", "xhigh", "max"],
+		metrics: Object.fromEntries(
+			["economy", "performance", "stability", "speed"].map(metric => [
+				metric,
+				{ scale: "0-5", meaning: "Operator rating" },
+			]),
+		),
+		models: {
+			"openai-codex/gpt-6-astra": {
+				family: "GPT-6",
+				behavior: "",
+				notes: "",
+				efforts: { max: slot(recommendation), high: slot(null), xhigh: slot("ok") },
+			},
 		},
-	},
-});
+	});
 
 function deferred<T>() {
 	let resolve!: (value: T) => void;
-	const promise = new Promise<T>(done => { resolve = done; });
+	const promise = new Promise<T>(done => {
+		resolve = done;
+	});
 	return { promise, resolve };
 }
 const slug = "openai-codex/gpt-6-astra";
@@ -36,7 +50,9 @@ describe("live model catalog", () => {
 	test("accepts complete slots, rejects a future version and invalid present slots", () => {
 		expect(parseModelCatalog(fixture()).models[slug]?.efforts.max?.recommendation).toBe("never");
 		expect(() => parseModelCatalog(fixture().replace('"schemaVersion":1', '"schemaVersion":2'))).toThrow();
-		expect(() => parseModelCatalog(fixture().replace('"recommendation":"never"', '"recommendation":"panic"'))).toThrow();
+		expect(() =>
+			parseModelCatalog(fixture().replace('"recommendation":"never"', '"recommendation":"panic"')),
+		).toThrow();
 		expect(() => parseModelCatalog(fixture().replace('\"max\":{', '\"ultra\":{'))).toThrow();
 		expect(() => parseModelCatalog(fixture().replace('"recommendation":"never",', ""))).toThrow();
 	});
@@ -51,9 +67,12 @@ describe("live model catalog", () => {
 	});
 
 	test("distinguishes present null from independently missing effort and model", async () => {
-		const loader = new LiveModelCatalogLoader({ io: {
-			stat: async () => ({ mtimeMs: 1, size: 42 }), readFile: async () => fixture(),
-		} });
+		const loader = new LiveModelCatalogLoader({
+			io: {
+				stat: async () => ({ mtimeMs: 1, size: 42 }),
+				readFile: async () => fixture(),
+			},
+		});
 		expect(loader.lookup(slug, "max")).toEqual({ status: "unavailable" });
 		await loader.setPath("~/catalog.json");
 		expect(loader.snapshot.expandedPath).toBe(`${homedir()}/catalog.json`);
@@ -70,9 +89,10 @@ describe("live model catalog", () => {
 		const loader = new LiveModelCatalogLoader({
 			io: {
 				stat: async path => ({ mtimeMs: 1, size: path.length }),
-				readFile: path => path === "A" ? a.promise : Promise.resolve(fixture("ok")),
+				readFile: path => (path === "A" ? a.promise : Promise.resolve(fixture("ok"))),
 			},
-			onChange: (_previous, current) => changes.push(`${current.expandedPath}:${current.revision}:${current.available}`),
+			onChange: (_previous, current) =>
+				changes.push(`${current.expandedPath}:${current.revision}:${current.available}`),
 		});
 		const old = loader.setPath("A");
 		await Promise.resolve(); // A stat resolves and its read is now pending.
@@ -93,10 +113,13 @@ describe("live model catalog", () => {
 		const transitions: Array<[number, number]> = [];
 		const loader = new LiveModelCatalogLoader({
 			now: () => time,
-			io: { stat: async () => ({ mtimeMs: version, size: 1 }), readFile: async () => {
-				reads++;
-				return fixture(version === 1 ? "never" : "ok");
-			} },
+			io: {
+				stat: async () => ({ mtimeMs: version, size: 1 }),
+				readFile: async () => {
+					reads++;
+					return fixture(version === 1 ? "never" : "ok");
+				},
+			},
 			onChange: (previous, current) => transitions.push([previous.revision, current.revision]),
 		});
 		await loader.setPath("/catalog.json");
@@ -117,7 +140,11 @@ describe("live model catalog", () => {
 		const changes: number[] = [];
 		const warnings: string[] = [];
 		const io: CatalogIo = { stat: () => pending.promise, readFile: async () => fixture() };
-		const loader = new LiveModelCatalogLoader({ io, onChange: (_, current) => changes.push(current.revision), onWarning: warning => warnings.push(warning) });
+		const loader = new LiveModelCatalogLoader({
+			io,
+			onChange: (_, current) => changes.push(current.revision),
+			onWarning: warning => warnings.push(warning),
+		});
 		const load = loader.setPath("A");
 		loader.dispose();
 		pending.resolve({ mtimeMs: 1, size: 1 });
@@ -131,7 +158,10 @@ describe("live model catalog", () => {
 		let version = 1;
 		const warnings: string[] = [];
 		const loader = new LiveModelCatalogLoader({
-			io: { stat: async () => ({ mtimeMs: version, size: 1 }), readFile: async () => version === 1 ? fixture() : '{"schemaVersion":2}' },
+			io: {
+				stat: async () => ({ mtimeMs: version, size: 1 }),
+				readFile: async () => (version === 1 ? fixture() : '{"schemaVersion":2}'),
+			},
 			onWarning: warning => warnings.push(warning),
 		});
 		await loader.setPath("A");

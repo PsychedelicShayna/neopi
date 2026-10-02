@@ -19,7 +19,13 @@ import {
 	runSubagentFollowUpTurn,
 	runSubprocess,
 } from "@oh-my-pi/pi-coding-agent/task/executor";
-import { TASK_SUBAGENT_EVENT_CHANNEL, TASK_SUBAGENT_LIFECYCLE_CHANNEL, type AgentDefinition, type SubagentEventPayload, type SubagentLifecyclePayload } from "@oh-my-pi/pi-coding-agent/task/types";
+import {
+	TASK_SUBAGENT_EVENT_CHANNEL,
+	TASK_SUBAGENT_LIFECYCLE_CHANNEL,
+	type AgentDefinition,
+	type SubagentEventPayload,
+	type SubagentLifecyclePayload,
+} from "@oh-my-pi/pi-coding-agent/task/types";
 import { activeSubagentRuns, EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { createSessionDefaults } from "../helpers/session-defaults";
 
@@ -213,10 +219,20 @@ describe("runSubprocess result acceptance", () => {
 		expect(frames.map(frame => frame.status)).toEqual(["started", "completed"]);
 		expect(frames[0]?.runKind).toBe("spawn");
 		expect(frames[0]?.runToken).toBe(frames[1]?.runToken);
-		expect(events.some(envelope => envelope.event.type === "agent_start" &&
-			envelope.owned && envelope.event.runOwners?.includes(frames[0]!.runToken))).toBe(true);
-		expect(events.some(envelope => envelope.event.type === "message_end" &&
-			envelope.owned && envelope.runToken === frames[0]?.runToken)).toBe(true);
+		expect(
+			events.some(
+				envelope =>
+					envelope.event.type === "agent_start" &&
+					envelope.owned &&
+					envelope.event.runOwners?.includes(frames[0]!.runToken),
+			),
+		).toBe(true);
+		expect(
+			events.some(
+				envelope =>
+					envelope.event.type === "message_end" && envelope.owned && envelope.runToken === frames[0]?.runToken,
+			),
+		).toBe(true);
 	});
 
 	it("settles the started token when final progress publication throws", async () => {
@@ -232,12 +248,19 @@ describe("runSubprocess result acceptance", () => {
 			eventBus: bus,
 		} as CreateAgentSessionResult);
 
-		await expect(runSubprocess({
-			cwd: "/tmp", agent: baseAgent, task: "finish", index: 0, id: AGENT_ID, eventBus: bus,
-			onProgress: progress => {
-				if (progress.status === "completed") throw new Error("final progress failed");
-			},
-		})).rejects.toThrow("final progress failed");
+		await expect(
+			runSubprocess({
+				cwd: "/tmp",
+				agent: baseAgent,
+				task: "finish",
+				index: 0,
+				id: AGENT_ID,
+				eventBus: bus,
+				onProgress: progress => {
+					if (progress.status === "completed") throw new Error("final progress failed");
+				},
+			}),
+		).rejects.toThrow("final progress failed");
 		expect(frames.map(frame => frame.status)).toEqual(["started", "failed"]);
 		expect(frames[1]?.runToken).toBe(frames[0]?.runToken);
 		expect(frames[1]?.outcomeExcerpt).toBe("");

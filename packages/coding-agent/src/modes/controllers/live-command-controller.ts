@@ -345,7 +345,8 @@ export class LiveCommandController {
 			settings: settingsSource,
 			sink: session,
 			extractAssistantText: message => this.#ctx.extractAssistantText(message),
-			notify: (level, message) => level === "warning" ? this.#ctx.showError(message) : this.#ctx.showStatus(message),
+			notify: (level, message) =>
+				level === "warning" ? this.#ctx.showError(message) : this.#ctx.showStatus(message),
 		});
 		ingestRef.current = ingest;
 		this.#session = session;
@@ -377,11 +378,11 @@ export class LiveCommandController {
 			const data = await createLivePersonaFeature().data();
 			const active = data.items.find(item => item.active);
 			if (
-				this.#session === session
-				&& active
-				&& !active.builtin
-				&& !active.instructions.includes("<client-protocol>")
-				&& !this.#protocolNoticeShown.has(active.name)
+				this.#session === session &&
+				active &&
+				!active.builtin &&
+				!active.instructions.includes("<client-protocol>") &&
+				!this.#protocolNoticeShown.has(active.name)
 			) {
 				this.#protocolNoticeShown.add(active.name);
 				this.#ctx.showStatus(

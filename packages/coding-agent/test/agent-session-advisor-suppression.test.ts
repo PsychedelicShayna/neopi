@@ -28,10 +28,7 @@ import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import { LiveIngest } from "@oh-my-pi/pi-coding-agent/live/ingest";
-import {
-	LIVE_INGEST_DEFAULTS,
-	type LiveIngestSettingsSource,
-} from "@oh-my-pi/pi-coding-agent/live/ingest-settings";
+import { LIVE_INGEST_DEFAULTS, type LiveIngestSettingsSource } from "@oh-my-pi/pi-coding-agent/live/ingest-settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm, USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";

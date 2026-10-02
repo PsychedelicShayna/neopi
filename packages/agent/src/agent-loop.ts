@@ -2006,7 +2006,9 @@ async function streamAssistantResponse(
 		requestModelId: model.id,
 		requestReasoning: effectiveReasoning,
 		requestDisableReasoning: effectiveDisableReasoning,
-		requestEffectiveThinkingLevel: effectiveDisableReasoning ? undefined : clampThinkingLevelForModel(model, effectiveReasoning),
+		requestEffectiveThinkingLevel: effectiveDisableReasoning
+			? undefined
+			: clampThinkingLevelForModel(model, effectiveReasoning),
 	} as const;
 	// `getCwd` is read once per LLM call so a mid-run session move (`/move`) reaches
 	// workspace-scoped provider discovery; falls back to the static `cwd` when unset.
@@ -2245,9 +2247,17 @@ async function streamAssistantResponse(
 							context.messages.push(finalMessage);
 						}
 						if (!addedPartial) {
-							stream.push({ type: "message_start", message: snapshotAssistantMessage(finalMessage), ...requestAttribution });
+							stream.push({
+								type: "message_start",
+								message: snapshotAssistantMessage(finalMessage),
+								...requestAttribution,
+							});
 						}
-						stream.push({ type: "message_end", message: snapshotAssistantMessage(finalMessage), ...requestAttribution });
+						stream.push({
+							type: "message_end",
+							message: snapshotAssistantMessage(finalMessage),
+							...requestAttribution,
+						});
 						await finishChat(finalMessage);
 						speculationSettled = true;
 						providerStreamSettled = true;
@@ -2521,7 +2531,11 @@ async function streamAssistantResponse(
 					context.messages[context.messages.length - 1] = trailing;
 				} else {
 					context.messages.push(trailing);
-					stream.push({ type: "message_start", message: snapshotAssistantMessage(trailing), ...requestAttribution });
+					stream.push({
+						type: "message_start",
+						message: snapshotAssistantMessage(trailing),
+						...requestAttribution,
+					});
 				}
 				stream.push({ type: "message_end", message: snapshotAssistantMessage(trailing), ...requestAttribution });
 				await finishChat(trailing);

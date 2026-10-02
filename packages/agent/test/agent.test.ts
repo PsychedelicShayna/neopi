@@ -637,7 +637,10 @@ describe("Agent", () => {
 	});
 
 	it("keeps request effort on delayed same-model output after a live switch", async () => {
-		const mock = createMockModel({ reasoning: true, responses: [{ content: ["high response"] }, { content: ["low response"] }] });
+		const mock = createMockModel({
+			reasoning: true,
+			responses: [{ content: ["high response"] }, { content: ["low response"] }],
+		});
 		Object.assign(mock.model, { thinking: { mode: "effort", efforts: [Effort.Low, Effort.High] } });
 		const entered = Promise.withResolvers<void>();
 		const release = Promise.withResolvers<void>();
@@ -662,17 +665,25 @@ describe("Agent", () => {
 		await first;
 		await agent.prompt("second");
 
-		const generated = events.filter((event): event is Extract<AgentEvent, { type: "message_end" }> =>
-			event.type === "message_end" && event.message.role === "assistant" &&
-			event.message.content.some(block => block.type === "text" && Boolean(block.text)));
+		const generated = events.filter(
+			(event): event is Extract<AgentEvent, { type: "message_end" }> =>
+				event.type === "message_end" &&
+				event.message.role === "assistant" &&
+				event.message.content.some(block => block.type === "text" && Boolean(block.text)),
+		);
 		expect(generated).toHaveLength(2);
 		expect(generated.map(event => event.requestReasoning)).toEqual(["high", "low"]);
 		expect(generated.map(event => event.requestEffectiveThinkingLevel)).toEqual([Effort.High, Effort.Low]);
 		expect(generated.map(event => event.requestModelId)).toEqual([mock.model.id, mock.model.id]);
-		expect(events.filter((event): event is Extract<AgentEvent, { type: "message_update" }> =>
-			event.type === "message_update" &&
-			event.message.content.some(block => block.type === "text" && Boolean(block.text)))
-			.map(event => event.requestReasoning)).toContain("high");
+		expect(
+			events
+				.filter(
+					(event): event is Extract<AgentEvent, { type: "message_update" }> =>
+						event.type === "message_update" &&
+						event.message.content.some(block => block.type === "text" && Boolean(block.text)),
+				)
+				.map(event => event.requestReasoning),
+		).toContain("high");
 	});
 
 	it("classifies an in-flight continuation cancellation as aborted", async () => {

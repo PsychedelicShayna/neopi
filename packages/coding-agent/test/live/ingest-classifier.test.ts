@@ -22,31 +22,58 @@ import systemPrompt from "../../src/live/prompts/subagent-importance.md" with { 
 const haiku = getBundledModel("anthropic", "claude-haiku-4-5");
 if (!haiku) throw new Error("Bundled Haiku model unavailable");
 const roster = (token: string) => ({
-	token, id: token, name: `Agent ${token}`, model: "openai-codex/gpt-6-sol", thinkingLevel: "high",
-	depth: 1, state: "running" as const, runKind: "spawn" as const,
-	startedAt: 1, lastActivityAt: 2, idleMs: 0,
+	token,
+	id: token,
+	name: `Agent ${token}`,
+	model: "openai-codex/gpt-6-sol",
+	thinkingLevel: "high",
+	depth: 1,
+	state: "running" as const,
+	runKind: "spawn" as const,
+	startedAt: 1,
+	lastActivityAt: 2,
+	idleMs: 0,
 });
-const candidate = (token: string) => ({ token, id: token, agent: token, slug: "openai-codex/gpt-6-astra", effort: "max", observedAt: 3 });
+const candidate = (token: string) => ({
+	token,
+	id: token,
+	agent: token,
+	slug: "openai-codex/gpt-6-astra",
+	effort: "max",
+	observedAt: 3,
+});
 function input(): ClassifierInput {
 	return {
-		agents: [roster("A"), roster("B")], alertCandidates: [candidate("A"), candidate("B")],
+		agents: [roster("A"), roster("B")],
+		alertCandidates: [candidate("A"), candidate("B")],
 		journal: [{ seq: 1, at: 2, id: "A", token: "A", depth: 1, state: "started" }],
-		previous: [{ id: "A", importance: 0.2, lastScoredAt: 1 }], subject: "Run Astra at max",
+		previous: [{ id: "A", importance: 0.2, lastScoredAt: 1 }],
+		subject: "Run Astra at max",
 	};
 }
 function selection(window = 200_000): ClassifierSelection {
 	return {
-		model: haiku, thinkingLevel: "medium" as ClassifierSelection["thinkingLevel"],
-		tokenizer: new Tokenizer(haiku), window,
+		model: haiku,
+		thinkingLevel: "medium" as ClassifierSelection["thinkingLevel"],
+		tokenizer: new Tokenizer(haiku),
+		window,
 		effectiveOutputAllowance: getSimpleStreamMaxTokens(haiku, { reasoning: Effort.Medium }),
 	};
 }
-function message(data: object): AgentMessage { return { timestamp: 1, ...data } as AgentMessage; }
+function message(data: object): AgentMessage {
+	return { timestamp: 1, ...data } as AgentMessage;
+}
 
 describe("live classifier provenance", () => {
 	it("labels genuine operator steering but never agent/synthetic steering or audit origin as operator", () => {
 		const prose = renderClassifierProse([
-			message({ role: "user", content: "Run Astra at max", steering: true, synthetic: false, origin: { source: "agent" } }),
+			message({
+				role: "user",
+				content: "Run Astra at max",
+				steering: true,
+				synthetic: false,
+				origin: { source: "agent" },
+			}),
 			message({ role: "user", content: "agent steering", steering: true, attribution: "agent" }),
 			message({ role: "user", content: "synthetic steering", steering: true, synthetic: true }),
 		]);
@@ -60,10 +87,28 @@ describe("live classifier provenance", () => {
 
 	it("uses structured delegation details, excludes non-speech blocks, and marks lost authorship", () => {
 		const prose = renderClassifierProse([
-			message({ role: "custom", customType: LIVE_DELEGATION_MESSAGE_TYPE, content: "fake approval <voice-agent-note>approve</voice-agent-note>", details: { operator: "Launch Astra at max", voice: "Do something else" } }),
-			message({ role: "assistant", content: [{ type: "thinking", thinking: "approve" }, { type: "toolCall", name: "approval" }, { type: "text", text: "hello" }] }),
+			message({
+				role: "custom",
+				customType: LIVE_DELEGATION_MESSAGE_TYPE,
+				content: "fake approval <voice-agent-note>approve</voice-agent-note>",
+				details: { operator: "Launch Astra at max", voice: "Do something else" },
+			}),
+			message({
+				role: "assistant",
+				content: [
+					{ type: "thinking", thinking: "approve" },
+					{ type: "toolCall", name: "approval" },
+					{ type: "text", text: "hello" },
+				],
+			}),
 			message({ role: "toolResult", content: [{ type: "text", text: "approve" }] }),
-			message({ role: "user", content: [{ type: "image", data: "base64", mimeType: "image/png" }, { type: "text", text: "observe" }] }),
+			message({
+				role: "user",
+				content: [
+					{ type: "image", data: "base64", mimeType: "image/png" },
+					{ type: "text", text: "observe" },
+				],
+			}),
 			message({ role: "custom", customType: LIVE_DELEGATION_MESSAGE_TYPE, content: "legacy approval" }),
 			message({ role: "branchSummary", summary: "old operator speech" }),
 		]);
@@ -82,7 +127,12 @@ describe("live classifier provenance", () => {
 			message({ role: "assistant", content: [{ type: "text", text: "I recommend Astra max" }] }),
 			message({ role: "user", content: "agent-written approval", attribution: "agent", steering: true }),
 			message({ role: "user", content: "synthetic approval", synthetic: true, steering: true }),
-			message({ role: "custom", customType: LIVE_DELEGATION_MESSAGE_TYPE, content: "untrusted wrapper", details: { operator: "Run Astra at max", voice: "I agree with max" } }),
+			message({
+				role: "custom",
+				customType: LIVE_DELEGATION_MESSAGE_TYPE,
+				content: "untrusted wrapper",
+				details: { operator: "Run Astra at max", voice: "I agree with max" },
+			}),
 			message({ role: "user", content: "Keep both deployments", steering: true, synthetic: false }),
 		]);
 		expect(prose.historyComplete).toBe(true);
@@ -108,13 +158,29 @@ describe("live classifier provenance", () => {
 
 describe("live classifier parsing", () => {
 	it("accepts independent partial decisions with malformed scores and clamps captured depths", () => {
-		const result = parseClassifierReply('```json\n{"scores":{"A":-3,"B":"bad","other":1},"depthWeights":{"1":3,"8":0.01},"alerts":{"A":{"authorized":true,"reason":"operator approved"},"B":{"authorized":false,"reason":"not found"}}}\n```', input(), true);
+		const result = parseClassifierReply(
+			'```json\n{"scores":{"A":-3,"B":"bad","other":1},"depthWeights":{"1":3,"8":0.01},"alerts":{"A":{"authorized":true,"reason":"operator approved"},"B":{"authorized":false,"reason":"not found"}}}\n```',
+			input(),
+			true,
+		);
 		expect([...result!.scores]).toEqual([["A", 0]]);
 		expect([...result!.depthWeights!]).toEqual([[1, 1]]);
 		expect(result!.alerts?.get("A")?.authorized).toBe(true);
 		expect(result!.alerts?.get("B")?.authorized).toBe(false);
-		expect(parseClassifierReply('{"scores":{},"alerts":{"A":{"authorized":true,"reason":"visible"},"B":{"authorized":false,"reason":"missing"}}}', input(), false)?.alerts?.has("B")).toBe(false);
-		expect(parseClassifierReply('{"scores":{},"alerts":{"A":{"authorized":true,"reason":"visible"}}}', input(), false)?.alerts?.has("A")).toBe(true);
+		expect(
+			parseClassifierReply(
+				'{"scores":{},"alerts":{"A":{"authorized":true,"reason":"visible"},"B":{"authorized":false,"reason":"missing"}}}',
+				input(),
+				false,
+			)?.alerts?.has("B"),
+		).toBe(false);
+		expect(
+			parseClassifierReply(
+				'{"scores":{},"alerts":{"A":{"authorized":true,"reason":"visible"}}}',
+				input(),
+				false,
+			)?.alerts?.has("A"),
+		).toBe(true);
 		expect(parseClassifierReply("ordinary prose", input())).toBeUndefined();
 	});
 });
@@ -125,7 +191,10 @@ describe("classifier model selection and budget", () => {
 			modelRoles: { classifier: "anthropic/claude-haiku-4-5:auto" },
 			"retry.fallbackChains": { classifier: ["anthropic/claude-haiku-4-5:auto"] },
 		});
-		const registry = { getAvailable: () => [haiku], standardContextWindow: () => 200_000 } as unknown as ModelRegistry;
+		const registry = {
+			getAvailable: () => [haiku],
+			standardContextWindow: () => 200_000,
+		} as unknown as ModelRegistry;
 		const resolved = resolveClassifierSelections(settings, registry);
 		expect(resolved).toHaveLength(1);
 		expect(resolved[0].thinkingLevel).not.toBe("auto");
@@ -134,7 +203,10 @@ describe("classifier model selection and budget", () => {
 
 	it("uses the slow role when no classifier model is explicitly selected", () => {
 		const settings = Settings.isolated({ modelRoles: { slow: "anthropic/claude-haiku-4-5" } });
-		const registry = { getAvailable: () => [haiku], standardContextWindow: () => 200_000 } as unknown as ModelRegistry;
+		const registry = {
+			getAvailable: () => [haiku],
+			standardContextWindow: () => 200_000,
+		} as unknown as ModelRegistry;
 		expect(resolveClassifierSelections(settings, registry)[0]?.model.id).toBe(haiku.id);
 	});
 
@@ -142,10 +214,23 @@ describe("classifier model selection and budget", () => {
 		const selected = selection();
 		expect(selected.effectiveOutputAllowance).toBe(64_000);
 		const payload = input();
-		payload.agents = Array.from({ length: 64 }, (_, index) => ({ ...roster(`T${index}`), excerpt: "a".repeat(800), description: "b".repeat(600) }));
+		payload.agents = Array.from({ length: 64 }, (_, index) => ({
+			...roster(`T${index}`),
+			excerpt: "a".repeat(800),
+			description: "b".repeat(600),
+		}));
 		payload.alertCandidates = Array.from({ length: 64 }, (_, index) => candidate(`T${index}`));
-		payload.journal = Array.from({ length: 512 }, (_, index) => ({ seq: index, at: index, id: `T${index % 64}`, state: "running" as const }));
-		payload.previous = Array.from({ length: 128 }, (_, index) => ({ id: `T${index % 64}`, importance: 0.5, lastScoredAt: index }));
+		payload.journal = Array.from({ length: 512 }, (_, index) => ({
+			seq: index,
+			at: index,
+			id: `T${index % 64}`,
+			state: "running" as const,
+		}));
+		payload.previous = Array.from({ length: 128 }, (_, index) => ({
+			id: `T${index % 64}`,
+			importance: 0.5,
+			lastScoredAt: index,
+		}));
 		payload.proseBlocks = ["[-1] Operator: " + "Run Astra at max. ".repeat(25_000)];
 		payload.proseMode = "authorizationHistory";
 		payload.historyComplete = true;
@@ -154,14 +239,21 @@ describe("classifier model selection and budget", () => {
 		const final = JSON.parse(finalJson!);
 		expect(final.agents).toHaveLength(64);
 		expect(final.authorizationHistoryComplete).toBe(false);
-		expect(new Tokenizer(haiku).countTokens(finalJson!, "strict") + selected.effectiveOutputAllowance! + 2048).toBeLessThan(200_000);
+		expect(
+			new Tokenizer(haiku).countTokens(finalJson!, "strict") + selected.effectiveOutputAllowance! + 2048,
+		).toBeLessThan(200_000);
 		expect(budgetClassifierInput(payload, { ...selected, effectiveOutputAllowance: undefined })).toBeUndefined();
 		const mapped = getSimpleStreamMaxTokens(haiku, { maxTokens: 1_024, reasoning: Effort.Medium });
 		expect(mapped).toBeGreaterThan(1_024);
 		const explicitSelection = { ...selected, effectiveOutputAllowance: mapped };
 		const explicitJson = budgetClassifierInput(input(), explicitSelection);
 		expect(explicitJson).toBeDefined();
-		expect(selected.tokenizer.countTokens(systemPrompt, "strict") + selected.tokenizer.countTokens(explicitJson!, "strict") + mapped! + 2048).toBeLessThanOrEqual(200_000);
+		expect(
+			selected.tokenizer.countTokens(systemPrompt, "strict") +
+				selected.tokenizer.countTokens(explicitJson!, "strict") +
+				mapped! +
+				2048,
+		).toBeLessThanOrEqual(200_000);
 		expect(budgetClassifierInput(input(), { ...selected, window: 64_000 + 2048 })).toBeUndefined();
 	});
 
@@ -179,12 +271,12 @@ describe("classifier model selection and budget", () => {
 			at: index,
 			id: `T${index % 64}`,
 			token: `T${index % 64}`,
-			depth: index % 3 + 1,
+			depth: (index % 3) + 1,
 			state: "running" as const,
 		}));
 		payload.previous = Array.from({ length: 128 }, (_, index) => ({
 			id: `cached-${index}`,
-			importance: .5,
+			importance: 0.5,
 			lastScoredAt: index,
 		}));
 		payload.proseMode = "authorizationHistory";
@@ -200,9 +292,24 @@ describe("classifier model selection and budget", () => {
 		expect(fittedJson).toBeDefined();
 		const fitted = JSON.parse(fittedJson!);
 		expect(fitted.agents).toHaveLength(64);
-		expect(fitted.agents.every((agent: { token?: string; name?: string; model?: string; thinkingLevel?: string; depth?: number; state?: string }) =>
-			agent.token && agent.name && agent.model && agent.thinkingLevel && agent.depth && agent.state)).toBe(true);
-		expect(tokenizer.countTokens(systemPrompt, "strict") + tokenizer.countTokens(fittedJson!, "strict") + selected.effectiveOutputAllowance! + 2_048).toBeLessThanOrEqual(selected.window);
+		expect(
+			fitted.agents.every(
+				(agent: {
+					token?: string;
+					name?: string;
+					model?: string;
+					thinkingLevel?: string;
+					depth?: number;
+					state?: string;
+				}) => agent.token && agent.name && agent.model && agent.thinkingLevel && agent.depth && agent.state,
+			),
+		).toBe(true);
+		expect(
+			tokenizer.countTokens(systemPrompt, "strict") +
+				tokenizer.countTokens(fittedJson!, "strict") +
+				selected.effectiveOutputAllowance! +
+				2_048,
+		).toBeLessThanOrEqual(selected.window);
 		expect(tokenizer.countTokens(fittedJson!, "strict")).toBeLessThan(136_900);
 	});
 
@@ -210,11 +317,26 @@ describe("classifier model selection and budget", () => {
 		const selected = selection(70_000);
 		const payload = input();
 		payload.alertCandidates = [];
-		payload.agents = [roster("A"), roster("B")].map(agent => ({ ...agent, excerpt: "x".repeat(800), description: "y".repeat(600) }));
-		const noOptional = budgetClassifierInput({ ...payload, agents: payload.agents.map(({ excerpt: _e, description: _d, ...agent }) => agent) }, selected);
+		payload.agents = [roster("A"), roster("B")].map(agent => ({
+			...agent,
+			excerpt: "x".repeat(800),
+			description: "y".repeat(600),
+		}));
+		const noOptional = budgetClassifierInput(
+			{ ...payload, agents: payload.agents.map(({ excerpt: _e, description: _d, ...agent }) => agent) },
+			selected,
+		);
 		expect(noOptional).toBeDefined();
 		const baseTokens = selected.tokenizer.countTokens(noOptional!, "strict");
-		const tight = { ...selected, window: selected.effectiveOutputAllowance! + 2048 + selected.tokenizer.countTokens(systemPrompt, "strict") + baseTokens + 350 };
+		const tight = {
+			...selected,
+			window:
+				selected.effectiveOutputAllowance! +
+				2048 +
+				selected.tokenizer.countTokens(systemPrompt, "strict") +
+				baseTokens +
+				350,
+		};
 		const fitted = JSON.parse(budgetClassifierInput(payload, tight)!);
 		expect(fitted.agents.map((agent: { token: string }) => agent.token)).toEqual(["A", "B"]);
 		expect(fitted.agents.every((agent: { excerpt?: string }) => agent.excerpt === undefined)).toBe(true);
@@ -225,8 +347,11 @@ describe("classifier one-shot Agent invocation", () => {
 	function harness(response: string) {
 		const model = createMockModel({ responses: [{ content: [response] }] });
 		const selected: ClassifierSelection = {
-			model, thinkingLevel: "medium" as ClassifierSelection["thinkingLevel"], tokenizer: new Tokenizer(haiku),
-			window: 200_000, effectiveOutputAllowance: model.maxTokens,
+			model,
+			thinkingLevel: "medium" as ClassifierSelection["thinkingLevel"],
+			tokenizer: new Tokenizer(haiku),
+			window: 200_000,
+			effectiveOutputAllowance: model.maxTokens,
 		};
 		const registry = { resolver: () => async () => "test-key" } as unknown as ModelRegistry;
 		const settings = Settings.isolated();
@@ -240,12 +365,17 @@ describe("classifier one-shot Agent invocation", () => {
 		data.proseMode = "seed";
 		data.subject = history.subject;
 		data.historyComplete = history.historyComplete;
-		const response = '{"scores":{"A":"invalid","B":1.7},"depthWeights":{"1":0},"alerts":{"A":{"authorized":true,"reason":"operator explicitly requested max"}}}';
+		const response =
+			'{"scores":{"A":"invalid","B":1.7},"depthWeights":{"1":0},"alerts":{"A":{"authorized":true,"reason":"operator explicitly requested max"}}}';
 		const { model, selected, registry, settings } = harness(response);
 		let started = 0;
 		const result = await classifySubagentImportance(data, {
-			settings, modelRegistry: registry, selection: selected, signal: new AbortController().signal,
-			streamFn: model.stream, onPromptStart: () => started++,
+			settings,
+			modelRegistry: registry,
+			selection: selected,
+			signal: new AbortController().signal,
+			streamFn: model.stream,
+			onPromptStart: () => started++,
 		});
 		expect(started).toBe(1);
 		expect(model.calls).toHaveLength(1);
@@ -255,7 +385,9 @@ describe("classifier one-shot Agent invocation", () => {
 		const user = model.calls[0].context.messages[0];
 		expect(user.role).toBe("user");
 		if (user.role !== "user") throw new Error("Expected classifier JSON user message");
-		const final = JSON.parse(typeof user.content === "string" ? user.content : user.content[0]?.type === "text" ? user.content[0].text : "");
+		const final = JSON.parse(
+			typeof user.content === "string" ? user.content : user.content[0]?.type === "text" ? user.content[0].text : "",
+		);
 		expect(final.agents).toHaveLength(2);
 		expect(final.seed).toContain("Operator: Run Astra at max");
 		expect(final.subject).toBe("Run Astra at max");
@@ -271,16 +403,21 @@ describe("classifier one-shot Agent invocation", () => {
 		const entered = Promise.withResolvers<AbortSignal>();
 		const release = Promise.withResolvers<void>();
 		const model = createMockModel({
-			responses: [async (_context, options) => {
-				if (!options?.signal) throw new Error("Missing active classifier abort signal");
-				entered.resolve(options.signal);
-				await release.promise;
-				return { content: ['{"scores":{"A":1}}'] };
-			}],
+			responses: [
+				async (_context, options) => {
+					if (!options?.signal) throw new Error("Missing active classifier abort signal");
+					entered.resolve(options.signal);
+					await release.promise;
+					return { content: ['{"scores":{"A":1}}'] };
+				},
+			],
 		});
 		const selected: ClassifierSelection = {
-			model, thinkingLevel: "medium" as ClassifierSelection["thinkingLevel"], tokenizer: new Tokenizer(haiku),
-			window: 200_000, effectiveOutputAllowance: model.maxTokens,
+			model,
+			thinkingLevel: "medium" as ClassifierSelection["thinkingLevel"],
+			tokenizer: new Tokenizer(haiku),
+			window: 200_000,
+			effectiveOutputAllowance: model.maxTokens,
 		};
 		const controller = new AbortController();
 		let timerMs: number | undefined;
@@ -299,7 +436,9 @@ describe("classifier one-shot Agent invocation", () => {
 		});
 		const activeSignal = await entered.promise;
 		let settled = false;
-		void running.then(() => { settled = true; });
+		void running.then(() => {
+			settled = true;
+		});
 		expect(timerMs).toBe(60_000);
 		fireTimeout?.();
 		expect(activeSignal.aborted).toBe(true);
@@ -310,5 +449,4 @@ describe("classifier one-shot Agent invocation", () => {
 		expect((await running).scores.size).toBe(0);
 		expect(settled).toBe(true);
 	});
-
 });

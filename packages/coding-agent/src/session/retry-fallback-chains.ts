@@ -304,7 +304,11 @@ export function validateRetryFallbackChains(
 					report(`Invalid regex fallback entry in retry.fallbackChains for '${key}': ${selectorStr}`);
 				} else {
 					const catalog = modelRegistry.getAll("all");
-					if (!resolveModelRoleValue(selectorStr, kindRole ? catalog.filter(kindRole.accepts) : catalog, { settings }).model) {
+					if (
+						!resolveModelRoleValue(selectorStr, kindRole ? catalog.filter(kindRole.accepts) : catalog, {
+							settings,
+						}).model
+					) {
 						report(`Fallback chain for ${keyKind} '${key}' references unknown model: ${selectorStr}`);
 					}
 				}

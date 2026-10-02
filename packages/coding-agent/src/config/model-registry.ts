@@ -263,9 +263,8 @@ export class ModelRegistry {
 	#captureWindow(model: Model<Api>): Model<Api> {
 		const window = this.#validWindow(model.contextWindow);
 		if (window !== undefined) {
-			const priced = model.provider === "xai-oauth"
-				? undefined
-				: this.#validWindow(model.cost.longContext?.inputThreshold);
+			const priced =
+				model.provider === "xai-oauth" ? undefined : this.#validWindow(model.cost.longContext?.inputThreshold);
 			this.#standardWindows.set(model, Math.min(window, priced ?? window));
 		}
 		return model;
@@ -307,7 +306,7 @@ export class ModelRegistry {
 				...Object.values(result.thinking?.effortRouting ?? {}),
 			]);
 			const source = [...sourceIds]
-				.map(id => id === undefined ? undefined : byKey.get(`${result.provider}\u0000${id}`))
+				.map(id => (id === undefined ? undefined : byKey.get(`${result.provider}\u0000${id}`)))
 				.find(model => model?.contextWindow === result.contextWindow);
 			if (source) this.#carryWindow(source, result);
 		}
@@ -1076,7 +1075,9 @@ export class ModelRegistry {
 							: model;
 					if (withHeaders.provider !== providerName) {
 						const original = originals.get(`${withHeaders.provider}\u0000${withHeaders.id}`);
-						return original ? this.#carryWindow(original, withHeaders as Model<Api>) : withHeaders as Model<Api>;
+						return original
+							? this.#carryWindow(original, withHeaders as Model<Api>)
+							: (withHeaders as Model<Api>);
 					}
 					// `identity` exists only on built rows. Without it the hook
 					// authored a spec, where `compat` already is the sparse
@@ -1167,10 +1168,13 @@ export class ModelRegistry {
 				this.#captureWindow(m);
 				if (!providerOverride) return m;
 				const withTransportOverride = this.#applyProviderTransportOverride(toModelSpec(m), providerOverride);
-				return this.#carryWindow(m, buildModel({
-					...withTransportOverride,
-					compat: mergeCompat(m.compatConfig, providerOverride.compat),
-				} as ModelSpec<Api>));
+				return this.#carryWindow(
+					m,
+					buildModel({
+						...withTransportOverride,
+						compat: mergeCompat(m.compatConfig, providerOverride.compat),
+					} as ModelSpec<Api>),
+				);
 			});
 		});
 	}
@@ -1216,10 +1220,13 @@ export class ModelRegistry {
 			const override = this.#providerOverrides.get(model.provider);
 			// Reapply only the transport; it cannot change the chosen window.
 			return override?.transport
-				? this.#carryWindow(model, this.#applyProviderTransportOverride(model, {
-						baseUrl: override.baseUrl,
-						transport: override.transport,
-					}))
+				? this.#carryWindow(
+						model,
+						this.#applyProviderTransportOverride(model, {
+							baseUrl: override.baseUrl,
+							transport: override.transport,
+						}),
+					)
 				: model;
 		});
 	}
@@ -1315,14 +1322,18 @@ export class ModelRegistry {
 				const maximum = resolveMaxContextWindow(model);
 				if (maximum !== undefined && this.#validWindow(model.contextWindow) !== undefined) {
 					if (!standardBundledById && getBundledProviders().some(provider => provider === providerId)) {
-						standardBundledById = bundledById ?? new Map(
-							(getBundledModels(providerId as Parameters<typeof getBundledModels>[0]) as Model<Api>[])
-								.map(bundled => [bundled.id, bundled]),
-						);
+						standardBundledById =
+							bundledById ??
+							new Map(
+								(getBundledModels(providerId as Parameters<typeof getBundledModels>[0]) as Model<Api>[]).map(
+									bundled => [bundled.id, bundled],
+								),
+							);
 					}
 					const bundled = standardBundledById?.get(model.id);
 					const bundledWindow = bundled && this.#standardWindows.get(this.#captureWindow(bundled));
-					if (bundledWindow !== undefined) this.#standardWindows.set(model, Math.min(bundledWindow, model.contextWindow!));
+					if (bundledWindow !== undefined)
+						this.#standardWindows.set(model, Math.min(bundledWindow, model.contextWindow!));
 				} else {
 					this.#captureWindow(model);
 				}
@@ -1349,10 +1360,13 @@ export class ModelRegistry {
 			const withCompat = providerOverride
 				? models.map(model => {
 						const spec = this.#applyProviderTransportOverride(toModelSpec(model), providerOverride);
-						return this.#carryWindow(model, buildModel({
-							...spec,
-							compat: mergeCompat(model.compatConfig, providerOverride.compat),
-						}));
+						return this.#carryWindow(
+							model,
+							buildModel({
+								...spec,
+								compat: mergeCompat(model.compatConfig, providerOverride.compat),
+							}),
+						);
 					})
 				: models;
 			const resolved = this.#applyProviderModelOverrides(providerId, withCompat);
@@ -1490,7 +1504,10 @@ export class ModelRegistry {
 	#applyProviderCompat(compat: ModelSpec<Api>["compat"] | undefined, models: Model<Api>[]): Model<Api>[] {
 		if (!compat) return models;
 		return models.map(model =>
-			this.#carryWindow(model, buildModel({ ...model, compat: mergeCompat(model.compatConfig, compat) } as ModelSpec<Api>)),
+			this.#carryWindow(
+				model,
+				buildModel({ ...model, compat: mergeCompat(model.compatConfig, compat) } as ModelSpec<Api>),
+			),
 		);
 	}
 
@@ -1500,20 +1517,26 @@ export class ModelRegistry {
 			providerConfig.discovery.type === "llama.cpp" ||
 			providerConfig.discovery.type === "lm-studio"
 				? models.map(model =>
-						this.#carryWindow(model, buildModel({ ...model, imageInputDecoder: "stb", compat: model.compatConfig } as ModelSpec<Api>)),
+						this.#carryWindow(
+							model,
+							buildModel({ ...model, imageInputDecoder: "stb", compat: model.compatConfig } as ModelSpec<Api>),
+						),
 					)
 				: models;
 
 		const withRemoteCompaction = providerConfig.remoteCompaction
 			? withDecoderMetadata.map(model =>
-					this.#carryWindow(model, buildModel({
-						...model,
-						remoteCompaction: mergeProviderRemoteCompactionConfig(
-							model.remoteCompaction,
-							providerConfig.remoteCompaction,
-						),
-						compat: model.compatConfig,
-					} as ModelSpec<Api>)),
+					this.#carryWindow(
+						model,
+						buildModel({
+							...model,
+							remoteCompaction: mergeProviderRemoteCompactionConfig(
+								model.remoteCompaction,
+								providerConfig.remoteCompaction,
+							),
+							compat: model.compatConfig,
+						} as ModelSpec<Api>),
+					),
 				)
 			: withDecoderMetadata;
 
@@ -1525,11 +1548,14 @@ export class ModelRegistry {
 		return withRemoteCompaction.map(model => {
 			const normalized =
 				model.api === "openai-completions"
-					? this.#carryWindow(model, buildModel({
-							...model,
-							api: "openai-responses" as const,
-							compat: model.compatConfig,
-						} as ModelSpec<Api>))
+					? this.#carryWindow(
+							model,
+							buildModel({
+								...model,
+								api: "openai-responses" as const,
+								compat: model.compatConfig,
+							} as ModelSpec<Api>),
+						)
 					: model;
 			if (contextLengthOverride === undefined) {
 				return normalized;
@@ -1810,11 +1836,14 @@ export class ModelRegistry {
 				// Provider discovery owns its supplied window; the merge only changes
 				// transport and capabilities. Preserve raw provenance across that build.
 				if (!this.#standardWindows.has(model)) this.#captureCachedWindow(model);
-				return this.#carryWindow(model, mergeDiscoveredModel(
+				return this.#carryWindow(
 					model,
-					resolveProviderModelReference(model.provider, model.id, existingModels),
-					this.#providerOverrides.get(model.provider),
-				));
+					mergeDiscoveredModel(
+						model,
+						resolveProviderModelReference(model.provider, model.id, existingModels),
+						this.#providerOverrides.get(model.provider),
+					),
+				);
 			}),
 		);
 		const authoritativeProviders = providersWithAuthoritativeProjectCatalog(discoveredModels);
@@ -2031,12 +2060,15 @@ export class ModelRegistry {
 				providerId,
 				this.#normalizeDiscoverableModels(
 					providerConfig,
-					this.#applyProviderCompat(providerConfig.compat, result.models.map(model => {
-						const window = verifiedDiscoveredWindows.get(model.id);
-						if (window !== undefined) this.#standardWindows.set(model, window);
-						else this.#captureCachedWindow(model);
-						return model;
-					})),
+					this.#applyProviderCompat(
+						providerConfig.compat,
+						result.models.map(model => {
+							const window = verifiedDiscoveredWindows.get(model.id);
+							if (window !== undefined) this.#standardWindows.set(model, window);
+							else this.#captureCachedWindow(model);
+							return model;
+						}),
+					),
 				),
 			),
 			replaceRuntimeModels: result.source === "provider",
@@ -2555,7 +2587,9 @@ export class ModelRegistry {
 		const standard = model.contextWindow;
 		if (standard === null || maximum <= standard) return model;
 		const window = clampsContextOverride(baseline) ? clampCodexContextWindow(baseline, maximum) : maximum;
-		return window === standard ? model : this.#carryWindow(model, applyModelOverride(model, { contextWindow: window }));
+		return window === standard
+			? model
+			: this.#carryWindow(model, applyModelOverride(model, { contextWindow: window }));
 	}
 
 	/**
@@ -2625,10 +2659,13 @@ export class ModelRegistry {
 			if (!overrides) {
 				return this.#carryWindow(raw, applyModelOverride(model, { contextWindow: 1_000_000 }));
 			}
-			return this.#carryWindow(raw, applyModelOverride(model, {
-				contextWindow: overrides.contextWindow ?? 1_000_000,
-				...overrides,
-			}));
+			return this.#carryWindow(
+				raw,
+				applyModelOverride(model, {
+					contextWindow: overrides.contextWindow ?? 1_000_000,
+					...overrides,
+				}),
+			);
 		});
 	}
 
