@@ -253,10 +253,16 @@ it("excludes autoloaded project credentials from host restoration when the launc
 			'import * as fs from "node:fs";',
 			"const originalRead = fs.readFileSync;",
 			'spyOn(fs, "readFileSync").mockImplementation((file, ...args) => { if (file === "/proc/self/environ") throw new Error("procfs unavailable"); return originalRead(file, ...args); });',
+			`const { runCli } = require(${JSON.stringify(path.resolve(import.meta.dir, "../src/cli.ts"))});`,
+			'await runCli(["--profile", "work", "--help"]);',
 			`const { getHostEnvForTools } = require(${JSON.stringify(hostModule)});`,
 			"const host = await getHostEnvForTools();",
 			'const text = await Bun.file(host.OMP_HOST_ENV_FILE).text();',
-			'console.log(JSON.stringify({ secret: text.includes("HOST_ENV_PROJECT_SECRET"), expanded: text.includes("HOST_ENV_EXPANDED"), editor: host.OMP_HOST_EDITOR }));',
+			`const { getShellConfig } = require(${JSON.stringify(path.resolve(import.meta.dir, "../../utils/src/procmgr.ts"))});`,
+			`const restored = Bun.spawn(["/bin/sh", "-c", '. "$OMP_HOST_ENV_FILE"; printf "%s|%s|%s" "\${OMP_PROFILE-unset}" "\${PI_PROFILE-unset}" "\${PI_CODING_AGENT_DIR-unset}"'], {env: {...getShellConfig().env, ...host}, stdout: "pipe", stderr: "inherit"});`,
+			"const profiles = await new Response(restored.stdout).text();",
+			"if (await restored.exited !== 0) throw new Error('restoration failed');",
+			'console.log(JSON.stringify({ secret: text.includes("HOST_ENV_PROJECT_SECRET"), expanded: text.includes("HOST_ENV_EXPANDED"), editor: host.OMP_HOST_EDITOR, profiles }));',
 		].join("\n");
 		const child = Bun.spawn([process.execPath, "--no-install", "--eval", script], {
 			cwd: tmp,
@@ -269,7 +275,7 @@ it("excludes autoloaded project credentials from host restoration when the launc
 		]);
 		expect(stderr).toBe("");
 		expect(exitCode).toBe(0);
-		expect(JSON.parse(stdout)).toEqual({ secret: false, expanded: false, editor: "nvim" });
+		expect(JSON.parse(stdout.trim().split("\n").at(-1)!)).toEqual({ secret: false, expanded: false, editor: "nvim", profiles: "unset|unset|unset" });
 	} finally {
 		await fs.rm(tmp, { recursive: true, force: true });
 	}

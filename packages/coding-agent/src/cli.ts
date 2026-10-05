@@ -22,6 +22,8 @@ import type * as Postmortem from "@oh-my-pi/pi-utils/postmortem";
 // work, so a host that dies mid-startup is still recognized (print/json modes
 // exit with it).
 import "./utils/launch-parent";
+// Capture without loading profile dotenv before --profile bootstrap.
+import "@oh-my-pi/pi-utils/launch-env";
 import {
 	APP_NAME,
 	getActiveProfile,
