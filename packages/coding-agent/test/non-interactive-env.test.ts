@@ -185,6 +185,7 @@ it("restores launcher editor and credentials for interactive children without un
 			"GPG_TTY", "OMPCODE", "CLAUDECODE", "SHELL",
 			"OMP_HOST_ENV_FILE", "OMP_HOST_EDITOR", "OMP_HOST_VISUAL",
 			"OMP_HOST_SSH_ASKPASS", "OMP_HOST_SUDO_ASKPASS", "OMP_HOST_TERM",
+			"HOST_ENV_COMMAND_SECRET", "OMP_HOST_OVERLAY_KEYS",
 		];
 		const probe = `console.log(JSON.stringify(Object.fromEntries(${JSON.stringify(selected)}.map(key => [key, process.env[key] ?? null]))))`;
 		const script = [
@@ -192,8 +193,9 @@ it("restores launcher editor and credentials for interactive children without un
 			`import { buildNonInteractiveEnv } from ${JSON.stringify(toolModule)};`,
 			`import { getShellConfig } from ${JSON.stringify(path.resolve(import.meta.dir, "../../utils/src/procmgr.ts"))};`,
 			'process.env.EDITOR = "true"; process.env.TERM = "dumb";',
-			"const host = await getHostEnvForTools();",
-			"const env = { ...getShellConfig().env, ...buildNonInteractiveEnv(host) };",
+			'const overlay = { HOST_ENV_COMMAND_SECRET: "command-secret" };',
+			"const host = await getHostEnvForTools(overlay);",
+			"const env = { ...getShellConfig().env, ...buildNonInteractiveEnv(host), ...overlay };",
 			`const run = async restored => {`,
 			`	const child = Bun.spawn(["/bin/sh", "-c", restored ? '. "$OMP_HOST_ENV_FILE"; exec "$@"' : 'exec "$@"', "probe", process.execPath, "--no-env-file", "--eval", ${JSON.stringify(probe)}], { env, stdout: "pipe", stderr: "pipe" });`,
 			"	const output = await new Response(child.stdout).text();",
@@ -237,6 +239,7 @@ it("restores launcher editor and credentials for interactive children without un
 			GPG_TTY: null, OMPCODE: null, CLAUDECODE: null, SHELL: "/bin/sh",
 			OMP_HOST_ENV_FILE: null, OMP_HOST_EDITOR: null, OMP_HOST_VISUAL: null,
 			OMP_HOST_SSH_ASKPASS: null, OMP_HOST_SUDO_ASKPASS: null, OMP_HOST_TERM: null,
+			HOST_ENV_COMMAND_SECRET: null, OMP_HOST_OVERLAY_KEYS: null,
 		});
 		expect(result.editor).toBe("nvim");
 		expect(result.term).toBe("xterm-256color");

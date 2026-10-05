@@ -13,3 +13,4 @@ After an abnormal exit, the next local tool launch prunes abandoned snapshots; O
 Git repository-location variables are excluded from restoration so sibling tools discover their own working directory's repository.
 Restoration also removes variables added only by the centralized shell environment, including a synthetic `GPG_TTY` and coding-agent markers when absent from the launcher.
 Injected `OMP_HOST_*` metadata is cleared during restoration when the launcher did not supply it, so siblings do not inherit this process's temporary snapshot path.
+Per-command caller and direnv overlay names are passed separately as validated `OMP_HOST_OVERLAY_KEYS`; restoration clears overlay-only variables before exporting launcher values and removes that metadata too.

@@ -208,7 +208,7 @@ export async function startService(
 		name: params.name,
 		application: shell.shell,
 		args: [...shell.args, `${shell.prefix ? `${shell.prefix} ` : ""}${params.command}`],
-		env: { ...shell.env, ...(await getHostEnvForTools()) },
+		env: { ...shell.env, ...(await getHostEnvForTools(shell.env)) },
 		cwd: resolveToCwd(params.cwd ?? session.cwd, session.cwd),
 		pty: params.pty ?? true,
 		ready: ready

@@ -12,8 +12,12 @@ const SHELL_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 let toolHostEnv: Promise<Record<string, string>> | undefined;
 
 /** Lazily persist the launcher's env, never the sanitized tool env or project dotenv. */
-export function getHostEnvForTools(): Promise<Record<string, string>> {
-	return (toolHostEnv ??= createHostEnvForTools());
+export async function getHostEnvForTools(overlay?: Record<string, string>): Promise<Record<string, string>> {
+	const env = await (toolHostEnv ??= createHostEnvForTools());
+	if (!overlay) return env;
+	const keys = Object.keys(overlay).filter(key => !(key in hostEnv) && SHELL_ENV_NAME.test(key));
+	if (keys.length === 0) return env;
+	return { ...env, OMP_HOST_OVERLAY_KEYS: keys.join(" ") };
 }
 
 async function pruneAbandonedSnapshots(root: string): Promise<void> {
@@ -49,11 +53,13 @@ async function createHostEnvForTools(): Promise<Record<string, string>> {
 			await fs.promises.chmod(dir, 0o700);
 			// Sourcing restores absence too: inherited tool-only overrides must not survive.
 			const shellOnlyKeys = Object.keys(getShellConfig().env).filter(key => !(key in hostEnv));
-			const metadataKeys = ["OMP_HOST_ENV_FILE", ...HOST_KEYS.map(key => `OMP_HOST_${key}`)];
+			const metadataKeys = ["OMP_HOST_ENV_FILE", "OMP_HOST_OVERLAY_KEYS", ...HOST_KEYS.map(key => `OMP_HOST_${key}`)];
 			const unsetKeys = [
 				...new Set([...Object.keys(NON_INTERACTIVE_ENV), ...shellOnlyKeys, ...HOST_KEYS, ...metadataKeys]),
 			].filter(key => SHELL_ENV_NAME.test(key));
-			const lines = [`unset ${unsetKeys.join(" ")}`];
+			// Overlay names are validated identifiers supplied per command, not cached
+			// in this shared file; concurrent commands can restore independently.
+			const lines = ["unset ${OMP_HOST_OVERLAY_KEYS-}", `unset ${unsetKeys.join(" ")}`];
 			for (const [key, value] of Object.entries(hostEnv)) {
 				if (!SHELL_ENV_NAME.test(key)) continue;
 				// POSIX single quoting keeps shell metacharacters and multiline values inert.
@@ -72,7 +78,7 @@ async function createHostEnvForTools(): Promise<Record<string, string>> {
 				lease.release();
 			}
 		});
-		const env: Record<string, string> = { OMP_HOST_ENV_FILE: file };
+		const env: Record<string, string> = { OMP_HOST_ENV_FILE: file, OMP_HOST_OVERLAY_KEYS: "" };
 		for (const key of HOST_KEYS) {
 			const value = hostEnv[key];
 			if (value !== undefined) env[`OMP_HOST_${key}`] = value;
