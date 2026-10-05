@@ -12,3 +12,4 @@ Capture precedes profile bootstrap without loading profile dotenv; profile-deriv
 After an abnormal exit, the next local tool launch prunes abandoned snapshots; OS-backed owner leases preserve snapshots still in use by live npi processes.
 Git repository-location variables are excluded from restoration so sibling tools discover their own working directory's repository.
 Restoration also removes variables added only by the centralized shell environment, including a synthetic `GPG_TTY` and coding-agent markers when absent from the launcher.
+Injected `OMP_HOST_*` metadata is cleared during restoration when the launcher did not supply it, so siblings do not inherit this process's temporary snapshot path.

@@ -183,6 +183,8 @@ it("restores launcher editor and credentials for interactive children without un
 			"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
 			"GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
 			"GPG_TTY", "OMPCODE", "CLAUDECODE", "SHELL",
+			"OMP_HOST_ENV_FILE", "OMP_HOST_EDITOR", "OMP_HOST_VISUAL",
+			"OMP_HOST_SSH_ASKPASS", "OMP_HOST_SUDO_ASKPASS", "OMP_HOST_TERM",
 		];
 		const probe = `console.log(JSON.stringify(Object.fromEntries(${JSON.stringify(selected)}.map(key => [key, process.env[key] ?? null]))))`;
 		const script = [
@@ -233,6 +235,8 @@ it("restores launcher editor and credentials for interactive children without un
 			GIT_DIR: null, GIT_WORK_TREE: null, GIT_INDEX_FILE: null, GIT_COMMON_DIR: null,
 			GIT_OBJECT_DIRECTORY: null, GIT_ALTERNATE_OBJECT_DIRECTORIES: null,
 			GPG_TTY: null, OMPCODE: null, CLAUDECODE: null, SHELL: "/bin/sh",
+			OMP_HOST_ENV_FILE: null, OMP_HOST_EDITOR: null, OMP_HOST_VISUAL: null,
+			OMP_HOST_SSH_ASKPASS: null, OMP_HOST_SUDO_ASKPASS: null, OMP_HOST_TERM: null,
 		});
 		expect(result.editor).toBe("nvim");
 		expect(result.term).toBe("xterm-256color");

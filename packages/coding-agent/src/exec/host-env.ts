@@ -49,8 +49,10 @@ async function createHostEnvForTools(): Promise<Record<string, string>> {
 			await fs.promises.chmod(dir, 0o700);
 			// Sourcing restores absence too: inherited tool-only overrides must not survive.
 			const shellOnlyKeys = Object.keys(getShellConfig().env).filter(key => !(key in hostEnv));
-			const unsetKeys = [...new Set([...Object.keys(NON_INTERACTIVE_ENV), ...shellOnlyKeys, ...HOST_KEYS])]
-				.filter(key => SHELL_ENV_NAME.test(key));
+			const metadataKeys = ["OMP_HOST_ENV_FILE", ...HOST_KEYS.map(key => `OMP_HOST_${key}`)];
+			const unsetKeys = [
+				...new Set([...Object.keys(NON_INTERACTIVE_ENV), ...shellOnlyKeys, ...HOST_KEYS, ...metadataKeys]),
+			].filter(key => SHELL_ENV_NAME.test(key));
 			const lines = [`unset ${unsetKeys.join(" ")}`];
 			for (const [key, value] of Object.entries(hostEnv)) {
 				if (!SHELL_ENV_NAME.test(key)) continue;
