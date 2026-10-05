@@ -1,3 +1,4 @@
+import type { Subprocess } from "bun";
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -261,6 +262,44 @@ it("excludes autoloaded project credentials from host restoration when the launc
 		expect(exitCode).toBe(0);
 		expect(JSON.parse(stdout)).toEqual({ secret: false, expanded: false, editor: "nvim" });
 	} finally {
+		await fs.rm(tmp, { recursive: true, force: true });
+	}
+});
+
+it("prunes host credentials abandoned by SIGKILL without deleting live launch snapshots", async () => {
+	const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-host-crash-"));
+	const children: Subprocess[] = [];
+	try {
+		const hostModule = path.resolve(import.meta.dir, "../src/exec/host-env.ts");
+		const script = [
+			`import { getHostEnvForTools } from ${JSON.stringify(hostModule)};`,
+			"console.log((await getHostEnvForTools()).OMP_HOST_ENV_FILE);",
+			"await Bun.sleep(60000);",
+		].join("\n");
+		const launch = async () => {
+			const child = Bun.spawn([process.execPath, "--no-env-file", "--no-install", "--eval", script], {
+				cwd: tmp,
+				env: { HOME: tmp, PI_CONFIG_DIR: ".omp", XDG_STATE_HOME: "", XDG_CACHE_HOME: "", XDG_DATA_HOME: "", PATH: process.env.PATH ?? "", HOST_PRIVATE_CREDENTIAL: "private" },
+				stdout: "pipe",
+				stderr: "inherit",
+			});
+			children.push(child);
+			const reader = child.stdout.getReader();
+			const { value } = await reader.read();
+			reader.releaseLock();
+			return { child, file: new TextDecoder().decode(value).trim() };
+		};
+		const abandoned = await launch();
+		abandoned.child.kill("SIGKILL");
+		await abandoned.child.exited;
+		expect(await Bun.file(abandoned.file).exists()).toBe(true);
+		const live = await launch();
+		expect(await Bun.file(abandoned.file).exists()).toBe(false);
+		await launch();
+		expect(await Bun.file(live.file).text()).toContain("HOST_PRIVATE_CREDENTIAL='private'");
+	} finally {
+		for (const child of children) child.kill("SIGKILL");
+		await Promise.all(children.map(child => child.exited));
 		await fs.rm(tmp, { recursive: true, force: true });
 	}
 });
