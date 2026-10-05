@@ -25,6 +25,7 @@ import {
 import { getOrCreateSnapshot } from "../utils/shell-snapshot";
 import { TerminalGraphicsDecoder } from "../utils/terminal-graphics";
 import { loadDirenvEnv } from "./direnv";
+import { getHostEnvForTools } from "./host-env";
 import { buildNonInteractiveEnv } from "./non-interactive-env";
 
 import {
@@ -557,7 +558,8 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		direnvSetting: virtualCwd ? "off" : cfgBashDirenv.get(settings),
 		commandPrefix: prefix,
 	});
-	const commandEnv = buildNonInteractiveEnv(preflight.env);
+	const hostEnv = await getHostEnvForTools();
+	const commandEnv = buildNonInteractiveEnv({ ...hostEnv, ...preflight.env });
 	const runCdInPersistentShell = options?.useUserShell === true && !prefix && isPersistentShellCdCommand(command);
 	// Never wrap in cmd.exe: it is only the Windows no-bash fallback for spawn
 	// paths, and the embedded brush shell runs the POSIX line better directly.

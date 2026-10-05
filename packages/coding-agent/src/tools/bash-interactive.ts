@@ -5,6 +5,7 @@ import { type PtyRunResult, PtySession } from "@oh-my-pi/pi-natives";
 import { loadXtermTerminal } from "@oh-my-pi/pi-tui/tools/terminal-output";
 import { Settings } from "../config/settings";
 import { OutputSink, type OutputSummary } from "@oh-my-pi/pi-tui/tools/streaming-output";
+import { getHostEnvForTools } from "../exec/host-env";
 import { TerminalGraphicsDecoder } from "../utils/terminal-graphics";
 import { resolveOutputMaxColumns, resolveOutputSinkArtifactMaxBytes, resolveOutputSinkHeadBytes } from "./output-meta";
 
@@ -32,6 +33,7 @@ export async function runInteractiveBashPty(
 	// Load the xterm Terminal ctor here (async boundary) — the ui.custom factory below is sync.
 	const XtermTerminal = await loadXtermTerminal();
 	const { shell: resolvedShell } = settings.getShellConfig();
+	const hostEnv = await getHostEnvForTools();
 	const graphics = new TerminalGraphicsDecoder();
 	const sink = new OutputSink({
 		artifactPath: options.artifactPath,
@@ -107,6 +109,7 @@ export async function runInteractiveBashPty(
 							// pagers, and TUIs behave like a normal terminal.
 							env: {
 								TERM: "xterm-256color",
+								...hostEnv,
 								...options.env,
 							},
 							signal: options.signal,

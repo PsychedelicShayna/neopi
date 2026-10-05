@@ -22,6 +22,8 @@ import type * as Postmortem from "@oh-my-pi/pi-utils/postmortem";
 // work, so a host that dies mid-startup is still recognized (print/json modes
 // exit with it).
 import "./utils/launch-parent";
+// Capture the launcher's environment before runtime/tool overlays are constructed.
+import "@oh-my-pi/pi-utils/env";
 import {
 	APP_NAME,
 	getActiveProfile,

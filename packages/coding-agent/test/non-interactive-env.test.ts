@@ -168,3 +168,67 @@ it("filters expanded dotenv values while preserving matching and empty launcher 
 		await fs.rm(tmp, { recursive: true, force: true });
 	}
 });
+
+it("restores launcher editor and credentials for interactive children without unsanitizing tool commands", async () => {
+	if (process.platform === "win32") return;
+	const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-host-env-"));
+	try {
+		await Bun.write(path.join(tmp, ".env"), "HOST_ENV_DOTENV_SECRET=project-only\n");
+		const hostModule = path.resolve(import.meta.dir, "../src/exec/host-env.ts");
+		const toolModule = path.resolve(import.meta.dir, "../src/exec/non-interactive-env.ts");
+		const selected = [
+			"EDITOR", "VISUAL", "SSH_ASKPASS", "SUDO_ASKPASS", "TERM", "CI", "GIT_EDITOR",
+			"HOST_ENV_DOTENV_SECRET", "HOST_ENV_LITERAL",
+		];
+		const probe = `console.log(JSON.stringify(Object.fromEntries(${JSON.stringify(selected)}.map(key => [key, process.env[key] ?? null]))))`;
+		const script = [
+			`import { getHostEnvForTools } from ${JSON.stringify(hostModule)};`,
+			`import { buildNonInteractiveEnv } from ${JSON.stringify(toolModule)};`,
+			`import { filterChildShellEnv } from ${JSON.stringify(path.resolve(import.meta.dir, "../../utils/src/env.ts"))};`,
+			'process.env.EDITOR = "true"; process.env.TERM = "dumb";',
+			"const host = await getHostEnvForTools();",
+			"const env = { ...filterChildShellEnv(process.env), ...buildNonInteractiveEnv(host) };",
+			`const run = async restored => {`,
+			`	const child = Bun.spawn(["/bin/sh", "-c", restored ? '. "$OMP_HOST_ENV_FILE"; exec "$@"' : 'exec "$@"', "probe", process.execPath, "--no-env-file", "--eval", ${JSON.stringify(probe)}], { env, stdout: "pipe", stderr: "pipe" });`,
+			"	const output = await new Response(child.stdout).text();",
+			"	if (await child.exited !== 0) throw new Error(await new Response(child.stderr).text());",
+			"	return JSON.parse(output);",
+			"};",
+			"const stat = await Bun.file(host.OMP_HOST_ENV_FILE).stat();",
+			"console.log(JSON.stringify({ tool: await run(false), restored: await run(true), file: host.OMP_HOST_ENV_FILE, mode: stat.mode & 0o777, editor: host.OMP_HOST_EDITOR, term: host.OMP_HOST_TERM }));",
+		].join("\n");
+		const literal = "spaces 'quotes' $dollars `backticks`\nand a newline";
+		const child = Bun.spawn([process.execPath, "--no-install", "--eval", script], {
+			cwd: tmp,
+			env: {
+				HOME: tmp, PI_CONFIG_DIR: ".omp", XDG_STATE_HOME: "", XDG_CACHE_HOME: "", XDG_DATA_HOME: "",
+				PATH: process.env.PATH ?? "", SHELL: "/bin/sh",
+				EDITOR: "nvim", VISUAL: "", SSH_ASKPASS: "/host/askpass", TERM: "xterm-256color",
+				HOST_ENV_LITERAL: literal,
+			},
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const [stdout, stderr, exitCode] = await Promise.all([
+			new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+		]);
+		expect(stderr).toBe("");
+		expect(exitCode).toBe(0);
+		const result = JSON.parse(stdout);
+		expect(result.tool.EDITOR).toBe("true");
+		expect(result.tool.VISUAL).toBe("true");
+		expect(result.tool.SSH_ASKPASS).toBe(NON_INTERACTIVE_ENV.SSH_ASKPASS);
+		expect(result.tool.TERM).toBe("xterm-256color");
+		expect(result.restored).toEqual({
+			EDITOR: "nvim", VISUAL: "", SSH_ASKPASS: "/host/askpass", SUDO_ASKPASS: null,
+			TERM: "xterm-256color", CI: null, GIT_EDITOR: null,
+			HOST_ENV_DOTENV_SECRET: null, HOST_ENV_LITERAL: literal,
+		});
+		expect(result.editor).toBe("nvim");
+		expect(result.term).toBe("xterm-256color");
+		expect(result.mode).toBe(0o600);
+		expect(await Bun.file(result.file).exists()).toBe(false);
+	} finally {
+		await fs.rm(tmp, { recursive: true, force: true });
+	}
+});
