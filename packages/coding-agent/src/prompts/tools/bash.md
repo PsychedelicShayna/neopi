@@ -10,3 +10,4 @@ Tool shells disable editors and credential prompts, but retain the host `TERM`. 
 Before starting a tmux server/pane or sibling TUI, use a subshell: `( . "$OMP_HOST_ENV_FILE"; "$SHELL" -lc '<launch command>' )`. The private 0600 POSIX file restores the original launcher environment, including unsetting tool-only overrides. Do not print or share it: it may contain credentials. It is removed when this npi process exits. This does not repair an already-poisoned tmux server's environment.
 When the runtime cannot read the pre-dotenv launch environment, values matching project dotenv files are excluded conservatively from the snapshot.
 After an abnormal exit, the next local tool launch prunes abandoned snapshots; OS-backed owner leases preserve snapshots still in use by live npi processes.
+Git repository-location variables are excluded from restoration so sibling tools discover their own working directory's repository.

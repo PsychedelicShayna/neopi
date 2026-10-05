@@ -133,11 +133,14 @@ function readLaunchEnv(): ReadonlyMap<string, string> | undefined {
 
 const launchEnvValues = readLaunchEnv();
 const projectEnvNamesLoadedByOmp = new Set<string>();
-const originalProcessEnv: Readonly<Record<string, string>> = Object.freeze(
-	launchEnvValues ? Object.fromEntries(launchEnvValues) : filterChildShellEnvInternal(process.env, process.cwd()),
-);
+const originalProcessEnv: Record<string, string> = launchEnvValues
+	? Object.fromEntries(launchEnvValues)
+	: filterChildShellEnvInternal(process.env, process.cwd());
+// Interactive restoration must not pin Git to the launcher's checkout either.
+stripGitRepoLocationEnv(originalProcessEnv);
+Object.freeze(originalProcessEnv);
 
-/** Launcher snapshot; without authoritative provenance, exclude matching project dotenv values. */
+/** Launcher snapshot with Git repository locators and unproven project dotenv values excluded. */
 export function getOriginalProcessEnv(): Readonly<Record<string, string>> {
 	return originalProcessEnv;
 }

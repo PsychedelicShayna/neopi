@@ -180,6 +180,8 @@ it("restores launcher editor and credentials for interactive children without un
 		const selected = [
 			"EDITOR", "VISUAL", "SSH_ASKPASS", "SUDO_ASKPASS", "TERM", "CI", "GIT_EDITOR",
 			"HOST_ENV_DOTENV_SECRET", "HOST_ENV_LITERAL",
+			"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+			"GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
 		];
 		const probe = `console.log(JSON.stringify(Object.fromEntries(${JSON.stringify(selected)}.map(key => [key, process.env[key] ?? null]))))`;
 		const script = [
@@ -206,6 +208,9 @@ it("restores launcher editor and credentials for interactive children without un
 				PATH: process.env.PATH ?? "", SHELL: "/bin/sh",
 				EDITOR: "nvim", VISUAL: "", SSH_ASKPASS: "/host/askpass", TERM: "xterm-256color",
 				HOST_ENV_LITERAL: literal,
+				GIT_DIR: "/launcher/git", GIT_WORK_TREE: "/launcher/tree", GIT_INDEX_FILE: "/launcher/index",
+				GIT_COMMON_DIR: "/launcher/common", GIT_OBJECT_DIRECTORY: "/launcher/objects",
+				GIT_ALTERNATE_OBJECT_DIRECTORIES: "/launcher/alternates",
 			},
 			stdout: "pipe",
 			stderr: "pipe",
@@ -224,6 +229,8 @@ it("restores launcher editor and credentials for interactive children without un
 			EDITOR: "nvim", VISUAL: "", SSH_ASKPASS: "/host/askpass", SUDO_ASKPASS: null,
 			TERM: "xterm-256color", CI: null, GIT_EDITOR: null,
 			HOST_ENV_DOTENV_SECRET: null, HOST_ENV_LITERAL: literal,
+			GIT_DIR: null, GIT_WORK_TREE: null, GIT_INDEX_FILE: null, GIT_COMMON_DIR: null,
+			GIT_OBJECT_DIRECTORY: null, GIT_ALTERNATE_OBJECT_DIRECTORIES: null,
 		});
 		expect(result.editor).toBe("nvim");
 		expect(result.term).toBe("xterm-256color");
