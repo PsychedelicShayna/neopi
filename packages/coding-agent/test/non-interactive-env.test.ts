@@ -186,6 +186,7 @@ it("restores launcher editor and credentials for interactive children without un
 			"OMP_HOST_ENV_FILE", "OMP_HOST_EDITOR", "OMP_HOST_VISUAL",
 			"OMP_HOST_SSH_ASKPASS", "OMP_HOST_SUDO_ASKPASS", "OMP_HOST_TERM",
 			"HOST_ENV_COMMAND_SECRET", "OMP_HOST_OVERLAY_KEYS",
+			"MallocStackLogging", "MallocStackLoggingNoCompact",
 		];
 		const probe = `console.log(JSON.stringify(Object.fromEntries(${JSON.stringify(selected)}.map(key => [key, process.env[key] ?? null]))))`;
 		const script = [
@@ -216,6 +217,7 @@ it("restores launcher editor and credentials for interactive children without un
 				GIT_DIR: "/launcher/git", GIT_WORK_TREE: "/launcher/tree", GIT_INDEX_FILE: "/launcher/index",
 				GIT_COMMON_DIR: "/launcher/common", GIT_OBJECT_DIRECTORY: "/launcher/objects",
 				GIT_ALTERNATE_OBJECT_DIRECTORIES: "/launcher/alternates",
+				MallocStackLogging: "off", MallocStackLoggingNoCompact: "1",
 			},
 			stdout: "pipe",
 			stderr: "pipe",
@@ -240,6 +242,7 @@ it("restores launcher editor and credentials for interactive children without un
 			OMP_HOST_ENV_FILE: null, OMP_HOST_EDITOR: null, OMP_HOST_VISUAL: null,
 			OMP_HOST_SSH_ASKPASS: null, OMP_HOST_SUDO_ASKPASS: null, OMP_HOST_TERM: null,
 			HOST_ENV_COMMAND_SECRET: null, OMP_HOST_OVERLAY_KEYS: null,
+			MallocStackLogging: null, MallocStackLoggingNoCompact: null,
 		});
 		expect(result.editor).toBe("nvim");
 		expect(result.term).toBe("xterm-256color");

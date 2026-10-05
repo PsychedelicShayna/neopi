@@ -110,13 +110,13 @@ export function stripGitRepoLocationEnv(
 
 const projectEnvNamesLoadedByOmp = new Set<string>();
 const originalProcessEnv: Record<string, string> = launchEnvValues
-	? Object.fromEntries(launchEnvValues)
+	? filterProcessEnv(Object.fromEntries(launchEnvValues))
 	: filterChildShellEnvInternal(startupProcessEnv!, startupCwd);
 // Interactive restoration must not pin Git to the launcher's checkout either.
 stripGitRepoLocationEnv(originalProcessEnv);
 Object.freeze(originalProcessEnv);
 
-/** Launcher snapshot with Git repository locators and unproven project dotenv values excluded. */
+/** Launcher snapshot with subprocess-unsafe values, Git locators, and unproven dotenv values excluded. */
 export function getOriginalProcessEnv(): Readonly<Record<string, string>> {
 	return originalProcessEnv;
 }
