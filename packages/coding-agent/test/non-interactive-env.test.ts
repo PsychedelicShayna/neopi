@@ -182,15 +182,16 @@ it("restores launcher editor and credentials for interactive children without un
 			"HOST_ENV_DOTENV_SECRET", "HOST_ENV_LITERAL",
 			"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
 			"GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+			"GPG_TTY", "OMPCODE", "CLAUDECODE", "SHELL",
 		];
 		const probe = `console.log(JSON.stringify(Object.fromEntries(${JSON.stringify(selected)}.map(key => [key, process.env[key] ?? null]))))`;
 		const script = [
 			`import { getHostEnvForTools } from ${JSON.stringify(hostModule)};`,
 			`import { buildNonInteractiveEnv } from ${JSON.stringify(toolModule)};`,
-			`import { filterChildShellEnv } from ${JSON.stringify(path.resolve(import.meta.dir, "../../utils/src/env.ts"))};`,
+			`import { getShellConfig } from ${JSON.stringify(path.resolve(import.meta.dir, "../../utils/src/procmgr.ts"))};`,
 			'process.env.EDITOR = "true"; process.env.TERM = "dumb";',
 			"const host = await getHostEnvForTools();",
-			"const env = { ...filterChildShellEnv(process.env), ...buildNonInteractiveEnv(host) };",
+			"const env = { ...getShellConfig().env, ...buildNonInteractiveEnv(host) };",
 			`const run = async restored => {`,
 			`	const child = Bun.spawn(["/bin/sh", "-c", restored ? '. "$OMP_HOST_ENV_FILE"; exec "$@"' : 'exec "$@"', "probe", process.execPath, "--no-env-file", "--eval", ${JSON.stringify(probe)}], { env, stdout: "pipe", stderr: "pipe" });`,
 			"	const output = await new Response(child.stdout).text();",
@@ -231,6 +232,7 @@ it("restores launcher editor and credentials for interactive children without un
 			HOST_ENV_DOTENV_SECRET: null, HOST_ENV_LITERAL: literal,
 			GIT_DIR: null, GIT_WORK_TREE: null, GIT_INDEX_FILE: null, GIT_COMMON_DIR: null,
 			GIT_OBJECT_DIRECTORY: null, GIT_ALTERNATE_OBJECT_DIRECTORIES: null,
+			GPG_TTY: null, OMPCODE: null, CLAUDECODE: null, SHELL: "/bin/sh",
 		});
 		expect(result.editor).toBe("nvim");
 		expect(result.term).toBe("xterm-256color");

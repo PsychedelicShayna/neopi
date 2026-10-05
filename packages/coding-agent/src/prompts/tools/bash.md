@@ -11,3 +11,4 @@ Before starting a tmux server/pane or sibling TUI, use a subshell: `( . "$OMP_HO
 When the runtime cannot read the pre-dotenv launch environment, values matching project dotenv files are excluded conservatively from the snapshot.
 After an abnormal exit, the next local tool launch prunes abandoned snapshots; OS-backed owner leases preserve snapshots still in use by live npi processes.
 Git repository-location variables are excluded from restoration so sibling tools discover their own working directory's repository.
+Restoration also removes variables added only by the centralized shell environment, including a synthetic `GPG_TTY` and coding-agent markers when absent from the launcher.
