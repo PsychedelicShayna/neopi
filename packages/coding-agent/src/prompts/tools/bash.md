@@ -8,3 +8,4 @@ No `head`/`tail`/redirection; output trunc by default, full result at `artifact:
 {{#if autoBackgroundEnabled}}Background results follow; NEVER poll; foreground wait unchanged.{{/if}}
 Tool shells disable editors and credential prompts, but retain the host `TERM`. `OMP_HOST_EDITOR`, `OMP_HOST_VISUAL`, `OMP_HOST_SSH_ASKPASS`, `OMP_HOST_SUDO_ASKPASS`, and `OMP_HOST_TERM` expose launcher values when present.
 Before starting a tmux server/pane or sibling TUI, use a subshell: `( . "$OMP_HOST_ENV_FILE"; "$SHELL" -lc '<launch command>' )`. The private 0600 POSIX file restores the original launcher environment, including unsetting tool-only overrides. Do not print or share it: it may contain credentials. It is removed when this npi process exits. This does not repair an already-poisoned tmux server's environment.
+When the runtime cannot read the pre-dotenv launch environment, values matching project dotenv files are excluded conservatively from the snapshot.

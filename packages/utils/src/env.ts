@@ -132,16 +132,15 @@ function readLaunchEnv(): ReadonlyMap<string, string> | undefined {
 }
 
 const launchEnvValues = readLaunchEnv();
+const projectEnvNamesLoadedByOmp = new Set<string>();
 const originalProcessEnv: Readonly<Record<string, string>> = Object.freeze(
-	launchEnvValues ? Object.fromEntries(launchEnvValues) : filterProcessEnv(process.env),
+	launchEnvValues ? Object.fromEntries(launchEnvValues) : filterChildShellEnvInternal(process.env, process.cwd()),
 );
 
-/** Environment supplied by the launcher, before tool overrides or project dotenv loading. */
+/** Launcher snapshot; without authoritative provenance, exclude matching project dotenv values. */
 export function getOriginalProcessEnv(): Readonly<Record<string, string>> {
 	return originalProcessEnv;
 }
-
-const projectEnvNamesLoadedByOmp = new Set<string>();
 
 function expandDotenvValues(values: Record<string, string>, env: Record<string, string>): Record<string, string> {
 	const expanded: Record<string, string> = {};

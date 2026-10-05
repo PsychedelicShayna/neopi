@@ -232,3 +232,35 @@ it("restores launcher editor and credentials for interactive children without un
 		await fs.rm(tmp, { recursive: true, force: true });
 	}
 });
+
+it("excludes autoloaded project credentials from host restoration when the launch environment is unavailable", async () => {
+	const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-host-fallback-"));
+	try {
+		await Bun.write(path.join(tmp, ".env"), "HOST_ENV_PROJECT_SECRET=project-only\nBASE=loaded\nHOST_ENV_EXPANDED=$BASE-secret\n");
+		const hostModule = path.resolve(import.meta.dir, "../src/exec/host-env.ts");
+		const script = [
+			'import { mock } from "bun:test";',
+			'import * as fs from "node:fs";',
+			"const originalRead = fs.readFileSync;",
+			'mock.module("node:fs", () => ({ ...fs, readFileSync: (file, ...args) => { if (file === "/proc/self/environ") throw new Error("procfs unavailable"); return originalRead(file, ...args); } }));',
+			`const { getHostEnvForTools } = require(${JSON.stringify(hostModule)});`,
+			"const host = await getHostEnvForTools();",
+			'const text = await Bun.file(host.OMP_HOST_ENV_FILE).text();',
+			'console.log(JSON.stringify({ secret: text.includes("HOST_ENV_PROJECT_SECRET"), expanded: text.includes("HOST_ENV_EXPANDED"), editor: host.OMP_HOST_EDITOR }));',
+		].join("\n");
+		const child = Bun.spawn([process.execPath, "--no-install", "--eval", script], {
+			cwd: tmp,
+			env: { HOME: tmp, PI_CONFIG_DIR: ".omp", XDG_STATE_HOME: "", XDG_CACHE_HOME: "", XDG_DATA_HOME: "", PATH: process.env.PATH ?? "", EDITOR: "nvim" },
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const [stdout, stderr, exitCode] = await Promise.all([
+			new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+		]);
+		expect(stderr).toBe("");
+		expect(exitCode).toBe(0);
+		expect(JSON.parse(stdout)).toEqual({ secret: false, expanded: false, editor: "nvim" });
+	} finally {
+		await fs.rm(tmp, { recursive: true, force: true });
+	}
+});
