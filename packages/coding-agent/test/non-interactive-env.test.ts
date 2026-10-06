@@ -178,15 +178,35 @@ it("restores launcher editor and credentials for interactive children without un
 		const hostModule = path.resolve(import.meta.dir, "../src/exec/host-env.ts");
 		const toolModule = path.resolve(import.meta.dir, "../src/exec/non-interactive-env.ts");
 		const selected = [
-			"EDITOR", "VISUAL", "SSH_ASKPASS", "SUDO_ASKPASS", "TERM", "CI", "GIT_EDITOR",
-			"HOST_ENV_DOTENV_SECRET", "HOST_ENV_LITERAL",
-			"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
-			"GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-			"GPG_TTY", "OMPCODE", "CLAUDECODE", "SHELL",
-			"OMP_HOST_ENV_FILE", "OMP_HOST_EDITOR", "OMP_HOST_VISUAL",
-			"OMP_HOST_SSH_ASKPASS", "OMP_HOST_SUDO_ASKPASS", "OMP_HOST_TERM",
-			"HOST_ENV_COMMAND_SECRET", "OMP_HOST_OVERLAY_KEYS",
-			"MallocStackLogging", "MallocStackLoggingNoCompact",
+			"EDITOR",
+			"VISUAL",
+			"SSH_ASKPASS",
+			"SUDO_ASKPASS",
+			"TERM",
+			"CI",
+			"GIT_EDITOR",
+			"HOST_ENV_DOTENV_SECRET",
+			"HOST_ENV_LITERAL",
+			"GIT_DIR",
+			"GIT_WORK_TREE",
+			"GIT_INDEX_FILE",
+			"GIT_COMMON_DIR",
+			"GIT_OBJECT_DIRECTORY",
+			"GIT_ALTERNATE_OBJECT_DIRECTORIES",
+			"GPG_TTY",
+			"OMPCODE",
+			"CLAUDECODE",
+			"SHELL",
+			"OMP_HOST_ENV_FILE",
+			"OMP_HOST_EDITOR",
+			"OMP_HOST_VISUAL",
+			"OMP_HOST_SSH_ASKPASS",
+			"OMP_HOST_SUDO_ASKPASS",
+			"OMP_HOST_TERM",
+			"HOST_ENV_COMMAND_SECRET",
+			"OMP_HOST_OVERLAY_KEYS",
+			"MallocStackLogging",
+			"MallocStackLoggingNoCompact",
 		];
 		const probe = `console.log(JSON.stringify(Object.fromEntries(${JSON.stringify(selected)}.map(key => [key, process.env[key] ?? null]))))`;
 		const script = [
@@ -210,20 +230,34 @@ it("restores launcher editor and credentials for interactive children without un
 		const child = Bun.spawn([process.execPath, "--no-install", "--eval", script], {
 			cwd: tmp,
 			env: {
-				HOME: tmp, PI_CONFIG_DIR: ".omp", XDG_STATE_HOME: "", XDG_CACHE_HOME: "", XDG_DATA_HOME: "",
-				PATH: process.env.PATH ?? "", SHELL: "/bin/sh",
-				EDITOR: "nvim", VISUAL: "", SSH_ASKPASS: "/host/askpass", TERM: "xterm-256color",
+				HOME: tmp,
+				PI_CONFIG_DIR: ".omp",
+				XDG_STATE_HOME: "",
+				XDG_CACHE_HOME: "",
+				XDG_DATA_HOME: "",
+				PATH: process.env.PATH ?? "",
+				SHELL: "/bin/sh",
+				EDITOR: "nvim",
+				VISUAL: "",
+				SSH_ASKPASS: "/host/askpass",
+				TERM: "xterm-256color",
 				HOST_ENV_LITERAL: literal,
-				GIT_DIR: "/launcher/git", GIT_WORK_TREE: "/launcher/tree", GIT_INDEX_FILE: "/launcher/index",
-				GIT_COMMON_DIR: "/launcher/common", GIT_OBJECT_DIRECTORY: "/launcher/objects",
+				GIT_DIR: "/launcher/git",
+				GIT_WORK_TREE: "/launcher/tree",
+				GIT_INDEX_FILE: "/launcher/index",
+				GIT_COMMON_DIR: "/launcher/common",
+				GIT_OBJECT_DIRECTORY: "/launcher/objects",
 				GIT_ALTERNATE_OBJECT_DIRECTORIES: "/launcher/alternates",
-				MallocStackLogging: "off", MallocStackLoggingNoCompact: "1",
+				MallocStackLogging: "off",
+				MallocStackLoggingNoCompact: "1",
 			},
 			stdout: "pipe",
 			stderr: "pipe",
 		});
 		const [stdout, stderr, exitCode] = await Promise.all([
-			new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+			child.exited,
 		]);
 		expect(stderr).toBe("");
 		expect(exitCode).toBe(0);
@@ -233,16 +267,35 @@ it("restores launcher editor and credentials for interactive children without un
 		expect(result.tool.SSH_ASKPASS).toBe(NON_INTERACTIVE_ENV.SSH_ASKPASS);
 		expect(result.tool.TERM).toBe("xterm-256color");
 		expect(result.restored).toEqual({
-			EDITOR: "nvim", VISUAL: "", SSH_ASKPASS: "/host/askpass", SUDO_ASKPASS: null,
-			TERM: "xterm-256color", CI: null, GIT_EDITOR: null,
-			HOST_ENV_DOTENV_SECRET: null, HOST_ENV_LITERAL: literal,
-			GIT_DIR: null, GIT_WORK_TREE: null, GIT_INDEX_FILE: null, GIT_COMMON_DIR: null,
-			GIT_OBJECT_DIRECTORY: null, GIT_ALTERNATE_OBJECT_DIRECTORIES: null,
-			GPG_TTY: null, OMPCODE: null, CLAUDECODE: null, SHELL: "/bin/sh",
-			OMP_HOST_ENV_FILE: null, OMP_HOST_EDITOR: null, OMP_HOST_VISUAL: null,
-			OMP_HOST_SSH_ASKPASS: null, OMP_HOST_SUDO_ASKPASS: null, OMP_HOST_TERM: null,
-			HOST_ENV_COMMAND_SECRET: null, OMP_HOST_OVERLAY_KEYS: null,
-			MallocStackLogging: null, MallocStackLoggingNoCompact: null,
+			EDITOR: "nvim",
+			VISUAL: "",
+			SSH_ASKPASS: "/host/askpass",
+			SUDO_ASKPASS: null,
+			TERM: "xterm-256color",
+			CI: null,
+			GIT_EDITOR: null,
+			HOST_ENV_DOTENV_SECRET: null,
+			HOST_ENV_LITERAL: literal,
+			GIT_DIR: null,
+			GIT_WORK_TREE: null,
+			GIT_INDEX_FILE: null,
+			GIT_COMMON_DIR: null,
+			GIT_OBJECT_DIRECTORY: null,
+			GIT_ALTERNATE_OBJECT_DIRECTORIES: null,
+			GPG_TTY: null,
+			OMPCODE: null,
+			CLAUDECODE: null,
+			SHELL: "/bin/sh",
+			OMP_HOST_ENV_FILE: null,
+			OMP_HOST_EDITOR: null,
+			OMP_HOST_VISUAL: null,
+			OMP_HOST_SSH_ASKPASS: null,
+			OMP_HOST_SUDO_ASKPASS: null,
+			OMP_HOST_TERM: null,
+			HOST_ENV_COMMAND_SECRET: null,
+			OMP_HOST_OVERLAY_KEYS: null,
+			MallocStackLogging: null,
+			MallocStackLoggingNoCompact: null,
 		});
 		expect(result.editor).toBe("nvim");
 		expect(result.term).toBe("xterm-256color");
@@ -256,7 +309,10 @@ it("restores launcher editor and credentials for interactive children without un
 it("excludes autoloaded project credentials from host restoration when the launch environment is unavailable", async () => {
 	const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-host-fallback-"));
 	try {
-		await Bun.write(path.join(tmp, ".env"), "HOST_ENV_PROJECT_SECRET=project-only\nBASE=loaded\nHOST_ENV_EXPANDED=$BASE-secret\n");
+		await Bun.write(
+			path.join(tmp, ".env"),
+			"HOST_ENV_PROJECT_SECRET=project-only\nBASE=loaded\nHOST_ENV_EXPANDED=$BASE-secret\n",
+		);
 		const hostModule = path.resolve(import.meta.dir, "../src/exec/host-env.ts");
 		const script = [
 			'import { spyOn } from "bun:test";',
@@ -267,7 +323,7 @@ it("excludes autoloaded project credentials from host restoration when the launc
 			'await runCli(["--profile", "work", "--help"]);',
 			`const { getHostEnvForTools } = require(${JSON.stringify(hostModule)});`,
 			"const host = await getHostEnvForTools();",
-			'const text = await Bun.file(host.OMP_HOST_ENV_FILE).text();',
+			"const text = await Bun.file(host.OMP_HOST_ENV_FILE).text();",
 			`const { getShellConfig } = require(${JSON.stringify(path.resolve(import.meta.dir, "../../utils/src/procmgr.ts"))});`,
 			`const restored = Bun.spawn(["/bin/sh", "-c", '. "$OMP_HOST_ENV_FILE"; printf "%s|%s|%s" "\${OMP_PROFILE-unset}" "\${PI_PROFILE-unset}" "\${PI_CODING_AGENT_DIR-unset}"'], {env: {...getShellConfig().env, ...host}, stdout: "pipe", stderr: "inherit"});`,
 			"const profiles = await new Response(restored.stdout).text();",
@@ -276,16 +332,31 @@ it("excludes autoloaded project credentials from host restoration when the launc
 		].join("\n");
 		const child = Bun.spawn([process.execPath, "--no-install", "--eval", script], {
 			cwd: tmp,
-			env: { HOME: tmp, PI_CONFIG_DIR: ".omp", XDG_STATE_HOME: "", XDG_CACHE_HOME: "", XDG_DATA_HOME: "", PATH: process.env.PATH ?? "", EDITOR: "nvim" },
+			env: {
+				HOME: tmp,
+				PI_CONFIG_DIR: ".omp",
+				XDG_STATE_HOME: "",
+				XDG_CACHE_HOME: "",
+				XDG_DATA_HOME: "",
+				PATH: process.env.PATH ?? "",
+				EDITOR: "nvim",
+			},
 			stdout: "pipe",
 			stderr: "pipe",
 		});
 		const [stdout, stderr, exitCode] = await Promise.all([
-			new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+			child.exited,
 		]);
 		expect(stderr).toBe("");
 		expect(exitCode).toBe(0);
-		expect(JSON.parse(stdout.trim().split("\n").at(-1)!)).toEqual({ secret: false, expanded: false, editor: "nvim", profiles: "unset|unset|unset" });
+		expect(JSON.parse(stdout.trim().split("\n").at(-1)!)).toEqual({
+			secret: false,
+			expanded: false,
+			editor: "nvim",
+			profiles: "unset|unset|unset",
+		});
 	} finally {
 		await fs.rm(tmp, { recursive: true, force: true });
 	}
@@ -304,7 +375,15 @@ it("prunes host credentials abandoned by SIGKILL without deleting live launch sn
 		const launch = async () => {
 			const child = Bun.spawn([process.execPath, "--no-env-file", "--no-install", "--eval", script], {
 				cwd: tmp,
-				env: { HOME: tmp, PI_CONFIG_DIR: ".omp", XDG_STATE_HOME: "", XDG_CACHE_HOME: "", XDG_DATA_HOME: "", PATH: process.env.PATH ?? "", HOST_PRIVATE_CREDENTIAL: "private" },
+				env: {
+					HOME: tmp,
+					PI_CONFIG_DIR: ".omp",
+					XDG_STATE_HOME: "",
+					XDG_CACHE_HOME: "",
+					XDG_DATA_HOME: "",
+					PATH: process.env.PATH ?? "",
+					HOST_PRIVATE_CREDENTIAL: "private",
+				},
 				stdout: "pipe",
 				stderr: "inherit",
 			});
