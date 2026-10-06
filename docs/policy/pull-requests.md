@@ -6,6 +6,8 @@ PR lifecycle, body sections, babysitting loop and round cap, flaky-CI evidence, 
 
 issue → worktree from `origin/nightly` → PR into `nightly` labelled `needs-review` → scoped Codex review ([review-bots.md#codex](review-bots.md#codex)) → babysit → `ready-for-merge` → GitHub auto-merge → worktree removed.
 
+After applying `ready-for-merge`, the labelling agent also runs `gh pr merge <n> --auto --merge`. GitHub merges once the ruleset conditions (an approving bot review and green checks) are met. The label is the human-readable state; the auto-merge flag is the mechanism.
+
 `neopi` receives only `promote/<tag>` PRs ([builds.md#promotion](builds.md#promotion)) and `hotfix/<slug>` PRs; the owner merges both.
 
 ## Labels

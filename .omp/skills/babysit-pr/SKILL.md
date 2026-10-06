@@ -178,8 +178,8 @@ gh api graphql --paginate -f id=<thread> -f query='
 For each configured bot other than Codex, use the request and completion
 signals from the policy's bot table.
 
-`nightly` rulesets enforce the auto-merge gate; your label is the request.
-Apply it only when the gate holds.
+`nightly` rulesets enforce the auto-merge gate. The label records the state;
+step 8 also enables auto-merge after the gate holds.
 
 ## 2. Handle CI
 
@@ -243,8 +243,9 @@ Batch every fix you know about before pushing.
 
 ## 5. Push, then request a round
 
-Push your own topic branch, then request a new round with the scoped
-template from `docs/policy/review-bots.md` (body file, NOTE header first):
+Push your own topic branch, then request a round using
+`docs/policy/review-bots.md` (body file, NOTE header first): the full scoped
+template once per PR, then the short form after each subsequent push:
 
 ```sh
 git push                  # or the github tool's pr_push after pr_checkout
@@ -323,16 +324,20 @@ gh api graphql -f id=<thread> -f query='
   mutation($id:ID!){unresolveReviewThread(input:{threadId:$id}){thread{isResolved}}}'
 ```
 
-If the PR, or an issue it closes, carries `sentinel-review-requested` (always
-true for `promote/<tag>` PRs), the gate also requires the sentinel panel's
-sealed unanimous approval on `GATE_HEAD` (`docs/policy/review-bots.md`
-› Sentinel). Without that evidence the gate fails: stop and report to the
-owner.
+If the PR, or an issue it closes, carries `sentinel-review-requested`, follow
+`docs/policy/review-bots.md` › Sentinel. Until its OPEN roster and reveal
+mechanics are settled, `nightly` → `neopi` promotions use the owner's merge
+as their gate; do not block them on an undefined panel quorum. Once the
+sentinel exists, its ruleset-required sealed unanimous approval must cover
+`GATE_HEAD`. Without that required evidence, stop and report to the owner.
 
-Then label (agents never merge; the `nightly` ruleset auto-merges):
+For PRs into `nightly`, then label and enable auto-merge (GitHub merges only
+when the ruleset's approving bot review and green checks hold). PRs into
+`neopi` remain for the owner's merge; agents do not enable auto-merge there.
 
 ```sh
 gh pr edit $PR --remove-label needs-review --add-label ready-for-merge
+gh pr merge $PR --auto --merge --match-head-commit "$GATE_HEAD"
 ```
 
 At the round cap or silence limit instead:

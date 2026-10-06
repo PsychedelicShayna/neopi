@@ -6,7 +6,7 @@ The babysitting loop, round cap, and baseline-issue rule: see the workspace AGEN
 
 | Bot | Author login (REST / GraphQL) | Request a round | Round complete when | Severity marker |
 | --- | --- | --- | --- | --- |
-| Codex connector | `chatgpt-codex-connector[bot]` / `chatgpt-codex-connector` | The [Codex template](#codex) as a PR comment. | The summary comment (`<!-- codex-pull-request-review-summary -->`) shows both **Code Review** and **Security Review** completed on the head commit. A 👍 reaction means both finished with no findings; 👀 means a pass is still running. | A `P<n>` badge opens each inline finding. Security findings start with `<!-- codex-security-review-finding:v1 -->` and a `Security:` title. |
+| Codex connector | `chatgpt-codex-connector[bot]` / `chatgpt-codex-connector` | The [Codex template](#codex) once per PR, then the short-form request after each subsequent push. | The summary comment (`<!-- codex-pull-request-review-summary -->`) shows both **Code Review** and **Security Review** completed on the head commit. A 👍 reaction means both finished with no findings; 👀 means a pass is still running. | A `P<n>` badge opens each inline finding. Security findings start with `<!-- codex-security-review-finding:v1 -->` and a `Security:` title. |
 
 The `babysit-pr` skill reads every backticked login in column 2 from the PR's base-branch copy of this file; keep both login forms backticked and keep the table directly under this heading. A reply beginning `Codex Review: Something went wrong` is a failed round, not a clean one; the latest response controls.
 
@@ -24,7 +24,7 @@ Checking out and reading a PR is always allowed. Execute its code on the maintai
 
 ## Codex
 
-Never mention `@codex` with an empty body. The PR author posts ONE comment from this template. Fill `{MODEL}` with the composing model, `{BASE}` with the base branch, `{ONE_PARAGRAPH_WHAT_AND_WHY}` with the change, and `{ISSUE}` with the linked issue number (`none` when there is none). Disable auto-invoke if Codex reviews unscoped.
+The PR author posts the full scoped template once per PR. Fill `{MODEL}` with the composing model, `{BASE}` with the base branch, `{ONE_PARAGRAPH_WHAT_AND_WHY}` with the change, and `{ISSUE}` with the linked issue number (`none` when there is none). Disable auto-invoke if Codex reviews unscoped.
 
 ```markdown
 > [!NOTE]
@@ -47,9 +47,22 @@ Linked issue: #{ISSUE}
 
 Extra Context instructions: upstream syncs use [upstream-sync.md#6-publish](upstream-sync.md#6-publish); promotions scope to "our fork's issues, not upstream ghosts" ([builds.md#promotion](builds.md#promotion)).
 
+After each subsequent push, re-request review with this short form. Fill `{SHA}` with the pushed head commit; the scope remains the full request above.
+
+```markdown
+> [!NOTE]
+> {MODEL} on behalf of PsychedelicShayna
+
+@codex review
+
+Head {SHA}; same scope as the request above.
+```
+
 ## Sentinel
 
-Mandatory for `nightly` → `neopi` promotions and for PRs carrying `sentinel-review-requested`; otherwise optional by @-mention.
+Once operational, mandatory for `nightly` → `neopi` promotions and for PRs carrying `sentinel-review-requested`; otherwise optional by @-mention.
+
+Until the sentinel roster and reveal mechanics are settled (OPEN), the gate for `nightly` → `neopi` promotions is the owner's merge, not an undefined panel quorum. The sentinel becomes required by ruleset when it exists.
 
 Question: "will I regret merging this?" Judge purpose/project fit, architecture, maintainability, UI coherence, conventions, and value versus risk. Bug-hunting is Codex's job.
 

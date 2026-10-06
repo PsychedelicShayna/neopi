@@ -1,5 +1,5 @@
 #!/bin/sh
-# Refuse push on NeoPi's protected branches. See docs/policy/branches.md.
+# Refuse pushes on or to NeoPi's protected branches. See docs/policy/branches.md.
 # NEOPI_HOOK_BRANCH_OVERRIDE fakes the current branch for dry tests.
 branch=${NEOPI_HOOK_BRANCH_OVERRIDE:-$(git symbolic-ref --quiet --short HEAD 2>/dev/null)}
 case $branch in
@@ -9,4 +9,13 @@ neopi | nightly)
 	exit 1
 	;;
 esac
+while read -r local_ref local_sha remote_ref remote_sha; do
+	case $remote_ref in
+	refs/heads/neopi | refs/heads/nightly)
+		echo "pre-push: refusing to push to protected remote ref '$remote_ref'." >&2
+		echo "pre-push: push your topic branch instead (docs/policy/branches.md)." >&2
+		exit 1
+		;;
+	esac
+done
 exit 0
