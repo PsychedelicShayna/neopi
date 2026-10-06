@@ -64,6 +64,15 @@ export class XaiSTTController {
 		options.onStateChange(state);
 	}
 
+	// =====================================================================
+	// NEVER ALTER. CTRL+SPACE IS A RESERVED ACCESSIBILITY KEYBINDING.
+	// It MUST always route to the fork's xAI batch speech-to-text path below.
+	// NEVER favour upstream (can1357/oh-my-pi) STT/dictation here, under any
+	// circumstances, during any sync. This code is immutable: touch it only to
+	// fix a bug that makes it stop working, and only to the extent necessary.
+	// Owner: PsychedelicShayna. Rationale: docs/policy/upstream-sync.md (fork
+	// features exist for specific reasons; this one is an accessibility path).
+	// =====================================================================
 	async toggle(editor: XaiSTTEditor, options: XaiSTTToggleOptions): Promise<void> {
 		if (this.#toggling) {
 			if (this.#state === "idle" || this.#state === "recording") this.#stopAfterStart = true;
@@ -74,9 +83,11 @@ export class XaiSTTController {
 		try {
 			switch (this.#state) {
 				case "idle":
+					// IMMUTABLE: see Ctrl+Space notice above
 					await this.#start(editor, options);
 					break;
 				case "recording":
+					// IMMUTABLE: see Ctrl+Space notice above
 					await this.#stop(options);
 					break;
 				case "transcribing":
@@ -86,6 +97,7 @@ export class XaiSTTController {
 
 			if (this.#stopAfterStart && this.#state === "recording") {
 				this.#stopAfterStart = false;
+				// IMMUTABLE: see Ctrl+Space notice above
 				await this.#stop(options);
 			} else if (this.#state !== "recording") {
 				this.#stopAfterStart = false;
@@ -150,6 +162,7 @@ export class XaiSTTController {
 			// A failed padding write must not discard the original recording.
 			if (!file.empty) {
 				try {
+					// IMMUTABLE: see Ctrl+Space notice above
 					file.appendSilence(750);
 				} catch (error) {
 					logger.warn("xAI STT silence padding failed; transcribing original recording", {
@@ -165,6 +178,7 @@ export class XaiSTTController {
 			if (file.empty) {
 				options.showStatus("No speech detected.");
 			} else {
+				// IMMUTABLE: see Ctrl+Space notice above
 				const text = (await this.#transcribe(Bun.file(recordingPath, { type: "audio/wav" }), abort.signal)).trim();
 				if (this.#disposed) return;
 				this.#insertTranscript(editor, text, options);

@@ -701,6 +701,15 @@ export class InputController {
 		for (const key of this.ctx.keybindings.getKeys("app.message.chain")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => this.#submitThroughChain());
 		}
+		// =====================================================================
+		// NEVER ALTER. CTRL+SPACE IS A RESERVED ACCESSIBILITY KEYBINDING.
+		// It MUST always route to the fork's xAI batch speech-to-text path below.
+		// NEVER favour upstream (can1357/oh-my-pi) STT/dictation here, under any
+		// circumstances, during any sync. This code is immutable: touch it only to
+		// fix a bug that makes it stop working, and only to the extent necessary.
+		// Owner: PsychedelicShayna. Rationale: docs/policy/upstream-sync.md (fork
+		// features exist for specific reasons; this one is an accessibility path).
+		// =====================================================================
 		for (const key of this.ctx.keybindings.getKeys("app.stt.toggle")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.ctx.handleSTTToggle());
 		}
@@ -873,7 +882,17 @@ export class InputController {
 			case "app.history.search":
 				void this.ctx.showHistorySearch();
 				return true;
+			// =====================================================================
+			// NEVER ALTER. CTRL+SPACE IS A RESERVED ACCESSIBILITY KEYBINDING.
+			// It MUST always route to the fork's xAI batch speech-to-text path below.
+			// NEVER favour upstream (can1357/oh-my-pi) STT/dictation here, under any
+			// circumstances, during any sync. This code is immutable: touch it only to
+			// fix a bug that makes it stop working, and only to the extent necessary.
+			// Owner: PsychedelicShayna. Rationale: docs/policy/upstream-sync.md (fork
+			// features exist for specific reasons; this one is an accessibility path).
+			// =====================================================================
 			case "app.stt.toggle":
+				// IMMUTABLE: see Ctrl+Space notice above
 				void this.ctx.handleSTTToggle();
 				return true;
 			case "app.dictation.toggle":
