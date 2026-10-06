@@ -1,6 +1,6 @@
 # Review PRs
 
-Parallel PR triage: decide merge-worthiness, prepare rebased worktrees, fix blockers, return them for human merge.
+Parallel PR triage: decide merge-worthiness, prepare rebased worktrees, fix blockers. `nightly` PRs then follow the auto-merge path; `neopi` PRs return to the owner for merge (`docs/policy/pull-requests.md`).
 
 ## Arguments
 
@@ -29,10 +29,10 @@ Assign each PR's number, head ref, author, and workflow. Agents isolate; use `ir
 #### Read and decide
 
 1. Read `pr://<N>` (comments default; `?comments=0` skips) and `pr://<N>/diff` (changed-file listing). Full unified diff: `pr://<N>/diff/all`; file slice: `pr://<N>/diff/<i>`.
-2. Check `git log origin/main` and `gh search prs` for an already-landed equivalent.
+2. Check `git log origin/<base>` (the PR's base branch, normally `nightly`) and `gh search prs` for an already-landed equivalent.
 3. Decision:
    - `slop`: AI-generated noise, broken, off-spec, or net-negative. Drop; 1–2-line justification; no checkout.
-   - `superseded`: fixed/merged in main or newer PR. Drop with pointer.
+   - `superseded`: fixed/merged in the base branch or newer PR. Drop with pointer.
    - `worthy`: proceed.
 
 Ambiguous: `worthy`; human decides on a real branch.
@@ -71,8 +71,9 @@ Before `pr_checkout`, derive `$MAIN` from original cwd: `git rev-parse --show-to
 #### Rebase
 
 ```bash
-git fetch origin main
-git rebase origin/main
+BASE=$(gh pr view <N> --json baseRefName --jq .baseRefName)
+git fetch origin "$BASE"
+git rebase "origin/$BASE"
 ```
 
 Mechanical conflicts (formatting, import order, adjacent edits): resolve, continue. Semantic conflicts: abort, note final report, do not commit.
@@ -85,16 +86,9 @@ Each fix: read existing patterns; follow `AGENTS.md` conventions; add/update beh
 
 #### Commit
 
-One conventional commit/logical fix atop rebased PR branch:
+One logical commit per fix atop the rebased PR branch, per `docs/policy/commits.md`, with `Addresses review feedback on #<PR>.` in the body.
 
-```bash
-git add -A
-git commit -m "fix(<scope>): <what & why>
-
-Addresses review feedback on #<PR>."
-```
-
-Do NOT amend author commits, push, merge, or force-push author history; human reviews/merges.
+Do NOT amend author commits, push, merge, or force-push author history.
 
 #### Report
 
@@ -118,11 +112,11 @@ After all agents finish, print:
 |----|-------|----------|--------|-------|----------|
 ```
 
-Then worktree paths grouped by decision for `cd` and merge.
+Then worktree paths grouped by decision for `cd` and handoff.
 
 ## Rules
 
 - MUST use parallel subagents, one/PR; NEVER serial loop.
 - `slop`/`superseded`: skip checkout; record decision only.
 - Fixes limited to merge blockers in that PR's diff.
-- MUST NOT push or merge; human reviews and merges.
+- MUST NOT push or merge; merge authority: `docs/policy/pull-requests.md`.

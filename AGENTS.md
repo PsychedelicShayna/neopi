@@ -20,13 +20,16 @@ This repo contains multiple packages, but **`packages/coding-agent/`** is the pr
 - NEVER use a remote installer, a global package-manager install, `bun setup`,
   or `scripts/link-omp.sh` to install this fork. Build from the reviewed
   checkout and copy `dist/npi` to the dedicated `npi` path.
+- Before building in a fresh clone, run `git config core.hooksPath .githooks`.
 
 ## Fork maintenance
 
+Repository process (branches, commits, PRs, reviews, syncs, builds) lives in docs/policy/; inside this repo those files override any global or injected commit/PR rule. Start at `docs/policy/README.md`; workspace-wide rules are in the workspace AGENTS.md (parent of this repository).
+
 Before adding fork behavior, integrating upstream, or rebasing a fork PR, read
-`docs/agents/fork-maintenance.md` for extension-first placement and compatibility
-checks. Before synchronizing an upstream release, read and follow
-`docs/agents/upstream-sync.md`.
+`docs/agents/fork-maintenance.md` for extension-first placement, compatibility
+checks, and the fork feature register. Before synchronizing an upstream release,
+read and follow `docs/policy/upstream-sync.md`.
 
 ## Fork self-update
 
@@ -35,17 +38,7 @@ checks. Before synchronizing an upstream release, read and follow
 - The executable basename and exact argument list gate that rewrite.
   `npi update --check`, `npi update --help`, and any additional arguments keep
   the ordinary update-command behavior.
-- Updates MUST follow `docs/agents/upstream-sync.md`: preserve WIP and ahead
-  commits; merge prerequisite PRs only after validation; fetch the remote
-  default and create a fresh worktree from it. Merge the newest upstream
-  release tag; resolve every conflict personally, sequentially, with a
-  contemporaneous ledger. Sign logical commits with actual-model attribution.
-- MUST prove checks, build, staged install, and runtime smoke before PR merge.
-  NEVER commit or push directly to the default branch. After merge, fast-forward
-  only an ancestor checkout; preserve divergent work through topic/recovery
-  refs and follow the documented safe realignment procedure instead.
-- Install only `packages/coding-agent/dist/npi` at the dedicated `npi` path
-  and smoke-test the installed executable. NEVER use the upstream installer for this source fork.
+- The update procedure is `docs/policy/upstream-sync.md`; builds and installs follow `docs/policy/builds.md`.
 
 
 
@@ -68,22 +61,7 @@ checks. Before synchronizing an upstream release, read and follow
 
 ## GitHub
 
-- Before posting a GitHub comment or creating an issue, MUST show the target and proposed text and obtain user confirmation. An explicit instruction to post supplied text to a specified target already counts as confirmation.
-- A request to address or fix PR feedback permits drafting replies, not posting them without confirmation. A request only to get or check comments is read-only.
-- When authorized to resolve review feedback, MUST verify the fix, obtain approval for a factual reply citing the change and verification, and post it in the existing thread before resolving. NEVER resolve if the reply is unapproved or posting fails.
-- Permission to work on a PR does not authorize unrelated comments or issue creation.
-
-### Pull requests
-
-When authorized to create or edit a contributor-submitted PR, follow the checklist below. RoboOMP-managed PRs follow their dedicated workflow and enforced body format in `python/robomp/src/prompts/system_append.md` instead.
-
-- MUST read `CONTRIBUTING.md` and `.github/PULL_REQUEST_TEMPLATE.md` first. Preserve the template sections and checklist, including when shortening an existing description.
-- For user-facing changes, MUST follow the [Changelog](#changelog) attribution rules. Internal issue fixes keep their issue links. For external contributions, add the PR link and contributor credit after GitHub assigns the number, then push the entry before marking the changelog checklist item complete.
-- MUST read back the published PR description after creating or editing it. Check only verified checklist items; explain skipped or inapplicable checks in `Testing`.
-
-Authorized exception: the Issue Funnel seat (`IssueFunnel` / Rue) may publish and amend issues per `docs/agents/issue-funnel.md`. Other seats still follow the two rules above.
-
-Authorized exception: an owner's standing authorization to babysit a PR covers, on that PR only, the GitHub actions listed in `docs/agents/pr-review-bots.md` › Authorization: requesting bot reviews, and replying to and resolving review-bot threads. Threads from human reviewers still need confirmation under the GitHub rules above.
+GitHub comments, PR publication, labels, review replies, and merge authority: `docs/policy/pull-requests.md` and `docs/policy/review-bots.md`. For user-facing changes, also follow the [Changelog](#changelog) attribution rules. RoboOMP-managed PRs follow `python/robomp/src/prompts/system_append.md`; the Issue Funnel seat (`IssueFunnel` / Rue) may publish and amend issues per `docs/agents/issue-funnel.md`.
 
 ## Code Quality
 
@@ -303,7 +281,7 @@ For the bash tool specifically:
 
 ## Commands
 
-- NEVER commit unless asked.
+- Commits follow `docs/policy/commits.md`.
 - Never use `tsc`/`npx tsc` — always `bun check`.
 - Never run `cargo test` directly for Rust tests — use `bun run test:rs`. It runs `cargo nextest run` (config: `.config/nextest.toml`) followed by a `cargo test --doc` pass, because nextest does not execute doctests. The doctest pass runs every runnable doctest in the workspace's lib crates; today that is tree-sitter-go's one example (pi-natives is a `cdylib`, which rustdoc skips; pi-builtins' examples are `ignore`d vendored uutils docs).
 - Merge commits (maintainer merges of PRs) follow: `Merge PR #<number>: <conventional PR subject> (@<author>)` — e.g. `Merge PR #6386: feat(catalog): add native Meta Model API provider (@eggpeat)`.
@@ -394,10 +372,7 @@ Location: `packages/*/CHANGELOG.md` (per package).
 
 ## Releasing
 
-1. Ensure all changes since last release are in each affected package's `[Unreleased]` section.
-2. Run `bun run release`.
-
-The script handles version bump, CHANGELOG finalization, commit, tag, publish, and adding new `[Unreleased]` sections.
+NeoPi builds, tags, and promotion: `docs/policy/builds.md`. `bun run release` is upstream's npm release flow; NEVER run it here.
 
 ## Agent skills
 
@@ -418,6 +393,5 @@ Use the multi-context layout rooted at `CONTEXT-MAP.md`. See
 
 ### PR review bots
 
-PRs merge only when CI is green and the latest round from every review bot is
-clean. Use the `babysit-pr` skill to get there. See
-`docs/agents/pr-review-bots.md` and `docs/adr/0001-pr-review-bot-merge-gate.md`.
+Use the `babysit-pr` skill to drive a PR through review. Rules:
+`docs/policy/review-bots.md`.

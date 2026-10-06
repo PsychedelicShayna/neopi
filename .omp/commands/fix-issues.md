@@ -36,7 +36,7 @@ Each subagent MUST:
 
 ### b. Diagnose/reproduce
 
-MUST reproduce in current cwd on `main`, before any worktree.
+MUST reproduce in a clean `nightly` checkout at `origin/nightly`, before any worktree.
 
 1. Read relevant checkout source; state concrete 1–2-sentence failure hypothesis.
 2. Under affected package, create focused `repro-issue-<N>-<slug>.test.ts` (or `.rs`, etc.): unique, greppable, deletable.
@@ -52,14 +52,13 @@ Confirmed local repro required.
 
 ```bash
 MAIN="$(git rev-parse --show-toplevel)"
-ENC="$(printf '%s' "$MAIN" | sed 's|[/\\:]|-|g')"
-WT="$HOME/.omp/wt/${ENC}/fix-issue-<N>"
+WT="$(dirname "$MAIN")/neopi-wt-fix-issue-<N>"
 
-git -C "$MAIN" fetch origin main
-git -C "$MAIN" worktree add -B "fix/issue-<N>" "$WT" origin/main
+git -C "$MAIN" fetch origin
+git -C "$MAIN" worktree add "$WT" -b "fix/issue-<N>" origin/nightly
 ```
 
-Branch: `fix/issue-<N>`; `fix/issue-<N>-<slug>` for multiple fixes. Worktree path follows `pr_checkout` convention.
+Branch: `fix/issue-<N>`; `fix/issue-<N>-<slug>` for multiple fixes. Branch and worktree rules: `docs/policy/branches.md`.
 
 ### d. Symlink artifacts
 
@@ -91,18 +90,9 @@ MUST NOT symlink whole `packages/natives/native/`: shadows tracked source.
 
 ### f. Commit
 
-One logical conventional commit with `Fixes #<N>`:
+One logical commit per `docs/policy/commits.md`, with `Fixes #<N>` in the body.
 
-```bash
-git add -A
-git commit -m "fix(<scope>): <one-line summary>
-
-<short body explaining root cause and the fix>
-
-Fixes #<N>."
-```
-
-Do NOT push; human pushes/opens PR.
+Push the branch and open the PR into `nightly` per `docs/policy/pull-requests.md` (labels `needs-review` and `bug`), then post the scoped Codex request from `docs/policy/review-bots.md`.
 
 ### g. Report
 
@@ -110,9 +100,10 @@ Do NOT push; human pushes/opens PR.
 Issue #<N>  <title>
 Status:    fixed | unreproduced | not-a-bug | existing-pr (#<M>)
 Repro:     <test path inside worktree>            (if applicable)
-Worktree:  ~/.omp/wt/.../fix-issue-<N>            (if created)
+Worktree:  <repo-parent>/neopi-wt-fix-issue-<N>  (if created)
 Branch:    fix/issue-<N>                          (if created)
 Commits:   <shas + one-liners>                    (if any)
+PR:        <url>                                  (if opened)
 Notes:     <root cause in one sentence; or what info is missing>
 ```
 
@@ -125,12 +116,12 @@ After all subagents, print:
 |---|-------|--------|----------------|
 ```
 
-Group worktree paths by status, `fixed` first, for batch `cd`/push.
+Group worktree paths and PR links by status, `fixed` first.
 
 ## Rules
 
-MUST: reproduce on current-cwd `main` before worktree; parallel one-issue subagents; check existing PR first and divert reasonable ones to `review-prs`; symlink `target`, `node_modules`, native `*.node` before worktree builds/tests; conventional commits with body `Fixes #<N>`.
+MUST: reproduce on `nightly` before worktree; parallel one-issue subagents; check existing PR first and divert reasonable ones to `review-prs`; symlink `target`, `node_modules`, native `*.node` before worktree builds/tests; commits per `docs/policy/commits.md`.
 
-MUST NOT: symlink entire `packages/natives/native/`; push, open PRs, or comment on issues; ship stubs, product-code mocks, or `TODO: implement` placeholders; expand beyond reported bug into adjacent code smells.
+MUST NOT: symlink entire `packages/natives/native/`; merge PRs or comment on issues; ship stubs, product-code mocks, or `TODO: implement` placeholders; expand beyond reported bug into adjacent code smells.
 
-Failed repro → delete temporary cwd test before yielding; leave original checkout clean.
+Failed repro → delete temporary test before yielding; leave the `nightly` checkout clean.

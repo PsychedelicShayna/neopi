@@ -1,5 +1,7 @@
 # Release
 
+Upstream oh-my-pi package release flow (commits and pushes directly to `main`). NEVER run it in NeoPi; NeoPi builds, tags, and promotion follow `docs/policy/builds.md`.
+
 Release all packages at specified version.
 
 ## Arguments

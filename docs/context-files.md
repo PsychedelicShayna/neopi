@@ -185,7 +185,7 @@ Use a top-level **`RULES.md`** for the handful of hard requirements that must st
 ```markdown
 # ~/.omp/agent/RULES.md
 
-Never commit or push unless the user explicitly asks.
+Do not push to protected branches.
 Do not edit generated files.
 ```
 

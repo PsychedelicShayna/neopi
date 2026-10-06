@@ -70,7 +70,7 @@ This repository does not prescribe a remote installer or a global package-manage
 
 ## Updating
 
-Run `npi update` for the fork-aware interactive update path. Maintainers integrating upstream releases must use the origin-based worktree and PR procedure in [docs/agents/upstream-sync.md](docs/agents/upstream-sync.md); the remote default branch is the source of truth.
+Run `npi update` for the fork-aware interactive update path. Maintainers integrating upstream releases must use the origin-based worktree and PR procedure in [docs/policy/upstream-sync.md](docs/policy/upstream-sync.md); fetched `origin/nightly` is the integration base.
 
 ## Capture an idea
 
@@ -78,7 +78,7 @@ Run `npi update` for the fork-aware interactive update path. Maintainers integra
 
 ## Working on NeoPi
 
-- Read [AGENTS.md](AGENTS.md) before changing code or installing a build.
+- Read [AGENTS.md](AGENTS.md) before changing code or installing a build, and [docs/policy/](docs/policy/README.md) for branches, commits, PRs, and builds.
 - Read [docs/neopi-fork.md](docs/neopi-fork.md) before changing fork-specific behavior.
 - Track work in [GitHub Issues](https://github.com/PsychedelicShayna/neopi/issues).
 - Follow [issue-tracker mechanics](docs/agents/issue-tracker.md) and [triage-label definitions](docs/agents/triage-labels.md) when publishing or triaging issues.

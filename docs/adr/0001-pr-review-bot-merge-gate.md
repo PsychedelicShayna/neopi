@@ -1,6 +1,6 @@
 # 0001: Merge only when CI and every review bot's latest round are clean
 
-Status: accepted (2026-09-28)
+Status: superseded (2026-10-06) by [`docs/policy/review-bots.md`](../policy/review-bots.md) and [`docs/policy/pull-requests.md`](../policy/pull-requests.md); agents no longer merge. Kept as history.
 
 Automated reviewers comment on every fork PR. As of this ADR, that is the
 Codex connector (`chatgpt-codex-connector[bot]`), which runs a code review and
@@ -11,8 +11,7 @@ the latest review round from every configured bot, including the security
 review of the head commit, has no P0/P1 finding. After every push, agents
 explicitly request a new round from each bot. Every bot thread gets a factual
 reply before it is resolved. Security findings are never deferred. The
-operating rules are in
-[`docs/agents/pr-review-bots.md`](../agents/pr-review-bots.md).
+operating rules were in `docs/agents/pr-review-bots.md` (removed).
 
 ## Context
 

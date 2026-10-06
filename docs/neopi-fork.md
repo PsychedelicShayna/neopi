@@ -14,7 +14,7 @@ git log --no-merges v18.2.5..origin/neopi
 git diff --stat v18.2.5...origin/neopi
 ```
 
-Counts move; rerun the commands. For the repeatable release-integration procedure, read [docs/agents/upstream-sync.md](agents/upstream-sync.md).
+Counts move; rerun the commands. For the repeatable release-integration procedure, read [docs/policy/upstream-sync.md](policy/upstream-sync.md).
 
 ## User eval: JavaScript, Ruby, Julia, and plugins
 
@@ -109,7 +109,7 @@ An unregistered `agent` value shaped like `provider/model[:effort]` or `@role[:e
 
 NeoPi builds `packages/coding-agent/dist/npi` and installs only as `npi`. Exact argv `npi update` launches the fork-specific interactive update request from `packages/coding-agent/src/prompts/npi-update.md`; extra update flags retain ordinary updater behavior.
 
-Early binary and deployment work is recorded by `da8bb86645`, `e795702ff4`, `64380829e2`, `05380db554`, and `bc1c74703d`. Current policy supersedes their historical command names; follow `AGENTS.md` and `docs/agents/upstream-sync.md`.
+Early binary and deployment work is recorded by `da8bb86645`, `e795702ff4`, `64380829e2`, `05380db554`, and `bc1c74703d`. Current policy supersedes their historical command names; follow `AGENTS.md` and `docs/policy/upstream-sync.md`.
 
 ## Portable flash and RAM operation
 
@@ -177,7 +177,7 @@ Steps without a model use the **Prose** role (`@prose`), which falls back to the
 
 ## Upstream synchronization
 
-Recent release integrations landed through [PR #62](https://github.com/PsychedelicShayna/neopi/pull/62) and [PR #67](https://github.com/PsychedelicShayna/neopi/pull/67). Future integrations follow the origin-snapshot, recovery-ref, conflict-ledger, verification, and PR process in [docs/agents/upstream-sync.md](agents/upstream-sync.md).
+Recent release integrations landed through [PR #62](https://github.com/PsychedelicShayna/neopi/pull/62) and [PR #67](https://github.com/PsychedelicShayna/neopi/pull/67). Future integrations follow the origin-snapshot, recovery-ref, conflict-ledger, verification, and PR process in [docs/policy/upstream-sync.md](policy/upstream-sync.md).
 
 ## Boundaries
 

@@ -1084,7 +1084,7 @@ Change (one canonical todo-view state, A5):
 
 ## 7. Milestones
 
-Each milestone ends with a critic pass. No commits unless asked (AGENTS.md).
+Each milestone ends with a critic pass. Commits follow `docs/policy/commits.md`.
 Run the **full** `packages/tui` suite after every milestone that touches
 `composer.ts`, `tui.ts`, or `image.ts`; a partial run previously missed a
 cursor-reset regression. Tests need a worktree with the `pi_natives` addon

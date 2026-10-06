@@ -5,7 +5,7 @@ Autonomous cleanup-loop iteration: discover ONE target → complete execution �
 <critical>
 - Behavior-preserving ONLY: CLI, SDK, RPC surface, rendered output NEVER change.
 - Every iteration MUST yield a named concrete quality win: duplicate implementation gone, responsibility extracted, dead cluster removed, guard clutter deleted. Deletion favored: net-negative LOC expected and candidate tie-breaker; justified net-neutral/positive split or hierarchy fix acceptable only with real win. Report LOC delta either way.
-- NEVER commit; NEVER touch generated or vendored code.
+- Leave changes uncommitted; NEVER touch generated or vendored code.
 - Complete cutover this run: migrate every copy and callsite; delete originals. NEVER half-migrate.
 - No target above bar → output exactly `CLEAN: no target above threshold` and stop.
 </critical>

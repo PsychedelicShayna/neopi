@@ -78,8 +78,9 @@ System-wide decisions live in [`docs/adr/`](docs/adr/README.md).
 ### Fork process
 
 - [Agent process docs](docs/agents/) (`docs/agents/`): issue tracker, triage
-  labels, domain layout, fork maintenance, upstream sync, the Issue Funnel,
-  and [PR review bots](docs/agents/pr-review-bots.md).
+  labels, domain layout, fork maintenance, and the Issue Funnel.
+- [Repository policy](docs/policy/README.md) (`docs/policy/`): branches,
+  commits, PRs, review bots, upstream sync, builds, and promotion.
 
 ## Relationships
 
