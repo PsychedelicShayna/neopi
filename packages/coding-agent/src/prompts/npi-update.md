@@ -17,6 +17,6 @@ Update the local `PsychedelicShayna/neopi` source fork to the newest stable upst
 9. Make small logical commits with the explicit agent signing key and actual provider/model attribution. Verify each signature. Push the branch, open the PR into `nightly` with label `upstream-sync`, post the scoped Codex request from `docs/policy/review-bots.md`, and babysit it per `docs/policy/pull-requests.md`.
 10. After GitHub merges the PR, update local protected-branch checkouts only with `git fetch origin && git reset --hard origin/<branch>` after preserving divergent work; NEVER discard it.
 11. Install per `docs/policy/builds.md`: back up the existing executable and preserve unrelated extensions and backups. Promotion to `neopi` and stable `npi` rebuilds wait for the owner's word.
-12. Smoke-test the installed `npi`, verify the expected release version, and confirm the live `omp` fingerprint is unchanged. Report PRs, commits, upstream tag, conflict ledger, checks, build/install paths, extension deployment, runtime proof, and preserved work.
+12. Smoke-test the binary installed per `docs/policy/builds.md`, verify it reports the expected release, and confirm the live `omp` fingerprint is unchanged. Leave stable `npi` untouched pending promotion. Report PRs, commits, upstream tag, conflict ledger, checks, build/install paths, extension deployment, runtime proof, and preserved work.
 
 Do not invoke the upstream update installer or any setup/link command that targets `omp`. Finish the complete source-fork update; do not stop at a merge, build, or plan boundary.

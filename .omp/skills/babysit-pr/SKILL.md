@@ -219,7 +219,9 @@ Inspect every thread with `resolved: false` and every thread with
 
 ## 4. Fix, with a test that fails first
 
-For each real finding (or root cause):
+For each real behavior finding (or root cause). A documentation or process
+finding skips steps 1–3: fix it, run the focused check that shows the
+correction, and cite that check in the commit body.
 
 1. Write the regression test for the contract the finding describes. Follow
    `AGENTS.md` › Testing Guidance.
@@ -319,6 +321,12 @@ post the factual reply as in step 6, then resolve it again:
 gh api graphql -f id=<thread> -f query='
   mutation($id:ID!){unresolveReviewThread(input:{threadId:$id}){thread{isResolved}}}'
 ```
+
+If the PR, or an issue it closes, carries `sentinel-review-requested` (always
+true for `promote/<tag>` PRs), the gate also requires the sentinel panel's
+sealed unanimous approval on `GATE_HEAD` (`docs/policy/review-bots.md`
+› Sentinel). Without that evidence the gate fails: stop and report to the
+owner.
 
 Then label (agents never merge; the `nightly` ruleset auto-merges):
 
