@@ -189,9 +189,10 @@ Apply it only when the gate holds.
   `gh api repos/$REPO/actions/jobs/<job-id>/logs` for a job that failed while
   the rest of the run is still going.
   - Caused by the branch: fix it as in step 4.
-  - Suspected flake: rerun nothing until the same test chunk passes locally
-    on both base and head; cite both runs in a NOTE comment (workspace
-    AGENTS.md).
+  - Suspected flake: rerun nothing until the same test chunk passes on both
+    base and head; cite both runs in a NOTE comment (workspace AGENTS.md).
+    With `LOCAL_RUN=true`, run it through the relay. With `LOCAL_RUN=false`,
+    run it only in the sandbox from step 0, or hand it to the owner.
   - Fixing it needs a ruleset or `push`/`workflow_dispatch` workflow change:
     stop and propose a separate single-purpose PR.
 - If there are review fixes to push, push them first. The push restarts CI,

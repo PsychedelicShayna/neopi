@@ -20,13 +20,15 @@ git worktree add --detach "$WT" "$SHA"
 cd "$WT"
 git config core.hooksPath .githooks
 bun install --frozen-lockfile
-./build.sh
 TAG=<install tag from the section below>
+./build.sh
 git tag "$TAG" "$SHA"
-git push origin "$TAG"
 export NPI_DEST="$HOME/.local/lib/npi-latest/npi"   # npi-nightly: $HOME/.local/lib/npi-nightly/npi
-./install.sh
-"$NPI_DEST" --version
+if ./install.sh && "$NPI_DEST" --version; then
+  git push origin "$TAG"
+else
+  git tag -d "$TAG"
+fi
 ```
 
 Remove the build worktree afterward (`git worktree remove "$WT"`). Update a local `neopi` or `nightly` checkout only with `git fetch origin && git reset --hard origin/<branch>`, as the workspace AGENTS.md specifies.
