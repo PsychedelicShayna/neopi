@@ -52,7 +52,7 @@ export type BackfillOutcome =
 	| "complete"
 	/** The timeout elapsed first; committed batches remain and a later run resumes. */
 	| "incomplete"
-	/** Capture stopped on an oversized entry, repeated failures, or corrupt committed data. */
+	/** Capture stopped on an oversized entry or corrupt committed data. */
 	| "halted"
 	/** The `chronicler` role resolved to no available model. */
 	| "no_model"
@@ -147,9 +147,10 @@ async function leaseIsHeld(sessionFile: string): Promise<boolean> {
 /**
  * Capture the uncovered backlog of one stored session without appending to it.
  *
- * Waits for the Chronicler's backlog walk to settle or `timeoutMs` to pass,
- * then drains with `drainMs`. Sessions that are already covered, disabled,
- * leased, or legacy return before any model is resolved.
+ * Waits through recoverable failures until coverage completes or `timeoutMs`
+ * passes, then drains with `drainMs`. Oversized/corrupt input and unavailable
+ * models return their actionable outcome; covered, disabled, leased, and
+ * legacy sessions return before any model is resolved.
  */
 export async function runHeadlessBackfill(options: HeadlessBackfillOptions): Promise<HeadlessBackfillResult> {
 	const before = await readStoredSessionCoverage(options.sessionFile);
@@ -196,11 +197,13 @@ export async function runHeadlessBackfill(options: HeadlessBackfillOptions): Pro
 
 	const pollMs = Math.max(1, options.pollMs ?? DEFAULT_POLL_MS);
 	const deadline = Date.now() + Math.max(0, options.timeoutMs);
-	const settled = chronicler.idle().then(() => true);
+	let settled = chronicler.idle().then(() => true);
 	let reported = before.coveredEntries;
 	while (true) {
 		const remaining = deadline - Date.now();
 		if (remaining <= 0) break;
+		// Wake promptly when active work settles, but keep the allotted budget
+		// available when settling merely armed an autonomous recovery timer.
 		const done = await Promise.race([settled, Bun.sleep(Math.min(pollMs, remaining)).then(() => false)]);
 		try {
 			const now = await committedCoverage(sessionFile, messageIds);
@@ -208,11 +211,19 @@ export async function runHeadlessBackfill(options: HeadlessBackfillOptions): Pro
 				reported = now.coveredEntries;
 				options.onProgress?.(now);
 			}
+			if (now.coveredEntries >= now.totalEntries) break;
 		} catch (error) {
 			// A corrupt store halts the runtime itself; the final read reports it.
 			logger.debug("Chronicler backfill progress read failed", { error: String(error) });
 		}
-		if (done) break;
+		if (chronicler.status === "halted" || chronicler.status === "no_model" || chronicler.status === "contended")
+			break;
+		if (done) {
+			const retryAt = chronicler.health.retryAt;
+			const retryDelay = retryAt === undefined ? pollMs : Math.max(1, retryAt - Date.now());
+			await Bun.sleep(Math.max(0, Math.min(pollMs, retryDelay, deadline - Date.now())));
+			settled = chronicler.idle().then(() => true);
+		}
 	}
 	try {
 		await chronicler.drain(options.drainMs);
@@ -229,16 +240,22 @@ export async function runHeadlessBackfill(options: HeadlessBackfillOptions): Pro
 
 	const after = await committedCoverage(sessionFile, messageIds);
 	if (after.coveredEntries >= after.totalEntries) return { outcome: "complete", before, after };
-	switch (chronicler.status) {
+	const status = chronicler.status;
+	switch (status) {
 		case "halted":
 			return { outcome: "halted", before, after };
 		case "no_model":
 			return { outcome: "no_model", before, after };
 		case "off":
-			// Enabled and eligible, so the only scan that leaves the runtime off is
-			// one that lost the lease to a process that took it after our check.
+		case "contended":
 			return { outcome: "leased", before, after };
-		default:
+		case "running":
+		case "retrying":
+		case "suspended":
+		case "stopping":
+		case "stopped":
 			return { outcome: "incomplete", before, after };
 	}
+	const exhaustive: never = status;
+	throw new Error(`Unexpected Chronicler status: ${exhaustive}`);
 }
