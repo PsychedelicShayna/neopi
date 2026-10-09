@@ -8,6 +8,7 @@ import { createBrowserPrelude } from "@oh-my-pi/pi-coding-agent/tools/browser";
 import {
 	findFreeCdpPort,
 	findReusableCdp,
+	gracefulKillTreeOnce,
 	pickElectronTarget,
 	probeCdpStatus,
 	resolveSpawnArgs,
@@ -363,7 +364,9 @@ describe("pickElectronTarget", () => {
 			} finally {
 				await invoke({ action: "close", name: ownedName, kill: true }).catch(() => {});
 				await invoke({ action: "close", name: borrowedName, kill: true }).catch(() => {});
-				child.kill();
+				// AppImage launchers (e.g. Helium) setsid the real browser, so a
+				// plain child.kill() only stops the launcher and leaks Chromium.
+				await gracefulKillTreeOnce(child.pid);
 				await child.exited;
 				await fs.rm(root, { recursive: true, force: true });
 			}
