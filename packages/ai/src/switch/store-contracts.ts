@@ -1,6 +1,13 @@
 import type { Usage } from "../types";
 import type { SwitchConfig } from "./config/types";
-import type { AccountingPrincipal, AttemptRecord, CredentialBinding, JobRecord, ResolvedPlan, VideoStatus } from "./internal";
+import type {
+	AccountingPrincipal,
+	AttemptRecord,
+	CredentialBinding,
+	JobRecord,
+	ResolvedPlan,
+	VideoStatus,
+} from "./internal";
 import type { ConsumptionView, EstimateView, FailoverCause, Gate, Scope } from "./wire";
 
 export interface StoreOptions {
@@ -66,8 +73,18 @@ export interface AdmissionResult {
 export type AttemptOutcome =
 	| { kind: "accepted-job"; jobId: string; status: VideoStatus; httpStatus: number }
 	| { kind: "terminal"; status: number; usage?: Usage; costUsd?: number; committed: boolean; cause?: FailoverCause }
-	| { kind: "job-terminal"; jobId: string; status: "completed" | "failed" | "cancelled" | "expired"; usage?: Usage; costUsd?: number }
-	| { kind: "forced"; reason: "drain" | "timeout" | "client-abort" | "shutdown" | "recovery" | "job-expired"; status: number };
+	| {
+			kind: "job-terminal";
+			jobId: string;
+			status: "completed" | "failed" | "cancelled" | "expired";
+			usage?: Usage;
+			costUsd?: number;
+	  }
+	| {
+			kind: "forced";
+			reason: "drain" | "timeout" | "client-abort" | "shutdown" | "recovery" | "job-expired";
+			status: number;
+	  };
 
 export interface SettlementResult {
 	finalized: boolean;

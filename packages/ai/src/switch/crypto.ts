@@ -83,8 +83,10 @@ export class SwitchSignatures {
 
 	#decode(token: string, key: Uint8Array): unknown {
 		const parts = token.split(".");
-		if (parts.length !== 2 || !/^[A-Za-z0-9_-]+$/.test(parts[0]) || !/^[A-Za-z0-9_-]{43}$/.test(parts[1])) throw new SwitchError(409, "stale_preview", "Preview signature is invalid");
-		if (!digestMatches(this.#signature(parts[0], key), parts[1])) throw new SwitchError(409, "stale_preview", "Preview signature is invalid");
+		if (parts.length !== 2 || !/^[A-Za-z0-9_-]+$/.test(parts[0]) || !/^[A-Za-z0-9_-]{43}$/.test(parts[1]))
+			throw new SwitchError(409, "stale_preview", "Preview signature is invalid");
+		if (!digestMatches(this.#signature(parts[0], key), parts[1]))
+			throw new SwitchError(409, "stale_preview", "Preview signature is invalid");
 		try {
 			return JSON.parse(Buffer.from(parts[0], "base64url").toString("utf8"));
 		} catch {
@@ -92,20 +94,41 @@ export class SwitchSignatures {
 		}
 	}
 
-	preview(value: PreviewBasis): string { return this.#encode(value, this.#previewKey); }
-	readPreview(token: string): PreviewBasis { return this.#decode(token, this.#previewKey) as PreviewBasis; }
-	import(value: ImportBasis): string { return this.#encode(value, this.#importKey); }
-	readImport(token: string): ImportBasis { return this.#decode(token, this.#importKey) as ImportBasis; }
-	page(value: PageBasis): string { return this.#encode(value, this.#pageKey); }
+	preview(value: PreviewBasis): string {
+		return this.#encode(value, this.#previewKey);
+	}
+	readPreview(token: string): PreviewBasis {
+		return this.#decode(token, this.#previewKey) as PreviewBasis;
+	}
+	import(value: ImportBasis): string {
+		return this.#encode(value, this.#importKey);
+	}
+	readImport(token: string): ImportBasis {
+		return this.#decode(token, this.#importKey) as ImportBasis;
+	}
+	page(value: PageBasis): string {
+		return this.#encode(value, this.#pageKey);
+	}
 	readPage(token: string): PageBasis {
-		try { return this.#decode(token, this.#pageKey) as PageBasis; }
-		catch { throw new SwitchError(400, "invalid_cursor", "History cursor is invalid"); }
+		try {
+			return this.#decode(token, this.#pageKey) as PageBasis;
+		} catch {
+			throw new SwitchError(400, "invalid_cursor", "History cursor is invalid");
+		}
 	}
 
-	job(id: string): string { return `${id}.${this.#signature(id, this.#jobKey)}`; }
+	job(id: string): string {
+		return `${id}.${this.#signature(id, this.#jobKey)}`;
+	}
 	readJob(token: string): string {
 		const parts = token.split(".");
-		if (parts.length !== 2 || !/^[a-f0-9-]{36}$/.test(parts[0]) || !/^[A-Za-z0-9_-]{43}$/.test(parts[1]) || !digestMatches(this.#signature(parts[0], this.#jobKey), parts[1])) throw new SwitchError(400, "invalid_job", "Job id authentication failed");
+		if (
+			parts.length !== 2 ||
+			!/^[a-f0-9-]{36}$/.test(parts[0]) ||
+			!/^[A-Za-z0-9_-]{43}$/.test(parts[1]) ||
+			!digestMatches(this.#signature(parts[0], this.#jobKey), parts[1])
+		)
+			throw new SwitchError(400, "invalid_job", "Job id authentication failed");
 		return parts[0];
 	}
 }

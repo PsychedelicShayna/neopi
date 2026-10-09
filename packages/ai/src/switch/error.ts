@@ -21,7 +21,9 @@ export function invalid(issues: Issue[]): never {
 }
 
 export function unavailable(milestone: string, capability: string): never {
-	throw new SwitchError(501, "capability_unavailable", `${capability} requires ${milestone}`, { requiredMilestone: milestone });
+	throw new SwitchError(501, "capability_unavailable", `${capability} requires ${milestone}`, {
+		requiredMilestone: milestone,
+	});
 }
 
 export function notFound(resource: string): never {

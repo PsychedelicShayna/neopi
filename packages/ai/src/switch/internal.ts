@@ -1,8 +1,18 @@
 import type { CredentialBinding } from "../auth/types";
 import type { PlanConfig, SwitchConfig } from "./config/types";
 import type {
-	AttributionMode, AttemptView, Budget, ConsumptionView, Decision, EstimateView, GrantExpiry,
-	GrantView, PlanEntry, Precision, Scope, WindowInstanceView,
+	AttributionMode,
+	AttemptView,
+	Budget,
+	ConsumptionView,
+	Decision,
+	EstimateView,
+	GrantExpiry,
+	GrantView,
+	PlanEntry,
+	Precision,
+	Scope,
+	WindowInstanceView,
 } from "./wire";
 
 export type AccountingPrincipal = { kind: "key"; id: string } | { kind: "anonymous"; id: string };
@@ -137,7 +147,15 @@ export interface AttemptRecord {
 	stale: boolean;
 	unpriced: boolean;
 }
-export type VideoStatus = "queued" | "processing" | "pending" | "in_progress" | "completed" | "failed" | "cancelled" | "expired";
+export type VideoStatus =
+	| "queued"
+	| "processing"
+	| "pending"
+	| "in_progress"
+	| "completed"
+	| "failed"
+	| "cancelled"
+	| "expired";
 export interface JobRecord {
 	id: string;
 	originAttemptId: string;

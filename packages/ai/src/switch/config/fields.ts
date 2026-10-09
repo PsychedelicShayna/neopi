@@ -5,9 +5,11 @@ import { Fields, KEY_NAME } from "../validation";
 function distance(left: string, right: string): number {
 	const row = Array.from({ length: right.length + 1 }, (_, index) => index);
 	for (let i = 1; i <= left.length; i++) {
-		let previous = row[0]; row[0] = i;
+		let previous = row[0];
+		row[0] = i;
 		for (let j = 1; j <= right.length; j++) {
-			const diagonal = previous; previous = row[j];
+			const diagonal = previous;
+			previous = row[j];
 			row[j] = Math.min(row[j] + 1, row[j - 1] + 1, diagonal + (left[i - 1] === right[j - 1] ? 0 : 1));
 		}
 	}
@@ -16,10 +18,15 @@ function distance(left: string, right: string): number {
 
 /** Invalid values remain parser-local until finish rejects the entire document. */
 export class ConfigFields extends Fields {
-	override issue(path: string, message: string, code = "E-OPTION"): void { super.issue(path, message, code); }
+	override issue(path: string, message: string, code = "E-OPTION"): void {
+		super.issue(path, message, code);
+	}
 
 	override object(value: unknown, path: string, allowed: readonly string[]): Record<string, unknown> {
-		if (!value || typeof value !== "object" || Array.isArray(value)) { this.issue(path, "Expected a table"); return {}; }
+		if (!value || typeof value !== "object" || Array.isArray(value)) {
+			this.issue(path, "Expected a table");
+			return {};
+		}
 		const row = value as Record<string, unknown>;
 		for (const field of Object.keys(row).sort()) {
 			if (allowed.includes(field)) continue;
@@ -27,9 +34,16 @@ export class ConfigFields extends Fields {
 			let best = Number.POSITIVE_INFINITY;
 			for (const candidate of allowed) {
 				const score = distance(field, candidate);
-				if (score < best) { best = score; closest = candidate; }
+				if (score < best) {
+					best = score;
+					closest = candidate;
+				}
 			}
-			this.issue(`${path}.${field}`, closest ? `Unknown key; closest defined key is ${closest}` : "No keys are defined for this table", "E-UNKNOWN-KEY");
+			this.issue(
+				`${path}.${field}`,
+				closest ? `Unknown key; closest defined key is ${closest}` : "No keys are defined for this table",
+				"E-UNKNOWN-KEY",
+			);
 		}
 		return row;
 	}
@@ -73,7 +87,10 @@ export class ConfigFields extends Fields {
 
 	stringTable(value: unknown, path: string): Record<string, string> {
 		if (value === undefined) return {};
-		if (!value || typeof value !== "object" || Array.isArray(value)) { this.issue(path, "Expected a table of strings"); return {}; }
+		if (!value || typeof value !== "object" || Array.isArray(value)) {
+			this.issue(path, "Expected a table of strings");
+			return {};
+		}
 		const result: Record<string, string> = Object.create(null);
 		for (const [name, item] of Object.entries(value)) {
 			if (typeof item !== "string") this.issue(`${path}.${name}`, "Expected a string");
@@ -83,11 +100,18 @@ export class ConfigFields extends Fields {
 	}
 
 	bind(value: unknown, path: string): ParsedBind {
-		try { return parseBind(this.text(value, path)); }
-		catch { this.issue(path, "Expected a port, host:port or [IPv6]:port", "E-BIND"); return { hostname: "127.0.0.1", port: 0 }; }
+		try {
+			return parseBind(this.text(value, path));
+		} catch {
+			this.issue(path, "Expected a port, host:port or [IPv6]:port", "E-BIND");
+			return { hostname: "127.0.0.1", port: 0 };
+		}
 	}
 
 	override finish(): void {
-		if (this.issues.length) throw new SwitchError(422, "validation", "Switch configuration is invalid", { issues: this.issues.sort((a, b) => a.path.localeCompare(b.path) || a.code.localeCompare(b.code)) });
+		if (this.issues.length)
+			throw new SwitchError(422, "validation", "Switch configuration is invalid", {
+				issues: this.issues.sort((a, b) => a.path.localeCompare(b.path) || a.code.localeCompare(b.code)),
+			});
 	}
 }

@@ -9,8 +9,31 @@ export type SecretRef =
 	| { kind: "inline"; value: string }
 	| { kind: "sealed"; sha256: string };
 export type ChatProtocol = "openai-chat" | "openai-responses" | "anthropic-messages";
-export type KindProtocol = "openai-embeddings" | "openrouter-rerank" | "openai-images" | "openai-speech" | "openai-transcriptions" | "openrouter-video";
-export type GatewayRouteKind = ChatProtocol | "pi-native" | "embeddings" | "rerank" | "images" | "images-edits" | "speech" | "transcriptions" | "video" | "video-poll" | "video-content" | "systemone" | "models" | "usage" | "credentials-check" | "healthz" | "me";
+export type KindProtocol =
+	| "openai-embeddings"
+	| "openrouter-rerank"
+	| "openai-images"
+	| "openai-speech"
+	| "openai-transcriptions"
+	| "openrouter-video";
+export type GatewayRouteKind =
+	| ChatProtocol
+	| "pi-native"
+	| "embeddings"
+	| "rerank"
+	| "images"
+	| "images-edits"
+	| "speech"
+	| "transcriptions"
+	| "video"
+	| "video-poll"
+	| "video-content"
+	| "systemone"
+	| "models"
+	| "usage"
+	| "credentials-check"
+	| "healthz"
+	| "me";
 export type ConnectEntry =
 	| { kind: "provider"; provider: string }
 	| { kind: "provider-glob"; provider: string; glob: string }

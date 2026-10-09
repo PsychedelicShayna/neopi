@@ -8,11 +8,15 @@ export function normalizeAddress(input: string): string | undefined {
 	if (family === 4) return raw;
 	if (family !== 6) return undefined;
 	let address: string;
-	try { address = new URL(`http://[${raw}]/`).hostname.slice(1, -1); }
-	catch { return undefined; }
+	try {
+		address = new URL(`http://[${raw}]/`).hostname.slice(1, -1);
+	} catch {
+		return undefined;
+	}
 	const mapped = /^::ffff:([a-f0-9]{1,4}):([a-f0-9]{1,4})$/.exec(address);
 	if (!mapped) return address;
-	const high = Number.parseInt(mapped[1], 16), low = Number.parseInt(mapped[2], 16);
+	const high = Number.parseInt(mapped[1], 16),
+		low = Number.parseInt(mapped[2], 16);
 	return `${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`;
 }
 
@@ -37,7 +41,11 @@ export function allowsAddress(policy: BlockList, address: string): boolean {
 }
 
 /** Only a trusted accepted socket peer may supply the proxy-appended last hop. */
-export function resolveSwitchPeer(socketAddress: string | undefined, forwarded: string | null, trustedProxies: BlockList): string {
+export function resolveSwitchPeer(
+	socketAddress: string | undefined,
+	forwarded: string | null,
+	trustedProxies: BlockList,
+): string {
 	const socket = socketAddress === undefined ? undefined : normalizeAddress(socketAddress);
 	if (!socket) throw new SwitchError(403, "peer_unknown", "The accepted socket peer is unavailable");
 	if (!forwarded || !allowsAddress(trustedProxies, socket)) return socket;
@@ -48,6 +56,10 @@ export function resolveSwitchPeer(socketAddress: string | undefined, forwarded: 
 
 export function isExactOrigin(value: string): boolean {
 	if (!/^[a-z][a-z0-9+.-]*:\/\/[^/?#]+$/i.test(value)) return false;
-	try { const url = new URL(value); return !!url.hostname && !url.username && !url.password; }
-	catch { return false; }
+	try {
+		const url = new URL(value);
+		return !!url.hostname && !url.username && !url.password;
+	} catch {
+		return false;
+	}
 }

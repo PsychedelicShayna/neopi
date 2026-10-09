@@ -322,13 +322,22 @@ export class KeyCascade implements KeysApi {
 		if (credential.type === "api_key" && this.isKeylessFallback(expectedProvider, credential)) return undefined;
 		const key = credential.type === "api_key" ? await this.#deps.overrides.resolve(credential.key) : undefined;
 		if (credential.type === "api_key" && !key) return undefined;
-		return fingerprintCredential({ id: credentialId, provider: expectedProvider, credential, disabledCause: null }, key);
+		return fingerprintCredential(
+			{ id: credentialId, provider: expectedProvider, credential, disabledCause: null },
+			key,
+		);
 	}
 
 	async getPinned(
 		credentialId: number,
 		sessionId: string,
-		options: { expectedProvider: string; expectedFingerprint: string; modelId?: string; signal?: AbortSignal; forceRefresh?: boolean },
+		options: {
+			expectedProvider: string;
+			expectedFingerprint: string;
+			modelId?: string;
+			signal?: AbortSignal;
+			forceRefresh?: boolean;
+		},
 	): Promise<string | undefined> {
 		if (options.signal?.aborted) return undefined;
 		const provider = options.expectedProvider;
@@ -336,28 +345,54 @@ export class KeyCascade implements KeysApi {
 		const entry = this.#deps.pool.entries(provider).find(row => row.id === credentialId);
 		if (!entry) return undefined;
 		if (entry.credential.type === "api_key") {
-			if (this.isKeylessFallback(provider, entry.credential) || !(await this.#deps.selector.allowsPinnedApiKey(provider, credentialId, options.modelId))) return undefined;
+			if (
+				this.isKeylessFallback(provider, entry.credential) ||
+				!(await this.#deps.selector.allowsPinnedApiKey(provider, credentialId, options.modelId))
+			)
+				return undefined;
 			const current = this.#deps.pool.entries(provider).find(row => row.id === credentialId);
 			if (!current || current.credential.type !== "api_key") return undefined;
 			const apiKey = await this.#deps.overrides.resolve(current.credential.key);
 			if (!apiKey) return undefined;
 			await this.#deps.pool.adoptExternalChanges();
 			const latest = this.#deps.pool.entries(provider).find(row => row.id === credentialId);
-			if (!latest || latest.credential.type !== "api_key" || latest.credential.key !== current.credential.key) return undefined;
-			const fingerprint = fingerprintCredential({ id: credentialId, provider, credential: latest.credential, disabledCause: null }, apiKey);
+			if (!latest || latest.credential.type !== "api_key" || latest.credential.key !== current.credential.key)
+				return undefined;
+			const fingerprint = fingerprintCredential(
+				{ id: credentialId, provider, credential: latest.credential, disabledCause: null },
+				apiKey,
+			);
 			if (fingerprint !== options.expectedFingerprint || options.signal?.aborted) return undefined;
 			if (!(await this.#deps.selector.allowsPinnedApiKey(provider, credentialId, options.modelId))) return undefined;
 			const finalRow = this.#deps.pool.entries(provider).find(row => row.id === credentialId);
-			return finalRow?.credential.type === "api_key" && finalRow.credential.key === current.credential.key && !options.signal?.aborted ? apiKey : undefined;
+			return finalRow?.credential.type === "api_key" &&
+				finalRow.credential.key === current.credential.key &&
+				!options.signal?.aborted
+				? apiKey
+				: undefined;
 		}
-		const before = fingerprintCredential({ id: credentialId, provider, credential: entry.credential, disabledCause: null });
+		const before = fingerprintCredential({
+			id: credentialId,
+			provider,
+			credential: entry.credential,
+			disabledCause: null,
+		});
 		if (before !== options.expectedFingerprint) return undefined;
-		const selected = await this.#deps.selector.resolvePinnedOAuth(provider, credentialId, sessionId, { modelId: options.modelId, signal: options.signal, forceRefresh: options.forceRefresh });
+		const selected = await this.#deps.selector.resolvePinnedOAuth(provider, credentialId, sessionId, {
+			modelId: options.modelId,
+			signal: options.signal,
+			forceRefresh: options.forceRefresh,
+		});
 		if (!selected || selected.credentialId !== credentialId || options.signal?.aborted) return undefined;
 		await this.#deps.pool.adoptExternalChanges();
 		const latest = this.#deps.pool.entries(provider).find(row => row.id === credentialId);
 		if (!latest || latest.credential.type !== "oauth") return undefined;
-		const fingerprint = fingerprintCredential({ id: credentialId, provider, credential: latest.credential, disabledCause: null });
+		const fingerprint = fingerprintCredential({
+			id: credentialId,
+			provider,
+			credential: latest.credential,
+			disabledCause: null,
+		});
 		return fingerprint === options.expectedFingerprint ? selected.apiKey : undefined;
 	}
 

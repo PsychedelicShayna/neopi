@@ -39,7 +39,14 @@ import { mergeRefreshedOrganizationScope, OAUTH_REFRESH_SKEW_MS } from "./refres
 import type { OAuthRefresher } from "./refresh";
 import { USAGE_REPORT_TTL_MS } from "./sqlite-credential-store";
 import type { AuthCredentialStore } from "./store";
-import type { AuthCredential, BoundHeaderIngestResult, CredentialBinding, OAuthCredential, ObservedUsageInput, UsageApi } from "./types";
+import type {
+	AuthCredential,
+	BoundHeaderIngestResult,
+	CredentialBinding,
+	OAuthCredential,
+	ObservedUsageInput,
+	UsageApi,
+} from "./types";
 import {
 	dedupeUsageReports,
 	isUsageLimitExhausted,
@@ -504,7 +511,9 @@ export class UsageService implements UsageApi {
 		options?: { sessionId?: string; baseUrl?: string; responseStatus?: number },
 	): boolean {
 		const credential = this.#deps.affinity.activeOAuth(provider, options?.sessionId);
-		return credential ? this.#ingestHeadersForCredential(provider, credential, headers, options).status === "applied" : false;
+		return credential
+			? this.#ingestHeadersForCredential(provider, credential, headers, options).status === "applied"
+			: false;
 	}
 
 	/**
@@ -518,7 +527,12 @@ export class UsageService implements UsageApi {
 		options?: { sessionId?: string; baseUrl?: string; responseStatus?: number },
 	): Promise<BoundHeaderIngestResult> {
 		const store = this.#deps.store;
-		if (!store.withPinnedUsageTransaction || !store.setCacheStrict || store.refreshSnapshot || store.fetchUsageReports) {
+		if (
+			!store.withPinnedUsageTransaction ||
+			!store.setCacheStrict ||
+			store.refreshSnapshot ||
+			store.fetchUsageReports
+		) {
 			return { status: "ignored", reason: "unsupported" };
 		}
 		// The callback is synchronous: SQLite fences the exact row identity and
@@ -553,7 +567,8 @@ export class UsageService implements UsageApi {
 		// the usage endpoint.
 		const exhausted = parsedReport.limits.some(limit => isUsageLimitExhausted(limit));
 		const last = this.#usageHeaderIngestAt.get(cacheKey);
-		if (!exhausted && last !== undefined && now - last < USAGE_HEADER_INGEST_INTERVAL_MS) return { status: "ignored", reason: "throttled" };
+		if (!exhausted && last !== undefined && now - last < USAGE_HEADER_INGEST_INTERVAL_MS)
+			return { status: "ignored", reason: "throttled" };
 		const metadata: Record<string, unknown> = { ...parsedReport.metadata };
 		if (credential.accountId && metadata.accountId === undefined) metadata.accountId = credential.accountId;
 		if (credential.email && metadata.email === undefined) metadata.email = credential.email;

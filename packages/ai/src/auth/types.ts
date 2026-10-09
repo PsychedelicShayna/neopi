@@ -915,7 +915,13 @@ export interface KeysApi {
 	getPinned(
 		credentialId: number,
 		sessionId: string,
-		options: { expectedProvider: string; expectedFingerprint: string; modelId?: string; signal?: AbortSignal; forceRefresh?: boolean },
+		options: {
+			expectedProvider: string;
+			expectedFingerprint: string;
+			modelId?: string;
+			signal?: AbortSignal;
+			forceRefresh?: boolean;
+		},
 	): Promise<string | undefined>;
 	/**
 	 * Peek at API key for a provider without refreshing OAuth tokens.

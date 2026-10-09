@@ -5,11 +5,27 @@ export type JsonValue = null | boolean | number | string | JsonValue[] | { [key:
 export type AdminRole = "read" | "write";
 /** Capability presence describes an implemented operation, never an operator role grant. */
 export type AdminCapability =
-	| "keys.read" | "keys.write" | "keys.adjust.preview" | "keys.adjust"
-	| "plans.read" | "plans.refresh" | "plans.check" | "usage.read"
-	| "decisions.read" | "events.read" | "events.stream" | "audit.read"
-	| "config.read" | "config.reload" | "explain" | "models.read"
-	| "keys.export" | "keys.import" | "backup" | "glue.read" | "glue.restart";
+	| "keys.read"
+	| "keys.write"
+	| "keys.adjust.preview"
+	| "keys.adjust"
+	| "plans.read"
+	| "plans.refresh"
+	| "plans.check"
+	| "usage.read"
+	| "decisions.read"
+	| "events.read"
+	| "events.stream"
+	| "audit.read"
+	| "config.read"
+	| "config.reload"
+	| "explain"
+	| "models.read"
+	| "keys.export"
+	| "keys.import"
+	| "backup"
+	| "glue.read"
+	| "glue.restart";
 export type Unit = "requests" | "tokens" | "usd" | "plan_pct";
 export type AttributionMode = "proportional" | "declared" | "tokens";
 export type OvercommitMode = "allow" | "normalize" | "deny";
@@ -340,7 +356,11 @@ export interface SessionView {
 
 export interface UsageView {
 	window: string;
-	unitSeries: { budget: string; unit: Unit; points: { from: number; to: number; used: number; reserved?: number; source: string }[] }[];
+	unitSeries: {
+		budget: string;
+		unit: Unit;
+		points: { from: number; to: number; used: number; reserved?: number; source: string }[];
+	}[];
 	attributionSeries: {
 		instance: string;
 		principal: { kind: "key"; id: string };
@@ -363,17 +383,40 @@ export type Adjustment =
 	| { op: "gate.remove"; plan: string; meter: string }
 	| { op: "budget.add"; budget: Budget }
 	| { op: "budget.remove"; budget: string }
-	| { op: "budget.set"; budget: string; cap?: number; policy?: Budget["policy"]; burstBelow?: number; warnAt?: number[] }
+	| {
+			op: "budget.set";
+			budget: string;
+			cap?: number;
+			policy?: Budget["policy"];
+			burstBelow?: number;
+			warnAt?: number[];
+	  }
 	| { op: "budget.raise"; budget: string; by: number }
 	| { op: "budget.scale"; budget: string; percent: number }
 	| { op: "budget.suspend"; budget: string; until: Until; reason?: string }
-	| { op: "grant.add"; budget: string; until: Until; reason?: string; amount?: number; percent_of_cap?: number; percent_of_plan_remaining?: number; to_remaining_percent?: number }
+	| {
+			op: "grant.add";
+			budget: string;
+			until: Until;
+			reason?: string;
+			amount?: number;
+			percent_of_cap?: number;
+			percent_of_plan_remaining?: number;
+			to_remaining_percent?: number;
+	  }
 	| { op: "grant.revoke"; grant: string }
 	| { op: "transfer"; from: string; to: string; budget: string; amount: number; until: Until; reason?: string };
 
 export type AdjustmentPreviewRequest =
 	| { mode: "operation"; adjustment: Adjustment }
-	| { mode: "number"; subject: { budget: string } | { plan: string; meter: string }; number: number; duration?: string; donor?: string; newBudget?: Budget };
+	| {
+			mode: "number";
+			subject: { budget: string } | { plan: string; meter: string };
+			number: number;
+			duration?: string;
+			donor?: string;
+			newBudget?: Budget;
+	  };
 
 export interface PreviewChoice {
 	meaningId: MeaningId | Adjustment["op"];
@@ -454,7 +497,15 @@ export interface ConsumptionView {
 	weight: number;
 }
 
-export type FailoverCause = "429" | "5xx" | "connect" | "timeout" | "reauth" | "model-missing" | "plan-exhausted" | "draining";
+export type FailoverCause =
+	| "429"
+	| "5xx"
+	| "connect"
+	| "timeout"
+	| "reauth"
+	| "model-missing"
+	| "plan-exhausted"
+	| "draining";
 
 export interface AttemptView {
 	id: string;
@@ -510,8 +561,24 @@ export interface Decision {
 }
 
 export interface EventDetails {
-	threshold_crossed: { constraint: string; threshold: number; used: number; limit: number; unit: Unit; instanceId?: string; resetsAt?: number };
-	denied: { decisionId: string; code: string; constraint: string; used?: number; limit?: number; unit?: Unit; resetsAt?: number };
+	threshold_crossed: {
+		constraint: string;
+		threshold: number;
+		used: number;
+		limit: number;
+		unit: Unit;
+		instanceId?: string;
+		resetsAt?: number;
+	};
+	denied: {
+		decisionId: string;
+		code: string;
+		constraint: string;
+		used?: number;
+		limit?: number;
+		unit?: Unit;
+		resetsAt?: number;
+	};
 	plan_fallback: { decisionId: string; from: string; to: string; cause: FailoverCause };
 	plan_exhausted: { decisionId?: string; usedPct: number; instanceId: string };
 	meter_unavailable: { ageS?: number; fetchedAt?: number; reason: string; instanceId?: string };
@@ -519,10 +586,32 @@ export interface EventDetails {
 	plan_unresolved: { reason: string };
 	unplanned_account: { provider: string; count: number };
 	gate_overshoot: { instanceId: string; limit: number; observedPct: number; attemptIds: string[]; keyIds: string[] };
-	over_budget_soft: { attemptId: string; budget: string; used: number; reserved: number; capEff: number; unit: Unit; instanceId?: string };
-	burst_used: { attemptId: string; budget: string; used: number; reserved: number; capEff: number; unit: Unit; instanceId?: string };
+	over_budget_soft: {
+		attemptId: string;
+		budget: string;
+		used: number;
+		reserved: number;
+		capEff: number;
+		unit: Unit;
+		instanceId?: string;
+	};
+	burst_used: {
+		attemptId: string;
+		budget: string;
+		used: number;
+		reserved: number;
+		capEff: number;
+		unit: Unit;
+		instanceId?: string;
+	};
 	stale_admitted: { ageS: number; allowedS: number; headroom: number; attemptIds: string[]; suppressed: number };
-	allotment_changed: { operation: string; affectedKeys: string[]; policyVersion: number; auditId: string; system: boolean };
+	allotment_changed: {
+		operation: string;
+		affectedKeys: string[];
+		policyVersion: number;
+		auditId: string;
+		system: boolean;
+	};
 	key_minted: { key: string; rev: number; policyVersion: number; auditId: string; graceUntil?: number };
 	key_rotated: { key: string; rev: number; policyVersion: number; auditId: string; graceUntil?: number };
 	key_revoked: { key: string; rev: number; policyVersion: number; auditId: string; graceUntil?: number };
@@ -536,9 +625,21 @@ export interface EventDetails {
 	discovery_failed: { provider: string; keptPrevious: boolean; reason: string };
 	auth_failed: { peer: string; count: number; intervalS: number };
 	notify_failed: { sinkId: string; eventId: string; reason: string };
-	import_applied: { mode: "merge" | "replace"; created: string[]; updated: string[]; revoked: string[]; policyVersion: number; auditId: string };
+	import_applied: {
+		mode: "merge" | "replace";
+		created: string[];
+		updated: string[];
+		revoked: string[];
+		policyVersion: number;
+		auditId: string;
+	};
 	backup_created: { backupId: string; auditId: string };
-	admin_action: { action: "plan_refresh" | "plan_check" | "export"; resourceId?: string; auditId: string; result: "ok" | "failed" };
+	admin_action: {
+		action: "plan_refresh" | "plan_check" | "export";
+		resourceId?: string;
+		auditId: string;
+		result: "ok" | "failed";
+	};
 }
 
 export type EventKind = keyof EventDetails;
@@ -567,7 +668,17 @@ export interface AuditView {
 	correlationId: string;
 }
 
-export type ResourceKind = "overview" | "key" | "plan" | "usage" | "decisions" | "events" | "audit" | "config" | "health" | "allocation";
+export type ResourceKind =
+	| "overview"
+	| "key"
+	| "plan"
+	| "usage"
+	| "decisions"
+	| "events"
+	| "audit"
+	| "config"
+	| "health"
+	| "allocation";
 export interface ResourceInvalidation {
 	kind: ResourceKind;
 	id?: string;
@@ -582,7 +693,9 @@ export interface ChangeFrame {
 	event?: SwitchEvent;
 }
 export type ChangeEventName = "state" | "meter" | "reload" | "event";
-export interface ResyncFrame { reason: string }
+export interface ResyncFrame {
+	reason: string;
+}
 
 export interface ExplainRequest {
 	model: string;
@@ -645,7 +758,9 @@ export interface ImportPreview {
 	preview?: string;
 }
 
-export interface ImportApplyRequest extends ImportRequest { preview: string }
+export interface ImportApplyRequest extends ImportRequest {
+	preview: string;
+}
 export interface ImportResult {
 	keys: KeyView[];
 	createdTokens: { name: string; token: string }[];
@@ -661,9 +776,19 @@ export interface PlanCheckResult {
 	planId: string;
 	results: { status: string; reason?: string }[];
 }
-export interface ReloadResult { config: ConfigView; applied: boolean; issues: Issue[] }
-export interface BackupResult { backupId: string; path: string; bytes: number }
-export interface GlueListView { providers: GlueView[] }
+export interface ReloadResult {
+	config: ConfigView;
+	applied: boolean;
+	issues: Issue[];
+}
+export interface BackupResult {
+	backupId: string;
+	path: string;
+	bytes: number;
+}
+export interface GlueListView {
+	providers: GlueView[];
+}
 
 export interface AnnouncedModel {
 	id: string;
