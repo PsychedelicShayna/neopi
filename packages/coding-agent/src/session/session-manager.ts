@@ -162,6 +162,17 @@ export async function copySessionArtifacts(sourceSessionFile: string, destinatio
 				recursive: true,
 				force: false,
 				errorOnExist: false,
+				filter: source => {
+					const relative = path.relative(sourceArtifactsDir, source);
+					// Copy committed Chronicle data and recorder transcripts, never
+					// the live writer's cooperative or recorder ownership sidecars.
+					return (
+						relative !== "chronicler.lock" &&
+						relative !== "chronicler.lock.claim" &&
+						!/^chronicler\.lock\.[0-9a-f-]+\.tmp$/i.test(relative) &&
+						!/^chronicler[/\\]\.__chronicler\.jsonl\.(?:lease|lock)(?:\.os)?$/.test(relative)
+					);
+				},
 			});
 		}
 	} catch (error) {
