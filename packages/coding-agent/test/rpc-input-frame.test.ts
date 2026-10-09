@@ -314,6 +314,7 @@ describe("RpcInputDispatcher", () => {
 						todoPhases: [],
 						chatMode: "off",
 						mode: "default",
+						chronicler: { status: "off" },
 					},
 				};
 			}

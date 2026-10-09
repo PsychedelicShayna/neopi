@@ -530,9 +530,33 @@ is re-armed.
   "planMode": {
     "planFilePath": "local://PLAN.md",
     "workflow": "parallel"
+  },
+  "chronicler": {
+    "status": "running",
+    "sessionId": "...",
+    "sessionFile": "...",
+    "artifactsDir": "...",
+    "lastCommittedAt": "2026-10-08T14:11:33.132Z",
+    "error": "...",
+    "retryAt": 1791500000000
   }
 }
 ```
+
+`chronicler` reports the session diary's capture health. `status` is one of:
+
+| Status | Meaning |
+|---|---|
+| `off` | Chronicler is disabled for this session. |
+| `no_model` | Enabled, but its model role does not resolve. |
+| `running` | Bound to the current session and capturing. |
+| `retrying` | A capture, store, or ownership step failed; recovery is scheduled at `retryAt`. |
+| `contended` | Another live writer holds the session's Chronicle lease, or a legacy lease cannot be proven abandoned. `error` carries the lock diagnostic. |
+| `halted` | The stored Chronicle is invalid or oversized; `error` says why. Live sessions keep revalidating it and resume once it is repaired. |
+| `suspended` | Paused across a new session, fork, resume, branch, or cwd move; rebinds when the transition finishes or rolls back. |
+| `stopping` / `stopped` | The session is shutting down. |
+
+`sessionId`, `sessionFile`, and `artifactsDir` describe the session Chronicler is bound to now, not the one it started with. `lastCommittedAt` is the last committed beat's timestamp, including history inherited through a fork. `error` and `retryAt` (epoch milliseconds) are present only while a failure is outstanding.
 
 `activeRole` is the model role the current model was selected through, and is
 absent when the model was chosen directly. `set_role` sets it, and so does a

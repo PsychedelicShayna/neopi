@@ -1615,6 +1615,7 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 					sessionFile: session.sessionFile,
 					sessionId: session.sessionId,
 					sessionName: session.sessionName,
+					chronicler: session.chroniclerHealth,
 					autoCompactionEnabled: session.autoCompactionEnabled,
 					queuedMessageCount: session.queuedMessageCount,
 					queuedMessages: session.getQueuedMessages(),
