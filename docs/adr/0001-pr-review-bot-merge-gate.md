@@ -1,6 +1,10 @@
 # 0001: Merge only when CI and every review bot's latest round are clean
 
-Status: accepted (2026-09-28)
+Status: superseded (2026-10-09) by the workspace policy in `~/repos/AGENTS.md`.
+Review bots are advisory; the authoring agent merges on its own judgment once
+the workspace gates pass. Kept for the reasoning and the history below.
+
+Original status: accepted (2026-09-28)
 
 Automated reviewers comment on every fork PR. As of this ADR, that is the
 Codex connector (`chatgpt-codex-connector[bot]`), which runs a code review and

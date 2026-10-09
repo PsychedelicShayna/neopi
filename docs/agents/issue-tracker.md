@@ -8,8 +8,8 @@ Issues and specs for this repo live in GitHub Issues at `PsychedelicShayna/neopi
 - Read: `gh issue view <number> --comments`, including labels.
 - List: `gh issue list --state <state> --json number,title,body,labels,comments` with the filters the task requires.
 - Apply or remove labels: `gh issue edit <number> --add-label "..."` or `--remove-label "..."`.
-- Close only when the user or invoked workflow authorizes it.
-- The repository's GitHub rules in `AGENTS.md` remain authoritative. This guide describes mechanics and does not authorize unsolicited comments.
+- Close an issue when the fix merged (`Fixes #<n>` in the merging commit does it), when it is a verified duplicate, or when the owner said so. Say why in the closing comment.
+- Posting rules are the workspace policy in `~/repos/AGENTS.md` (comment identity block, labels). This guide is mechanics only.
 
 ## Pull requests as a triage surface
 

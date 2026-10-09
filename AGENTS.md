@@ -6,20 +6,41 @@ This repo contains multiple packages, but **`packages/coding-agent/`** is the pr
 
 **Terminology**: When the user says "agent" or asks "why is agent doing X", they mean the **coding-agent package implementation**, not you (the assistant). The coding-agent is a CLI tool — questions about its behavior refer to code in `packages/coding-agent/`, not your current session.
 
-## Binary install (HARD RULE)
+## Workspace policy comes first
 
-- Build and install this fork only as **`npi`**, normally at
-  `~/.local/bin/npi`. NEVER install, copy, or link it under another binary
-  name.
-- The allowed compiled artifact is `packages/coding-agent/dist/npi`. Source
-  runs may use `bun run dev` or
-  `bun --cwd=packages/coding-agent src/cli.ts`.
+Branches, worktrees, commits, signing, pull requests, merging, labels, and
+anything posted to GitHub are governed by the workspace policy in
+`~/repos/AGENTS.md`. This file adds only what is specific to this repository
+and never adds a confirmation step the workspace policy does not have.
+
+Repository specifics (`docs/policy/README.md` has the full table):
+
+- Default branch `neopi`; integration branch `nightly`. Topic branches start
+  from `origin/nightly` and PRs target `nightly`.
+- Merge commits read `Merge PR #<number>: <conventional PR subject> (@<author>)`.
+- Review bots are advisory. The authoring agent decides whether a round is
+  worth requesting; see `docs/agents/pr-review-bots.md` for the mechanics.
+
+## Build and install
+
+Two channels ship from this repository, both built by `./build.sh` and
+installed by `./install.sh` (Linux only; README.md "Install from source" has
+the macOS path). Never assemble the binary from individual `bun run` commands:
+every upstream version bump invalidates the gitignored native addon in each
+checkout, and only `build.sh` detects and rebuilds it.
+
+| Channel | Branch | Checkout | Install |
+| --- | --- | --- | --- |
+| `npi` | `neopi` | `~/repos/neopi` | `./install.sh` → `~/.local/bin/npi` |
+| `npi-nightly` | `nightly` | `~/repos/neopi-nightly` | `NPI_DEST=~/.local/lib/npi-nightly/npi ./install.sh`; `~/.local/bin/npi-nightly` is a wrapper, `ni` the fish alias |
+
+- The compiled artifact is `packages/coding-agent/dist/npi`. Source runs use
+  `bun run dev` or `bun --cwd=packages/coding-agent src/cli.ts`.
 - The fork's operator commands (`/persona`, `/loadout`, `/repl`, `/kernel`)
-  are built into `packages/coding-agent`; installing `npi` needs no extension
-  deployment step.
-- NEVER use a remote installer, a global package-manager install, `bun setup`,
-  or `scripts/link-omp.sh` to install this fork. Build from the reviewed
-  checkout and copy `dist/npi` to the dedicated `npi` path.
+  are built in; no extension deployment step.
+- Never install this fork through a remote installer, a global package
+  manager, `bun setup`, or `scripts/link-omp.sh`.
+- Stage a throwaway install with `NPI_DEST=<temp>/bin/npi PI_CODING_AGENT_DIR=<temp>/agent ./install.sh`.
 
 ## Fork maintenance
 
@@ -28,25 +49,11 @@ Before adding fork behavior, integrating upstream, or rebasing a fork PR, read
 checks. Before synchronizing an upstream release, read and follow
 `docs/agents/upstream-sync.md`.
 
-## Fork self-update
-
-- Exact argv `npi update` launches the fork-specific interactive update session
-  from `packages/coding-agent/src/prompts/npi-update.md`.
-- The executable basename and exact argument list gate that rewrite.
-  `npi update --check`, `npi update --help`, and any additional arguments keep
-  the ordinary update-command behavior.
-- Updates MUST follow `docs/agents/upstream-sync.md`: preserve WIP and ahead
-  commits; merge prerequisite PRs only after validation; fetch the remote
-  default and create a fresh worktree from it. Merge the newest upstream
-  release tag; resolve every conflict personally, sequentially, with a
-  contemporaneous ledger. Sign logical commits with actual-model attribution.
-- MUST prove checks, build, staged install, and runtime smoke before PR merge.
-  NEVER commit or push directly to the default branch. After merge, fast-forward
-  only an ancestor checkout; preserve divergent work through topic/recovery
-  refs and follow the documented safe realignment procedure instead.
-- Install only `packages/coding-agent/dist/npi` at the dedicated `npi` path
-  and smoke-test the installed executable. NEVER use the upstream installer for this source fork.
-
+Exact argv `npi update` launches the fork-specific interactive update session
+from `packages/coding-agent/src/prompts/npi-update.md`; the executable basename
+and exact argument list gate that rewrite. `npi update --check`,
+`npi update --help`, and any additional arguments keep the ordinary
+update-command behavior.
 
 
 ### Package Structure
@@ -68,22 +75,18 @@ checks. Before synchronizing an upstream release, read and follow
 
 ## GitHub
 
-- Before posting a GitHub comment or creating an issue, MUST show the target and proposed text and obtain user confirmation. An explicit instruction to post supplied text to a specified target already counts as confirmation.
-- A request to address or fix PR feedback permits drafting replies, not posting them without confirmation. A request only to get or check comments is read-only.
-- When authorized to resolve review feedback, MUST verify the fix, obtain approval for a factual reply citing the change and verification, and post it in the existing thread before resolving. NEVER resolve if the reply is unapproved or posting fails.
-- Permission to work on a PR does not authorize unrelated comments or issue creation.
+Posting, commenting, filing issues, and merging follow the workspace policy;
+nothing here requires confirmation beyond it. Repository specifics:
 
-### Pull requests
+- Contributor PRs (any author other than the owner) are read-only on the
+  owner's machine: never run their code locally. `docs/agents/pr-review-bots.md`
+  › Running PR code has the owner-head test.
+- PR bodies use `.github/PULL_REQUEST_TEMPLATE.md` as the workspace policy
+  requires. User-facing changes follow the [Changelog](#changelog)
+  attribution rules.
+- The Issue Funnel seat (`IssueFunnel` / Rue) publishes and amends issues per
+  `docs/agents/issue-funnel.md`.
 
-When authorized to create or edit a contributor-submitted PR, follow the checklist below. RoboOMP-managed PRs follow their dedicated workflow and enforced body format in `python/robomp/src/prompts/system_append.md` instead.
-
-- MUST read `CONTRIBUTING.md` and `.github/PULL_REQUEST_TEMPLATE.md` first. Preserve the template sections and checklist, including when shortening an existing description.
-- For user-facing changes, MUST follow the [Changelog](#changelog) attribution rules. Internal issue fixes keep their issue links. For external contributions, add the PR link and contributor credit after GitHub assigns the number, then push the entry before marking the changelog checklist item complete.
-- MUST read back the published PR description after creating or editing it. Check only verified checklist items; explain skipped or inapplicable checks in `Testing`.
-
-Authorized exception: the Issue Funnel seat (`IssueFunnel` / Rue) may publish and amend issues per `docs/agents/issue-funnel.md`. Other seats still follow the two rules above.
-
-Authorized exception: an owner's standing authorization to babysit a PR covers, on that PR only, the GitHub actions listed in `docs/agents/pr-review-bots.md` › Authorization: requesting bot reviews, and replying to and resolving review-bot threads. Threads from human reviewers still need confirmation under the GitHub rules above.
 
 ## Code Quality
 
@@ -303,18 +306,11 @@ For the bash tool specifically:
 
 ## Commands
 
-- NEVER commit unless asked.
 - Never use `tsc`/`npx tsc` — always `bun check`.
 - Never run `cargo test` directly for Rust tests — use `bun run test:rs`. It runs `cargo nextest run` (config: `.config/nextest.toml`) followed by a `cargo test --doc` pass, because nextest does not execute doctests. The doctest pass runs every runnable doctest in the workspace's lib crates; today that is tree-sitter-go's one example (pi-natives is a `cdylib`, which rustdoc skips; pi-builtins' examples are `ignore`d vendored uutils docs).
-- Merge commits (maintainer merges of PRs) follow: `Merge PR #<number>: <conventional PR subject> (@<author>)` — e.g. `Merge PR #6386: feat(catalog): add native Meta Model API provider (@eggpeat)`.
 - **Cargo parallelism**: always pass `-j 6` to cargo builds (e.g. `cargo build -j 6`,
   `bun run build:native` should use `CARGO_BUILD_JOBS=6`). The machine has 20 cores;
   unbounded cargo eats all of them and starves the session.
-- **Building and installing `npi`**: `./build.sh` then `./install.sh` at the repo root. Never
-  assemble the binary from individual `bun run` commands: every upstream version bump
-  invalidates the gitignored native addon in each checkout, and only `build.sh` detects and
-  rebuilds it. Stage installs with `NPI_DEST=<temp>/bin/npi PI_CODING_AGENT_DIR=<temp>/agent`.
-  The scripts are Linux-only; README.md "Install from source" gives the macOS path.
 
 ## Rust Build Profiles
 
@@ -418,6 +414,6 @@ Use the multi-context layout rooted at `CONTEXT-MAP.md`. See
 
 ### PR review bots
 
-PRs merge only when CI is green and the latest round from every review bot is
-clean. Use the `babysit-pr` skill to get there. See
-`docs/agents/pr-review-bots.md` and `docs/adr/0001-pr-review-bot-merge-gate.md`.
+Advisory, never a merge gate. `docs/agents/pr-review-bots.md` has the bot
+table and the owner-head safety rule; the `babysit-pr` skill has the
+mechanics for when a round is worth running.
