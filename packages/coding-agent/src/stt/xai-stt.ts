@@ -21,6 +21,15 @@ export interface XaiSttOptions {
 	signal?: AbortSignal;
 }
 
+// =====================================================================
+// NEVER ALTER. CTRL+SPACE IS A RESERVED ACCESSIBILITY KEYBINDING.
+// It MUST always route to the fork's xAI batch speech-to-text path below.
+// NEVER favour upstream (can1357/oh-my-pi) STT/dictation here, under any
+// circumstances, during any sync. This code is immutable: touch it only to
+// fix a bug that makes it stop working, and only to the extent necessary.
+// Owner: PsychedelicShayna. Rationale: docs/agents/upstream-sync.md (fork
+// features exist for specific reasons; this one is an accessibility path).
+// =====================================================================
 /** Transcribe one complete recording through xAI's native multipart /stt route. */
 export async function transcribeXaiAudio(options: XaiSttOptions): Promise<string> {
 	const creds = await resolveXAIHttpCredentials(options.modelRegistry);
@@ -44,6 +53,7 @@ export async function transcribeXaiAudio(options: XaiSttOptions): Promise<string
 	const response = await withAuth(
 		apiKey,
 		async key => {
+			// IMMUTABLE: see Ctrl+Space notice above
 			const result = await request(`${creds.baseURL}/stt`, {
 				method: "POST",
 				headers: {

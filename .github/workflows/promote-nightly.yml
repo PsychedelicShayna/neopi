@@ -49,11 +49,7 @@ jobs:
               branch="sync/promote-$date"
               git config user.name "github-actions[bot]"
               git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-              if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
-                 git push origin "origin/$SOURCE:refs/heads/$branch"
-              else
-                 git push origin "origin/$SOURCE:refs/heads/$branch"
-              fi
+              git push --force origin "origin/$SOURCE:refs/heads/$branch"
               existing=$(gh pr list --base "$BASE" --head "$branch" --state open --json number --jq '.[0].number // empty')
               if [ -n "$existing" ]; then
                  echo "number=$existing" >> "$GITHUB_OUTPUT"
@@ -82,11 +78,11 @@ jobs:
                  echo "- [ ] Tested locally (not run: promotion PR)"
                  echo "- [ ] CHANGELOG updated (not applicable: promotion PR)"
               } > "$body"
-              number=$(gh pr create --base "$BASE" --head "$branch" \
+              url=$(gh pr create --base "$BASE" --head "$branch" \
                  --title "chore(promote): nightly into neopi $date" \
-                 --body-file "$body" --label upstream-sync \
-                 --json number --jq .number 2>/dev/null || \
-                 gh pr list --base "$BASE" --head "$branch" --state open --json number --jq '.[0].number')
+                 --body-file "$body" --label upstream-sync)
+              number=${url##*/}
+              [ -n "$number" ] || { echo "::error::could not determine the promotion PR number"; exit 1; }
               echo "number=$number" >> "$GITHUB_OUTPUT"
 
          - name: Merge the promotion PR

@@ -7726,15 +7726,26 @@ export class InteractiveMode implements InteractiveModeContext {
 		);
 	}
 
+	// =====================================================================
+	// NEVER ALTER. CTRL+SPACE IS A RESERVED ACCESSIBILITY KEYBINDING.
+	// It MUST always route to the fork's xAI batch speech-to-text path below.
+	// NEVER favour upstream (can1357/oh-my-pi) STT/dictation here, under any
+	// circumstances, during any sync. This code is immutable: touch it only to
+	// fix a bug that makes it stop working, and only to the extent necessary.
+	// Owner: PsychedelicShayna. Rationale: docs/agents/upstream-sync.md (fork
+	// features exist for specific reasons; this one is an accessibility path).
+	// =====================================================================
 	/** Ctrl+Space owns an independent, whole-recording xAI path. */
 	async handleSTTToggle(): Promise<void> {
 		if (this.#sttController && this.#sttController.state !== "idle") {
 			this.showWarning("Finish configured dictation before recording xAI speech input.");
 			return;
 		}
+		// IMMUTABLE: see Ctrl+Space notice above
 		this.#xaiSttController ??= new XaiSTTController({
 			settings: this.settings,
 			transcribe: (audio, signal) =>
+				// IMMUTABLE: see Ctrl+Space notice above
 				transcribeXaiAudio({
 					modelRegistry: this.session.modelRegistry,
 					sessionId: this.session.sessionId,
@@ -7743,6 +7754,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					signal,
 				}),
 		});
+		// IMMUTABLE: see Ctrl+Space notice above
 		await this.#xaiSttController.toggle(this.editor, this.#dictationCallbacks(this.editor));
 	}
 

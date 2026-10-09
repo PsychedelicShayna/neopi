@@ -265,6 +265,15 @@ export const KEYBINDINGS = {
 		defaultKeys: "ctrl+r",
 		description: "Search history",
 	},
+	// =====================================================================
+	// NEVER ALTER. CTRL+SPACE IS A RESERVED ACCESSIBILITY KEYBINDING.
+	// It MUST always route to the fork's xAI batch speech-to-text path below.
+	// NEVER favour upstream (can1357/oh-my-pi) STT/dictation here, under any
+	// circumstances, during any sync. This code is immutable: touch it only to
+	// fix a bug that makes it stop working, and only to the extent necessary.
+	// Owner: PsychedelicShayna. Rationale: docs/agents/upstream-sync.md (fork
+	// features exist for specific reasons; this one is an accessibility path).
+	// =====================================================================
 	"app.stt.toggle": {
 		defaultKeys: "ctrl+space",
 		description: "Record complete audio for xAI transcription (Ctrl+Space, reserved; not remappable)",
@@ -305,6 +314,7 @@ export const KEYBINDINGS = {
  * Ctrl+Space is the xAI whole-recording escape hatch and must always reach it.
  */
 export const RESERVED_KEYS = {
+	// IMMUTABLE: see Ctrl+Space notice above
 	"ctrl+space": "app.stt.toggle",
 } as const satisfies Record<string, Keybinding>;
 

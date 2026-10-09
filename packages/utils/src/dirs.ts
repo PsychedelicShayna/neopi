@@ -1105,6 +1105,11 @@ export function getTinyWorkerRuntimeDir(): string {
 	return dirs.rootSubdir(path.join("run", "tiny"), "state");
 }
 
+/** Private per-process host-environment snapshots (~/.omp/run/host-env; XDG state aware). */
+export function getHostEnvRuntimeRoot(): string {
+	return dirs.rootSubdir(path.join("run", "host-env"), "state");
+}
+
 /** Root directory containing every per-project daemon runtime scope (~/.omp/run/daemons; XDG default: $XDG_STATE_HOME/omp/run/daemons). */
 export function getDaemonRuntimeRoot(): string {
 	return dirs.rootSubdir(path.join("run", "daemons"), "state");
