@@ -707,7 +707,7 @@ export class InputController {
 		// NEVER favour upstream (can1357/oh-my-pi) STT/dictation here, under any
 		// circumstances, during any sync. This code is immutable: touch it only to
 		// fix a bug that makes it stop working, and only to the extent necessary.
-		// Owner: PsychedelicShayna. Rationale: docs/policy/upstream-sync.md (fork
+		// Owner: PsychedelicShayna. Rationale: docs/agents/upstream-sync.md (fork
 		// features exist for specific reasons; this one is an accessibility path).
 		// =====================================================================
 		for (const key of this.ctx.keybindings.getKeys("app.stt.toggle")) {
@@ -888,7 +888,7 @@ export class InputController {
 			// NEVER favour upstream (can1357/oh-my-pi) STT/dictation here, under any
 			// circumstances, during any sync. This code is immutable: touch it only to
 			// fix a bug that makes it stop working, and only to the extent necessary.
-			// Owner: PsychedelicShayna. Rationale: docs/policy/upstream-sync.md (fork
+			// Owner: PsychedelicShayna. Rationale: docs/agents/upstream-sync.md (fork
 			// features exist for specific reasons; this one is an accessibility path).
 			// =====================================================================
 			case "app.stt.toggle":
