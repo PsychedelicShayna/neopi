@@ -1100,4 +1100,54 @@ export class CredentialSelector {
 
 		return undefined;
 	}
+
+	/** Use the normal eligibility, usage, refresh and block checks for one retained OAuth row only. */
+	async resolvePinnedOAuth(
+		provider: string,
+		credentialId: number,
+		sessionId: string,
+		options: AuthApiKeyOptions,
+	): Promise<OAuthResolutionResult | undefined> {
+		await this.#deps.pool.adoptExternalChanges();
+		const index = this.#deps.pool
+			.entries(provider)
+			.findIndex(row => row.id === credentialId && row.credential.type === "oauth");
+		if (index < 0) return undefined;
+		const credential = this.#deps.pool.entries(provider)[index].credential;
+		if (credential.type !== "oauth") return undefined;
+		this.#deps.policies.validateFor(provider, [credential]);
+		const strategy = this.#deps.strategies(provider);
+		const rankingContext: CredentialRankingContext = { modelId: options.modelId };
+		const blockScope = strategy?.blockScope?.(rankingContext);
+		const blockScopes = credentialBlockScopesForRequest(provider, strategy, rankingContext, blockScope);
+		const planGate = strategy?.planGate?.(rankingContext);
+		return this.tryOAuth(provider, { credential, index }, providerTypeKey(provider, "oauth"), sessionId, options, {
+			checkUsage: strategy !== undefined || this.#deps.usage.canFetchOAuthUsage(provider),
+			allowBlocked: false,
+			allowFallback: false,
+			...(planGate ? { planGate, enforcePlanRequirement: true } : {}),
+			strategy,
+			rankingContext,
+			blockScope,
+			blockScopes,
+		});
+	}
+
+	/** A one-row API-key pin cannot exploit the generic selector's single-row blocked fallback. */
+	async allowsPinnedApiKey(provider: string, credentialId: number, modelId?: string): Promise<boolean> {
+		await this.#deps.pool.adoptExternalChanges();
+		const index = this.#deps.pool
+			.entries(provider)
+			.findIndex(row => row.id === credentialId && row.credential.type === "api_key");
+		if (index < 0) return false;
+		const strategy = this.#deps.strategies(provider);
+		const rankingContext: CredentialRankingContext = { modelId };
+		const blockScope = strategy?.blockScope?.(rankingContext);
+		return !this.#deps.blocks.isBlocked(
+			provider,
+			providerTypeKey(provider, "api_key"),
+			index,
+			credentialBlockScopesForRequest(provider, strategy, rankingContext, blockScope),
+		);
+	}
 }

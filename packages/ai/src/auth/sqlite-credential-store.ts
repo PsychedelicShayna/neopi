@@ -369,6 +369,7 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	#db: Database;
 	#listActiveStmt: Statement;
 	#listActiveByProviderStmt: Statement;
+	#getActiveByIdStmt: Statement;
 	#listDisabledStmt: Statement;
 	#listDisabledByProviderStmt: Statement;
 	#insertStmt: Statement;
@@ -419,6 +420,9 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		);
 		this.#listActiveByProviderStmt = this.#db.prepare(
 			"SELECT id, provider, credential_type, data, disabled_cause, identity_key FROM auth_credentials WHERE provider = ? AND disabled_cause IS NULL ORDER BY id ASC",
+		);
+		this.#getActiveByIdStmt = this.#db.prepare(
+			"SELECT id, provider, credential_type, data, disabled_cause, identity_key FROM auth_credentials WHERE id = ? AND disabled_cause IS NULL",
 		);
 		this.#listDisabledStmt = this.#db.prepare(
 			"SELECT id, provider, credential_type, data, disabled_cause, identity_key, updated_at FROM auth_credentials WHERE disabled_cause IS NOT NULL ORDER BY id ASC",
@@ -1252,6 +1256,14 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		}
 		return results;
 	}
+	/** Keep the row identity check and durable cache merge under the same SQLite write lease. */
+	withPinnedUsageTransaction<T>(id: number, apply: (row: StoredAuthCredential | undefined) => T): T {
+		return this.#db.transaction(() => {
+			const raw = this.#getActiveByIdStmt.get(id) as AuthRow | undefined;
+			const credential = raw ? deserializeCredential(raw) : undefined;
+			return apply(raw && credential ? toStoredAuthCredential(raw, credential) : undefined);
+		})();
+	}
 
 	async listDisabledCredentials(provider?: string): Promise<DisabledCredentialSummary[]> {
 		const rows =
@@ -1565,6 +1577,9 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		} catch {
 			// Ignore cache set failures
 		}
+	}
+	setCacheStrict(key: string, value: string, expiresAtSec: number): void {
+		this.#upsertCacheStmt.run(key, value, expiresAtSec);
 	}
 
 	/** Drop all cache rows whose keys start with the supplied prefix. */
@@ -2037,6 +2052,7 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		this.#closed = true;
 		this.#listActiveStmt.finalize();
 		this.#listActiveByProviderStmt.finalize();
+		this.#getActiveByIdStmt.finalize();
 		this.#listDisabledStmt.finalize();
 		this.#listDisabledByProviderStmt.finalize();
 		this.#insertStmt.finalize();
