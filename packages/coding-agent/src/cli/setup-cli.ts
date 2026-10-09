@@ -6,6 +6,7 @@
 import * as path from "node:path";
 import { APP_NAME, getProjectDir, getPythonEnvDir } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
+import { formatKeyHint } from "@oh-my-pi/pi-tui/key-hint-format";
 import { Settings } from "../config/settings";
 import { ModelRegistry } from "../config/model-registry";
 import { resolveRoleChain } from "../config/model-resolver";
@@ -300,7 +301,7 @@ async function handleSpeechSetup(flags: { json?: boolean; check?: boolean }): Pr
 	console.log(chalk.green(`\n${theme.status.success} Speech is ready`));
 	console.log(
 		chalk.dim(
-			"Ctrl+Space records complete utterances for xAI using existing credentials. Enable configured dictation via stt.enabled, then hold Space or press Ctrl+Alt+Space; enable the speech-generation tool via speechgen.enabled; speak replies aloud via speech.enabled.",
+			`Ctrl+Space records complete utterances for xAI using existing credentials. Enable configured dictation via stt.enabled, then hold ${formatKeyHint("space")} or press Ctrl+Alt+Space; enable the speech-generation tool via speechgen.enabled; speak replies aloud via speech.enabled.`,
 		),
 	);
 }

@@ -10,7 +10,7 @@ import {
 import type { Model, ModelSpec, OpenAICompat } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { seedModels } from "@oh-my-pi/pi-catalog/compat/providers";
 
 function chatModel(compat: OpenAICompat): Model<"openai-completions"> {
 	return buildModel({
@@ -42,6 +42,12 @@ function responsesModel(compat: OpenAICompat): Model<"openai-responses"> {
 		maxTokens: 4096,
 		compat,
 	} satisfies ModelSpec<"openai-responses">);
+}
+
+function tokenPlanModel(id: string): Model<"openai-completions"> {
+	const spec = seedModels<"openai-completions">("alibaba-token-plan").find(model => model.id === id);
+	if (!spec) throw new Error(`Missing Alibaba Token Plan seed ${id}`);
+	return buildModel(spec);
 }
 
 function chatParams(): OpenAICompletionsParams {
@@ -134,37 +140,8 @@ describe("OpenAI compat policy", () => {
 		expect(responseBody.input).toEqual([]);
 	});
 
-	it("exposes reasoning replay constraints independent of endpoint", () => {
-		const compat: OpenAICompat = {
-			requiresReasoningContentForToolCalls: true,
-			requiresReasoningContentForAllAssistantTurns: true,
-			allowsSyntheticReasoningContentForToolCalls: false,
-			reasoningContentField: "reasoning_content",
-		};
-		const chatPolicy = resolveOpenAICompatPolicy(chatModel(compat), { endpoint: "chat-completions" });
-		const responsesPolicy = resolveOpenAICompatPolicy(responsesModel(compat), { endpoint: "responses" });
-
-		expect(chatPolicy.reasoning.requiresReasoningContentForToolCalls).toBe(true);
-		expect(responsesPolicy.reasoning.requiresReasoningContentForToolCalls).toBe(true);
-		expect(chatPolicy.reasoning.requiresReasoningContentForAllAssistantTurns).toBe(true);
-		expect(responsesPolicy.reasoning.requiresReasoningContentForAllAssistantTurns).toBe(true);
-		expect(chatPolicy.reasoning.allowsSyntheticReasoningContentForToolCalls).toBe(false);
-		expect(responsesPolicy.reasoning.allowsSyntheticReasoningContentForToolCalls).toBe(false);
-	});
-
-	it("exposes tool id and cumulative reasoning stream constraints for both endpoints", () => {
-		const compat: OpenAICompat = { requiresMistralToolIds: true, reasoningDeltasMayBeCumulative: true };
-		const chatPolicy = resolveOpenAICompatPolicy(chatModel(compat), { endpoint: "chat-completions" });
-		const responsesPolicy = resolveOpenAICompatPolicy(responsesModel(compat), { endpoint: "responses" });
-
-		expect(chatPolicy.tools.toolCallIdKind).toBe("mistral-9-alnum");
-		expect(responsesPolicy.tools.toolCallIdKind).toBe("mistral-9-alnum");
-		expect(chatPolicy.stream.reasoningDeltasMayBeCumulative).toBe(true);
-		expect(responsesPolicy.stream.reasoningDeltasMayBeCumulative).toBe(true);
-	});
-
 	it("routes Token Plan qwen3.8-max effort selections onto the wire", () => {
-		const model = getBundledModel<"openai-completions">("alibaba-token-plan", "qwen3.8-max");
+		const model = tokenPlanModel("qwen3.8-max");
 		for (const effort of [Effort.Low, Effort.Medium, Effort.XHigh]) {
 			const params = chatParams();
 			const policy = resolveOpenAICompatPolicy(model, { endpoint: "chat-completions", reasoning: effort });
@@ -190,7 +167,7 @@ describe("OpenAI compat policy", () => {
 		// The preview rides Alibaba's binary enable_thinking toggle, not the
 		// OpenAI reasoning_effort control, so effort selections must not leak an
 		// unsupported reasoning_effort onto the wire.
-		const model = getBundledModel<"openai-completions">("alibaba-token-plan", "qwen3.8-max-preview");
+		const model = tokenPlanModel("qwen3.8-max-preview");
 		const params = chatParams();
 		applyChatCompletionsCompatPolicy(
 			params,

@@ -4,19 +4,32 @@ import { type } from "@oh-my-pi/omptype";
 import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import { YAML } from "bun";
-import { isMap, isNode, isSeq, type YAMLMap, type YAMLSeq } from "yaml";
+import { type Document, isMap, isNode, isSeq, type ParsedNode, type YAMLMap, type YAMLSeq } from "yaml";
 import { expandAtImports } from "../discovery/at-imports";
 import { BUILTIN_TOOL_NAMES, normalizeToolNames } from "../tools/builtin-names";
+import { writeFileAtomically } from "../utils/atomic-file";
 import { ADVISOR_DEFAULT_BUDGET_PER_UPDATE, ADVISOR_MAX_BUDGET_PER_UPDATE } from "./emission-guard";
 import { collectConfigCandidates } from "./watchdog";
 import { materializeYamlAlias, parseYamlMappingDocument, yamlDocumentRoot } from "../config/yaml-document";
 
-import type { AdvisorConfig, AdvisorConfigScope, WatchdogConfigDoc } from "@oh-my-pi/pi-tui/overlays/advisor-config";
+import {
+	ADVISOR_SYNC_BACKLOG_MODES,
+	type AdvisorConfig,
+	type AdvisorConfigScope,
+	type AdvisorSyncBacklog,
+	type WatchdogConfigDoc,
+} from "@oh-my-pi/pi-tui/overlays/advisor-config";
+
+export { ADVISOR_REVIEW_MODES, ADVISOR_SYNC_BACKLOG_MODES } from "@oh-my-pi/pi-tui/overlays/advisor-config";
+export type { AdvisorReviewMode, AdvisorSyncBacklog } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 
 const WATCHDOG_ADVISOR_KEYS = [
 	"name",
 	"model",
 	"tools",
+	"reviewMode",
+	"reviewInterval",
+	"syncBacklog",
 	"instructions",
 	"systemPrompt",
 	"enabled",
@@ -69,12 +82,34 @@ export interface DiscoveredAdvisors {
 	 * a broken roster entry never fails silently.
 	 */
 	warnings: string[];
+	/** A present file was unreadable or malformed; keep the prior live roster during hot reload. */
+	unsafeToReconcile: boolean;
+}
+
+const reviewIntervalSchema = type("1 <= number.integer <= 9007199254740991");
+const syncBacklogSchema = type.enumerated(...ADVISOR_SYNC_BACKLOG_MODES);
+/** Unquoted `syncBacklog: 3` parses as a number; accept the numeric thresholds alongside the string enum. */
+const syncBacklogEntrySchema = type.enumerated(...ADVISOR_SYNC_BACKLOG_MODES, 1, 3, 5);
+const SYNC_BACKLOG_NUMERIC_THRESHOLDS = { 1: "1", 3: "3", 5: "5" } as const;
+
+function normalizeSyncBacklog(
+	value: AdvisorSyncBacklog | keyof typeof SYNC_BACKLOG_NUMERIC_THRESHOLDS,
+): AdvisorSyncBacklog {
+	return typeof value === "number" ? SYNC_BACKLOG_NUMERIC_THRESHOLDS[value] : value;
+}
+
+function assertAdvisorCadence(advisor: AdvisorConfig): void {
+	if (advisor.reviewInterval !== undefined) reviewIntervalSchema.assert(advisor.reviewInterval);
+	if (advisor.syncBacklog !== undefined) syncBacklogSchema.assert(advisor.syncBacklog);
 }
 
 const advisorEntrySchema = type({
 	name: "string",
 	"model?": "string",
 	"tools?": "string[]",
+	"reviewMode?": "'turn' | 'agent-end'",
+	"reviewInterval?": reviewIntervalSchema,
+	"syncBacklog?": syncBacklogEntrySchema,
 	"instructions?": "string",
 	"systemPrompt?": "string",
 	"enabled?": "boolean",
@@ -88,6 +123,9 @@ function editableAdvisorConfig(entry: AdvisorYamlEntry): AdvisorConfig {
 	const advisor: AdvisorConfig = { name: entry.name };
 	if (entry.model?.trim()) advisor.model = entry.model;
 	if (entry.tools !== undefined) advisor.tools = [...entry.tools];
+	if (entry.reviewMode !== undefined) advisor.reviewMode = entry.reviewMode;
+	if (entry.reviewInterval !== undefined) advisor.reviewInterval = entry.reviewInterval;
+	if (entry.syncBacklog !== undefined) advisor.syncBacklog = normalizeSyncBacklog(entry.syncBacklog);
 	if (entry.instructions?.trim()) advisor.instructions = entry.instructions;
 	if (entry.systemPrompt !== undefined) advisor.systemPrompt = entry.systemPrompt;
 	if (entry.enabled !== undefined) advisor.enabled = entry.enabled;
@@ -234,7 +272,16 @@ function filterAdvisorTools(tools: string[] | undefined, sourcePath: string): st
  * thrown — so a bad project config can't kill the session.
  */
 export async function discoverAdvisorConfigs(cwd: string, agentDir?: string): Promise<DiscoveredAdvisors> {
-	const items = await collectConfigCandidates(cwd, agentDir, ["WATCHDOG.yml", "WATCHDOG.yaml"]);
+	let unsafeToReconcile = false;
+	const items = await collectConfigCandidates(cwd, agentDir, ["WATCHDOG.yml", "WATCHDOG.yaml"], {
+		onReadError: () => {
+			unsafeToReconcile = true;
+		},
+		onRejected: (filePath, rejection) => {
+			unsafeToReconcile = true;
+			logger.warn("Skipped config candidate", { path: filePath, ...rejection });
+		},
+	});
 	const advisors = new Map<string, AdvisorConfig>();
 	const sharedParts: string[] = [];
 	let sharedMaxNotesPerUpdate: number | undefined;
@@ -250,10 +297,12 @@ export async function discoverAdvisorConfigs(cwd: string, agentDir?: string): Pr
 			parsed = YAML.parse(item.content);
 		} catch (err) {
 			warn(`${item.path}: failed to parse YAML (${String(err)}) — file skipped`, { path: item.path });
+			unsafeToReconcile = true;
 			continue;
 		}
 		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
 			warn(`${item.path}: expected a YAML mapping — file skipped`, { path: item.path });
+			unsafeToReconcile = true;
 			continue;
 		}
 		const {
@@ -281,6 +330,9 @@ export async function discoverAdvisorConfigs(cwd: string, agentDir?: string): Pr
 				model: entry.model?.trim() || undefined,
 				tools: filterAdvisorTools(entry.tools, item.path),
 				systemPrompt: entry.systemPrompt,
+				reviewMode: entry.reviewMode,
+				reviewInterval: entry.reviewInterval,
+				syncBacklog: entry.syncBacklog === undefined ? undefined : normalizeSyncBacklog(entry.syncBacklog),
 				maxNotesPerUpdate:
 					typeof entry.maxNotesPerUpdate === "number" &&
 					Number.isFinite(entry.maxNotesPerUpdate) &&
@@ -299,6 +351,7 @@ export async function discoverAdvisorConfigs(cwd: string, agentDir?: string): Pr
 		sharedInstructions: sharedParts.length > 0 ? sharedParts.join("\n\n") : undefined,
 		sharedMaxNotesPerUpdate,
 		warnings,
+		unsafeToReconcile,
 	};
 }
 
@@ -475,6 +528,7 @@ export function serializeWatchdogConfig(doc: WatchdogConfigDoc): string {
 	if (doc.advisors.length > 0) {
 		lines.push("advisors:");
 		for (const advisor of doc.advisors) {
+			assertAdvisorCadence(advisor);
 			lines.push(`  - name: ${YAML.stringify(advisor.name)}`);
 			if (advisor.model?.trim()) lines.push(`    model: ${YAML.stringify(advisor.model)}`);
 			if (advisor.tools !== undefined) {
@@ -486,6 +540,10 @@ export function serializeWatchdogConfig(doc: WatchdogConfigDoc): string {
 						lines.push(`      - ${YAML.stringify(tool)}`);
 					}
 				}
+			}
+			if (advisor.reviewMode !== undefined) lines.push(`    reviewMode: ${YAML.stringify(advisor.reviewMode)}`);
+			if (advisor.syncBacklog !== undefined) {
+				lines.push(`    syncBacklog: ${YAML.stringify(advisor.syncBacklog)}`);
 			}
 			if (advisor.instructions?.trim()) {
 				appendYamlString(lines, "    ", "instructions", advisor.instructions);
@@ -502,6 +560,9 @@ export function serializeWatchdogConfig(doc: WatchdogConfigDoc): string {
 			) {
 				lines.push(`    maxNotesPerUpdate: ${Math.trunc(advisor.maxNotesPerUpdate)}`);
 			}
+			if (advisor.reviewInterval !== undefined) {
+				lines.push(`    reviewInterval: ${advisor.reviewInterval}`);
+			}
 		}
 	}
 	return lines.length === 0 ? "" : `${lines.join("\n")}\n`;
@@ -516,6 +577,9 @@ function watchdogAdvisorValues(advisor: AdvisorConfig): Record<(typeof WATCHDOG_
 		systemPrompt: advisor.systemPrompt,
 		enabled: advisor.enabled,
 		includeThinking: advisor.includeThinking,
+		reviewMode: advisor.reviewMode,
+		reviewInterval: advisor.reviewInterval,
+		syncBacklog: advisor.syncBacklog,
 		maxNotesPerUpdate:
 			typeof advisor.maxNotesPerUpdate === "number" &&
 			Number.isFinite(advisor.maxNotesPerUpdate) &&
@@ -526,40 +590,43 @@ function watchdogAdvisorValues(advisor: AdvisorConfig): Record<(typeof WATCHDOG_
 }
 
 function findWatchdogAdvisor(
+	document: Document.Parsed<ParsedNode>,
 	sequence: YAMLSeq<unknown>,
 	name: string,
 	occurrence: number,
 ): { index: number; map: YAMLMap<unknown, unknown> } | undefined {
 	let seen = 0;
 	for (const [index, item] of sequence.items.entries()) {
-		if (!isMap(item) || item.get("name") !== name) continue;
+		if (!isMap(item) || watchdogAdvisorMapValues(document, item)?.name !== name) continue;
 		if (seen === occurrence) return { index, map: item };
 		seen++;
 	}
 	return undefined;
 }
 
-function removeMalformedWatchdogAdvisors(sequence: YAMLSeq<unknown>): void {
+function removeMalformedWatchdogAdvisors(document: Document.Parsed<ParsedNode>, sequence: YAMLSeq<unknown>): void {
 	for (let index = sequence.items.length - 1; index >= 0; index--) {
 		const item = sequence.items[index];
-		const value: unknown = isNode(item) ? item.toJSON() : item;
+		const value: unknown = isNode(item) ? item.toJS(document) : item;
 		if (!(advisorEntrySchema(value) instanceof type.errors)) continue;
 		sequence.delete(index);
 	}
 }
 
 function resolveWatchdogAdvisorOrigin(
+	document: Document.Parsed<ParsedNode>,
 	sequence: YAMLSeq<unknown>,
 	origin: WatchdogAdvisorOrigin,
 	origins: readonly WatchdogAdvisorOrigin[],
 ): { index: number; map: YAMLMap<unknown, unknown> } | undefined {
 	const candidates: { index: number; map: YAMLMap<unknown, unknown> }[] = [];
 	for (const [index, item] of sequence.items.entries()) {
-		if (isMap(item) && item.get("name") === origin.name) candidates.push({ index, map: item });
+		if (isMap(item) && watchdogAdvisorMapValues(document, item)?.name === origin.name)
+			candidates.push({ index, map: item });
 	}
 	if (origin.fingerprint !== undefined) {
 		const exact = candidates.filter(
-			candidate => watchdogAdvisorFingerprint(candidate.map.toJSON()) === origin.fingerprint,
+			candidate => watchdogAdvisorFingerprint(candidate.map.toJS(document)) === origin.fingerprint,
 		);
 		if (exact.length === 1) return exact[0];
 		if (exact.length > 1) return undefined;
@@ -570,26 +637,36 @@ function resolveWatchdogAdvisorOrigin(
 }
 
 function watchdogAdvisorMapValues(
+	document: Document.Parsed<ParsedNode>,
 	map: YAMLMap<unknown, unknown>,
 ): Record<(typeof WATCHDOG_ADVISOR_KEYS)[number], unknown> | undefined {
-	const parsed = advisorEntrySchema(map.toJSON());
+	const parsed = advisorEntrySchema(map.toJS(document));
 	return parsed instanceof type.errors ? undefined : watchdogAdvisorValues(editableAdvisorConfig(parsed));
 }
 
-function watchdogAdvisorOriginUnchanged(map: YAMLMap<unknown, unknown>, origin: WatchdogAdvisorOrigin): boolean {
+function watchdogAdvisorOriginUnchanged(
+	document: Document.Parsed<ParsedNode>,
+	map: YAMLMap<unknown, unknown>,
+	origin: WatchdogAdvisorOrigin,
+): boolean {
 	if (origin.fingerprint !== undefined) {
-		return watchdogAdvisorFingerprint(map.toJSON()) === origin.fingerprint;
+		return watchdogAdvisorFingerprint(map.toJS(document)) === origin.fingerprint;
 	}
-	const currentValues = watchdogAdvisorMapValues(map);
+	const currentValues = watchdogAdvisorMapValues(document, map);
 	if (!currentValues) return false;
 	const expectedValues = watchdogAdvisorValues(origin.base);
 	return WATCHDOG_ADVISOR_KEYS.every(key => Bun.deepEquals(currentValues[key], expectedValues[key]));
 }
 
-function patchWatchdogAdvisor(map: YAMLMap<unknown, unknown>, advisor: AdvisorConfig, base?: AdvisorConfig): void {
+function patchWatchdogAdvisor(
+	document: Document.Parsed<ParsedNode>,
+	map: YAMLMap<unknown, unknown>,
+	advisor: AdvisorConfig,
+	base?: AdvisorConfig,
+): void {
 	const values = watchdogAdvisorValues(advisor);
 	const baseValues = base ? watchdogAdvisorValues(base) : undefined;
-	const currentValues = baseValues ? watchdogAdvisorMapValues(map) : undefined;
+	const currentValues = baseValues ? watchdogAdvisorMapValues(document, map) : undefined;
 	for (const key of WATCHDOG_ADVISOR_KEYS) {
 		if (baseValues && Bun.deepEquals(values[key], baseValues[key])) continue;
 		if (baseValues && currentValues && !Bun.deepEquals(currentValues[key], baseValues[key])) continue;
@@ -601,6 +678,7 @@ function patchWatchdogAdvisor(map: YAMLMap<unknown, unknown>, advisor: AdvisorCo
 
 function patchWatchdogDocument(source: string, doc: WatchdogConfigDoc, baseline?: WatchdogBaseline): string {
 	if (!source.trim() && (!baseline || !baseline.sourceWasPresent)) return serializeWatchdogConfig(doc);
+	for (const advisor of doc.advisors) assertAdvisorCadence(advisor);
 	const document = parseYamlMappingDocument(source);
 	const root = yamlDocumentRoot(document);
 	const topLevelValues = {
@@ -653,9 +731,9 @@ function patchWatchdogDocument(source: string, doc: WatchdogConfigDoc, baseline?
 			for (const advisor of doc.advisors) {
 				const occurrence = occurrences.get(advisor.name) ?? 0;
 				occurrences.set(advisor.name, occurrence + 1);
-				const existing = findWatchdogAdvisor(existingSequence, advisor.name, occurrence);
+				const existing = findWatchdogAdvisor(document, existingSequence, advisor.name, occurrence);
 				if (existing) {
-					patchWatchdogAdvisor(existing.map, advisor);
+					patchWatchdogAdvisor(document, existing.map, advisor);
 					items.push(existing.map);
 				} else {
 					items.push(document.createNode(watchdogAdvisorValues(advisor)));
@@ -677,11 +755,11 @@ function patchWatchdogDocument(source: string, doc: WatchdogConfigDoc, baseline?
 	for (let index = 0; index < sequence.items.length; index++) {
 		materializeYamlAlias(document, ["advisors", index]);
 	}
-	removeMalformedWatchdogAdvisors(sequence);
+	removeMalformedWatchdogAdvisors(document, sequence);
 
 	const resolvedOrigins = baseline.origins.map(origin => ({
 		origin,
-		existing: resolveWatchdogAdvisorOrigin(sequence, origin, baseline.origins),
+		existing: resolveWatchdogAdvisorOrigin(document, sequence, origin, baseline.origins),
 	}));
 	const matches = new Map<AdvisorConfig, (typeof resolvedOrigins)[number]>();
 	const claimedOrigins = new Set<WatchdogAdvisorOrigin>();
@@ -718,7 +796,7 @@ function patchWatchdogDocument(source: string, doc: WatchdogConfigDoc, baseline?
 			continue;
 		}
 		if (!resolved.existing) continue;
-		patchWatchdogAdvisor(resolved.existing.map, advisor, resolved.origin.base);
+		patchWatchdogAdvisor(document, resolved.existing.map, advisor, resolved.origin.base);
 	}
 
 	const removals = resolvedOrigins
@@ -726,7 +804,7 @@ function patchWatchdogDocument(source: string, doc: WatchdogConfigDoc, baseline?
 			resolved =>
 				!claimedOrigins.has(resolved.origin) &&
 				resolved.existing &&
-				watchdogAdvisorOriginUnchanged(resolved.existing.map, resolved.origin),
+				watchdogAdvisorOriginUnchanged(document, resolved.existing.map, resolved.origin),
 		)
 		.map(resolved => resolved.existing!)
 		.sort((left, right) => right.index - left.index);
@@ -763,7 +841,7 @@ export async function saveWatchdogConfigFile(filePath: string, doc: WatchdogConf
 		const root = yamlDocumentRoot(parseYamlMappingDocument(content));
 		const wroteFile = root.items.length > 0;
 		if (wroteFile) {
-			await Bun.write(filePath, content);
+			await writeFileAtomically(filePath, content);
 		} else {
 			await fs.rm(filePath, { force: true });
 		}

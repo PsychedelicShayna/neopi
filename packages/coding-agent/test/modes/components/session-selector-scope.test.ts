@@ -26,6 +26,28 @@ function createSession(id: string, title: string, cwd: string, parentSessionPath
 const TAB = "\t";
 
 describe("SessionSelectorComponent scope toggle", () => {
+	it("navigates rows with j/k and preserves literal hjkl filter text until the second Escape", () => {
+		const selected: string[] = [];
+		let cancelled = 0;
+		const selector = new SessionSelectorComponent(
+			[createSession("alpha", "Alpha", "/work/current"), createSession("beta", "Beta", "/work/current")],
+			session => selected.push(session.id),
+			() => cancelled++,
+			() => {},
+		);
+		selector.handleInput("j");
+		selector.handleInput("\n");
+		expect(selected).toEqual(["beta"]);
+		selector.handleInput("k");
+		selector.handleInput("i");
+		for (const key of "hjkl") selector.handleInput(key);
+		expect(Bun.stripANSI(selector.render(120).join("\n"))).toContain("hjkl");
+		selector.handleInput("\x1b");
+		expect(cancelled).toBe(0);
+		expect(Bun.stripANSI(selector.render(120).join("\n"))).toContain("hjkl");
+		selector.handleInput("\x1b");
+		expect(cancelled).toBe(1);
+	});
 	it("loads the all-projects list on Tab and surfaces each session's directory", async () => {
 		const folder = [createSession("local", "Local", "/work/current")];
 		const global = [
@@ -113,9 +135,7 @@ describe("SessionSelectorComponent scope toggle", () => {
 		expect(rendered).toContain("(current folder)");
 		expect(rendered).not.toContain("(all projects)");
 		expect(rendered).not.toContain("other-project");
-		// The empty-state hint must be visible so the user knows Tab is the way out.
 		expect(rendered).toContain("No sessions in current folder");
-		expect(rendered).toContain("Press Tab to view all");
 	});
 
 	it("marks forked child sessions in the rendered list", () => {

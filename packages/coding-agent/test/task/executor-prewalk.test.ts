@@ -39,7 +39,9 @@ function yieldEmittingSession(
 	const serving = (model: Model | undefined): { selector: string; isFallback: boolean } | undefined =>
 		model ? { selector: `${model.provider}/${model.id}`, isFallback: false } : undefined;
 	const session = {
-		...createSessionDefaults(),
+		...createSessionDefaults(event => {
+			for (const listener of listeners) listener(event);
+		}),
 		state: { messages: [] },
 		agent: { state: { systemPrompt: ["test"] } },
 		model: modelSwitch?.from,
@@ -79,6 +81,7 @@ function yieldEmittingSession(
 					isError: false,
 				});
 			}
+			return true;
 		},
 	};
 	return session as unknown as AgentSession;

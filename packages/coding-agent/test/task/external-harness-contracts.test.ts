@@ -2,13 +2,13 @@ import type { SingleResult } from "@oh-my-pi/pi-tui/tools/task";
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
+import { SUBAGENT_OUTCOME_EXCERPT_CHARS, runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
 import {
 	type AgentDefinition,
 	type SubagentLifecyclePayload,
 	TASK_SUBAGENT_LIFECYCLE_CHANNEL,
 } from "@oh-my-pi/pi-coding-agent/task/types";
-import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
+import { activeSubagentRuns, EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import {
 	assertExternalHarnessCapabilities,
 	ClaudeExternalHarnessAdapter,
@@ -112,6 +112,12 @@ describe("external harness contracts", () => {
 
 		expect(result.exitCode).toBe(0);
 		expect(events.map(event => event.status)).toEqual(["started", "completed"]);
+		expect(events[0]?.runToken).toMatch(/^[\da-f-]{36}$/);
+		expect(events[1]?.runToken).toBe(events[0]?.runToken);
+		expect(events[0]?.runKind).toBe("spawn");
+		expect(events[0]?.depth).toBe(1);
+		expect(events[1]?.outcomeExcerpt).toBe("done");
+		expect(activeSubagentRuns(eventBus).size).toBe(0);
 	});
 
 	it("emits one failed settlement when an external adapter throws", async () => {
@@ -121,5 +127,28 @@ describe("external harness contracts", () => {
 
 		await expect(runSubprocess(lifecycleRunOptions(eventBus))).rejects.toThrow("adapter failed");
 		expect(events.map(event => event.status)).toEqual(["started", "failed"]);
+		expect(events[1]?.runToken).toBe(events[0]?.runToken);
+		expect(events[1]?.outcomeExcerpt).toBe("");
+		expect(activeSubagentRuns(eventBus).size).toBe(0);
+	});
+
+	it("publishes external runs to the root bus and excerpts accepted Unicode output", async () => {
+		const sessionBus = new EventBus();
+		const rootBus = new EventBus();
+		const starts = collectLifecycle(sessionBus);
+		const rootFrames = collectLifecycle(rootBus);
+		const output = `  ${"🪐".repeat(SUBAGENT_OUTCOME_EXCERPT_CHARS + 2)}  `;
+		vi.spyOn(claudeExternalHarnessAdapter, "execute").mockImplementation(async () => {
+			expect(activeSubagentRuns(rootBus).size).toBe(1);
+			return settledResult({ output });
+		});
+
+		const result = await runSubprocess({ ...lifecycleRunOptions(sessionBus), subagentEventBus: rootBus });
+		expect(result.output).toBe(output);
+		expect(rootFrames.map(frame => frame.status)).toEqual(["started", "completed"]);
+		expect(starts.map(frame => frame.runToken)).toEqual(rootFrames.map(frame => frame.runToken));
+		expect([...rootFrames[1]!.outcomeExcerpt!].length).toBe(SUBAGENT_OUTCOME_EXCERPT_CHARS - 2);
+		expect(rootFrames[1]!.outcomeExcerpt).toBe("🪐".repeat(SUBAGENT_OUTCOME_EXCERPT_CHARS - 2));
+		expect(activeSubagentRuns(rootBus).size).toBe(0);
 	});
 });

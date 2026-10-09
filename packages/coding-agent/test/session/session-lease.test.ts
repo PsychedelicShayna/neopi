@@ -68,7 +68,15 @@ class LeaseHolder {
 }
 
 function resumeArgs(resume: string, sessionDir: string): Args {
-	return { resume, sessionDir, messages: [], fileArgs: [], unknownFlags: new Map(), unrecognizedFlags: [] };
+	return {
+		resume,
+		sessionDir,
+		messages: [],
+		fileArgs: [],
+		unknownFlags: new Map(),
+		unrecognizedFlags: [],
+		invalidFlagValues: [],
+	};
 }
 
 describe("session lifetime lease", () => {

@@ -307,6 +307,7 @@ export class ChroniclerStore {
 	#committedBatchIds = new Set<string>();
 	#beatIds = new Set<string>();
 	#lastEntryId: string | null = null;
+	#lastCommittedAt: string | undefined;
 
 	/** Latest committed manifest per session, in commit order, for carry recovery. */
 	#ownCarry: { sources: string[]; text: string } | null = null;
@@ -353,6 +354,10 @@ export class ChroniclerStore {
 		return this.#sourcesView;
 	}
 
+	get lastCommittedAt(): string | undefined {
+		return this.#lastCommittedAt;
+	}
+
 	get carry(): { sources: string[]; text: string } | null {
 		return this.#carry;
 	}
@@ -389,6 +394,7 @@ export class ChroniclerStore {
 		this.#committedBatchIds = new Set();
 		this.#beatIds = new Set();
 		this.#lastEntryId = null;
+		this.#lastCommittedAt = undefined;
 		this.#ownCarry = null;
 		this.#ownCarrySeen = false;
 		this.#inheritedCarry = null;
@@ -560,13 +566,14 @@ export class ChroniclerStore {
 	 * together. Everything before the rename leaves the batch's entries
 	 * unprocessed; nothing after it can turn a committed batch into a retry.
 	 */
-	async commitBatch(batch: CaptureBatch): Promise<void> {
+	async commitBatch(batch: CaptureBatch, assertPublicationOwner?: () => void): Promise<void> {
 		this.#assertUsable();
 		this.#assertOwned(batch);
 		if (this.#committedBatches.has(batch)) {
 			throw new Error(`Chronicler batch ${batch.id} is already committed`);
 		}
 		if (batch.revoked) throw new Error(`Chronicler batch ${batch.id} was revoked`);
+		assertPublicationOwner?.();
 		if (!batch.finalized) throw new Error(`Chronicler batch ${batch.id} was not finalized by the capture pass`);
 		if (this.#committedBatchIds.has(batch.id)) {
 			throw new ChroniclerCorruptionError(`batch id ${batch.id} is already committed on disk`, batch.id);
@@ -591,6 +598,7 @@ export class ChroniclerStore {
 				`${JSON.stringify(checkpoint, null, "\t")}\n`,
 			);
 			await this.#publish(staging, destination, checkpoint, () => {
+				assertPublicationOwner?.();
 				if (batch.revoked) {
 					throw new Error(`Chronicler batch ${batch.id} was revoked before publication`);
 				}
@@ -940,6 +948,7 @@ export class ChroniclerStore {
 	/** Fold one validated batch into the in-memory committed view. */
 	#absorb(batch: LoadedBatch): void {
 		const { checkpoint, records } = batch;
+		this.#lastCommittedAt = checkpoint.committedAt;
 		if (this.#committedBatchIds.has(checkpoint.batchId)) {
 			throw this.#halt(`batch ${checkpoint.batchId} is loaded twice`, checkpoint.batchId);
 		}

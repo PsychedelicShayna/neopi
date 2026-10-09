@@ -28,8 +28,16 @@ import { cfgEnabledModels } from "../config/model-settings";
 import { roleCandidatePool } from "../config/model-roles";
 import type { Settings } from "../config/settings";
 import { judgeRoleChain } from "../judgment";
-import { BUNDLED_ENVELOPES, DEFAULT_EDGE_ENVELOPE, ENTRY_ENVELOPE, isInlineTemplate } from "./envelopes";
+import {
+	BUNDLED_ENVELOPES,
+	BUNDLED_ROLES,
+	DEFAULT_EDGE_ENVELOPE,
+	ENTRY_ENVELOPE,
+	isInlineTemplate,
+	LIMIT_ENVELOPE,
+} from "./envelopes";
 import { MIXTURE_API } from "./provider";
+import { cfgMoaSummaryModel } from "./settings";
 import type { MixtureIssue, ResolvedMember, ResolvedMixture, ToolPolicy } from "./types";
 import { definitionSizeIssue, documentPresets, type PreparedDocumentPresets } from "./validate";
 
@@ -175,7 +183,7 @@ export function resolveMixture(input: MixtureDefinition, ctx: ResolveMixtureCont
 		const resolved = resolveModelRoleValue(member.model, available, { settings: ctx.settings });
 		let rolePrompt = member.systemPrompt;
 		if (rolePrompt === undefined && member.role !== undefined) {
-			rolePrompt = lookupPreset(member.role, definition.roles, presets.roles, {});
+			rolePrompt = lookupPreset(member.role, definition.roles, presets.roles, BUNDLED_ROLES);
 			if (rolePrompt === undefined) {
 				issues.push({
 					code: "member.role.unresolved",
@@ -234,6 +242,8 @@ export function resolveMixture(input: MixtureDefinition, ctx: ResolveMixtureCont
 	const envelopes: Record<string, string> = {};
 	const entryEnvelope = lookupPreset(ENTRY_ENVELOPE, definition.envelopes, presets.envelopes, BUNDLED_ENVELOPES);
 	if (entryEnvelope !== undefined) envelopes[ENTRY_ENVELOPE] = entryEnvelope;
+	const limitEnvelope = lookupPreset(LIMIT_ENVELOPE, definition.envelopes, presets.envelopes, BUNDLED_ENVELOPES);
+	if (limitEnvelope !== undefined) envelopes[LIMIT_ENVELOPE] = limitEnvelope;
 	definition.edges.forEach((edge, index) => {
 		const reference = edge.envelope ?? DEFAULT_EDGE_ENVELOPE;
 		if (isInlineTemplate(reference) || envelopes[reference] !== undefined) return;
@@ -262,9 +272,27 @@ export function resolveMixture(input: MixtureDefinition, ctx: ResolveMixtureCont
 		),
 		slicer: definition.edges.some(edge => isFanoutEdge(edge) && edge.slices === "auto"),
 	};
-	// The summary and slicer helpers ship with the milestones that can reach them (M2, M4);
-	// until then the capability gate rejects any definition whose `uses` names them.
+	// Summary dependencies are pinned at resolution, just like member and judge models.
 	const judgePlan = uses.judge ? resolveJudgePlan(ctx, isAllowed, issues) : undefined;
+	let summaryModel: Model<Api> | undefined;
+	if (uses.summary) {
+		const selector = cfgMoaSummaryModel.get(ctx.settings);
+		const model = resolveModelRoleValue(selector, available, { settings: ctx.settings }).model;
+		if (!model || isMixtureApi(model) || !isAllowed(model)) {
+			const reason = !model
+				? "does not resolve"
+				: isMixtureApi(model)
+					? "is a mixture"
+					: "is excluded by enabledModels";
+			issues.push({
+				code: "helper.unresolved",
+				path: "summary",
+				message: `moa.summary_model "${selector}" ${reason}`,
+			});
+		} else {
+			summaryModel = model;
+		}
+	}
 	const readOnlyTools = new Set(ADVISOR_DEFAULT_TOOL_NAMES);
 
 	const revision = Bun.hash(
@@ -278,8 +306,9 @@ export function resolveMixture(input: MixtureDefinition, ctx: ResolveMixtureCont
 			envelopes,
 			judgePlan: judgePlan?.map(candidate => formatModelStringWithRouting(candidate.model)),
 			readOnlyTools: [...readOnlyTools],
+			summaryModel: summaryModel && formatModelStringWithRouting(summaryModel),
 		}),
 	).toString(16);
 
-	return { definition, members, envelopes, presets, uses, judgePlan, readOnlyTools, issues, revision };
+	return { definition, members, envelopes, presets, uses, judgePlan, summaryModel, readOnlyTools, issues, revision };
 }

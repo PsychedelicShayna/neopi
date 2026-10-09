@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { hasFsCode, isEexist, isEnoent, logger, toError } from "@oh-my-pi/pi-utils";
 
 /**
@@ -12,6 +13,37 @@ export async function replaceFileAtomically(tempPath: string, targetPath: string
 	} catch (error) {
 		if (!hasFsCode(error, "EPERM") && !isEexist(error)) throw error;
 		await replaceAfterWindowsRenameFailure(tempPath, targetPath, error);
+	}
+}
+
+/** Write a complete sibling file before publishing it, without exposing truncated contents. */
+export async function writeFileAtomically(filePath: string, content: string): Promise<void> {
+	const targetPath = await fs.promises.realpath(filePath).catch(error => {
+		if (isEnoent(error)) return filePath;
+		throw error;
+	});
+	const tempPath = `${targetPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+	let removeTemp = false;
+	try {
+		let handle: fs.promises.FileHandle;
+		try {
+			handle = await fs.promises.open(tempPath, "wx", 0o600);
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+			await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
+			handle = await fs.promises.open(tempPath, "wx", 0o600);
+		}
+		removeTemp = true;
+		try {
+			await handle.writeFile(content, "utf8");
+			await handle.sync();
+		} finally {
+			await handle.close();
+		}
+		await replaceFileAtomically(tempPath, targetPath);
+		removeTemp = false;
+	} finally {
+		if (removeTemp) await fs.promises.rm(tempPath, { force: true }).catch(() => {});
 	}
 }
 

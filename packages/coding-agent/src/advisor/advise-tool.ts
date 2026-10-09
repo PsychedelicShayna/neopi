@@ -43,12 +43,16 @@ const ADVISOR_GUIDANCE = "weigh, don't blindly obey";
  * non-interrupting YieldQueue dispatcher and the interrupting steer path so both
  * build byte-identical content.
  */
-export function formatAdvisorBatchContent(notes: readonly AdvisorNote[]): string {
+export function formatAdvisorBatchContent(notes: readonly AdvisorNote[], opts?: { currentTurn?: number }): string {
 	return notes
 		.map(n => {
 			const severity = n.severity ? ` severity="${n.severity}"` : "";
 			const who = n.advisor ? ` advisor="${escapeXmlAttribute(n.advisor)}"` : "";
-			return `<advisory${who}${severity} guidance="${ADVISOR_GUIDANCE}">\n${escapeXmlText(n.note)}\n</advisory>`;
+			const age =
+				opts?.currentTurn !== undefined && n.turn !== undefined && opts.currentTurn > n.turn
+					? ` turns_ago="${opts.currentTurn - n.turn}"`
+					: "";
+			return `<advisory${who}${severity}${age} guidance="${ADVISOR_GUIDANCE}">\n${escapeXmlText(n.note)}\n</advisory>`;
 		})
 		.join("\n");
 }
@@ -81,6 +85,9 @@ export type AdvisorDeliveryChannel = "steer" | "preserve";
  *   still steers a triggered turn to force the primary to acknowledge and continue
  *   before the turn is considered done (#5628) — deferring it to the next user
  *   turn is the bug.
+ *   `allowTerminalConcernSteering` opts out of ONLY this preservation branch
+ *   (a final-review continuation policy); stop/abort suppression and `preserveOnly`
+ *   still run first and are never bypassed.
  * - After a deliberate user interrupt (`autoResumeSuppressed`) the advisor must
  *   not auto-resume the stopped run. While the agent is idle — or still tearing
  *   the interrupted turn down (`aborting`) — the note is preserved as a visible
@@ -96,12 +103,22 @@ export function resolveAdvisorDeliveryChannel(opts: {
 	streaming: boolean;
 	aborting: boolean;
 	terminalAnswerNoQueuedWork?: boolean;
+	/** Opt out of terminal-answer preservation for a late `concern` (default
+	 *  false). Bypasses ONLY that branch — never stop/abort suppression or
+	 *  `preserveOnly`. */
+	allowTerminalConcernSteering?: boolean;
 	preserveOnly?: boolean;
 }): AdvisorDeliveryChannel {
 	if (opts.preserveOnly && !opts.streaming) return "preserve";
 	if (!isSteeringSeverity(opts.severity)) return "preserve";
 	if (opts.autoResumeSuppressed && (opts.aborting || !opts.streaming)) return "preserve";
-	if (opts.terminalAnswerNoQueuedWork && opts.severity !== "blocker" && !opts.streaming && !opts.aborting)
+	if (
+		opts.terminalAnswerNoQueuedWork &&
+		opts.severity !== "blocker" &&
+		!opts.allowTerminalConcernSteering &&
+		!opts.streaming &&
+		!opts.aborting
+	)
 		return "preserve";
 	return "steer";
 }
@@ -146,6 +163,18 @@ function advisorSeverityRank(severity: AdvisorSeverity | undefined): number {
 	return ADVISOR_SEVERITY_RANK[severity ?? "nit"];
 }
 
+/**
+ * Merged-batch ordering: most recent turn first, then severity (blocker →
+ * concern → nit) within a turn. The newest notes describe the latest state of
+ * the work, so they read first; severity breaks ties so a blocker never hides
+ * below a same-turn nit.
+ */
+export function compareAdvisorNotes(a: AdvisorNote, b: AdvisorNote): number {
+	const turnDelta = (b.turn ?? 0) - (a.turn ?? 0);
+	if (turnDelta !== 0) return turnDelta;
+	return advisorSeverityRank(b.severity) - advisorSeverityRank(a.severity);
+}
+
 /** Admission acks: one line each — the advisor needs the verdict, not a policy essay. */
 const ADVISOR_ACK_SENT = "Delivered.";
 /** Held behind the in-progress primary turn; flushed when it completes. */
@@ -172,6 +201,9 @@ export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails>
 	 */
 	readonly #guard: AdvisorEmissionGuard;
 	#inProgressUpdate = false;
+	/** Primary-turn count the in-flight update reviews (stamped on emitted notes
+	 *  so merged batches can report how stale each review was at delivery). */
+	#coveredTurn: number | undefined;
 	/** Notes admitted but withheld while the primary was mid-turn, in arrival
 	 *  order. Flushed deterministically at the completed-update transition or an
 	 *  explicit {@link flushDeferredNotes}, so delivery does not depend on the
@@ -182,6 +214,7 @@ export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails>
 		key: string;
 		note: string;
 		severity?: AdviseDetails["severity"];
+		turn?: number;
 	}[] = [];
 
 	/**
@@ -194,7 +227,7 @@ export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails>
 	 *   {@link ADVISOR_DEFAULT_BUDGET_PER_UPDATE}).
 	 */
 	constructor(
-		private readonly onAdvice: (note: string, severity?: AdviseDetails["severity"]) => void,
+		private readonly onAdvice: (note: string, severity: AdviseDetails["severity"] | undefined, turn?: number) => void,
 		guard?: AdvisorEmissionGuard,
 	) {
 		this.#guard = guard ?? new AdvisorEmissionGuard();
@@ -209,9 +242,10 @@ export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails>
 	 * was admitted when emitted, so the flush routes without re-admission and a
 	 * backlog of one note per originating update reaches the primary intact.
 	 */
-	beginUpdate(inProgress: boolean): void {
+	beginUpdate(inProgress: boolean, coveredTurn?: number): void {
 		const wasInProgress = this.#inProgressUpdate;
 		this.#inProgressUpdate = inProgress;
+		this.#coveredTurn = coveredTurn;
 		this.#guard.beginUpdate();
 		if (wasInProgress && !inProgress) this.#flushDeferred();
 	}
@@ -222,11 +256,11 @@ export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails>
 	}
 
 	/**
-	 * Mark the primary no longer mid-turn and flush the withheld backlog
+	 * Mark the primary no longer active and flush the withheld backlog
 	 * WITHOUT starting a new advisor update or resetting the guard's budget.
-	 * Called at the primary's terminal boundary (final yield), where no advisor
-	 * review follows but reserved notes must still reach the primary. Flushed
-	 * notes stay charged to their originating update as routed deliveries.
+	 * Called only after the primary run rules out further continuations, so
+	 * nits cannot enter model context during an advisor-triggered continuation.
+	 * Flushed notes stay charged to their originating update as routed deliveries.
 	 */
 	flushDeferredNotes(): void {
 		this.#inProgressUpdate = false;
@@ -274,7 +308,7 @@ export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails>
 				const displacedIndex = this.#deferredNotes.findIndex(item => item.key === decision.displacedKey);
 				if (displacedIndex !== -1) this.#deferredNotes.splice(displacedIndex, 1);
 			}
-			this.#deferredNotes.push({ key, note: args.note, severity: args.severity });
+			this.#deferredNotes.push({ key, note: args.note, severity: args.severity, turn: this.#coveredTurn });
 			return this.#result(ADVISOR_ACK_DEFERRED, args);
 		}
 		// Live path (completed update, or a blocker that must interrupt now). A
@@ -285,7 +319,7 @@ export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails>
 		const decision = this.#guard.admit(args.note, { rank, pending: false });
 		if (!decision.accepted) return this.#suppressed(args, decision.reason);
 		this.#deferredNotes = this.#deferredNotes.filter(item => item.key !== key && item.key !== decision.displacedKey);
-		this.onAdvice(args.note, args.severity);
+		this.onAdvice(args.note, args.severity, this.#coveredTurn);
 		return this.#result(ADVISOR_ACK_SENT, args);
 	}
 
@@ -296,9 +330,9 @@ export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails>
 		if (this.#deferredNotes.length === 0) return;
 		const pending = this.#deferredNotes;
 		this.#deferredNotes = [];
-		for (const { note, severity } of pending) {
+		for (const { note, severity, turn } of pending) {
 			this.#guard.markRouted(note);
-			this.onAdvice(note, severity);
+			this.onAdvice(note, severity, turn ?? this.#coveredTurn);
 		}
 	}
 

@@ -161,6 +161,7 @@ describe("HookSelectorComponent model slider", () => {
 			{ maxVisible: 3 },
 		);
 
+		component.handleInput("i");
 		component.handleInput("o");
 		component.handleInput("g");
 		const rendered = component

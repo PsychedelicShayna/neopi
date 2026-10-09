@@ -9,7 +9,7 @@ import { formatResultOutputFallback } from "@oh-my-pi/pi-coding-agent/task";
 import { runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
-import { createSessionDefaults } from "../helpers/session-defaults";
+import { createSessionDefaults, ownFakeSessionEvents } from "../helpers/session-defaults";
 
 /**
  * Contract: runaway-subagent guards.
@@ -117,6 +117,7 @@ function createFakeSession(config: FakeSessionConfig = {}): FakeSessionHandle {
 }
 
 function mockCreateAgentSession(session: AgentSession) {
+	ownFakeSessionEvents(session);
 	return vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue({
 		session,
 		extensionsResult: {} as unknown as LoadExtensionsResult,

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ToolApprovalRequest } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/tool-approval-requester";
 import { RpcToolApprovalBridge } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-tool-approval";
-import type { RpcToolApprovalRequest } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
+import type { RpcToolApprovalRequest, RpcToolApprovalResponse } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 import { cfgToolsApproval } from "@oh-my-pi/pi-coding-agent/tools/settings";
 
 const request: ToolApprovalRequest = {
@@ -48,6 +48,20 @@ describe("RpcToolApprovalBridge", () => {
 			decision: "allow_forever" as "allow_once",
 		});
 		expect(await unknown).toMatchObject({ approved: false });
+	});
+
+	test("a cancelled frame cannot grant allow_session even when it carries an approval decision", async () => {
+		const settings = Settings.isolated();
+		const { bridge, lastRequest } = createBridge({ settings });
+		const result = bridge.request(request);
+		bridge.handleResponse({
+			type: "tool_approval_response",
+			id: lastRequest().id,
+			decision: "allow_session",
+			cancelled: true,
+		} as RpcToolApprovalResponse);
+		expect(await result).toMatchObject({ approved: false });
+		expect(cfgToolsApproval.get(settings)).not.toHaveProperty("bash", "allow");
 	});
 
 	test("provider safety checks are forwarded only when pending; disconnect rejects pending requests", async () => {

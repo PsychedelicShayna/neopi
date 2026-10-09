@@ -26,7 +26,7 @@ function createMockSession(onPrompt: (params: { emit: (event: AgentSessionEvent)
 		for (const listener of listeners) listener(event);
 	};
 	const session = {
-		...createSessionDefaults(),
+		...createSessionDefaults(emit),
 		state: { messages: [] },
 		agent: { state: { systemPrompt: ["test"] } },
 		model: undefined,
@@ -43,6 +43,7 @@ function createMockSession(onPrompt: (params: { emit: (event: AgentSessionEvent)
 		},
 		prompt: async (_text: string, _options?: PromptOptions) => {
 			onPrompt({ emit });
+			return true;
 		},
 	};
 	return session as unknown as AgentSession;

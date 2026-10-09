@@ -249,16 +249,19 @@ export async function runChainStep(
 		ThinkingLevel.Inherit;
 	if (selection?.mode === "auto" && decision) {
 		try {
-			const classified = await classifyDifficulty(input, {
-				settings: options.settings,
-				registry: options.modelRegistry,
-				model: resolved.model,
-				signal,
-				allowedEfforts: decision.candidates,
-				sessionManager: options.sessionManager,
-				onContextFallback: reason => options.onEffortNotice?.(reason),
-				onEffortDisclosure: message => options.onEffortNotice?.(message),
-			});
+			const classified = await classifyDifficulty(
+				{ request: input },
+				{
+					settings: options.settings,
+					registry: options.modelRegistry,
+					model: resolved.model,
+					signal,
+					allowedEfforts: decision.candidates,
+					sessionManager: options.sessionManager,
+					onContextFallback: reason => options.onEffortNotice?.(reason),
+					onEffortDisclosure: message => options.onEffortNotice?.(message),
+				},
+			);
 			if (!classified || !decision.candidates.includes(classified)) throw new Error("Invalid effort classification");
 			thinkingLevel = classified;
 		} catch {

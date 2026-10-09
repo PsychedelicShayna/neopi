@@ -23,7 +23,7 @@ async function harness(columns: number) {
 	const composer = new Composer({
 		terminal: term,
 		tuiOptions: { renderScheduler: scheduler },
-		preferences: { ...COMPOSER_DEFAULTS, quiet: true, spellingTypoDetection: false, spellingAutocomplete: false },
+		preferences: { ...COMPOSER_DEFAULTS, quiet: true, spellingTypoDetection: false, spellingAutocomplete: "off" },
 	});
 	composer.setRuntimeChildren([new TranscriptContainer(), new Text("EDITOR", 0, 0)]);
 	composer.start();

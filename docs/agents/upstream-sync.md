@@ -1,6 +1,6 @@
 # Synchronizing an upstream release
 
-Use this procedure for every upstream release integration. GitHub's remote default branch is the source of truth. A local checkout is a work surface, not a release baseline.
+Use this procedure for every upstream release integration. Upstream syncs land on the integration branch `nightly` (workspace policy, `~/repos/AGENTS.md` › Upstream forks), never directly on the default branch; `nightly` is promoted to `neopi` on its own schedule. Everywhere below, `$DEFAULT` therefore means `nightly`. GitHub's remote branch is the source of truth. A local checkout is a work surface, not a release baseline.
 
 RFC 2119 applies to MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` and `AVOID` mean `MUST NOT` and `SHOULD NOT`.
 
@@ -17,10 +17,10 @@ RFC 2119 applies to MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` 
 
 ## 1. Preserve local work
 
-Identify the remote default branch and fetch both remotes:
+Set the integration branch and fetch both remotes:
 
 ```sh
-DEFAULT=$(git remote show origin | sed -n '/HEAD branch/s/.*: //p')
+DEFAULT=nightly
 git fetch origin --prune
 git fetch upstream --tags --prune
 ```

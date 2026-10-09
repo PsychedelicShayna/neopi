@@ -113,6 +113,7 @@ const codingAgentNativePathPatterns = [
 	// Real broker subprocess startup needs a short-lived test process rather
 	// than the 100-file singleton bucket's accumulated process-wide state.
 	/^test\/launch\/broker-placement\.test\.ts$/,
+	/^test\/launch\/broker-idle-shutdown\.test\.ts$/,
 	/(^|\/)[^/]*(bash|native|browser|cmux|mnemopi|hindsight|memory)[^/]*\.test\.ts$/i,
 	/^test\/[^/]*(ask|gh|irc|task|eval|search|read|write|edit|ast|resolve|sqlite|web-search|fetch|image|ssh|tool)[^/]*\.test\.ts$/,
 	/^test\/core\/python-[^/]*\.test\.ts$/,
@@ -594,6 +595,8 @@ function testTimeoutMs(): number {
 // reporting reads the truth. A `parallel` request marks the command as a `bun
 // test` invocation, so that is also where the shared per-test timeout is
 // applied; the Rust task, which has neither, passes through untouched.
+// Width one uses Bun's ordinary serial runner; --parallel=1 still selects its
+// native parallel path, which repeatedly crashed otherwise passing serial chunks.
 function applyChunkBudget(commands: TestCommand[], poolWidth: number): TestCommand[] {
 	const timeout = testTimeoutMs();
 	return commands.map(testCommand => {
@@ -601,7 +604,7 @@ function applyChunkBudget(commands: TestCommand[], poolWidth: number): TestComma
 		const parallel = budgetedParallel(testCommand.parallel, poolWidth);
 		return {
 			...testCommand,
-			command: [...testCommand.command, `--parallel=${parallel}`, `--timeout=${timeout}`],
+			command: [...testCommand.command, ...(parallel > 1 ? [`--parallel=${parallel}`] : []), `--timeout=${timeout}`],
 			parallel,
 		};
 	});

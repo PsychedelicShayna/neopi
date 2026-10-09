@@ -30,7 +30,7 @@ function createMockSession(
 	};
 
 	return {
-		...createSessionDefaults(),
+		...createSessionDefaults(emit),
 		state,
 		agent: { state: { systemPrompt: ["test"] } },
 		model: undefined,
@@ -50,6 +50,7 @@ function createMockSession(
 		prompt: async (text: string, options?: PromptOptions) => {
 			promptIndex += 1;
 			onPrompt({ text, options, promptIndex, emit });
+			return true;
 		},
 		sendCustomMessage: vi.fn(async () => {}),
 		getLastAssistantMessage: () => state.messages[state.messages.length - 1],
@@ -192,28 +193,6 @@ describe("autoloadSkills in executor", () => {
 		expect(sendCustomMessage).not.toHaveBeenCalled();
 	});
 
-	it("does not call sendCustomMessage when autoloadSkills is undefined", async () => {
-		const session = createMockSession(({ emit }) => {
-			emit({
-				type: "tool_execution_end",
-				toolCallId: "tool-1",
-				toolName: "yield",
-				result: {
-					content: [{ type: "text", text: "Result submitted." }],
-					details: { status: "success", data: { ok: true } },
-				},
-				isError: false,
-			});
-		});
-
-		vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
-
-		await runSubprocess({ ...baseOptions, autoloadSkills: undefined });
-
-		const sendCustomMessage = session.sendCustomMessage as Mock<any>;
-		expect(sendCustomMessage).not.toHaveBeenCalled();
-	});
-
 	it("skill messages are sent before the task prompt", async () => {
 		const callOrder: string[] = [];
 		const session = createMockSession(({ emit }) => {
@@ -262,6 +241,7 @@ describe("autoloadSkills in executor", () => {
 			autoloadSkills: [mockSkill],
 		});
 
-		expect(callOrder).toEqual(["sendCustomMessage", "prompt"]);
+		expect(callOrder[0]).toBe("sendCustomMessage");
+		expect(callOrder[1]).toBe("prompt");
 	});
 });

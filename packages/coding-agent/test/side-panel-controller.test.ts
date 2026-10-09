@@ -30,7 +30,7 @@ async function harness(columns: number, overrides: Record<string, unknown> = {})
 	const composer = new Composer({
 		terminal: term,
 		tuiOptions: { renderScheduler: scheduler },
-		preferences: { ...COMPOSER_DEFAULTS, quiet: true, spellingTypoDetection: false, spellingAutocomplete: false },
+		preferences: { ...COMPOSER_DEFAULTS, quiet: true, spellingTypoDetection: false, spellingAutocomplete: "off" },
 	});
 	const transcript = new TranscriptContainer();
 	transcript.addChild(new CardBlock());

@@ -2,6 +2,7 @@ import { trackMountedDialog } from "../../control/dialogs";
 import { cfgControlSecretInput } from "../../control/settings";
 import * as fs from "node:fs";
 import advisorSystemPrompt from "../../prompts/advisor/system.md" with { type: "text" };
+import liveClientProtocolTemplate from "../../live/prompts/live-client-protocol.md" with { type: "text" };
 import { renderChatAdvisorPrompt } from "../../chat/chat-system-prompt";
 import { type AgentMessage, type AgentToolResult, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
@@ -11,6 +12,8 @@ import type { OAuthProvider } from "@oh-my-pi/pi-ai/oauth/types";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import type { Component, OverlayHandle } from "@oh-my-pi/pi-tui";
 import { Loader, Spacer, Text } from "@oh-my-pi/pi-tui";
+import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
+import { appKey, editorKey } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
 import {
 	getAgentDbPath,
 	getAgentDir,
@@ -32,10 +35,16 @@ import type { AdvisorConfigScope } from "@oh-my-pi/pi-tui/overlays/advisor-confi
 import { type ChainConfigDeps, ChainConfigOverlayComponent } from "@oh-my-pi/pi-tui/overlays/chain-config";
 import type { ChainConfigScope } from "@oh-my-pi/pi-tui/overlays/chain-types";
 import { chainsConfigFilePath, discoverChains, loadChainsConfigFile, saveChainsConfigFile } from "../../chains/config";
+import { discoverMixtures, mixturesConfigFilePath } from "../../moa/config";
+import { MixtureCatalog } from "../../moa/provider";
+import { discoverRegistrableMixtures, readMixtureDefinitionFile, saveMixtureDefinition } from "../../moa/registration";
+import { type MixtureConfigDeps, MixtureConfigOverlayComponent } from "@oh-my-pi/pi-tui/overlays/mixture-config";
+import type { MixtureConfigScope } from "@oh-my-pi/pi-tui/overlays/mixture-types";
 import { CHAIN_DEFAULT_ROLE, CHAIN_SYSTEM_PROMPT } from "../../chains/runner";
 import { formatModelRoleAlias } from "../../config/model-roles";
 import { showGitOverlay } from "../../cli/git-tui";
 import { formatLoginIdentity } from "../../cli/oauth-terminal";
+import { acquireModelRoleMutation, modelPresetSavedMessage, saveModelPreset } from "../../config/model-presets";
 import { resolveAdvisorRoleSelection, resolveModelRoleValue } from "../../config/model-resolver";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import { getRoleInfo } from "../../config/model-roles";
@@ -73,6 +82,12 @@ import { toLogoutAccounts } from "../../slash-commands/helpers/logout";
 import type { LogoutAccount } from "@oh-my-pi/pi-tui/overlays/logout-account-selector";
 import { describeRedeemOutcome, toResetUsageAccounts } from "../../slash-commands/helpers/reset-usage";
 import { toSessionPinAccounts } from "../../slash-commands/helpers/session-pin";
+import {
+	accountIdentityLabel,
+	collectStoredAccounts,
+	collectUnreportedAccounts,
+	selectReportableAccounts,
+} from "../../slash-commands/helpers/usage-accounts";
 import { loadDailyActivity } from "../../stats/activity-client";
 import {
 	AUTO_THINKING,
@@ -99,6 +114,7 @@ import {
 	savePersonaConfigDoc,
 	sessionPersonaHost,
 } from "../../neopi/persona-config";
+import { LIVE_INGEST_DEFAULTS, liveIngestSourceFields } from "../../live/ingest-settings";
 import { createAgentsHubDeps } from "../agents-hub-deps";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { collapseSharedUsageReports } from "@oh-my-pi/pi-tui/overlays/usage-display";
@@ -124,7 +140,6 @@ import type { OAuthSelectorComponent as OAuthSelectorComponentType } from "@oh-m
 import { PluginSelectorComponent } from "@oh-my-pi/pi-tui/overlays/plugin-selector";
 import { type ResetUsageAccount, ResetUsageSelectorComponent } from "@oh-my-pi/pi-tui/overlays/reset-usage-selector";
 import { type BranchVariantPath, RewindSelectorComponent } from "@oh-my-pi/pi-tui/overlays/rewind-selector";
-import { renderSegmentTrack } from "@oh-my-pi/pi-tui/chrome/segment-track";
 import { SessionAccountSelectorComponent } from "@oh-my-pi/pi-tui/overlays/session-account-selector";
 import { SessionSelectorComponent, type SessionSelectorOptions } from "@oh-my-pi/pi-tui/overlays/session-selector";
 import { SettingsSelectorComponent } from "@oh-my-pi/pi-tui/overlays/settings-selector";
@@ -134,6 +149,7 @@ import { UsageDashboardComponent } from "@oh-my-pi/pi-tui/overlays/usage-dashboa
 import { renderUsageReports } from "./command-controller";
 import type { SessionObserverRegistry } from "@oh-my-pi/pi-tui/overlays/session-observer-registry";
 
+import { cfgAdvisorSyncBacklog } from "../../advisor/settings";
 import { cfgBranchSummaryEnabled } from "../../session/context-settings";
 import { cfgCycleOrder, cfgDisabledProviders, cfgModelRoleStorage } from "../../config/model-settings";
 import { cfgDefaultThinkingLevel } from "../../session/settings";
@@ -153,8 +169,6 @@ import {
 } from "../settings";
 import { cfgTaskAgentModelOverrides } from "../../task/settings";
 import { cfgAdvisorMaxNotesPerUpdate } from "../../advisor/settings";
-
-const MANUAL_LOGIN_PROMPT = "Paste the authorization code (or full redirect URL), then press Enter:";
 
 interface ModelOverlayModules {
 	ModelHubComponent: typeof ModelHubComponentType;
@@ -208,14 +222,12 @@ export class SelectorController {
 		return handle;
 	}
 
-	#defaultRoleMutationTail = Promise.resolve();
-
+	/**
+	 * Serialize default-role mutations with `/modelpreset switch`, which holds the
+	 * same shared tail in `config/model-presets.ts` for its whole apply.
+	 */
 	async #acquireDefaultRoleMutation(): Promise<() => void> {
-		const previous = this.#defaultRoleMutationTail;
-		const { promise, resolve } = Promise.withResolvers<void>();
-		this.#defaultRoleMutationTail = previous.then(() => promise);
-		await previous;
-		return resolve;
+		return acquireModelRoleMutation();
 	}
 
 	async #refreshOAuthProviderAuthState(): Promise<void> {
@@ -326,6 +338,7 @@ export class SelectorController {
 						const availableWidth = this.ctx.editor.getTopBorderAvailableWidth(this.ctx.ui.terminal.columns);
 						return this.ctx.statusLine.getPreviewLines(availableWidth).join("\n");
 					},
+					describeStatusLinePreview: () => this.ctx.statusLine.describePreview(),
 					onPluginsChanged: async () => {
 						const projectPath = await resolveActiveProjectRegistryPath(this.ctx.sessionManager.getCwd());
 						clearPluginRootsAndCaches(projectPath ? [projectPath] : undefined);
@@ -363,6 +376,19 @@ export class SelectorController {
 	 * classic full report one keypress away. Takes no transcript space.
 	 */
 	showUsageDashboard(reports: UsageReport[]): void {
+		const authStorage = this.ctx.session.modelRegistry.authStorage;
+		const accounts = selectReportableAccounts(
+			collectStoredAccounts(authStorage),
+			provider => authStorage.usage.providerFor(provider) !== undefined,
+		);
+		if (reports.length === 0 && accounts.length === 0) {
+			this.ctx.showWarning("No usage data available.");
+			return;
+		}
+		const unavailableAccounts = collectUnreportedAccounts(reports, accounts).map(account => ({
+			provider: account.provider,
+			label: accountIdentityLabel(account),
+		}));
 		const currentProvider = this.ctx.session.model?.provider;
 		const activeAccount = currentProvider
 			? this.ctx.session.modelRegistry.authStorage.oauth.identity(currentProvider, this.ctx.session.sessionId)
@@ -375,16 +401,19 @@ export class SelectorController {
 		};
 		const dashboard = new UsageDashboardComponent({
 			reports,
-			renderDetail: width =>
+			unavailableAccounts,
+			renderDetail: (width, current) =>
 				renderUsageReports(
-					reports,
+					current,
 					theme,
 					Date.now(),
 					width,
 					provider => (provider === currentProvider ? activeAccount : undefined),
 					usageModelSelectors,
+					unavailableAccounts,
 				),
 			loadActivity: loadDailyActivity,
+			refresh: () => this.ctx.session.fetchUsageReports(),
 			requestRender: () => this.ctx.ui.requestRender(),
 			onClose: done,
 		});
@@ -433,7 +462,10 @@ export class SelectorController {
 					const chatMode = this.ctx.session.chatMode;
 					return chatMode
 						? renderChatAdvisorPrompt(chatMode.mode, maxNotesPerUpdate)
-						: prompt.render(advisorSystemPrompt, { max_notes_per_update: maxNotesPerUpdate });
+						: prompt.render(advisorSystemPrompt, {
+								max_notes_per_update: maxNotesPerUpdate,
+								include_thinking: advisor.includeThinking !== false,
+							});
 				},
 				getAvailableModels: () => this.ctx.session.modelRegistry.getAvailable(),
 				browserSource: createModelBrowserSource(this.ctx.settings),
@@ -444,6 +476,7 @@ export class SelectorController {
 				},
 				scopedModels: this.ctx.session.scopedModels,
 				availableToolNames: this.ctx.session.getAdvisorAvailableToolNames(),
+				syncBacklog: cfgAdvisorSyncBacklog.get(this.ctx.settings),
 				defaultModelLabel: defaultAdvisorModel
 					? `${defaultAdvisorModel.provider}/${defaultAdvisorModel.id}`
 					: undefined,
@@ -577,6 +610,107 @@ export class SelectorController {
 		})();
 	}
 
+	showMixtureConfigure(name?: string, returnToModelHub = false): void {
+		const cwd = this.ctx.sessionManager.getCwd();
+		const agentDir = this.ctx.session.getMixtureAgentDir() ?? getAgentDir() ?? getProjectDir();
+		void (async () => {
+			let projectDir = cwd;
+			try {
+				projectDir = vcs.repo(cwd)?.root() ?? cwd;
+			} catch {
+				projectDir = cwd;
+			}
+			const dirs = { projectDir, agentDir };
+			const discovered = await discoverMixtures(cwd, agentDir);
+			const selected = name ? discovered.mixtures.find(item => item.definition.name === name) : undefined;
+			const initialScope: MixtureConfigScope =
+				selected?.path === mixturesConfigFilePath("user", dirs) ? "user" : "project";
+			const snapshots = new Map<MixtureConfigScope, string | null>();
+			const readScope = async (scope: MixtureConfigScope) => {
+				const snapshot = await readMixtureDefinitionFile(mixturesConfigFilePath(scope, dirs));
+				snapshots.set(scope, snapshot.hash);
+				return snapshot.doc;
+			};
+			const initialDoc = await readScope(initialScope);
+			const registration = {
+				cwd,
+				agentDir,
+				registry: this.ctx.session.modelRegistry,
+				settings: this.ctx.settings,
+			};
+			const deps: MixtureConfigDeps = {
+				getAvailableModels: () => this.ctx.session.getAvailableModels(),
+				browserSource: createModelBrowserSource(this.ctx.settings),
+				externalEditor: text => {
+					const command = getEditorCommand();
+					return command ? openInEditor(command, text) : Promise.resolve(null);
+				},
+				availableToolNames: this.ctx.session.getAdvisorAvailableToolNames(),
+				activeName: () => (this.ctx.session.model?.api === "mixture" ? this.ctx.session.model.id : undefined),
+			};
+			const overlay = new MixtureConfigOverlayComponent(
+				this.ctx.ui,
+				deps,
+				initialScope,
+				initialDoc,
+				{
+					loadDoc: readScope,
+					save: async (scope, doc) => {
+						const result = await saveMixtureDefinition({
+							...registration,
+							sourcePath: mixturesConfigFilePath(scope, dirs),
+							doc,
+							baseHash: snapshots.get(scope) ?? null,
+						});
+						snapshots.set(scope, result.hash);
+						if (result.validation.warnings.length)
+							this.ctx.showWarning(result.validation.warnings.map(issue => issue.message).join("; "));
+						this.ctx.showStatus(`Saved ${scope} MIXTURES.toml; press a to apply changes.`);
+					},
+					apply: async () => {
+						const roster = await discoverRegistrableMixtures(registration);
+						const current = this.ctx.session.model;
+						if (current?.api === "mixture" && !roster.some(item => item.definition.name === current.id)) {
+							const fallback = this.ctx.session.getAvailableModels().find(model => model.api !== "mixture");
+							if (!fallback) throw new Error("Select a physical model before removing the active mixture.");
+							await this.ctx.session.setModel(fallback);
+						}
+						MixtureCatalog.for(registration.registry).scope(cwd, agentDir).setRoster(roster);
+						this.ctx.session.emitNotice("info", `${roster.length} mixtures registered`);
+						this.ctx.ui.requestRender();
+					},
+					activate: async selectedName => {
+						if (!this.ctx.session.getRegisteredMixture(selectedName))
+							throw new Error(`Mixture ${selectedName} is not registered in this workspace.`);
+						const model = registration.registry.find("mixture", selectedName);
+						if (!model) throw new Error(`Mixture ${selectedName} is unavailable in the model picker.`);
+						await this.ctx.session.setModel(model);
+						this.ctx.showStatus(`Using mixture/${selectedName}`);
+					},
+					close: () => {
+						handle.hide();
+						this.focusActiveEditorArea();
+						this.ctx.ui.requestRender();
+						if (returnToModelHub) this.#showModelHub({ initialProviderId: "mixture" });
+					},
+					requestRender: () => this.ctx.ui.requestRender(),
+					notify: message => this.ctx.showStatus(message),
+					warn: message => this.ctx.showWarning(message),
+				},
+				name,
+			);
+			const handle = this.ctx.ui.showOverlay(overlay, {
+				anchor: "bottom-center",
+				width: "100%",
+				maxHeight: "100%",
+				margin: 0,
+				fullscreen: true,
+			});
+			this.ctx.ui.setFocus(overlay);
+			this.ctx.ui.requestRender();
+		})().catch(error => this.ctx.showError(error instanceof Error ? error.message : String(error)));
+	}
+
 	showPersonaConfigure(scope: PersonaScope): void {
 		void (async () => {
 			const host = sessionPersonaHost(this.ctx.session, {
@@ -600,6 +734,16 @@ export class SelectorController {
 				{
 					variant: scope,
 					newEntryContent: newPersonaContent(scope),
+					...(scope === "live"
+						? {
+								protocolLinesText: liveClientProtocolTemplate,
+								protocolMarker: "<client-protocol>",
+								newEntrySources: () => ({
+									fields: liveIngestSourceFields(LIVE_INGEST_DEFAULTS),
+									raw: structuredClone(LIVE_INGEST_DEFAULTS),
+								}),
+							}
+						: {}),
 					externalEditor: text => {
 						const command = getEditorCommand();
 						return command ? openInEditor(command, text) : Promise.resolve(null);
@@ -793,7 +937,7 @@ export class SelectorController {
 			await this.ctx.session.setModelTemporary(model, level);
 			this.ctx.statusLine.invalidate();
 			this.ctx.updateEditorBorderColor();
-			const roleSelectorHint = this.ctx.keybindings.getKeys("app.model.select")[0] ?? "Alt+M";
+			const roleSelectorHint = appKey(this.ctx.keybindings, "app.model.select") || formatKeyHint("alt+m");
 			this.ctx.showStatus(`Session-only model: ${selector}. Use ${roleSelectorHint} or /model for roles.`);
 		};
 		if (!compactFirst) {
@@ -857,10 +1001,8 @@ export class SelectorController {
 						this.ctx.statusLine.invalidate();
 						this.ctx.updateEditorBorderColor();
 						this.ctx.showModelCycleTrack(
-							renderSegmentTrack(
-								quickRoleOrder.map(role => ({ label: role })),
-								quickRoleOrder.indexOf(entry.role),
-							),
+							quickRoleOrder.map(role => ({ label: role })),
+							quickRoleOrder.indexOf(entry.role),
 						);
 						done();
 					} catch (error) {
@@ -883,7 +1025,6 @@ export class SelectorController {
 				currentContextTokens,
 				currentSelector,
 				taskModeKeys: this.ctx.keybindings.getKeys("app.model.selectTemporary"),
-				taskModeKeyLabel: this.ctx.keybindings.getDisplayString("app.model.selectTemporary") || "alt+p",
 				taskSelector,
 				quickRoles: quickRoleCycle?.models,
 				quickRoleOrder,
@@ -1105,7 +1246,7 @@ export class SelectorController {
 				},
 				onFallbackChainChange: (role, chain, effort, copiedSelections) => {
 					try {
-						const selections = { ...cfgFallbackEffortSelections.get(this.ctx.settings)[role] };
+						const selections = { ...this.ctx.settings.getGlobalFallbackEffortSelections(role) };
 						for (const selector of Object.keys(selections))
 							if (!chain.includes(selector)) delete selections[selector];
 						if (effort) selections[effort.selector] = effort.selection;
@@ -1129,6 +1270,10 @@ export class SelectorController {
 					}
 				},
 
+				onDefineMixture: name => {
+					done();
+					this.showMixtureConfigure(name, true);
+				},
 				onLoginRequest: providerId => {
 					done();
 					void this.#loginThenReopenModelHub(providerId);
@@ -1143,10 +1288,34 @@ export class SelectorController {
 						this.ctx.showError(error instanceof Error ? error.message : String(error));
 					}
 				},
+				onSavePreset: name => {
+					try {
+						saveModelPreset(this.ctx.settings, name);
+						this.ctx.showStatus(modelPresetSavedMessage(this.ctx.settings, name));
+					} catch (error) {
+						this.ctx.showError(error instanceof Error ? error.message : String(error));
+					}
+				},
 				onCancel: () => done(),
 			},
 			{
 				initialProviderId: hubOptions.initialProviderId,
+				currentSelector: this.ctx.session.model
+					? `${this.ctx.session.model.provider}/${this.ctx.session.model.id}`
+					: undefined,
+				pinnedProviders: [
+					{
+						id: "mixture",
+						label: "Mixture of Agents",
+						action: {
+							label: "+ Define mixture model…",
+							onSelect: () => {
+								done();
+								this.showMixtureConfigure(undefined, true);
+							},
+						},
+					},
+				],
 			},
 		);
 		const overlayHandle = this.#showFullscreenMenu(hub);
@@ -1527,7 +1696,7 @@ export class SelectorController {
 							this.ctx.ui,
 							spinner => theme.fg("accent", spinner),
 							text => theme.fg("muted", text),
-							"Summarizing branch... (esc to cancel)",
+							`Summarizing branch... (${appKey(this.ctx.keybindings, "app.interrupt")} to cancel)`,
 							getSymbolTheme().spinnerFrames,
 						);
 						this.ctx.statusContainer.addChild(summaryLoader);
@@ -1614,6 +1783,7 @@ export class SelectorController {
 					this.ctx.ui.requestRender();
 				},
 				cfgTreeFilterMode.get(settings),
+				this.ctx.sessionManager.getSessionName(),
 			);
 			return { component: selector, focus: selector };
 		});
@@ -2088,7 +2258,11 @@ export class SelectorController {
 				// editor's `/login <url>` path is unreachable while the dialog holds
 				// focus (#5339).
 				onManualCodeInput: useManualInput
-					? signal => dialog.showManualInput(MANUAL_LOGIN_PROMPT, signal)
+					? signal =>
+							dialog.showManualInput(
+								`Paste the authorization code (or full redirect URL), then press ${editorKey("tui.input.submit")}:`,
+								signal,
+							)
 					: undefined,
 			});
 			// Scope the post-login refresh to the just-authenticated provider with an

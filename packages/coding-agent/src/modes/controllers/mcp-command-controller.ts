@@ -6,6 +6,8 @@
 import * as path from "node:path";
 import { type Component, replaceTabs, Spacer, Text } from "@oh-my-pi/pi-tui";
 import { getMCPConfigPath, getProjectDir, PRODUCT_NAME } from "@oh-my-pi/pi-utils";
+import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
+import { appKey } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
 import { clearCache as clearFsCache } from "../../capability/fs";
 import type { SourceMeta } from "../../capability/types";
 import { expandEnvVarsDeep } from "../../discovery/helpers";
@@ -69,6 +71,8 @@ import { MCPAddWizard } from "@oh-my-pi/pi-tui/overlays/mcp-add-wizard";
 import { TranscriptBlock } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { parseCommandArgs } from "../../utils/command-args";
 import { theme } from "@oh-my-pi/pi-tui/theme";
+import { col, span, text } from "@oh-my-pi/pi-tui/native/describe";
+import type { NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import type { InteractiveModeContext } from "../types";
 import { groupBySource, parseRemoveArgs, readScopeFlag, showCommandMessage } from "./command-controller-shared";
 
@@ -226,6 +230,7 @@ function wrapUrlRows(label: string, url: string, width: number): string[] {
 export class MCPAuthorizationLinkPrompt implements Component {
 	readonly #fullUrl: string;
 	readonly #launchUrl: string | undefined;
+	#node: NativeNode | undefined;
 
 	constructor(url: string, launchUrl?: string) {
 		this.#fullUrl = url;
@@ -233,6 +238,23 @@ export class MCPAuthorizationLinkPrompt implements Component {
 	}
 
 	invalidate(): void {}
+
+	/** Prompt, clickable full URL (open + copy), and optional local shortcut; immutable, so built once. */
+	describe(): NativeNode {
+		this.#node ??= col(
+			[
+				text([span("Open authorization URL:", "success")]),
+				text([span("Click here to authorize", "link", { href: this.#fullUrl })], {
+					href: this.#fullUrl,
+					actions: { click: "open", menu: ["open", "copy"] },
+				}),
+				urlCopyRow("Copy URL:", this.#fullUrl),
+				...(this.#launchUrl ? [urlCopyRow("Local shortcut (this machine only):", this.#launchUrl)] : []),
+			],
+			{ gap: "xs" },
+		);
+		return this.#node;
+	}
 
 	render(width: number): readonly string[] {
 		const link = urlHyperlinkAlways(this.#fullUrl, "Click here to authorize");
@@ -246,6 +268,16 @@ export class MCPAuthorizationLinkPrompt implements Component {
 		}
 		return lines;
 	}
+}
+
+/** Labelled URL that copies on click and wraps anywhere so no parameter is hidden. */
+function urlCopyRow(label: string, url: string): NativeNode {
+	return text([span(`${label} `, "muted"), span(url, "mono", { href: url })], {
+		wrap: "char",
+		href: url,
+		actions: { click: "copy", menu: ["copy", "open"] },
+		title: "Copy URL",
+	});
 }
 
 /**
@@ -928,7 +960,10 @@ export class MCPCommandController {
 						block.addChild(new Spacer(1));
 						block.addChild(
 							new Text(
-								theme.fg("muted", "Waiting for authorization... (Press Esc to cancel, 5 minute timeout)"),
+								theme.fg(
+									"muted",
+									`Waiting for authorization... (Press ${appKey(this.ctx.keybindings, "app.interrupt")} to cancel, 5 minute timeout)`,
+								),
 								1,
 								0,
 							),
@@ -1423,7 +1458,10 @@ export class MCPCommandController {
 				"",
 				theme.fg("muted", "Server creation cancelled."),
 				"",
-				theme.fg("dim", "Tip: Press Ctrl+C or Esc anytime to cancel"),
+				theme.fg(
+					"dim",
+					`Tip: Press ${formatKeyHint("ctrl+c")} or ${appKey(this.ctx.keybindings, "app.interrupt")} anytime to cancel`,
+				),
 				"",
 			].join("\n"),
 		);
@@ -1696,7 +1734,14 @@ export class MCPCommandController {
 
 			hintBlock = new MutableHintBlock();
 			hintBlock.addChild(new DynamicBorder());
-			const text = new Text(theme.fg("muted", `Testing connection to "${name}"... (esc to cancel)`), 1, 1);
+			const text = new Text(
+				theme.fg(
+					"muted",
+					`Testing connection to "${name}"... (${appKey(this.ctx.keybindings, "app.interrupt")} to cancel)`,
+				),
+				1,
+				1,
+			);
 			hintBlock.addChild(text);
 			hintBlock.addChild(new DynamicBorder());
 			this.ctx.presentCommandOutput(hintBlock);
@@ -2422,7 +2467,9 @@ export class MCPCommandController {
 	}
 
 	async #handleSmitheryLoginWithApiKey(): Promise<boolean> {
-		const apiKey = await this.#promptSmitheryApiKey("Smithery API key (Esc to cancel)");
+		const apiKey = await this.#promptSmitheryApiKey(
+			`Smithery API key (${appKey(this.ctx.keybindings, "app.interrupt")} to cancel)`,
+		);
 		if (!apiKey) return false;
 		await saveSmitheryApiKey(apiKey);
 		this.ctx.showStatus("Smithery API key saved.");

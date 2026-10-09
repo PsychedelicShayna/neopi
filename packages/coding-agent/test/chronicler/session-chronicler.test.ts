@@ -31,7 +31,8 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { parseFrontmatter, TempDir } from "@oh-my-pi/pi-utils";
+import { acquireFileLock, parseFrontmatter, TempDir } from "@oh-my-pi/pi-utils";
+import { __internalsForTesting as fileLockInternals } from "@oh-my-pi/pi-utils/file-lock";
 import { ExtensionRuntime, loadExtensionFromFactory } from "../../src/extensibility/extensions/loader";
 import { ExtensionRunner } from "../../src/extensibility/extensions/runner";
 import { EventBus } from "../../src/utils/event-bus";
@@ -41,7 +42,13 @@ import { createAgentSession } from "../../src/sdk";
 import { AgentSession } from "../../src/session/agent-session";
 import { SecretObfuscator } from "../../src/secrets/obfuscator";
 import { estimateToolSchemaTokens } from "@oh-my-pi/pi-tui/status-line/context-usage";
-import { SessionChronicler, type SessionChroniclerHost } from "../../src/chronicler/session-chronicler";
+import {
+	__sessionChroniclerInternalsForTesting,
+	type ChroniclerHealth,
+	SessionChronicler,
+	type SessionChroniclerHost,
+} from "../../src/chronicler/session-chronicler";
+import { runHeadlessBackfill } from "../../src/chronicler/backfill";
 import { type CaptureCheckpoint, ChroniclerStore, chroniclerStoreIO } from "../../src/chronicler/store";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 import { cfgChroniclerEnabled } from "@oh-my-pi/pi-coding-agent/chronicler/settings";
@@ -434,6 +441,15 @@ describe("SessionChronicler capture runtime", () => {
 		}
 	}
 
+	async function waitForHealth(harness: Harness, predicate: (health: ChroniclerHealth) => boolean): Promise<void> {
+		const deadline = Date.now() + SETTLE_MS;
+		while (!predicate(harness.chronicler.health)) {
+			if (Date.now() >= deadline)
+				throw new Error(`Timed out waiting for Chronicler health: ${JSON.stringify(harness.chronicler.health)}`);
+			await Bun.sleep(25);
+		}
+	}
+
 	async function beatFiles(root: string, batchId: string): Promise<string[]> {
 		const names = await fs.readdir(path.join(root, "beats", batchId));
 		return names.filter(name => name.endsWith(".md")).sort();
@@ -570,6 +586,44 @@ describe("SessionChronicler capture runtime", () => {
 		expect(passSourceIds(passes[1]!)).toEqual([entry]);
 		expect(passConversationText(passes[1]!)).not.toContain("Never finalized");
 	});
+
+	it("aborts a traffic-free stream after 60 minutes and retries the same prefix from scratch", async () => {
+		const manager = await newSessionManager();
+		const entry = appendUser(manager, "Retry this capture if its stream goes completely quiet.");
+		await manager.flush();
+		scripts.push([{ content: ["Too late"], stopReason: "stop", delayMs: 2 * 60 * 60 * 1_000 }]);
+		scripts.push(ackPass());
+
+		const timerIO = __sessionChroniclerInternalsForTesting.chroniclerTimerIO;
+		const originalSetTimeout = timerIO.setTimeout;
+		const originalClearTimeout = timerIO.clearTimeout;
+		const fakeHandle = setTimeout(() => {}, 1);
+		clearTimeout(fakeHandle);
+		let fireWatchdog: (() => void) | undefined;
+		let watchdogDelay: number | undefined;
+		timerIO.setTimeout = (callback, delayMs) => {
+			fireWatchdog = callback;
+			watchdogDelay = delayMs;
+			return fakeHandle;
+		};
+		timerIO.clearTimeout = () => {};
+		try {
+			const harness = startChronicler(manager, newSettings());
+			await waitForPassStart(0);
+			expect(watchdogDelay).toBe(60 * 60 * 1_000);
+			expect(fireWatchdog).toBeDefined();
+
+			fireWatchdog!();
+			await waitForPassStart(1);
+			expect(passes).toHaveLength(2);
+			expect(passSourceIds(passes[1]!)).toEqual([entry]);
+			expect(passConversationText(passes[1]!)).not.toContain("Too late");
+			await waitForCoverage(harness.root, [entry]);
+		} finally {
+			timerIO.setTimeout = originalSetTimeout;
+			timerIO.clearTimeout = originalClearTimeout;
+		}
+	}, 30_000);
 
 	it("publishes nothing when the provider fails after beats were staged", async () => {
 		const manager = await newSessionManager();
@@ -1338,18 +1392,13 @@ describe("SessionChronicler capture runtime", () => {
 		const later = appendUser(resumed, "Typed in the resumed window.");
 		await resumed.flush();
 		other.chronicler.onPrimaryTurnEnd(false);
-		const deadline = Date.now() + SETTLE_MS;
-		while (!other.notices.some(notice => notice.message.includes("another process is chronicling"))) {
-			if (Date.now() >= deadline) throw new Error("Expected the second owner to report a held store");
-			await Bun.sleep(25);
-		}
+		await waitForHealth(other, health => health.status === "contended" && health.retryAt !== undefined);
 		expect(passes).toHaveLength(1);
 		expect(await committedEntryIds(owner.root)).toEqual([first]);
 
-		// Once the original owner releases the store, the resumed window captures the rest exactly once.
-		await shutdown(owner);
+		// Releasing the owner alone unblocks the idle resumed window: no turn wake.
 		scripts.push(ackPass());
-		other.chronicler.onPrimaryTurnEnd(false);
+		await shutdown(owner);
 		await waitForCoverage(other.root, [first, later]);
 		expect(duplicates(await committedEntryIds(other.root))).toEqual([]);
 	}, 30_000);
@@ -1478,7 +1527,6 @@ describe("SessionChronicler capture runtime", () => {
 			ensure.mockRestore();
 		}
 		scripts.push(ackPass());
-		harness.chronicler.onPrimaryTurnEnd(false);
 		await waitForCoverage(harness.root, [entry]);
 		expect(manager.isSessionOnDisk()).toBe(true);
 		const persisted = await fs.readFile(manager.getSessionFile()!, "utf8");
@@ -1497,9 +1545,6 @@ describe("SessionChronicler capture runtime", () => {
 		expect(harness.chronicler.status).toBe("halted");
 		expect(passes).toHaveLength(0);
 		expect(await committedEntryIds(harness.root)).not.toContain(entry);
-		expect(harness.notices.map(notice => notice.message)).toContain(
-			"Chronicler capture paused: one transcript entry exceeds the capture input budget; no entries were skipped.",
-		);
 	});
 
 	it("bounds drain when the provider ignores abort and fences its released late tool calls", async () => {
@@ -2228,5 +2273,466 @@ describe("SessionChronicler capture runtime", () => {
 		expect(
 			oldMessages.filter(message => message.role === "assistant").every(message => message.usage.totalTokens === 0),
 		).toBe(true);
+	});
+
+	it("recovers an exhausted capture burst without another primary turn and publishes the prefix once", async () => {
+		const manager = await newSessionManager();
+		const entry = appendUser(manager, "The failed prefix must remain available after its retry burst.");
+		await manager.flush();
+		scripts.push(
+			[chronicleTurn({ title: "Unpublished one" }), { throw: "temporary provider outage" }],
+			[chronicleTurn({ title: "Unpublished two" }), { throw: "temporary provider outage" }],
+			[chronicleTurn({ title: "Unpublished three" }), { throw: "temporary provider outage" }],
+			beatPass({ title: "Recovered publication" }),
+		);
+		const harness = startChronicler(manager, newSettings());
+		await waitForHealth(
+			harness,
+			health =>
+				health.status === "retrying" &&
+				health.retryAt !== undefined &&
+				health.error?.includes("after 3 attempts") === true,
+		);
+		expect(harness.chronicler.health.error).toContain("temporary provider outage");
+		expect(await committedEntryIds(harness.root)).toEqual([]);
+		expect(harness.chronicler.health.retryAt! - Date.now()).toBeLessThanOrEqual(60_000);
+		const later = appendUser(manager, "Material persisted while waiting for autonomous recovery.");
+		await manager.flush();
+		await waitForCoverage(harness.root, [entry, later]);
+		await harness.chronicler.idle();
+		const [batch] = await readCommitted(harness.root);
+		expect(await committedEntryIds(harness.root)).toEqual([entry, later]);
+		expect(batch!.beats).toHaveLength(1);
+		expect(harness.chronicler.health.lastCommittedAt).toBe(batch!.committedAt);
+		expect(harness.chronicler.health.error).toBeUndefined();
+		expect(harness.chronicler.health.retryAt).toBeUndefined();
+		expect(passes.map(passSourceIds)).toEqual([[entry], [entry], [entry], [entry, later]]);
+	}, 30_000);
+
+	it("keeps a headless backfill alive through transient ownership IO recovery until all sources are covered", async () => {
+		const manager = await newSessionManager();
+		const entry = appendUser(manager, "A headless timer retry must get the full capture budget.");
+		await manager.flush();
+		const file = manager.getSessionFile()!;
+		const transcript = await Bun.file(file).text();
+		const root = chroniclerRoot(manager);
+		scripts.push(ackPass());
+		const io = fileLockInternals.cooperativeLockIO;
+		const readProcessStat = io.readProcessStat;
+		let fail = true;
+		const identityRead = spyOn(io, "readProcessStat").mockImplementation(async pid => {
+			if (fail) {
+				fail = false;
+				throw Object.assign(new Error("temporary process identity EIO"), { code: "EIO" });
+			}
+			return readProcessStat(pid);
+		});
+		try {
+			const result = await runHeadlessBackfill({
+				sessionFile: file,
+				settings: newSettings(),
+				modelRegistry,
+				obfuscator: undefined,
+				timeoutMs: 10_000,
+				drainMs: 1_000,
+				pollMs: 10,
+			});
+			expect(result.outcome).toBe("complete");
+			expect(result.before.coveredEntries).toBe(0);
+			expect(result.after.coveredEntries).toBe(1);
+			expect(await committedEntryIds(root)).toEqual([entry]);
+			expect(await Bun.file(file).text()).toBe(transcript);
+		} finally {
+			identityRead.mockRestore();
+		}
+	}, 30_000);
+
+	it("reports incomplete only after the headless budget expires with recoverable IO still blocked", async () => {
+		const manager = await newSessionManager();
+		const entry = appendUser(manager, "A persistent operational failure must use the allotted budget.");
+		await manager.flush();
+		const root = chroniclerRoot(manager);
+		const identityRead = spyOn(fileLockInternals.cooperativeLockIO, "readProcessStat").mockRejectedValue(
+			Object.assign(new Error("persistent process identity EIO"), { code: "EIO" }),
+		);
+		try {
+			const started = Date.now();
+			const result = await runHeadlessBackfill({
+				sessionFile: manager.getSessionFile()!,
+				settings: newSettings(),
+				modelRegistry,
+				obfuscator: undefined,
+				timeoutMs: 100,
+				drainMs: 1_000,
+				pollMs: 10,
+			});
+			expect(result.outcome).toBe("incomplete");
+			expect(Date.now() - started).toBeGreaterThanOrEqual(100);
+			expect(result.after.coveredEntries).toBe(0);
+			expect(await committedEntryIds(root)).not.toContain(entry);
+		} finally {
+			identityRead.mockRestore();
+		}
+	});
+
+	it("recovers after suspension rejects on corrupt lease metadata and rollback repairs ownership", async () => {
+		const manager = await newSessionManager();
+		const harness = startChronicler(manager, newSettings());
+		await harness.chronicler.idle();
+		const leasePath = `${harness.root}.lock`;
+		await Bun.write(leasePath, "{invalid lease metadata");
+		try {
+			await expect(harness.chronicler.suspendForSessionChange()).rejects.toThrow();
+			expect(harness.chronicler.health.status).toBe("suspended");
+			expect(harness.chronicler.health.error).toContain("suspension failed");
+			expect(harness.chronicler.health.retryAt).toBeUndefined();
+			await fs.rm(leasePath);
+			const entry = appendUser(manager, "Capture this after restoring the failed transition's identity.");
+			await manager.flush();
+			scripts.push(ackPass());
+			harness.chronicler.resumeAfterSessionChange();
+			await waitForCoverage(harness.root, [entry]);
+			await harness.chronicler.idle();
+			expect(await committedEntryIds(harness.root)).toEqual([entry]);
+			expect(harness.chronicler.health.status).toBe("running");
+			expect(harness.chronicler.health.error).toBeUndefined();
+			const contender = startChronicler(manager, newSettings());
+			await waitForHealth(contender, health => health.status === "contended");
+			expect(passes).toHaveLength(1);
+			await shutdown(contender);
+		} finally {
+			await fs.rm(leasePath, { force: true });
+			await shutdown(harness, 1_000);
+		}
+	}, 30_000);
+
+	it("retains a primary wake arriving during a same-prefix retry without duplicating committed coverage", async () => {
+		const manager = await newSessionManager();
+		const first = appendUser(manager, "First prefix with one transient provider failure.");
+		await manager.flush();
+		scripts.push([{ throw: "one transient outage" }], ackPass(), ackPass());
+		const harness = startChronicler(manager, newSettings());
+		try {
+			await waitForHealth(harness, health => health.status === "retrying" && health.retryAt !== undefined);
+			const later = appendUser(manager, "A later persisted intention during retry backoff.");
+			await manager.flush();
+			harness.chronicler.onPrimaryTurnEnd(false);
+			await waitForCoverage(harness.root, [first, later]);
+			expect(await committedEntryIds(harness.root)).toEqual([first, later]);
+			expect(passes.map(passSourceIds)).toEqual([[first], [first], [later]]);
+		} finally {
+			await shutdown(harness, 1_000);
+		}
+	}, 30_000);
+
+	it("keeps corruption visible across bounded retries and detects an idle canonical repair without losing beats", async () => {
+		const manager = await newSessionManager();
+		const first = appendUser(manager, "Already committed history must survive repair.");
+		await manager.flush();
+		scripts.push(beatPass({ title: "Preserved committed beat" }));
+		const original = startChronicler(manager, newSettings());
+		const [committed] = await waitForBatches(original.root, 1);
+		await shutdown(original);
+		const manifestPath = path.join(original.root, "beats", committed!.batchId, "COMMIT.json");
+		const manifest = await Bun.file(manifestPath).text();
+		const beatFile = (await beatFiles(original.root, committed!.batchId))[0]!;
+		const beat = await readBeatFile(original.root, committed!.batchId, beatFile);
+		const later = appendUser(manager, "Waiting while committed state is corrupt.");
+		await manager.flush();
+		await Bun.write(manifestPath, "{invalid committed JSON");
+		scripts.push(ackPass());
+		const harness = startChronicler(manager, newSettings());
+		await waitForHealth(harness, health => health.status === "halted" && health.retryAt !== undefined);
+		const reason = harness.chronicler.health.error;
+		expect(reason).toContain("checkpoint");
+		expect(reason).toContain("JSON");
+		const firstRetry = harness.chronicler.health.retryAt!;
+		await waitForHealth(harness, health => health.retryAt !== undefined && health.retryAt > firstRetry);
+		expect(harness.chronicler.health.status).toBe("halted");
+		expect(harness.chronicler.health.error).toBe(reason);
+		expect(harness.notices.filter(notice => notice.message.includes(reason!))).toHaveLength(1);
+		expect(passes).toHaveLength(1);
+		await Bun.write(manifestPath, manifest);
+		await waitForCoverage(harness.root, [first, later]);
+		await harness.chronicler.idle();
+		expect(await committedEntryIds(harness.root)).toEqual([first, later]);
+		expect(await Bun.file(manifestPath).text()).toBe(manifest);
+		expect(await readBeatFile(harness.root, committed!.batchId, beatFile)).toBe(beat);
+		expect(passSourceIds(passes[1]!)).toEqual([later]);
+		expect(harness.chronicler.health.error).toBeUndefined();
+		expect(harness.chronicler.health.lastCommittedAt).toBe((await readCommitted(harness.root))[1]!.committedAt);
+	}, 30_000);
+
+	it("reports operational store IO separately from contention and catches up after the obstruction is removed", async () => {
+		const manager = await newSessionManager();
+		const entry = appendUser(manager, "Store directory obstruction must not consume this intention.");
+		await manager.flush();
+		const root = chroniclerRoot(manager);
+		await Bun.write(root, "not a directory");
+		scripts.push(ackPass());
+		const harness = startChronicler(manager, newSettings());
+		await waitForHealth(harness, health => health.status === "retrying" && health.retryAt !== undefined);
+		expect(harness.chronicler.health.error).toContain("ENOTDIR");
+		expect(harness.notices.some(notice => notice.message.includes("Another writer"))).toBe(false);
+		expect(passes).toHaveLength(0);
+		await fs.rm(root);
+		await waitForCoverage(root, [entry]);
+		expect(await committedEntryIds(root)).toEqual([entry]);
+	});
+
+	it("cancels autonomous recovery on disable and terminal stop", async () => {
+		const manager = await newSessionManager();
+		const entry = appendUser(manager, "No disabled or stopped retry may consume this.");
+		await manager.flush();
+		availableModels = [];
+		const settings = newSettings();
+		const harness = startChronicler(manager, settings);
+		await waitForHealth(harness, health => health.status === "no_model" && health.retryAt !== undefined);
+		cfgChroniclerEnabled.override(settings, false);
+		availableModels = [captureModel];
+		scripts.push(ackPass());
+		await harness.chronicler.idle();
+		expect(harness.chronicler.health.status).toBe("off");
+		expect(harness.chronicler.health.retryAt).toBeUndefined();
+		await Bun.sleep(2_200);
+		expect(passes).toHaveLength(0);
+		expect(await committedEntryIds(harness.root)).toEqual([]);
+
+		availableModels = [];
+		cfgChroniclerEnabled.override(settings, true);
+		await waitForHealth(harness, health => health.status === "no_model" && health.retryAt !== undefined);
+		await shutdown(harness);
+		availableModels = [captureModel];
+		expect(harness.chronicler.health.status).toBe("stopped");
+		expect(harness.chronicler.health.retryAt).toBeUndefined();
+		await Bun.sleep(2_200);
+		expect(passes).toHaveLength(0);
+		expect(await committedEntryIds(harness.root)).not.toContain(entry);
+	}, 30_000);
+
+	it("suspends an abort-ignoring provider before releasing ownership and resumes unchanged identity after rollback", async () => {
+		const manager = await newSessionManager();
+		const entry = appendUser(manager, "Rollback must catch up the original identity.");
+		await manager.flush();
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		ignoreProviderAbort = true;
+		scripts.push(
+			[
+				async context => {
+					entered.resolve();
+					await release.promise;
+					return {
+						content: [
+							{
+								type: "toolCall",
+								name: "chronicle",
+								arguments: {
+									title: "Late fenced beat",
+									kind: "decision",
+									body: "This revoked completion must never publish.",
+									topics: ["chronicler"],
+									sources: receivedSourceIds(context),
+								},
+							},
+						],
+					};
+				},
+				finishTurn(),
+				stopTurn,
+			],
+			ackPass(),
+		);
+		const harness = startChronicler(manager, newSettings());
+		let suspension: Promise<void> | undefined;
+		try {
+			await entered.promise;
+			suspension = harness.chronicler.suspendForSessionChange();
+			expect(harness.chronicler.health.status).toBe("suspended");
+			const suspended = await Promise.race([suspension.then(() => true), Bun.sleep(1_000).then(() => false)]);
+			expect(suspended).toBe(true);
+			const lease = await acquireFileLock(harness.root, { retries: 1, takeoverStoppedOwner: true });
+			lease.release();
+			harness.chronicler.onPrimaryTurnEnd(false);
+			await Bun.sleep(100);
+			expect(passes).toHaveLength(1);
+			expect(await readCommitted(harness.root)).toEqual([]);
+			// A failed host transition leaves the original identity untouched.
+			harness.chronicler.resumeAfterSessionChange();
+			await waitForCoverage(harness.root, [entry]);
+			await harness.chronicler.idle();
+			const recorder = path.join(harness.root, "__chronicler.jsonl");
+			const recorded = await Bun.file(recorder).text();
+			release.resolve();
+			await Bun.sleep(150);
+			expect(await committedEntryIds(harness.root)).toEqual([entry]);
+			expect(await Bun.file(recorder).text()).toBe(recorded);
+			expect(harness.chronicler.health.sessionId).toBe(manager.getSessionId());
+			expect(harness.chronicler.health.status).toBe("running");
+		} finally {
+			release.resolve();
+			await suspension;
+			await shutdown(harness);
+		}
+	});
+
+	it("settles fenced staging IO before suspension returns and retries the unchanged source only after resume", async () => {
+		const manager = await newSessionManager();
+		const entry = appendUser(manager, "Uncommitted staging may not move with a transition.");
+		await manager.flush();
+		const reached = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const write = chroniclerStoreIO.writeArtifact;
+		let held = false;
+		const writeSpy = spyOn(chroniclerStoreIO, "writeArtifact").mockImplementation(async (file, text) => {
+			if (!held && file.includes(".pending-") && file.endsWith("/COMMIT.json")) {
+				held = true;
+				reached.resolve();
+				await release.promise;
+			}
+			return write(file, text);
+		});
+		scripts.push(beatPass(), ackPass());
+		const harness = startChronicler(manager, newSettings());
+		let suspension: Promise<void> | undefined;
+		try {
+			await reached.promise;
+			let suspended = false;
+			suspension = harness.chronicler.suspendForSessionChange().then(() => {
+				suspended = true;
+			});
+			await Bun.sleep(100);
+			expect(suspended).toBe(false);
+			expect(await readCommitted(harness.root)).toEqual([]);
+			release.resolve();
+			await suspension;
+			expect(suspended).toBe(true);
+			expect(await committedEntryIds(harness.root)).toEqual([]);
+			expect((await fs.readdir(path.join(harness.root, "beats"))).some(name => name.startsWith(".pending-"))).toBe(
+				false,
+			);
+			harness.chronicler.resumeAfterSessionChange();
+			await waitForCoverage(harness.root, [entry]);
+			expect(await committedEntryIds(harness.root)).toEqual([entry]);
+			expect((await readCommitted(harness.root))[0]!.beats).toEqual([]);
+		} finally {
+			release.resolve();
+			await suspension;
+			await shutdown(harness);
+			writeSpy.mockRestore();
+		}
+	});
+
+	it("detects lost idle ownership autonomously and preserves committed coverage when reacquiring", async () => {
+		const timerIO = __sessionChroniclerInternalsForTesting.chroniclerTimerIO;
+		const setTimer = timerIO.setTimeout;
+		const ownershipTimer = spyOn(timerIO, "setTimeout").mockImplementation((callback, delay) =>
+			setTimer(callback, delay === 60_000 ? 50 : delay),
+		);
+		const manager = await newSessionManager();
+		const first = appendUser(manager, "The first owner's preserved beat.");
+		await manager.flush();
+		scripts.push(beatPass({ title: "Preserved across ownership loss" }));
+		const harness = startChronicler(manager, newSettings());
+		try {
+			const [committed] = await waitForBatches(harness.root, 1);
+			await harness.chronicler.idle();
+			const manifestPath = path.join(harness.root, "beats", committed!.batchId, "COMMIT.json");
+			const manifest = await Bun.file(manifestPath).text();
+			const later = appendUser(manager, "New idle backlog after ownership is revoked.");
+			await manager.flush();
+			scripts.push(ackPass());
+			// Removing the authority record revokes the live handle; no turn end follows.
+			await fs.rm(`${harness.root}.lock`);
+			await waitForHealth(
+				harness,
+				health => health.status === "retrying" && health.error?.includes("ownership") === true,
+			);
+			await waitForCoverage(harness.root, [first, later]);
+			expect(await committedEntryIds(harness.root)).toEqual([first, later]);
+			expect(await Bun.file(manifestPath).text()).toBe(manifest);
+			expect(passSourceIds(passes[1]!)).toEqual([later]);
+		} finally {
+			await shutdown(harness);
+			ownershipTimer.mockRestore();
+		}
+	});
+
+	it("rebinds a suspended runtime to a copied fork with current health and inherited coverage", async () => {
+		const parent = await newSessionManager();
+		const first = appendUser(parent, "Parent provenance must stay original in the child.");
+		await parent.flush();
+		scripts.push(beatPass({ title: "Parent beat" }));
+		const harness = startChronicler(parent, newSettings());
+		const [original] = await waitForBatches(harness.root, 1);
+		await harness.chronicler.suspendForSessionChange();
+		const child = await SessionManager.forkFrom(parent.getSessionFile()!, cwd, sessionDir, undefined, {
+			copyArtifacts: true,
+			suppressBreadcrumb: true,
+		});
+		try {
+			harness.host.sessionManager = child;
+			expect(harness.chronicler.health.sessionId).toBe(child.getSessionId());
+			expect(harness.chronicler.health.sessionFile).toBe(child.getSessionFile());
+			expect(harness.chronicler.health.artifactsDir).toBe(child.getArtifactsDir() ?? undefined);
+			expect(harness.chronicler.health.lastCommittedAt).toBeUndefined();
+			const childEntry = appendUser(child, "Only this child material is unseen.");
+			await child.flush();
+			scripts.push(ackPass());
+			harness.chronicler.resumeAfterSessionChange();
+			const root = chroniclerRoot(child);
+			await waitForCoverage(root, [first, childEntry]);
+			await harness.chronicler.idle();
+			const copied = await readCommitted(root);
+			expect(copied[0]).toEqual(original);
+			expect(await committedEntryIds(root)).toEqual([first, childEntry]);
+			expect(passSourceIds(passes[1]!)).toEqual([childEntry]);
+			expect(harness.chronicler.health.lastCommittedAt).toBe(copied[1]!.committedAt);
+			expect(harness.chronicler.health.status).toBe("running");
+			expect(await committedEntryIds(harness.root)).toEqual([first]);
+		} finally {
+			await shutdown(harness);
+			await child.close();
+		}
+	});
+
+	it("waits for an already-started canonical publication before releasing transition ownership without replay", async () => {
+		const manager = await newSessionManager();
+		const entry = appendUser(manager, "Publication already past its atomic ownership check.");
+		await manager.flush();
+		const published = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const rename = chroniclerStoreIO.rename;
+		const renameSpy = spyOn(chroniclerStoreIO, "rename").mockImplementation(async (from, to) => {
+			await rename(from, to);
+			published.resolve();
+			await release.promise;
+		});
+		scripts.push(beatPass());
+		const harness = startChronicler(manager, newSettings());
+		let suspension: Promise<void> | undefined;
+		try {
+			await published.promise;
+			let suspended = false;
+			suspension = harness.chronicler.suspendForSessionChange().then(() => {
+				suspended = true;
+			});
+			await Bun.sleep(100);
+			expect(suspended).toBe(false);
+			expect(await committedEntryIds(harness.root)).toEqual([entry]);
+			release.resolve();
+			await suspension;
+			harness.chronicler.resumeAfterSessionChange();
+			await harness.chronicler.idle();
+			expect(passes).toHaveLength(1);
+			expect(await committedEntryIds(harness.root)).toEqual([entry]);
+			expect(harness.chronicler.health.status).toBe("running");
+			expect(harness.chronicler.health.lastCommittedAt).toBe((await readCommitted(harness.root))[0]!.committedAt);
+		} finally {
+			release.resolve();
+			await suspension;
+			await shutdown(harness);
+			renameSpy.mockRestore();
+		}
 	});
 });

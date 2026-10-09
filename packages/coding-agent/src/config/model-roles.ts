@@ -65,6 +65,14 @@ export const MODEL_ROLES: Record<ModelRole, ModelRoleInfo> = {
 	task: { tag: "TASK", name: "Subtask", color: "muted", section: "chat", accepts: acceptsChat },
 	advisor: { tag: "ADVISOR", name: "Advisor", color: "accent", section: "chat", accepts: acceptsChat },
 	chronicler: { tag: "CHRON", name: "Chronicler", color: "dim", section: "chat", accepts: acceptsChat },
+	"chronicler-summary": {
+		tag: "CHRONSUM",
+		name: "Chronicle summaries",
+		color: "dim",
+		section: "chat",
+		accepts: acceptsChat,
+	},
+	classifier: { tag: "CLASSIFY", name: "Classifier", color: "muted", section: "chat", accepts: acceptsChat },
 	effort: { tag: "EFFORT", name: "Effort classifier", color: "accent", section: "chat", accepts: acceptsChat },
 	prose: { tag: "PROSE", name: "Prose", color: "warning", section: "chat", accepts: acceptsChat },
 	image: {

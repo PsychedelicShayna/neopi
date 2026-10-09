@@ -8,6 +8,11 @@ export const TASK_SUBAGENT_LIFECYCLE_CHANNEL = "task:subagent:lifecycle";
 
 /** Payload emitted on TASK_SUBAGENT_PROGRESS_CHANNEL */
 export interface SubagentProgressPayload {
+	runToken: string;
+	owned: boolean;
+	/** Verified from generated output of this run's effective provider request. */
+	runEffectiveModelIdentity?: string;
+	runEffectiveThinkingLevel?: string;
 	index: number;
 	agent: string;
 	agentSource: AgentSource;
@@ -23,6 +28,15 @@ export interface SubagentProgressPayload {
 /** Payload emitted on TASK_SUBAGENT_LIFECYCLE_CHANNEL */
 export interface SubagentLifecyclePayload {
 	id: string;
+	runToken: string;
+	depth?: number;
+	runKind?: "spawn" | "wake" | "followUp";
+	model?: string;
+	thinkingLevel?: string;
+	outcomeExcerpt?: string;
+	/** Present on active-run ledger snapshots only, after owned generated output. */
+	runEffectiveModelIdentity?: string;
+	runEffectiveThinkingLevel?: string;
 	agent: string;
 	agentSource: AgentSource;
 	description?: string;

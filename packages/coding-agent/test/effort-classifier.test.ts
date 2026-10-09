@@ -16,7 +16,9 @@ import { ModelRegistry } from "../src/config/model-registry";
 import { Settings } from "../src/config/settings";
 import {
 	EffortPolicyError,
+	cfgEffortRules,
 	cfgFallbackEffortSelections,
+	matchEffortRule,
 	resolveImplicitEffort,
 	type EffortSelection,
 } from "../src/config/effort-policy";
@@ -108,12 +110,15 @@ describe("on-demand effort classification", () => {
 					},
 				}) as never,
 		);
-		const effort = await classifyDifficulty("solve the bug", {
-			settings,
-			registry: registry(),
-			model,
-			allowedEfforts: [Effort.Low, Effort.High],
-		});
+		const effort = await classifyDifficulty(
+			{ request: "solve the bug" },
+			{
+				settings,
+				registry: registry(),
+				model,
+				allowedEfforts: [Effort.Low, Effort.High],
+			},
+		);
 		expect(effort).toBe(Effort.High);
 		expect(call).toHaveBeenCalledTimes(1);
 		expect(call.mock.calls[0]?.[0].id).toBe("classifier");
@@ -127,12 +132,15 @@ describe("on-demand effort classification", () => {
 
 	it("returns a singleton without contacting the classifier", async () => {
 		const call = vi.spyOn(ai, "completeSimple");
-		const effort = await classifyDifficulty("anything", {
-			settings: Settings.isolated({}),
-			registry: registry(),
-			model,
-			allowedEfforts: [Effort.High],
-		});
+		const effort = await classifyDifficulty(
+			{ request: "anything" },
+			{
+				settings: Settings.isolated({}),
+				registry: registry(),
+				model,
+				allowedEfforts: [Effort.High],
+			},
+		);
 		expect(effort).toBe(Effort.High);
 		expect(call).not.toHaveBeenCalled();
 	});
@@ -141,12 +149,15 @@ describe("on-demand effort classification", () => {
 		const settings = Settings.isolated({ modelRoles: { effort: "mock/classifier:auto" } });
 		const call = vi.spyOn(ai, "completeSimple");
 		await expect(
-			classifyDifficulty("anything", {
-				settings,
-				registry: registry(),
-				model,
-				allowedEfforts: [Effort.Low, Effort.High],
-			}),
+			classifyDifficulty(
+				{ request: "anything" },
+				{
+					settings,
+					registry: registry(),
+					model,
+					allowedEfforts: [Effort.Low, Effort.High],
+				},
+			),
 		).rejects.toThrow("Auto");
 		expect(call).not.toHaveBeenCalled();
 	});
@@ -164,6 +175,7 @@ describe("on-demand effort classification", () => {
 		} as never);
 		const notices: string[] = [];
 		const judge = resolveJudge({
+			purpose: "direct-judgment-test",
 			settings,
 			registry: registry(),
 			onEffortDisclosure: notice => notices.push(notice),
@@ -211,6 +223,7 @@ describe("on-demand effort classification", () => {
 			} as never);
 		const notices: string[] = [];
 		const judge = resolveJudge({
+			purpose: "direct-judgment-test",
 			settings,
 			registry: registry([model, backup]),
 			onEffortDisclosure: notice => notices.push(notice),
@@ -241,7 +254,7 @@ describe("on-demand effort classification", () => {
 			stopReason: "stop",
 			content: [{ type: "text", text: "high" }],
 		} as never);
-		const judge = resolveJudge({ settings, registry: registry() });
+		const judge = resolveJudge({ settings, registry: registry(), purpose: "direct-judgment-test" });
 		await judge.judge({
 			state: "a hard debugging request",
 			questions: {
@@ -270,6 +283,7 @@ describe("on-demand effort classification", () => {
 			} as never);
 		const notices: string[] = [];
 		const judge = resolveJudge({
+			purpose: "direct-judgment-test",
 			settings,
 			registry: registry(),
 			onEffortDisclosure: notice => notices.push(notice),
@@ -426,6 +440,51 @@ describe("implicit effort policy resolution", () => {
 		const fixed = resolveImplicitEffort(settings, model, { mode: "fixed", level: Effort.XHigh }, "role");
 		expect(fixed.level).toBe(Effort.High);
 		expect(fixed.disclosure).toContain("mock/classifier");
+	});
+
+	it("prioritizes exact over regex over glob and uses the first matching regex", () => {
+		const settings = Settings.isolated({
+			"effort.rules": [
+				{ selector: "mock/*", allowed: [Effort.Low] },
+				{ selector: "re:^mock/class", allowed: [Effort.Medium] },
+				{ selector: "re:^mock/classifier$", allowed: [Effort.High] },
+				{ selector: "mock/classifier", allowed: [Effort.XHigh] },
+			],
+		});
+		expect(matchEffortRule(settings, model)?.allowed).toEqual([Effort.XHigh]);
+		const regexSettings = Settings.isolated({
+			"effort.rules": [
+				{ selector: "mock/*", allowed: [Effort.Low] },
+				{ selector: "re:^mock/class", allowed: [Effort.Medium] },
+				{ selector: "re:^mock/classifier$", allowed: [Effort.High] },
+			],
+		});
+		expect(matchEffortRule(regexSettings, model)?.allowed).toEqual([Effort.Medium]);
+		expect(resolveImplicitEffort(regexSettings, model, { mode: "auto" }, "role").candidates).toEqual([Effort.Medium]);
+	});
+
+	it("retains case-insensitive Bun glob matching and skips invalid regex before glob fallback", () => {
+		const settings = Settings.isolated({
+			"effort.rules": [
+				{ selector: "re:[", allowed: [Effort.XHigh] },
+				{ selector: "MOCK/{CLASSIFIER,OTHER}", allowed: [Effort.Low] },
+			],
+		});
+		expect(matchEffortRule(settings, model)?.allowed).toEqual([Effort.Low]);
+		expect(
+			resolveImplicitEffort(settings, model, { mode: "auto", selector: "MOCK/CLASS*" }, "role").candidates,
+		).toEqual([Effort.Low]);
+		expect(
+			resolveImplicitEffort(settings, model, { mode: "auto", selector: "re:^mock/classifier$" }, "role").candidates,
+		).toEqual([Effort.Low]);
+		expect(
+			resolveImplicitEffort(
+				settings,
+				model,
+				{ mode: "auto", selector: "re:^mock/other$", allowed: [Effort.High] },
+				"role",
+			).candidates,
+		).toEqual([Effort.Low]);
 	});
 
 	it("does not promote a saved role default to an explicit override, even when both request the same level", () => {
