@@ -2,6 +2,15 @@ import type { KeyId } from "./app-keybindings";
 import { getKeybindings } from "./keybindings";
 import { matchesKey } from "./keys";
 
+/** Treat Vim motion keys as arrows only while a picker is in normal mode. */
+export function pickerNavigationKey(data: string): string {
+	if (matchesKey(data, "h") || matchesKey(data, "shift+h")) return "\x1b[D";
+	if (matchesKey(data, "j") || matchesKey(data, "shift+j")) return "\x1b[B";
+	if (matchesKey(data, "k") || matchesKey(data, "shift+k")) return "\x1b[A";
+	if (matchesKey(data, "l") || matchesKey(data, "shift+l")) return "\x1b[C";
+	return data;
+}
+
 /**
  * Match the coding-agent interrupt key.
  *

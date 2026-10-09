@@ -191,6 +191,7 @@ describe("HookSelectorComponent", () => {
 			{ outline: true, maxVisible: 3 },
 		);
 
+		component.handleInput("i");
 		for (const key of "browser") {
 			component.handleInput(key);
 		}
@@ -323,7 +324,7 @@ describe("HookSelectorComponent", () => {
 		expect(selected).toBe("2. Second");
 	});
 
-	it("treats digits as search text once the list overflows", () => {
+	it("treats digits as search text when the overflowing list is in insert mode", () => {
 		let selected: string | undefined;
 		const options = Array.from({ length: 20 }, (_, i) => `Option ${i + 1}`);
 		const component = new HookSelectorComponent(
@@ -336,10 +337,11 @@ describe("HookSelectorComponent", () => {
 			{ maxVisible: 5 },
 		);
 
+		component.handleInput("i");
 		component.handleInput("1");
 
 		expect(selected).toBeUndefined();
-		expect(component.render(80).join("\n")).toContain("Search: 1");
+		expect(Bun.stripANSI(component.render(80).join("\n"))).toContain("Search: 1");
 	});
 
 	it("renders disabled options dimmed", () => {

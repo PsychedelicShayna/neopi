@@ -20,6 +20,7 @@ function createHost(limits?: { maxWidth: number; maxHeight: number }) {
 			"browser.enabled": true,
 			"browser.headless": true,
 			"browser.cmux": false,
+			"browser.tern": false,
 			"tools.maxTimeout": 0,
 			...(limits
 				? { "browser.screenshotMaxWidth": limits.maxWidth, "browser.screenshotMaxHeight": limits.maxHeight }

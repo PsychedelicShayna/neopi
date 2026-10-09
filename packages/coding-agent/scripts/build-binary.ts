@@ -3,12 +3,6 @@
 import { createRequire } from "node:module";
 import * as path from "node:path";
 import { APP_NAME } from "@oh-my-pi/pi-utils/dirs";
-import {
-	defaultNeopiExtensionsDestDir,
-	defaultNeopiExtensionsSourceDir,
-	formatNeopiExtensionsResult,
-	installNeopiExtensions,
-} from "../../../scripts/install-neopi-extensions";
 import { resolveBuildIdentity } from "./build-identity";
 import { compileCodingAgent } from "./compile-binary";
 
@@ -45,25 +39,6 @@ export function resolveCrossBuild(value: string | undefined): CrossBuild | null 
 			return { id: value, platform: "win32", arch: "arm64", target: "bun-windows-arm64" };
 		default:
 			throw new Error(`Unsupported CROSS_TARGET: ${value}`);
-	}
-}
-
-function isTruthyCi(value: string | undefined): boolean {
-	if (!value) return false;
-	const normalized = value.trim().toLowerCase();
-	return normalized !== "" && normalized !== "0" && normalized !== "false";
-}
-
-async function deployNeopiExtensionsAfterBuild(outputPath: string): Promise<void> {
-	try {
-		const result = await installNeopiExtensions({
-			sourceDir: defaultNeopiExtensionsSourceDir(repoRoot),
-			destDir: defaultNeopiExtensionsDestDir(),
-		});
-		console.log(`neopi extensions: ${formatNeopiExtensionsResult(result)}`);
-	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		console.warn(`neopi extensions: post-build deploy failed; binary is already at ${outputPath}: ${message}`);
 	}
 }
 
@@ -146,10 +121,6 @@ async function main(): Promise<void> {
 					path.join(repoRoot, "scripts", "macos-entitlements.plist"),
 					outputPath,
 				]);
-			}
-
-			if (!crossBuild && !isTruthyCi(Bun.env.CI) && Bun.env.NPI_SKIP_EXTENSION_INSTALL !== "1") {
-				await deployNeopiExtensionsAfterBuild(outputPath);
 			}
 		} finally {
 			await runCommand(["bun", "--cwd=../natives", "run", "gen:native:reset"]);

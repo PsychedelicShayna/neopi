@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { parseEnv } from "node:util";
 import { getAgentDir, getConfigRootDir, getProjectDir, refreshDirsFromEnv } from "./dirs";
+import { launchEnvValues, startupCwd, startupProcessEnv } from "./launch-env";
 
 export * from "./worker-host";
 
@@ -107,32 +108,18 @@ export function stripGitRepoLocationEnv(
 	}
 }
 
-// Bun autoloads the project's dotenv files into `process.env` before user code
-// runs — including inside `bun build --compile` binaries — so a snapshot of
-// `Bun.env` is only pre-dotenv when autoloading was explicitly disabled. Linux
-// keeps the original exec environment in procfs, which is authoritative.
-function readLaunchEnv(): ReadonlyMap<string, string> | undefined {
-	if (process.platform === "linux") {
-		try {
-			const values = new Map<string, string>();
-			for (const entry of fs.readFileSync("/proc/self/environ", "utf8").split("\0")) {
-				const separator = entry.indexOf("=");
-				if (separator > 0) values.set(entry.slice(0, separator), entry.slice(separator + 1));
-			}
-			return values;
-		} catch {}
-	}
-	if (!process.execArgv.includes("--no-env-file")) return undefined;
-	const values = new Map<string, string>();
-	for (const key in Bun.env) {
-		const value = Bun.env[key];
-		if (value !== undefined) values.set(key, value);
-	}
-	return values;
-}
-
-const launchEnvValues = readLaunchEnv();
 const projectEnvNamesLoadedByOmp = new Set<string>();
+const originalProcessEnv: Record<string, string> = launchEnvValues
+	? filterProcessEnv(Object.fromEntries(launchEnvValues))
+	: filterChildShellEnvInternal(startupProcessEnv!, startupCwd);
+// Interactive restoration must not pin Git to the launcher's checkout either.
+stripGitRepoLocationEnv(originalProcessEnv);
+Object.freeze(originalProcessEnv);
+
+/** Launcher snapshot with subprocess-unsafe values, Git locators, and unproven dotenv values excluded. */
+export function getOriginalProcessEnv(): Readonly<Record<string, string>> {
+	return originalProcessEnv;
+}
 
 function expandDotenvValues(values: Record<string, string>, env: Record<string, string>): Record<string, string> {
 	const expanded: Record<string, string> = {};

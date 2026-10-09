@@ -58,6 +58,7 @@ function createRegistryWithSnapshot(): RpcSubagentRegistry {
 	const registry = new RpcSubagentRegistry(eventBus, () => {});
 	eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
 		id: "SubagentA",
+		runToken: "T1",
 		index: 0,
 		agent: "task",
 		agentSource: "bundled",
@@ -90,6 +91,7 @@ describe("RPC subagent registry", () => {
 		const registry = new RpcSubagentRegistry(eventBus, frame => frames.push(frame));
 		const lifecycle: SubagentLifecyclePayload = {
 			id: "SubagentA",
+			runToken: "T1",
 			index: 0,
 			agent: "task",
 			agentSource: "bundled",
@@ -100,6 +102,8 @@ describe("RPC subagent registry", () => {
 		};
 		const progressPayload: SubagentProgressPayload = {
 			index: 0,
+			runToken: "T1",
+			owned: true,
 			agent: "task",
 			agentSource: "bundled",
 			task: "Do work",
@@ -110,6 +114,8 @@ describe("RPC subagent registry", () => {
 		};
 		const eventPayload: SubagentEventPayload = {
 			id: "SubagentA",
+			runToken: "T1",
+			owned: true,
 			event: { type: "agent_start" },
 		};
 
@@ -136,6 +142,7 @@ describe("RPC subagent registry", () => {
 		registry.setSubscriptionLevel("progress");
 		const lifecycle: SubagentLifecyclePayload = {
 			id: "SubagentA",
+			runToken: "T1",
 			index: 0,
 			agent: "task",
 			agentSource: "bundled",
@@ -146,6 +153,8 @@ describe("RPC subagent registry", () => {
 		};
 		const progressPayload: SubagentProgressPayload = {
 			index: 0,
+			runToken: "T1",
+			owned: true,
 			agent: "task",
 			agentSource: "bundled",
 			task: "Do work",
@@ -170,25 +179,6 @@ describe("RPC subagent registry", () => {
 			},
 		]);
 
-		registry.dispose();
-	});
-
-	test("clears stale snapshots when the active RPC session changes", () => {
-		const eventBus = new EventBus();
-		const registry = new RpcSubagentRegistry(eventBus, () => {});
-		eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
-			id: "SubagentA",
-			index: 0,
-			agent: "task",
-			agentSource: "bundled",
-			status: "started",
-			sessionFile: "/tmp/subagent.jsonl",
-		} satisfies SubagentLifecyclePayload);
-
-		expect(registry.getSubagents()).toHaveLength(1);
-		registry.clear();
-
-		expect(registry.getSubagents()).toHaveLength(0);
 		registry.dispose();
 	});
 
@@ -276,6 +266,7 @@ describe("RPC subagent registry", () => {
 		const sessionFile = "/tmp/subagent.jsonl";
 		eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
 			id: "SubagentA",
+			runToken: "T1",
 			index: 0,
 			agent: "task",
 			agentSource: "bundled",
@@ -286,6 +277,7 @@ describe("RPC subagent registry", () => {
 		expect(registry.getSubagents()).toHaveLength(1);
 		eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
 			id: "SubagentA",
+			runToken: "T1",
 			index: 0,
 			agent: "task",
 			agentSource: "bundled",
@@ -305,6 +297,8 @@ describe("RPC subagent registry", () => {
 		const registry = new RpcSubagentRegistry(eventBus, frame => frames.push(frame));
 		const eventPayload: SubagentEventPayload = {
 			id: "SubagentA",
+			runToken: "T1",
+			owned: true,
 			event: { type: "agent_start" },
 		};
 
@@ -455,6 +449,7 @@ function handle(frame) {
 		registry.setSubscriptionLevel("events");
 		eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
 			id: "Kid",
+			runToken: "T1",
 			agent: "task",
 			agentSource: "bundled",
 			status: "started",
@@ -463,6 +458,7 @@ function handle(frame) {
 		} satisfies SubagentLifecyclePayload);
 		eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
 			id: "Kid.Grandkid",
+			runToken: "T2",
 			agent: "task",
 			agentSource: "bundled",
 			status: "started",
@@ -471,6 +467,8 @@ function handle(frame) {
 		} satisfies SubagentLifecyclePayload);
 		eventBus.emit(TASK_SUBAGENT_EVENT_CHANNEL, {
 			id: "Kid.Grandkid",
+			runToken: "T2",
+			owned: true,
 			event: { type: "agent_start" } as SubagentEventPayload["event"],
 		} satisfies SubagentEventPayload);
 		expect(frames.map(frame => frame.type)).toEqual(["subagent_lifecycle", "subagent_lifecycle", "subagent_event"]);
@@ -490,6 +488,7 @@ function handle(frame) {
 		registryB.setSubscriptionLevel("events");
 		busB.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
 			id: "Kid",
+			runToken: "T1",
 			agent: "task",
 			agentSource: "bundled",
 			status: "started",

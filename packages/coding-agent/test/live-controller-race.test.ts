@@ -28,8 +28,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AgentRegistry } from "../src/registry/agent-registry";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
+import type { CustomMessage } from "../src/session/messages";
 import { LiveSessionController } from "../src/live/controller";
+import { LiveIngest } from "../src/live/ingest";
+import { LIVE_INGEST_DEFAULTS, type LiveIngestSettingsSource } from "../src/live/ingest-settings";
+import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, type SubagentLifecyclePayload } from "../src/task/types";
+import { EventBus, emitSubagentFrame } from "../src/utils/event-bus";
 import type { LiveClientMessage, LiveServerEvent } from "../src/live/protocol";
 
 function deferred<T = void>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (cause: unknown) => void } {
@@ -61,10 +67,10 @@ function agentEnd(
 	return { type: "agent_end", messages, ...flags } as unknown as AgentSessionEvent;
 }
 
-function delegation(id: string, text: string): LiveServerEvent {
+function delegation(id: string, _text: string): LiveServerEvent {
 	return {
 		type: "delegation.created",
-		item: { type: "delegation", target: "client", id, content: [{ type: "input_text", text }] },
+		item: { type: "delegation", target: "client", id, content: [] },
 	};
 }
 
@@ -98,12 +104,16 @@ interface DeliveryControl {
 
 interface Harness {
 	controller: LiveSessionController;
+	session: AgentSession;
 	sent: LiveClientMessage[];
 	aborts: Array<Record<string, unknown>>;
 	prompts: string[];
 	deliveries: DeliveryControl[];
 	speech: Array<{ turn: number; text: string; final: boolean }>;
-	delegated: number[][];
+	sentSpeech: string[];
+	audioSent: Float32Array[];
+	fireOutputLevel(level: number): void;
+	fireMicrophone(samples: Float32Array): void;
 	fireLive(event: LiveServerEvent): void;
 	fireSession(event: AgentSessionEvent): void;
 	setStreaming(value: boolean): void;
@@ -114,13 +124,22 @@ interface Harness {
 function makeHarness(options?: {
 	artifactPath?: string | undefined;
 	speakableIdleMs?: number;
+	thinkingFlushMs?: number;
 	holdDelivery?: boolean;
+	dropAudio?: boolean;
+	playbackQueue?: { queuedMs: number; droppedMs: number };
+	blockDelegateKeyword?: string;
+	ircRelayTransform?: (message: CustomMessage, body: string) => string | undefined;
+	ircRelayAllowed?: (message: CustomMessage) => boolean;
+	relayGates?: () => { reasoning: boolean; progress: boolean; finalAnswers: boolean };
 }): Harness {
 	const sent: LiveClientMessage[] = [];
 	const aborts: Array<Record<string, unknown>> = [];
 	const prompts: string[] = [];
 	const speech: Harness["speech"] = [];
-	const delegated: number[][] = [];
+	const audioSent: Float32Array[] = [];
+	let microphoneCallback: ((error: Error | null, samples: Float32Array) => void) | undefined;
+	const sentSpeech: string[] = [];
 	const abortGates: Array<{ promise: Promise<void>; resolve: () => void }> = [];
 	const deliveries: Harness["deliveries"] = [];
 	let streaming = false;
@@ -215,9 +234,14 @@ function makeHarness(options?: {
 			onTranscript() {},
 			onTerminal() {},
 			onUserSpeech: ({ turn, text, final }) => speech.push({ turn, text, final }),
-			onDelegated: texts => delegated.push([...texts]),
+			onSpeechSent: text => sentSpeech.push(text),
 		},
 		...(options?.speakableIdleMs !== undefined ? { speakableIdleMs: options.speakableIdleMs } : {}),
+		...(options?.thinkingFlushMs !== undefined ? { thinkingFlushMs: options.thinkingFlushMs } : {}),
+		blockDelegateKeyword: options?.blockDelegateKeyword,
+		ircRelayTransform: options?.ircRelayTransform,
+		ircRelayAllowed: options?.ircRelayAllowed,
+		relayGates: options?.relayGates,
 		extractAssistantText: message => (message as unknown as { testText?: string }).testText ?? "",
 		createTransport: transportOptions => {
 			liveCallbacks = transportOptions.callbacks;
@@ -228,20 +252,34 @@ function makeHarness(options?: {
 				},
 				async close() {},
 				async setMuted() {},
-				pushAudio() {},
+				pushAudio(samples: Float32Array) {
+					if (options?.dropAudio) return false;
+					audioSent.push(samples);
+					return true;
+				},
+				playbackQueueStats() {
+					return options?.playbackQueue ?? { queuedMs: 0, droppedMs: 0 };
+				},
 			};
 		},
-		createRecorder: () => ({ stop() {} }),
+		createRecorder: (_sampleRate, callback) => {
+			microphoneCallback = callback;
+			return { stop() {} };
+		},
 	});
 
 	return {
+		session,
 		controller,
 		sent,
 		aborts,
 		prompts,
 		deliveries,
 		speech,
-		delegated,
+		sentSpeech,
+		audioSent,
+		fireOutputLevel: level => liveCallbacks?.onOutputLevel(level),
+		fireMicrophone: samples => microphoneCallback?.(null, samples),
 		fireLive: event => liveCallbacks?.onEvent(event),
 		fireSession: event => sessionSubscriber?.(event),
 		setStreaming: value => {
@@ -278,7 +316,171 @@ function speakableTexts(sent: LiveClientMessage[]): string[] {
 	return texts;
 }
 
+describe("live microphone forwarding", () => {
+	it("suppresses likely speaker echo but forwards quiet speech after output falls silent", async () => {
+		const h = makeHarness();
+		await h.controller.start();
+		h.fireOutputLevel(0.6);
+		expect(h.controller.phase).toBe("speaking");
+		const speech = new Float32Array(320).fill(0.02);
+		h.fireMicrophone(speech);
+		expect(h.audioSent).toEqual([]);
+		await wait(300);
+		expect(h.controller.phase).toBe("listening");
+		h.fireMicrophone(speech);
+		expect(h.audioSent).toEqual([speech]);
+		await h.controller.stop();
+		const lines = (await readFile(h.artifactPath, "utf8")).trim().split("\n");
+		expect(lines.map(line => JSON.parse(line))).toEqual([
+			expect.objectContaining({
+				type: "audio-frame-summary",
+				captured: 2,
+				sent: 1,
+				droppedAtGate: 1,
+				droppedAtNativeQueue: 0,
+			}),
+		]);
+	});
+
+	it("expires speaker activity only after the last reported output packet", async () => {
+		const h = makeHarness();
+		await h.controller.start();
+		h.fireOutputLevel(0.5);
+		await wait(150);
+		h.fireOutputLevel(0.4);
+		await wait(150);
+		expect(h.controller.phase).toBe("speaking");
+		await wait(120);
+		expect(h.controller.phase).toBe("listening");
+		await h.controller.stop();
+	});
+
+	it("persists a counted native queue-drop summary when audio cannot be queued", async () => {
+		const h = makeHarness({ dropAudio: true });
+		await h.controller.start();
+		h.fireMicrophone(new Float32Array(320).fill(0.02));
+		h.fireMicrophone(new Float32Array(320).fill(0.02));
+		await h.controller.stop();
+		const lines = (await readFile(h.artifactPath, "utf8")).trim().split("\n");
+		expect(lines.map(line => JSON.parse(line))).toEqual([
+			expect.objectContaining({
+				type: "audio-frame-summary",
+				captured: 2,
+				sent: 0,
+				droppedAtGate: 0,
+				droppedAtNativeQueue: 2,
+			}),
+		]);
+	});
+});
+
 describe("live controller delegation ownership", () => {
+	it("forces the current composer draft independently of provider-finalized turns", async () => {
+		const h = makeHarness();
+		await h.controller.start();
+		h.fireLive({ type: "input_transcript.added", item: { text: "Fix the ca" } });
+		expect(h.controller.forceDelegateComposer("typed context Fix the cache.")).toBe(true);
+		await settle();
+		expect(h.prompts).toEqual(["typed context Fix the cache."]);
+		expect(h.sentSpeech).toEqual(["typed context Fix the cache."]);
+		expect(h.sent.filter(item => item.type === "session.context.append").map(item => item.content[0]?.text)).toEqual([
+			"Operator Message Sent To Main Agent",
+		]);
+		await h.controller.stop();
+	});
+
+	it("does not retain answered turns when a later composer draft is force-delegated", async () => {
+		const h = makeHarness();
+		await h.controller.start();
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "fix the cache" } });
+		h.fireLive({ type: "turn.done", turn: { role: "assistant", transcript: "I can help." } });
+		expect(h.sentSpeech).toEqual(["fix the cache"]);
+		expect(h.controller.forceDelegateComposer("new draft")).toBe(true);
+		await settle();
+		expect(h.prompts).toEqual(["new draft"]);
+		expect(h.sentSpeech).toEqual(["fix the cache", "new draft"]);
+		await h.controller.stop();
+	});
+
+	it("blocks a model delegation for a keyword turn while retaining its sanitized text", async () => {
+		const h = makeHarness({ blockDelegateKeyword: "iris only" });
+		await h.controller.start();
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "Iris—only tell me a joke" } });
+		h.fireLive(delegation("dlg-blocked", "wrong"));
+		await settle();
+		expect(h.prompts).toEqual([]);
+		expect(h.sentSpeech).toEqual(["tell me a joke"]);
+		await h.controller.stop();
+	});
+	it("allows delegation of the next utterance after an Iris-only turn", async () => {
+		const h = makeHarness({ blockDelegateKeyword: "iris only" });
+		await h.controller.start();
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "iris only say hello" } });
+		h.fireLive({ type: "input_transcript.added", item: { text: "fix the cache" } });
+		h.fireLive(delegation("dlg-after-block", "wrong"));
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "fix the cache" } });
+		await settle();
+		expect(h.prompts).toEqual(["fix the cache"]);
+		await h.controller.stop();
+	});
+
+	it("does not cancel an older delegation for a separate Iris-only utterance", async () => {
+		const h = makeHarness({ blockDelegateKeyword: "iris only" });
+		await h.controller.start();
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "fix the cache" } });
+		h.fireLive(delegation("dlg-first", "wrong"));
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "iris only say hello" } });
+		await settle();
+		expect(h.prompts).toEqual(["fix the cache"]);
+		expect(h.sentSpeech).toContain("say hello");
+		await h.controller.stop();
+	});
+
+	it("force-delegates a composer correction instead of an earlier Iris claim", async () => {
+		const h = makeHarness();
+		await h.controller.start();
+		h.fireLive({ type: "input_transcript.added", item: { text: "fix the cache" } });
+		h.fireLive(delegation("dlg-early", "wrong"));
+		expect(h.controller.forceDelegateComposer("fix the cache, with the corrected timeout")).toBe(true);
+		await settle();
+		expect(h.prompts).toEqual(["fix the cache, with the corrected timeout"]);
+		await h.controller.stop();
+	});
+
+	it("cancels Iris's claim if its pending partial finishes with a block keyword", async () => {
+		const h = makeHarness({ blockDelegateKeyword: "iris only" });
+		await h.controller.start();
+		h.fireLive({ type: "input_transcript.added", item: { text: "Iris" } });
+		h.fireLive(delegation("dlg-too-early", "wrong"));
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "Iris only explain it" } });
+		await settle();
+		expect(h.prompts).toEqual([]);
+		expect(h.sentSpeech).toEqual(["explain it"]);
+		await h.controller.stop();
+	});
+
+	it("does not interpret withdrawn partial speech as a force keyword", async () => {
+		const h = makeHarness();
+		await h.controller.start();
+		h.fireLive({ type: "input_transcript.added", item: { text: "send it now" } });
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "not yet" } });
+		await settle();
+		expect(h.prompts).toEqual([]);
+		h.fireLive(delegation("dlg-later", "wrong"));
+		await settle();
+		expect(h.prompts).toEqual(["not yet"]);
+		await h.controller.stop();
+	});
+
+	it("saves speech answered by Iris even without an incremental output transcript", async () => {
+		const h = makeHarness();
+		await h.controller.start();
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "what time is it" } });
+		h.fireLive({ type: "turn.done", turn: { role: "assistant", transcript: "Noon." } });
+		expect(h.sentSpeech).toEqual(["what time is it"]);
+		await h.controller.stop();
+	});
+
 	it("builds the prompt from the controller transcript, not delegation content", async () => {
 		const h = makeHarness();
 		await h.controller.start();
@@ -359,6 +561,7 @@ describe("live controller delegation ownership", () => {
 		h.fireLive(delegation("dlg-late", "model-authored fallback"));
 		await settle();
 		expect(h.prompts).toEqual(["spoken while she answered\n\nnow do it"]);
+		expect(h.sentSpeech).toEqual(["iris, what time is it", "spoken while she answered\n\nnow do it"]);
 	});
 
 	it("never relays speech the operator already submitted from the composer", async () => {
@@ -423,7 +626,7 @@ describe("live controller delegation ownership", () => {
 		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "second request" } });
 		h.fireLive(delegation("dlg-second", "model-authored fallback"));
 		await settle();
-		expect(h.delegated).toContainEqual([1]);
+		expect(h.sentSpeech).toContain("first request");
 	});
 
 	it("reports a typed voice prompt undelivered when the call ends before it connects", async () => {
@@ -459,7 +662,7 @@ describe("live controller delegation ownership", () => {
 		h.deliveries[0]!.accept();
 		await h.controller.stop();
 		expect(h.prompts).toEqual(["fix the parser"]);
-		expect(h.delegated).toContainEqual([1]);
+		expect(h.sentSpeech).toContain("fix the parser");
 	});
 
 	it("does not relay a later turn as the answer to a shared prompt a delegation already answered", async () => {
@@ -492,6 +695,30 @@ describe("live controller delegation ownership", () => {
 		h.fireSession(agentEnd([assistant("Unrelated later work.", "stop")]));
 		await settle();
 		expect(h.sent.filter(message => message.type === "session.context.append")).toHaveLength(1);
+	});
+
+	it("delivers a requested final answer at once even while operator activity holds speakables", async () => {
+		const h = makeHarness({ speakableIdleMs: 60_000 });
+		await h.controller.start();
+		h.controller.expectOperatorTurn();
+		h.controller.noteComposerActivity();
+		h.fireSession(agentEnd([assistant("The build is fixed.", "stop")]));
+		await settle();
+		const finals = h.sent.flatMap(message =>
+			message.type === "session.context.append" ? [message.content.map(item => item.text).join("")] : [],
+		);
+		expect(finals).toHaveLength(1);
+		expect(finals[0]).toContain("The build is fixed.");
+	});
+
+	it("keeps the recognizer's word spacing when incremental transcript chunks stream in", async () => {
+		const h = makeHarness();
+		await h.controller.start();
+		for (const text of [" That's", " a", " bug", " right", " now"]) {
+			h.fireLive({ type: "input_transcript.added", item: { text } });
+		}
+		await settle();
+		expect(h.speech.at(-1)?.text).toBe("That's a bug right now");
 	});
 
 	it("keeps a spoken request when the voice agent is answering a typed prompt", async () => {
@@ -784,6 +1011,55 @@ describe("live controller delegation ownership", () => {
 		expect(h.sent.some(m => m.type === "session.context.append" && m.channel === "speakable")).toBe(true);
 	});
 
+	it("relays the peer IRC body once with sender and recipient attribution", async () => {
+		const h = makeHarness();
+		await h.controller.start();
+		h.fireSession({
+			type: "irc_message",
+			message: {
+				role: "custom",
+				customType: "irc:relay",
+				content: "",
+				display: true,
+				details: { from: "A", to: "B", body: "x" },
+				attribution: "agent",
+				timestamp: 1,
+			},
+		} as unknown as AgentSessionEvent);
+		await settle();
+		expect(speakableTexts(h.sent)).toEqual(["Crew relay from A to B: x"]);
+	});
+
+	it("ignores empty crew cards and lets the IRC transform suppress or replace a body", async () => {
+		const suppressed = makeHarness({ ircRelayTransform: () => undefined });
+		await suppressed.controller.start();
+		suppressed.fireSession(crewMessage("empty", "A", ""));
+		suppressed.fireSession(crewMessage("suppressed", "A", "x"));
+		await settle();
+		expect(speakableTexts(suppressed.sent)).toEqual([]);
+
+		const replaced = makeHarness({ ircRelayTransform: (_message, _body) => "y" });
+		await replaced.controller.start();
+		replaced.fireSession(crewMessage("replaced", "A", "x"));
+		await settle();
+		expect(speakableTexts(replaced.sent)).toEqual(["Crew report from A: y"]);
+	});
+
+	it("drops a held crew relay when its source is disabled before release", async () => {
+		let enabled = true;
+		const h = makeHarness({ speakableIdleMs: 60_000, ircRelayAllowed: () => enabled });
+		await h.controller.start();
+		h.controller.noteComposerActivity();
+		h.fireSession(crewMessage("held", "A", "progress"));
+		expect(h.controller.heldContextCount()).toBe(1);
+		enabled = false;
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "release" } });
+		h.fireLive(delegation("crew-release", ""));
+		await settle();
+		expect(speakableTexts(h.sent)).toEqual([]);
+		await h.controller.stop();
+	});
+
 	it("sends typed operator text immediately: addressed to the voice agent, or as silent commentary when shared", async () => {
 		const h = makeHarness({ speakableIdleMs: 60_000 });
 		await h.controller.start();
@@ -920,5 +1196,314 @@ describe("live controller delegation ownership", () => {
 		h.fireSession(update);
 		await settle();
 		expect(speakableTexts(h.sent)).toHaveLength(1);
+	});
+	it("gates primary reasoning at enqueue and again when operator-held context releases", async () => {
+		let enabled = true;
+		const h = makeHarness({
+			speakableIdleMs: 60_000,
+			thinkingFlushMs: 0,
+			relayGates: () => ({ reasoning: enabled, progress: true, finalAnswers: true }),
+		});
+		await h.controller.start();
+		const thinking = "Consider the available options before settling the result. ".repeat(7);
+		const update = {
+			type: "message_update",
+			message: { role: "assistant", content: [{ type: "thinking", thinking }] },
+		} as unknown as AgentSessionEvent;
+		enabled = false;
+		h.fireSession(update);
+		await settle();
+		expect(speakableTexts(h.sent)).toEqual([]);
+		enabled = true;
+		h.controller.noteComposerActivity();
+		h.fireSession(update);
+		await settle();
+		expect(h.controller.heldContextCount()).toBe(1);
+		enabled = false;
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "release" } });
+		h.fireLive(delegation("d-release", ""));
+		await settle();
+		expect(speakableTexts(h.sent)).toEqual([]);
+		await h.controller.stop();
+	});
+
+	it("gates primary tool progress at enqueue and after a hold without skipping cleanup", async () => {
+		let progress = false;
+		const h = makeHarness({
+			speakableIdleMs: 60_000,
+			relayGates: () => ({ reasoning: true, progress, finalAnswers: true }),
+		});
+		await h.controller.start();
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "run checks" } });
+		h.fireLive(delegation("progress-d", ""));
+		await settle();
+		const tool = { type: "message_end", message: assistant("Running checks now", "toolUse") } as AgentSessionEvent;
+		h.fireSession(tool);
+		await settle();
+		expect(h.sent.some(item => item.type === "delegation.context.append" && item.channel === "commentary")).toBe(
+			false,
+		);
+		progress = true;
+		h.controller.noteComposerActivity();
+		h.fireSession(tool);
+		await settle();
+		expect(h.controller.heldContextCount()).toBe(1);
+		progress = false;
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "release" } });
+		h.fireLive(delegation("progress-release", ""));
+		await settle();
+		expect(h.sent.some(item => item.type === "delegation.context.append" && item.channel === "commentary")).toBe(
+			false,
+		);
+		await h.controller.stop();
+	});
+
+	it("silences gated final answers but still retires delegation and operator-turn ownership", async () => {
+		let finalAnswers = false;
+		const h = makeHarness({ relayGates: () => ({ reasoning: true, progress: true, finalAnswers }) });
+		await h.controller.start();
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "first" } });
+		h.fireLive(delegation("first-d", ""));
+		await settle();
+		h.fireSession(agentEnd([assistant("hidden delegated answer", "stop")]));
+		await settle();
+		expect(speakableTexts(h.sent)).toEqual([]);
+		h.controller.expectOperatorTurn();
+		h.fireSession(agentEnd([assistant("hidden operator answer", "stop")]));
+		finalAnswers = true;
+		h.fireSession(agentEnd([assistant("unrelated", "stop")]));
+		await settle();
+		expect(speakableTexts(h.sent)).toEqual([]);
+		h.controller.expectOperatorTurn();
+		h.fireSession(agentEnd([assistant("visible", "stop")]));
+		await settle();
+		expect(
+			h.sent.some(item => item.type === "session.context.append" && item.content[0]?.text.includes("visible")),
+		).toBe(true);
+		await h.controller.stop();
+	});
+	it("keeps the protected overflow slot through eight held reports and freezes at delivery", async () => {
+		const h = makeHarness({ speakableIdleMs: 60_000 });
+		const receipts: Array<[number, boolean]> = [];
+		let count = 257;
+		const alertsEnabled = true;
+		expect(h.controller.appendSpeakableContext("preconnect report")).toBe(false);
+		h.controller.appendCommentaryContext("preconnect commentary");
+		expect(
+			h.controller.appendOverflowAlertContext(
+				() => ({ text: `Red alert: ${count} deployments; authorization not checked.`, receiptId: 1 }),
+				() => alertsEnabled,
+				(id, accepted) => receipts.push([id, accepted]),
+			),
+		).toBe(false);
+		await h.controller.start();
+		expect(h.controller.appendSpeakableContext("connected report")).toBe(true);
+		h.controller.noteComposerActivity();
+		for (let i = 0; i < 8; i++) h.controller.appendSpeakableContext(`report ${i}`);
+		expect(
+			h.controller.appendOverflowAlertContext(
+				() => ({ text: `Red alert: ${count} deployments; authorization not checked.`, receiptId: 7 }),
+				() => alertsEnabled,
+				(id, accepted) => receipts.push([id, accepted]),
+			),
+		).toBe(true);
+		count = 321;
+		expect(h.controller.heldContextCount()).toBe(8);
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "release" } });
+		h.fireLive(delegation("overflow-release", ""));
+		await settle(40);
+		expect(speakableTexts(h.sent)).toContain("Red alert: 321 deployments; authorization not checked.");
+		expect(receipts).toEqual([[7, true]]);
+		await h.controller.stop();
+	});
+	it("routes a real lifecycle frame through LiveIngest and the connected live controller", async () => {
+		const h = makeHarness();
+		await h.controller.start();
+		const registry = new AgentRegistry();
+		registry.register({ id: "main", displayName: "main", kind: "main", session: h.session, status: "running" });
+		registry.register({
+			id: "worker",
+			displayName: "worker",
+			kind: "sub",
+			parentId: "main",
+			session: null,
+			status: "running",
+		});
+		const bus = new EventBus();
+		const liveSettings = {
+			...LIVE_INGEST_DEFAULTS,
+			subagentClassifier: false,
+			effortAlerts: false,
+			startAnnounceQuietMs: 0,
+		};
+		const source = {
+			get: () => liveSettings,
+			listen: () => () => {},
+		} as unknown as LiveIngestSettingsSource;
+		const timers = new Map<number, { fn: () => void; ms: number }>();
+		let nextTimer = 0;
+		const ingest = new LiveIngest({
+			session: h.session,
+			registry,
+			subagentEventBus: bus,
+			settings: source,
+			sink: h.controller,
+			extractAssistantText: () => "",
+			setTimer: (fn, ms) => {
+				const id = ++nextTimer;
+				timers.set(id, { fn, ms });
+				return () => {
+					timers.delete(id);
+				};
+			},
+		});
+		ingest.attach();
+		const start = {
+			id: "worker",
+			runToken: "run-1",
+			depth: 1,
+			runKind: "spawn",
+			agent: "Sol",
+			agentSource: "bundled",
+			index: 0,
+			status: "started",
+		} satisfies SubagentLifecyclePayload;
+		emitSubagentFrame(bus, bus, TASK_SUBAGENT_LIFECYCLE_CHANNEL, start);
+		for (const [id, timer] of timers)
+			if (timer.ms === 0) {
+				timers.delete(id);
+				timer.fn();
+			}
+		emitSubagentFrame(bus, bus, TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
+			...start,
+			status: "completed",
+			outcomeExcerpt: "integrated path passed",
+		});
+		await settle();
+		expect(speakableTexts(h.sent)).toEqual([
+			"Subagents started: Sol, depth 1.",
+			"Subagent report from Sol: (completed) integrated path passed",
+		]);
+		ingest.detach();
+		await h.controller.stop();
+	});
+
+	it("drops guarded held context after its source is turned off", async () => {
+		const h = makeHarness({ speakableIdleMs: 60_000 });
+		await h.controller.start();
+		h.controller.noteComposerActivity();
+		let canDeliver = true;
+		let settled = 0;
+		expect(
+			h.controller.appendSpeakableContext(
+				"Subagent report from T: (completed) yes",
+				"report",
+				() => canDeliver,
+				() => {
+					settled++;
+				},
+			),
+		).toBe(true);
+		expect(
+			h.controller.appendOverflowAlertContext(
+				() => ({ text: "Red alert: should not escape.", receiptId: 9 }),
+				() => canDeliver,
+				() => {
+					throw new Error("disabled overflow receipt escaped");
+				},
+			),
+		).toBe(true);
+		canDeliver = false;
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "release" } });
+		h.fireLive(delegation("held-release", ""));
+		await settle();
+		expect(speakableTexts(h.sent)).toEqual([]);
+		expect(settled).toBe(1);
+		await h.controller.stop();
+	});
+});
+
+describe("live voice backlog bounds", () => {
+	it("does not retain answered turns across a long call", async () => {
+		const h = makeHarness();
+		await h.controller.start();
+		for (let i = 0; i < 200; i += 1) {
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: `request ${i}` } });
+			h.fireLive({ type: "output_transcript.added", item: { text: "ok" } });
+			h.fireLive({ type: "turn.done", turn: { role: "assistant", transcript: "ok" } });
+			expect(h.controller.pendingUserTurnCount()).toBe(0);
+		}
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "only the latest" } });
+		h.fireLive(delegation("dlg-after-many", "poison"));
+		await settle();
+		expect(h.prompts).toEqual(["only the latest"]);
+		expect(h.controller.pendingUserTurnCount()).toBe(0);
+	});
+
+	it("caps held context and keeps only the latest thinking and progress item", async () => {
+		const h = makeHarness({ speakableIdleMs: 60_000, thinkingFlushMs: 0 });
+		await h.controller.start();
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "work" } });
+		h.fireLive(delegation("dlg-hold", "work"));
+		await settle();
+		h.deliveries.at(-1)?.complete();
+		await settle();
+		h.controller.noteComposerActivity();
+
+		for (let i = 0; i < 20; i += 1) {
+			h.fireSession(crewMessage(`r-${i}`, "Helios", `report ${i}`));
+			h.fireSession({
+				type: "message_end",
+				message: { role: "assistant", stopReason: "toolUse", testText: `progress ${i}` },
+			} as unknown as AgentSessionEvent);
+			expect(h.controller.heldContextCount()).toBeLessThanOrEqual(8);
+		}
+		let thinking = "";
+		for (let i = 0; i < 20; i += 1) {
+			thinking += `Reasoning pass ${i} weighs the next step carefully. `.repeat(6);
+			h.fireSession({
+				type: "message_update",
+				message: { role: "assistant", content: [{ type: "thinking", thinking }] },
+			} as unknown as AgentSessionEvent);
+			expect(h.controller.heldContextCount()).toBeLessThanOrEqual(8);
+		}
+		expect(speakableTexts(h.sent)).toEqual([]);
+
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "next" } });
+		h.fireLive(delegation("dlg-release", "next"));
+		await settle(40);
+
+		const reports = speakableTexts(h.sent).filter(text => text.startsWith("Crew report from"));
+		const reasoning = speakableTexts(h.sent).filter(text => text.startsWith("Main agent reasoning"));
+		expect(reports.length).toBeLessThanOrEqual(8);
+		expect(reports.at(-1)).toBe("Crew report from Helios: report 19");
+		expect(reports.some(text => text.endsWith("report 0"))).toBe(false);
+		expect(reasoning).toHaveLength(1);
+		expect(reasoning[0]).toContain("Reasoning pass 19");
+		const progress = h.sent.flatMap(message => {
+			if (message.type !== "session.context.append" && message.type !== "delegation.context.append") return [];
+			if (message.channel !== "commentary") return [];
+			return [message.content.map(item => item.text).join("")];
+		});
+		expect(progress).toEqual(["progress 19"]);
+		expect(h.controller.heldContextCount()).toBe(0);
+	});
+
+	it("records speaker queue depth and drops in the audio-frame summary", async () => {
+		const h = makeHarness({ playbackQueue: { queuedMs: 1800, droppedMs: 4000 } });
+		await h.controller.start();
+		await h.controller.stop();
+		const lines = (await readFile(h.artifactPath, "utf8")).trim().split("\n");
+		expect(lines.map(line => JSON.parse(line))).toEqual([
+			expect.objectContaining({
+				type: "audio-frame-summary",
+				captured: 0,
+				sent: 0,
+				droppedAtGate: 0,
+				droppedAtNativeQueue: 0,
+				playbackQueuedMs: 1800,
+				playbackDroppedMs: 4000,
+			}),
+		]);
 	});
 });

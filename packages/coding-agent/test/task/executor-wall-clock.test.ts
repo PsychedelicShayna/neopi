@@ -9,7 +9,7 @@ import type { AgentSession, AgentSessionEvent, PromptOptions } from "@oh-my-pi/p
 import { runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
-import { createSessionDefaults } from "../helpers/session-defaults";
+import { createSessionDefaults, ownFakeSessionEvents } from "../helpers/session-defaults";
 
 /**
  * Contract: when `task.maxRuntimeMs` is set, a subagent whose inference call
@@ -61,6 +61,7 @@ function createHangingSession(): HangingSessionHandle {
 }
 
 function mockCreateAgentSession(session: AgentSession) {
+	ownFakeSessionEvents(session);
 	return vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue({
 		session,
 		extensionsResult: {} as unknown as LoadExtensionsResult,

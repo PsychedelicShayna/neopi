@@ -12,7 +12,15 @@ import type { SubmenuOption } from "@oh-my-pi/pi-tui/overlays/settings-defs";
  * only `priority` (fast mode); Google (Gemini API + Vertex) realizes
  * `flex`/`priority`.
  */
-export const SERVICE_TIER_OPENAI_VALUES = ["none", "auto", "default", "flex", "scale", "priority"] as const;
+export const SERVICE_TIER_OPENAI_VALUES = [
+	"none",
+	"auto",
+	"default",
+	"flex",
+	"scale",
+	"priority",
+	"ultrafast",
+] as const;
 export const SERVICE_TIER_ANTHROPIC_VALUES = ["none", "priority"] as const;
 export const SERVICE_TIER_GOOGLE_VALUES = ["none", "flex", "priority"] as const;
 
@@ -64,6 +72,7 @@ export const SERVICE_TIER_INHERIT_SETTING_VALUES = [
 	"flex",
 	"scale",
 	"priority",
+	"ultrafast",
 ] as const;
 
 export type ServiceTierInheritSettingValue = (typeof SERVICE_TIER_INHERIT_SETTING_VALUES)[number];
@@ -101,9 +110,18 @@ export const SERVICE_TIER_OPENAI_OPTIONS: ReadonlyArray<SubmenuOption<ServiceTie
 	{ value: "none", label: "None", description: "Omit service_tier (standard processing)" },
 	{ value: "auto", label: "Auto", description: "Provider default tier selection" },
 	{ value: "default", label: "Default", description: "Standard priority processing" },
-	{ value: "flex", label: "Flex", description: "Lower cost, higher latency when available" },
+	{
+		value: "flex",
+		label: "Flex",
+		description: "Lower cost, higher latency on OpenAI API; Codex only when discovery advertises it",
+	},
 	{ value: "scale", label: "Scale", description: "Scale Tier credits when available" },
 	{ value: "priority", label: "Priority", description: "Faster, higher cost (premium request)" },
+	{
+		value: "ultrafast",
+		label: "Ultrafast",
+		description: "Lowest-latency serving; OpenAI API preview access, or Codex models that advertise it",
+	},
 ];
 
 export const SERVICE_TIER_ANTHROPIC_OPTIONS: ReadonlyArray<SubmenuOption<ServiceTierAnthropicSettingValue>> = [
@@ -126,9 +144,14 @@ export const SERVICE_TIER_INHERIT_OPTIONS: ReadonlyArray<SubmenuOption<ServiceTi
 	{ value: "none", label: "None", description: "Standard processing" },
 	{ value: "auto", label: "Auto", description: "Provider default tier selection (OpenAI family)" },
 	{ value: "default", label: "Default", description: "Standard priority processing (OpenAI family)" },
-	{ value: "flex", label: "Flex", description: "Flexible capacity tier (OpenAI/Google families)" },
+	{
+		value: "flex",
+		label: "Flex",
+		description: "Flexible capacity (OpenAI API / Google; Codex only when discovery advertises it)",
+	},
 	{ value: "scale", label: "Scale", description: "Scale Tier credits (OpenAI family)" },
 	{ value: "priority", label: "Priority", description: "Priority on every supported family of the spawned model" },
+	{ value: "ultrafast", label: "Ultrafast", description: "Ultrafast serving (OpenAI family, where available)" },
 ];
 
 /** Map a per-family setting value to a wire {@link ServiceTier}, or `undefined` to omit. */

@@ -240,6 +240,9 @@ export class StreamMuxHost {
 			// The paired close event performs pane cleanup.
 		});
 		socket.once("close", () => this.#detach(connection));
+		// The local session has left. Bun can leave end()/destroySoon() waiting
+		// for an unwritable peer's finish event, so release the owned socket at EOF.
+		socket.once("end", () => socket.destroy());
 	}
 
 	#consume(connection: LocalConnection, chunk: Buffer): void {

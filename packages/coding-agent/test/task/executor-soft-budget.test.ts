@@ -75,7 +75,7 @@ function createMockSession(
 	};
 
 	const session: Partial<AgentSession> = {
-		...createSessionDefaults(),
+		...createSessionDefaults(emit),
 		state: { messages: [] } as never,
 		agent: { state: { systemPrompt: ["test"] } } as never,
 		model: { api: "anthropic-messages" } as never,
@@ -536,65 +536,72 @@ describe("runSubprocess soft request budget", () => {
 		expect(restoredRegistry.get(id)?.status).toBe("parked");
 	});
 
-	it("a nested spawn reaches the root RPC surface through the inherited observability bus", async () => {
+	it("a real depth-2 executor spawn reaches the root RPC surface through the inherited observability bus", async () => {
 		const id = "WiringScout";
-		// Separate session and observability buses, the way the CLI wires them.
+		const grandchildId = `${id}.Grandkid`;
 		const sessionBus = new EventBus();
 		const treeBus = new EventBus();
 		const frames: RpcSubagentFrame[] = [];
-		let resolveTerminalLatch: (() => void) | undefined;
-		const waitForTerminal = (): Promise<void> => {
-			const deferred = Promise.withResolvers<void>();
-			resolveTerminalLatch = deferred.resolve;
-			return deferred.promise;
-		};
+		const grandchildTerminal = Promise.withResolvers<void>();
 		const rpcRegistry = new RpcSubagentRegistry(treeBus, frame => {
 			frames.push(frame);
-			if (frame.type !== "subagent_lifecycle" || frame.payload.status === "started") return;
-			resolveTerminalLatch?.();
-			resolveTerminalLatch = undefined;
+			if (
+				frame.type === "subagent_lifecycle" &&
+				frame.payload.id === grandchildId &&
+				frame.payload.status !== "started"
+			)
+				grandchildTerminal.resolve();
 		});
 		rpcRegistry.setSubscriptionLevel("events");
-		const handle = createMockSession(({ promptIndex, emit, pushMessage }) => {
+
+		const grandchild = createMockSession(({ promptIndex, emit, pushMessage }) => {
 			if (promptIndex !== 1) return;
-			// The depth-2 executor publishes on the bus its spawner handed down —
-			// captured from the real spawn options, not the test's own bus.
-			capturedOptions?.subagentEventBus?.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
-				id: `${id}.Grandkid`,
-				agent: "task",
-				agentSource: "bundled",
-				status: "started",
-				parentToolCallId: "call-grandkid",
-				index: 2,
-			});
-			const message = assistantText("settling");
+			const message = assistantText("grandchild settled");
 			pushMessage(message);
 			emit({ type: "message_end", message } as unknown as AgentSessionEvent);
 		});
-		let capturedOptions: { subagentEventBus?: EventBus } | undefined;
+		const createdOptions: Array<{ subagentEventBus?: EventBus }> = [];
+		const outer = createMockSession(async ({ promptIndex, emit, pushMessage }) => {
+			if (promptIndex !== 1) return;
+			const inheritedRootBus = createdOptions[0]?.subagentEventBus;
+			expect(inheritedRootBus).toBe(treeBus);
+			registerRunning(grandchildId, grandchild.session);
+			await runSubprocess({
+				...baseOptions(grandchildId, new EventBus(), inheritedRootBus),
+				taskDepth: 1,
+			});
+			const message = assistantText("parent settled");
+			pushMessage(message);
+			emit({ type: "message_end", message } as unknown as AgentSessionEvent);
+		});
+		const sessions = [outer.session, grandchild.session];
 		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
-			capturedOptions = options;
+			if (!options) throw new Error("Nested session options missing");
+			createdOptions.push(options);
+			const next = sessions.shift();
+			if (!next) throw new Error("Unexpected extra nested session");
 			return {
-				session: handle.session,
+				session: next,
 				extensionsResult: {} as unknown as LoadExtensionsResult,
 				setToolUIContext: () => {},
 				eventBus: new EventBus(),
 			} satisfies CreateAgentSessionResult;
 		});
-		registerRunning(id, handle.session);
+		registerRunning(id, outer.session);
 
-		const terminal = waitForTerminal();
 		await runSubprocess(baseOptions(id, sessionBus, treeBus));
-		await terminal;
+		await grandchildTerminal.promise;
 
-		// The spawn wiring inherited the tree bus into the nested session.
-		expect(capturedOptions?.subagentEventBus).toBe(treeBus);
-		// The root RPC surface observed the depth-1 run…
-		expect(frames.some(frame => frame.type === "subagent_lifecycle" && frame.payload.id === id)).toBe(true);
-		// …and the depth-2 frame published on the inherited bus.
-		expect(frames.some(frame => frame.type === "subagent_lifecycle" && frame.payload.id === `${id}.Grandkid`)).toBe(
-			true,
+		expect(createdOptions).toHaveLength(2);
+		expect(createdOptions[1]?.subagentEventBus).toBe(treeBus);
+		const starts = frames.filter(
+			(frame): frame is Extract<RpcSubagentFrame, { type: "subagent_lifecycle" }> =>
+				frame.type === "subagent_lifecycle" && frame.payload.status === "started",
 		);
+		expect(starts.find(frame => frame.payload.id === id)?.payload.depth).toBe(1);
+		const depthTwo = starts.find(frame => frame.payload.id === grandchildId)?.payload;
+		expect(depthTwo?.depth).toBe(2);
+		expect(depthTwo?.runToken).toEqual(expect.any(String));
 	});
 
 	it("an aliased observability bus does not duplicate lifecycle frames", async () => {

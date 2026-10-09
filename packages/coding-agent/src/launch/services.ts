@@ -5,6 +5,7 @@ import type { DaemonSnapshot, DaemonSpec } from "@oh-my-pi/pi-tui/tools/daemon";
 import { formatDuration, replaceTabs } from "@oh-my-pi/pi-tui/render/render-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { getDaemonRuntimeDir, sanitizeText } from "@oh-my-pi/pi-utils";
+import { getHostEnvForTools } from "../exec/host-env";
 import { type DaemonBrokerClient, daemonClientForProject } from "./client";
 import { canonicalProjectDir } from "./paths";
 import type { DaemonOperation, DaemonRpcResult } from "./protocol";
@@ -25,7 +26,6 @@ export interface ServiceStart {
 	command: string;
 	cwd?: string;
 	pty?: boolean;
-	env?: Record<string, string>;
 	ready?: ServiceReady;
 }
 
@@ -208,7 +208,7 @@ export async function startService(
 		name: params.name,
 		application: shell.shell,
 		args: [...shell.args, `${shell.prefix ? `${shell.prefix} ` : ""}${params.command}`],
-		env: { ...shell.env, ...params.env },
+		env: { ...shell.env, ...(await getHostEnvForTools(shell.env)) },
 		cwd: resolveToCwd(params.cwd ?? session.cwd, session.cwd),
 		pty: params.pty ?? true,
 		ready: ready

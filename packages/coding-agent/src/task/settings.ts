@@ -205,6 +205,19 @@ export const cfgTaskBatch = register({
 	},
 });
 
+export const cfgTaskSpeculativeLaunch = register({
+	id: "task.speculativeLaunch",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "tasks",
+		group: "Subagents",
+		label: "Speculative Task Launch",
+		description:
+			"Start each batch subagent as soon as its tasks[] item finishes streaming instead of waiting for the whole task call. Launched agents are aborted if the finished call fails validation, is blocked, or its arguments change. Requires auto-allowed task approval and no extension tool lifecycle handlers.",
+	},
+});
+
 export const cfgTaskEnableEffort = register({
 	id: "task.enableEffort",
 	type: "boolean",
@@ -347,9 +360,10 @@ export const cfgTaskMaxEffort = register({
 	ui: {
 		tab: "tasks",
 		group: "Subagents",
-		label: "Maximum Per-Spawn Effort",
+		label: "Legacy Per-Spawn Effort Ceiling",
 		description:
-			"Maximum reasoning effort allowed for the task tool's per-spawn effort hint. Lower values prevent callers from escalating subagents above this ceiling; the default preserves the model's full range.",
+			"Only in legacy effort mode: limit the task tool's coarse per-spawn effort hint. Replacement mode uses per-model effort rules instead.",
+		condition: "legacyEffortPolicy",
 		options: THINKING_EFFORTS.map(getThinkingLevelMetadata),
 	},
 });

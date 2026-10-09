@@ -41,7 +41,7 @@ export function mixtureTraceTitle(details: MixtureTraceDetails): string {
 			return parts.join(" · ");
 		}
 		case "decision":
-			return `${details.mixture} · hop ${details.hop} · ${details.decision.kind} (${details.decision.judge})`;
+			return `${details.mixture} · hop ${details.hop} · ${details.decision.kind} ${details.decision.outcome} · ${details.decision.judge} (${details.decision.judgeKind})`;
 		case "steering":
 			return `${details.mixture} · steering → ${details.targetMemberId}`;
 		case "limit":

@@ -69,11 +69,21 @@ export const commands: CommandEntry[] = [
 		help: commandHelp.cleanseHelp,
 	},
 	{
+		name: "chronicle",
+		load: () => import("./commands/chronicle").then(m => m.default),
+		help: commandHelp.chronicleHelp,
+	},
+	{
 		name: "collab",
 		// Keep implementation imports behind the command boundary: this table is
 		// also imported before profile bootstrap and by native-free worker entries.
 		load: () => import("./commands/collab").then(m => m.default),
 		help: commandHelp.collabHelp,
+	},
+	{
+		name: "ctl",
+		load: () => import("./commands/ctl").then(m => m.default),
+		help: commandHelp.ctlHelp,
 	},
 	{
 		name: "commit",
@@ -176,6 +186,11 @@ export const commands: CommandEntry[] = [
 		load: () => import("./commands/plugin").then(m => m.default),
 		aliases: ["plugins"],
 		help: commandHelp.pluginHelp,
+	},
+	{
+		name: "predict",
+		load: () => import("./commands/predict").then(m => m.default),
+		help: commandHelp.predictHelp,
 	},
 	{
 		name: "ps",

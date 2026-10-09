@@ -31,7 +31,6 @@ export CARGO_BUILD_JOBS=6
 
 native_dir=packages/natives/native
 version=$(bun -p 'require("./packages/natives/package.json").version')
-sentinel="__piNativesV${version//[^A-Za-z0-9]/_}"
 
 # The addon must match the libc of the Bun that loads it; scripts/host-detect.ts
 # reads the same ELF interpreter. There is no modern musl x64 addon.
@@ -58,10 +57,12 @@ esac
 addon="$native_dir/$addon_name"
 stamp="$native_dir/.$addon_name.stamp"
 
-# The addon exports a function named after the package version. Same rule as
-# containsVersionSentinel in packages/natives/native/version-sentinel.js: the
-# next byte must not extend the identifier (18_1_1 must not match 18_1_10).
-has_sentinel() { LC_ALL=C grep -aqE "${sentinel}([^A-Za-z0-9_]|\$)" "$1"; }
+# Current addons report the version through a post-link stamp, not the
+# pre-upstream per-release __piNativesV* symbol.
+has_release() {
+	bun -e 'process.exit(require(process.argv[1]).__piNativesBuildVersion?.() === process.argv[2] ? 0 : 1)' \
+		"$(realpath -- "$1")" "$version"
+}
 
 # Everything the addon is compiled from, the scripts and configs that drive that
 # build, and the settings that change its bytes.
@@ -106,8 +107,8 @@ if [[ -L $addon ]]; then
 	rm -f -- "$addon"
 elif [[ ! -f $addon ]]; then
 	reason="$addon is missing"
-elif ! has_sentinel "$addon"; then
-	reason="$addon lacks the $version sentinel $sentinel"
+elif ! has_release "$addon"; then
+	reason="$addon does not report native version $version"
 elif [[ ${NPI_FORCE_NATIVE:-} == 1 ]]; then
 	reason="NPI_FORCE_NATIVE=1"
 elif [[ ! -f $stamp ]] || [[ $(<"$stamp") != "$(expected_stamp)" ]]; then
@@ -120,7 +121,7 @@ if [[ -n $reason ]]; then
 	rm -f -- "$stamp"
 	bun --cwd=packages/natives run build
 	[[ -f $addon && ! -L $addon ]] || die "native build finished but $addon was not produced"
-	has_sentinel "$addon" || die "freshly built $addon still lacks $sentinel"
+	has_release "$addon" || die "freshly built $addon does not report native version $version"
 	expected_stamp >"$stamp"
 else
 	say "native addon is current: $addon"
@@ -138,7 +139,7 @@ source_id=$(source_id)
 started=$(mktemp)
 trap 'rm -f -- "$started"' EXIT
 # A host build only: an inherited cross target would write dist/npi-<target> instead.
-env -u CROSS_TARGET OMP_BUILD_BYTECODE=0 NPI_SKIP_EXTENSION_INSTALL=1 bun --cwd=packages/coding-agent run build
+env -u CROSS_TARGET OMP_BUILD_BYTECODE=0 bun --cwd=packages/coding-agent run build
 
 [[ $binary -nt $started ]] || die "$binary was not rewritten by this build"
 git diff --quiet -- "$native_dir/embedded-addon.js" || die "$native_dir/embedded-addon.js was left modified"

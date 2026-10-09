@@ -97,6 +97,23 @@ describe("InteractiveMode deferred command preview", () => {
 		expect(transcriptText(mode)).not.toContain("Claude 5 Hour");
 	});
 
+	it("mounts mid-turn output straight into the transcript on a Tern surface", async () => {
+		const { mode, setStreaming } = await createHarness();
+		setStreaming(true);
+		// A native surface reconciles a document instead of appending scrollback,
+		// so there is nothing to duplicate and no reason to hold a clipped preview
+		// above the prompt for the rest of the turn.
+		Object.defineProperty(mode.ui, "nativeRendering", { configurable: true, get: () => true });
+		try {
+			mode.presentCommandOutput(new Text("Context 112K / 1m", 1, 0));
+		} finally {
+			Reflect.deleteProperty(mode.ui, "nativeRendering");
+		}
+
+		expect(noticeText(mode)).toBe("");
+		expect(transcriptText(mode)).toContain("Context 112K / 1m");
+	});
+
 	it("counts commands rather than the components each one queues", async () => {
 		const { mode, setStreaming } = await createHarness();
 		setStreaming(true);
@@ -145,6 +162,47 @@ describe("InteractiveMode deferred command preview", () => {
 
 		expect(noticeText(mode)).toBe("");
 		expect(transcriptText(mode)).toContain("usage panel");
+	});
+
+	it("keeps finalized voice text out of the live transcript until settle without another command preview", async () => {
+		const { mode, setStreaming } = await createHarness();
+		setStreaming(true);
+		mode.presentCommandOutput(new Text("Voice reply in full", 1, 0), { preview: false });
+		expect(noticeText(mode)).toBe("");
+		expect(transcriptText(mode)).not.toContain("Voice reply in full");
+
+		mode.presentCommandOutput(new Text("operator usage output", 1, 0));
+		expect(noticeText(mode)).toContain("operator usage output");
+		expect(noticeText(mode)).not.toContain("Voice reply in full");
+		setStreaming(false);
+		mode.flushPendingCommandOutput();
+		expect(transcriptText(mode)).toContain("Voice reply in full");
+		expect(transcriptText(mode)).toContain("operator usage output");
+	});
+
+	it("keeps chronological order if a new voice reply arrives after streaming stops but before the settle event", async () => {
+		const { mode, setStreaming } = await createHarness();
+		setStreaming(true);
+		mode.presentCommandOutput(new Text("First voice reply", 1, 0), { preview: false });
+		setStreaming(false);
+		mode.presentCommandOutput(new Text("Second voice reply", 1, 0), { preview: false });
+		const transcript = transcriptText(mode);
+		expect(transcript).toContain("First voice reply");
+		expect(transcript.indexOf("First voice reply")).toBeLessThan(transcript.indexOf("Second voice reply"));
+	});
+
+	it("bounds pending operator output while a live voice caption and primary stream coexist", async () => {
+		const { mode } = await createHarness();
+		mode.liveTranscriptContainer.addChild(new Text("Voice: still speaking", 0, 0));
+		mode.pendingMessagesContainer.addChild(
+			new Text(Array.from({ length: 40 }, (_, index) => `tool row ${index}`).join("\n"), 0, 0),
+		);
+		const rows = mode.pendingMessagesContainer.render(80);
+		expect(rows.length).toBeLessThan(6);
+		expect(rows.join("\n")).toContain("Operator output:");
+		expect(rows.join("\n")).toContain("tool row 39");
+		mode.liveTranscriptContainer.clear();
+		expect(mode.pendingMessagesContainer.render(80).join("\n")).toContain("tool row 0");
 	});
 
 	it("drops a stale preview when the session is reset while output is queued", async () => {

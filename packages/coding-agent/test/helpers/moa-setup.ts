@@ -47,6 +47,87 @@ to = "editor"
 x = { output = true }
 `;
 
+/** An M2 loop, routed rebuttal, transcript summary, and terminal ruling. */
+export const COURTROOM_TOML = `
+[envelopes]
+disagree = """
+The topic is: {{topic}}
+There are {{mixture.member_count}} participants. The previous turn was {{from.id}}.
+Your role is to disagree with {{from.id}} on the merits.
+{{> moa-parts}}
+"""
+
+[roles]
+prosecution = "You argue the strongest case that the proposal is wrong. Be concrete."
+
+[[mixtures]]
+name = "courtroom"
+description = "Adversarial review with a judge"
+entry = "prosecution"
+
+[[mixtures.members]]
+id = "prosecution"
+description = "opens and presses the case against the proposal"
+model = "fake/writer"
+role = "prosecution"
+tools = false
+show = "always"
+
+[[mixtures.members]]
+id = "defense"
+description = "rebuts the prosecution point by point"
+model = "fake/editor"
+role = "defense"
+tools = false
+[mixtures.members.route]
+instructions = "Has the argument been exhausted, or is there a live point to rebut?"
+state = ["output"]
+min_confidence = 0.6
+fallback = "verdict"
+[mixtures.members.terminate]
+instructions = "Has the defense conceded the central claim?"
+threshold = 0.8
+
+[[mixtures.members]]
+id = "judge"
+description = "weighs both sides and writes the ruling"
+model = "fake/other"
+role = "judge"
+tools = false
+show = "final"
+
+[[mixtures.edges]]
+id = "open"
+from = "prosecution"
+to = "defense"
+x = { output = true }
+envelope = "disagree"
+
+[[mixtures.edges]]
+id = "rebut"
+from = "defense"
+to = "prosecution"
+x = { output = true, transcript = { optimize = "compact" } }
+envelope = "defend"
+when = "there is a specific, unanswered point the prosecution must address"
+max_traversals = 3
+
+[[mixtures.edges]]
+id = "verdict"
+from = "defense"
+to = "judge"
+x = { transcript = { optimize = "verbatim" } }
+envelope = "judge"
+when = "both sides have made their case and nothing new is being said"
+
+[mixtures.limits]
+max_hops = 12
+budget_usd = 4
+wall_clock_minutes = 60
+on_limit = "judge"
+limit_target = "judge"
+`;
+
 /** What a scripted member does for one call. */
 export interface MemberReply {
 	text?: string;
@@ -196,7 +277,13 @@ export async function createMoaFixture(tempDir: TempDir, mixturesToml = DRAFT_TH
 		baseUrl: "http://127.0.0.1:1/v1",
 		apiKey: "fake-key",
 		api: FAKE_API,
-		models: [fakeModel("writer", ["text", "image"]), fakeModel("editor"), fakeModel("other")],
+		models: [
+			fakeModel("writer", ["text", "image"]),
+			fakeModel("editor"),
+			fakeModel("other"),
+			fakeModel("jev"),
+			fakeModel("summary"),
+		],
 	});
 	return { authStorage, registry, agentDir, cwd };
 }
@@ -206,14 +293,17 @@ export interface MoaSessionOptions {
 	settings?: Settings;
 	/** The starting model; `null` lets the session restore one (session file, then the default role). */
 	model?: Model | null;
+	/** The workspace; defaults to the fixture's project directory. */
+	cwd?: string;
 }
 
 /** A real session over the fixture's registry, starting on `fake/other` unless `model` says otherwise. */
 export async function createMoaSession(fixture: MoaFixture, options: MoaSessionOptions = {}): Promise<AgentSession> {
+	const cwd = options.cwd ?? fixture.cwd;
 	const { session } = await createAgentSession({
-		cwd: fixture.cwd,
+		cwd,
 		agentDir: fixture.agentDir,
-		sessionManager: options.sessionManager ?? SessionManager.inMemory(fixture.cwd),
+		sessionManager: options.sessionManager ?? SessionManager.inMemory(cwd),
 		authStorage: fixture.authStorage,
 		modelRegistry: fixture.registry,
 		settings: options.settings ?? Settings.isolated({ "compaction.enabled": false }),

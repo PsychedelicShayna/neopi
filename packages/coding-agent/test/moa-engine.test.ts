@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { Tokenizer } from "@oh-my-pi/pi-agent-core";
 import {
@@ -10,23 +11,28 @@ import {
 	registerCustomApi,
 	type ToolChoice,
 } from "@oh-my-pi/pi-ai";
+import type { Judge, JudgmentRequest, JudgmentResult, Questions } from "@oh-my-pi/pi-ai/judgment";
 import { streamSimple } from "@oh-my-pi/pi-ai/stream";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { fitHopRequest, type HopParts, truncateToTokens } from "@oh-my-pi/pi-coding-agent/moa/budget";
 import { streamMixture } from "@oh-my-pi/pi-coding-agent/moa/engine";
 import { createSessionMixtureHost, type SessionMixtureHost } from "@oh-my-pi/pi-coding-agent/moa/host";
 import { MIXTURE_API, MixtureCatalog, registerMixtureApi } from "@oh-my-pi/pi-coding-agent/moa/provider";
-import { discoverRegistrableMixtures, retainMixtureCatalog } from "@oh-my-pi/pi-coding-agent/moa/registration";
+import { discoverRegistrableMixtures, MixtureWorkspace } from "@oh-my-pi/pi-coding-agent/moa/registration";
+import { zeroUsage } from "@oh-my-pi/pi-coding-agent/moa/outer-stream";
 import { findAnchor } from "@oh-my-pi/pi-coding-agent/moa/request";
 import { MIXTURE_RUN_ENTRY_TYPE, type MixtureCheckpoint, type MixtureRun } from "@oh-my-pi/pi-coding-agent/moa/types";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
+import * as imageBudget from "@oh-my-pi/pi-coding-agent/session/provider-image-budget";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { MIXTURE_TRACE_MESSAGE_TYPE, type MixtureTraceDetails } from "@oh-my-pi/pi-tui/overlays/mixture-types";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import {
 	createMoaFixture,
+	COURTROOM_TOML,
 	createMoaSession,
 	DRAFT_THEN_EDIT_TOML,
 	FAKE_API,
@@ -65,9 +71,9 @@ async function ensureFixture(toml = DRAFT_THEN_EDIT_TOML): Promise<MoaFixture> {
 	return fixture;
 }
 
-function mixtureModel() {
-	const model = fixture.registry.find("mixture", "draft-then-edit");
-	if (!model) throw new Error("mixture/draft-then-edit was not registered");
+function mixtureModel(name = "draft-then-edit") {
+	const model = fixture.registry.find("mixture", name);
+	if (!model) throw new Error(`mixture/${name} was not registered`);
 	return model;
 }
 
@@ -75,12 +81,27 @@ async function mixtureSession(
 	toml = DRAFT_THEN_EDIT_TOML,
 	sessionManager?: SessionManager,
 	settings: Settings = Settings.isolated(SETTINGS),
+	name = "draft-then-edit",
 ): Promise<AgentSession> {
 	await ensureFixture(toml);
 	const session = await createMoaSession(fixture, { sessionManager, settings });
 	sessions.push(session);
-	await session.setModel(mixtureModel());
+	await session.setModel(mixtureModel(name));
 	return session;
+}
+
+const COURTROOM_SETTINGS = {
+	...SETTINGS,
+	"moa.summary_model": "fake/summary",
+	modelRoles: { judge: "fake/jev" },
+	"retry.fallbackChains": { judge: [] },
+};
+
+function courtroomSession(
+	toml = COURTROOM_TOML,
+	settings = Settings.isolated(COURTROOM_SETTINGS),
+): Promise<AgentSession> {
+	return mixtureSession(toml, undefined, settings, "courtroom");
 }
 
 function lastAssistant(session: AgentSession): AssistantMessage {
@@ -143,6 +164,428 @@ async function abortDuringEditor(session: AgentSession, editorCost: number): Pro
 	await turn.catch(() => {});
 	return editorAbort.resolve;
 }
+
+describe("graph control in a session", () => {
+	it("routes on the pinned chat judge choice, records decisions, and counts traversals", async () => {
+		const session = await courtroomSession();
+		members.script("jev", { text: "no" }, { text: "rebut" }, { text: "no" }, { text: "verdict" });
+		members.script("other", { text: "Final ruling" });
+		await session.sendUserMessage("Is this proposal sound?");
+		expect(members.calls.filter(call => call.model.id !== "jev").map(call => call.model.id)).toEqual([
+			"writer",
+			"editor",
+			"writer",
+			"editor",
+			"other",
+		]);
+		expect(lastAssistant(session).content).toEqual([{ type: "text", text: "Final ruling" }]);
+		const routes = traceCards(session).filter(card => card.kind === "decision" && card.decision.kind === "route");
+		expect(routes).toHaveLength(2);
+		expect(routes[0]?.kind === "decision" && routes[0].decision.outcome).toBe("→ rebut (floor inactive)");
+		expect(routes[0]?.kind === "decision" && routes[0].decision.judge).toBe("fake/jev");
+		const done = checkpoints(session).findLast(entry => entry.reason === "done");
+		expect(done?.run.traversals.rebut).toBe(1);
+	});
+
+	it("chooses the only eligible edge after the rebuttal traversal bound", async () => {
+		const session = await courtroomSession(COURTROOM_TOML.replace("max_traversals = 3", "max_traversals = 1"));
+		members.script("jev", { text: "no" }, { text: "rebut" }, { text: "no" });
+		await session.sendUserMessage("Debate");
+		expect(members.calls.filter(call => call.model.id !== "jev").map(call => call.model.id)).toEqual([
+			"writer",
+			"editor",
+			"writer",
+			"editor",
+			"other",
+		]);
+		expect(members.callsTo("jev")).toHaveLength(3);
+		expect(
+			traceCards(session).filter(card => card.kind === "decision" && card.decision.kind === "route"),
+		).toHaveLength(1);
+	});
+
+	it("ends on a termination judgment before asking for a route", async () => {
+		const session = await courtroomSession();
+		members.script("jev", { text: "yes" });
+		members.script("editor", { text: "Defense conceded" });
+		await session.sendUserMessage("Debate");
+		expect(members.callsTo("jev")).toHaveLength(1);
+		expect(lastAssistant(session).content).toEqual([{ type: "text", text: "Defense conceded" }]);
+		expect(checkpoints(session).findLast(entry => entry.reason === "done")?.run.endReason).toBe("terminate");
+		expect(
+			traceCards(session).some(card => card.kind === "decision" && card.decision.outcome.startsWith("yes 1.00")),
+		).toBe(true);
+	});
+
+	it("renders a verdict member's answer and charges a separate verdict hop", async () => {
+		const toml = `
+[[mixtures]]
+name = "verdict-test"
+entry = "a"
+[[mixtures.members]]
+id = "a"
+model = "fake/writer"
+system_prompt = "Argue."
+tools = false
+[[mixtures.members]]
+id = "v"
+kind = "verdict"
+[mixtures.members.question]
+type = "choice"
+instructions = "Which side won?"
+[mixtures.members.question.criteria]
+proposal = "the proposal won"
+nobody = "no one won"
+[[mixtures.edges]]
+from = "a"
+to = "v"
+x = { output = true }
+`;
+		const session = await mixtureSession(toml, undefined, Settings.isolated(COURTROOM_SETTINGS), "verdict-test");
+		members.script("jev", { text: "proposal" });
+		await session.sendUserMessage("Debate");
+		expect(lastAssistant(session).content).toEqual([
+			{ type: "text", text: expect.stringContaining("Answer: proposal") },
+		]);
+		const done = checkpoints(session).findLast(entry => entry.reason === "done");
+		expect(done?.run.lifetime.hops).toBe(2);
+		expect(done?.run.endReason).toBe("verdict");
+		expect(traceCards(session).some(card => card.kind === "hop" && card.model === "verdict")).toBe(true);
+	});
+
+	it("pauses on a failed route judgment instead of silently choosing an edge", async () => {
+		const session = await courtroomSession(COURTROOM_TOML.replace('fallback = "verdict"', 'fallback = "pause"'));
+		members.script("jev", { text: "no" }, { error: { message: "judge down" } });
+		await session.sendUserMessage("Debate");
+		expect(lastAssistant(session).content[0]).toEqual({
+			type: "text",
+			text: expect.stringContaining("⏸ courtroom paused at defense after 2 hops"),
+		});
+		expect(checkpoints(session).findLast(entry => entry.reason === "pause")?.run.phase.kind).toBe("decision_pending");
+		expect(members.callsTo("writer")).toHaveLength(1);
+		expect(members.callsTo("editor")).toHaveLength(1);
+		const cards = traceCards(session);
+		expect(cards.filter(card => card.kind === "hop")).toHaveLength(2);
+		expect(
+			cards.some(card => card.kind === "decision" && card.decision.outcome === "fallback → pause (judgment failed)"),
+		).toBe(true);
+		expect(cards.findLast(card => card.kind === "checkpoint")?.kind).toBe("checkpoint");
+	});
+
+	async function nativeCourtroom(
+		confidence: number,
+		fallback = "verdict",
+		options: { deadline?: boolean; limits?: string } = {},
+	) {
+		const base = options.limits
+			? COURTROOM_TOML.replace(/\[mixtures\.limits\][\s\S]*$/, `[mixtures.limits]\n${options.limits}\n`)
+			: COURTROOM_TOML;
+		const toml = base.replace('fallback = "verdict"', `fallback = "${fallback}"`);
+		await ensureFixture(toml);
+		await Bun.write(path.join(fixture.agentDir, "MIXTURES.toml"), toml);
+		const settings = Settings.isolated(COURTROOM_SETTINGS);
+		const manager = SessionManager.inMemory(fixture.cwd);
+		const workspace = await MixtureWorkspace.retain("native-judge", {
+			cwd: fixture.cwd,
+			agentDir: fixture.agentDir,
+			registry: fixture.registry,
+			settings,
+		});
+		try {
+			const host = createSessionMixtureHost({
+				sessionManager: manager,
+				modelRegistry: fixture.registry,
+				workspace,
+				settings,
+				stream: streamSimple,
+				prepareContext: async context => context,
+				emit: () => {},
+				notice: () => {},
+			});
+			const native: Judge = {
+				label: "typesafe/jev-latest",
+				async judge<Q extends Questions>(request: JudgmentRequest<Q>): Promise<JudgmentResult<Q>> {
+					const answers = Object.fromEntries(
+						Object.entries(request.questions).map(([id, question]) => {
+							if (question.type === "noul") return [id, { type: "noul", noul: 0 }];
+							if (question.type === "choice") {
+								const labels = Object.keys(question.criteria);
+								const choice = labels[0]!;
+								return [
+									id,
+									{
+										type: "choice",
+										choice,
+										probabilities: Object.fromEntries(labels.map(label => [label, label === choice ? 1 : 0])),
+										confidence,
+									},
+								];
+							}
+							return [id, { type: "score", score: 0, probabilities: { "0": 1 }, confidence }];
+						}),
+					) as JudgmentResult<Q>["answers"];
+					return { api: "typesafe", provider: "typesafe", model: "jev-latest", answers, usage: zeroUsage() };
+				},
+			};
+			const override = {
+				...host,
+				judge: () => ({
+					withCandidate: async <T>(
+						run: (judge: Judge, kind: "native" | "local" | "online") => Promise<T>,
+						judgeOptions?: { signal?: AbortSignal },
+					): Promise<T> => {
+						if (options.deadline) {
+							const signal = judgeOptions?.signal;
+							if (!signal) throw new Error("no deadline signal");
+							if (!signal.aborted) {
+								const aborted = Promise.withResolvers<void>();
+								signal.addEventListener("abort", () => aborted.resolve(), { once: true });
+								await aborted.promise;
+							}
+							throw signal.reason;
+						}
+						return run(native, "native");
+					},
+				}),
+			};
+			const result = await streamMixture(
+				mixtureModel("courtroom"),
+				{ systemPrompt: ["outer"], messages: [{ role: "user", content: "Debate", timestamp: 0 }] },
+				undefined,
+				override,
+			).result();
+			const cards = manager
+				.getBranch()
+				.flatMap(entry =>
+					entry.type === "custom_message" && entry.customType === MIXTURE_TRACE_MESSAGE_TYPE
+						? [entry.details as MixtureTraceDetails]
+						: [],
+				);
+			return { result, cards };
+		} finally {
+			workspace.release();
+		}
+	}
+
+	it("falls back below a native confidence floor, including to pause", async () => {
+		const chosen = await nativeCourtroom(0.31);
+		expect(members.calls.filter(call => call.model.id !== "jev").map(call => call.model.id)).toEqual([
+			"writer",
+			"editor",
+			"other",
+		]);
+		expect(
+			chosen.cards.some(
+				card => card.kind === "decision" && card.decision.outcome === "fallback → verdict (0.31 < 0.60)",
+			),
+		).toBe(true);
+		const paused = await nativeCourtroom(0.31, "pause");
+		expect(paused.result.content[0]).toEqual({
+			type: "text",
+			text: expect.stringContaining("⏸ courtroom paused at defense"),
+		});
+		expect(
+			paused.cards.some(
+				card => card.kind === "decision" && card.decision.outcome === "fallback → pause (0.31 < 0.60)",
+			),
+		).toBe(true);
+	});
+
+	it("takes a native judge's selected edge when confidence meets the floor", async () => {
+		const result = await nativeCourtroom(0.6);
+		expect(
+			members.calls
+				.filter(call => call.model.id !== "jev")
+				.slice(0, 3)
+				.map(call => call.model.id),
+		).toEqual(["writer", "editor", "writer"]);
+		expect(result.cards.some(card => card.kind === "decision" && card.decision.outcome === "→ rebut 0.60")).toBe(
+			true,
+		);
+	});
+
+	it("treats a judgment deadline as a wall-clock limit before recording a decision", async () => {
+		const timed = await nativeCourtroom(0.6, "verdict", {
+			deadline: true,
+			limits: 'wall_clock_minutes = 0.002\non_limit = "stop"',
+		});
+		expect(timed.result.content[0]).toEqual({
+			type: "text",
+			text: expect.stringContaining("the 0.002m wall-clock limit was reached"),
+		});
+		expect(timed.cards.filter(card => card.kind === "decision")).toHaveLength(0);
+		expect(members.calls.map(call => call.model.id)).toEqual(["writer", "editor"]);
+	});
+});
+
+describe("limits, pause, and resume", () => {
+	const limitsToml = (lines: string) =>
+		COURTROOM_TOML.replace(/\[mixtures\.limits\][\s\S]*$/, `[mixtures.limits]\n${lines}\n`);
+
+	it("runs a judge-on-limit hop with the prior transcript then ends at the hop limit", async () => {
+		const session = await courtroomSession(limitsToml('max_hops = 3\non_limit = "judge"\nlimit_target = "judge"'));
+		members.script("jev", { text: "no" }, { text: "rebut" });
+		members.script("other", { text: "ruling" });
+		await session.sendUserMessage("Debate");
+		expect(members.calls.filter(call => call.model.id !== "jev").map(call => call.model.id)).toEqual([
+			"writer",
+			"editor",
+			"writer",
+			"other",
+		]);
+		expect(userText(members.callsTo("other")[0]?.context.messages[0])).toContain("[hop 1 · prosecution ← entry]");
+		expect(userText(members.callsTo("other")[0]?.context.messages[0])).toContain("The run reached a limit (hops: 3)");
+		expect(lastAssistant(session).content).toEqual([{ type: "text", text: "ruling" }]);
+		const done = checkpoints(session).findLast(checkpoint => checkpoint.reason === "done");
+		expect([done?.run.endReason, done?.run.lifetime.hops]).toEqual(["limit:hops", 4]);
+		expect(traceCards(session).some(card => card.kind === "limit" && card.action === "judge")).toBe(true);
+	});
+
+	it("stops after the member settlement that crosses the budget before judging", async () => {
+		const session = await courtroomSession(limitsToml('budget_usd = 0.015\non_limit = "stop"'));
+		members.script("writer", { cost: 0.005 });
+		members.script("editor", { text: "rebuttal", cost: 0.02 });
+		await session.sendUserMessage("Debate");
+		expect(members.calls.map(call => call.model.id)).toEqual(["writer", "editor"]);
+		expect(lastAssistant(session).content[0]).toEqual({
+			type: "text",
+			text: expect.stringContaining("the $0.015 budget limit was reached"),
+		});
+		expect(checkpoints(session).findLast(checkpoint => checkpoint.reason === "done")?.run.endReason).toBe(
+			"limit:budget",
+		);
+	});
+
+	it("checks a terminating judge settlement against the budget before asking for a route", async () => {
+		const session = await courtroomSession(limitsToml('budget_usd = 0.04\non_limit = "stop"'));
+		members.script("writer", { cost: 0.01 });
+		members.script("editor", { cost: 0.01 });
+		members.script("jev", { text: "no", cost: 0.05 });
+		await session.sendUserMessage("Debate");
+		expect(members.callsTo("jev")).toHaveLength(1);
+		expect(
+			traceCards(session)
+				.filter(card => card.kind === "decision")
+				.map(card => card.kind === "decision" && card.decision.kind),
+		).toEqual(["terminate"]);
+		expect(lastAssistant(session).content[0]).toEqual({
+			type: "text",
+			text: expect.stringContaining("the $0.04 budget limit was reached"),
+		});
+	});
+
+	it("resumes a paused hop in a new window without forwarding the next prompt; hard caps persist", async () => {
+		const session = await courtroomSession(
+			limitsToml('max_hops = 2\non_limit = "pause"'),
+			Settings.isolated({ ...COURTROOM_SETTINGS, "moa.hard_max_hops": 3 }),
+		);
+		const seen = events(session);
+		members.script("jev", { text: "no" }, { text: "rebut" });
+		await session.sendUserMessage("go");
+		expect(members.calls.filter(call => call.model.id !== "jev").map(call => call.model.id)).toEqual([
+			"writer",
+			"editor",
+		]);
+		expect(lastAssistant(session).content[0]).toEqual({
+			type: "text",
+			text: expect.stringContaining("⏸ courtroom paused at prosecution after 2 hops"),
+		});
+		expect(checkpoints(session).findLast(checkpoint => checkpoint.reason === "pause")?.run.phase.kind).toBe(
+			"hop_ready",
+		);
+		const before = members.calls.length;
+		await session.sendUserMessage("continue please");
+		const after = members.calls.slice(before);
+		expect(after.map(call => call.model.id)).toEqual(["writer"]);
+		expect(userText(after[0]?.context.messages[0])).not.toContain("continue please");
+		expect(seen.some(event => event.type === "notice" && event.message.includes("resumed with a fresh window"))).toBe(
+			true,
+		);
+		expect(lastAssistant(session).content[0]).toEqual({
+			type: "text",
+			text: expect.stringContaining("the hard cap of 3 hops was reached"),
+		});
+		const done = checkpoints(session).findLast(checkpoint => checkpoint.reason === "done");
+		expect([done?.run.window.hops, done?.run.lifetime.hops]).toEqual([1, 3]);
+	});
+
+	it("stops on a hard budget even when the soft policy says pause", async () => {
+		const session = await courtroomSession(
+			limitsToml('on_limit = "pause"'),
+			Settings.isolated({ ...COURTROOM_SETTINGS, "moa.hard_budget_usd": 0.015 }),
+		);
+		members.script("writer", { cost: 0.02 });
+		await session.sendUserMessage("Debate");
+		expect(lastAssistant(session).content[0]).toEqual({
+			type: "text",
+			text: expect.stringContaining("the hard cap of $0.015 was reached"),
+		});
+		expect(checkpoints(session).findLast(checkpoint => checkpoint.reason === "done")?.run.endReason).toBe("hard_cap");
+		expect(checkpoints(session).some(checkpoint => checkpoint.reason === "pause")).toBe(false);
+	});
+
+	it("turns a mid-call wall-clock deadline into a limit with the aborted attempt billed", async () => {
+		const session = await courtroomSession(limitsToml('wall_clock_minutes = 0.002\non_limit = "stop"'));
+		members.script("writer", { waitForAbort: true, cost: 0.01 });
+		await session.sendUserMessage("Debate");
+		expect(lastAssistant(session).content[0]).toEqual({
+			type: "text",
+			text: expect.stringContaining("the 0.002m wall-clock limit was reached"),
+		});
+		expect(traceCards(session).some(card => card.kind === "hop" && card.hop === 1 && card.status === "aborted")).toBe(
+			true,
+		);
+		expect(checkpoints(session).findLast(entry => entry.reason === "done")?.run.endReason).toBe("limit:wall_clock");
+		expect(lastAssistant(session).usageBreakdown?.find(entry => entry.kind === "member")?.usage.cost.total).toBe(
+			0.01,
+		);
+	});
+
+	it("exempts the wall-clock limit hop from the expired deadline", async () => {
+		const session = await courtroomSession(
+			limitsToml('wall_clock_minutes = 0.002\non_limit = "judge"\nlimit_target = "judge"'),
+		);
+		members.script("writer", { waitForAbort: true, cost: 0.01 });
+		members.script("other", { text: "ruling" });
+		await session.sendUserMessage("Debate");
+		expect(members.calls.map(call => call.model.id)).toEqual(["writer", "other"]);
+		expect(lastAssistant(session).content).toEqual([{ type: "text", text: "ruling" }]);
+		expect(members.callsTo("other")[0]?.options?.signal?.aborted).toBe(false);
+		expect(checkpoints(session).findLast(entry => entry.reason === "done")?.run.endReason).toBe("limit:wall_clock");
+	});
+
+	it("finishes a limit hop even when its target has ordinary outgoing edges", async () => {
+		const session = await courtroomSession(
+			limitsToml('budget_usd = 0.015\non_limit = "judge"\nlimit_target = "prosecution"'),
+		);
+		members.script("writer", { text: "opening", cost: 0.01 }, { text: "closing statement", cost: 0.01 });
+		members.script("editor", { cost: 0.01 });
+		await session.sendUserMessage("Debate");
+		expect(members.calls.map(call => call.model.id)).toEqual(["writer", "editor", "writer"]);
+		expect(lastAssistant(session).content).toEqual([{ type: "text", text: "closing statement" }]);
+		expect(traceCards(session).filter(card => card.kind === "limit")).toHaveLength(1);
+		expect(checkpoints(session).findLast(entry => entry.reason === "done")?.run.endReason).toBe("limit:budget");
+	});
+
+	it("appends the limit notice after live partial output when the terminal member times out", async () => {
+		const toml = DRAFT_THEN_EDIT_TOML.replace(
+			'entry = "writer"',
+			'entry = "writer"\nlimits = { wall_clock_minutes = 0.002, on_limit = "stop" }',
+		);
+		const session = await mixtureSession(toml);
+		members.script("editor", { text: "partial answer", waitForAbort: true, cost: 0.01 });
+		await session.sendUserMessage("go");
+		expect(lastAssistant(session).content[0]).toEqual({
+			type: "text",
+			text: expect.stringContaining(
+				"partial answer\n\n⏹ draft-then-edit stopped after 2 hops: the 0.002m wall-clock limit was reached",
+			),
+		});
+		expect(traceCards(session).some(card => card.kind === "hop" && card.hop === 2 && card.status === "aborted")).toBe(
+			true,
+		);
+	});
+});
 
 describe("linear mixture in a session", () => {
 	it("answers with the editor's text only, hands on the writer's output without its reasoning, and persists cards above the answer", async () => {
@@ -232,14 +675,16 @@ describe("linear mixture in a session", () => {
 		);
 		const overridden = await createMoaSession(fixture, { settings: Settings.isolated(SETTINGS) });
 		sessions.push(overridden);
-		MixtureCatalog.for(fixture.registry).setRoster(
-			await discoverRegistrableMixtures({
-				cwd: fixture.cwd,
-				agentDir: fixture.agentDir,
-				registry: fixture.registry,
-				settings: Settings.isolated(),
-			}),
-		);
+		MixtureCatalog.for(fixture.registry)
+			.scope(fixture.cwd, fixture.agentDir)
+			.setRoster(
+				await discoverRegistrableMixtures({
+					cwd: fixture.cwd,
+					agentDir: fixture.agentDir,
+					registry: fixture.registry,
+					settings: Settings.isolated(),
+				}),
+			);
 		await overridden.setModel(mixtureModel());
 		members.script("writer", { text: "shown draft" });
 		await overridden.sendUserMessage("go");
@@ -276,7 +721,12 @@ describe("linear mixture in a session", () => {
 	});
 
 	it.each([
-		{ limit: "hops", toml: 'entry = "writer"\nlimits = { max_hops = 1 }', settings: {}, reason: "the 1-hop limit" },
+		{
+			limit: "hops",
+			toml: 'entry = "writer"\nlimits = { max_hops = 1, on_limit = "stop" }',
+			settings: {},
+			reason: "the 1-hop limit",
+		},
 		{
 			limit: "hard_cap",
 			toml: 'entry = "writer"',
@@ -773,6 +1223,101 @@ describe("provider context for members", () => {
 		expect(delivered).toHaveLength(7);
 	});
 
+	it("rejects an entry image that exceeds the member's remaining context without calling it", async () => {
+		const definition = DRAFT_THEN_EDIT_TOML.replace('model = "fake/writer"', 'model = "vision/tight"');
+		await ensureFixture(definition);
+		fixture.registry.registerProvider("vision", {
+			baseUrl: "http://127.0.0.1:1/v1",
+			apiKey: "k",
+			api: "moa-fake",
+			models: [
+				{
+					id: "tight",
+					name: "tight",
+					reasoning: true,
+					input: ["text", "image"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 1_300,
+					maxTokens: 100,
+				},
+			],
+		});
+		const session = await mixtureSession(definition);
+		const image: ImageContent = {
+			type: "image",
+			data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
+			mimeType: "image/png",
+		};
+		await session.prompt("describe", { images: [image] });
+		expect(lastAssistant(session).errorMessage).toContain("hop.context_exceeded");
+		expect(members.callsTo("tight")).toHaveLength(0);
+	});
+
+	it("fits only the entry images that the member provider will retain", async () => {
+		const definition = DRAFT_THEN_EDIT_TOML.replace('model = "fake/writer"', 'model = "vision/limited"');
+		await ensureFixture(definition);
+		fixture.registry.registerProvider("vision", {
+			baseUrl: "http://127.0.0.1:1/v1",
+			apiKey: "k",
+			api: "moa-fake",
+			models: [
+				{
+					id: "limited",
+					name: "limited",
+					reasoning: true,
+					input: ["text", "image"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 7_000,
+					maxTokens: 100,
+				},
+			],
+		});
+		const session = await mixtureSession(definition);
+		const image: ImageContent = {
+			type: "image",
+			data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
+			mimeType: "image/png",
+		};
+		await session.prompt("describe", { images: Array.from({ length: 7 }, () => image) });
+		expect(lastAssistant(session).stopReason).toBe("stop");
+		const sent = members.callsTo("limited")[0]?.context.messages[0];
+		expect(
+			sent?.role === "user" && Array.isArray(sent.content)
+				? sent.content.filter(block => block.type === "image").length
+				: 0,
+		).toBe(5);
+	});
+
+	it("fits the omission text rather than charging an unreadable entry image", async () => {
+		const definition = DRAFT_THEN_EDIT_TOML.replace('model = "fake/writer"', 'model = "vision/tight"');
+		await ensureFixture(definition);
+		fixture.registry.registerProvider("vision", {
+			baseUrl: "http://127.0.0.1:1/v1",
+			apiKey: "k",
+			api: "moa-fake",
+			models: [
+				{
+					id: "tight",
+					name: "tight",
+					reasoning: true,
+					input: ["text", "image"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 1_300,
+					maxTokens: 100,
+				},
+			],
+		});
+		const session = await mixtureSession(definition);
+		await session.prompt("describe", { images: [{ type: "image", data: "not a png", mimeType: "image/png" }] });
+		expect(lastAssistant(session).stopReason).toBe("stop");
+		const content = members.callsTo("tight")[0]?.context.messages[0]?.content;
+		expect(content).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ type: "text", text: expect.stringContaining("[image omitted:") }),
+			]),
+		);
+	});
+
 	it("gives every member call the session's per-request provider options, as a native model gets them", async () => {
 		const settings = Settings.isolated({
 			...SETTINGS,
@@ -802,7 +1347,7 @@ describe("engine contract through a session host", () => {
 	beforeEach(async () => {
 		await ensureFixture();
 		manager = SessionManager.inMemory(fixture.cwd);
-		await retainMixtureCatalog("engine", {
+		const workspace = await MixtureWorkspace.retain("engine", {
 			cwd: fixture.cwd,
 			agentDir: fixture.agentDir,
 			registry: fixture.registry,
@@ -811,6 +1356,7 @@ describe("engine contract through a session host", () => {
 		host = createSessionMixtureHost({
 			sessionManager: manager,
 			modelRegistry: fixture.registry,
+			workspace,
 			settings: Settings.isolated(),
 			stream: streamSimple,
 			prepareContext: async context => context,
@@ -836,6 +1382,88 @@ describe("engine contract through a session host", () => {
 	async function call(messages: Message[], toolChoice?: ToolChoice): Promise<AssistantMessage> {
 		return streamMixture(mixtureModel(), { systemPrompt: ["outer"], messages }, { toolChoice }, host).result();
 	}
+
+	it("keeps the live run at hop_ready after aborting during entry-image preparation", async () => {
+		const reached = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const original = imageBudget.dropUnreadableContextImages;
+		vi.spyOn(imageBudget, "dropUnreadableContextImages").mockImplementation(async (context, model) => {
+			reached.resolve();
+			await release.promise;
+			return original(context, model);
+		});
+		const controller = new AbortController();
+		streamMixture(
+			mixtureModel(),
+			{
+				systemPrompt: ["outer"],
+				messages: [
+					{
+						role: "user",
+						content: [
+							{ type: "text", text: "describe" },
+							{
+								type: "image",
+								data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
+								mimeType: "image/png",
+							},
+						],
+						timestamp: 0,
+					},
+				],
+			},
+			{ signal: controller.signal },
+			host,
+		);
+		await reached.promise;
+		controller.abort();
+		release.resolve();
+		await Bun.sleep(20);
+		expect(currentRun().status).toBe("checkpoint");
+		expect(currentRun().phase).toEqual({ kind: "hop_ready", memberId: "writer" });
+		expect(currentRun().hops).toHaveLength(0);
+	});
+
+	it("fits omission text instead of images stripped by the member transport", async () => {
+		const resolve = host.resolveRun.bind(host);
+		vi.spyOn(host, "resolveRun").mockImplementation(name => {
+			const resolved = resolve(name);
+			if (typeof resolved === "string") return resolved;
+			const writer = resolved.members.writer;
+			if (writer?.kind !== "model") throw new Error("writer model missing");
+			return {
+				...resolved,
+				members: {
+					...resolved.members,
+					writer: {
+						...writer,
+						model: buildModel({
+							...writer.model,
+							api: "openai-completions",
+							compat: { stripImageInput: true },
+							contextWindow: 1_300,
+							maxTokens: 100,
+						}),
+					},
+				},
+			};
+		});
+		host.stream = (model, context, options) => streamSimple({ ...model, api: FAKE_API }, context, options);
+		const image: ImageContent = {
+			type: "image",
+			data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
+			mimeType: "image/png",
+		};
+		const result = await call([{ role: "user", content: [{ type: "text", text: "describe" }, image], timestamp: 0 }]);
+		expect(result.stopReason).toBe("stop");
+		const sent = members.callsTo("writer")[0]?.context.messages[0];
+		expect(userText(sent)).toContain("image omitted");
+		expect(
+			sent?.role === "user" && Array.isArray(sent.content)
+				? sent.content.some(block => block.type === "image")
+				: false,
+		).toBe(false);
+	});
 
 	it.each<[ToolChoice, string]>([
 		["required", "toolchoice.unsatisfiable"],

@@ -23,7 +23,13 @@ import type {
 	ScoreQuestion,
 } from "@oh-my-pi/pi-ai";
 import { isRecord } from "@oh-my-pi/pi-utils";
-import { type ChainJudge, type JudgmentUsage, journalJudgmentUsage, resolveJudge } from "../judgment";
+import {
+	type ChainJudge,
+	type JudgmentUsage,
+	journalJudgmentUsage,
+	resolveJudge,
+	sharedJudgmentCache,
+} from "../judgment";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { withBridgeTimeoutPause } from "./bridge-timeout";
 import { type EvalCompletionBridgeOptions, evalRequestSlots } from "./completion-bridge";
@@ -38,6 +44,7 @@ export type CellAnswer = Answer | { type: "bool"; bool: number };
 export interface EvalJudgmentResult {
 	answers: Record<string, CellAnswer>;
 	model: string;
+	notices?: string[];
 }
 
 function invalid(detail: string): ToolError {
@@ -169,15 +176,21 @@ export function sessionJudge(
 	options: Pick<EvalCompletionBridgeOptions, "session">,
 	purpose: string,
 	onUsage?: (usage: JudgmentUsage) => void,
+	onEffortDisclosure?: (message: string) => void,
 ): ChainJudge {
 	const { session } = options;
 	const registry = session.modelRegistry;
 	if (!registry) throw new ToolError("judge() has no model registry.");
-	const journal = journalJudgmentUsage(session.sessionManager, purpose);
+	const journal = journalJudgmentUsage(session.sessionManager);
 	return resolveJudge({
 		settings: session.settings,
 		registry,
 		sessionId: session.getSessionId?.() ?? undefined,
+		sessionManager: session.sessionManager,
+		onEffortDisclosure,
+		purpose,
+		telemetry: session.getTelemetry?.(),
+		cache: sharedJudgmentCache(),
 		onUsage:
 			onUsage && journal
 				? usage => {
@@ -196,12 +209,19 @@ export async function runEvalJudgment(
 	if (!isRecord(args)) throw invalid("expected { state, questions }");
 	const state = parseState(args.state);
 	const questions = parseQuestions(args.questions);
-	const judge = sessionJudge(options, "judge");
+	const notices: string[] = [];
+	const judge = sessionJudge(options, "judge", undefined, message => {
+		notices.push(message);
+		options.session.onEffortDisclosure?.(message);
+	});
 	const signal = options.signal;
 	return withBridgeTimeoutPause(options.emitStatus, async () => {
 		await evalRequestSlots.acquire(signal);
 		try {
-			return toEvalJudgmentResult(await judge.judge({ state, questions }, { signal }));
+			return {
+				...toEvalJudgmentResult(await judge.judge({ state, questions }, { signal })),
+				...(notices.length ? { notices } : {}),
+			};
 		} finally {
 			evalRequestSlots.release();
 		}

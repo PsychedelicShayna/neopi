@@ -23,6 +23,9 @@ export const DAEMON_RUNTIME_DIR_ENV = "OMP_DAEMON_RUNTIME_DIR";
 /** Optional environment key overriding last-client shutdown grace. */
 export const DAEMON_IDLE_GRACE_ENV = "OMP_DAEMON_IDLE_GRACE_MS";
 
+/** Private launch marker: only a broker placed in a shared systemd scope may drop deck generation ownership. */
+export const DAEMON_BROKER_SCOPED_ENV = "OMP_DAEMON_BROKER_SCOPED";
+
 /** Signals accepted by daemon input operations. */
 export type DaemonSignal = "SIGINT" | "SIGTERM" | "SIGHUP" | "SIGQUIT" | "SIGKILL";
 

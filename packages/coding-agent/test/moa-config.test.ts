@@ -7,7 +7,12 @@ import {
 	parseMixturesDoc,
 	saveMixturesConfigFile,
 } from "@oh-my-pi/pi-coding-agent/moa/config";
-import { discoverRegistrableMixtures } from "@oh-my-pi/pi-coding-agent/moa/registration";
+import {
+	discoverRegistrableMixtures,
+	MixtureWorkspace,
+	readMixtureDefinitionFile,
+	saveMixtureDefinition,
+} from "@oh-my-pi/pi-coding-agent/moa/registration";
 import { serializeMixturesConfig } from "@oh-my-pi/pi-coding-agent/moa/toml";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { logger, TempDir } from "@oh-my-pi/pi-utils";
@@ -276,6 +281,94 @@ describe("MIXTURES.toml serialization", () => {
 		expect(await Bun.file(file).exists()).toBe(false);
 		expect(await loadMixturesConfigFile(file)).toEqual({ mixtures: [] });
 	});
+
+	it("rejects oversized UTF-8 output without replacing the saved configuration", async () => {
+		using dir = TempDir.createSync("@moa-config-save-bound-");
+		const file = dir.join("MIXTURES.toml");
+		const original = parse(DRAFT_THEN_EDIT);
+		await saveMixturesConfigFile(file, original);
+		const saved = await Bun.file(file).text();
+		const oversized = {
+			...original,
+			roles: Object.fromEntries(Array.from({ length: 100 }, (_, index) => [`role${index}`, "é".repeat(22_000)])),
+		};
+
+		await expect(saveMixturesConfigFile(file, oversized)).rejects.toThrow("file.too_large");
+		expect(await Bun.file(file).text()).toBe(saved);
+		expect(await loadMixturesConfigFile(file)).toEqual(original);
+	});
+
+	it("rejects invalid drafts without replacing the file and registers valid edits only on apply", async () => {
+		using dir = TempDir.createSync("@moa-config-edit-");
+		const fixture = await createMoaFixture(dir);
+		const file = path.join(fixture.agentDir, "MIXTURES.toml");
+		const ctx = {
+			cwd: fixture.cwd,
+			agentDir: fixture.agentDir,
+			registry: fixture.registry,
+			settings: Settings.isolated(),
+		};
+		const workspace = await MixtureWorkspace.retain("editor", ctx);
+		try {
+			const original = await Bun.file(file).text();
+			const { doc, hash: baseHash } = await readMixtureDefinitionFile(file);
+			const first = doc.mixtures[0]!;
+			await expect(
+				saveMixtureDefinition({
+					...ctx,
+					sourcePath: file,
+					doc: { ...doc, mixtures: [{ ...first, entry: "missing" }] },
+					baseHash,
+				}),
+			).rejects.toThrow("entry");
+			expect(await Bun.file(file).text()).toBe(original);
+			expect(fixture.registry.find("mixture", "draft-then-edit")).toBeDefined();
+
+			await saveMixtureDefinition({
+				...ctx,
+				sourcePath: file,
+				doc: { ...doc, mixtures: [{ ...first, name: "new-mixture" }] },
+				baseHash,
+			});
+			expect(fixture.registry.find("mixture", "new-mixture")).toBeUndefined();
+			workspace.scope.setRoster(await discoverRegistrableMixtures(ctx));
+			expect(fixture.registry.getAvailable().map(model => `${model.provider}/${model.id}`)).toContain(
+				"mixture/new-mixture",
+			);
+			expect(fixture.registry.find("mixture", "draft-then-edit")).toBeUndefined();
+		} finally {
+			workspace.release();
+			fixture.authStorage.close();
+		}
+	});
+	it("rejects stale or symlinked sources without altering the external file", async () => {
+		using dir = TempDir.createSync("@moa-config-cas-");
+		const fixture = await createMoaFixture(dir);
+		const file = path.join(fixture.agentDir, "MIXTURES.toml");
+		const ctx = {
+			cwd: fixture.cwd,
+			agentDir: fixture.agentDir,
+			registry: fixture.registry,
+			settings: Settings.isolated(),
+		};
+		try {
+			const { doc, hash: baseHash } = await readMixtureDefinitionFile(file);
+			const externalEdit = `${await Bun.file(file).text()}\n# external edit\n`;
+			await Bun.write(file, externalEdit);
+			await expect(saveMixtureDefinition({ ...ctx, sourcePath: file, doc, baseHash })).rejects.toThrow(
+				"changed since it was loaded",
+			);
+			expect(await Bun.file(file).text()).toBe(externalEdit);
+
+			const target = dir.join("outside.toml");
+			await fs.rename(file, target);
+			await fs.symlink(target, file);
+			await expect(saveMixtureDefinition({ ...ctx, sourcePath: file, doc, baseHash })).rejects.toThrow();
+			expect(await Bun.file(target).text()).toBe(externalEdit);
+		} finally {
+			fixture.authStorage.close();
+		}
+	});
 });
 
 describe("discoverMixtures", () => {
@@ -337,6 +430,20 @@ model = "x/y"
 		}
 	}
 
+	it("refuses every mixture in a document with an unused oversized preset, not a sibling document", async () => {
+		using dir = TempDir.createSync("@moa-config-preset-bound-");
+		const bad = `[roles]\nunused = "${"x".repeat(65_537)}"\n${
+			DRAFT_THEN_EDIT_TOML
+		}${DRAFT_THEN_EDIT_TOML.replace('name = "draft-then-edit"', 'name = "second"')}`;
+		const good = DRAFT_THEN_EDIT_TOML.replace('name = "draft-then-edit"', 'name = "independent"');
+		const { registered, refused } = await register(dir, bad, good);
+		expect(registered.map(definition => definition.name)).toEqual(["independent"]);
+		expect(refused).toEqual([
+			["draft-then-edit", "limits.text_size"],
+			["second", "limits.text_size"],
+		]);
+	});
+
 	it("refuses a name declared twice in one file, logging name.duplicate for each declaration", async () => {
 		using dir = TempDir.createSync("@moa-config-duplicate-");
 		const solo = DRAFT_THEN_EDIT_TOML.replace('name = "draft-then-edit"', 'name = "solo"');
@@ -375,4 +482,53 @@ tools = false
 		expect(registered.map(definition => definition.name)).toEqual(["writer-only"]);
 		expect(refused).toEqual([["draft-then-edit", "member.model.excluded"]]);
 	});
+
+	/**
+	 * Discovery and the configurator's loader on a workspace whose user MIXTURES.toml is
+	 * prepared by `setup`, beside a readable project file that must still load.
+	 */
+	async function withUserFile(prefix: string, setup: (userFile: string) => Promise<void>) {
+		using dir = TempDir.createSync(prefix);
+		const agentDir = dir.join("agent");
+		const cwd = dir.join("project");
+		await fs.mkdir(agentDir, { recursive: true });
+		await fs.mkdir(cwd, { recursive: true });
+		const userFile = path.join(agentDir, "MIXTURES.toml");
+		await setup(userFile);
+		const project = DRAFT_THEN_EDIT_TOML.replace('name = "draft-then-edit"', 'name = "project-only"');
+		await Bun.write(path.join(cwd, "MIXTURES.toml"), project);
+		const discovered = await discoverMixtures(cwd, agentDir);
+		const edited = await loadMixturesConfigFile(userFile);
+		return { userFile, discovered, edited };
+	}
+
+	it("skips a MIXTURES.toml over the file cap by its size, without reading it, and still loads a sibling file", async () => {
+		// A sparse 8 GiB file: reading it whole would take seconds and gigabytes.
+		const { userFile, discovered, edited } = await withUserFile("@moa-config-too-large-", async userFile => {
+			await Bun.write(userFile, DRAFT_THEN_EDIT_TOML);
+			await fs.truncate(userFile, 8 * 1024 ** 3);
+		});
+		expect(discovered.mixtures.map(entry => entry.definition.name)).toEqual(["project-only"]);
+		expect(discovered.warnings).toEqual([expect.stringContaining(`${userFile}: file.too_large`)]);
+		expect(edited).toEqual({ mixtures: [], warnings: [expect.stringContaining("file.too_large")] });
+	});
+
+	it.each<[string, (userFile: string) => Promise<void>]>([
+		["a symlink to /dev/zero", userFile => fs.symlink("/dev/zero", userFile)],
+		[
+			"a FIFO no one writes to",
+			async userFile => {
+				expect(Bun.spawnSync(["mkfifo", userFile]).exitCode).toBe(0);
+			},
+		],
+	])(
+		"refuses %s as file.not_regular without reading it, and still loads a sibling file",
+		async (_label, setup) => {
+			const { userFile, discovered, edited } = await withUserFile("@moa-config-not-regular-", setup);
+			expect(discovered.mixtures.map(entry => entry.definition.name)).toEqual(["project-only"]);
+			expect(discovered.warnings).toEqual([expect.stringContaining(`${userFile}: file.not_regular`)]);
+			expect(edited).toEqual({ mixtures: [], warnings: [expect.stringContaining("file.not_regular")] });
+		},
+		5_000,
+	);
 });

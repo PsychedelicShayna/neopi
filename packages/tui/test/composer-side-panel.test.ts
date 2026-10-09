@@ -73,7 +73,7 @@ async function setup(
 			quiet: true,
 			resizeScrollback: options.mode ?? "rebuild",
 			spellingTypoDetection: false,
-			spellingAutocomplete: false,
+			spellingAutocomplete: "off",
 		},
 	});
 	const transcript = new TranscriptContainer();
@@ -492,7 +492,7 @@ describe("Composer side panel: overlays, hover, clicks, cursor", () => {
 		const composer = new Composer({
 			terminal: term,
 			tuiOptions: { renderScheduler: scheduler },
-			preferences: { ...COMPOSER_DEFAULTS, quiet: true, spellingTypoDetection: false, spellingAutocomplete: false },
+			preferences: { ...COMPOSER_DEFAULTS, quiet: true, spellingTypoDetection: false, spellingAutocomplete: "off" },
 		});
 		composer.setRuntimeChildren([new TranscriptContainer(), composer.editor]);
 		composer.start();

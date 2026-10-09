@@ -41,7 +41,9 @@ it("overlaps registry refresh with session-file opening and session setup", asyn
 	let sessionCreated = false;
 	const listeners: Array<(event: AgentSessionEvent) => void> = [];
 	const session = {
-		...createSessionDefaults(),
+		...createSessionDefaults(event => {
+			for (const listener of listeners) listener(event);
+		}),
 		state: { messages: [] },
 		agent: { state: { systemPrompt: ["test"] } },
 		model: undefined,
@@ -63,6 +65,7 @@ it("overlaps registry refresh with session-file opening and session setup", asyn
 					isError: false,
 				} as AgentSessionEvent);
 			}
+			return true;
 		},
 	} as unknown as AgentSession;
 	vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async () => {

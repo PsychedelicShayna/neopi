@@ -10,7 +10,6 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
 	AUTO_THINKING,
 	clampAutoThinkingEffort,
-	parseCliThinkingLevel,
 	parseConfiguredThinkingLevel,
 	parseEffort,
 	parseThinkingLevel,
@@ -41,7 +40,7 @@ describe("auto thinking classifier helpers", () => {
 		if (!judge) throw new Error(`Expected bundled local judge ${autoThinkingModel}`);
 
 		return {
-			settings: Settings.isolated({ modelRoles: { judge: `local/${autoThinkingModel}` } }),
+			settings: Settings.isolated({ "effort.mode": "legacy", modelRoles: { judge: `local/${autoThinkingModel}` } }),
 			registry: createRegistry([judge]),
 			model,
 		};
@@ -55,14 +54,6 @@ describe("auto thinking classifier helpers", () => {
 		expect(parseThinkingLevel(ThinkingLevel.Off)).toBe(ThinkingLevel.Off);
 	});
 
-	it("parses CLI --thinking selectors while rejecting inherit", () => {
-		expect(parseCliThinkingLevel(ThinkingLevel.Off)).toBe(ThinkingLevel.Off);
-		expect(parseCliThinkingLevel(AUTO_THINKING)).toBe(AUTO_THINKING);
-		expect(parseCliThinkingLevel("max")).toBe(ThinkingLevel.Max);
-		expect(parseCliThinkingLevel(ThinkingLevel.Inherit)).toBeUndefined();
-		expect(parseCliThinkingLevel("bogus")).toBeUndefined();
-	});
-
 	it("expands the local reasoning classifier budget", async () => {
 		let maxTokens: number | undefined;
 		const fixture = createLocalClassifierFixture("qwen3-1.7b");
@@ -71,7 +62,7 @@ describe("auto thinking classifier helpers", () => {
 			return "moderate";
 		});
 
-		const effort = await classifyDifficulty("fix the local classifier token budget", fixture);
+		const effort = await classifyDifficulty({ request: "fix the local classifier token budget" }, fixture);
 
 		expect(effort).toBe(Effort.High);
 		expect(maxTokens).toBe(1024);
@@ -86,10 +77,13 @@ describe("auto thinking classifier helpers", () => {
 		vi.spyOn(tinyModelClient, "complete").mockResolvedValue(answer);
 
 		expect(
-			await classifyDifficulty("classify this task", {
-				...fixture,
-				model: buildLadderModel("bucket-target", XHIGH_LADDER),
-			}),
+			await classifyDifficulty(
+				{ request: "classify this task" },
+				{
+					...fixture,
+					model: buildLadderModel("bucket-target", XHIGH_LADDER),
+				},
+			),
 		).toBe(expected);
 	});
 
@@ -103,16 +97,20 @@ describe("auto thinking classifier helpers", () => {
 		const sparse = buildLadderModel("mock-minimal-max", [Effort.Minimal, Effort.Max]);
 		vi.spyOn(tinyModelClient, "complete").mockResolvedValue("hard");
 		const settings = Settings.isolated({
+			"effort.mode": "legacy",
 			modelRoles: { judge: "local/qwen3-1.7b" },
 			"providers.autoThinkingMaxEffort": "max",
 		});
 
 		expect(
-			await classifyDifficulty("cut over the storage layer", {
-				settings,
-				registry: fixture.registry,
-				model: sparse,
-			}),
+			await classifyDifficulty(
+				{ request: "cut over the storage layer" },
+				{
+					settings,
+					registry: fixture.registry,
+					model: sparse,
+				},
+			),
 		).toBeUndefined();
 	});
 
@@ -124,7 +122,7 @@ describe("auto thinking classifier helpers", () => {
 			return "moderate";
 		});
 
-		const effort = await classifyDifficulty("rename a local helper", fixture);
+		const effort = await classifyDifficulty({ request: "rename a local helper" }, fixture);
 
 		expect(effort).toBe(Effort.High);
 		expect(maxTokens).toBe(16);
@@ -139,7 +137,10 @@ describe("auto thinking classifier helpers", () => {
 		});
 
 		await classifyDifficulty(
-			"\u001b[31minvestigate failure\u001b[0m 54783db3f0f17c74cae81976f0e825a909deb71e\n```\nnoisy code\n```",
+			{
+				request:
+					"\u001b[31minvestigate failure\u001b[0m 54783db3f0f17c74cae81976f0e825a909deb71e\n```\nnoisy code\n```",
+			},
 			fixture,
 		);
 
@@ -153,6 +154,7 @@ describe("auto thinking classifier helpers", () => {
 		if (!baseModel) throw new Error("Expected bundled Claude Sonnet 4.6 model");
 		const classifierModel = { ...baseModel, reasoning: false };
 		const settings = Settings.isolated({
+			"effort.mode": "legacy",
 			modelRoles: { judge: `${classifierModel.provider}/${classifierModel.id}` },
 		});
 		const registry = createRegistry([classifierModel], { [classifierModel.provider]: "test-key" });
@@ -161,11 +163,14 @@ describe("auto thinking classifier helpers", () => {
 			content: [{ type: "text", text: "high" }],
 		} as never);
 
-		const effort = await classifyDifficulty("add validation around the retry path", {
-			settings,
-			registry,
-			model: baseModel,
-		});
+		const effort = await classifyDifficulty(
+			{ request: "add validation around the retry path" },
+			{
+				settings,
+				registry,
+				model: baseModel,
+			},
+		);
 		const options = completeSimpleMock.mock.calls[0]?.[2] as
 			| { disableReasoning?: boolean; maxTokens?: number }
 			| undefined;
@@ -184,6 +189,7 @@ describe("auto thinking classifier helpers", () => {
 		const classifierModel = getBundledModel("anthropic", "claude-sonnet-4-6");
 		if (!classifierModel) throw new Error("Expected bundled Claude Sonnet 4.6 model");
 		const settings = Settings.isolated({
+			"effort.mode": "legacy",
 			modelRoles: { judge: `${classifierModel.provider}/${classifierModel.id}` },
 			"providers.autoThinkingMaxEffort": maxEffort,
 		});
@@ -232,6 +238,23 @@ describe("auto thinking classifier helpers", () => {
 	const MAX_LADDER = [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max];
 	const XHIGH_LADDER = [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh];
 
+	it("classifies a delegated turn from its solution space alone, falling back to the request when blank", async () => {
+		const fixture = createOnlineFixture(buildLadderModel("mock-xhigh", XHIGH_LADDER), "xhigh");
+		// State rides the user message; the system prompt names the field in its instructions.
+		const judgeState = (call: number) => JSON.stringify(fixture.completeSimpleMock.mock.calls[call]?.[1].messages);
+
+		await classifyDifficulty(
+			{ request: "update the retry handler", solutionSpace: " deadlock cause open, no repro " },
+			fixture.deps,
+		);
+		await classifyDifficulty({ request: "update the retry handler", solutionSpace: "   " }, fixture.deps);
+
+		expect(judgeState(0)).toContain("<solution_space>deadlock cause open, no repro</solution_space>");
+		expect(judgeState(0)).not.toContain("update the retry handler");
+		expect(judgeState(1)).toContain("update the retry handler");
+		expect(judgeState(1)).not.toContain("<solution_space>");
+	});
+
 	it("reports usage for each response when a transient classifier failure is retried", async () => {
 		const fixture = createOnlineFixture(buildLadderModel("mock-max", MAX_LADDER), "high");
 		fixture.completeSimpleMock.mockImplementationOnce(async (_model, _context, options) => {
@@ -250,7 +273,7 @@ describe("auto thinking classifier helpers", () => {
 		});
 		const onUsage = vi.fn();
 
-		await classifyDifficulty("refactor the scheduler", { ...fixture.deps, onUsage });
+		await classifyDifficulty({ request: "refactor the scheduler" }, { ...fixture.deps, onUsage });
 
 		expect(fixture.completeSimpleMock).toHaveBeenCalledTimes(2);
 		expect(onUsage).toHaveBeenCalledTimes(2);
@@ -259,6 +282,7 @@ describe("auto thinking classifier helpers", () => {
 			expect.objectContaining({ role: "judge", stopReason: "error", errorMessage: "Internal Server Error" }),
 		);
 		expect(onUsage).toHaveBeenNthCalledWith(2, {
+			purpose: "auto-thinking",
 			role: "judge",
 			api: fixture.classifierModel.api,
 			provider: fixture.classifierModel.provider,
@@ -271,7 +295,7 @@ describe("auto thinking classifier helpers", () => {
 
 	it("resolves max only when opted in, and rejects it as off-ladder otherwise", async () => {
 		const optedIn = createOnlineFixture(buildLadderModel("mock-max", MAX_LADDER), "max", "max");
-		expect(await classifyDifficulty("untangle this cross-service race", optedIn.deps)).toBe(Effort.Max);
+		expect(await classifyDifficulty({ request: "untangle this cross-service race" }, optedIn.deps)).toBe(Effort.Max);
 
 		vi.restoreAllMocks();
 
@@ -279,12 +303,14 @@ describe("auto thinking classifier helpers", () => {
 		// fails (the caller keeps its provisional level) rather than crossing the
 		// default ceiling.
 		const defaulted = createOnlineFixture(buildLadderModel("mock-max", MAX_LADDER), "max");
-		await expect(classifyDifficulty("untangle this cross-service race", defaulted.deps)).rejects.toThrow();
+		await expect(
+			classifyDifficulty({ request: "untangle this cross-service race" }, defaulted.deps),
+		).rejects.toThrow();
 	});
 
 	it("resolves the sparse ladder's max tier when opted in", async () => {
 		const fixture = createOnlineFixture(buildLadderModel("mock-sparse", [Effort.High, Effort.Max]), "max", "max");
-		expect(await classifyDifficulty("cut over the storage layer", fixture.deps)).toBe(Effort.Max);
+		expect(await classifyDifficulty({ request: "cut over the storage layer" }, fixture.deps)).toBe(Effort.Max);
 	});
 
 	it("takes the first label when the classifier echoes several", async () => {
@@ -295,7 +321,7 @@ describe("auto thinking classifier helpers", () => {
 			"low, medium, high, xhigh, max",
 			"max",
 		);
-		expect(await classifyDifficulty("rename a helper", fixture.deps)).toBe(Effort.Low);
+		expect(await classifyDifficulty({ request: "rename a helper" }, fixture.deps)).toBe(Effort.Low);
 	});
 
 	it("resolves no level on a max-only ladder without opt-in", async () => {
@@ -303,12 +329,12 @@ describe("auto thinking classifier helpers", () => {
 		// must not snap the request back up — auto yields nothing and the session
 		// keeps its current level.
 		const defaulted = createOnlineFixture(buildLadderModel("mock-max-only", [Effort.Max]), "xhigh");
-		expect(await classifyDifficulty("cut over the storage layer", defaulted.deps)).toBeUndefined();
+		expect(await classifyDifficulty({ request: "cut over the storage layer" }, defaulted.deps)).toBeUndefined();
 
 		vi.restoreAllMocks();
 
 		const optedIn = createOnlineFixture(buildLadderModel("mock-max-only", [Effort.Max]), "max", "max");
-		expect(await classifyDifficulty("cut over the storage layer", optedIn.deps)).toBe(Effort.Max);
+		expect(await classifyDifficulty({ request: "cut over the storage layer" }, optedIn.deps)).toBe(Effort.Max);
 	});
 
 	it("has no provisional level on a max-only ladder", () => {
@@ -317,7 +343,7 @@ describe("auto thinking classifier helpers", () => {
 
 	it("stops at the highest tier under the ceiling on a sparse ladder", async () => {
 		const fixture = createOnlineFixture(buildLadderModel("mock-hm", [Effort.High, Effort.Max]), "xhigh");
-		expect(await classifyDifficulty("cut over the storage layer", fixture.deps)).toBe(Effort.High);
+		expect(await classifyDifficulty({ request: "cut over the storage layer" }, fixture.deps)).toBe(Effort.High);
 	});
 
 	it("keeps the provisional auto level below max even when the model defaults to it", () => {

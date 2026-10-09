@@ -1,7 +1,6 @@
 import type { ApiKeyResolver } from "@oh-my-pi/pi-ai";
 import { transcribeAudio } from "@oh-my-pi/pi-ai/transcription";
 import type { Api, Model } from "@oh-my-pi/pi-catalog/types";
-import { AudioCapture } from "@oh-my-pi/pi-natives";
 import type { ModelBrowserRegistry } from "@oh-my-pi/pi-tui/overlays/model-browser";
 import { logger } from "@oh-my-pi/pi-utils";
 import { resolveRoleChain } from "../config/model-resolver";
@@ -12,6 +11,7 @@ import { type SttStreamHandle, sttClient } from "./asr-client";
 import { downloadSttModel, isSttModelCached } from "./downloader";
 import { resolveSttModelSpec, type SttModelKey } from "./models";
 import { evaluateSubmitTrigger } from "./submit-trigger";
+import { sharedAudioCapture } from "./shared-audio-capture";
 import { WavFileRecorder } from "./wav-file-recorder";
 
 import { cfgSttLanguage, cfgSttSubmitTrigger } from "./settings";
@@ -94,7 +94,7 @@ export class STTController {
 			this.#registry = dependencies?.registry;
 			this.#getSessionId = dependencies?.getSessionId;
 		} else {
-			this.#createCapture = onAudio => new AudioCapture(16_000, onAudio);
+			this.#createCapture = onAudio => sharedAudioCapture(16_000, onAudio);
 			this.#settings = createCaptureOrDependencies?.settings ?? settings;
 			this.#registry = createCaptureOrDependencies?.registry;
 			this.#getSessionId = createCaptureOrDependencies?.getSessionId;
@@ -182,26 +182,18 @@ export class STTController {
 		// modelRoles.dictation mid-session re-runs preflight for the new model.
 		if (this.#resolvedModelKey === modelKey) return modelKey;
 		try {
-			// Only clear the status line when preflight emitted progress; the
-			// cached-model fast path emits nothing.
-			let wroteStatus = false;
-			const status = (msg: string): void => {
-				wroteStatus = true;
-				options.showStatus(msg);
-			};
 			// Loading the multi-hundred-MB speech model into the worker is what made
 			// the old "Checking STT dependencies…" step slow. Don't pay it before
 			// recording: when the weights are already cached, start now and warm the
 			// model in the background — the stream/transcribe paths load it on demand
 			// (memoized in the worker) and it is hot by the time recording stops.
-			// Only a genuine first-use download blocks, with explicit progress, so we
-			// never record silently against missing weights.
+			// Only a genuine first-use download blocks (its progress shows in the
+			// download HUD), so we never record silently against missing weights.
 			if (await isSttModelCached(modelKey)) {
 				this.#warmModel(modelKey);
 			} else {
-				await downloadSttModel(modelKey, p => status(`Downloading speech model ${p.label} (${p.percent}%)`));
+				await downloadSttModel(modelKey);
 			}
-			if (wroteStatus) options.showStatus("");
 			this.#resolvedModelKey = modelKey;
 			return modelKey;
 		} catch (err) {

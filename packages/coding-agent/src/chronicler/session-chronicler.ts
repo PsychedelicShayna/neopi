@@ -18,7 +18,7 @@ import { Agent, type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core
 import { estimateTranscriptTokens } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Api, Model, ProviderSessionState } from "@oh-my-pi/pi-ai";
 import { streamSimple } from "@oh-my-pi/pi-ai";
-import { acquireFileLock, type FileLockHandle, logger, prompt } from "@oh-my-pi/pi-utils";
+import { acquireFileLock, FileLockContentionError, type FileLockHandle, logger, prompt } from "@oh-my-pi/pi-utils";
 import { AdvisorTranscriptRecorder, deriveAdvisorTelemetry } from "../advisor";
 import type { ModelRegistry } from "../config/model-registry";
 import { formatModelString, resolveChroniclerRoleSelection } from "../config/model-resolver";
@@ -44,13 +44,24 @@ import { renderChronicleDelta } from "./render";
 import { type CaptureBatch, type CaptureSource, ChroniclerStore, isChroniclerCorruption } from "./store";
 
 /**
+ * The slice of a session the runtime reads. {@link AgentSession} passes its
+ * live SessionManager; the headless backfill passes a read-only view over a
+ * stored transcript whose persistence members are no-ops.
+ */
+export type ChroniclerSessionView = Pick<
+	SessionManager,
+	"getSessionId" | "getSessionFile" | "getArtifactsDir" | "getEntries" | "ensureOnDisk" | "isSessionOnDisk" | "flush"
+>;
+
+/**
  * Host seam the runtime binds against. The two persistence-order callbacks and
  * `isCaptureEligible` are wired by {@link AgentSession}; everything else mirrors
  * the advisor host surface.
  */
 export interface SessionChroniclerHost {
-	agent: Agent;
-	sessionManager: SessionManager;
+	/** Source of telemetry inherited by the capture Agent. */
+	agent: Pick<Agent, "telemetry">;
+	sessionManager: ChroniclerSessionView;
 	settings: Settings;
 	modelRegistry: ModelRegistry;
 	obfuscator: SecretObfuscator | undefined;
@@ -63,7 +74,26 @@ export interface SessionChroniclerHost {
 	isCaptureEligible(): boolean;
 }
 
-type ChroniclerStatus = "off" | "no_model" | "running" | "halted";
+export type ChroniclerStatus =
+	| "off"
+	| "no_model"
+	| "running"
+	| "halted"
+	| "retrying"
+	| "contended"
+	| "suspended"
+	| "stopping"
+	| "stopped";
+
+export interface ChroniclerHealth {
+	readonly status: ChroniclerStatus;
+	readonly sessionId?: string;
+	readonly sessionFile?: string;
+	readonly artifactsDir?: string;
+	readonly lastCommittedAt?: string;
+	readonly error?: string;
+	readonly retryAt?: number;
+}
 
 interface RoleSelection {
 	model: Model<Api>;
@@ -140,10 +170,24 @@ const UNSEEN_FLUSH_CHARS = 80_000;
 const GENERIC_BUDGET_TOKENS = 32_000;
 /** Fraction of a known positive context window a capture pass may fill. */
 const CONTEXT_BUDGET_FRACTION = 0.7;
-/** Consecutive failed attempts on one prefix before capture halts. */
+/** Consecutive failed attempts in one capture burst before reconciliation. */
 const MAX_CONSECUTIVE_FAILURES = 3;
 /** Backoff before each retry of the same unseen prefix. */
 const RETRY_BACKOFF_MS = [2_000, 4_000];
+/** Autonomous recovery is exponential but never waits more than one minute. */
+const MAX_RECOVERY_BACKOFF_MS = 60_000;
+const OWNERSHIP_CHECK_MS = 60_000;
+/** Abort a model attempt after this long without any streamed assistant event. */
+const STREAM_STALL_MS = 60 * 60 * 1_000;
+/** Hard per-attempt deadline, slightly beyond the resettable idle watchdog. */
+const ATTEMPT_DEADLINE_MS = 65 * 60 * 1_000;
+
+const chroniclerTimerIO = {
+	setTimeout: (callback: () => void, delayMs: number): Timer => setTimeout(callback, delayMs),
+	clearTimeout: (timer: Timer | undefined): void => clearTimeout(timer),
+};
+
+export const __sessionChroniclerInternalsForTesting = { chroniclerTimerIO };
 /** Default drain deadline for model work at shutdown. */
 const DEFAULT_DRAIN_MS = 20_000;
 /** Recent persisted-message identities kept for the turn-end rendezvous. */
@@ -160,6 +204,18 @@ export class SessionChronicler {
 	#deadlineSignal = Promise.withResolvers<void>();
 	#scheduledDescriptor: SessionDescriptor | undefined;
 
+	#suspended = false;
+	#suspension: Promise<void> | undefined;
+	#attemptFence = Promise.withResolvers<void>();
+	#retryTimer: Timer | undefined;
+	#ownershipTimer: Timer | undefined;
+	#retryAt: number | undefined;
+	#retryAttempt = 0;
+	#reconcile = false;
+	#error: string | undefined;
+	#failureWarned: string | undefined;
+	#lastCommittedAt: string | undefined;
+	#lastCommittedDescriptor: SessionDescriptor | undefined;
 	#chain: Promise<void> = Promise.resolve();
 	#scanQueued = false;
 	#pendingScan: ScheduledScan | undefined;
@@ -169,9 +225,6 @@ export class SessionChronicler {
 	#activeBatch: CaptureBatch | undefined;
 
 	#settingsUnsub: (() => void) | undefined;
-	#noModelWarned: string | undefined;
-	/** Session file last reported as chronicled by another process; one notice per episode. */
-	#leaseContendedWarned: string | undefined;
 
 	/** Recent persisted-message identities: cloned assistants break object identity. */
 	#settled = new Map<string, AgentMessage[]>();
@@ -193,6 +246,70 @@ export class SessionChronicler {
 		return this.#status;
 	}
 
+	get health(): ChroniclerHealth {
+		const manager = this.#host.sessionManager;
+		const committed = this.#lastCommittedDescriptor;
+		const sameHistory =
+			committed &&
+			manager.getSessionId() === committed.sessionId &&
+			manager.getSessionFile() === committed.sessionFile &&
+			manager.getArtifactsDir() === committed.artifactsDir &&
+			this.#host.cwd() === committed.cwd;
+		return {
+			status:
+				this.#cleanedUp && !this.#binding
+					? "stopped"
+					: this.#stopping
+						? "stopping"
+						: this.#suspended
+							? "suspended"
+							: this.#status,
+			sessionId: manager.getSessionId(),
+			sessionFile: manager.getSessionFile(),
+			artifactsDir: manager.getArtifactsDir() ?? undefined,
+			lastCommittedAt: sameHistory ? this.#lastCommittedAt : undefined,
+			error: this.#error,
+			retryAt: this.#retryAt,
+		};
+	}
+
+	/** Fence synchronously, then settle filesystem work before the host moves it. */
+	async suspendForSessionChange(): Promise<void> {
+		if (this.#suspension) return this.#suspension;
+		if (this.#cleanedUp) return;
+		this.#suspended = true;
+		this.#cancelTimers();
+		this.#resetRecovery();
+		this.#pendingScan = undefined;
+		this.#revokeNow("chronicler session transition", true);
+		this.#status = "suspended";
+		this.#settled.clear();
+		const suspension = this.#chain.then(async () => {
+			await this.#disableBinding();
+			this.#scheduledDescriptor = undefined;
+			this.#status = "suspended";
+		});
+		// The caller must see teardown failure, but it must not poison the owner
+		// chain: a rollback/resume still needs to enqueue a real reconciliation scan.
+		this.#chain = suspension.catch(error => {
+			this.#error = `Session transition suspension failed: ${errorText(error)}`;
+			this.#status = "suspended";
+			this.#host.emitNotice("warning", `Chronicler ${this.#error}`, "chronicler");
+		});
+		this.#suspension = suspension;
+		await suspension;
+	}
+
+	/** Also catch up when a failed transition restored the unchanged identity. */
+	resumeAfterSessionChange(): void {
+		if (this.#stopping || this.#cleanedUp) return;
+		this.#suspension = undefined;
+		this.#suspended = false;
+		this.#status = "off";
+		this.#resetRecovery();
+		this.#scheduleWake(true);
+	}
+
 	/**
 	 * The primary finished a turn. Schedules a capture wake; when `lastMessage`
 	 * is supplied the wake parks until that message's persistence settles, so the
@@ -200,7 +317,7 @@ export class SessionChronicler {
 	 */
 	onPrimaryTurnEnd(willContinue: boolean | undefined, lastMessage?: AgentMessage): void {
 		if (!this.#enabled() || !this.#host.isCaptureEligible()) return;
-		if (this.#stopping || this.#cleanedUp || this.#host.isDisposed()) return;
+		if (this.#suspended || this.#stopping || this.#cleanedUp || this.#host.isDisposed()) return;
 		this.#fenceSessionChange();
 		// A new turn end supersedes any earlier park: a stale generation's
 		// persistence may never notify, and a dangling park must not linger.
@@ -229,7 +346,7 @@ export class SessionChronicler {
 	 */
 	onPrimaryMessagePersisted(message: AgentMessage): void {
 		if (!this.#enabled() || !this.#host.isCaptureEligible()) return;
-		if (this.#stopping || this.#cleanedUp || this.#host.isDisposed()) return;
+		if (this.#suspended || this.#stopping || this.#cleanedUp || this.#host.isDisposed()) return;
 		this.#fenceSessionChange();
 		this.#recordSettled(message);
 		if (message.role === "user") this.#maybeEnsureOnDisk();
@@ -254,9 +371,25 @@ export class SessionChronicler {
 	 */
 	beginStop(): void {
 		if (this.#stopping) return;
+		const recovering = this.#retryTimer !== undefined;
+		this.#cancelTimers();
 		this.#pendingRendezvous = undefined;
-		this.#scheduleWake(true, true);
+		if (recovering) this.#pendingScan = undefined;
+		else this.#scheduleWake(true, true);
 		this.#stopping = true;
+	}
+
+	/**
+	 * Resolve once the owner chain holds no queued or running work. A headless
+	 * host waits on this for the construction-time backlog walk to finish
+	 * (covered, halted, unresolved model, or contended lease) before draining.
+	 */
+	async idle(): Promise<void> {
+		let chain: Promise<void>;
+		do {
+			chain = this.#chain;
+			await chain;
+		} while (chain !== this.#chain);
 	}
 
 	/**
@@ -287,10 +420,10 @@ export class SessionChronicler {
 			this.#deadlineExpired = true;
 			this.#deadlineSignal.resolve();
 			this.#pendingScan = undefined;
-			this.#revokeNow("chronicler drain deadline");
+			this.#revokeNow("chronicler drain deadline", true);
 		}
-		// Only the shutdown deadline can release an unsettled model prompt.
-		// Publication and recorder writes stay owned until they settle.
+		// A detached model cannot extend shutdown; publication and recorder writes
+		// remain owned until their filesystem work settles.
 		await this.#chain;
 		await this.#cleanup();
 	}
@@ -303,7 +436,7 @@ export class SessionChronicler {
 	 * snapshot; nothing downstream re-reads the live manager for identity.
 	 */
 	#scheduleWake(forceFlush: boolean, bypassStop = false): void {
-		if (this.#deadlineExpired || this.#cleanedUp) return;
+		if (this.#suspended || this.#deadlineExpired || this.#cleanedUp || this.#retryTimer !== undefined) return;
 		if ((this.#stopping || this.#host.isDisposed()) && !bypassStop) return;
 		if (!this.#enabled()) return;
 		if (!this.#host.isCaptureEligible()) return;
@@ -357,20 +490,15 @@ export class SessionChronicler {
 		this.#chain = this.#chain
 			.then(() => this.#runScan())
 			.catch(error => {
-				logger.warn("Chronicler scan chain failed", { error: String(error) });
+				this.#requestRetry(errorText(error), isChroniclerCorruption(error) ? "halted" : "retrying");
 			});
 	}
 
 	#onSettingChange(): void {
-		if (this.#cleanedUp || this.#deadlineExpired) return;
-		// Reopen canonical committed state on configuration changes, including a
-		// corruption halt: strict store validation will halt again if it persists.
-		if (this.#status === "halted") {
-			this.#status = "off";
-		}
-		if (!this.#enabled()) {
-			this.#status = "off";
-		}
+		if (this.#cleanedUp || this.#deadlineExpired || this.#stopping) return;
+		this.#cancelTimers();
+		this.#resetRecovery();
+		this.#status = this.#suspended ? "suspended" : "off";
 		this.#revokeNow("chronicler settings change");
 		if (!this.#enabled()) {
 			this.#pendingScan = undefined;
@@ -389,14 +517,19 @@ export class SessionChronicler {
 	/**
 	 * Synchronously fence everything in flight: bump the generation, revoke the
 	 * single uncommitted batch so a publication cannot slip past its pre-rename
-	 * check. Ordinary revocation lets the in-flight provider settle; only the
-	 * terminal deadline aborts its Agent. A committed batch is never revoked.
+	 * check. Ordinary revocation owns the in-flight completion; transitions,
+	 * lost ownership and the terminal deadline detach its fenced Agent.
 	 */
-	#revokeNow(reason: string): void {
+	#revokeNow(reason: string, detach = false): void {
 		this.#generation++;
 		const batch = this.#activeBatch;
 		if (batch && !Object.isFrozen(batch)) batch.revoked = true;
-		if (this.#deadlineExpired) this.#binding?.agent.abort(reason);
+		if (detach) {
+			this.#binding?.agentUnsubscribe();
+			this.#binding?.agent.abort(reason);
+			this.#attemptFence.resolve();
+			this.#attemptFence = Promise.withResolvers<void>();
+		}
 		this.#pendingRendezvous = undefined;
 	}
 
@@ -466,22 +599,24 @@ export class SessionChronicler {
 	 * descriptor, rechecked immediately before the call.
 	 */
 	#maybeEnsureOnDisk(): void {
-		if (this.#stopping || this.#cleanedUp || this.#host.isDisposed()) return;
+		if (this.#suspended || this.#stopping || this.#cleanedUp || this.#host.isDisposed()) return;
 		if (!this.#host.isCaptureEligible() || !this.#enabled()) return;
 		const manager = this.#host.sessionManager;
 		const frozenFile = manager.getSessionFile();
+		const gen = this.#generation;
 		const frozenId = manager.getSessionId();
 		// Only a session with an allocated file may be materialized: never invent
 		// a fake artifacts root for an in-memory session.
 		if (!frozenFile || manager.isSessionOnDisk()) return;
 		this.#chain = this.#chain
 			.then(async () => {
+				if (gen !== this.#generation || this.#suspended || !this.#enabled()) return;
 				if (manager.getSessionFile() !== frozenFile || manager.getSessionId() !== frozenId) return;
 				if (manager.isSessionOnDisk()) return;
 				await manager.ensureOnDisk();
 			})
 			.catch(error => {
-				logger.debug("Chronicler ensureOnDisk failed", { error: String(error) });
+				if (gen === this.#generation) this.#requestRetry(`Transcript materialization failed: ${errorText(error)}`);
 			});
 	}
 
@@ -498,9 +633,11 @@ export class SessionChronicler {
 		if (!scan) return;
 
 		const gen = scan.gen;
-		if (this.#deadlineExpired || this.#cleanedUp || gen !== this.#generation) return;
+		if (this.#suspended || this.#deadlineExpired || this.#cleanedUp || gen !== this.#generation) return;
+		// An already queued turn wake must not bypass an autonomous recovery backoff.
+		// Its source entries remain in the transcript for the timer's fresh snapshot.
+		if (this.#retryTimer !== undefined) return;
 		if (!this.#host.isCaptureEligible()) return;
-		if (this.#status === "halted") return;
 
 		if (!this.#enabled()) {
 			await this.#disableBinding();
@@ -509,19 +646,9 @@ export class SessionChronicler {
 
 		const selection = this.#resolveSelection();
 		if (!selection) {
-			this.#status = "no_model";
-			const unresolved = JSON.stringify(cfgModelRoles.get(this.#host.settings) ?? null);
-			if (this.#noModelWarned !== unresolved) {
-				this.#noModelWarned = unresolved;
-				this.#host.emitNotice(
-					"warning",
-					"Chronicler enabled but no model resolved for the chronicler role",
-					"chronicler",
-				);
-			}
+			this.#requestRetry("No model resolved for the chronicler role", "no_model", false);
 			return;
 		}
-		this.#noModelWarned = undefined;
 
 		if (!(await this.#materialize(scan.descriptor, gen))) return;
 
@@ -536,6 +663,7 @@ export class SessionChronicler {
 		this.#status = "running";
 
 		await this.#drainBacklog(binding, scan);
+		if (gen === this.#generation && this.#retryAt === undefined) this.#resetRecovery();
 	}
 
 	/**
@@ -553,11 +681,20 @@ export class SessionChronicler {
 		if (!stillCurrent()) return false;
 		try {
 			await manager.ensureOnDisk();
-			if (!stillCurrent() || !manager.isSessionOnDisk()) return false;
+			if (!stillCurrent()) return false;
+			if (!manager.isSessionOnDisk()) {
+				this.#requestRetry("Transcript materialization did not produce a durable session");
+				return false;
+			}
 			await manager.flush();
-			return stillCurrent() && manager.isSessionOnDisk();
+			if (!stillCurrent()) return false;
+			if (!manager.isSessionOnDisk()) {
+				this.#requestRetry("Transcript flush did not leave a durable session");
+				return false;
+			}
+			return true;
 		} catch (error) {
-			logger.debug("Chronicler transcript durability deferred", { error: String(error) });
+			if (stillCurrent()) this.#requestRetry(`Transcript durability failed: ${errorText(error)}`);
 			return false;
 		}
 	}
@@ -595,43 +732,43 @@ export class SessionChronicler {
 	): Promise<"committed" | "revoked" | "halted"> {
 		const selected = this.#selectPrefix(binding, unseen, ownedIds);
 		if (selected.kind === "oversized") {
-			this.#status = "halted";
-			this.#host.emitNotice(
-				"warning",
-				"Chronicler capture paused: one transcript entry exceeds the capture input budget; no entries were skipped.",
-				"chronicler",
+			this.#requestRetry(
+				"One transcript entry exceeds the capture input budget; no entries were skipped.",
+				"halted",
 			);
 			return "halted";
 		}
 
 		let attempt = 0;
 		while (true) {
-			if (this.#generation !== binding.gen) return "revoked";
+			if (this.#generation !== binding.gen || !this.#ownsLease(binding)) return "revoked";
 
 			const outcome = await this.#runAttempt(binding, selected.entries, selected.requestText);
 			if (outcome.kind === "committed") return "committed";
 			if (outcome.kind === "revoked") return "revoked";
 			if (outcome.kind === "corruption") {
-				this.#status = "halted";
-				this.#host.emitNotice("warning", `Chronicler capture halted: ${outcome.error}`, "chronicler");
+				this.#requestRetry(outcome.error, "halted");
 				return "halted";
 			}
 
 			attempt += 1;
 			if (attempt >= MAX_CONSECUTIVE_FAILURES) {
-				this.#status = "halted";
-				this.#host.emitNotice(
-					"warning",
-					`Chronicler capture paused after repeated failures: ${outcome.error}`,
-					"chronicler",
-				);
+				this.#requestRetry(`Capture failed after ${attempt} attempts: ${outcome.error}`);
 				return "halted";
 			}
 			// A failed attempt is never retained as if committed: rebuild the model
 			// conversation from committed framing before retrying the same prefix.
 			this.#rebuildConversation(binding);
 			const backoff = RETRY_BACKOFF_MS[Math.min(attempt - 1, RETRY_BACKOFF_MS.length - 1)];
-			if (!(await this.#sleep(backoff, binding.gen))) return "revoked";
+			if (!this.#stopping) {
+				this.#status = "retrying";
+				this.#error = outcome.error;
+				this.#retryAt = Date.now() + backoff;
+			}
+			const retry = await this.#sleep(backoff, binding.gen);
+			if (this.#retryTimer === undefined) this.#retryAt = undefined;
+			if (!retry) return "revoked";
+			this.#status = "running";
 		}
 	}
 
@@ -673,14 +810,40 @@ export class SessionChronicler {
 				timestamp: Date.now(),
 			};
 
+			let stalled = false;
+			let watchdog: Timer | undefined;
+			const armWatchdog = () => {
+				chroniclerTimerIO.clearTimeout(watchdog);
+				watchdog = chroniclerTimerIO.setTimeout(() => {
+					stalled = true;
+					binding.agent.abort("Chronicler stream stalled");
+				}, STREAM_STALL_MS);
+			};
+			const stopWatching = binding.agent.subscribe(event => {
+				if (event.type === "message_update") armWatchdog();
+			});
+			binding.agent.setDeadline(Date.now() + ATTEMPT_DEADLINE_MS);
+			armWatchdog();
 			try {
-				await Promise.race([binding.agent.prompt([request]), this.#deadlineSignal.promise]);
+				await Promise.race([
+					binding.agent.prompt([request]),
+					this.#deadlineSignal.promise,
+					this.#attemptFence.promise,
+				]);
 			} catch (error) {
-				if (this.#generation !== binding.gen || batch.revoked) return { kind: "revoked" };
-				return { kind: "failed", error: errorText(error) };
+				if (this.#generation !== binding.gen || batch.revoked || !this.#ownsLease(binding)) {
+					return { kind: "revoked" };
+				}
+				return { kind: "failed", error: stalled ? "model stream stalled" : errorText(error) };
+			} finally {
+				chroniclerTimerIO.clearTimeout(watchdog);
+				stopWatching();
+				binding.agent.setDeadline(undefined);
 			}
 
-			if (this.#generation !== binding.gen || batch.revoked) return { kind: "revoked" };
+			if (this.#generation !== binding.gen || batch.revoked || !this.#ownsLease(binding)) {
+				return { kind: "revoked" };
+			}
 
 			const failure = this.#passFailure(binding.agent, batch);
 			if (failure) return { kind: "failed", error: failure };
@@ -688,7 +851,9 @@ export class SessionChronicler {
 			// Publication starts here. A fence landing before the store's pre-rename
 			// check revokes this batch and the rename never happens; a fence landing
 			// after it settles in this frozen root and is never turned into a retry.
-			const publication = binding.store.commitBatch(batch);
+			const publication = binding.store.commitBatch(batch, () => {
+				if (!this.#ownsLease(binding)) throw new Error("Chronicler ownership was taken over");
+			});
 			try {
 				await publication;
 			} catch (error) {
@@ -697,8 +862,16 @@ export class SessionChronicler {
 				// batch never published, so this is retryable — unless the committed
 				// data itself disagrees, which halts.
 				if (isChroniclerCorruption(error)) return { kind: "corruption", error: errorText(error) };
-				if (this.#generation !== binding.gen || batch.revoked) return { kind: "revoked" };
+				if (this.#generation !== binding.gen || batch.revoked || !this.#ownsLease(binding)) {
+					return { kind: "revoked" };
+				}
 				return { kind: "failed", error: errorText(error) };
+			}
+			this.#lastCommittedAt = binding.store.lastCommittedAt;
+			this.#lastCommittedDescriptor = binding.descriptor;
+			if (binding.gen === this.#generation) {
+				this.#resetRecovery();
+				this.#status = "running";
 			}
 			return { kind: "committed" };
 		} finally {
@@ -883,11 +1056,15 @@ export class SessionChronicler {
 	): Promise<ChroniclerBinding | undefined> {
 		const gen = this.#generation;
 		const current = this.#binding;
+		const reconcile = this.#reconcile;
+		this.#reconcile = false;
 		const rebind =
 			!current ||
+			reconcile ||
 			current.gen !== this.#generation ||
 			!this.#sameDescriptor(current.descriptor, descriptor) ||
-			current.modelString !== selection.modelString;
+			current.modelString !== selection.modelString ||
+			!this.#ownsLease(current);
 		if (!rebind) return current;
 
 		// Serialized on the owner chain, so any previous prompt/publication has
@@ -899,21 +1076,13 @@ export class SessionChronicler {
 		const storeRoot = `${descriptor.artifactsDir}/chronicler`;
 		let lease: FileLockHandle;
 		try {
-			lease = await acquireFileLock(storeRoot, { retries: 1 });
-		} catch {
-			// Another process owns this session's store; retry on the next scan so
-			// capture resumes here once that process exits (the OS drops its lease).
-			if (this.#leaseContendedWarned !== descriptor.sessionFile) {
-				this.#leaseContendedWarned = descriptor.sessionFile;
-				this.#host.emitNotice(
-					"warning",
-					"Chronicler paused: another process is chronicling this session",
-					"chronicler",
-				);
-			}
+			lease = await acquireFileLock(storeRoot, { retries: 1, takeoverStoppedOwner: true });
+		} catch (error) {
+			if (gen !== this.#generation) return undefined;
+			if (!(error instanceof FileLockContentionError)) throw error;
+			this.#requestRetry(`Chronicler lease contention: ${error.message}`, "contended");
 			return undefined;
 		}
-		this.#leaseContendedWarned = undefined;
 		let bound = false;
 		try {
 			const store = new ChroniclerStore(
@@ -929,6 +1098,24 @@ export class SessionChronicler {
 		} finally {
 			if (!bound) lease.release();
 		}
+	}
+
+	#ownsLease(binding: ChroniclerBinding): boolean {
+		let owned: boolean;
+		try {
+			owned = binding.lease.isOwner?.() ?? true;
+		} catch (error) {
+			if (binding.gen === this.#generation) {
+				this.#revokeNow("chronicler ownership check failed", true);
+				this.#requestRetry(`Chronicler ownership check failed: ${errorText(error)}`);
+			}
+			return false;
+		}
+		if (!owned && binding.gen === this.#generation) {
+			this.#revokeNow("chronicler ownership lost", true);
+			this.#requestRetry("Chronicler ownership was taken over");
+		}
+		return owned;
 	}
 
 	#completeBinding(
@@ -976,11 +1163,14 @@ export class SessionChronicler {
 			lease,
 		};
 		agent.addBeforeModelCallHook(() => {
-			if (this.#generation !== gen || this.#deadlineExpired || this.#cleanedUp) {
+			if (this.#generation !== gen || this.#deadlineExpired || this.#cleanedUp || !this.#ownsLease(binding)) {
 				throw new Error("Chronicler binding was revoked");
 			}
 		});
 		this.#binding = binding;
+		this.#lastCommittedAt = store.lastCommittedAt;
+		this.#lastCommittedDescriptor = descriptor;
+		this.#watchOwnership(binding);
 		return binding;
 	}
 
@@ -1014,12 +1204,14 @@ export class SessionChronicler {
 	async #teardownBinding(binding: ChroniclerBinding): Promise<void> {
 		binding.agentUnsubscribe();
 		binding.agent.abort("chronicler binding released");
-		binding.lease.release();
+		chroniclerTimerIO.clearTimeout(this.#ownershipTimer);
+		this.#ownershipTimer = undefined;
 		try {
 			await binding.recorder.close();
 		} catch (error) {
 			logger.debug("Chronicler recorder close failed", { error: String(error) });
 		}
+		binding.lease.release();
 	}
 
 	async #disableBinding(): Promise<void> {
@@ -1032,12 +1224,12 @@ export class SessionChronicler {
 	}
 
 	#handleBindingError(error: unknown): void {
-		this.#status = "halted";
-		this.#host.emitNotice("warning", `Chronicler capture halted: ${errorText(error)}`, "chronicler");
+		this.#requestRetry(errorText(error), isChroniclerCorruption(error) ? "halted" : "retrying");
 	}
 
 	async #cleanup(): Promise<void> {
 		if (this.#cleanedUp) return;
+		this.#cancelTimers();
 		this.#cleanedUp = true;
 		this.#settingsUnsub?.();
 		this.#settingsUnsub = undefined;
@@ -1045,6 +1237,62 @@ export class SessionChronicler {
 			await this.#teardownBinding(this.#binding);
 			this.#binding = undefined;
 		}
+	}
+
+	#cancelTimers(): void {
+		chroniclerTimerIO.clearTimeout(this.#retryTimer);
+		chroniclerTimerIO.clearTimeout(this.#ownershipTimer);
+		this.#retryTimer = undefined;
+		this.#ownershipTimer = undefined;
+		this.#retryAt = undefined;
+	}
+
+	#resetRecovery(): void {
+		chroniclerTimerIO.clearTimeout(this.#retryTimer);
+		this.#retryTimer = undefined;
+		this.#retryAt = undefined;
+		this.#retryAttempt = 0;
+		this.#error = undefined;
+		this.#failureWarned = undefined;
+	}
+
+	#requestRetry(reason: string, status: ChroniclerStatus = "retrying", reconcile = true): void {
+		if (
+			this.#suspended ||
+			this.#stopping ||
+			this.#cleanedUp ||
+			this.#deadlineExpired ||
+			this.#host.isDisposed() ||
+			!this.#enabled() ||
+			!this.#host.isCaptureEligible()
+		)
+			return;
+		this.#error = reason;
+		this.#status = status;
+		this.#reconcile ||= reconcile;
+		if (this.#failureWarned !== reason) {
+			this.#failureWarned = reason;
+			this.#host.emitNotice("warning", `Chronicler recovery pending: ${reason}`, "chronicler");
+		}
+		if (this.#retryTimer !== undefined) return;
+		const delay = Math.min(RETRY_BACKOFF_MS[0] * 2 ** Math.min(this.#retryAttempt++, 5), MAX_RECOVERY_BACKOFF_MS);
+		this.#retryAt = Date.now() + delay;
+		this.#retryTimer = chroniclerTimerIO.setTimeout(() => {
+			this.#retryTimer = undefined;
+			this.#retryAt = undefined;
+			this.#scheduleWake(true);
+		}, delay);
+		this.#retryTimer.unref?.();
+	}
+
+	#watchOwnership(binding: ChroniclerBinding): void {
+		if (this.#stopping || this.#suspended || this.#cleanedUp || !this.#enabled()) return;
+		this.#ownershipTimer = chroniclerTimerIO.setTimeout(() => {
+			this.#ownershipTimer = undefined;
+			if (this.#binding !== binding || this.#generation !== binding.gen) return;
+			if (this.#ownsLease(binding)) this.#watchOwnership(binding);
+		}, OWNERSHIP_CHECK_MS);
+		this.#ownershipTimer.unref?.();
 	}
 
 	/** Interruptible sleep; resolves false when the generation is revoked. */

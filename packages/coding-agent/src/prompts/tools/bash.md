@@ -4,5 +4,14 @@ Persistent shell: one fact command/pipeline; dependencies use `&&`.
 Internal URIs work as paths for builtins/coreutils, redirects, globs.
 {{#if asyncEnabled}}`async` defers finite results; timeout unchanged.{{/if}}
 No `head`/`tail`/redirection; output trunc by default, full result at `artifact://<id>`.
-{{#if hasLaunch}}Long-lived services: unique name; ready/env require name; no async/timeout. env adds variables; pty defaults true. ready needs log regex or port (both if given); host defaults 127.0.0.1, ready.timeout 30s.{{/if}}
+{{#if hasLaunch}}Long-lived services: unique name; ready requires name; no async/timeout; pty defaults true. ready needs log regex or port (both if given); host defaults 127.0.0.1, ready.timeout 30s.{{/if}}
 {{#if autoBackgroundEnabled}}Background results follow; NEVER poll; foreground wait unchanged.{{/if}}
+Tool shells disable editors and credential prompts, but retain the host `TERM`. `OMP_HOST_EDITOR`, `OMP_HOST_VISUAL`, `OMP_HOST_SSH_ASKPASS`, `OMP_HOST_SUDO_ASKPASS`, and `OMP_HOST_TERM` expose launcher values when present.
+For POSIX shells only, before starting a tmux server/pane or sibling TUI, use a subshell: `( set -- "$SHELL"; . "$OMP_HOST_ENV_FILE"; "$1" -lc '<launch command>' )`. Capture the resolved POSIX shell before sourcing because restoration may unset a synthetic `SHELL` absent from the launcher. This recipe is not for cmd.exe or PowerShell: they cannot source this POSIX file and must not receive `-lc`; use a POSIX shell for this restoration workflow. The private 0600 POSIX file restores the original launcher environment, including unsetting tool-only overrides. Do not print or share it: it may contain credentials. It is removed when this npi process exits. This does not repair an already-poisoned tmux server's environment.
+Capture precedes profile bootstrap without loading profile dotenv; profile-derived runtime variables are not launcher values. When the runtime cannot read the pre-dotenv launch environment, values matching project dotenv files are excluded conservatively from the snapshot.
+After an abnormal exit, the next local tool launch prunes abandoned snapshots; OS-backed owner leases preserve snapshots still in use by live npi processes.
+Git repository-location variables are excluded from restoration so sibling tools discover their own working directory's repository.
+Restoration also removes variables added only by the centralized shell environment, including a synthetic `GPG_TTY` and coding-agent markers when absent from the launcher.
+Injected `OMP_HOST_*` metadata is cleared during restoration when the launcher did not supply it, so siblings do not inherit this process's temporary snapshot path.
+Per-command caller and direnv overlay names are passed separately as validated `OMP_HOST_OVERLAY_KEYS`; restoration clears overlay-only variables before exporting launcher values and removes that metadata too.
+The central process-environment safety filter also excludes malloc stack-logging diagnostics from authoritative snapshots; restoration does not re-enable them in siblings.

@@ -585,7 +585,9 @@ export async function recoverOrphanedBackups(sessionDir: string, storage: Sessio
 		if (dotIdx <= 0) continue;
 		const primaryName = trimmed.slice(0, dotIdx);
 		if (!primaryName.endsWith(".jsonl")) continue;
-		const primaryPath = path.join(sessionDir, primaryName);
+		// The primary is the backup's sibling: strip the suffix from the listed path instead of
+		// re-joining `sessionDir`, so the key keeps the storage's own spelling of the directory.
+		const primaryPath = backup.slice(0, backup.length - (name.length - primaryName.length));
 		let mtimeMs = 0;
 		try {
 			mtimeMs = storage.statSync(backup).mtimeMs;
@@ -804,7 +806,8 @@ export async function getRecentSessions(
 	return recent;
 }
 
-function sessionMatchesResumeArg(session: SessionInfo, sessionArg: string): boolean {
+/** `--resume` selector semantics: a case-insensitive prefix of the session id or file name. */
+export function sessionMatchesResumeArg(session: SessionInfo, sessionArg: string): boolean {
 	const normalizedArg = sessionArg.toLowerCase();
 	const normalizedId = session.id.toLowerCase();
 	if (normalizedId.startsWith(normalizedArg)) {

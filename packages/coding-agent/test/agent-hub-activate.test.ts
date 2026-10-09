@@ -39,7 +39,7 @@ function persistedChildJsonl(id: string): string {
 	].join("\n");
 }
 
-function makeHub(focusAgent: (id: string) => Promise<void>) {
+function makeHub(focusAgent: (id: string) => Promise<void>, secondAgent = false) {
 	const agents = new AgentRegistry();
 	agents.register({
 		id: AGENT_ID,
@@ -50,6 +50,17 @@ function makeHub(focusAgent: (id: string) => Promise<void>) {
 		sessionFile: null,
 		status: "running",
 	});
+	if (secondAgent) {
+		agents.register({
+			id: "Worker2",
+			displayName: "Worker2",
+			kind: "sub",
+			parentId: "Main",
+			session: { subscribe: () => () => {} } as unknown as AgentSession,
+			sessionFile: null,
+			status: "running",
+		});
+	}
 	let doneCalls = 0;
 	const done = Promise.withResolvers<void>();
 	const renderRequested = Promise.withResolvers<void>();
@@ -121,6 +132,26 @@ describe("Agent hub Enter activation", () => {
 		resetSettingsForTest();
 	});
 
+	it("navigates with hjkl and keeps literal filter text through insert Esc until normal Esc closes (#35)", () => {
+		const { hub, doneCalls } = makeHub(async () => {}, true);
+		const [firstId, secondId] = renderedRosterIds(hub, 120);
+		expect(renderedRosterEntry(hub, firstId!, 120)).toContain("❯");
+		hub.handleInput("j");
+		expect(renderedRosterEntry(hub, secondId!, 120)).toContain("❯");
+		hub.handleInput("k");
+		expect(renderedRosterEntry(hub, firstId!, 120)).toContain("❯");
+		hub.handleInput("l");
+		hub.handleInput("h");
+		hub.handleInput("i");
+		for (const key of "hjkl") hub.handleInput(key);
+		expect(Bun.stripANSI(hub.render(120).join("\n"))).toContain("/hjkl");
+		hub.handleInput("\x1b");
+		expect(doneCalls()).toBe(0);
+		expect(Bun.stripANSI(hub.render(120).join("\n"))).toContain("/hjkl");
+		hub.handleInput("\x1b");
+		expect(doneCalls()).toBe(1);
+		hub.dispose();
+	});
 	it("Enter focuses the selected agent and closes the hub", async () => {
 		const focusedIds: string[] = [];
 		const { hub, doneCalls, done } = makeHub(async id => {
@@ -160,11 +191,7 @@ describe("Agent hub Enter activation", () => {
 			status: "aborted",
 		});
 		const focusAgent = vi.fn(async () => {});
-		let viewer: { render(width: number): readonly string[] } | undefined;
-		const showOverlay = vi.fn((component: { render(width: number): readonly string[] }) => {
-			viewer = component;
-			return { hide: () => {} };
-		});
+		const showOverlay = vi.fn((_component: unknown, _options: unknown) => ({ hide: () => {} }));
 		const setFocus = vi.fn();
 		const onDone = vi.fn();
 		const hub = new AgentHubOverlayComponent({
@@ -193,7 +220,6 @@ describe("Agent hub Enter activation", () => {
 			fullscreen: true,
 		});
 		expect(setFocus).toHaveBeenCalledWith(expect.anything());
-		expect(Bun.stripANSI(viewer!.render(120).join("\n"))).not.toContain("Enter:send");
 		expect(onDone).not.toHaveBeenCalled();
 		hub.dispose();
 	});

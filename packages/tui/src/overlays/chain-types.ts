@@ -2,7 +2,7 @@
  * Post-processing chains: named, ordered model passes that rewrite composer
  * text before it is sent. Each step's output is the next step's input; the
  * last step's output is what gets sent. Declared in `CHAINS.yml` at the
- * project root or the user agent dir, and edited by `/chaining configure`.
+ * project root or the user agent dir, and edited by `/chain configure`.
  */
 
 /** One step of a chain: a single model pass over the previous step's text. */

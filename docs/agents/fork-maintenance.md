@@ -10,8 +10,8 @@ For each core integration, record the missing extension capability and the obser
 
 Examples in this fork:
 
-- Persona and loadout command interfaces belong in extensions. Atomic settings changes remain the responsibility of Settings and AgentSession.
-- Additional eval backends use the registration API; execution ownership, cancellation, and transcript persistence remain session responsibilities.
+- Personas, loadouts, and REPL mode started as extensions and moved into `packages/coding-agent` once their UX needed the composer, fullscreen overlays, and per-turn prompt preparation. Their state and command logic live in `src/neopi/`; the integration points are narrow: `AgentSession` applies the session persona while preparing a turn, and the input controller routes REPL cells. Atomic settings changes remain the responsibility of Settings and AgentSession.
+- Additional eval backends from third-party extensions use the registration API; execution ownership, cancellation, and transcript persistence remain session responsibilities.
 - Advisor severity policy can live in its own module, but queue delivery and interruption guarantees require agent-loop and session integration.
 
 ## Integrating an upstream release

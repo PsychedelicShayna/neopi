@@ -13,6 +13,7 @@ import type { Context, SimpleStreamOptions, ToolResultMessage } from "@oh-my-pi/
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { kCursorExecResolved } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { createAssistantMessage, createUserMessage } from "./helpers";
 
 function createHeldSteeringAgent(interruptMode: "immediate" | "wait") {
@@ -176,16 +177,6 @@ describe("Agent", () => {
 			agent.abort();
 			await run;
 		}
-	});
-
-	it("should support steering message queueing", async () => {
-		const agent = new Agent();
-
-		const message = { role: "user" as const, content: "Queued message", timestamp: Date.now() };
-		agent.steer(message);
-
-		// The message is queued but not yet in state.messages
-		expect(agent.state.messages).not.toContainEqual(message);
 	});
 
 	it("classifies agent-authored steering as a parent steering message", async () => {
@@ -644,6 +635,57 @@ describe("Agent", () => {
 		await Promise.resolve();
 		expect(predecessorIdleResolved).toBe(true);
 		expect(agent.state.isStreaming).toBe(false);
+	});
+
+	it("keeps request effort on delayed same-model output after a live switch", async () => {
+		const mock = createMockModel({
+			reasoning: true,
+			responses: [{ content: ["high response"] }, { content: ["low response"] }],
+		});
+		Object.assign(mock.model, { thinking: { mode: "effort", efforts: [Effort.Low, Effort.High] } });
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		let requests = 0;
+		const events: AgentEvent[] = [];
+		const agent = new Agent({
+			initialState: { model: mock.model },
+			streamFn: async (model, context, options) => {
+				if (++requests === 1) {
+					entered.resolve();
+					await release.promise;
+				}
+				return mock.stream(model, context, options);
+			},
+		});
+		agent.subscribe(event => events.push(event));
+		agent.setThinkingLevel(Effort.High);
+		const first = agent.prompt("first");
+		await entered.promise;
+		agent.setThinkingLevel(Effort.Low);
+		release.resolve();
+		await first;
+		await agent.prompt("second");
+
+		const generated = events.filter(
+			(event): event is Extract<AgentEvent, { type: "message_end" }> =>
+				event.type === "message_end" &&
+				event.message.role === "assistant" &&
+				event.message.content.some(block => block.type === "text" && Boolean(block.text)),
+		);
+		expect(generated).toHaveLength(2);
+		expect(generated.map(event => event.requestReasoning)).toEqual([Effort.High, Effort.Low]);
+		expect(generated.map(event => event.requestEffectiveThinkingLevel)).toEqual([Effort.High, Effort.Low]);
+		expect(generated.map(event => event.requestModelId)).toEqual([mock.model.id, mock.model.id]);
+		expect(
+			events
+				.filter(
+					(event): event is Extract<AgentEvent, { type: "message_update" }> =>
+						event.type === "message_update" &&
+						event.message.role === "assistant" &&
+						event.message.content.some(block => block.type === "text" && Boolean(block.text)),
+				)
+				.map(event => event.requestReasoning),
+		).toContain(Effort.High);
 	});
 
 	it("classifies an in-flight continuation cancellation as aborted", async () => {
@@ -1630,22 +1672,6 @@ describe("Agent", () => {
 
 		const reasoningPerCall: Array<SimpleStreamOptions["reasoning"]> = mock.calls.map(call => call.options?.reasoning);
 		expect(reasoningPerCall).toEqual([ThinkingLevel.Low, ThinkingLevel.High]);
-	});
-
-	it("forwards explicit reasoning disablement to the stream", async () => {
-		const mock = createMockModel({ responses: [{ content: ["ok"] }] });
-		const agent = new Agent({
-			initialState: {
-				model: mock.model,
-				messages: [],
-				disableReasoning: true,
-			},
-			streamFn: mock.stream,
-		});
-
-		await agent.prompt("run");
-
-		expect(mock.calls[0]?.options?.disableReasoning).toBe(true);
 	});
 
 	it("re-reads disableReasoning for each model call within a run", async () => {

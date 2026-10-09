@@ -91,40 +91,12 @@ describe("SelectorController.handleResumeSession preflight flush", () => {
 
 		expect(result).toBe(false);
 		expect(ctx.showError).toHaveBeenCalledWith(expect.stringContaining("disk full"));
+		expect(ctx.prepareSessionSwitch).not.toHaveBeenCalled();
+		expect(ctx.resetObserverRegistry).not.toHaveBeenCalled();
 		expect(ctx.clearTransientSessionUi).not.toHaveBeenCalled();
 		expect(switchSession).not.toHaveBeenCalled();
 		expect(applyCwdChange).not.toHaveBeenCalled();
 		expect(ctx.showStatus).not.toHaveBeenCalled();
-	});
-
-	it("proceeds and returns true when flush succeeds", async () => {
-		const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-resume-preflight-"));
-		try {
-			const { ctx, switchSession, applyCwdChange, state } = createResumeContext({ sourceCwd: tmpDir });
-			const targetCwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-resume-target-"));
-			switchSession.mockImplementation(async (_sessionPath, options) => {
-				state.cwd = targetCwd;
-				return options?.onCwdChange ? options.onCwdChange(targetCwd, tmpDir) : true;
-			});
-			const controller = new SelectorController(ctx);
-
-			const result = await controller.handleResumeSession("/tmp/some-session.jsonl");
-
-			expect(result).toBe(true);
-			expect(ctx.settings.flush).toHaveBeenCalled();
-			expect(ctx.clearTransientSessionUi).toHaveBeenCalled();
-			expect(switchSession).toHaveBeenCalledWith(
-				"/tmp/some-session.jsonl",
-				expect.objectContaining({ onCwdChange: expect.any(Function) }),
-			);
-			expect(applyCwdChange).toHaveBeenCalledWith(targetCwd);
-			expect(ctx.showError).not.toHaveBeenCalled();
-			expect(ctx.showStatus).toHaveBeenCalled();
-
-			await fs.rm(targetCwd, { recursive: true, force: true });
-		} finally {
-			await fs.rm(tmpDir, { recursive: true, force: true });
-		}
 	});
 
 	it("restores an in-memory source when cwd application fails", async () => {

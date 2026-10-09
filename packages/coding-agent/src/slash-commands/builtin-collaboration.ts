@@ -1,6 +1,11 @@
+import { clearSubmittedText } from "./helpers/draft";
 import { Spacer } from "@oh-my-pi/pi-tui";
 import { APP_NAME, formatAge, getAgentDir } from "@oh-my-pi/pi-utils";
+import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
 import { discoverChains } from "../chains/config";
+import { discoverMixtures } from "../moa/config";
+import { checkMixture } from "../moa/registration";
+import { formatMixtureReset, formatMixtureStatus } from "../moa/status";
 import { CollabGuestLink } from "../collab/guest";
 import type { CollabHost } from "../collab/host";
 import { type CollabHostSnapshot, listCollabHosts } from "../collab/registry";
@@ -18,7 +23,7 @@ import { copyToClipboard } from "../utils/clipboard";
 import { refreshStatusLine } from "./builtin-modes";
 import { CollabQrCodeComponent, collabBrowserLink } from "@oh-my-pi/pi-tui/chrome/collab-qrcode";
 import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers/parse";
-import type { SlashCommandSpec } from "./types";
+import type { SlashCommandRuntime, SlashCommandSpec } from "./types";
 
 import { cfgBrowserEnabled, cfgBrowserHeadless } from "../tools/browser/settings";
 import { cfgShareRedactSecrets, cfgShareServerUrl, cfgShareStore } from "../commands/settings";
@@ -53,7 +58,7 @@ async function formatChainingStatus(cwd: string): Promise<string> {
 		`Active chain: ${active || "(none; you will be asked)"}`,
 	];
 	if (chains.length === 0) {
-		lines.push("No chains defined. Create one with /chaining configure.");
+		lines.push("No chains defined. Create one with /chain configure.");
 	} else {
 		lines.push("Chains:");
 		for (const chain of chains) {
@@ -65,11 +70,11 @@ async function formatChainingStatus(cwd: string): Promise<string> {
 	return lines.join("\n");
 }
 
-/** Apply a /chaining verb that does not need the TUI; returns the message, or undefined for an unknown verb. */
+/** Apply a /chain verb that does not need the TUI; returns the message, or undefined for an unknown verb. */
 async function applyChainingVerb(verb: string, rest: string, cwd: string): Promise<string | undefined> {
 	if (verb === "on") {
 		const { chains } = await discoverChains(cwd, getAgentDir());
-		if (chains.length === 0) return "No chains defined. Create one with /chaining configure first.";
+		if (chains.length === 0) return "No chains defined. Create one with /chain configure first.";
 		cfgChainingAuto.set(settings, true);
 		const active = cfgChainingActive.get(settings);
 		return chains.some(chain => chain.name === active)
@@ -97,7 +102,47 @@ async function applyChainingVerb(verb: string, rest: string, cwd: string): Promi
 	return undefined;
 }
 
-const CHAINING_USAGE = "Usage: /chaining [on|off|status|use [name]|configure]";
+const CHAINING_USAGE = "Usage: /chain [on|off|status|use [name]|configure]";
+
+const MIXTURE_USAGE = "Usage: /mixture [configure|list|use <name>|reset|status]";
+
+async function mixtureList(runtime: Pick<SlashCommandRuntime, "session" | "settings" | "cwd">): Promise<string> {
+	const agentDir = runtime.session.getMixtureAgentDir() ?? getAgentDir();
+	const found = await discoverMixtures(runtime.cwd, agentDir);
+	const names = found.mixtures.map(item => item.definition.name);
+	const active = runtime.session.model?.api === "mixture" ? runtime.session.model.id : undefined;
+	const lines = ["Mixtures:"];
+	for (const item of found.mixtures) {
+		const checked = checkMixture(
+			item.definition,
+			{
+				cwd: runtime.cwd,
+				agentDir,
+				registry: runtime.session.modelRegistry,
+				settings: runtime.settings,
+			},
+			item.preparedPresets,
+			names,
+		);
+		const state = checked.errors[0]?.code ?? "ready";
+		lines.push(
+			`  ${active === item.definition.name ? "*" : "-"} ${sanitizeDisplayLine(item.definition.name)} (${state})`,
+		);
+	}
+	if (found.mixtures.length === 0) lines.push("  (none — open /mixture to create one)");
+	for (const warning of found.warnings) lines.push(`Warning: ${sanitizeDisplayLine(warning)}`);
+	return lines.join("\n");
+}
+
+async function useMixture(runtime: Pick<SlashCommandRuntime, "session">, name: string): Promise<string> {
+	if (!name) return MIXTURE_USAGE;
+	if (!runtime.session.getRegisteredMixture(name))
+		return `Mixture ${sanitizeDisplayLine(name)} is not registered in this workspace.`;
+	const model = runtime.session.modelRegistry.find("mixture", name);
+	if (!model) return `Mixture ${sanitizeDisplayLine(name)} is not available for selection.`;
+	await runtime.session.setModel(model);
+	return `Using mixture/${sanitizeDisplayLine(name)}`;
+}
 function showCollabQrCode(ctx: InteractiveModeContext, webLink: string): void {
 	try {
 		ctx.present([new Spacer(1), new CollabQrCodeComponent(webLink)]);
@@ -190,7 +235,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 					runtime.ctx.showStatus("Advisor disabled.");
 				}
 				refreshStatusLine(runtime.ctx);
-				runtime.ctx.editor.setText("");
+				clearSubmittedText(runtime);
 				return;
 			}
 			if (verb === "on") {
@@ -199,38 +244,38 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 					active ? "Advisor enabled." : "Advisor setting enabled, but no model is assigned to the 'advisor' role.",
 				);
 				refreshStatusLine(runtime.ctx);
-				runtime.ctx.editor.setText("");
+				clearSubmittedText(runtime);
 				return;
 			}
 			if (verb === "off") {
 				runtime.ctx.session.setAdvisorEnabled(false);
 				runtime.ctx.showStatus("Advisor disabled.");
 				refreshStatusLine(runtime.ctx);
-				runtime.ctx.editor.setText("");
+				clearSubmittedText(runtime);
 				return;
 			}
 			if (verb === "status") {
 				await runtime.ctx.handleAdvisorStatusCommand();
-				runtime.ctx.editor.setText("");
+				clearSubmittedText(runtime);
 				return;
 			}
 			if (verb === "dump") {
 				const isRaw = rest.toLowerCase() === "raw";
 				runtime.ctx.handleAdvisorDumpCommand(isRaw);
-				runtime.ctx.editor.setText("");
+				clearSubmittedText(runtime);
 				return;
 			}
 			if (verb === "configure") {
 				runtime.ctx.showAdvisorConfigure();
-				runtime.ctx.editor.setText("");
+				clearSubmittedText(runtime);
 				return;
 			}
 			runtime.ctx.showStatus("Usage: /advisor [on|off|status|dump [raw]|configure]");
-			runtime.ctx.editor.setText("");
+			clearSubmittedText(runtime);
 		},
 	},
 	{
-		name: "chaining",
+		name: "chain",
 		icon: "advisor",
 		description: "Post-processing chains that rewrite a prompt through ordered model steps before it is sent",
 		acpDescription: "Manage post-processing chains",
@@ -252,7 +297,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 			const { verb, rest } = parseSubcommand(command.args);
 			if (verb === "configure") {
 				await runtime.output(
-					"/chaining configure opens an interactive editor and is only available in the interactive TUI.",
+					"/chain configure opens an interactive editor and is only available in the interactive TUI.",
 				);
 				return commandConsumed();
 			}
@@ -270,6 +315,75 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 			}
 			const message = await applyChainingVerb(verb || "status", rest, runtime.ctx.sessionManager.getCwd());
 			runtime.ctx.showStatus(message ?? CHAINING_USAGE);
+			refreshStatusLine(runtime.ctx);
+		},
+	},
+	{
+		name: "mixture",
+		aliases: ["moa"],
+		icon: "advisor",
+		description: "Configure, select, reset, and inspect Mixture of Agents models and runs",
+		acpDescription: "Manage Mixture of Agents models and runs",
+		acpInputHint: "[list|use <name>|configure [name]|reset|status]",
+		subcommands: [
+			{ name: "configure", description: "Open the fullscreen graph configurator (TUI)", usage: "[name]" },
+			{ name: "list", description: "List discovered mixtures and validation state" },
+			{ name: "use", description: "Select a registered mixture model", usage: "<name>" },
+			{ name: "reset", description: "Drop the current mixture run so the next message starts fresh" },
+			{ name: "status", description: "Show the current mixture run's hop, member, and spend" },
+		],
+		allowArgs: true,
+		handle: async (command, runtime) => {
+			const { verb, rest } = parseSubcommand(command.args);
+			if (verb === "reset") {
+				await runtime.output(formatMixtureReset(runtime.session.resetMixtureRuns()));
+				return commandConsumed();
+			}
+			if (verb === "status") {
+				await runtime.output(formatMixtureStatus(runtime.session.mixtureRuns(), runtime.settings));
+				return commandConsumed();
+			}
+			if (verb === "configure") {
+				await runtime.output("/mixture configure requires the interactive TUI.");
+				return commandConsumed();
+			}
+			const message =
+				!verb || verb === "list"
+					? await mixtureList(runtime)
+					: verb === "use"
+						? await useMixture(runtime, rest.trim())
+						: undefined;
+			return message === undefined
+				? usage(MIXTURE_USAGE, runtime)
+				: (await runtime.output(message), commandConsumed());
+		},
+		handleTui: async (command, runtime) => {
+			const { verb, rest } = parseSubcommand(command.args);
+			runtime.ctx.editor.setText("");
+			if (verb === "reset") {
+				runtime.ctx.showStatus(formatMixtureReset(runtime.ctx.session.resetMixtureRuns()));
+				return;
+			}
+			if (verb === "status") {
+				runtime.ctx.showStatus(formatMixtureStatus(runtime.ctx.session.mixtureRuns(), runtime.ctx.settings));
+				return;
+			}
+			if (!verb || verb === "configure") {
+				runtime.ctx.showMixtureConfigure(rest.trim() || undefined);
+				return;
+			}
+			const shared = {
+				session: runtime.ctx.session,
+				settings: runtime.ctx.settings,
+				cwd: runtime.ctx.sessionManager.getCwd(),
+			};
+			const message =
+				verb === "list"
+					? await mixtureList(shared)
+					: verb === "use"
+						? await useMixture(shared, rest.trim())
+						: MIXTURE_USAGE;
+			runtime.ctx.showStatus(message);
 			refreshStatusLine(runtime.ctx);
 		},
 	},
@@ -294,7 +408,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		},
 		handleTui: async (command, runtime) => {
 			await runtime.ctx.handleExportCommand(command.text);
-			runtime.ctx.editor.setText("");
+			clearSubmittedText(runtime);
 		},
 	},
 	{
@@ -321,7 +435,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		},
 		handleTui: async (_command, runtime) => {
 			await runtime.ctx.handleTraceCommand();
-			runtime.ctx.editor.setText("");
+			clearSubmittedText(runtime);
 		},
 	},
 	{
@@ -354,7 +468,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		},
 		handleTui: async (_command, runtime) => {
 			await runtime.ctx.handleDumpCommand();
-			runtime.ctx.editor.setText("");
+			clearSubmittedText(runtime);
 		},
 	},
 	{
@@ -380,7 +494,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		},
 		handleTui: async (_command, runtime) => {
 			await runtime.ctx.handleShareCommand();
-			runtime.ctx.editor.setText("");
+			clearSubmittedText(runtime);
 		},
 	},
 	{
@@ -406,7 +520,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		},
 		handleTui: async (command, runtime) => {
 			const ctx = runtime.ctx;
-			ctx.editor.setText("");
+			clearSubmittedText(runtime);
 			const args = command.args.trim();
 			const { verb, rest } = parseSubcommand(args);
 			if (verb === "stop") {
@@ -520,7 +634,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		allowArgs: true,
 		handleTui: async (command, runtime) => {
 			const ctx = runtime.ctx;
-			ctx.editor.setText("");
+			clearSubmittedText(runtime);
 			const link = command.args.trim();
 			if (!link) {
 				ctx.showError("Usage: /join <link>");
@@ -555,7 +669,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		},
 		handleTui: async (_command, runtime) => {
 			const ctx = runtime.ctx;
-			ctx.editor.setText("");
+			clearSubmittedText(runtime);
 			if (ctx.collabGuest) {
 				await ctx.collabGuest.leave("left");
 				return;
@@ -613,7 +727,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 			let next = current;
 			if (!cfgBrowserEnabled.get(settings)) {
 				runtime.ctx.showWarning("Browser capability is disabled (enable in settings)");
-				runtime.ctx.editor.setText("");
+				clearSubmittedText(runtime);
 				return;
 			}
 			if (!arg) {
@@ -624,7 +738,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 				next = false;
 			} else {
 				runtime.ctx.showStatus("Usage: /browser [headless|visible]");
-				runtime.ctx.editor.setText("");
+				clearSubmittedText(runtime);
 				return;
 			}
 			cfgBrowserHeadless.set(settings, next);
@@ -632,11 +746,11 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 				await restartBrowserForModeChange();
 			} catch (error) {
 				runtime.ctx.showWarning(`Failed to restart browser: ${errorMessage(error)}`);
-				runtime.ctx.editor.setText("");
+				clearSubmittedText(runtime);
 				return;
 			}
 			runtime.ctx.showStatus(`Browser mode: ${next ? "headless" : "visible"}`);
-			runtime.ctx.editor.setText("");
+			clearSubmittedText(runtime);
 		},
 	},
 	{
@@ -648,47 +762,47 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 			const arg = command.args.trim().toLowerCase();
 			if (!arg) {
 				runtime.ctx.showCopySelector();
-				runtime.ctx.editor.setText("");
+				clearSubmittedText(runtime);
 				return;
 			}
 			if (arg === "code") {
 				const block = extractLastCodeBlock(runtime.ctx.session.messages);
 				if (!block) {
 					runtime.ctx.showStatus("No code block to copy.");
-					runtime.ctx.editor.setText("");
+					clearSubmittedText(runtime);
 					return;
 				}
 				await copyToClipboard(block.code);
 				runtime.ctx.showStatus("Copied code block to clipboard");
-				runtime.ctx.editor.setText("");
+				clearSubmittedText(runtime);
 				return;
 			}
 			if (arg === "cmd" || arg === "command") {
 				const lastCommand = extractLastCommand(runtime.ctx.session.messages);
 				if (!lastCommand) {
 					runtime.ctx.showStatus("No command to copy.");
-					runtime.ctx.editor.setText("");
+					clearSubmittedText(runtime);
 					return;
 				}
 				await copyToClipboard(lastCommand.code);
 				runtime.ctx.showStatus(`Copied ${lastCommand.kind === "bash" ? "bash command" : "eval code"} to clipboard`);
-				runtime.ctx.editor.setText("");
+				clearSubmittedText(runtime);
 				return;
 			}
 			if (arg === "link" || arg === "url") {
 				const link = extractLastLink(runtime.ctx.session.messages);
 				if (!link) {
 					runtime.ctx.showStatus("No link to copy.");
-					runtime.ctx.editor.setText("");
+					clearSubmittedText(runtime);
 					return;
 				}
 				await copyToClipboard(link.href);
 				runtime.ctx.showStatus("Copied link to clipboard");
-				runtime.ctx.editor.setText("");
+				clearSubmittedText(runtime);
 				return;
 			}
 			runtime.ctx.showStatus("Usage: /copy [code|cmd|link]");
-			runtime.ctx.editor.setText("");
+			clearSubmittedText(runtime);
 		},
 	},
 	{
@@ -699,19 +813,21 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		handleTui: async (command, runtime) => {
 			const arg = command.args.trim().toLowerCase();
 			if (arg && arg !== "link" && arg !== "url") {
-				runtime.ctx.showStatus("Usage: /open [link]  (pick a specific link: /copy, → blocks, o)");
-				runtime.ctx.editor.setText("");
+				runtime.ctx.showStatus(
+					`Usage: /open [link]  (pick a specific link: /copy, ${formatKeyHint("right")} blocks, ${formatKeyHint("o")})`,
+				);
+				clearSubmittedText(runtime);
 				return;
 			}
 			const link = extractLastLink(runtime.ctx.session.messages);
 			if (!link) {
 				runtime.ctx.showStatus("No link to open.");
-				runtime.ctx.editor.setText("");
+				clearSubmittedText(runtime);
 				return;
 			}
 			openPath(link.href);
 			runtime.ctx.showStatus(`Opening ${link.href}`);
-			runtime.ctx.editor.setText("");
+			clearSubmittedText(runtime);
 		},
 	},
 ];

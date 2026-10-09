@@ -142,14 +142,10 @@ export function validateAgentModelSelector(
 	);
 }
 
-/**
- * Reject a concrete explicit level the resolved model cannot honor. The
- * `auto`, `max`, and `off` sentinels always pass: they map onto whatever the
- * model actually supports instead of requesting a fixed level.
- */
+/** Reject a fixed explicit level the resolved model cannot honor. Auto and off need no wire effort. */
 function assertEffortSupported(selector: string, model: Model<Api>, level: ConfiguredThinkingLevel | undefined): void {
 	const concrete = concreteThinkingLevel(level);
-	if (concrete === undefined || concrete === ThinkingLevel.Off || concrete === ThinkingLevel.Max) return;
+	if (concrete === undefined || concrete === ThinkingLevel.Off) return;
 	const effort = toReasoningEffort(concrete);
 	if (effort === undefined) return;
 	if (getSupportedEfforts(model).includes(effort)) return;
@@ -163,7 +159,7 @@ function supportedEffortsText(model: Model<Api>): string {
 	if (supported.length === 0) {
 		return `${formatModelString(model)} has no controllable thinking effort; omit the ":<effort>" suffix or use ":auto".`;
 	}
-	return `${formatModelString(model)} supports: ${supported.join(", ")} (plus "auto", "max", "off").`;
+	return `${formatModelString(model)} supports: ${supported.join(", ")} (plus "auto" and "off").`;
 }
 
 /** Up to `limit` catalog entries closest to `input` by edit distance over `provider/id` and bare `id`. */

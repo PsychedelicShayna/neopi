@@ -13,16 +13,23 @@
  */
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import type { MessageOrigin } from "@oh-my-pi/pi-ai";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
+import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
-import { $env, isRecord, logger, Snowflake } from "@oh-my-pi/pi-utils";
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
+import { $env, getAgentDir, isRecord, logger, Snowflake } from "@oh-my-pi/pi-utils";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
 import {
+	type ExtensionAskDialogQuestion,
+	type ExtensionAskDialogResult,
+	type ExtensionAskDialogSubmitResult,
 	type ExtensionUIContext,
 	type ExtensionUIDialogOptions,
 	type ExtensionUISelectItem,
 	type ExtensionWidgetOptions,
 	getExtensionUISelectOptionLabel,
+	timedOutAskDialogResult,
 } from "../../extensibility/extensions";
 import {
 	type BuiltSkillPromptMessage,
@@ -32,7 +39,18 @@ import {
 	type SkillPromptInput,
 } from "../../extensibility/skills";
 import { type Theme, theme } from "@oh-my-pi/pi-tui/theme";
+import { discoverMixtures, mixturesConfigFilePath } from "../../moa/config";
+import { checkMixture, readMixtureDefinitionFile, saveMixtureDefinition } from "../../moa/registration";
+import { AgentLifecycleManager } from "../../registry/agent-lifecycle";
+import {
+	type WordCompletionEngine,
+	type WordCompletionMethod,
+	type WordCompletionQuery,
+	wordCompletionQuery,
+} from "@oh-my-pi/pi-tui/prompt/word-completion";
+import { requestTextPrediction, textPredictionBackend } from "../../predict/client";
 import type { AgentSession } from "../../session/agent-session";
+import { CACHE_WARMING_MODES } from "../../session/cache-warmer";
 import { findMostRecentNonEmptySession } from "../../session/session-listing";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
 import { executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
@@ -41,8 +59,13 @@ import { defaultLoadModeForToolName } from "../../tools/essential-tools";
 import type { EventBus } from "../../utils/event-bus";
 import { selectRpcEntries } from "./rpc-compat";
 import { calculateTokensPerSecond } from "../../utils/token-rate";
-import { formatPersistenceDurabilityFailure, formatPersistenceFailure } from "../persistence-failure";
+import {
+	formatPersistenceDurabilityFailure,
+	formatPersistenceFailure,
+	formatPersistenceNotice,
+} from "../persistence-failure";
 import { initializeExtensions } from "../runtime-init";
+import { cfgSpellingAutocomplete } from "../settings";
 import { isRpcHostToolResult, isRpcHostToolUpdate, RpcHostToolBridge } from "./host-tools";
 import { isRpcHostUriResult, RpcHostUriBridge } from "./host-uris";
 import { RPC_CAPABILITIES } from "./rpc-capabilities";
@@ -51,18 +74,14 @@ import { claimRpcInput, readRpcInputFrames } from "./rpc-input";
 import { pageRpcMessages, RPC_MESSAGES_PAGE_BUSY_ERROR, RpcMessagesPageError } from "./rpc-messages";
 import { RpcOutputWriter } from "./rpc-output";
 import { isRpcPlanProposalResponse, RpcPlanModeController, RpcSetModeError } from "./rpc-plan-mode";
-import {
-	RpcExtensionUserMessageTracker,
-	RpcPromptResults,
-	type RpcPromptTicket,
-	watchAndReportPromptResult,
-} from "./rpc-prompt-results";
+import { RpcExtensionUserMessageTracker, RpcPromptResults, watchAndReportPromptResult } from "./rpc-prompt-results";
+import type { RpcPromptTicket } from "./rpc-prompt-results";
 import { RpcRoles } from "./rpc-roles";
 import { setRpcChatMode } from "./rpc-chat-mode";
 import { RpcSessionEventForwarder } from "./rpc-session-events";
 import { sessionLeaseErrorCode } from "./rpc-session-lease";
 import { isRpcSessionSettled, RpcSessionSettleWatcher } from "./rpc-session-settle";
-import { RpcSubagentRegistry, readRpcSubagentTranscript } from "./rpc-subagents";
+import { RpcSubagentRegistry, readRpcSubagentTranscript, resolveOwnedLiveSubagent } from "./rpc-subagents";
 import { getRpcUsage, RpcUsageUnavailableError } from "./rpc-usage";
 import { isRpcApprovalHandler, isRpcToolApprovalResponse, RpcToolApprovalBridge } from "./rpc-tool-approval";
 import type {
@@ -86,6 +105,84 @@ import type {
 	RpcSubagentSubscriptionLevel,
 	RpcToolApprovalResponse,
 } from "./rpc-types";
+
+const INVALID_TEXT_CURSOR_ERROR = "cursor must be an integer UTF-16 offset within text";
+
+function isTextCursor(text: unknown, cursor: unknown): text is string {
+	return (
+		typeof text === "string" &&
+		typeof cursor === "number" &&
+		Number.isInteger(cursor) &&
+		cursor >= 0 &&
+		cursor <= text.length
+	);
+}
+
+/**
+ * Composer ghost-text query at a UTF-16 cursor offset, gated like the TUI
+ * editor's: only at the end of a line, and only for a prose word.
+ */
+function wordQueryAt(text: string, cursor: number): WordCompletionQuery | undefined {
+	if (cursor < text.length && text[cursor] !== "\n") return undefined;
+	const lines = text.split("\n");
+	let cursorLine = 0;
+	let lineStart = 0;
+	while (lineStart + lines[cursorLine]!.length < cursor) lineStart += lines[cursorLine++]!.length + 1;
+	return wordCompletionQuery(lines, cursorLine, cursor - lineStart);
+}
+
+interface QueuedWordPrediction {
+	engine: WordCompletionEngine;
+	query: WordCompletionQuery;
+	resolve(suffix: string | null): void;
+	reject(error: unknown): void;
+}
+
+/**
+ * `predict_word` answers for one RPC session, with the TUI provider's flow
+ * control: one engine request in flight, and a newer request replaces the one
+ * waiting behind it (the replaced request answers `null`), so a burst of
+ * typing costs the shared daemon at most two inferences.
+ */
+export class RpcWordPredictor {
+	#busy = false;
+	#queued: QueuedWordPrediction | undefined;
+	readonly #request: typeof requestTextPrediction;
+
+	/** `request` is a test seam. */
+	constructor(request: typeof requestTextPrediction = requestTextPrediction) {
+		this.#request = request;
+	}
+
+	/**
+	 * Ghost-text suffix for the word ending at `cursor`, or `null` when the
+	 * engine is off, nothing applies, or a newer request superseded this one.
+	 * Rejects when the prediction daemon cannot answer.
+	 */
+	predict(method: WordCompletionMethod, text: string, cursor: number): Promise<string | null> {
+		if (method === "off") return Promise.resolve(null);
+		const query = wordQueryAt(text, cursor);
+		if (!query) return Promise.resolve(null);
+		if (!this.#busy) return this.#run(method, query);
+		this.#queued?.resolve(null);
+		const { promise, resolve, reject } = Promise.withResolvers<string | null>();
+		this.#queued = { engine: method, query, resolve, reject };
+		return promise;
+	}
+
+	async #run(engine: WordCompletionEngine, query: WordCompletionQuery): Promise<string | null> {
+		this.#busy = true;
+		try {
+			const { suggestion } = await this.#request(engine, query.before, query.prefix);
+			return suggestion?.suffix || null;
+		} finally {
+			this.#busy = false;
+			const next = this.#queued;
+			this.#queued = undefined;
+			if (next) void this.#run(next.engine, next.query).then(next.resolve, next.reject);
+		}
+	}
+}
 
 // Re-export types for consumers
 export type * from "./rpc-types";
@@ -151,6 +248,7 @@ export type RpcSkillCommandResult = { agentInvoked: true; userEntryId?: string }
 
 export interface RpcSkillInvocation extends SkillPromptInput {
 	skill: Skill;
+	queueChipText: string;
 }
 
 /**
@@ -164,7 +262,7 @@ export function resolveRpcSkillInvocation(session: RpcSkillCommandSession, text:
 	if (!parsed) return null;
 	const skill = session.skills.find(candidate => candidate.name === parsed.name);
 	if (!skill) return null;
-	return { skill, args: parsed.args, prompt: parsed.prompt };
+	return { skill, args: parsed.args, prompt: parsed.prompt, queueChipText: text };
 }
 
 /**
@@ -172,7 +270,7 @@ export function resolveRpcSkillInvocation(session: RpcSkillCommandSession, text:
  * and dispatches it through the full prompt pipeline (usage preflight,
  * compaction checks, provider calls). Resolves once the turn is scheduled.
  * Must not run on the RPC serial queue's response path — register it with
- * watchAndReportLocalOnlyPromptResult and answer the command first.
+ * watchAndReportPromptResult and answer the command once it is admitted.
  */
 export async function runRpcSkillCommand(
 	session: RpcSkillCommandSession,
@@ -180,27 +278,34 @@ export async function runRpcSkillCommand(
 	streamingBehavior: "steer" | "followUp" = "steer",
 	prebuilt?: BuiltSkillPromptMessage,
 	entryId?: string,
+	runOwner?: string,
+	onPromptAdmitted?: () => void,
+	images?: ImageContent[],
 ): Promise<boolean> {
 	const built = prebuilt ?? (await buildSkillPromptMessage(invocation.skill, invocation, "user"));
 	return session.promptCustomMessage(
 		{
 			customType: SKILL_PROMPT_MESSAGE_TYPE,
-			content: built.message,
+			content: images?.length ? [{ type: "text", text: built.message }, ...images] : built.message,
 			display: true,
 			details: built.details,
 			attribution: "user",
 		},
-		{ streamingBehavior, entryId },
+		{ streamingBehavior, entryId, runOwner, queueChipText: invocation.queueChipText, onPromptAdmitted },
 	);
 }
 
 /**
  * Skill branch of the `prompt` command: resolves the invocation cheaply, then
- * registers the slow dispatch with watchAndReportPromptResult and
- * returns immediately. The caller answers the command right away — building
- * the skill prompt and running the prompt pipeline (usage preflight,
- * compaction, provider calls) can outlast any client's prompt timeout under
- * provider stress; the plain-prompt path responds first for the same reason.
+ * registers the slow dispatch with watchAndReportPromptResult and awaits
+ * admission (or completion, for a message that settles without ever being
+ * admitted) before answering. The caller still does not wait for the full
+ * dispatch pipeline — building the skill prompt and running it (usage
+ * preflight, compaction, provider calls) can outlast any client's prompt
+ * timeout under provider stress; only queue admission gates the response.
+ *
+ * @returns `null` for a non-skill message, `"cancelled"` when `isCurrent`
+ *   reports the submission was invalidated while the skill file was read.
  */
 export async function dispatchRpcSkillPrompt(input: {
 	ticket: RpcPromptTicket;
@@ -213,7 +318,11 @@ export async function dispatchRpcSkillPrompt(input: {
 	results: RpcPromptResults;
 	onError: (error: Error) => void;
 	extensionUserMessageTracker: RpcExtensionUserMessageTracker;
-}): Promise<RpcSkillCommandResult | null> {
+	/** Run owner the skill prompt's work is scheduled under (#171). */
+	runOwner?: string;
+	images?: ImageContent[];
+	isCurrent?: () => boolean;
+}): Promise<RpcSkillCommandResult | "cancelled" | null> {
 	const invocation = resolveRpcSkillInvocation(input.session, input.message);
 	if (!invocation) return null;
 	// buildSkillPromptMessage is cheap file I/O and covers the failure the old
@@ -222,11 +331,24 @@ export async function dispatchRpcSkillPrompt(input: {
 	// promptCustomMessage pipeline (usage preflight, compaction, provider
 	// calls) is what moves behind the acknowledgement.
 	const built = await buildSkillPromptMessage(invocation.skill, invocation, "user");
+	if (input.isCurrent && !input.isCurrent()) return "cancelled";
 	const userEntryId = input.reserveEntryId();
-	watchAndReportPromptResult({
+	input.results.bindEntry(input.ticket, userEntryId);
+	if (input.runOwner) input.results.bindOwner(input.ticket, input.runOwner);
+	// Failure before admission also releases this wait and reports a failed prompt_result.
+	await watchAndReportPromptResult({
 		ticket: input.ticket,
-		startPrompt: () =>
-			runRpcSkillCommand(input.session, invocation, input.streamingBehavior ?? "steer", built, userEntryId),
+		startPrompt: onPromptAdmitted =>
+			runRpcSkillCommand(
+				input.session,
+				invocation,
+				input.streamingBehavior ?? "steer",
+				built,
+				userEntryId,
+				input.runOwner,
+				onPromptAdmitted,
+				input.images,
+			),
 		results: input.results,
 		releaseReservation: () => input.releaseEntryId?.(userEntryId),
 		onError: input.onError,
@@ -239,10 +361,11 @@ export async function tryRunRpcSkillCommand(
 	session: RpcSkillCommandSession,
 	text: string,
 	streamingBehavior: "steer" | "followUp" = "steer",
+	images?: ImageContent[],
 ): Promise<RpcSkillCommandResult | false> {
 	const invocation = resolveRpcSkillInvocation(session, text);
 	if (!invocation) return false;
-	await runRpcSkillCommand(session, invocation, streamingBehavior);
+	await runRpcSkillCommand(session, invocation, streamingBehavior, undefined, undefined, undefined, undefined, images);
 	return { agentInvoked: true };
 }
 
@@ -333,21 +456,31 @@ export function answerRpcProtocolNegotiation(
 }
 
 /**
- * Commands dispatched in the background instead of on the serial queue:
- * `bash` so a later `abort_bash` can overtake it, and `get_usage` because
- * upstream usage fetches can take seconds and must not hold up `prompt`.
+ * Commands that skip the serial queue entirely; see {@link dispatchRpcInputFrame}.
+ * (`prompt` and `steer_subagent` are also backgrounded there, but start through
+ * the serial tail.)
+ * A Set, not a Record: `type` is untrusted input and must not hit prototype keys.
  */
-const CONCURRENT_RPC_COMMANDS: ReadonlySet<RpcCommand["type"]> = new Set<RpcCommand["type"]>(["bash", "get_usage"]);
+const BACKGROUND_COMMANDS: ReadonlySet<string> = new Set<RpcCommand["type"]>(["bash", "get_usage", "predict_word"]);
 
 /**
  * Dispatch a single parsed frame from the RPC input stream.
  *
- * Concurrent commands ({@link CONCURRENT_RPC_COMMANDS}) are dispatched in the
+ * `bash`, `predict_word`, `prompt` and `steer_subagent` are dispatched in the
  * background so the caller can keep reading subsequent frames while one is
- * still running. This lets a client send `abort_bash` while a long-running
- * `bash` is in flight, or `prompt` while `get_usage` waits on a provider.
+ * still settling: a `bash` command can run for a long time, and a `prompt`
+ * command's response is held until the message is admitted, which can span
+ * real wall-clock time (image normalization, a vision-model description call).
+ * `steer_subagent` likewise holds its response until the subagent accepts the
+ * message, which for a subagent between turns includes its whole
+ * pre-`agent_start` setup. Backgrounding them lets a client send `abort_bash`
+ * while a shell command runs, or `abort` (and `steer`/`follow_up`/`get_state`)
+ * while a `prompt` or `steer_subagent` is still admitting. `predict_word` is
+ * backgrounded too, so a cold prediction engine never stalls the command queue
+ * behind a keystroke.
  * Response correlation is preserved via each command's `id`; ordering across
  * concurrent commands is not guaranteed and clients MUST match on `id`.
+ * Provider usage fetches (`get_usage`) are backgrounded for the same reason.
  *
  * @returns `undefined` when the frame was routed to a side-channel handler
  *   (extension UI response, host tool/URI frames) or dispatched in the
@@ -363,11 +496,23 @@ export function dispatchRpcInputFrame(parsed: unknown, deps: RpcInputFrameDeps):
 	// the union here.
 	const command = parsed as RpcCommand;
 
-	// Concurrent commands can run for a long time. Dispatch them in the
-	// background so later frames (e.g. `abort_bash`, `prompt`) are handled
-	// without waiting for them. The response is emitted when `handleCommand`
-	// resolves; clients correlate via `command.id`.
-	if (CONCURRENT_RPC_COMMANDS.has(command.type)) {
+	// `bash` can run for a long time, and `prompt`'s response is held until
+	// admission (see PromptOptions.onPromptAdmitted), which can likewise span
+	// real wall-clock time; `steer_subagent` waits for the subagent to accept.
+	// Dispatch them in the background so a subsequent frame — `abort_bash` for
+	// a running `bash`, or `abort`/`steer`/`follow_up`/`get_state` for an
+	// admitting `prompt` — can be read and handled without waiting for the
+	// earlier command to finish on its own. `predict_word` is backgrounded so a
+	// cold prediction engine never stalls the command queue behind a keystroke.
+	// The response is emitted when `handleCommand` resolves; clients correlate
+	// via `command.id`.
+	if (
+		BACKGROUND_COMMANDS.has(command.type) ||
+		command.type === "prompt" ||
+		command.type === "steer" ||
+		command.type === "follow_up" ||
+		command.type === "steer_subagent"
+	) {
 		const task = (async () => {
 			try {
 				deps.output(await deps.handleCommand(command));
@@ -385,24 +530,91 @@ export function dispatchRpcInputFrame(parsed: unknown, deps: RpcInputFrameDeps):
 	})();
 }
 
+const USER_INPUT_TYPES: Record<string, true> = {
+	prompt: true,
+	steer: true,
+	follow_up: true,
+	abort_and_prompt: true,
+};
+
+const SESSION_CHANGE_TYPES: Record<string, true> = {
+	new_session: true,
+	switch_session: true,
+	branch: true,
+	open_session: true,
+};
+
 /**
- * Serializes ordinary RPC commands while allowing control frames to dispatch immediately.
+ * Orders user input and decides whether an accepted frame is still wanted.
  *
- * With a `ready` gate, control frames (extension UI responses, host tool/URI
- * results) still dispatch on arrival, but every command, concurrent ones
- * (`bash`, `get_usage`) included, waits for the gate to settle. RPC mode
- * settles it once extension startup finishes, so an extension that asks the
- * host a question during `session_start` gets the answer instead of
- * deadlocking startup (issue #110).
+ * Every user-input, abort and session-change frame gets a sequence number when it
+ * is accepted (read from stdin), not when its handler runs. An abort invalidates
+ * input accepted before it immediately. A session change invalidates input accepted
+ * before the change frame, and only once the change succeeds: a vetoed change keeps
+ * that input, and input pipelined after the change still runs in the new session.
  */
+export class RpcUserInputGate {
+	#tail: Promise<void> = Promise.resolve();
+	#sequence = 0;
+	#validFrom = 0;
+	#acceptedAt = new WeakMap<object, number>();
+
+	/** Call from {@link RpcInputDispatcher.dispatch} before the handler is queued. */
+	accept(command: RpcCommand): void {
+		const isAbort = command.type === "abort" || command.type === "abort_and_prompt";
+		if (
+			!isAbort &&
+			!Object.hasOwn(USER_INPUT_TYPES, command.type) &&
+			!Object.hasOwn(SESSION_CHANGE_TYPES, command.type)
+		) {
+			return;
+		}
+		const sequence = ++this.#sequence;
+		this.#acceptedAt.set(command, sequence);
+		if (isAbort) this.#validFrom = sequence;
+	}
+
+	/** A session change succeeded: invalidate input accepted before its frame. */
+	commitSessionChange(command: RpcCommand): void {
+		const sequence = this.#acceptedAt.get(command);
+		if (sequence !== undefined && sequence > this.#validFrom) this.#validFrom = sequence;
+	}
+
+	/** False when an abort, or a successful session change, accepted after this frame invalidated it. */
+	isCurrent(command: RpcCommand): boolean {
+		const sequence = this.#acceptedAt.get(command);
+		return sequence !== undefined && sequence >= this.#validFrom;
+	}
+
+	/** Run user-input work in accept order. The tail releases when `work` settles, not when a model turn ends. */
+	enqueue<T>(work: () => Promise<T>): Promise<T> {
+		const run = this.#tail.then(work, work);
+		this.#tail = run.then(
+			() => {},
+			() => {},
+		);
+		return run;
+	}
+}
+
+/** Starts prompts, steers, follow-ups and `steer_subagent` after earlier ordinary commands, without
+ * awaiting admission. Control frames, `bash` and `predict_word` dispatch immediately (see
+ * dispatchRpcInputFrame). `acceptInput` runs synchronously in {@link dispatch}, before the
+ * handler is queued, so an abort can invalidate a frame that has not started yet. */
 export class RpcInputDispatcher {
 	#tail: Promise<void> = Promise.resolve();
 	#tasks = new Set<Promise<void>>();
 	#gate: Promise<void> | undefined;
 	readonly #deps: RpcInputFrameDeps;
 	readonly #afterSerialCommand: (() => Promise<void>) | undefined;
+	readonly #acceptInput: ((command: RpcCommand) => void) | undefined;
 
-	constructor(options: { deps: RpcInputFrameDeps; afterSerialCommand?: () => Promise<void>; ready?: Promise<void> }) {
+	constructor(options: {
+		deps: RpcInputFrameDeps;
+		afterSerialCommand?: () => Promise<void>;
+		ready?: Promise<void>;
+		acceptInput?: (command: RpcCommand) => void;
+	}) {
 		this.#deps = options.deps;
 		this.#afterSerialCommand = options.afterSerialCommand;
 		if (options.ready) {
@@ -417,21 +629,24 @@ export class RpcInputDispatcher {
 			this.#gate = gate;
 			this.#tail = gate;
 		}
+		this.#acceptInput = options.acceptInput;
 	}
 
 	/** Accept a parsed input frame without blocking the stdin reader. */
 	dispatch(parsed: unknown): void {
 		try {
 			if (dispatchRpcControlFrame(parsed, this.#deps)) return;
-
 			const command = parsed as RpcCommand;
-			// Transport-level and session-free: answered while startup is still
-			// gated, so a startup dialog cannot stall version negotiation (#110).
+			// Session-free negotiation must remain answerable during a startup dialog.
 			if (command.type === "negotiate_protocol" && this.#gate) {
 				this.#deps.output(answerRpcProtocolNegotiation(command));
 				return;
 			}
-			if (CONCURRENT_RPC_COMMANDS.has(command.type)) {
+			this.#acceptInput?.(command);
+			// Bash and predict_word retain their immediate side channel. Prompts,
+			// steers, follow-ups and steer_subagent start through the serial tail, but
+			// dispatchRpcInputFrame backgrounds their admission.
+			if (BACKGROUND_COMMANDS.has(command.type)) {
 				const gate = this.#gate;
 				if (gate) {
 					this.#track(
@@ -488,10 +703,11 @@ export class RpcInputDispatcher {
  * Coordinates deferred shutdown with in-flight background input tasks.
  *
  * `pi.shutdown()` from an extension only *requests* shutdown; the process must
- * not exit while a background-dispatched command (`bash`, see
+ * not exit while a background-dispatched command (`bash`, `predict_word`,
+ * `prompt` or `steer_subagent`, see
  * {@link dispatchRpcInputFrame}) still owes the client a response frame. The
  * coordinator tracks those tasks, re-checks the shutdown request whenever one
- * settles (covering a shutdown requested mid-bash with no follow-up client
+ * settles (covering a shutdown requested mid-command with no follow-up client
  * frame), and drains every tracked task before invoking `performShutdown`.
  * The shutdown sequence is latched so concurrent triggers (input loop and
  * settling tasks) run it exactly once.
@@ -544,6 +760,100 @@ export class RpcShutdownCoordinator {
 }
 
 export type RpcSubagentResetRegistry = Pick<RpcSubagentRegistry, "clear">;
+
+/**
+ * Handle RPC `cancel_subagent`: hard-kill one of this session's running
+ * subagents through the same path as the Agent Hub / collab `kill` command.
+ * Aborting the live turn and releasing the registry ref as an `aborted`
+ * tombstone settles the owning `task` call (foreground or background) with an
+ * aborted result, and disposing the session cancels its nested children.
+ *
+ * Only ids this session reported as running are reachable (see
+ * {@link resolveOwnedLiveSubagent}). Returns `false` (a no-op) for unknown,
+ * finished, or already-cancelled subagents so hosts can treat cancelling a
+ * vanished subagent as success. Rejects when the tombstone cannot be persisted
+ * or the abort fails; the subagent is still detached and disposed.
+ */
+export async function handleRpcCancelSubagent(
+	subagentRegistry: Pick<RpcSubagentRegistry, "getSubagents">,
+	subagentId: string,
+): Promise<boolean> {
+	const owned = resolveOwnedLiveSubagent(subagentRegistry, subagentId);
+	if (!owned) return false;
+	// Start the release first: it publishes the `aborted` tombstone synchronously,
+	// so the executor cannot accept the run's result (flipping the ref to idle)
+	// while the abort below is still settling. Settle both together so a failed
+	// tombstone write is reported here instead of escaping as an unhandled
+	// rejection while the abort is pending.
+	const [released, aborted] = await Promise.allSettled([
+		AgentLifecycleManager.global().release(subagentId, owned.ref, { tombstone: true }),
+		owned.session.abort({ reason: USER_INTERRUPT_LABEL }),
+	]);
+	if (released.status === "rejected") throw released.reason;
+	if (aborted.status === "rejected") throw aborted.reason;
+	return released.value;
+}
+
+/**
+ * Handle RPC `steer_subagent`: send the host's message to a running subagent
+ * as its user, the same way Agent Hub chat does: `AgentLifecycleManager.ensureLive`,
+ * then `prompt(message, { streamingBehavior: "steer" })` on the subagent's own
+ * session. A mid-turn subagent is steered at its next step boundary; one
+ * between turns starts its next turn. Because this is `prompt()`, extension,
+ * custom and file slash commands run and prompt templates expand as in Agent
+ * Hub chat (unlike RPC `steer`, which rejects extension commands). The message
+ * is recorded in the subagent's transcript, never attributed to the parent.
+ *
+ * Only running subagents this session lists in `get_subagents` are reachable
+ * (see {@link resolveOwnedLiveSubagent}); one whose result the parent already
+ * accepted is refused. A running ref always holds a live session, so
+ * `ensureLive` never revives here; it only cancels an in-flight idle park.
+ *
+ * Resolves once the message is accepted: queued into a running turn, or the
+ * subagent's new turn started (`agent_start`). A refusal before that —
+ * including a prompt dropped by an abort, disposal or usage preflight — is
+ * returned as the error; the rest of the turn is not awaited and later
+ * failures are logged. Returns an error message, or `undefined` once accepted.
+ */
+export async function handleRpcSteerSubagent(
+	subagentRegistry: Pick<RpcSubagentRegistry, "getSubagents">,
+	subagentId: string,
+	message: string,
+): Promise<string | undefined> {
+	const notRunning = `Subagent not running: ${subagentId}`;
+	const owned = resolveOwnedLiveSubagent(subagentRegistry, subagentId);
+	if (!owned) return notRunning;
+	let session: AgentSession;
+	try {
+		session = await AgentLifecycleManager.global().ensureLive(subagentId);
+	} catch {
+		return notRunning;
+	}
+	// ensureLive awaits; the id may now belong to a different (same-name) agent,
+	// or the subagent may have finished in the meantime.
+	const current = resolveOwnedLiveSubagent(subagentRegistry, subagentId);
+	if (current?.ref !== owned.ref || current.session !== session) return notRunning;
+
+	const accepted = Promise.withResolvers<void>();
+	const unsubscribe = session.subscribe(event => {
+		if (event.type === "agent_start") accepted.resolve();
+	});
+	session.prompt(message, { streamingBehavior: "steer", throwOnDrop: true }).then(
+		() => accepted.resolve(),
+		err => {
+			accepted.reject(err);
+			logger.warn("steer_subagent message failed", { subagentId, error: String(err) });
+		},
+	);
+	try {
+		await accepted.promise;
+		return undefined;
+	} catch (err) {
+		return `Subagent refused the message: ${err instanceof Error ? err.message : String(err)}`;
+	} finally {
+		unsubscribe();
+	}
+}
 
 export async function handleRpcSessionChange(
 	session: RpcSessionChangeSession,
@@ -697,6 +1007,94 @@ export function requestRpcSelect(
 	);
 }
 
+/** Validates `ask` answers against the questions; any mismatch throws instead of guessing. */
+function parseAskDialogResponse(
+	response: RpcExtensionUIResponse,
+	questions: ExtensionAskDialogQuestion[],
+	dialogOptions: ExtensionUIDialogOptions,
+): ExtensionAskDialogSubmitResult | undefined {
+	if ("cancelled" in response && response.cancelled) {
+		if (response.timedOut) dialogOptions.onTimeout?.();
+		return undefined;
+	}
+	const answers: unknown = "answers" in response ? response.answers : undefined;
+	if (!Array.isArray(answers) || answers.length !== questions.length) {
+		throw new Error(`Ask dialog response must carry ${questions.length} answers in question order`);
+	}
+	return {
+		kind: "submit",
+		results: questions.map((question, index) => {
+			const answer: unknown = answers[index];
+			if (!isRecord(answer) || answer.id !== question.id) {
+				throw new Error(`Ask dialog answer ${index} must have id ${JSON.stringify(question.id)}`);
+			}
+			const labels = question.options.map(option => option.label);
+			const multi = question.multi ?? false;
+			const { selectedOptions, customInput } = answer;
+			if (!Array.isArray(selectedOptions)) {
+				throw new Error(`Ask dialog answer ${JSON.stringify(question.id)} must carry a selectedOptions array`);
+			}
+			const selected: string[] = [];
+			for (const label of selectedOptions) {
+				if (typeof label !== "string" || !labels.includes(label)) {
+					throw new Error(
+						`Ask dialog answer ${JSON.stringify(question.id)} selected unknown option ${JSON.stringify(label)}`,
+					);
+				}
+				if (selected.includes(label)) {
+					throw new Error(
+						`Ask dialog answer ${JSON.stringify(question.id)} selected ${JSON.stringify(label)} twice`,
+					);
+				}
+				selected.push(label);
+			}
+			if (customInput !== undefined && typeof customInput !== "string") {
+				throw new Error(`Ask dialog answer ${JSON.stringify(question.id)} customInput must be a string`);
+			}
+			const custom = customInput?.trim() || undefined;
+			if (!multi && (selected.length > 1 || (selected.length > 0 && custom !== undefined))) {
+				throw new Error(
+					`Ask dialog answer ${JSON.stringify(question.id)} is single-select but carries more than one answer`,
+				);
+			}
+			return {
+				id: question.id,
+				question: question.question,
+				options: labels,
+				multi,
+				selectedOptions: selected,
+				customInput: custom,
+			};
+		}),
+	};
+}
+
+/** Sends all ask questions as one RPC `ask` dialog; a timeout answers every question with its recommended option. */
+export async function requestRpcAskDialog(
+	pendingRequests: Map<string, PendingExtensionRequest>,
+	output: RpcOutput,
+	questions: ExtensionAskDialogQuestion[],
+	dialogOptions?: ExtensionUIDialogOptions,
+): Promise<ExtensionAskDialogResult | undefined> {
+	let timedOut = false;
+	const opts: ExtensionUIDialogOptions = {
+		...dialogOptions,
+		onTimeout: () => {
+			timedOut = true;
+			dialogOptions?.onTimeout?.();
+		},
+	};
+	const result = await requestRpcDialog(
+		pendingRequests,
+		output,
+		opts,
+		undefined,
+		{ method: "ask", questions, timeout: dialogOptions?.timeout },
+		response => parseAskDialogResponse(response, questions, opts),
+	);
+	return timedOut ? timedOutAskDialogResult(questions) : result;
+}
+
 export function requestRpcEditor(
 	pendingRequests: Map<string, PendingExtensionRequest>,
 	output: RpcOutput,
@@ -781,13 +1179,17 @@ export function requestRpcDialog<T>(
 		opts?.signal?.removeEventListener("abort", onAbort);
 		pendingRequests.delete(id);
 	};
-	const onAbort = () => {
+	// Tells the host to close a dialog omp has already settled, so a late answer
+	// cannot look actionable after abort or timeout.
+	const cancelHostDialog = () =>
 		output({
 			type: "extension_ui_request",
 			id: Snowflake.next() as string,
 			method: "cancel",
 			targetId: id,
 		} as RpcExtensionUIRequest);
+	const onAbort = () => {
+		cancelHostDialog();
 		cleanup();
 		resolve(defaultValue);
 	};
@@ -796,6 +1198,7 @@ export function requestRpcDialog<T>(
 	if (opts?.timeout !== undefined) {
 		timeoutId = setTimeout(() => {
 			opts.onTimeout?.();
+			cancelHostDialog();
 			cleanup();
 			resolve(defaultValue);
 		}, opts.timeout);
@@ -804,7 +1207,11 @@ export function requestRpcDialog<T>(
 	pendingRequests.set(id, {
 		resolve: response => {
 			cleanup();
-			resolve(parseResponse(response));
+			try {
+				resolve(parseResponse(response));
+			} catch (err) {
+				reject(err);
+			}
 		},
 		reject,
 	});
@@ -831,33 +1238,43 @@ export function applyRpcQueueModeCommand(session: AgentSession, command: RpcQueu
 }
 
 /**
- * Report a store failure as a `notice` frame (plus a stderr mirror) — issue
- * #11493. The frame goes straight through the mode's `output` rather than
- * `session.emitNotice`: dispose clears the session's event listeners before it
- * closes the store (agent-session.ts `#doDispose`), so a failure latched during
- * `close()` would have no subscriber left to forward it and the client would
- * see a nonzero exit with no notice at all. `onFailure` records the failure for
- * the mode's own teardown attribution: a failure still latched at dispose is
- * what makes `session.dispose()` reject.
+ * Report a store failure as an error `notice` frame and a session move as a
+ * warning one (each with a stderr mirror) — issue #11493. Frames go straight
+ * through the mode's `output` rather than `session.emitNotice`: dispose clears
+ * the session's event listeners before it closes the store (agent-session.ts
+ * `#doDispose`), so a failure latched during `close()` would have no subscriber
+ * left to forward it and the client would see a nonzero exit with no notice at
+ * all. `onFailure` records the failure for the mode's own teardown
+ * attribution: a failure still latched at dispose is what makes
+ * `session.dispose()` reject.
  */
 export function registerRpcPersistenceSurface(
 	session: Pick<AgentSession, "sessionManager">,
 	output: (frame: object) => void,
 	onFailure?: (error: Error) => void,
 ): () => void {
-	return session.sessionManager.onPersistenceError(error => {
+	const unsubscribeFailures = session.sessionManager.onPersistenceError(error => {
 		onFailure?.(error);
 		const message = formatPersistenceFailure(error.message);
 		output({ type: "notice", level: "error", message, source: "session-persistence" });
 		process.stderr.write(`${message}\n`);
 	});
+	const unsubscribeNotices = session.sessionManager.onPersistenceNotice(notice => {
+		const message = formatPersistenceNotice(notice);
+		output({ type: "notice", level: "warning", message, source: "session-persistence" });
+		process.stderr.write(`${message}\n`);
+	});
+	return () => {
+		unsubscribeFailures();
+		unsubscribeNotices();
+	};
 }
 
 /** Startup options for {@link runRpcMode}. */
 export interface RpcModeOptions {
-	/** `--mode rpc-ui`: route tool UI (ask, tool cards) over the protocol as well. */
+	/** `--mode rpc-ui`: route tool UI (e.g. ask) over the protocol, independently of headless extensions. */
 	setToolUIContext?: (uiContext: ExtensionUIContext, hasUI: boolean) => void;
-	/** `--no-ui`: extensions run with `hasUI=false`; no dialog or presentation `extension_ui_request` frames are emitted. */
+	/** `--no-ui`: extensions run with `hasUI=false` and no UI frames; tool UI and host-issued login are unaffected. */
 	headless?: boolean;
 	subagentEventBus?: EventBus;
 	input?: ReadableStream<Uint8Array>;
@@ -869,6 +1286,972 @@ export interface RpcModeOptions {
  * Run in RPC mode.
  * Listens for JSON commands on stdin, outputs events and responses on stdout.
  */
+
+/** Shared command switch for stdio and the control socket. */
+export interface RpcCommandHandlerContext {
+	session: AgentSession;
+	output: RpcOutput;
+	success: <T extends RpcCommand["type"]>(id: string | undefined, command: T, data?: object | null) => RpcResponse;
+	error: (id: string | undefined, command: string, message: string, code?: string) => RpcResponse;
+	promptResults: RpcPromptResults;
+	ownPrompt: (ticket: RpcPromptTicket) => string;
+	reservePromptEntryId: (message: string) => string | undefined;
+	executeCustomPromptCommand: (message: string) => Promise<string | null>;
+	emitAvailableCommandsUpdate: () => Promise<void>;
+	reloadPluginState: () => Promise<void>;
+	getAvailableCommands: () => Promise<unknown>;
+	/** Set by a control connection so the user entry is attributed. Absent on stdio. */
+	origin?: MessageOrigin;
+	onPromptError: (id: string | undefined, command: string) => (promptError: Error) => void;
+	extensionUserMessageTracker: RpcExtensionUserMessageTracker;
+	trackBackground: (task: () => Promise<void>) => void;
+	subagentRegistry: RpcSubagentRegistry | undefined;
+	planMode: RpcPlanModeController;
+	settleWatcher: RpcSessionSettleWatcher;
+	rpcRoles: RpcRoles;
+	sessionEvents: RpcSessionEventForwarder;
+	hostToolBridge: RpcHostToolBridge;
+	hostUriBridge: RpcHostUriBridge;
+	toolApprovalBridge: RpcToolApprovalBridge;
+	pendingExtensionRequests: Map<string, PendingExtensionRequest>;
+	createUiContext: (pending: Map<string, PendingExtensionRequest>, output: RpcOutput) => ExtensionUIContext;
+	/** RPC stdio ask-dialog negotiation; native pane UI has no protocol fallback to toggle. */
+	setAskDialogEnabled?: (enabled: boolean) => void;
+	inputGate?: RpcUserInputGate;
+	isShutdownRequested?: () => boolean;
+}
+
+// Handle a single command
+export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command: RpcCommand) => Promise<RpcResponse> {
+	const {
+		session,
+		output,
+		success,
+		error,
+		promptResults,
+		ownPrompt,
+		reservePromptEntryId,
+		executeCustomPromptCommand,
+		emitAvailableCommandsUpdate,
+		reloadPluginState,
+		getAvailableCommands,
+		onPromptError,
+		origin,
+		extensionUserMessageTracker,
+		trackBackground,
+		subagentRegistry,
+		planMode,
+		settleWatcher,
+		rpcRoles,
+		sessionEvents,
+		hostToolBridge,
+		hostUriBridge,
+		toolApprovalBridge,
+		pendingExtensionRequests,
+		createUiContext,
+	} = ctx;
+	const wordPredictor = new RpcWordPredictor();
+	const inputGate = ctx.inputGate ?? new RpcUserInputGate();
+	type OrderedUserInput = Extract<RpcCommand, { type: "prompt" | "steer" | "follow_up" | "abort_and_prompt" }>;
+	type OrderedInputOutcome =
+		| { kind: "local" }
+		| { kind: "cancelled" }
+		| { kind: "builtin-agent" }
+		| { kind: "admitted"; userEntryId?: string };
+	const dispatchOrderedUserInput = (
+		command: OrderedUserInput,
+		ticket: RpcPromptTicket | undefined,
+	): Promise<OrderedInputOutcome> =>
+		inputGate.enqueue(async () => {
+			const sessionId = session.sessionId;
+			const isCurrent = () =>
+				inputGate.isCurrent(command) && !ctx.isShutdownRequested?.() && session.sessionId === sessionId;
+			if (!isCurrent()) return { kind: "cancelled" };
+			let text = command.message;
+			let images = command.images;
+			const runner = session.extensionRunner;
+			if (runner?.hasHandlers("input")) {
+				const result = await runner.emitInput(text, images, "rpc");
+				if (!isCurrent()) return { kind: "cancelled" };
+				if (result.handled) return { kind: "local" };
+				if (result.text !== undefined) text = result.text;
+				if (result.images !== undefined) images = result.images;
+			}
+			if (!isCurrent()) return { kind: "cancelled" };
+			if (!text.trim() && !images?.length) return { kind: "local" };
+			if (command.type === "steer" || command.type === "follow_up") {
+				const userEntryId = session.sessionManager.reserveEntryId();
+				try {
+					if (command.type === "steer") await session.steer(text, images, { entryId: userEntryId, origin });
+					else await session.followUp(text, images, { entryId: userEntryId, origin });
+				} catch (cause) {
+					session.sessionManager.releaseEntryId(userEntryId);
+					throw cause;
+				}
+				return { kind: "admitted", userEntryId };
+			}
+			if (!ticket) return { kind: "cancelled" };
+			if (command.type === "prompt") {
+				const skillResult = await dispatchRpcSkillPrompt({
+					ticket,
+					session,
+					message: text,
+					streamingBehavior: command.streamingBehavior,
+					reserveEntryId: () => session.sessionManager.reserveEntryId(),
+					releaseEntryId: entryId => session.sessionManager.releaseEntryId(entryId),
+					results: promptResults,
+					onError: onPromptError(command.id, "prompt"),
+					extensionUserMessageTracker,
+					runOwner: ownPrompt(ticket),
+					images,
+					isCurrent,
+				});
+				if (skillResult === "cancelled") return { kind: "cancelled" };
+				if (skillResult) return { kind: "admitted", userEntryId: skillResult.userEntryId };
+				const builtinResult = await executeAcpBuiltinSlashCommand(text, {
+					session,
+					sessionManager: session.sessionManager,
+					settings: session.settings,
+					cwd: session.sessionManager.getCwd(),
+					output: text => output({ type: "command_output", text }),
+					refreshCommands: emitAvailableCommandsUpdate,
+					reloadPlugins: reloadPluginState,
+					runCommandInBackground: task => trackBackground(task),
+					notifyTitleChanged: async () => {
+						output({ type: "session_info_update", title: session.sessionName, sessionId: session.sessionId });
+					},
+					notifyConfigChanged: async () => {
+						output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
+					},
+				});
+				if (!isCurrent()) return { kind: "cancelled" };
+				if (builtinResult !== false) {
+					if (!("prompt" in builtinResult)) {
+						if (builtinResult.agentInvoked === true) {
+							void session.waitForIdle().then(
+								() => promptResults.settle(ticket),
+								(cause: unknown) =>
+									promptResults.fail(ticket, cause instanceof Error ? cause.message : String(cause)),
+							);
+							return { kind: "builtin-agent" };
+						}
+						return { kind: "local" };
+					}
+					text = builtinResult.prompt;
+				}
+			}
+			const customCommandResult = await executeCustomPromptCommand(text);
+			if (!isCurrent()) return { kind: "cancelled" };
+			if (customCommandResult === "") return { kind: "local" };
+			const userEntryId = reservePromptEntryId(text);
+			if (userEntryId) promptResults.bindEntry(ticket, userEntryId);
+			const runOwner = ownPrompt(ticket);
+			await watchAndReportPromptResult({
+				ticket,
+				startPrompt: onPromptAdmitted =>
+					session.prompt(text, {
+						images,
+						...(command.type === "prompt" ? { streamingBehavior: command.streamingBehavior } : {}),
+						entryId: userEntryId,
+						runOwner,
+						origin,
+						customCommandResult: customCommandResult ?? undefined,
+						onPromptAdmitted,
+					}),
+				results: promptResults,
+				onError: onPromptError(command.id, command.type),
+				releaseReservation: () => session.sessionManager.releaseEntryId(userEntryId),
+				extensionUserMessageTracker,
+			});
+			return { kind: "admitted", userEntryId };
+		});
+	return async (command: RpcCommand): Promise<RpcResponse> => {
+		const id = command.id;
+		if (!ctx.inputGate) inputGate.accept(command);
+
+		switch (command.type) {
+			case "negotiate_protocol":
+				return answerRpcProtocolNegotiation(command);
+
+			// =================================================================
+			// Prompting
+			// =================================================================
+
+			case "prompt": {
+				// Taken before any dispatch so a builtin that schedules a turn (e.g. `/retry`)
+				// cannot start its run ahead of the prompt's event-stream position.
+				const ticket = promptResults.begin(id);
+				try {
+					const outcome = await dispatchOrderedUserInput(command, ticket);
+					if (outcome.kind === "local") {
+						promptResults.discard(ticket);
+						return success(id, "prompt", { agentInvoked: false });
+					}
+					if (outcome.kind === "builtin-agent") return success(id, "prompt", { agentInvoked: true });
+					if (outcome.kind === "cancelled") {
+						promptResults.settle(ticket);
+						return success(id, "prompt");
+					}
+					return success(
+						id,
+						"prompt",
+						outcome.userEntryId === undefined ? undefined : { userEntryId: outcome.userEntryId },
+					);
+				} catch (promptSetupError) {
+					// Rejected before acceptance: the error response is the only answer.
+					promptResults.discard(ticket);
+					throw promptSetupError;
+				}
+			}
+
+			case "steer":
+			case "follow_up": {
+				const outcome = await dispatchOrderedUserInput(command, undefined);
+				return success(
+					id,
+					command.type,
+					outcome.kind === "admitted" && outcome.userEntryId !== undefined
+						? { userEntryId: outcome.userEntryId }
+						: undefined,
+				);
+			}
+
+			case "remove_queued_message": {
+				if (typeof command.message !== "string") {
+					return error(id, "remove_queued_message", "message must be a string");
+				}
+				if (command.queue !== "steering" && command.queue !== "followUp") {
+					return error(id, "remove_queued_message", "queue must be steering or followUp");
+				}
+				return success(id, "remove_queued_message", {
+					removed: session.removeQueuedMessage(command.message, command.queue),
+				});
+			}
+
+			case "promote_queued_message": {
+				if (typeof command.message !== "string") {
+					return error(id, "promote_queued_message", "message must be a string");
+				}
+				return success(id, "promote_queued_message", { promoted: session.promoteQueuedMessage(command.message) });
+			}
+
+			case "abort": {
+				await session.abort({ reason: USER_INTERRUPT_LABEL });
+				return success(id, "abort");
+			}
+
+			case "abort_and_prompt": {
+				await session.abort({ reason: USER_INTERRUPT_LABEL });
+				const ticket = promptResults.begin(id);
+				void dispatchOrderedUserInput(command, ticket).then(
+					outcome => {
+						if (outcome.kind === "cancelled") promptResults.settle(ticket);
+						else if (outcome.kind === "local") promptResults.completeLocal(ticket);
+					},
+					(cause: unknown) => {
+						const promptError = cause instanceof Error ? cause : new Error(String(cause));
+						onPromptError(id, "abort_and_prompt")(promptError);
+						promptResults.fail(ticket, promptError.message);
+					},
+				);
+				return success(id, "abort_and_prompt");
+			}
+
+			case "new_session":
+			case "switch_session":
+			case "branch": {
+				let result: RpcSessionChangeResult;
+				try {
+					result = await handleRpcSessionChange(session, command, subagentRegistry);
+				} catch (err) {
+					const code = sessionLeaseErrorCode(err);
+					if (!code) throw err;
+					return error(id, command.type, err instanceof Error ? err.message : String(err), code);
+				}
+				if (!result.data.cancelled) {
+					inputGate.commitSessionChange(command);
+					promptResults.abortOpen();
+					// The detached run publishes no terminal agent_end to settle on.
+					void settleWatcher.check();
+					await emitAvailableCommandsUpdate();
+					// A session change ends set_mode's plan mode; answer once its restore landed.
+					await planMode.settled();
+				}
+				return success(id, result.type, result.data);
+			}
+
+			case "open_session": {
+				let result: RpcOpenSessionResult;
+				try {
+					result = await openRpcSession(session, command.sessionDir, subagentRegistry);
+				} catch (err) {
+					const code = sessionLeaseErrorCode(err);
+					if (!code) throw err;
+					return error(id, "open_session", err instanceof Error ? err.message : String(err), code);
+				}
+				if (!result.cancelled) {
+					inputGate.commitSessionChange(command);
+					promptResults.abortOpen();
+					void settleWatcher.check();
+					await emitAvailableCommandsUpdate();
+					await planMode.settled();
+				}
+				return success(id, "open_session", result);
+			}
+
+			// =================================================================
+			// State
+			// =================================================================
+
+			case "get_state": {
+				const state: RpcSessionState = {
+					model: session.model,
+					thinkingLevel: session.thinkingLevel,
+					isStreaming: session.isStreaming,
+					isCompacting: session.isCompacting,
+					steeringMode: session.steeringMode,
+					followUpMode: session.followUpMode,
+					interruptMode: session.interruptMode,
+					sessionFile: session.sessionFile,
+					sessionId: session.sessionId,
+					sessionName: session.sessionName,
+					chronicler: session.chroniclerHealth,
+					autoCompactionEnabled: session.autoCompactionEnabled,
+					queuedMessageCount: session.queuedMessageCount,
+					queuedMessages: session.getQueuedMessages(),
+					hasPendingAsyncWork: session.hasPendingAsyncWork(),
+					isSettled: isRpcSessionSettled(session),
+					todoPhases: session.getTodoPhases(),
+					fastModeEnabled: session.isFastModeEnabled(),
+					tokensPerSecond: calculateTokensPerSecond(session.messages, session.isStreaming),
+					fastModeActive: session.isFastModeActive(),
+					messageCount: session.messages.length,
+					systemPrompt: session.systemPrompt,
+					dumpTools: session.agent.state.tools.map(tool => ({
+						name: tool.name,
+						description: tool.description,
+						parameters: toolWireSchema(tool),
+						examples: tool.examples,
+					})),
+					contextUsage: session.getContextUsage(),
+					activeRole: rpcRoles.activeRole(),
+					chatMode: session.chatMode?.mode ?? "off",
+					...planMode.state,
+				};
+				return success(id, "get_state", state);
+			}
+
+			case "set_fast_mode": {
+				const supported = session.setFastMode(command.enabled);
+				if (command.enabled && !supported) {
+					return error(id, "set_fast_mode", "Fast mode is unavailable for the current model.");
+				}
+				return success(id, "set_fast_mode", {
+					enabled: session.isFastModeEnabled(),
+					active: session.isFastModeActive(),
+				});
+			}
+
+			case "set_ask_dialog": {
+				if (!ctx.setAskDialogEnabled) {
+					return error(id, "set_ask_dialog", "Ask-dialog negotiation is unavailable on this transport");
+				}
+				const enabled = command.enabled === true;
+				ctx.setAskDialogEnabled(enabled);
+				return success(id, "set_ask_dialog", { enabled });
+			}
+
+			case "set_chat_mode": {
+				const outcome = await setRpcChatMode(session, command);
+				if (!outcome.ok) return error(id, "set_chat_mode", outcome.message, outcome.code);
+				return success(id, "set_chat_mode", outcome.state);
+			}
+
+			case "set_mode": {
+				try {
+					return success(id, "set_mode", await planMode.setMode(command.mode, command.planFilePath));
+				} catch (err) {
+					if (!(err instanceof RpcSetModeError)) throw err;
+					return error(id, "set_mode", err.message, err.code);
+				}
+			}
+
+			case "get_available_commands": {
+				return success(id, "get_available_commands", { commands: await getAvailableCommands() });
+			}
+
+			case "get_entries": {
+				try {
+					return success(
+						id,
+						"get_entries",
+						selectRpcEntries(
+							session.sessionManager.getEntries(),
+							session.sessionManager.getLeafId(),
+							command.since,
+						),
+					);
+				} catch (err) {
+					return error(id, "get_entries", err instanceof Error ? err.message : String(err), "unknown_since");
+				}
+			}
+
+			case "get_tree": {
+				return success(id, "get_tree", {
+					tree: session.sessionManager.getTree(),
+					leafId: session.sessionManager.getLeafId(),
+				});
+			}
+
+			case "set_todos": {
+				session.setTodoPhases(command.phases);
+				return success(id, "set_todos", { todoPhases: session.getTodoPhases() });
+			}
+
+			case "set_host_tools": {
+				const tools = normalizeHostToolDefinitions(command.tools);
+				const rpcTools = hostToolBridge.setTools(tools);
+				await session.refreshRpcHostTools(rpcTools);
+				return success(id, "set_host_tools", { toolNames: tools.map(tool => tool.name) });
+			}
+
+			case "set_host_uri_schemes": {
+				try {
+					const schemes = hostUriBridge.setSchemes(command.schemes);
+					return success(id, "set_host_uri_schemes", { schemes });
+				} catch (err) {
+					return error(id, "set_host_uri_schemes", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "set_subagent_subscription": {
+				if (!subagentRegistry) {
+					return error(id, "set_subagent_subscription", "Subagent event bus is unavailable");
+				}
+				if (!isSubagentSubscriptionLevel(command.level)) {
+					return error(
+						id,
+						"set_subagent_subscription",
+						`Invalid subagent subscription level: ${String(command.level)}`,
+					);
+				}
+				subagentRegistry.setSubscriptionLevel(command.level);
+				return success(id, "set_subagent_subscription", { level: subagentRegistry.getSubscriptionLevel() });
+			}
+
+			case "set_event_filter": {
+				const events = command.events;
+				if (
+					events !== null &&
+					(!Array.isArray(events) || !events.every(event => typeof event === "string" && event.length > 0))
+				) {
+					return error(id, "set_event_filter", "events must be null or an array of non-empty event type strings");
+				}
+				const messageUpdates = command.messageUpdates === undefined ? "full" : command.messageUpdates;
+				if (messageUpdates !== "full" && messageUpdates !== "delta") {
+					return error(id, "set_event_filter", `Invalid message update projection: ${String(messageUpdates)}`);
+				}
+				return success(id, "set_event_filter", {
+					events: sessionEvents.setFilter(events, messageUpdates),
+					messageUpdates,
+				});
+			}
+
+			case "set_approval_handler": {
+				if (!isRpcApprovalHandler(command.handler)) {
+					return error(
+						id,
+						"set_approval_handler",
+						`handler must be "host" or "ui", got ${JSON.stringify(command.handler)}`,
+					);
+				}
+				return success(id, "set_approval_handler", { handler: toolApprovalBridge.setHandler(command.handler) });
+			}
+
+			case "get_subagents": {
+				if (!subagentRegistry) {
+					return error(id, "get_subagents", "Subagent event bus is unavailable", "subagent_bus_unavailable");
+				}
+				return success(id, "get_subagents", { subagents: subagentRegistry.getSubagents() });
+			}
+
+			case "get_subagent_messages": {
+				if (!subagentRegistry) {
+					return error(id, "get_subagent_messages", "Subagent event bus is unavailable");
+				}
+				try {
+					if (command.fromByte !== undefined && !Number.isFinite(command.fromByte)) {
+						return error(id, "get_subagent_messages", "fromByte must be a finite number");
+					}
+					const sessionFile = subagentRegistry.resolveSessionFile(command);
+					const transcript = await readRpcSubagentTranscript(sessionFile, command.fromByte);
+					return success(id, "get_subagent_messages", transcript);
+				} catch (err) {
+					return error(id, "get_subagent_messages", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "cancel_subagent": {
+				if (!subagentRegistry) {
+					return error(id, "cancel_subagent", "Subagent event bus is unavailable");
+				}
+				if (typeof command.subagentId !== "string" || command.subagentId.length === 0) {
+					return error(id, "cancel_subagent", "`subagentId` must be a non-empty string.");
+				}
+				try {
+					const cancelled = await handleRpcCancelSubagent(subagentRegistry, command.subagentId);
+					return success(id, "cancel_subagent", { cancelled });
+				} catch (err) {
+					return error(id, "cancel_subagent", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "steer_subagent": {
+				if (!subagentRegistry) {
+					return error(id, "steer_subagent", "Subagent event bus is unavailable");
+				}
+				if (typeof command.subagentId !== "string" || command.subagentId.length === 0) {
+					return error(id, "steer_subagent", "`subagentId` must be a non-empty string.");
+				}
+				if (typeof command.message !== "string" || !command.message.trim()) {
+					return error(id, "steer_subagent", "`message` is required for steer_subagent.");
+				}
+				const failure = await handleRpcSteerSubagent(subagentRegistry, command.subagentId, command.message);
+				return failure ? error(id, "steer_subagent", failure) : success(id, "steer_subagent");
+			}
+
+			// =================================================================
+			// Model
+			// =================================================================
+
+			case "set_model": {
+				let models = session.getAvailableModels();
+				let model = models.find(m => m.provider === command.provider && m.id === command.modelId);
+				if (!model) {
+					// Model not in the current catalog. Wait for in-flight
+					// background discovery before declaring it missing: on cold
+					// start, discovery-backed providers (proxy / ollama / etc.)
+					// populate seconds after session ready. Models already in
+					// the bundled catalog skip this await entirely so the RPC
+					// queue is not stalled behind unrelated discovery.
+					await session.modelRegistry.awaitBackgroundRefresh();
+					models = session.getAvailableModels();
+					model = models.find(m => m.provider === command.provider && m.id === command.modelId);
+				}
+				if (!model) {
+					return error(id, "set_model", `Model not found: ${command.provider}/${command.modelId}`);
+				}
+				await session.setModel(model);
+				return success(id, "set_model", model);
+			}
+
+			case "cycle_model": {
+				const result = await session.cycleModel();
+				if (!result) {
+					return success(id, "cycle_model", null);
+				}
+				return success(id, "cycle_model", result);
+			}
+
+			case "get_available_models": {
+				await session.modelRegistry.awaitBackgroundRefresh();
+				const models = session.getAvailableModels();
+				return success(id, "get_available_models", { models });
+			}
+
+			case "list_mixtures": {
+				const cwd = session.sessionManager.getCwd();
+				const agentDir = session.getMixtureAgentDir() ?? getAgentDir();
+				const discovered = await discoverMixtures(cwd, agentDir);
+				const names = discovered.mixtures.map(item => item.definition.name);
+				const context = { cwd, agentDir, registry: session.modelRegistry, settings: session.settings };
+				return success(id, "list_mixtures", {
+					mixtures: discovered.mixtures.map(item => ({
+						name: item.definition.name,
+						path: item.path,
+						registered: session.getRegisteredMixture(item.definition.name) !== undefined,
+						errors: checkMixture(item.definition, context, item.preparedPresets, names).errors,
+					})),
+					warnings: discovered.warnings,
+				});
+			}
+
+			case "create_mixture": {
+				if (command.scope !== "project" && command.scope !== "user")
+					return error(id, "create_mixture", "scope must be project or user");
+				const definition = command.definition;
+				if (
+					!isRecord(definition) ||
+					typeof definition.name !== "string" ||
+					!Array.isArray(definition.members) ||
+					!Array.isArray(definition.edges)
+				)
+					return error(id, "create_mixture", "definition needs a name, members, and edges");
+				const cwd = session.sessionManager.getCwd();
+				const agentDir = session.getMixtureAgentDir() ?? getAgentDir();
+				const discovered = await discoverMixtures(cwd, agentDir);
+				if (
+					discovered.mixtures.some(item => item.definition.name === definition.name) ||
+					session.modelRegistry.find("mixture", definition.name)
+				)
+					return error(id, "create_mixture", `mixture/${definition.name} already exists`);
+				let projectDir = cwd;
+				try {
+					projectDir = vcs.repo(cwd)?.root() ?? cwd;
+				} catch {
+					// A directory outside a repository is its own project scope.
+				}
+				const filePath = mixturesConfigFilePath(command.scope, { projectDir, agentDir });
+				try {
+					const { doc, hash: baseHash } = await readMixtureDefinitionFile(filePath);
+					doc.mixtures.push(definition);
+					const saved = await saveMixtureDefinition({
+						cwd,
+						agentDir,
+						registry: session.modelRegistry,
+						settings: session.settings,
+						sourcePath: filePath,
+						doc,
+						baseHash,
+						apply: true,
+					});
+					if (!saved.registered)
+						return error(id, "create_mixture", `mixture/${definition.name} could not register in this workspace`);
+					return success(id, "create_mixture", { name: definition.name, path: filePath });
+				} catch (err) {
+					return error(id, "create_mixture", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "select_mixture": {
+				if (!session.getRegisteredMixture(command.name))
+					return error(id, "select_mixture", `mixture/${command.name} is not registered in this workspace`);
+				const model = session.modelRegistry.find("mixture", command.name);
+				if (!model) return error(id, "select_mixture", `mixture/${command.name} is unavailable`);
+				await session.setModel(model);
+				return success(id, "select_mixture", model);
+			}
+
+			case "get_roles": {
+				await session.modelRegistry.awaitBackgroundRefresh();
+				return success(id, "get_roles", rpcRoles.list());
+			}
+
+			case "set_role": {
+				const result = await rpcRoles.setRole(command.role);
+				if (!result.ok) return error(id, "set_role", result.message, result.code);
+				output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
+				return success(id, "set_role", result.data);
+			}
+
+			// =================================================================
+			// Thinking
+			// =================================================================
+
+			case "set_thinking_level": {
+				session.setThinkingLevel(command.level);
+				return success(id, "set_thinking_level");
+			}
+
+			case "cycle_thinking_level": {
+				const level = session.cycleThinkingLevel();
+				if (!level) {
+					return success(id, "cycle_thinking_level", null);
+				}
+				return success(id, "cycle_thinking_level", { level });
+			}
+
+			case "get_available_thinking_levels": {
+				// Pi-compatible discovery: the selectable levels for the live model,
+				// including `off` (which `set_thinking_level` accepts but the
+				// effort-only helper excludes). NeoPi-only `auto`/`inherit` are
+				// intentionally omitted — that selector stays a NeoPi dialect.
+				return success(id, "get_available_thinking_levels", {
+					levels: [ThinkingLevel.Off, ...session.getAvailableThinkingLevels()],
+				});
+			}
+
+			// =================================================================
+			// Queue Modes
+			// =================================================================
+
+			case "set_steering_mode": {
+				applyRpcQueueModeCommand(session, command);
+				return success(id, "set_steering_mode");
+			}
+
+			case "set_follow_up_mode": {
+				applyRpcQueueModeCommand(session, command);
+				return success(id, "set_follow_up_mode");
+			}
+
+			case "set_interrupt_mode": {
+				applyRpcQueueModeCommand(session, command);
+				return success(id, "set_interrupt_mode");
+			}
+
+			// =================================================================
+			// Compaction
+			// =================================================================
+
+			case "compact": {
+				const result = await session.compact(command.customInstructions);
+				return success(id, "compact", result);
+			}
+
+			case "set_auto_compaction": {
+				session.setAutoCompactionEnabled(command.enabled);
+				return success(id, "set_auto_compaction");
+			}
+
+			case "set_cache_warming": {
+				if (!CACHE_WARMING_MODES.some(mode => mode === command.mode)) {
+					return error(id, "set_cache_warming", `Invalid cache warming mode: ${String(command.mode)}`);
+				}
+				return success(id, "set_cache_warming", { mode: session.setCacheWarmingMode(command.mode) });
+			}
+
+			// =================================================================
+			// Retry
+			// =================================================================
+
+			case "set_auto_retry": {
+				session.setAutoRetryEnabled(command.enabled);
+				return success(id, "set_auto_retry");
+			}
+
+			case "abort_retry": {
+				session.abortRetry();
+				return success(id, "abort_retry");
+			}
+
+			// =================================================================
+			// Bash
+			// =================================================================
+
+			case "bash": {
+				const result = await session.executeBash(command.command);
+				return success(id, "bash", result);
+			}
+
+			case "abort_bash": {
+				session.abortBash();
+				return success(id, "abort_bash");
+			}
+
+			// =================================================================
+			// Session
+			// =================================================================
+
+			case "get_session_stats": {
+				const stats = session.getSessionStats();
+				return success(id, "get_session_stats", stats);
+			}
+
+			case "get_usage": {
+				try {
+					const usage = await getRpcUsage(
+						{
+							authStorage: session.modelRegistry.authStorage,
+							fetchUsageReports: () => session.fetchUsageReports(),
+						},
+						command,
+					);
+					return success(id, "get_usage", usage);
+				} catch (err: unknown) {
+					if (err instanceof RpcUsageUnavailableError) return error(id, "get_usage", err.message, err.code);
+					throw err;
+				}
+			}
+
+			case "export_html": {
+				const path = await session.exportToHtml(command.outputPath);
+				return success(id, "export_html", { path });
+			}
+
+			case "get_branch_messages": {
+				const messages = session.getUserMessagesForBranching();
+				return success(id, "get_branch_messages", { messages });
+			}
+
+			case "get_last_assistant_text": {
+				const text = session.getLastAssistantText();
+				return success(id, "get_last_assistant_text", { text });
+			}
+
+			case "set_session_name": {
+				const name = command.name.trim();
+				if (!name) {
+					return error(id, "set_session_name", "Session name cannot be empty");
+				}
+				const applied = await session.setSessionName(name, "user");
+				if (!applied) {
+					return error(id, "set_session_name", "Session name cannot be empty");
+				}
+				return success(id, "set_session_name");
+			}
+
+			case "handoff": {
+				// Resetting the agent mid-stream lets the live turn keep emitting into a
+				// session that handoff has already torn down. Refuse while a prompt is in
+				// flight (mirrors the TUI /handoff guard).
+				if (session.isStreaming) {
+					return error(id, "handoff", "Cannot hand off while a response is in progress");
+				}
+				const result = await session.handoff(command.customInstructions);
+				await planMode.settled();
+				return success(id, "handoff", result ? { savedPath: result.savedPath } : null);
+			}
+
+			// =================================================================
+			// Messages
+			// =================================================================
+
+			case "get_messages": {
+				return success(id, "get_messages", { messages: session.messages });
+			}
+
+			case "get_messages_page": {
+				if (session.isStreaming || session.isCompacting)
+					return error(id, "get_messages_page", RPC_MESSAGES_PAGE_BUSY_ERROR, "session_busy");
+				const messages = session.messages;
+				try {
+					return success(
+						id,
+						"get_messages_page",
+						pageRpcMessages(
+							messages,
+							{
+								sessionId: session.sessionId,
+								leafId: session.sessionManager.getLeafId(),
+								messageCount: messages.length,
+							},
+							{ cursor: command.cursor, limit: command.limit },
+						),
+					);
+				} catch (pageError) {
+					return error(
+						id,
+						"get_messages_page",
+						pageError instanceof Error ? pageError.message : String(pageError),
+						pageError instanceof RpcMessagesPageError ? pageError.code : undefined,
+					);
+				}
+			}
+
+			// =================================================================
+			// Login
+			// =================================================================
+
+			case "get_login_providers": {
+				const providers = getOAuthProviders().map(provider => ({
+					id: provider.id,
+					name: provider.name,
+					available: provider.available,
+					authenticated: session.modelRegistry.authStorage.keys.source(provider.id) !== undefined,
+				}));
+				return success(id, "get_login_providers", { providers });
+			}
+
+			case "login": {
+				const knownProvider = getOAuthProviders().find(p => p.id === command.providerId);
+				if (!knownProvider) {
+					return error(id, "login", `Unknown OAuth provider: ${command.providerId}`);
+				}
+				const uiCtx = createUiContext(pendingExtensionRequests, output);
+				// Track whether onAuth has fired. Providers that require interactive
+				// input before a browser URL cannot be satisfied headlessly; after
+				// onAuth, prompt input is the pasted OAuth code/redirect URL path.
+				let authEmitted = false;
+				try {
+					await session.modelRegistry.authStorage.oauth.login(command.providerId, {
+						onAuth: info => {
+							authEmitted = true;
+							output({
+								type: "extension_ui_request",
+								id: Snowflake.next() as string,
+								method: "open_url",
+								url: info.url,
+								launchUrl: info.launchUrl,
+								instructions: info.instructions,
+							} as RpcExtensionUIRequest);
+						},
+						onProgress: message => {
+							uiCtx.notify(message, "info");
+						},
+						onPrompt: async prompt => {
+							if (prompt.secret) {
+								throw new Error(
+									`Provider '${command.providerId}' requires secret input, ` +
+										"which is not supported in RPC mode. Use the terminal UI to log in.",
+								);
+							}
+							if (!authEmitted) {
+								// onPrompt called before any auth URL — provider requires
+								// interactive input that cannot be satisfied headlessly.
+								return Promise.reject(
+									new Error(
+										`Provider '${command.providerId}' requires interactive prompts ` +
+											"which are not supported in RPC mode. Use the terminal UI to log in.",
+									),
+								);
+							}
+							return (await uiCtx.input(prompt.message, prompt.placeholder, { timeout: 600_000 })) ?? "";
+						},
+					});
+					// Provider-scoped online refresh so the just-persisted credential
+					// re-runs discovery instead of reusing a fresh authoritative cache
+					// row (#5780).
+					await session.modelRegistry.refreshProvider(command.providerId, "online");
+					return success(id, "login", { providerId: command.providerId });
+				} catch (err: unknown) {
+					return error(id, "login", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "predict_word": {
+				if (!isTextCursor(command.text, command.cursor)) {
+					return error(id, "predict_word", INVALID_TEXT_CURSOR_ERROR);
+				}
+				try {
+					const method = cfgSpellingAutocomplete.get(session.settings);
+					const suffix = await wordPredictor.predict(method, command.text, command.cursor);
+					return success(id, "predict_word", { suffix });
+				} catch (err: unknown) {
+					return error(id, "predict_word", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "predict_word_feedback": {
+				if (!isTextCursor(command.text, command.cursor)) {
+					return error(id, "predict_word_feedback", INVALID_TEXT_CURSOR_ERROR);
+				}
+				if (typeof command.suggestion !== "string" || typeof command.accepted !== "boolean") {
+					return error(id, "predict_word_feedback", "suggestion must be a string and accepted a boolean");
+				}
+				const method = cfgSpellingAutocomplete.get(session.settings);
+				if (method !== "off") {
+					const query = wordQueryAt(command.text, command.cursor);
+					if (query) {
+						textPredictionBackend(method).feedback(
+							query.before,
+							query.prefix,
+							command.suggestion,
+							command.accepted,
+						);
+					}
+				}
+				return success(id, "predict_word_feedback");
+			}
+
+			default: {
+				const unknownCommand = command as { type: string };
+				return error(id, unknownCommand.type, `Unknown command: ${unknownCommand.type}`);
+			}
+		}
+	};
+}
+
 export async function runRpcMode(session: AgentSession, options: RpcModeOptions = {}): Promise<never> {
 	const { setToolUIContext, headless = false, subagentEventBus, input = claimRpcInput(), launchModel } = options;
 	// Signal to RPC clients that the server is ready to accept commands
@@ -938,10 +2321,19 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	 * Extension UI context that uses the RPC protocol.
 	 */
 	class RpcExtensionUIContext implements ExtensionUIContext {
+		/** Set by `set_ask_dialog`; hosts that never opt in keep the select/editor ask fallback. */
+		askDialogEnabled = false;
+
 		constructor(
 			private pendingRequests: Map<string, PendingExtensionRequest>,
 			private output: (obj: RpcResponse | RpcExtensionUIRequest | object) => void,
 		) {}
+
+		get askDialog(): ExtensionUIContext["askDialog"] {
+			if (!this.askDialogEnabled) return undefined;
+			return (questions, dialogOptions) =>
+				requestRpcAskDialog(this.pendingRequests, this.output, questions, dialogOptions);
+		}
 
 		select(
 			title: string,
@@ -1134,6 +2526,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	// The deps below late-bind `handleCommand` and `shutdownCoordinator`, which
 	// are only invoked after `startup` resolves.
 	const startup = Promise.withResolvers<void>();
+	const inputGate = new RpcUserInputGate();
 	const dispatchFrameDeps: RpcInputFrameDeps = {
 		handleCommand: command => handleCommand(command),
 		output,
@@ -1150,6 +2543,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		deps: dispatchFrameDeps,
 		afterSerialCommand: () => shutdownCoordinator.checkShutdownRequested(),
 		ready: startup.promise,
+		acceptInput: command => inputGate.accept(command),
 	});
 	// Keep the stdin reader moving: side-channel frames dispatch immediately,
 	// ordinary commands serialize through inputDispatcher, and bash/get_usage
@@ -1268,6 +2662,13 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	// TypeScript/MCP command may also consume the prompt without writing one.
 	const reservePromptEntryId = (message: string): string | undefined =>
 		session.isExtensionCommand(message) ? undefined : session.sessionManager.reserveEntryId();
+	// Bind prompt receipts to run ownership instead of counting them.
+	let runOwnerSeq = 0;
+	const ownPrompt = (ticket: RpcPromptTicket): string => {
+		const owner = ticket.requestHandle ?? `rpc-${++runOwnerSeq}`;
+		promptResults.bindOwner(ticket, owner);
+		return owner;
+	};
 	const executeCustomPromptCommand = async (message: string): Promise<string | null> => {
 		if (!message.startsWith("/") || session.isExtensionCommand(message)) return null;
 		const space = message.indexOf(" ");
@@ -1276,701 +2677,37 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		return session.executeCustomCommand(message);
 	};
 
-	// Handle a single command
-	const handleCommand = async (command: RpcCommand): Promise<RpcResponse> => {
-		const id = command.id;
-
-		switch (command.type) {
-			case "negotiate_protocol":
-				return answerRpcProtocolNegotiation(command);
-
-			// =================================================================
-			// Prompting
-			// =================================================================
-
-			case "prompt": {
-				// Taken before any dispatch so a builtin that schedules a turn (e.g. `/retry`)
-				// cannot start its run ahead of the prompt's event-stream position.
-				const ticket = promptResults.begin(id);
-				try {
-					const skillResult = await dispatchRpcSkillPrompt({
-						ticket,
-						session,
-						message: command.message,
-						streamingBehavior: command.streamingBehavior,
-						reserveEntryId: () => session.sessionManager.reserveEntryId(),
-						releaseEntryId: entryId => session.sessionManager.releaseEntryId(entryId),
-						results: promptResults,
-						onError: onPromptError(id, "prompt"),
-						extensionUserMessageTracker,
-					});
-					if (skillResult) {
-						return success(id, "prompt", skillResult);
-					}
-					const builtinResult = await executeAcpBuiltinSlashCommand(command.message, {
-						session,
-						sessionManager: session.sessionManager,
-						settings: session.settings,
-						cwd: session.sessionManager.getCwd(),
-						output: text => output({ type: "command_output", text }),
-						refreshCommands: emitAvailableCommandsUpdate,
-						reloadPlugins: reloadPluginState,
-						runCommandInBackground: task => shutdownCoordinator.track(task()),
-						notifyTitleChanged: async () => {
-							output({ type: "session_info_update", title: session.sessionName, sessionId: session.sessionId });
-						},
-						notifyConfigChanged: async () => {
-							output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
-						},
-					});
-					if (builtinResult !== false) {
-						if ("prompt" in builtinResult) {
-							const userEntryId = session.sessionManager.reserveEntryId();
-							watchAndReportPromptResult({
-								ticket,
-								startPrompt: () =>
-									session.prompt(builtinResult.prompt, { images: command.images, entryId: userEntryId }),
-								results: promptResults,
-								onError: onPromptError(id, "prompt"),
-								releaseReservation: () => session.sessionManager.releaseEntryId(userEntryId),
-								extensionUserMessageTracker,
-							});
-							return success(id, "prompt", { userEntryId });
-						}
-						// A consumed builtin is normally local-only, but some (e.g.
-						// `/retry`) schedule an agent turn whose events stream after
-						// this response. Report that so the host does not finalize the
-						// request as non-agent work while the agent is running; the
-						// turn's prompt_result follows once the session settles. Either
-						// way the command itself writes no user entry, so no userEntryId.
-						if (builtinResult.agentInvoked === true) {
-							void session.waitForIdle().then(
-								() => promptResults.settle(ticket),
-								(idleError: unknown) =>
-									promptResults.fail(
-										ticket,
-										idleError instanceof Error ? idleError.message : String(idleError),
-									),
-							);
-						} else {
-							// Completed synchronously: `data.agentInvoked: false` is the completion signal.
-							promptResults.discard(ticket);
-						}
-						return success(id, "prompt", { agentInvoked: builtinResult.agentInvoked === true });
-					}
-
-					const customCommandResult = await executeCustomPromptCommand(command.message);
-					if (customCommandResult === "") {
-						promptResults.completeLocal(ticket);
-						return success(id, "prompt", { agentInvoked: false });
-					}
-					// Don't await - events will stream
-					// Extension commands are executed immediately, file prompt templates are expanded
-					// If streaming and streamingBehavior specified, queues via steer/followUp
-					const userEntryId = reservePromptEntryId(command.message);
-					watchAndReportPromptResult({
-						ticket,
-						startPrompt: () =>
-							session.prompt(command.message, {
-								images: command.images,
-								streamingBehavior: command.streamingBehavior,
-								entryId: userEntryId,
-								customCommandResult: customCommandResult ?? undefined,
-							}),
-						results: promptResults,
-						onError: onPromptError(id, "prompt"),
-						releaseReservation: () => session.sessionManager.releaseEntryId(userEntryId),
-						extensionUserMessageTracker,
-					});
-					return success(id, "prompt", userEntryId === undefined ? undefined : { userEntryId });
-				} catch (promptSetupError) {
-					// Rejected before acceptance: the error response is the only answer.
-					promptResults.discard(ticket);
-					throw promptSetupError;
-				}
-			}
-
-			case "steer": {
-				const userEntryId = session.sessionManager.reserveEntryId();
-				try {
-					await session.steer(command.message, command.images, { entryId: userEntryId });
-					return success(id, "steer", { userEntryId });
-				} catch (error) {
-					session.sessionManager.releaseEntryId(userEntryId);
-					throw error;
-				}
-			}
-
-			case "follow_up": {
-				const userEntryId = session.sessionManager.reserveEntryId();
-				try {
-					await session.followUp(command.message, command.images, { entryId: userEntryId });
-					return success(id, "follow_up", { userEntryId });
-				} catch (error) {
-					session.sessionManager.releaseEntryId(userEntryId);
-					throw error;
-				}
-			}
-
-			case "abort": {
-				await session.abort({ reason: USER_INTERRUPT_LABEL });
-				return success(id, "abort");
-			}
-
-			case "abort_and_prompt": {
-				await session.abort({ reason: USER_INTERRUPT_LABEL });
-				const customCommandResult = await executeCustomPromptCommand(command.message);
-				if (customCommandResult === "") {
-					promptResults.completeLocal(promptResults.begin(id));
-					return success(id, "abort_and_prompt", { agentInvoked: false });
-				}
-				const userEntryId = reservePromptEntryId(command.message);
-				// After the abort so the aborted run's terminal agent_end cannot settle this prompt.
-				watchAndReportPromptResult({
-					ticket: promptResults.begin(id),
-					startPrompt: () =>
-						session.prompt(command.message, {
-							images: command.images,
-							entryId: userEntryId,
-							customCommandResult: customCommandResult ?? undefined,
-						}),
-					results: promptResults,
-					onError: onPromptError(id, "abort_and_prompt"),
-					releaseReservation: () => session.sessionManager.releaseEntryId(userEntryId),
-					extensionUserMessageTracker,
-				});
-				return success(id, "abort_and_prompt", userEntryId === undefined ? undefined : { userEntryId });
-			}
-
-			case "new_session":
-			case "switch_session":
-			case "branch": {
-				let result: RpcSessionChangeResult;
-				try {
-					result = await handleRpcSessionChange(session, command, subagentRegistry);
-				} catch (err) {
-					const code = sessionLeaseErrorCode(err);
-					if (!code) throw err;
-					return error(id, command.type, err instanceof Error ? err.message : String(err), code);
-				}
-				if (!result.data.cancelled) {
-					promptResults.abortOpen();
-					// The detached run publishes no terminal agent_end to settle on.
-					void settleWatcher.check();
-					await emitAvailableCommandsUpdate();
-					// A session change ends set_mode's plan mode; answer once its restore landed.
-					await planMode.settled();
-				}
-				return success(id, result.type, result.data);
-			}
-
-			case "open_session": {
-				let result: RpcOpenSessionResult;
-				try {
-					result = await openRpcSession(session, command.sessionDir, subagentRegistry);
-				} catch (err) {
-					const code = sessionLeaseErrorCode(err);
-					if (!code) throw err;
-					return error(id, "open_session", err instanceof Error ? err.message : String(err), code);
-				}
-				if (!result.cancelled) {
-					promptResults.abortOpen();
-					void settleWatcher.check();
-					await emitAvailableCommandsUpdate();
-					await planMode.settled();
-				}
-				return success(id, "open_session", result);
-			}
-
-			// =================================================================
-			// State
-			// =================================================================
-
-			case "get_state": {
-				const state: RpcSessionState = {
-					model: session.model,
-					thinkingLevel: session.thinkingLevel,
-					isStreaming: session.isStreaming,
-					isCompacting: session.isCompacting,
-					steeringMode: session.steeringMode,
-					followUpMode: session.followUpMode,
-					interruptMode: session.interruptMode,
-					sessionFile: session.sessionFile,
-					sessionId: session.sessionId,
-					sessionName: session.sessionName,
-					autoCompactionEnabled: session.autoCompactionEnabled,
-					queuedMessageCount: session.queuedMessageCount,
-					hasPendingAsyncWork: session.hasPendingAsyncWork(),
-					isSettled: isRpcSessionSettled(session),
-					todoPhases: session.getTodoPhases(),
-					fastModeEnabled: session.isFastModeEnabled(),
-					tokensPerSecond: calculateTokensPerSecond(session.messages, session.isStreaming),
-					fastModeActive: session.isFastModeActive(),
-					messageCount: session.messages.length,
-					systemPrompt: session.systemPrompt,
-					dumpTools: session.agent.state.tools.map(tool => ({
-						name: tool.name,
-						description: tool.description,
-						parameters: toolWireSchema(tool),
-						examples: tool.examples,
-					})),
-					contextUsage: session.getContextUsage(),
-					activeRole: rpcRoles.activeRole(),
-					chatMode: session.chatMode?.mode ?? "off",
-					...planMode.state,
-				};
-				return success(id, "get_state", state);
-			}
-
-			case "set_fast_mode": {
-				const supported = session.setFastMode(command.enabled);
-				if (command.enabled && !supported) {
-					return error(id, "set_fast_mode", "Fast mode is unavailable for the current model.");
-				}
-				return success(id, "set_fast_mode", {
-					enabled: session.isFastModeEnabled(),
-					active: session.isFastModeActive(),
-				});
-			}
-
-			case "set_chat_mode": {
-				const outcome = await setRpcChatMode(session, command);
-				if (!outcome.ok) return error(id, "set_chat_mode", outcome.message, outcome.code);
-				return success(id, "set_chat_mode", outcome.state);
-			}
-
-			case "set_mode": {
-				try {
-					return success(id, "set_mode", await planMode.setMode(command.mode, command.planFilePath));
-				} catch (err) {
-					if (!(err instanceof RpcSetModeError)) throw err;
-					return error(id, "set_mode", err.message, err.code);
-				}
-			}
-
-			case "get_available_commands": {
-				return success(id, "get_available_commands", { commands: await getAvailableCommands() });
-			}
-
-			case "get_entries": {
-				try {
-					return success(
-						id,
-						"get_entries",
-						selectRpcEntries(
-							session.sessionManager.getEntries(),
-							session.sessionManager.getLeafId(),
-							command.since,
-						),
-					);
-				} catch (err) {
-					return error(id, "get_entries", err instanceof Error ? err.message : String(err), "unknown_since");
-				}
-			}
-
-			case "get_tree": {
-				return success(id, "get_tree", {
-					tree: session.sessionManager.getTree(),
-					leafId: session.sessionManager.getLeafId(),
-				});
-			}
-
-			case "set_todos": {
-				session.setTodoPhases(command.phases);
-				return success(id, "set_todos", { todoPhases: session.getTodoPhases() });
-			}
-
-			case "set_host_tools": {
-				const tools = normalizeHostToolDefinitions(command.tools);
-				const rpcTools = hostToolBridge.setTools(tools);
-				await session.refreshRpcHostTools(rpcTools);
-				return success(id, "set_host_tools", { toolNames: tools.map(tool => tool.name) });
-			}
-
-			case "set_host_uri_schemes": {
-				try {
-					const schemes = hostUriBridge.setSchemes(command.schemes);
-					return success(id, "set_host_uri_schemes", { schemes });
-				} catch (err) {
-					return error(id, "set_host_uri_schemes", err instanceof Error ? err.message : String(err));
-				}
-			}
-
-			case "set_subagent_subscription": {
-				if (!subagentRegistry) {
-					return error(id, "set_subagent_subscription", "Subagent event bus is unavailable");
-				}
-				if (!isSubagentSubscriptionLevel(command.level)) {
-					return error(
-						id,
-						"set_subagent_subscription",
-						`Invalid subagent subscription level: ${String(command.level)}`,
-					);
-				}
-				subagentRegistry.setSubscriptionLevel(command.level);
-				return success(id, "set_subagent_subscription", { level: subagentRegistry.getSubscriptionLevel() });
-			}
-
-			case "set_event_filter": {
-				const events = command.events;
-				if (
-					events !== null &&
-					(!Array.isArray(events) || !events.every(event => typeof event === "string" && event.length > 0))
-				) {
-					return error(id, "set_event_filter", "events must be null or an array of non-empty event type strings");
-				}
-				return success(id, "set_event_filter", { events: sessionEvents.setFilter(events) });
-			}
-
-			case "set_approval_handler": {
-				if (!isRpcApprovalHandler(command.handler)) {
-					return error(
-						id,
-						"set_approval_handler",
-						`handler must be "host" or "ui", got ${JSON.stringify(command.handler)}`,
-					);
-				}
-				return success(id, "set_approval_handler", { handler: toolApprovalBridge.setHandler(command.handler) });
-			}
-
-			case "get_subagents": {
-				if (!subagentRegistry) {
-					return error(id, "get_subagents", "Subagent event bus is unavailable");
-				}
-				return success(id, "get_subagents", { subagents: subagentRegistry.getSubagents() });
-			}
-
-			case "get_subagent_messages": {
-				if (!subagentRegistry) {
-					return error(id, "get_subagent_messages", "Subagent event bus is unavailable");
-				}
-				try {
-					if (command.fromByte !== undefined && !Number.isFinite(command.fromByte)) {
-						return error(id, "get_subagent_messages", "fromByte must be a finite number");
-					}
-					const sessionFile = subagentRegistry.resolveSessionFile(command);
-					const transcript = await readRpcSubagentTranscript(sessionFile, command.fromByte);
-					return success(id, "get_subagent_messages", transcript);
-				} catch (err) {
-					return error(id, "get_subagent_messages", err instanceof Error ? err.message : String(err));
-				}
-			}
-
-			// =================================================================
-			// Model
-			// =================================================================
-
-			case "set_model": {
-				let models = session.getAvailableModels();
-				let model = models.find(m => m.provider === command.provider && m.id === command.modelId);
-				if (!model) {
-					// Model not in the current catalog. Wait for in-flight
-					// background discovery before declaring it missing: on cold
-					// start, discovery-backed providers (proxy / ollama / etc.)
-					// populate seconds after session ready. Models already in
-					// the bundled catalog skip this await entirely so the RPC
-					// queue is not stalled behind unrelated discovery.
-					await session.modelRegistry.awaitBackgroundRefresh();
-					models = session.getAvailableModels();
-					model = models.find(m => m.provider === command.provider && m.id === command.modelId);
-				}
-				if (!model) {
-					return error(id, "set_model", `Model not found: ${command.provider}/${command.modelId}`);
-				}
-				await session.setModel(model);
-				return success(id, "set_model", model);
-			}
-
-			case "cycle_model": {
-				const result = await session.cycleModel();
-				if (!result) {
-					return success(id, "cycle_model", null);
-				}
-				return success(id, "cycle_model", result);
-			}
-
-			case "get_available_models": {
-				await session.modelRegistry.awaitBackgroundRefresh();
-				const models = session.getAvailableModels();
-				return success(id, "get_available_models", { models });
-			}
-
-			case "get_roles": {
-				await session.modelRegistry.awaitBackgroundRefresh();
-				return success(id, "get_roles", rpcRoles.list());
-			}
-
-			case "set_role": {
-				const result = await rpcRoles.setRole(command.role);
-				if (!result.ok) return error(id, "set_role", result.message, result.code);
-				output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
-				return success(id, "set_role", result.data);
-			}
-
-			// =================================================================
-			// Thinking
-			// =================================================================
-
-			case "set_thinking_level": {
-				session.setThinkingLevel(command.level);
-				return success(id, "set_thinking_level");
-			}
-
-			case "cycle_thinking_level": {
-				const level = session.cycleThinkingLevel();
-				if (!level) {
-					return success(id, "cycle_thinking_level", null);
-				}
-				return success(id, "cycle_thinking_level", { level });
-			}
-
-			case "get_available_thinking_levels": {
-				// Pi-compatible discovery: the selectable levels for the live model,
-				// including `off` (which `set_thinking_level` accepts but the
-				// effort-only helper excludes). NeoPi-only `auto`/`inherit` are
-				// intentionally omitted — that selector stays a NeoPi dialect.
-				return success(id, "get_available_thinking_levels", {
-					levels: [ThinkingLevel.Off, ...session.getAvailableThinkingLevels()],
-				});
-			}
-
-			// =================================================================
-			// Queue Modes
-			// =================================================================
-
-			case "set_steering_mode": {
-				applyRpcQueueModeCommand(session, command);
-				return success(id, "set_steering_mode");
-			}
-
-			case "set_follow_up_mode": {
-				applyRpcQueueModeCommand(session, command);
-				return success(id, "set_follow_up_mode");
-			}
-
-			case "set_interrupt_mode": {
-				applyRpcQueueModeCommand(session, command);
-				return success(id, "set_interrupt_mode");
-			}
-
-			// =================================================================
-			// Compaction
-			// =================================================================
-
-			case "compact": {
-				const result = await session.compact(command.customInstructions);
-				return success(id, "compact", result);
-			}
-
-			case "set_auto_compaction": {
-				session.setAutoCompactionEnabled(command.enabled);
-				return success(id, "set_auto_compaction");
-			}
-
-			// =================================================================
-			// Retry
-			// =================================================================
-
-			case "set_auto_retry": {
-				session.setAutoRetryEnabled(command.enabled);
-				return success(id, "set_auto_retry");
-			}
-
-			case "abort_retry": {
-				session.abortRetry();
-				return success(id, "abort_retry");
-			}
-
-			// =================================================================
-			// Bash
-			// =================================================================
-
-			case "bash": {
-				const result = await session.executeBash(command.command);
-				return success(id, "bash", result);
-			}
-
-			case "abort_bash": {
-				session.abortBash();
-				return success(id, "abort_bash");
-			}
-
-			// =================================================================
-			// Session
-			// =================================================================
-
-			case "get_session_stats": {
-				const stats = session.getSessionStats();
-				return success(id, "get_session_stats", stats);
-			}
-
-			case "get_usage": {
-				try {
-					const usage = await getRpcUsage(
-						{
-							authStorage: session.modelRegistry.authStorage,
-							fetchUsageReports: () => session.fetchUsageReports(),
-						},
-						command,
-					);
-					return success(id, "get_usage", usage);
-				} catch (err: unknown) {
-					if (err instanceof RpcUsageUnavailableError) return error(id, "get_usage", err.message, err.code);
-					throw err;
-				}
-			}
-
-			case "export_html": {
-				const path = await session.exportToHtml(command.outputPath);
-				return success(id, "export_html", { path });
-			}
-
-			case "get_branch_messages": {
-				const messages = session.getUserMessagesForBranching();
-				return success(id, "get_branch_messages", { messages });
-			}
-
-			case "get_last_assistant_text": {
-				const text = session.getLastAssistantText();
-				return success(id, "get_last_assistant_text", { text });
-			}
-
-			case "set_session_name": {
-				const name = command.name.trim();
-				if (!name) {
-					return error(id, "set_session_name", "Session name cannot be empty");
-				}
-				const applied = await session.setSessionName(name, "user");
-				if (!applied) {
-					return error(id, "set_session_name", "Session name cannot be empty");
-				}
-				return success(id, "set_session_name");
-			}
-
-			case "handoff": {
-				// Resetting the agent mid-stream lets the live turn keep emitting into a
-				// session that handoff has already torn down. Refuse while a prompt is in
-				// flight (mirrors the TUI /handoff guard).
-				if (session.isStreaming) {
-					return error(id, "handoff", "Cannot hand off while a response is in progress");
-				}
-				const result = await session.handoff(command.customInstructions);
-				await planMode.settled();
-				return success(id, "handoff", result ? { savedPath: result.savedPath } : null);
-			}
-
-			// =================================================================
-			// Messages
-			// =================================================================
-
-			case "get_messages": {
-				return success(id, "get_messages", { messages: session.messages });
-			}
-
-			case "get_messages_page": {
-				if (session.isStreaming || session.isCompacting)
-					return error(id, "get_messages_page", RPC_MESSAGES_PAGE_BUSY_ERROR, "session_busy");
-				const messages = session.messages;
-				try {
-					return success(
-						id,
-						"get_messages_page",
-						pageRpcMessages(
-							messages,
-							{
-								sessionId: session.sessionId,
-								leafId: session.sessionManager.getLeafId(),
-								messageCount: messages.length,
-							},
-							{ cursor: command.cursor, limit: command.limit },
-						),
-					);
-				} catch (pageError) {
-					return error(
-						id,
-						"get_messages_page",
-						pageError instanceof Error ? pageError.message : String(pageError),
-						pageError instanceof RpcMessagesPageError ? pageError.code : undefined,
-					);
-				}
-			}
-
-			// =================================================================
-			// Login
-			// =================================================================
-
-			case "get_login_providers": {
-				const providers = getOAuthProviders().map(provider => ({
-					id: provider.id,
-					name: provider.name,
-					available: provider.available,
-					authenticated: session.modelRegistry.authStorage.keys.source(provider.id) !== undefined,
-				}));
-				return success(id, "get_login_providers", { providers });
-			}
-
-			case "login": {
-				const knownProvider = getOAuthProviders().find(p => p.id === command.providerId);
-				if (!knownProvider) {
-					return error(id, "login", `Unknown OAuth provider: ${command.providerId}`);
-				}
-				const uiCtx = new RpcExtensionUIContext(pendingExtensionRequests, output);
-				// Track whether onAuth has fired. Providers that require interactive
-				// input before a browser URL cannot be satisfied headlessly; after
-				// onAuth, prompt input is the pasted OAuth code/redirect URL path.
-				let authEmitted = false;
-				try {
-					await session.modelRegistry.authStorage.oauth.login(command.providerId, {
-						onAuth: info => {
-							authEmitted = true;
-							output({
-								type: "extension_ui_request",
-								id: Snowflake.next() as string,
-								method: "open_url",
-								url: info.url,
-								launchUrl: info.launchUrl,
-								instructions: info.instructions,
-							} as RpcExtensionUIRequest);
-						},
-						onProgress: message => {
-							uiCtx.notify(message, "info");
-						},
-						onPrompt: async prompt => {
-							if (prompt.secret) {
-								throw new Error(
-									`Provider '${command.providerId}' requires secret input, ` +
-										"which is not supported in RPC mode. Use the terminal UI to log in.",
-								);
-							}
-							if (!authEmitted) {
-								// onPrompt called before any auth URL — provider requires
-								// interactive input that cannot be satisfied headlessly.
-								return Promise.reject(
-									new Error(
-										`Provider '${command.providerId}' requires interactive prompts ` +
-											"which are not supported in RPC mode. Use the terminal UI to log in.",
-									),
-								);
-							}
-							return (await uiCtx.input(prompt.message, prompt.placeholder, { timeout: 600_000 })) ?? "";
-						},
-					});
-					// Provider-scoped online refresh so the just-persisted credential
-					// re-runs discovery instead of reusing a fresh authoritative cache
-					// row (#5780).
-					await session.modelRegistry.refreshProvider(command.providerId, "online");
-					return success(id, "login", { providerId: command.providerId });
-				} catch (err: unknown) {
-					return error(id, "login", err instanceof Error ? err.message : String(err));
-				}
-			}
-
-			default: {
-				const unknownCommand = command as { type: string };
-				return error(id, unknownCommand.type, `Unknown command: ${unknownCommand.type}`);
-			}
-		}
-	};
+	const handleCommand = createRpcCommandHandler({
+		session,
+		inputGate,
+		isShutdownRequested: () => shutdownState.requested,
+		output,
+		success,
+		error,
+		promptResults,
+		ownPrompt,
+		reservePromptEntryId,
+		executeCustomPromptCommand,
+		emitAvailableCommandsUpdate,
+		reloadPluginState,
+		getAvailableCommands,
+		onPromptError,
+		extensionUserMessageTracker,
+		trackBackground: task => shutdownCoordinator.track(task()),
+		subagentRegistry,
+		planMode,
+		settleWatcher,
+		rpcRoles,
+		sessionEvents,
+		hostToolBridge,
+		hostUriBridge,
+		toolApprovalBridge,
+		pendingExtensionRequests,
+		createUiContext: (pending, uiOutput) => new RpcExtensionUIContext(pending, uiOutput),
+		setAskDialogEnabled: enabled => {
+			rpcUiContext.askDialogEnabled = enabled;
+		},
+	});
 
 	// Deferred shutdown (pi.shutdown() from an extension) must not kill the
 	// process while a background-dispatched bash still owes the client its

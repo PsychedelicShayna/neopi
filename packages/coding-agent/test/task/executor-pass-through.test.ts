@@ -33,7 +33,7 @@ function createMockSession(onPrompt: (params: { emit: (event: AgentSessionEvent)
 		for (const listener of listeners) listener(event);
 	};
 	const session = {
-		...createSessionDefaults(),
+		...createSessionDefaults(emit),
 		state: { messages: [] },
 		agent: { state: { systemPrompt: ["test"] } },
 		model: undefined,
@@ -50,6 +50,7 @@ function createMockSession(onPrompt: (params: { emit: (event: AgentSessionEvent)
 		},
 		prompt: async (_text: string, _options?: PromptOptions) => {
 			onPrompt({ emit });
+			return true;
 		},
 	};
 	return session as unknown as AgentSession;
@@ -206,7 +207,7 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 		expect(spy.mock.calls[1]?.[0]?.toolNames).toBeUndefined();
 	});
 
-	it("never grants subagents wait, and requires write for peers", async () => {
+	it("grants wait only to unrestricted subagents that can start background work, and requires write for peers", async () => {
 		const session = yieldEmittingSession();
 		const spy = vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
 
@@ -218,20 +219,28 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 		const writableResult = await runSubprocess({
 			...baseOptions,
 			id: "writable-child",
-			agent: { ...baseAgent, tools: ["read", "write"] },
+			agent: { ...baseAgent, tools: ["read", "write", "bash"] },
 		});
 		const spawningResult = await runSubprocess({
 			...baseOptions,
 			id: "spawning-child",
 			agent: { ...baseAgent, tools: ["read"], spawns: ["scout"] },
 		});
+		const restrictedResult = await runSubprocess({
+			...baseOptions,
+			id: "restricted-child",
+			agent: { ...baseAgent, tools: ["read", "bash"] },
+			restrictToolNames: true,
+		});
 
 		expect(readOnlyResult.exitCode).toBe(0);
 		expect(writableResult.exitCode).toBe(0);
 		expect(spawningResult.exitCode).toBe(0);
+		expect(restrictedResult.exitCode).toBe(0);
 		expect(spy.mock.calls[0]?.[0]?.toolNames).toEqual(["read", "grep", "glob"]);
-		expect(spy.mock.calls[1]?.[0]?.toolNames).toEqual(["read", "write"]);
-		expect(spy.mock.calls[2]?.[0]?.toolNames).toEqual(["read", "task"]);
+		expect(spy.mock.calls[1]?.[0]?.toolNames).toEqual(["read", "write", "bash", "wait"]);
+		expect(spy.mock.calls[2]?.[0]?.toolNames).toEqual(["read", "task", "wait"]);
+		expect(spy.mock.calls[3]?.[0]?.toolNames).toEqual(["read", "bash"]);
 
 		const promptText = (index: number): string => {
 			const prompt = spy.mock.calls[index]?.[0]?.systemPrompt;
@@ -389,7 +398,7 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 	it("caps caller-requested effort at task.maxEffort", async () => {
 		const model = getBundledModel("openai-codex", "gpt-5.6-sol");
 		if (!model) throw new Error("Expected gpt-5.6-sol model to exist");
-		const settings = Settings.isolated({ "task.maxEffort": "low" });
+		const settings = Settings.isolated({ "effort.mode": "legacy", "task.maxEffort": "low" });
 		settings.setModelRole("task", `${model.provider}/${model.id}`);
 		const session = yieldEmittingSession();
 		const spy = vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
@@ -419,7 +428,7 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 			provider: "mock",
 			thinking: { mode: "effort", efforts: [Effort.High] },
 		} as Model;
-		const settings = Settings.isolated({ "task.maxEffort": "low" });
+		const settings = Settings.isolated({ "effort.mode": "legacy", "task.maxEffort": "low" });
 		settings.setModelRole("task", `${model.provider}/${model.id}`);
 		const spy = vi.spyOn(sdkModule, "createAgentSession");
 
@@ -442,7 +451,7 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 	it("preserves the model's full effort range by default", async () => {
 		const model = getBundledModel("openai-codex", "gpt-5.6-sol");
 		if (!model) throw new Error("Expected gpt-5.6-sol model to exist");
-		const settings = Settings.isolated();
+		const settings = Settings.isolated({ "effort.mode": "legacy" });
 		settings.setModelRole("task", `${model.provider}/${model.id}`);
 		const session = yieldEmittingSession();
 		const spy = vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
@@ -458,6 +467,26 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 
 		expect(result.exitCode).toBe(0);
 		expect(spy.mock.calls[0]?.[0]?.thinkingLevel).toBe(ThinkingLevel.Max);
+	});
+
+	it("does not accept a legacy hi hint in replacement mode", async () => {
+		const model = getBundledModel("openai-codex", "gpt-5.6-sol");
+		if (!model) throw new Error("Expected gpt-5.6-sol model to exist");
+		const settings = Settings.isolated({ "effort.mode": "replacement" });
+		settings.setModelRole("task", `${model.provider}/${model.id}`);
+		const spy = vi.spyOn(sdkModule, "createAgentSession");
+
+		const result = await runSubprocess({
+			...baseOptions,
+			agent: { ...baseAgent, model: ["@task"] },
+			id: "subagent-legacy-hint-rejected",
+			effort: "hi",
+			settings,
+			modelRegistry: createModelRegistry(model),
+		});
+
+		expect(result.exitCode).toBe(1);
+		expect(spy).not.toHaveBeenCalled();
 	});
 
 	it("resolves an explicit task-role effort suffix over the agent-definition default", async () => {
@@ -505,6 +534,42 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 		const forwarded = spy.mock.calls[0]?.[0];
 		expect(forwarded?.thinkingLevel).toBe(ThinkingLevel.Low);
 	});
+	it("resolves a regex model override including its effort suffix ahead of a glob fallback", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const fallback = getBundledModel("anthropic", "claude-opus-4-5");
+		if (!model || !fallback) throw new Error("Expected bundled Anthropic models");
+		const session = yieldEmittingSession();
+		const spy = vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
+
+		const result = await runSubprocess({
+			...baseOptions,
+			id: "subagent-regex-model-override",
+			modelOverride: ["re:^anthropic/claude-sonnet-4-5:high$", "anthropic/claude-opus-*"],
+			modelRegistry: createModelRegistry([fallback, model]),
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(spy.mock.calls[0]?.[0]?.model).toMatchObject({ provider: "anthropic", id: "claude-sonnet-4-5" });
+		expect(spy.mock.calls[0]?.[0]?.thinkingLevel).toBe(ThinkingLevel.High);
+	});
+
+	it("retains Bun glob model overrides when no regex matches", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected bundled Anthropic model");
+		const session = yieldEmittingSession();
+		const spy = vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
+
+		const result = await runSubprocess({
+			...baseOptions,
+			id: "subagent-glob-model-override",
+			modelOverride: ["re:[", "anthropic/claude-sonnet-*"],
+			modelRegistry: createModelRegistry(model),
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(spy.mock.calls[0]?.[0]?.model).toMatchObject({ provider: "anthropic", id: "claude-sonnet-4-5" });
+	});
+
 	it("persists an explicit role from a caller model override", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");

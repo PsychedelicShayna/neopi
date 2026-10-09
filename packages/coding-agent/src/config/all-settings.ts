@@ -9,6 +9,7 @@ import * as sessionSettings from "../session/settings";
 import * as chatSettings from "../chat/settings";
 import * as advisorSettings from "../advisor/settings";
 import * as configModelSettings from "./model-settings";
+import * as effortPolicySettings from "./effort-policy";
 import * as sessionContextSettings from "../session/context-settings";
 import * as memoryBackendSettings from "../memory-backend/settings";
 import * as memoriesSettings from "../memories/settings";
@@ -38,18 +39,22 @@ import * as ttsSettings from "../tts/settings";
 import * as sttSettings from "../stt/settings";
 import * as liveSettings from "../live/settings";
 import * as collabSettings from "../collab/settings";
+import * as controlSettings from "../control/settings";
 import * as commandsSettings from "../commands/settings";
 import * as chainsSettings from "../chains/settings";
 import * as moaSettings from "../moa/settings";
 import * as streamSettings from "../stream/settings";
 import * as commitSettings from "../commit/settings";
 import * as cliGcSettings from "../cli/gc-settings";
+import * as telemetrySettings from "../telemetry-settings";
 
 const DOMAINS: readonly Readonly<Record<string, unknown>>[] = [
 	configModelSettings,
+	effortPolicySettings,
 	modesSettings,
 	sessionSettings,
 	chatSettings,
+	telemetrySettings,
 	advisorSettings,
 	sessionContextSettings,
 	memoryBackendSettings,
@@ -78,6 +83,7 @@ const DOMAINS: readonly Readonly<Record<string, unknown>>[] = [
 	secretsSettings,
 	sttSettings,
 	collabSettings,
+	controlSettings,
 	commandsSettings,
 	chainsSettings,
 	moaSettings,

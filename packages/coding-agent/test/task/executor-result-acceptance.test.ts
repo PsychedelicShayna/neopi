@@ -19,8 +19,15 @@ import {
 	runSubagentFollowUpTurn,
 	runSubprocess,
 } from "@oh-my-pi/pi-coding-agent/task/executor";
-import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
-import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
+import {
+	TASK_SUBAGENT_EVENT_CHANNEL,
+	TASK_SUBAGENT_LIFECYCLE_CHANNEL,
+	type AgentDefinition,
+	type SubagentEventPayload,
+	type SubagentLifecyclePayload,
+} from "@oh-my-pi/pi-coding-agent/task/types";
+import { activeSubagentRuns, EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
+import { createSessionDefaults } from "../helpers/session-defaults";
 
 const AGENT_ID = "accepted-result";
 
@@ -93,6 +100,7 @@ function createHarness(options?: { hangPrompt?: boolean; asyncJobManager?: Async
 		} as AgentSessionEvent);
 	};
 	const session = {
+		...createSessionDefaults(emit),
 		state: { messages },
 		agent: { state: { systemPrompt: ["test"] } },
 		model: undefined,
@@ -114,12 +122,13 @@ function createHarness(options?: { hangPrompt?: boolean; asyncJobManager?: Async
 			promptEntered.resolve();
 			if (options?.hangPrompt) {
 				await hangingPrompt.promise;
-				return;
+				return true;
 			}
 			const message = assistantStopMessage("submitting");
 			messages.push(message);
 			emit({ type: "message_end", message } as AgentSessionEvent);
 			emitTerminalYield({ report: text });
+			return true;
 		},
 		waitForIdle: async () => {},
 		isAdvisorActive: () => false,
@@ -177,11 +186,16 @@ describe("runSubprocess result acceptance", () => {
 	it("terminalizes the ref and stamps the run lifecycle when the yield is accepted", async () => {
 		const harness = createHarness();
 		const ref = registerRunning(harness.session);
+		const bus = new EventBus();
+		const frames: SubagentLifecyclePayload[] = [];
+		const events: SubagentEventPayload[] = [];
+		bus.on(TASK_SUBAGENT_LIFECYCLE_CHANNEL, frame => frames.push(frame as SubagentLifecyclePayload));
+		bus.on(TASK_SUBAGENT_EVENT_CHANNEL, event => events.push(event as SubagentEventPayload));
 		vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue({
 			session: harness.session,
 			extensionsResult: {} as unknown as LoadExtensionsResult,
 			setToolUIContext: () => {},
-			eventBus: new EventBus(),
+			eventBus: bus,
 		} as CreateAgentSessionResult);
 
 		const result = await runSubprocess({
@@ -190,6 +204,7 @@ describe("runSubprocess result acceptance", () => {
 			task: "do the work",
 			index: 0,
 			id: AGENT_ID,
+			eventBus: bus,
 		});
 
 		expect(result.exitCode).toBe(0);
@@ -201,6 +216,55 @@ describe("runSubprocess result acceptance", () => {
 		expect(AgentRegistry.global().staleAcceptedRuns()).toEqual([]);
 		// Launch milestone is the registration timestamp the acceptance must not move.
 		expect(settled?.createdAt).toBe(ref.createdAt);
+		expect(frames.map(frame => frame.status)).toEqual(["started", "completed"]);
+		expect(frames[0]?.runKind).toBe("spawn");
+		expect(frames[0]?.runToken).toBe(frames[1]?.runToken);
+		expect(
+			events.some(
+				envelope =>
+					envelope.event.type === "agent_start" &&
+					envelope.owned &&
+					envelope.event.runOwners?.includes(frames[0]!.runToken),
+			),
+		).toBe(true);
+		expect(
+			events.some(
+				envelope =>
+					envelope.event.type === "message_end" && envelope.owned && envelope.runToken === frames[0]?.runToken,
+			),
+		).toBe(true);
+	});
+
+	it("settles the started token when final progress publication throws", async () => {
+		const harness = createHarness();
+		registerRunning(harness.session);
+		const bus = new EventBus();
+		const frames: SubagentLifecyclePayload[] = [];
+		bus.on(TASK_SUBAGENT_LIFECYCLE_CHANNEL, frame => frames.push(frame as SubagentLifecyclePayload));
+		vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue({
+			session: harness.session,
+			extensionsResult: {} as unknown as LoadExtensionsResult,
+			setToolUIContext: () => {},
+			eventBus: bus,
+		} as CreateAgentSessionResult);
+
+		await expect(
+			runSubprocess({
+				cwd: "/tmp",
+				agent: baseAgent,
+				task: "finish",
+				index: 0,
+				id: AGENT_ID,
+				eventBus: bus,
+				onProgress: progress => {
+					if (progress.status === "completed") throw new Error("final progress failed");
+				},
+			}),
+		).rejects.toThrow("final progress failed");
+		expect(frames.map(frame => frame.status)).toEqual(["started", "failed"]);
+		expect(frames[1]?.runToken).toBe(frames[0]?.runToken);
+		expect(frames[1]?.outcomeExcerpt).toBe("");
+		expect(activeSubagentRuns(bus).size).toBe(0);
 	});
 
 	it("settles the owning task job when Agent Hub tombstones a running subagent", async () => {
@@ -252,12 +316,16 @@ describe("runSubprocess result acceptance", () => {
 
 	it("terminalizes an existing ref on a follow-up turn whose run-state mirror omits idle", async () => {
 		const harness = createHarness();
+		const bus = new EventBus();
+		const frames: SubagentLifecyclePayload[] = [];
+		bus.on(TASK_SUBAGENT_LIFECYCLE_CHANNEL, frame => frames.push(frame as SubagentLifecyclePayload));
 		registerRunning(harness.session);
 
 		const result = await runSubagentFollowUpTurn({
 			id: AGENT_ID,
 			agent: baseAgent,
 			message: "continue",
+			eventBus: bus,
 		});
 
 		expect(result.exitCode).toBe(0);
@@ -266,12 +334,19 @@ describe("runSubprocess result acceptance", () => {
 		expect(settled?.lifecycle?.responseAt).toBeNumber();
 		expect(settled?.lifecycle?.acceptedAt).toBeNumber();
 		expect(settled?.lifecycle?.terminalAt).toBeNumber();
+		expect(frames.map(frame => frame.status)).toEqual(["started", "completed"]);
+		expect(frames[0]?.runKind).toBe("followUp");
+		expect(frames[0]?.runToken).toBe(frames[1]?.runToken);
+		expect(frames[1]?.outcomeExcerpt).toContain("continue");
 	});
 
 	it("terminalizes the ref when an autonomous wake turn's yield is accepted", async () => {
 		const harness = createHarness();
+		const bus = new EventBus();
+		const frames: SubagentLifecyclePayload[] = [];
+		bus.on(TASK_SUBAGENT_LIFECYCLE_CHANNEL, frame => frames.push(frame as SubagentLifecyclePayload));
 		registerRunning(harness.session);
-		attachIrcWakeTurnMonitor(harness.session, { id: AGENT_ID, agent: baseAgent });
+		attachIrcWakeTurnMonitor(harness.session, { id: AGENT_ID, agent: baseAgent, eventBus: bus, taskDepth: 1 });
 		const observer = harness.wakeObserver();
 		expect(observer).toBeDefined();
 
@@ -294,6 +369,11 @@ describe("runSubprocess result acceptance", () => {
 		expect(settled?.lifecycle?.responseAt).toBeNumber();
 		expect(settled?.lifecycle?.acceptedAt).toBeNumber();
 		expect(settled?.lifecycle?.terminalAt).toBeNumber();
+		expect(frames.map(frame => frame.status)).toEqual(["started", "completed"]);
+		expect(frames[0]?.runKind).toBe("wake");
+		expect(frames[0]?.depth).toBe(1);
+		expect(frames[0]?.runToken).toBe(frames[1]?.runToken);
+		expect(frames[1]?.outcomeExcerpt).toContain("answered while woken");
 	});
 
 	it("delivers every yield of a woken agent to its parent as a job completion", async () => {

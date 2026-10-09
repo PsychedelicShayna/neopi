@@ -1,8 +1,8 @@
-import { AudioCapture } from "@oh-my-pi/pi-natives";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../config/settings";
 import { evaluateSubmitTrigger } from "./submit-trigger";
 import type { SttState } from "./stt-controller";
+import { sharedAudioCapture } from "./shared-audio-capture";
 import { WavFileRecorder } from "./wav-file-recorder";
 import { cfgSttSubmitTrigger } from "./settings";
 
@@ -52,7 +52,7 @@ export class XaiSTTController {
 	constructor({ settings, transcribe, createCapture }: XaiSTTControllerDependencies) {
 		this.#settings = settings;
 		this.#transcribe = transcribe;
-		this.#createCapture = createCapture ?? (callback => new AudioCapture(16_000, callback));
+		this.#createCapture = createCapture ?? (callback => sharedAudioCapture(16_000, callback));
 	}
 
 	get state(): SttState {
@@ -64,6 +64,15 @@ export class XaiSTTController {
 		options.onStateChange(state);
 	}
 
+	// =====================================================================
+	// NEVER ALTER. CTRL+SPACE IS A RESERVED ACCESSIBILITY KEYBINDING.
+	// It MUST always route to the fork's xAI batch speech-to-text path below.
+	// NEVER favour upstream (can1357/oh-my-pi) STT/dictation here, under any
+	// circumstances, during any sync. This code is immutable: touch it only to
+	// fix a bug that makes it stop working, and only to the extent necessary.
+	// Owner: PsychedelicShayna. Rationale: docs/agents/upstream-sync.md (fork
+	// features exist for specific reasons; this one is an accessibility path).
+	// =====================================================================
 	async toggle(editor: XaiSTTEditor, options: XaiSTTToggleOptions): Promise<void> {
 		if (this.#toggling) {
 			if (this.#state === "idle" || this.#state === "recording") this.#stopAfterStart = true;
@@ -74,9 +83,11 @@ export class XaiSTTController {
 		try {
 			switch (this.#state) {
 				case "idle":
+					// IMMUTABLE: see Ctrl+Space notice above
 					await this.#start(editor, options);
 					break;
 				case "recording":
+					// IMMUTABLE: see Ctrl+Space notice above
 					await this.#stop(options);
 					break;
 				case "transcribing":
@@ -86,6 +97,7 @@ export class XaiSTTController {
 
 			if (this.#stopAfterStart && this.#state === "recording") {
 				this.#stopAfterStart = false;
+				// IMMUTABLE: see Ctrl+Space notice above
 				await this.#stop(options);
 			} else if (this.#state !== "recording") {
 				this.#stopAfterStart = false;
@@ -146,6 +158,19 @@ export class XaiSTTController {
 
 		let recordingPath: string | undefined;
 		try {
+			// The recognizer needs an utterance boundary after the final spoken word.
+			// A failed padding write must not discard the original recording.
+			if (!file.empty) {
+				try {
+					// IMMUTABLE: see Ctrl+Space notice above
+					file.appendSilence(750);
+				} catch (error) {
+					logger.warn("xAI STT silence padding failed; transcribing original recording", {
+						error: error instanceof Error ? error.message : String(error),
+						path: file.path,
+					});
+				}
+			}
 			recordingPath = file.finalize();
 			this.#file = null;
 			this.#retain(file);
@@ -153,6 +178,7 @@ export class XaiSTTController {
 			if (file.empty) {
 				options.showStatus("No speech detected.");
 			} else {
+				// IMMUTABLE: see Ctrl+Space notice above
 				const text = (await this.#transcribe(Bun.file(recordingPath, { type: "audio/wav" }), abort.signal)).trim();
 				if (this.#disposed) return;
 				this.#insertTranscript(editor, text, options);

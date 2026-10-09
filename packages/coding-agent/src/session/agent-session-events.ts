@@ -1,4 +1,4 @@
-import type { AgentEvent, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import type { AgentEvent, AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Effort } from "@oh-my-pi/pi-ai";
 import type { Rule } from "../capability/rule";
@@ -10,10 +10,20 @@ import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { TodoItem } from "@oh-my-pi/pi-tui/tools/todo";
 import type { MixtureSessionEvent } from "../moa/host";
 import type { CustomMessage } from "./messages";
+import type { CacheWarmingRefreshEnd, CacheWarmingRefreshStart } from "./cache-warmer";
 
 /** Session-specific events that extend the core AgentEvent. */
 export type AgentSessionEvent =
-	| Exclude<AgentEvent, { type: "agent_end" }>
+	| Exclude<AgentEvent, { type: "agent_end" } | { type: "agent_start" }>
+	| (Extract<AgentEvent, { type: "agent_start" }> & {
+			/**
+			 * Request handles whose work launched or scheduled this run (#171).
+			 * Absent on runs nobody owns (keyboard prompts, autonomous turns).
+			 */
+			runOwners?: string[];
+			/** 1-based count of runs this session has started, this one included. */
+			agentStarts?: number;
+	  })
 	| (Extract<AgentEvent, { type: "agent_end" }> & {
 			/** False when an async delivery will resume the session before its true final settle. */
 			isTerminal?: boolean;
@@ -30,6 +40,12 @@ export type AgentSessionEvent =
 			 * this; UI that tracks run state (the TUI) keeps keying off `isTerminal`.
 			 */
 			hasFinalResponse?: boolean;
+			/**
+			 * True on a non-terminal end whose only possible resume is a background-job result
+			 * (no queued input, no continuation the agent scheduled itself). The wake is not
+			 * guaranteed: a cancelled or suppressed job never delivers one.
+			 */
+			awaitingAsyncWork?: boolean;
 	  })
 	| {
 			type: "auto_compaction_start";
@@ -61,17 +77,25 @@ export type AgentSessionEvent =
 			finalError?: string;
 			retryErrors?: RetryErrorUpdate[];
 	  }
+	| ({ type: "cache_warming_start" } & CacheWarmingRefreshStart)
+	| ({ type: "cache_warming_end" } & CacheWarmingRefreshEnd)
 	| { type: "retry_fallback_applied"; from: string; to: string; role: string; reason?: string }
 	| { type: "retry_fallback_succeeded"; model: string; role: string }
 	| { type: "model_changed" }
 	| { type: "config_warnings_changed" }
 	| { type: "advisor_cost_changed" }
 	| { type: "advisor_yielded" }
+	/** A finalized advisor-agent message (the same data the advisor transcript records). Fork seam for live ingest. */
+	| { type: "advisor_message"; advisor: string; slug: string; message: AgentMessage }
 	| { type: "ttsr_triggered"; rules: Rule[] }
 	| { type: "todo_reminder"; todos: TodoItem[]; attempt: number; maxAttempts: number }
 	| { type: "todo_auto_clear" }
 	| { type: "irc_message"; message: CustomMessage }
 	| { type: "notice"; level: "info" | "warning" | "error"; message: string; source?: string }
+	/** Owners joined a run already streaming (a coalesced continuation) (#171). */
+	| { type: "run_owners_joined"; owners: string[]; agentStarts: number }
+	/** Scheduled work for these owners ended before any run consumed it (#171). */
+	| { type: "run_owners_skipped"; owners: string[]; reason: string }
 	| MixtureSessionEvent
 	| {
 			type: "thinking_level_changed";
@@ -83,7 +107,9 @@ export type AgentSessionEvent =
 	  }
 	| { type: "goal_updated"; goal: Goal | null; state?: GoalModeState }
 	/** Live chat-mode change: `mode` is `off` outside chat mode; `include` is comma-joined. */
-	| { type: "chat_mode_changed"; mode: ChatModeSetting; include: string };
+	| { type: "chat_mode_changed"; mode: ChatModeSetting; include: string }
+	// Coalesced snapshot of displayable steering/follow-up queue on mutation.
+	| { type: "queue_update"; steering: string[]; followUp: string[] };
 
 /** Listener function for agent session events. */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;

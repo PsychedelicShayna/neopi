@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import { clearCustomApis } from "@oh-my-pi/pi-ai";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -8,11 +9,21 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { rebindMemoryBackendForCwd } from "@oh-my-pi/pi-coding-agent/hindsight/backend";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
+import { registerMixtureApi } from "@oh-my-pi/pi-coding-agent/moa/provider";
+import { MIXTURE_RUN_ENTRY_TYPE } from "@oh-my-pi/pi-coding-agent/moa/types";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { executeAcpBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins";
-import { getProjectAgentDir, getProjectDir, setProjectDir, removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
+import {
+	getProjectAgentDir,
+	getProjectDir,
+	setProjectDir,
+	removeSyncWithRetries,
+	Snowflake,
+	TempDir,
+} from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
+import { createMoaFixture, createMoaSession, DRAFT_THEN_EDIT_TOML, FakeMembers } from "./helpers/moa-setup";
 
 function textContent(result: { content?: Array<{ type: string; text?: string }> }): string {
 	return (
@@ -87,7 +98,7 @@ describe("createAgentSession cwd after /move", () => {
 					),
 				);
 				const settings = await Settings.loadIsolated({ cwd: cwdA, agentDir });
-				const sessionManager = SessionManager.create(cwdA, path.join(tempDir, "sessions"));
+				const sessionManager = SessionManager.create(cwdA, SessionManager.getDefaultSessionDir(cwdA, agentDir));
 				authStorage.keys.setRuntime("openai", "test-key");
 				({ session } = await createAgentSession({
 					cwd: cwdA,
@@ -119,6 +130,7 @@ describe("createAgentSession cwd after /move", () => {
 
 				moved = true;
 				await sessionManager.moveTo(cwdB);
+				expect(sessionManager.getSessionDir().startsWith(`${agentDir}${path.sep}`)).toBe(true);
 				await settings.reloadForCwd(cwdB);
 				// Rebinding must clear memory without depending on a later skill/tool refresh.
 				await rebindMemoryBackendForCwd(session);
@@ -148,21 +160,19 @@ describe("createAgentSession cwd after /move", () => {
 		const cwdB = path.join(tempDir, "cwd-b");
 		fs.mkdirSync(cwdA, { recursive: true });
 		fs.mkdirSync(cwdB, { recursive: true });
+		await Bun.write(path.join(cwdB, "moved.txt"), "moved cwd");
+		const agentDir = path.join(tempDir, "agent");
 
-		const sessionManager = SessionManager.create(cwdA, path.join(tempDir, "sessions"));
+		const sessionManager = SessionManager.create(cwdA, SessionManager.getDefaultSessionDir(cwdA, agentDir));
 		const authStorage = createInMemoryAuthStorage();
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
 		const { session } = await createAgentSession({
 			cwd: cwdA,
-			agentDir: tempDir,
+			agentDir,
 			sessionManager,
 			authStorage,
 			modelRegistry,
-			settings: Settings.isolated({
-				"async.enabled": false,
-				"bash.autoBackground.enabled": false,
-				"bashInterceptor.enabled": false,
-			}),
+			settings: Settings.isolated({ "async.enabled": false }),
 			model: getBundledModel("openai", "gpt-4o-mini"),
 			disableExtensionDiscovery: true,
 			skills: [],
@@ -174,17 +184,19 @@ describe("createAgentSession cwd after /move", () => {
 			skipPythonPreflight: true,
 			rules: [],
 			preloadedCustomToolPaths: [],
-			toolNames: ["bash"],
+			toolNames: ["read"],
 		});
 
 		try {
 			await sessionManager.moveTo(cwdB);
+			expect(sessionManager.getSessionDir().startsWith(`${agentDir}${path.sep}`)).toBe(true);
 
-			const bashTool = session.getToolByName("bash");
-			if (!bashTool) throw new Error("Expected bash tool");
-			const result = await bashTool.execute("pwd-after-move", { command: "pwd" });
+			// A relative read proves cwd rebinding without creating the process-scoped shell snapshot cache.
+			const readTool = session.getToolByName("read");
+			if (!readTool) throw new Error("Expected read tool");
+			const result = await readTool.execute("read-after-move", { path: "moved.txt" });
 
-			expect(textContent(result)).toContain(cwdB);
+			expect(textContent(result)).toContain("moved cwd");
 		} finally {
 			try {
 				await session.dispose();
@@ -212,7 +224,7 @@ describe("createAgentSession cwd after /move", () => {
 			),
 		);
 		const settings = await Settings.loadIsolated({ cwd: cwdA, agentDir });
-		const sessionManager = SessionManager.create(cwdA, path.join(tempDir, "sessions"));
+		const sessionManager = SessionManager.create(cwdA, SessionManager.getDefaultSessionDir(cwdA, agentDir));
 		const authStorage = createInMemoryAuthStorage();
 		const { session } = await createAgentSession({
 			cwd: cwdA,
@@ -253,6 +265,7 @@ describe("createAgentSession cwd after /move", () => {
 			});
 			expect(output.join("\n")).toContain("Moved to ");
 			expect(sessionManager.getCwd()).toBe(cwdB);
+			expect(sessionManager.getSessionDir().startsWith(`${agentDir}${path.sep}`)).toBe(true);
 			expect(session.getHindsightSessionState()).toBeUndefined();
 			expect(session.getMnemopiSessionState()).toBeUndefined();
 			// Explicit backend reapplication must preserve the same startup policy.
@@ -267,6 +280,123 @@ describe("createAgentSession cwd after /move", () => {
 			} finally {
 				authStorage.close();
 			}
+		}
+	});
+});
+
+describe("headless /move mixture run continuity", () => {
+	it("rebinds same-name mixture metadata on move and restores it after a failed move", async () => {
+		const root = TempDir.createSync("@moa-move-");
+		const originalProjectDir = getProjectDir();
+		const members = new FakeMembers();
+		registerMixtureApi();
+		const fixture = await createMoaFixture(root);
+		const destination = root.join("destination");
+		fs.mkdirSync(destination);
+		await Bun.write(
+			path.join(getProjectAgentDir(fixture.cwd), "MIXTURES.toml"),
+			DRAFT_THEN_EDIT_TOML.replace("tools = false", "tools = false\nmax_tokens = 8000"),
+		);
+		await Bun.write(
+			path.join(getProjectAgentDir(destination), "MIXTURES.toml"),
+			`[[mixtures]]
+name = "draft-then-edit"
+entry = "editor"
+
+[[mixtures.members]]
+id = "editor"
+model = "fake/editor"
+system_prompt = "Return the final answer."
+tools = false
+max_tokens = 2000
+`,
+		);
+		const manager = SessionManager.create(fixture.cwd, root.join("sessions"));
+		const settings = Settings.isolated({ "compaction.enabled": false });
+		const session = await createMoaSession(fixture, { sessionManager: manager, settings });
+		const checkpointIds = () =>
+			manager
+				.getBranch()
+				.flatMap(entry =>
+					entry.type === "custom" &&
+					entry.customType === MIXTURE_RUN_ENTRY_TYPE &&
+					"reason" in (entry.data as object)
+						? [(entry.data as { run: { id: string } }).run.id]
+						: [],
+				);
+		const output: string[] = [];
+		const runtime = {
+			session,
+			sessionManager: manager,
+			settings,
+			cwd: fixture.cwd,
+			output: (text: string) => {
+				output.push(text);
+			},
+			refreshCommands: () => {},
+			reloadPlugins: async () => {},
+		};
+		const notices: string[] = [];
+		const modelChanges: string[] = [];
+		session.subscribe(event => {
+			if (event.type === "notice" && event.source === "mixture") notices.push(event.message);
+			if (event.type === "model_changed") {
+				const model = session.agent.state.model;
+				modelChanges.push(`${model?.input.join(",")}/${model?.maxTokens}`);
+			}
+		});
+		try {
+			await session.setModel(fixture.registry.find("mixture", "draft-then-edit")!);
+			expect(session.agent.state.model?.input).toEqual(["text", "image"]);
+			expect(session.agent.state.model?.maxTokens).toBe(8000);
+			expect(session.agent.state.model?.contextWindow).toBe(64_000);
+			expect(modelChanges.at(-1)).toBe("text,image/8000");
+			await session.sendUserMessage("first");
+			const sourceRun = checkpointIds().at(-1);
+			expect(sourceRun).toBeDefined();
+
+			let failRefresh = true;
+			runtime.reloadPlugins = async () => {
+				if (failRefresh) {
+					failRefresh = false;
+					throw new Error("destination plugin refresh failed");
+				}
+			};
+			await executeAcpBuiltinSlashCommand(`/move ${destination}`, runtime);
+			expect(manager.getCwd()).toBe(fixture.cwd);
+			expect(output.join("\n")).toContain("Move failed: destination plugin refresh failed");
+			expect(session.agent.state.model?.provider).toBe("mixture");
+			expect(session.agent.state.model?.id).toBe("draft-then-edit");
+			expect(session.agent.state.model?.input).toEqual(["text", "image"]);
+			expect(session.agent.state.model?.maxTokens).toBe(8000);
+			expect(session.agent.state.model?.contextWindow).toBe(64_000);
+			expect(modelChanges).toContain("text/2000");
+			expect(modelChanges.at(-1)).toBe("text,image/8000");
+
+			expect(notices).toEqual([]);
+
+			runtime.reloadPlugins = async () => {};
+			await executeAcpBuiltinSlashCommand(`/move ${destination}`, runtime);
+			expect(manager.getCwd()).toBe(destination);
+			expect(session.agent.state.model?.provider).toBe("mixture");
+			expect(session.agent.state.model?.id).toBe("draft-then-edit");
+			expect(session.agent.state.model?.input).toEqual(["text"]);
+			expect(session.agent.state.model?.maxTokens).toBe(2000);
+			expect(session.agent.state.model?.contextWindow).toBe(64_000);
+			expect(modelChanges.at(-1)).toBe("text/2000");
+			expect(notices).toEqual([
+				"1 mixture run from the previous workspace was reset; the next message starts a new run",
+			]);
+			await session.sendUserMessage("second");
+			expect(checkpointIds().at(-1)).not.toBe(sourceRun);
+			expect(members.callsTo("writer")).toHaveLength(1);
+			expect(members.callsTo("editor")).toHaveLength(2);
+		} finally {
+			await session.dispose();
+			fixture.authStorage.close();
+			clearCustomApis();
+			setProjectDir(originalProjectDir);
+			root.removeSync();
 		}
 	});
 });

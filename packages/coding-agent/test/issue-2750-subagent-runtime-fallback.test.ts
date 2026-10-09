@@ -5,7 +5,7 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as sdkModule from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import type { ServingModel } from "@oh-my-pi/pi-coding-agent/session/retry-fallback-chains";
+import type { RetryFallbackRole, ServingModel } from "@oh-my-pi/pi-coding-agent/session/retry-fallback-chains";
 import { TurnRecovery, type TurnRecoveryHost } from "@oh-my-pi/pi-coding-agent/session/turn-recovery";
 import { runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
@@ -48,7 +48,9 @@ function createYieldingSession(
 ): AgentSession {
 	const listeners: Array<(event: { type: string; [key: string]: unknown }) => void> = [];
 	const session = {
-		...createSessionDefaults(),
+		...createSessionDefaults(event => {
+			for (const listener of listeners) listener(event as unknown as { type: string; [key: string]: unknown });
+		}),
 		agent: { state: { systemPrompt: ["test"] } },
 		state: { messages: [] },
 		model: model("primary", "bad-runtime-model"),
@@ -133,6 +135,8 @@ describe("subagent runtime model resolution", () => {
 					activeModel = model("custom", "unserved-candidate");
 				});
 				Object.defineProperty(session, "servingModel", { get: () => recovery.servingModel });
+				// The session's actual serving identity must survive an armed but unserved route.
+				// The executor consumes this getter during its yield event, not the speculative `model`.
 				expect(recovery.servingModel?.modelIdentity).toBe("custom/coding-router:max");
 				expect(recovery.servingModel?.thinkingLevel).toBe(level);
 				return { session, extensionsResult: {}, setToolUIContext: () => {} } as never;
@@ -275,6 +279,36 @@ describe("subagent runtime model resolution", () => {
 		expect(result.modelOverride).toEqual(["primary/bad-runtime-model", "fallback/working-model"]);
 		expect(result.resolvedModel).toBe("fallback/working-model");
 		expect(result.resolvedModelIsFallback).toBe(true);
+	});
+
+	it("persists the installed subagent fallback role for cold revival (#13789)", async () => {
+		const primary = model("primary", "bad-runtime-model");
+		const fallback = model("fallback", "working-model");
+		let persisted: RetryFallbackRole | undefined;
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async () => {
+			const session = createYieldingSession("none");
+			vi.spyOn(session.sessionManager, "appendSessionInit").mockImplementation(init => {
+				persisted = init.retryFallback;
+				return "session-init";
+			});
+			return { session, extensionsResult: {}, setToolUIContext: () => {} } as never;
+		});
+		await runSubprocess({
+			cwd: "/tmp",
+			agent: { name: "task", description: "test", systemPrompt: "test", source: "bundled" },
+			task: "work",
+			index: 0,
+			id: "issue-13789",
+			modelOverride: ["primary/bad-runtime-model", "fallback/working-model"],
+			settings: Settings.isolated({}),
+			modelRegistry: {
+				refresh: async () => {},
+				getAvailable: () => [primary, fallback],
+				getApiKey: async () => "test-key",
+			} as never,
+			enableLsp: false,
+		});
+		expect(persisted).toEqual({ primary: "primary/bad-runtime-model", chain: ["fallback/working-model"] });
 	});
 
 	it("does not attribute the run to a fallback that never served a turn", async () => {

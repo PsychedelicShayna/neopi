@@ -26,6 +26,7 @@ import {
 	type SessionEntry,
 	type SessionMessageEntry,
 } from "./session-entries";
+import type { EffortOrigin, EffortSelection } from "../config/effort-policy";
 
 // #4470 crash artifacts had legacy frames (no shape metadata) with 17 frames,
 // ~306k archive chars, and ~1.5M truncated chars. Current snapcompact frames
@@ -100,6 +101,8 @@ export interface SessionContext {
 	thinkingLevel?: string;
 	/** Configured thinking selector (`"auto"` or a concrete level) from the latest change. */
 	configuredThinkingLevel?: string;
+	effortOrigin?: EffortOrigin;
+	autoSelection?: EffortSelection;
 	serviceTier?: ServiceTierByFamily;
 	/** Model roles: { default: "provider/modelId", small: "provider/modelId", ... } */
 	models: Record<string, string>;
@@ -277,6 +280,8 @@ export function buildSessionContext(
 	// Extract settings and find compaction
 	let thinkingLevel: string | undefined = "off";
 	let configuredThinkingLevel: string | undefined;
+	let effortOrigin: EffortOrigin | undefined;
+	let autoSelection: EffortSelection | undefined;
 	let serviceTier: ServiceTierByFamily | undefined;
 	const models: Record<string, string> = {};
 	let compaction: CompactionEntry | null = null;
@@ -296,6 +301,8 @@ export function buildSessionContext(
 		if (entry.type === "thinking_level_change") {
 			thinkingLevel = entry.thinkingLevel ?? "off";
 			configuredThinkingLevel = entry.configured ?? entry.thinkingLevel ?? undefined;
+			effortOrigin = entry.effortOrigin;
+			autoSelection = entry.autoSelection;
 		} else if (entry.type === "model_change") {
 			// New format: { model: "provider/id", role?: string }
 			if (entry.model) {
@@ -628,7 +635,16 @@ export function buildSessionContext(
 					sourceEntry.timestamp,
 				);
 				setMessageEntryId(notesMessage, sourceEntry.id);
-				messages.unshift(notesMessage);
+				// Native Anthropic compaction must remain the first request block.
+				// Do not split it from the retained assistant turn and tool results.
+				const head = messages[0];
+				let insertAt = 0;
+				if (head?.role === "compactionSummary" && head.providerPayload?.type === "anthropicCompaction") {
+					insertAt = 1;
+					if (messages[insertAt]?.role === "assistant") insertAt++;
+					while (messages[insertAt]?.role === "toolResult") insertAt++;
+				}
+				messages.splice(insertAt, 0, notesMessage);
 			}
 		}
 	}
@@ -738,6 +754,8 @@ export function buildSessionContext(
 		cacheMissExplainedAt: options?.transcript ? cacheMissExplainedAt : undefined,
 		thinkingLevel,
 		configuredThinkingLevel,
+		effortOrigin,
+		autoSelection,
 		serviceTier,
 		models,
 		injectedTtsrRules,

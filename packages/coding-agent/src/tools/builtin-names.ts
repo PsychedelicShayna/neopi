@@ -27,8 +27,10 @@ export const BUILTIN_TOOL_NAMES = [
 	"retain",
 	"recall",
 	"reflect",
+	"chronicle_recall",
 	"learn",
 	"manage_skill",
+	"ctl",
 ] as const;
 
 export type BuiltinToolName = (typeof BUILTIN_TOOL_NAMES)[number];

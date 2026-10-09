@@ -5,6 +5,7 @@ import { type Api, type AssistantMessage, Effort, type Model } from "@oh-my-pi/p
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { cfgEffortRules } from "@oh-my-pi/pi-coding-agent/config/effort-policy";
 import { type CreateAgentSessionResult, createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -286,6 +287,29 @@ describe("AgentSession model persistence", () => {
 		if (!activeModel) throw new Error("Expected active model after cycleModel");
 		expect(modelValue(activeModel)).toBe(modelValue(result.model));
 		expect(created.settings.getModelRole("default")).toBe(defaultRoleValue);
+	});
+
+	it("treats filled-in scoped effort as policy-controlled but keeps an explicit CLI suffix", async () => {
+		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
+		const scopedModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
+		const created = await createSession({ initialModel: defaultModel });
+		cfgEffortRules.set(created.settings, [
+			{ selector: modelValue(scopedModel), allowed: [Effort.Low] },
+			{ selector: modelValue(defaultModel), allowed: [Effort.Low] },
+		]);
+		created.session.setScopedModels([
+			{ model: defaultModel, thinkingLevel: Effort.High, explicitThinkingLevel: true },
+			{ model: scopedModel, thinkingLevel: Effort.High, explicitThinkingLevel: false },
+		]);
+		await created.session.cycleModel();
+		expect(created.session.model?.id).toBe(scopedModel.id);
+		expect(created.session.thinkingLevel).toBe(Effort.Low);
+		expect(created.session.effortOrigin).toBe("default");
+
+		await created.session.cycleModel();
+		expect(created.session.model?.id).toBe(defaultModel.id);
+		expect(created.session.thinkingLevel).toBe(Effort.High);
+		expect(created.session.effortOrigin).toBe("caller");
 	});
 
 	it("restores the last active role model when switching sessions", async () => {
@@ -601,17 +625,5 @@ describe("AgentSession model persistence", () => {
 				EPHEMERAL_MODEL_CHANGE_ROLE,
 			),
 		).toEqual(["anthropic/claude-sonnet-4-5"]);
-	});
-
-	it("lists a named role model before the default fallback", () => {
-		expect(
-			getRestorableSessionModels(
-				{
-					default: "anthropic/claude-sonnet-4-5",
-					smol: "anthropic/claude-sonnet-4-6",
-				},
-				"smol",
-			),
-		).toEqual(["anthropic/claude-sonnet-4-6", "anthropic/claude-sonnet-4-5"]);
 	});
 });

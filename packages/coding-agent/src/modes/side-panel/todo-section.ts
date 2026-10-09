@@ -73,7 +73,7 @@ export interface TodoLinesInput {
 /** Budgets the HUD has always used. */
 export const TODO_LINE_BUDGET = { subsequentStageCap: 4, activeTaskCap: 5 } as const;
 
-function activePhase(phases: readonly TodoPhase[]): TodoPhase | undefined {
+export function activePhase(phases: readonly TodoPhase[]): TodoPhase | undefined {
 	const nonEmpty = phases.filter(phase => phase.tasks.length > 0);
 	const active = nonEmpty.find(phase =>
 		phase.tasks.some(task => task.status === "pending" || task.status === "in_progress"),

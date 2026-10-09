@@ -28,9 +28,18 @@ export const cleanseHelp = {
 	description: "Detect and fix project diagnostics with weighted parallel subagents",
 } satisfies CommandMetadata;
 
+export const chronicleHelp = {
+	description: "Chronicler memory tools over stored sessions: backfill",
+} satisfies CommandMetadata;
+
 export const collabHelp = {
 	description:
 		"List active local Collab host metadata without URLs; use collab link <instanceId|pid> to retrieve a control link (--view for view-only)",
+} satisfies CommandMetadata;
+
+export const ctlHelp = {
+	description:
+		"Drive a running npi session over its control socket: list, state, send, steer, abort, slash, action, keys, dialogs",
 } satisfies CommandMetadata;
 
 export const clipHelp = {
@@ -104,6 +113,10 @@ export const playHelp = {
 	description: "Replay a /record session recording in the terminal (space pauses, q quits)",
 } satisfies CommandMetadata;
 
+export const predictHelp = {
+	description: "Type a prompt and compare every word-completion engine's ghost text live",
+} satisfies CommandMetadata;
+
 export const psHelp = {
 	description: "List and control daemon-supervised background processes (logs, stop, kill, restart)",
 } satisfies CommandMetadata;
@@ -144,7 +157,7 @@ export const streamHelp = {
 } satisfies CommandMetadata;
 
 export const tinyModelsHelp = {
-	description: "Download tiny local models (session titles + memory)",
+	description: "Download tiny local models (session titles, memory, word completion)",
 } satisfies CommandMetadata;
 
 export const tokenHelp = { description: "Get the API key or OAuth token for a provider" } satisfies CommandMetadata;

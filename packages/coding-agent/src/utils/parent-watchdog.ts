@@ -121,10 +121,17 @@ export function watchParentProcess(options: ParentWatchdogOptions): ParentWatchd
 		return handle;
 	}
 
-	// A rejection is either our own stop() cancelling the wait (fire() is then
-	// a no-op) or the native handle failing, which the worker contract has
-	// always treated as the parent being gone.
-	parentProcess?.waitForExit({ signal: waitAbort.signal }).then(fire, fire);
+	// A native wait can fail or resolve false without the parent exiting.
+	// Confirm liveness before firing; the poll keeps watching if the handle
+	// becomes unusable while the parent remains alive.
+	parentProcess?.waitForExit({ signal: waitAbort.signal }).then(
+		exited => {
+			if (exited || !isParentAlive()) fire();
+		},
+		() => {
+			if (!isParentAlive()) fire();
+		},
+	);
 	pollTimer = setInterval(() => {
 		if (!isParentAlive()) fire();
 	}, options.pollIntervalMs ?? PARENT_WATCHDOG_POLL_MS);

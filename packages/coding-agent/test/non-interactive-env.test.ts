@@ -1,3 +1,4 @@
+import type { Subprocess } from "bun";
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -165,6 +166,244 @@ it("filters expanded dotenv values while preserving matching and empty launcher 
 			});
 		}
 	} finally {
+		await fs.rm(tmp, { recursive: true, force: true });
+	}
+});
+
+it("restores launcher editor and credentials for interactive children without unsanitizing tool commands", async () => {
+	if (process.platform === "win32") return;
+	const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-host-env-"));
+	try {
+		await Bun.write(path.join(tmp, ".env"), "HOST_ENV_DOTENV_SECRET=project-only\n");
+		const hostModule = path.resolve(import.meta.dir, "../src/exec/host-env.ts");
+		const toolModule = path.resolve(import.meta.dir, "../src/exec/non-interactive-env.ts");
+		const selected = [
+			"EDITOR",
+			"VISUAL",
+			"SSH_ASKPASS",
+			"SUDO_ASKPASS",
+			"TERM",
+			"CI",
+			"GIT_EDITOR",
+			"HOST_ENV_DOTENV_SECRET",
+			"HOST_ENV_LITERAL",
+			"GIT_DIR",
+			"GIT_WORK_TREE",
+			"GIT_INDEX_FILE",
+			"GIT_COMMON_DIR",
+			"GIT_OBJECT_DIRECTORY",
+			"GIT_ALTERNATE_OBJECT_DIRECTORIES",
+			"GPG_TTY",
+			"OMPCODE",
+			"CLAUDECODE",
+			"SHELL",
+			"OMP_HOST_ENV_FILE",
+			"OMP_HOST_EDITOR",
+			"OMP_HOST_VISUAL",
+			"OMP_HOST_SSH_ASKPASS",
+			"OMP_HOST_SUDO_ASKPASS",
+			"OMP_HOST_TERM",
+			"HOST_ENV_COMMAND_SECRET",
+			"OMP_HOST_OVERLAY_KEYS",
+			"MallocStackLogging",
+			"MallocStackLoggingNoCompact",
+		];
+		const probe = `console.log(JSON.stringify(Object.fromEntries(${JSON.stringify(selected)}.map(key => [key, process.env[key] ?? null]))))`;
+		const script = [
+			`import { getHostEnvForTools } from ${JSON.stringify(hostModule)};`,
+			`import { buildNonInteractiveEnv } from ${JSON.stringify(toolModule)};`,
+			`import { getShellConfig } from ${JSON.stringify(path.resolve(import.meta.dir, "../../utils/src/procmgr.ts"))};`,
+			'process.env.EDITOR = "true"; process.env.TERM = "dumb";',
+			'const overlay = { HOST_ENV_COMMAND_SECRET: "command-secret" };',
+			"const host = await getHostEnvForTools(overlay);",
+			"const env = { ...getShellConfig().env, ...buildNonInteractiveEnv(host), ...overlay };",
+			`const run = async restored => {`,
+			`	const child = Bun.spawn(["/bin/sh", "-c", restored ? '. "$OMP_HOST_ENV_FILE"; exec "$@"' : 'exec "$@"', "probe", process.execPath, "--no-env-file", "--eval", ${JSON.stringify(probe)}], { env, stdout: "pipe", stderr: "pipe" });`,
+			"	const output = await new Response(child.stdout).text();",
+			"	if (await child.exited !== 0) throw new Error(await new Response(child.stderr).text());",
+			"	return JSON.parse(output);",
+			"};",
+			"const stat = await Bun.file(host.OMP_HOST_ENV_FILE).stat();",
+			"console.log(JSON.stringify({ tool: await run(false), restored: await run(true), file: host.OMP_HOST_ENV_FILE, mode: stat.mode & 0o777, editor: host.OMP_HOST_EDITOR, term: host.OMP_HOST_TERM }));",
+		].join("\n");
+		const literal = "spaces 'quotes' $dollars `backticks`\nand a newline";
+		const child = Bun.spawn([process.execPath, "--no-install", "--eval", script], {
+			cwd: tmp,
+			env: {
+				HOME: tmp,
+				PI_CONFIG_DIR: ".omp",
+				XDG_STATE_HOME: "",
+				XDG_CACHE_HOME: "",
+				XDG_DATA_HOME: "",
+				PATH: process.env.PATH ?? "",
+				SHELL: "/bin/sh",
+				EDITOR: "nvim",
+				VISUAL: "",
+				SSH_ASKPASS: "/host/askpass",
+				TERM: "xterm-256color",
+				HOST_ENV_LITERAL: literal,
+				GIT_DIR: "/launcher/git",
+				GIT_WORK_TREE: "/launcher/tree",
+				GIT_INDEX_FILE: "/launcher/index",
+				GIT_COMMON_DIR: "/launcher/common",
+				GIT_OBJECT_DIRECTORY: "/launcher/objects",
+				GIT_ALTERNATE_OBJECT_DIRECTORIES: "/launcher/alternates",
+				MallocStackLogging: "off",
+				MallocStackLoggingNoCompact: "1",
+			},
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const [stdout, stderr, exitCode] = await Promise.all([
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+			child.exited,
+		]);
+		expect(stderr).toBe("");
+		expect(exitCode).toBe(0);
+		const result = JSON.parse(stdout);
+		expect(result.tool.EDITOR).toBe("true");
+		expect(result.tool.VISUAL).toBe("true");
+		expect(result.tool.SSH_ASKPASS).toBe(NON_INTERACTIVE_ENV.SSH_ASKPASS);
+		expect(result.tool.TERM).toBe("xterm-256color");
+		expect(result.restored).toEqual({
+			EDITOR: "nvim",
+			VISUAL: "",
+			SSH_ASKPASS: "/host/askpass",
+			SUDO_ASKPASS: null,
+			TERM: "xterm-256color",
+			CI: null,
+			GIT_EDITOR: null,
+			HOST_ENV_DOTENV_SECRET: null,
+			HOST_ENV_LITERAL: literal,
+			GIT_DIR: null,
+			GIT_WORK_TREE: null,
+			GIT_INDEX_FILE: null,
+			GIT_COMMON_DIR: null,
+			GIT_OBJECT_DIRECTORY: null,
+			GIT_ALTERNATE_OBJECT_DIRECTORIES: null,
+			GPG_TTY: null,
+			OMPCODE: null,
+			CLAUDECODE: null,
+			SHELL: "/bin/sh",
+			OMP_HOST_ENV_FILE: null,
+			OMP_HOST_EDITOR: null,
+			OMP_HOST_VISUAL: null,
+			OMP_HOST_SSH_ASKPASS: null,
+			OMP_HOST_SUDO_ASKPASS: null,
+			OMP_HOST_TERM: null,
+			HOST_ENV_COMMAND_SECRET: null,
+			OMP_HOST_OVERLAY_KEYS: null,
+			MallocStackLogging: null,
+			MallocStackLoggingNoCompact: null,
+		});
+		expect(result.editor).toBe("nvim");
+		expect(result.term).toBe("xterm-256color");
+		expect(result.mode).toBe(0o600);
+		expect(await Bun.file(result.file).exists()).toBe(false);
+	} finally {
+		await fs.rm(tmp, { recursive: true, force: true });
+	}
+});
+
+it("excludes autoloaded project credentials from host restoration when the launch environment is unavailable", async () => {
+	const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-host-fallback-"));
+	try {
+		await Bun.write(
+			path.join(tmp, ".env"),
+			"HOST_ENV_PROJECT_SECRET=project-only\nBASE=loaded\nHOST_ENV_EXPANDED=$BASE-secret\n",
+		);
+		const hostModule = path.resolve(import.meta.dir, "../src/exec/host-env.ts");
+		const script = [
+			'import { spyOn } from "bun:test";',
+			'import * as fs from "node:fs";',
+			"const originalRead = fs.readFileSync;",
+			'spyOn(fs, "readFileSync").mockImplementation((file, ...args) => { if (file === "/proc/self/environ") throw new Error("procfs unavailable"); return originalRead(file, ...args); });',
+			`const { runCli } = require(${JSON.stringify(path.resolve(import.meta.dir, "../src/cli.ts"))});`,
+			'await runCli(["--profile", "work", "--help"]);',
+			`const { getHostEnvForTools } = require(${JSON.stringify(hostModule)});`,
+			"const host = await getHostEnvForTools();",
+			"const text = await Bun.file(host.OMP_HOST_ENV_FILE).text();",
+			`const { getShellConfig } = require(${JSON.stringify(path.resolve(import.meta.dir, "../../utils/src/procmgr.ts"))});`,
+			`const restored = Bun.spawn(["/bin/sh", "-c", '. "$OMP_HOST_ENV_FILE"; printf "%s|%s|%s" "\${OMP_PROFILE-unset}" "\${PI_PROFILE-unset}" "\${PI_CODING_AGENT_DIR-unset}"'], {env: {...getShellConfig().env, ...host}, stdout: "pipe", stderr: "inherit"});`,
+			"const profiles = await new Response(restored.stdout).text();",
+			"if (await restored.exited !== 0) throw new Error('restoration failed');",
+			'console.log(JSON.stringify({ secret: text.includes("HOST_ENV_PROJECT_SECRET"), expanded: text.includes("HOST_ENV_EXPANDED"), editor: host.OMP_HOST_EDITOR, profiles }));',
+		].join("\n");
+		const child = Bun.spawn([process.execPath, "--no-install", "--eval", script], {
+			cwd: tmp,
+			env: {
+				HOME: tmp,
+				PI_CONFIG_DIR: ".omp",
+				XDG_STATE_HOME: "",
+				XDG_CACHE_HOME: "",
+				XDG_DATA_HOME: "",
+				PATH: process.env.PATH ?? "",
+				EDITOR: "nvim",
+			},
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const [stdout, stderr, exitCode] = await Promise.all([
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+			child.exited,
+		]);
+		expect(stderr).toBe("");
+		expect(exitCode).toBe(0);
+		expect(JSON.parse(stdout.trim().split("\n").at(-1)!)).toEqual({
+			secret: false,
+			expanded: false,
+			editor: "nvim",
+			profiles: "unset|unset|unset",
+		});
+	} finally {
+		await fs.rm(tmp, { recursive: true, force: true });
+	}
+});
+
+it("prunes host credentials abandoned by SIGKILL without deleting live launch snapshots", async () => {
+	const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-host-crash-"));
+	const children: Subprocess[] = [];
+	try {
+		const hostModule = path.resolve(import.meta.dir, "../src/exec/host-env.ts");
+		const script = [
+			`import { getHostEnvForTools } from ${JSON.stringify(hostModule)};`,
+			"console.log((await getHostEnvForTools()).OMP_HOST_ENV_FILE);",
+			"await Bun.sleep(60000);",
+		].join("\n");
+		const launch = async () => {
+			const child = Bun.spawn([process.execPath, "--no-env-file", "--no-install", "--eval", script], {
+				cwd: tmp,
+				env: {
+					HOME: tmp,
+					PI_CONFIG_DIR: ".omp",
+					XDG_STATE_HOME: "",
+					XDG_CACHE_HOME: "",
+					XDG_DATA_HOME: "",
+					PATH: process.env.PATH ?? "",
+					HOST_PRIVATE_CREDENTIAL: "private",
+				},
+				stdout: "pipe",
+				stderr: "inherit",
+			});
+			children.push(child);
+			const reader = child.stdout.getReader();
+			const { value } = await reader.read();
+			reader.releaseLock();
+			return { child, file: new TextDecoder().decode(value).trim() };
+		};
+		const abandoned = await launch();
+		abandoned.child.kill("SIGKILL");
+		await abandoned.child.exited;
+		expect(await Bun.file(abandoned.file).exists()).toBe(true);
+		const live = await launch();
+		expect(await Bun.file(abandoned.file).exists()).toBe(false);
+		await launch();
+		expect(await Bun.file(live.file).text()).toContain("HOST_PRIVATE_CREDENTIAL='private'");
+	} finally {
+		for (const child of children) child.kill("SIGKILL");
+		await Promise.all(children.map(child => child.exited));
 		await fs.rm(tmp, { recursive: true, force: true });
 	}
 });

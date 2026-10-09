@@ -3,6 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Effort, type FetchImpl } from "@oh-my-pi/pi-ai";
+import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import { cfgEffortRules, cfgFallbackEffortSelections } from "@oh-my-pi/pi-coding-agent/config/effort-policy";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
@@ -14,8 +16,12 @@ import { getModelMatchPreferences, resolveModelScope } from "@oh-my-pi/pi-coding
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { buildSessionOptions as buildCliSessionOptions } from "@oh-my-pi/pi-coding-agent/main";
 import { createAgentSession, type ExtensionFactory } from "@oh-my-pi/pi-coding-agent/sdk";
+import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
+import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
+import { getBundledAgent } from "@oh-my-pi/pi-coding-agent/task/agents";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
@@ -143,6 +149,209 @@ describe("createAgentSession deferred model pattern resolution", () => {
 			expect(session.model?.provider).toBe("runtime-provider");
 			expect(session.model?.id).toBe("runtime-model");
 			expect(modelFallbackMessage).toBeUndefined();
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	test("lets a child task spawn a model agent inherited from its parent", async () => {
+		const bundledTask = getBundledAgent("task");
+		if (!bundledTask) throw new Error("Expected bundled task agent");
+		const modelAgent: AgentDefinition = {
+			...bundledTask,
+			name: "m1",
+			model: ["runtime-provider/runtime-model"],
+		};
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: [bundledTask], projectAgentsDir: null });
+		const dispatched: executorModule.ExecutorOptions[] = [];
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			dispatched.push(options);
+			return {
+				index: options.index,
+				id: options.id,
+				agent: options.agent.name,
+				agentSource: options.agent.source,
+				task: options.task,
+				exitCode: 0,
+				output: "done",
+				stderr: "",
+				truncated: false,
+				durationMs: 1,
+				tokens: 0,
+				requests: 1,
+			};
+		});
+		const { session } = await createAgentSession({
+			...buildSessionOptions("runtime-provider/runtime-model"),
+			settings: Settings.isolated({ "async.enabled": false }),
+			toolNames: ["task"],
+			inheritedSessionAgents: [modelAgent],
+		});
+
+		try {
+			const taskTool = session.getToolByName("task");
+			if (!taskTool) throw new Error("Expected child task tool");
+			await taskTool.execute("nested-model-agent-call", {
+				agent: "m1",
+				task: "Inspect the target with the tagged model.",
+			});
+
+			expect(dispatched[0]?.modelOverride).toEqual(["runtime-provider/runtime-model"]);
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	async function startPrewalkSession(
+		prewalkInto: string | undefined,
+		{
+			model = "runtime-provider/runtime-model",
+			defaultRole,
+			smolRole,
+			extension = providerExtension,
+			authenticatedProvider,
+			hasUI = false,
+			onPrewalkWarning,
+		}: {
+			model?: string;
+			defaultRole?: string;
+			smolRole?: string;
+			extension?: ExtensionFactory;
+			authenticatedProvider?: string;
+			hasUI?: boolean;
+			onPrewalkWarning?: (warning: string) => void;
+		} = {},
+	) {
+		const authStorage = createInMemoryAuthStorage();
+		authStoragesToClose.push(authStorage);
+		if (authenticatedProvider) authStorage.keys.setRuntime(authenticatedProvider, "test-key");
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		const settings = Settings.isolated();
+		if (defaultRole) settings.setModelRole("default", defaultRole);
+		if (smolRole) settings.setModelRole("smol", smolRole);
+		const cliOptions = await buildCliSessionOptions(
+			parseArgs(["--model", model, ...(prewalkInto ? ["--prewalk-into", prewalkInto] : ["--prewalk"])]),
+			[],
+			SessionManager.inMemory(),
+			modelRegistry,
+			settings,
+		);
+		const { session } = await createAgentSession({
+			...cliOptions,
+			cwd: tempDir,
+			agentDir: tempDir,
+			authStorage,
+			modelRegistry,
+			settings,
+			hasUI,
+			onPrewalkWarning,
+			disableExtensionDiscovery: true,
+			extensions: [extension],
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			skipPythonPreflight: true,
+			rules: [],
+			preloadedCustomToolPaths: [],
+			toolNames: ["read"],
+		});
+		return session;
+	}
+
+	test("resolves prewalk target registered by an extension", async () => {
+		const session = await startPrewalkSession("runtime-provider/runtime-fallback-model:low");
+		try {
+			expect(session.model?.id).toBe("runtime-model");
+			expect(session.getPrewalkState()?.target.id).toBe("runtime-fallback-model");
+			expect(session.getPrewalkState()?.thinkingLevel).toBe(Effort.Low);
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	test("resolves the default smol prewalk role from an extension", async () => {
+		const session = await startPrewalkSession(undefined, {
+			smolRole: "runtime-provider/runtime-fallback-model:low",
+		});
+		try {
+			expect(session.getPrewalkState()?.target.id).toBe("runtime-fallback-model");
+			expect(session.getPrewalkState()?.thinkingLevel).toBe(Effort.Low);
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	test("prefers an earlier extension role target to a later bundled fallback", async () => {
+		const fallback = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!fallback) throw new Error("expected claude-sonnet-4-5 to be bundled");
+		const session = await startPrewalkSession("@default", {
+			defaultRole: `runtime-provider/runtime-fallback-model:low,${fallback.provider}/${fallback.id}`,
+			authenticatedProvider: fallback.provider,
+		});
+		try {
+			expect(session.getPrewalkState()?.target.provider).toBe("runtime-provider");
+			expect(session.getPrewalkState()?.target.id).toBe("runtime-fallback-model");
+			expect(session.getPrewalkState()?.thinkingLevel).toBe(Effort.Low);
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	test("keeps a bundled fallback when the earlier extension target is absent", async () => {
+		const startup = getBundledModel("anthropic", "claude-opus-4-5");
+		const fallback = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!startup || !fallback) throw new Error("expected bundled models");
+		const session = await startPrewalkSession("@default", {
+			model: `${startup.provider}/${startup.id}`,
+			defaultRole: `runtime-provider/missing,${fallback.provider}/${fallback.id}`,
+			authenticatedProvider: fallback.provider,
+			extension: () => {},
+		});
+		try {
+			expect(session.model?.id).toBe(startup.id);
+			expect(session.getPrewalkState()?.target.id).toBe(fallback.id);
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	test("fetches a mixed-case cold extension provider without probing unrelated providers", async () => {
+		const unrelatedFetch = vi.fn(async () => []);
+		const extension: ExtensionFactory = pi => {
+			pi.registerProvider("runtime-provider", dynamicOnlyProviderConfig);
+			pi.registerProvider("unrelated-provider", {
+				...dynamicOnlyProviderConfig,
+				fetchDynamicModels: unrelatedFetch,
+			});
+		};
+		const session = await startPrewalkSession("Runtime-Provider/cached-runtime-model", {
+			model: "anthropic/claude-sonnet-4-5",
+			authenticatedProvider: "anthropic",
+			extension,
+			hasUI: true,
+		});
+		try {
+			expect(session.getPrewalkState()?.target.id).toBe("cached-runtime-model");
+			expect(unrelatedFetch).not.toHaveBeenCalled();
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	test("warns and continues when an extension prewalk target never registers", async () => {
+		const writes = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		const warnings: string[] = [];
+		const session = await startPrewalkSession("missing-provider/missing-model", {
+			onPrewalkWarning: warning => warnings.push(warning),
+		});
+		try {
+			expect(session.getPrewalkState()).toBeUndefined();
+			expect(warnings).toHaveLength(1);
+			expect(warnings[0]).toContain("missing-provider/missing-model");
+			expect(writes).not.toHaveBeenCalled();
 		} finally {
 			await session.dispose();
 		}
@@ -829,6 +1038,118 @@ describe("createAgentSession deferred model pattern resolution", () => {
 			}
 		} finally {
 			exitSpy.mockRestore();
+		}
+	});
+
+	test("a startup fallback applies its own fixed effort rather than the explicit role suffix", async () => {
+		const settings = Settings.isolated({
+			"retry.fallbackChains": { slow: ["runtime-provider/runtime-fallback-model"] },
+		});
+		settings.setModelRole("slow", "missing-provider/missing-model");
+		cfgFallbackEffortSelections.set(settings, {
+			slow: { "runtime-provider/runtime-fallback-model": { mode: "fixed", level: ThinkingLevel.High } },
+		});
+		cfgEffortRules.set(settings, [{ selector: "runtime-provider/runtime-fallback-model", allowed: [Effort.Low] }]);
+		const authStorage = createInMemoryAuthStorage();
+		authStorage.keys.setRuntime("runtime-provider", "test-key");
+		authStoragesToClose.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "fallback-effort-models.yml"));
+		const parsed = parseArgs(["--model", "slow:medium"]);
+		const cliOptions = await buildCliSessionOptions(parsed, [], SessionManager.inMemory(), modelRegistry, settings);
+		expect(cliOptions.thinkingOrigin).toBe("caller");
+
+		const { session } = await createAgentSession({
+			...cliOptions,
+			cwd: tempDir,
+			agentDir: tempDir,
+			authStorage,
+			modelRegistry,
+			settings,
+			disableExtensionDiscovery: true,
+			extensions: [providerExtension],
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			skipPythonPreflight: true,
+			rules: [],
+			preloadedCustomToolPaths: [],
+			toolNames: ["read"],
+		});
+		try {
+			expect(session.model?.id).toBe("runtime-fallback-model");
+			expect(session.effortOrigin).toBe("fallback");
+			expect(session.configuredThinkingLevel()).toBe(ThinkingLevel.High);
+			expect(session.thinkingLevel).toBe(Effort.Low);
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	test("persists the requested role effort and implicit origin across a cold restart", async () => {
+		const settings = Settings.isolated();
+		settings.setModelRole("default", "runtime-provider/runtime-fallback-model:high");
+		cfgEffortRules.set(settings, [{ selector: "runtime-provider/runtime-fallback-model", allowed: [Effort.Low] }]);
+		const authStorage = createInMemoryAuthStorage();
+		authStorage.keys.setRuntime("runtime-provider", "test-key");
+		authStoragesToClose.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "restart-effort-models.yml"));
+		const sessionsDir = path.join(tempDir, "restart-effort-sessions");
+		const manager = SessionManager.create(tempDir, sessionsDir);
+		const sessionOptions = {
+			...buildSessionOptions("runtime-provider/runtime-fallback-model"),
+			modelPattern: undefined,
+			settings,
+			authStorage,
+			modelRegistry,
+			sessionManager: manager,
+		};
+		const { session } = await createAgentSession(sessionOptions);
+		const file = manager.getSessionFile();
+		if (!file) throw new Error("missing session file");
+		try {
+			expect(session.thinkingLevel).toBe(Effort.Low);
+			expect(session.configuredThinkingLevel()).toBe(ThinkingLevel.High);
+			expect(session.effortOrigin).toBe("role");
+			expect(manager.getBranch().find(entry => entry.type === "thinking_level_change")).toEqual(
+				expect.objectContaining({
+					thinkingLevel: Effort.Low,
+					configured: ThinkingLevel.High,
+					effortOrigin: "role",
+				}),
+			);
+			await manager.ensureOnDisk();
+		} finally {
+			await session.dispose();
+		}
+
+		const resumedManager = await SessionManager.open(file, sessionsDir);
+		const { session: resumed } = await createAgentSession({ ...sessionOptions, sessionManager: resumedManager });
+		try {
+			expect(resumed.model?.id).toBe("runtime-fallback-model");
+			expect(resumed.thinkingLevel).toBe(Effort.Low);
+			expect(resumed.configuredThinkingLevel()).toBe(ThinkingLevel.High);
+			expect(resumed.effortOrigin).toBe("role");
+		} finally {
+			await resumed.dispose();
+		}
+	});
+
+	test("a direct SDK model-pattern suffix remains a caller override", async () => {
+		const settings = Settings.isolated();
+		cfgEffortRules.set(settings, [{ selector: "runtime-provider/runtime-fallback-model", allowed: [Effort.Low] }]);
+		const { session } = await createAgentSession({
+			...buildSessionOptions("runtime-provider/runtime-fallback-model:high"),
+			settings,
+		});
+		try {
+			expect(session.effortOrigin).toBe("caller");
+			expect(session.configuredThinkingLevel()).toBe(ThinkingLevel.High);
+			expect(session.thinkingLevel).toBe(Effort.High);
+		} finally {
+			await session.dispose();
 		}
 	});
 

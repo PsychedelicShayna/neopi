@@ -286,7 +286,28 @@ export type SymbolKey =
 	| "tool.goal"
 	| "tool.irc"
 	| "tool.delete"
-	| "tool.move";
+	| "tool.move"
+	// Keyboard keys (rendered by formatKeyHint). `*Mac` variants replace the
+	// generic modifier on macOS, whose keycaps are labelled with ⌃ ⌥ ⌘.
+	| "key.ctrl"
+	| "key.ctrlMac"
+	| "key.shift"
+	| "key.alt"
+	| "key.altMac"
+	| "key.super"
+	| "key.superMac"
+	// Gap after a glyph modifier (`⌃⇧C`); nerd icons render too small to abut
+	| "key.joiner"
+	| "key.enter"
+	| "key.esc"
+	| "key.tab"
+	| "key.backspace"
+	| "key.delete"
+	| "key.space"
+	| "key.up"
+	| "key.down"
+	| "key.left"
+	| "key.right";
 
 export type SymbolMap = Record<SymbolKey, string>;
 /**
@@ -648,6 +669,25 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"tool.irc": "✉",
 	"tool.delete": "🗑",
 	"tool.move": "➜",
+	// Keys: word modifiers off macOS (⌃/⌥/⌘ name no key on a PC keyboard)
+	"key.ctrl": "Ctrl",
+	"key.ctrlMac": "⌃",
+	"key.shift": "⇧",
+	"key.alt": "Alt",
+	"key.altMac": "⌥",
+	"key.super": "Super",
+	"key.superMac": "⌘",
+	"key.joiner": "",
+	"key.enter": "⏎",
+	"key.esc": "⎋",
+	"key.tab": "⇥",
+	"key.backspace": "⌫",
+	"key.delete": "⌦",
+	"key.space": "␣",
+	"key.up": "↑",
+	"key.down": "↓",
+	"key.left": "←",
+	"key.right": "→",
 };
 
 const NERD_SYMBOLS: SymbolMap = {
@@ -805,10 +845,9 @@ const NERD_SYMBOLS: SymbolMap = {
 	"icon.pin": "\uf08d",
 	// pick:  | alt: ⊛ ◍ 
 	"icon.tokens": "\ue26b",
-	// pick:  (nf-dev-windows) | alt:  (nf-cod-window) ◫ ▦
-	// INTENTIONAL: the Windows logo is the chosen glyph here. It has been "fixed"
-	// to nf-cod-window before (739d5a3947) and reverted; do not swap it again.
-	"icon.context": "\ue70f",
+	// pick: ▦ | alt: ◫ U+EB7F (nf-cod-window); not U+E70F (nf-dev-windows logo)
+	// Fork choice (#33): ▦ replaces upstream's intentional Windows logo.
+	"icon.context": "▦",
 	// pick:  | alt: $ ¢
 	"icon.cost": "\uf155",
 	// pick: 󰙺 (nf-md-currency_usd_off)
@@ -1101,6 +1140,35 @@ const NERD_SYMBOLS: SymbolMap = {
 	"tool.irc": "\uF086",
 	"tool.delete": "\uf12d",
 	"tool.move": "\uf061",
+	// Keys: word modifiers off macOS; arrows stay Unicode (nerd arrows add nothing)
+	"key.ctrl": "Ctrl",
+	// pick: 󰘴 (nf-md-apple_keyboard_control) | alt: ⌃
+	"key.ctrlMac": "\u{f0634}",
+	// pick: 󰘶 (nf-md-apple_keyboard_shift) | alt: ⇧
+	"key.shift": "\u{f0636}",
+	"key.alt": "Alt",
+	// pick: 󰘵 (nf-md-apple_keyboard_option) | alt: ⌥
+	"key.altMac": "\u{f0635}",
+	"key.super": "Super",
+	// pick: 󰘳 (nf-md-apple_keyboard_command) | alt: ⌘
+	"key.superMac": "\u{f0633}",
+	"key.joiner": " ",
+	// pick: 󰌑 (nf-md-keyboard_return) | alt: ⏎
+	"key.enter": "\u{f0311}",
+	// pick: 󱊷 (nf-md-keyboard_esc) | alt: ⎋
+	"key.esc": "\u{f12b7}",
+	// pick: 󰌒 (nf-md-keyboard_tab) | alt: ⇥
+	"key.tab": "\u{f0312}",
+	// pick: 󰁮 (nf-md-backspace) | alt: ⌫
+	"key.backspace": "\u{f006e}",
+	// pick: 󰹾 (nf-md-backspace_reverse) | alt: ⌦
+	"key.delete": "\u{f0e7e}",
+	// pick: 󱁐 (nf-md-keyboard_space) | alt: ␣
+	"key.space": "\u{f1050}",
+	"key.up": "↑",
+	"key.down": "↓",
+	"key.left": "←",
+	"key.right": "→",
 };
 
 const ASCII_SYMBOLS: SymbolMap = {
@@ -1195,7 +1263,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"icon.advisorClosed": "(adv)",
 	"icon.time": "t:",
 	"icon.omp": "pi",
-	"icon.esc": "esc",
+	"icon.esc": "Esc",
 	"icon.ghost": "@",
 	"icon.agents": "AG",
 	"icon.job": "bg",
@@ -1378,6 +1446,24 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"tool.irc": "#",
 	"tool.delete": "rm",
 	"tool.move": "mv",
+	"key.ctrl": "Ctrl",
+	"key.ctrlMac": "Ctrl",
+	"key.shift": "Shift",
+	"key.alt": "Alt",
+	"key.altMac": "Option",
+	"key.super": "Super",
+	"key.superMac": "Cmd",
+	"key.joiner": "+",
+	"key.enter": "Enter",
+	"key.esc": "Esc",
+	"key.tab": "Tab",
+	"key.backspace": "Backspace",
+	"key.delete": "Delete",
+	"key.space": "Space",
+	"key.up": "Up",
+	"key.down": "Down",
+	"key.left": "Left",
+	"key.right": "Right",
 };
 
 export const SYMBOL_PRESETS: Record<SymbolPreset, SymbolMap> = {

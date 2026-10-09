@@ -1,19 +1,31 @@
 import * as url from "node:url";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { BracketedPasteHandler } from "../bracketed-paste";
+import { currentDetachedDraft } from "../draft-scope";
 import { BRACKETED_PASTE_END, BRACKETED_PASTE_START } from "../stdin-buffer";
-import { Editor, type EditorTextDecorationContext, type EditorTheme } from "../components/editor";
+import {
+	Editor,
+	type EditorTextDecorationContext,
+	type EditorTheme,
+	type NativeEditorLayout,
+} from "../components/editor";
 import { addKeyAliases, canonicalKeyId, getKeybindings } from "../keybindings";
 import { type KeyId, matchesKey, parseKey, parseKittySequence } from "../keys";
 import { SpaceHoldGesture } from "../space-hold";
-import { TUI } from "../tui";
+import { type Component, TUI } from "../tui";
 import type { AppKeybinding } from "../app-keybindings";
+import { formatKeyHint } from "../key-hint-format";
+import { MAIN_AGENT_ID } from "../overlays/agent-hub-types";
+import { compact, keyed, node, row, span } from "../native/describe";
+import type { DescribeContext, NativeNode, NativeUiEvent } from "../native/node";
+import type { ComposerFacts, ComposerFactsSource } from "../status-line/types";
 import { allowsModelMentions, allowsSkillTokens, SKILL_TOKEN_RE } from "./skill-tokens";
 import { expandModelMentionTags, MODEL_MENTION_RE, modelMentionToken } from "./model-mention-syntax";
 import { imageAttachmentSource } from "./image-source";
 import { isVideoPath } from "./video";
 import {
 	attachmentSgr,
+	type ChipKind,
 	COMPOSER_TOKEN_REGEX,
 	chipLabel,
 	collapseImageMarkers,
@@ -21,14 +33,19 @@ import {
 	collapseSkillTokens,
 	composerTokenRegex,
 	modelChipStyle,
+	PLACEHOLDER_REGEX,
+	referencedAttachments,
 	renderPlaceholders,
 	skillChipLabel,
 	skillChipStyle,
 	skillToken,
 } from "./composer-attachments";
-import { MacOSSpellingProvider, type SpellingFeatures } from "./macos-spelling";
-import { hasMagicKeyword, highlightMagicKeywords } from "./magic-keywords";
+import { type MacOSSpellingFeatures, MacOSSpellingProvider } from "./macos-spelling";
+import { hasMagicKeyword, highlightMagicKeywords, magicKeywordRanges } from "./magic-keywords";
+import type { TspEditorDecoration } from "@oh-my-pi/pi-wire";
+import { isNativeRendering } from "../native/state";
 import { isQueuedMessageList, parseQueueShorthand, QUEUE_LIST_MARKER_RE } from "./queue-input";
+import { type WordCompletionMethod, WordCompletionProvider } from "./word-completion";
 import { fgOrPlain, theme } from "../theme/theme";
 import { shimmerEnabled, shimmerText } from "../theme/shimmer";
 
@@ -36,6 +53,49 @@ import { shimmerEnabled, shimmerText } from "../theme/shimmer";
 export interface ChainLock {
 	onEscape: () => void;
 	onClear: () => void;
+}
+
+/** A shell-mode draft's sigil (`!`, `!!`, `$`, `$$`) with its surrounding blanks; the mode chip stands in for it natively. */
+const SHELL_SIGIL_RE = /^\s*(?:!!?|\$\$?)[ \t]?/;
+
+/** The composer's TSP placeholder; the rotating ANSI hints (thinking effort, …) move into control tooltips. */
+const NATIVE_COMPOSER_PLACEHOLDER = "Ask omp — / commands · @ files · ! bash";
+
+/** Live composer state the TSP layout shows; the interactive host wires {@link CustomEditor.composerState}. */
+export interface ComposerNativeState {
+	/** The draft runs as a shell command (`!`, `!!`) or Python (`$`, `$$`); `excluded` keeps it from the model. */
+	readonly shell?: { readonly kind: "bash" | "python"; readonly excluded: boolean };
+	/** Thinking effort word (`high`, `off`, `auto`); undefined when the model has no thinking. */
+	readonly thinking?: string;
+	/** A turn is running: the send keycap becomes a Stop button. */
+	readonly running: boolean;
+	/** The viewed subagent's lineage, outermost first and the viewed agent last; undefined on the main session. */
+	readonly viewing?: readonly string[];
+}
+
+/** Action code prefix of the viewing header's links: `focus:<agent id>`, {@link MAIN_AGENT_ID} for the main session. */
+const FOCUS_ACTION = "focus:";
+
+const IDLE_COMPOSER: ComposerNativeState = { running: false };
+
+/**
+ * Filled steps (of four) of the effort chip's fallback meter, for terminals without the `effort`
+ * kind; `auto` before it resolves has none known.
+ */
+const EFFORT_STEPS: Partial<Record<string, number>> = {
+	off: 0,
+	minimal: 1,
+	low: 1,
+	medium: 2,
+	high: 3,
+	xhigh: 4,
+	max: 4,
+};
+
+/** Independently switchable prose-assistance features of the composer. */
+export interface SpellingFeatures extends MacOSSpellingFeatures {
+	/** Word-completion engine; `off` disables ghost text. */
+	autocomplete: WordCompletionMethod;
 }
 
 type ConfigurableEditorAction = Extract<
@@ -381,14 +441,31 @@ export type ComposerChipDescriptor =
  */
 export class CustomEditor extends Editor {
 	#spelling = new MacOSSpellingProvider();
+	#wordCompletion = new WordCompletionProvider();
 	imageLinks?: readonly (string | undefined)[];
 
 	/** Draft images pasted into the composer, consumed on submit. Co-located with
 	 *  {@link imageLinks} so every piece of draft-image state lives on the editor. */
-	pendingImages: ImageContent[] = [];
-	/** Per-image source links (file:// targets) parallel to {@link pendingImages};
-	 *  `undefined` entries are images without a backing reference yet. */
-	pendingImageLinks: (string | undefined)[] = [];
+	#pendingImages: ImageContent[] = [];
+	#pendingImageLinks: (string | undefined)[] = [];
+
+	/** Draft images. A control submission sees a detached copy (#171). */
+	get pendingImages(): ImageContent[] {
+		return currentDetachedDraft()?.images ?? this.#pendingImages;
+	}
+	set pendingImages(images: ImageContent[]) {
+		const detached = currentDetachedDraft();
+		if (detached) detached.images = images;
+		else this.#pendingImages = images;
+	}
+	get pendingImageLinks(): (string | undefined)[] {
+		return currentDetachedDraft()?.imageLinks ?? this.#pendingImageLinks;
+	}
+	set pendingImageLinks(links: (string | undefined)[]) {
+		const detached = currentDetachedDraft();
+		if (detached) detached.imageLinks = links;
+		else this.#pendingImageLinks = links;
+	}
 	/** Large text pastes staged as compact chip tokens; expansion lives in the atom table.
 	 *  Numbered by a per-draft monotonic counter so a deleted chip never recycles its number
 	 *  (labels key the atom table). */
@@ -439,20 +516,37 @@ export class CustomEditor extends Editor {
 			this.#requestShimmerRepaint?.();
 		};
 		this.#spelling.onUpdate = requestTextAssistRepaint;
+		this.#wordCompletion.onUpdate = requestTextAssistRepaint;
 		this.onTextAssistApplied = requestTextAssistRepaint;
-		this.setTextAssistProvider(this.#spelling);
+		this.setTextAssistProvider({
+			getWordCompletion: (lines, cursorLine, cursorCol) =>
+				this.#wordCompletion.getWordCompletion(lines, cursorLine, cursorCol),
+			wordCompletionFeedback: (lines, cursorLine, cursorCol, suggestion, accepted) =>
+				this.#wordCompletion.wordCompletionFeedback(lines, cursorLine, cursorCol, suggestion, accepted),
+			tryAutocorrect: (lines, cursorLine, cursorCol) => this.#spelling.tryAutocorrect(lines, cursorLine, cursorCol),
+			getWordReplacements: (lines, cursorLine, cursorCol) =>
+				this.#spelling.getWordReplacements(lines, cursorLine, cursorCol),
+		});
 		if (args[0] instanceof TUI) this.tui = args[0];
 	}
 
-	/** Independently configure typo detection, word autocomplete, and autocorrect. */
+	/** Independently configure typo detection, the word-completion engine, and autocorrect. */
 	setSpellingFeatures(features: SpellingFeatures): void {
-		this.#spelling.setFeatures(features);
+		this.#spelling.setFeatures({ typoDetection: features.typoDetection, autocorrect: features.autocorrect });
+		this.#wordCompletion.setMethod(features.autocomplete);
 	}
 
 	/** Clear the composer draft: optionally commit `historyText` to history, then
 	 *  reset the editor text and all pending draft-image state. The shared tail of
 	 *  every "message submitted" path; pass no argument for a plain discard. */
 	clearDraft(historyText?: string): void {
+		const detached = currentDetachedDraft();
+		if (detached) {
+			detached.text = "";
+			detached.images = [];
+			detached.imageLinks = [];
+			return;
+		}
 		if (historyText !== undefined) this.addToHistory(historyText);
 		this.setText("");
 		this.clearPasteState();
@@ -461,6 +555,19 @@ export class CustomEditor extends Editor {
 		this.pendingImageLinks = [];
 		this.pendingTexts = [];
 		this.#textAttachmentCounter = 0;
+	}
+	/** Control submissions read and write the detached draft, never the human composer (#171). */
+	override getText(): string {
+		return currentDetachedDraft()?.text ?? super.getText();
+	}
+
+	override setText(text: string): void {
+		const detached = currentDetachedDraft();
+		if (detached) {
+			detached.text = text;
+			return;
+		}
+		super.setText(text);
 	}
 
 	/** Preserve a canceled draft in local navigation, then clear the composer. */
@@ -651,14 +758,29 @@ export class CustomEditor extends Editor {
 		) {
 			return cached.chips;
 		}
-		const text = this.getText();
+		const recorded = new Map<string, ChipKind>();
+		if (this.pendingImages.length > 0) {
+			for (const [label, expansion] of this.atoms) {
+				const kind = expansion.startsWith("[Image #")
+					? "image"
+					: expansion.startsWith("[Video #")
+						? "video"
+						: undefined;
+				if (kind !== undefined && expansion.match(PLACEHOLDER_REGEX)?.[0] === expansion) {
+					recorded.set(label, kind);
+				}
+			}
+		}
+		for (const entry of this.pendingTexts) {
+			// A reused label belongs to the atom currently expanding it, not a deleted paste.
+			if (!recorded.has(entry.label)) recorded.set(entry.label, "paste");
+		}
+		const refs = referencedAttachments(this.getText(), recorded);
 		const chips: ComposerChipDescriptor[] = [];
 		for (let i = 0; i < this.pendingImages.length; i++) {
 			const n = i + 1;
-			const video =
-				text.includes(chipLabel("video", n)) || text.includes(`[Video #${n}]`) || text.includes(`[Video #${n},`);
-			const image =
-				text.includes(chipLabel("image", n)) || text.includes(`[Image #${n}]`) || text.includes(`[Image #${n},`);
+			const video = refs.video.has(n);
+			const image = refs.image.has(n);
 			if (!video && !image) continue;
 			chips.push({
 				kind: video ? "video" : "image",
@@ -668,7 +790,7 @@ export class CustomEditor extends Editor {
 			});
 		}
 		for (const entry of this.pendingTexts) {
-			if (!text.includes(entry.label)) continue;
+			if (!refs.paste.has(entry.n)) continue;
 			chips.push({ kind: "paste", n: entry.n, text: entry });
 		}
 		this.#composerChipsCache = {
@@ -815,6 +937,67 @@ export class CustomEditor extends Editor {
 		);
 	};
 
+	/**
+	 * TSP decorations: magic keywords shimmer (terminal-clocked) in the accent
+	 * color, chips and markers take their token colors, misspellings are marked,
+	 * and queue-composer markers are dimmed/accented, all as ranges over the raw
+	 * buffer instead of painted text. A shell-mode draft is code: only its sigil
+	 * is decorated, hidden behind the mode chip.
+	 */
+	override describeDecorations = (lines: readonly string[]): readonly TspEditorDecoration[] => {
+		const text = lines.join("\n");
+		if (this.composerState().shell) {
+			const sigil = SHELL_SIGIL_RE.exec(text)?.[0].length ?? 0;
+			return sigil > 0 ? [{ from: 0, to: sigil, s: "hide" }] : [];
+		}
+		this.#syncComposerTokenPattern();
+		const decor: TspEditorDecoration[] = [];
+		let offset = 0;
+		const mark = (length: number, s: string): string => {
+			decor.push({ from: offset, to: offset + length, s });
+			offset += length;
+			return "";
+		};
+		renderPlaceholders(
+			text,
+			{
+				renderText: value => {
+					offset += value.length;
+					return "";
+				},
+				renderSkill: label => mark(label.length, "customMessageLabel strong"),
+				renderMention: label => mark(label.length, "statusLineModel strong"),
+				renderReference: value => mark(value.length, "accent strong"),
+			},
+			this.atomicTokenPattern,
+		);
+
+		const fx = this.#shimmerEnabled() ? "shimmer" : undefined;
+		for (const range of magicKeywordRanges(text)) decor.push({ ...range, s: "accent", fx });
+
+		const queueBody = parseQueueShorthand(text);
+		const queueList = queueBody !== undefined && isQueuedMessageList(queueBody);
+		let lineStart = 0;
+		for (let line = 0; line < lines.length; line++) {
+			const value = lines[line] ?? "";
+			if (queueBody !== undefined && (value.startsWith("->") || value.startsWith("=>"))) {
+				decor.push({ from: lineStart, to: lineStart + 2, s: "dim" });
+			}
+			if (queueList) {
+				const marker = QUEUE_LIST_MARKER_RE.exec(value);
+				if (marker) {
+					const indent = marker[1]?.length ?? 0;
+					decor.push({ from: lineStart + indent, to: lineStart + marker[0].length, s: "accent" });
+				}
+			}
+			for (const typo of this.#spelling.typoRanges(value, { editorText: text, lines, line, startCol: 0 })) {
+				decor.push({ from: lineStart + typo.start, to: lineStart + typo.start + typo.length, s: "typo" });
+			}
+			lineStart += value.length + 1;
+		}
+		return decor.sort((a, b) => a.from - b.from);
+	};
+
 	/** Optional test override for the magic-keyword shimmer gate. */
 	magicKeywordsEnabledOverride: boolean | undefined;
 
@@ -888,13 +1071,288 @@ export class CustomEditor extends Editor {
 	 *  decides whether to schedule another, so the chain stops by itself when
 	 *  `focused` flips off or the keyword leaves the buffer. */
 	#scheduleShimmerFrame(): void {
-		if (this.#shimmerTimer || !this.#requestShimmerRepaint) return;
+		// A TSP terminal animates the keyword shimmer from `describeDecorations`.
+		if (this.#shimmerTimer || !this.#requestShimmerRepaint || isNativeRendering()) return;
 		this.#shimmerTimer = setTimeout(() => {
 			this.#shimmerTimer = undefined;
 			this.#requestShimmerRepaint?.();
 		}, CustomEditor.SHIMMER_FRAME_MS);
 		this.#shimmerTimer.unref?.();
 	}
+	/** Viewing a subagent, the draft goes to it: the placeholder names it. */
+	override describePlaceholder = (): string => {
+		const agent = this.composerState().viewing?.at(-1);
+		return agent === undefined ? NATIVE_COMPOSER_PLACEHOLDER : `Message ${agent}`;
+	};
+	/** A shell-mode draft highlights as its language. */
+	override describeLanguage = (): string | undefined => this.composerState().shell?.kind;
+	/** Host-owned live state for the TSP composer (shell mode, effort chip, send/stop). */
+	composerState: () => ComposerNativeState = () => IDLE_COMPOSER;
+	/** The attachment band, described inside the composer on a TSP terminal (ANSI renders it above). */
+	attachmentChips: Component | undefined;
+	/** The status line's facts the TSP composer carries (context, model, usage, the other segments). */
+	composerFacts: ComposerFactsSource | undefined;
+	#nativeComposer:
+		| {
+				key: string;
+				facts: ComposerFacts | undefined;
+				chips: Component | undefined;
+				input: NativeNode;
+				focus: NativeNode | undefined;
+				mode: NativeNode | undefined;
+				bar: NativeNode;
+				layout: NativeEditorLayout;
+		  }
+		| undefined;
+
+	/**
+	 * The TSP composer: role `omp.editor[.bash|.python]` (tone `pending` while
+	 * a turn runs) over the context hairline, the viewing header while a
+	 * subagent is focused, the attachment chips, a `line` row of the
+	 * shell-mode chip and the input, and the `bar`: model chip, effort chip,
+	 * the other status facts, usage, then send (Stop while a turn runs).
+	 * Clicks come back as `status.model`, `thinking.cycle`, `submit`,
+	 * `interrupt` and `focus:<id>` actions.
+	 */
+	override describeLayout = (input: NativeNode, cx: DescribeContext): NativeEditorLayout => {
+		const effortGlyph = cx.supports("effort");
+		const state = this.composerState();
+		const shell = state.shell;
+		const facts = this.composerFacts?.describeComposerFacts();
+		const thinkingKey = this.#actionKeys.get("app.thinking.cycle")?.[0];
+		const modelKey = this.#actionKeys.get("app.model.selectTemporary")?.[0];
+		const interruptKey = this.#actionKeys.get("app.interrupt")?.[0] ?? "escape";
+		const key = [
+			shell?.kind,
+			shell?.excluded,
+			state.thinking,
+			state.running,
+			thinkingKey,
+			modelKey,
+			interruptKey,
+			state.viewing?.join("\u0001"),
+			effortGlyph,
+		].join("\0");
+		const chips = this.attachmentChips;
+		const memo = this.#nativeComposer;
+		if (memo && memo.key === key && memo.facts === facts && memo.input === input && memo.chips === chips) {
+			return memo.layout;
+		}
+		const { focus, mode, bar } =
+			memo?.key === key && memo.facts === facts
+				? memo
+				: this.#describeComposerControls(state, facts, thinkingKey, modelKey, interruptKey, effortGlyph);
+		const line = keyed(row(compact([mode, input]), { role: "omp.composer.line", align: "start", gap: "sm" }), "line");
+		const layout: NativeEditorLayout = {
+			role: shell ? `omp.editor.${shell.kind}` : "omp.editor",
+			tone: state.running ? "pending" : undefined,
+			children: compact([facts?.context, focus, chips, line, bar]),
+			caret: "line/input",
+		};
+		this.#nativeComposer = { key, facts, chips, input, focus, mode, bar, layout };
+		return layout;
+	};
+
+	/**
+	 * The viewing header (`omp.composer.focus`) while a subagent is focused:
+	 * an eye, the agent's ancestors as `omp.composer.crumb` links, the agent
+	 * itself (`omp.composer.agent`), then the way back to the main session
+	 * (`omp.composer.exit`, the interrupt key's keycap: Esc on an empty draft).
+	 */
+	#describeViewing(viewing: readonly string[], interruptKey: KeyId): NativeNode | undefined {
+		const agent = viewing.at(-1);
+		if (agent === undefined) return undefined;
+		const back = interruptKey === "escape" ? "esc" : formatKeyHint(interruptKey);
+		const crumbs = viewing.slice(0, -1).map(id =>
+			node(
+				"text",
+				{
+					role: "omp.composer.crumb",
+					text: id,
+					wrap: "none",
+					title: `View ${id}`,
+					actions: { click: `${FOCUS_ACTION}${id}` },
+				},
+				undefined,
+				`crumb:${id}`,
+			),
+		);
+		return keyed(
+			row(
+				[
+					node("icon", { name: "eye" }, undefined, "icon"),
+					node("text", { text: "Viewing", wrap: "none" }, undefined, "label"),
+					...crumbs,
+					node("text", { role: "omp.composer.agent", text: agent, wrap: "none" }, undefined, "agent"),
+					node(
+						"row",
+						{
+							role: "omp.composer.exit",
+							gap: "xs",
+							align: "center",
+							title: `Back to the main session  ${back}`,
+							actions: { click: `${FOCUS_ACTION}${MAIN_AGENT_ID}` },
+						},
+						[
+							node("kbd", { keys: [interruptKey] }, undefined, "key"),
+							node("text", { text: "main", wrap: "none" }, undefined, "label"),
+						],
+						"exit",
+					),
+				],
+				{
+					role: "omp.composer.focus",
+					gap: "xs",
+					align: "center",
+					title: `Viewing subagent ${agent}: what you send goes to it`,
+				},
+			),
+			"focus",
+		);
+	}
+
+	/** The viewing header over the text, the shell-mode chip before the input, and the bar under it. */
+	#describeComposerControls(
+		state: ComposerNativeState,
+		facts: ComposerFacts | undefined,
+		thinkingKey: KeyId | undefined,
+		modelKey: KeyId | undefined,
+		interruptKey: KeyId,
+		effortGlyph: boolean,
+	): { focus: NativeNode | undefined; mode: NativeNode | undefined; bar: NativeNode } {
+		const shell = state.shell;
+		const focus = state.viewing && this.#describeViewing(state.viewing, interruptKey);
+		const model =
+			facts &&
+			node(
+				"row",
+				{
+					role: "omp.composer.model",
+					gap: "xs",
+					align: "center",
+					tone: facts.model.tone,
+					title: modelKey ? `Switch model  ${formatKeyHint(modelKey)}` : "Switch model",
+					actions: { click: "status.model" },
+				},
+				[
+					node("icon", { name: "model" }, undefined, "icon"),
+					node("text", { spans: facts.model.spans, wrap: "none" }, undefined, "name"),
+					node("icon", { name: "chev" }, undefined, "chev"),
+				],
+				"model",
+			);
+		const thinking = state.thinking;
+		const effortSteps = thinking === undefined ? undefined : EFFORT_STEPS[thinking];
+		const effort =
+			thinking !== undefined &&
+			node(
+				"row",
+				{
+					role: "omp.composer.effort",
+					gap: "xs",
+					align: "center",
+					title: thinkingKey ? `Thinking effort  ${formatKeyHint(thinkingKey)}` : "Thinking effort",
+					actions: { click: "thinking.cycle" },
+				},
+				[
+					effortGlyph
+						? node("effort", { level: thinking }, undefined, "glyph")
+						: node(
+								"meter",
+								{ value: effortSteps === undefined ? null : effortSteps / 4, style: "blocks", steps: 4 },
+								undefined,
+								"meter",
+							),
+					node("text", { text: thinking, wrap: "none" }, undefined, "level"),
+				],
+				"effort",
+			);
+		const submit = state.running
+			? node(
+					"text",
+					{
+						role: "omp.composer.stop",
+						text: "Stop",
+						tone: "error",
+						title: `Stop  ${interruptKey === "escape" ? "esc" : formatKeyHint(interruptKey)}`,
+						actions: { click: "interrupt" },
+					},
+					undefined,
+					"stop",
+				)
+			: node(
+					"kbd",
+					{
+						role: "omp.composer.send",
+						keys: ["enter"],
+						title: `Send  ${formatKeyHint("enter")}`,
+						actions: { click: "submit" },
+					},
+					undefined,
+					"send",
+				);
+		// The status facts are the bar's flexible space; without them a spacer keeps send at the end.
+		const bar = keyed(
+			row(compact([model, effort, facts?.extras ?? node("row", { grow: 1 }, [], "gap"), facts?.usage, submit]), {
+				role: "omp.composer.bar",
+				gap: "sm",
+				align: "center",
+			}),
+			"bar",
+		);
+		if (!shell) return { focus, mode: undefined, bar };
+		const runs = shell.kind === "bash" ? "Runs in your shell" : "Runs in Python";
+		const mode = keyed(
+			row(
+				compact([
+					shell.excluded &&
+						node("icon", { name: "eye-off", title: "Not sent to the model" }, undefined, "excluded"),
+					node(
+						"text",
+						{ spans: [span(shell.kind, shell.kind === "bash" ? "bashMode" : "pythonMode")], wrap: "none" },
+						undefined,
+						"label",
+					),
+				]),
+				{
+					role: "omp.composer.mode",
+					gap: "xs",
+					align: "center",
+					title: shell.excluded ? `${runs} · not sent to the model` : runs,
+				},
+			),
+			"mode",
+		);
+		return { focus, mode, bar };
+	}
+
+	/**
+	 * Clicks on the composer's controls take the same paths as their keys: ⇧⇥,
+	 * ⏎ and Esc; the viewing header's links (`focus:<id>`) go to the host,
+	 * the status facts' clicks (`status.*`) to their source. Selection edits
+	 * go to the buffer.
+	 */
+	override handleNativeEvent(event: NativeUiEvent): void {
+		if (event.type !== "action") {
+			super.handleNativeEvent(event);
+			return;
+		}
+		switch (event.act) {
+			case "thinking.cycle":
+				this.onCycleThinkingLevel?.();
+				return;
+			case "submit":
+				this.submit();
+				return;
+			case "interrupt":
+				this.onEscape?.();
+				return;
+			default:
+				if (event.act.startsWith(FOCUS_ACTION)) this.onFocusAgent?.(event.act.slice(FOCUS_ACTION.length));
+				else this.composerFacts?.handleNativeEvent(event);
+		}
+	}
+
 	onEscape?: () => void;
 	onClear?: () => void;
 	onExit?: () => void;
@@ -921,6 +1379,8 @@ export class CustomEditor extends Editor {
 	onCapsLock?: () => void;
 	/** Called when left-arrow is pressed while the editor is empty (cursor necessarily at start). */
 	onLeftAtStart?: () => void;
+	/** Called when the viewing header asks to view agent `id` ({@link MAIN_AGENT_ID}: the main session). */
+	onFocusAgent?: (id: string) => void;
 
 	/** Space-bar push-to-talk; set its `handler` to enable it. It is a text-composition gesture, so it
 	 *  stays out of Vim's Normal/Visual modes (where the space bar is the `l` motion) and away from an

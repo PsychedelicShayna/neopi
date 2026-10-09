@@ -1,3 +1,4 @@
+import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
 import type { Settings } from "../config/settings";
 import type { SlashCommandIconName } from "@oh-my-pi/pi-tui/theme/symbols";
 import type { InteractiveModeContext, SubmittedUserInput } from "../modes/types";
@@ -27,6 +28,17 @@ export interface BuiltinSlashCommand {
 	inlineHint?: string;
 	/** TUI-only dynamic status text for command-name autocomplete. Static `description` remains canonical for ACP/help. */
 	getTuiAutocompleteDescription?: (runtime: TuiSlashCommandRuntime) => string | undefined;
+	/**
+	 * TUI argument completion replacing the declarative `subcommands` completer,
+	 * for commands whose later arguments are names (personas, loadouts, kernels).
+	 * `runtime` is absent for the static command list.
+	 */
+	getTuiArgumentCompletions?: (
+		argumentPrefix: string,
+		runtime: TuiSlashCommandRuntime | undefined,
+	) => AutocompleteItem[] | null | Promise<AutocompleteItem[] | null>;
+	/** TUI inline hint replacing the declarative `subcommands` hint. */
+	getTuiInlineHint?: (argumentText: string) => string | null;
 }
 
 /** Parsed slash-command text after stripping the leading "/". */

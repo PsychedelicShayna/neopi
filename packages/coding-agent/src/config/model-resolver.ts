@@ -32,6 +32,7 @@ import { modelMatchesHost } from "@oh-my-pi/pi-catalog/hosts";
 import { buildModelProviderPriorityRank } from "@oh-my-pi/pi-catalog/identity";
 import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
 import { type GeneratedProvider, getBundledModels, modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
+import { modelKind } from "@oh-my-pi/pi-catalog/types";
 import { DEFAULT_MODEL_PER_PROVIDER } from "@oh-my-pi/pi-catalog/provider-models";
 import { fuzzyMatch } from "@oh-my-pi/pi-tui";
 import { APP_NAME, logger } from "@oh-my-pi/pi-utils";
@@ -54,6 +55,7 @@ import {
 	MODEL_ROLE_IDS,
 	type ModelRole,
 } from "./model-roles";
+import { compileSelectorRegex, isGlobSelectorPattern, isRegexSelectorPattern } from "./selector-pattern";
 import type { Settings } from "./settings";
 
 import { cfgDisabledProviders, cfgEnabledModels, cfgModelProviderOrder } from "./model-settings";
@@ -129,6 +131,21 @@ function matchingGlobModels(pattern: string, availableModels: readonly Model<Api
 		const fullId = `${model.provider}/${model.id}`;
 		return glob.match(fullId.toLowerCase()) || glob.match(model.id.toLowerCase());
 	});
+}
+
+/** Test the full model selector first; only a suffix-specific regex selects a fixed effort. */
+function matchRegexModel(
+	regex: RegExp,
+	model: Model<Api>,
+): { thinkingLevel?: ThinkingLevel; explicitThinkingLevel: boolean } | undefined {
+	const fullId = `${model.provider}/${model.id}`;
+	if (regex.test(fullId)) return { explicitThinkingLevel: false };
+	for (const level of [ThinkingLevel.Off, ...(model.thinking?.efforts ?? [])]) {
+		if (regex.test(`${fullId}:${level}`)) {
+			return { thinkingLevel: level, explicitThinkingLevel: true };
+		}
+	}
+	return undefined;
 }
 
 function resolveGlobScopePattern(
@@ -510,6 +527,24 @@ type CliModelRegistry = Pick<ModelRegistry, "getAll" | "getAvailable">;
 type InitialModelRegistry = Pick<ModelRegistry, "getAvailable" | "find" | "hasConcreteAuth">;
 type RestorableModelRegistry = Pick<ModelRegistry, "getAvailable" | "find" | "getApiKey" | "hasConcreteAuth">;
 
+const kModelOrderIndex = Symbol("model-resolver.modelOrderIndex");
+type ModelsWithOrderIndex = readonly Model<Api>[] & {
+	[kModelOrderIndex]?: Map<string, number>;
+};
+
+/** `provider/id` → last position in `availableModels`; cached on the array like the provider indexes. */
+function getModelOrderIndex(availableModels: readonly Model<Api>[]): Map<string, number> {
+	const tagged = availableModels as ModelsWithOrderIndex;
+	const cached = tagged[kModelOrderIndex];
+	if (cached) return cached;
+	const index = new Map<string, number>();
+	for (let i = 0; i < availableModels.length; i += 1) {
+		index.set(formatModelString(availableModels[i]), i);
+	}
+	tagged[kModelOrderIndex] = index;
+	return index;
+}
+
 interface ModelPreferenceContext {
 	modelUsageRank: Map<string, number>;
 	providerUsageRank: Map<string, number>;
@@ -537,10 +572,7 @@ function buildPreferenceContext(
 	}
 	const providerPriorityRank = buildModelProviderPriorityRank(preferences?.providerOrder);
 	const deprioritizedProviders = new Set(preferences?.deprioritizeProviders ?? []);
-	const modelOrder = new Map<string, number>();
-	for (let i = 0; i < availableModels.length; i += 1) {
-		modelOrder.set(formatModelString(availableModels[i]), i);
-	}
+	const modelOrder = getModelOrderIndex(availableModels);
 
 	return { modelUsageRank, providerUsageRank, providerPriorityRank, deprioritizedProviders, modelOrder };
 }
@@ -890,6 +922,26 @@ function parseModelPatternWithContext(
 	context: ModelPreferenceContext,
 	options?: { allowInvalidThinkingSelectorFallback?: boolean },
 ): ParsedModelResult {
+	if (isRegexSelectorPattern(pattern)) {
+		const regex = compileSelectorRegex(pattern);
+		if (!regex) {
+			return {
+				model: undefined,
+				thinkingLevel: undefined,
+				warning: `Invalid regex model selector: ${pattern}`,
+				explicitThinkingLevel: false,
+			};
+		}
+		for (const model of availableModels) {
+			const match = matchRegexModel(regex, model);
+			if (match) return { model, ...match, warning: undefined };
+		}
+		return { model: undefined, thinkingLevel: undefined, warning: undefined, explicitThinkingLevel: false };
+	}
+	if (isGlobSelectorPattern(pattern)) {
+		const { models, thinkingLevel, explicitThinkingLevel } = resolveGlobScopePattern(pattern, availableModels);
+		return { model: models[0], thinkingLevel, explicitThinkingLevel, warning: undefined };
+	}
 	// Exact match on the full pattern first (no fuzzy): a literal id that
 	const exactMatch = matchModel(pattern, availableModels, context, { exactOnly: true });
 	if (exactMatch) {
@@ -1094,6 +1146,8 @@ function shouldInheritDefaultBeforePriority(role: ModelRole): boolean {
 const ROLE_PRIORITY_ALIAS: Partial<Record<ModelRole, keyof typeof MODEL_PRIO>> = {
 	advisor: "slow",
 	chronicler: "slow",
+	"chronicler-summary": "slow",
+	classifier: "slow",
 	prose: "smol",
 	memory: "smol",
 	tiny: "smol",
@@ -1107,7 +1161,10 @@ interface ConfiguredRoleFallback {
 
 const ROLE_CONFIGURED_FALLBACK: Partial<Record<ModelRole, ConfiguredRoleFallback>> = {
 	advisor: { role: "slow", configuredOnly: true },
+	classifier: { role: "slow", configuredOnly: true },
 	memory: { role: "tiny", configuredOnly: false },
+	// Temporal summaries and recall ranking follow the capture role unless configured.
+	"chronicler-summary": { role: "chronicler", configuredOnly: false },
 	tiny: { role: "smol", configuredOnly: false },
 	// Chain steps default to @prose; unset, it follows the user's own fast model.
 	prose: { role: "smol", configuredOnly: false },
@@ -1531,16 +1588,13 @@ export function resolveModelFromSettings(options: {
 export interface RoleChainCandidate {
 	model: Model<Api>;
 	explicit: boolean;
+	/** Original chain entry, retaining its effort metadata key. */
+	selector: string;
 	thinkingLevel?: ConfiguredThinkingLevel;
 }
 
 /** Resolve a role's primary and retry candidates in effective attempt order. */
-export function resolveRoleChain(
-	role: string,
-	settings: Settings,
-	pool: Model<Api>[],
-	options?: { hoistProvider?: string },
-): RoleChainCandidate[] {
+export function resolveRoleChain(role: string, settings: Settings, pool: Model<Api>[]): RoleChainCandidate[] {
 	const configuredRoles = settings.getModelRoles();
 	const configured = settings.getModelRole(role)?.trim();
 	const primarySelector = configured || formatModelRoleAlias(role);
@@ -1562,21 +1616,12 @@ export function resolveRoleChain(
 			if (explicit) existing.explicit = true;
 			continue;
 		}
-		const candidate: RoleChainCandidate = { model: resolved.model, explicit };
+		const candidate: RoleChainCandidate = { model: resolved.model, explicit, selector };
 		if (resolved.thinkingLevel !== undefined) candidate.thinkingLevel = resolved.thinkingLevel;
 		candidateByRoute.set(key, candidate);
 		candidates.push(candidate);
 	}
-
-	const hoistProvider = options?.hoistProvider;
-	if (!hoistProvider) return candidates;
-	const nonExplicit = candidates.filter(candidate => !candidate.explicit);
-	const hoisted = nonExplicit.filter(candidate => candidate.model.provider === hoistProvider);
-	if (hoisted.length === 0) return candidates;
-	const remaining = nonExplicit.filter(candidate => candidate.model.provider !== hoistProvider);
-	const reordered = [...hoisted, ...remaining];
-	let reorderedIndex = 0;
-	return candidates.map(candidate => (candidate.explicit ? candidate : reordered[reorderedIndex++]!));
+	return candidates;
 }
 
 /**
@@ -1746,6 +1791,29 @@ export function resolveChroniclerRoleSelection(
 	return resolved.model ? { model: resolved.model, thinkingLevel: resolved.thinkingLevel } : undefined;
 }
 
+/** Resolve the temporal summary/ranking role; unset, it follows the `chronicler` role. */
+export function resolveChronicleSummaryRoleSelection(
+	settings: Settings,
+	availableModels: Model<Api>[],
+): { model: Model<Api>; thinkingLevel?: ConfiguredThinkingLevel } | undefined {
+	const resolved = resolveModelRoleValue(formatModelRoleAlias("chronicler-summary"), availableModels, {
+		settings,
+		matchPreferences: getModelMatchPreferences(settings),
+	});
+	return resolved.model ? { model: resolved.model, thinkingLevel: resolved.thinkingLevel } : undefined;
+}
+
+/** Resolve the classifier role through the slow priority chain when unset. */
+export function resolveClassifierRoleSelection(
+	settings: Settings,
+	availableModels: Model<Api>[],
+): { model: Model<Api>; thinkingLevel?: ConfiguredThinkingLevel } | undefined {
+	const resolved = resolveModelRoleValue(formatModelRoleAlias("classifier"), availableModels, {
+		settings,
+		matchPreferences: getModelMatchPreferences(settings),
+	});
+	return resolved.model ? { model: resolved.model, thinkingLevel: resolved.thinkingLevel } : undefined;
+}
 /**
  * Resolve model patterns to actual Model objects with optional thinking levels
  * Format: "pattern:level" where :level is optional
@@ -1776,9 +1844,40 @@ export async function resolveModelScope(
 			explicitThinkingLevel: explicit,
 		});
 	};
+	// The scope is chat-only (it feeds Ctrl+P cycling and the initial model). A
+	// pattern naming an available non-chat runner (judge, search, image, …) is
+	// not a typo: the model hub and role resolution use runners outside the scope.
+	let runnerModels: Model<Api>[] | undefined;
+	const reportUnmatched = (pattern: string, glob: boolean) => {
+		runnerModels ??= modelRegistry.getAvailable("all").filter(model => modelKind(model) !== "chat");
+		const namesRunner = glob
+			? resolveGlobScopePattern(pattern, runnerModels).models.length > 0
+			: parseModelPatternWithContext(pattern, runnerModels, buildPreferenceContext(runnerModels, preferences))
+					.model !== undefined;
+		if (namesRunner) {
+			logger.debug(`Scope pattern "${pattern}" names a non-chat model; it stays out of the chat scope`);
+			return;
+		}
+		logger.warn(`No models match pattern "${pattern}"`);
+	};
 
 	for (const pattern of patterns) {
-		// Check if pattern contains glob characters
+		if (isRegexSelectorPattern(pattern)) {
+			const regex = compileSelectorRegex(pattern);
+			if (!regex) {
+				logger.warn(`Invalid regex model selector: ${pattern}`);
+				continue;
+			}
+			let matched = false;
+			for (const model of availableModels) {
+				const match = matchRegexModel(regex, model);
+				if (!match) continue;
+				matched = true;
+				addScopedModel(model, match.thinkingLevel, match.explicitThinkingLevel);
+			}
+			if (!matched) logger.warn(`No models match pattern "${pattern}"`);
+			continue;
+		}
 		if (pattern.includes("*") || pattern.includes("?") || pattern.includes("[")) {
 			// Extract optional thinking level suffix (e.g., "provider/*:high") only
 			// after literal `:max` globs had a chance to match real model IDs.
@@ -1789,7 +1888,7 @@ export async function resolveModelScope(
 			} = resolveGlobScopePattern(pattern, availableModels);
 
 			if (matchingModels.length === 0) {
-				logger.warn(`No models match pattern "${pattern}"`);
+				reportUnmatched(pattern, true);
 				continue;
 			}
 
@@ -1829,7 +1928,7 @@ export async function resolveModelScope(
 		}
 
 		if (!model) {
-			logger.warn(`No models match pattern "${pattern}"`);
+			reportUnmatched(pattern, false);
 			continue;
 		}
 
@@ -1907,6 +2006,11 @@ export function filterAvailableModelsByEnabledPatterns(
 	};
 
 	for (const pattern of patterns) {
+		if (isRegexSelectorPattern(pattern)) {
+			const regex = compileSelectorRegex(pattern);
+			if (regex) for (const model of available) if (matchRegexModel(regex, model)) addAllowed(model);
+			continue;
+		}
 		if (pattern.includes("*") || pattern.includes("?") || pattern.includes("[")) {
 			for (const model of resolveGlobScopePattern(pattern, available).models) {
 				addAllowed(model);

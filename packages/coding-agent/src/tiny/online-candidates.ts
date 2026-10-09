@@ -37,6 +37,7 @@ function createFallbackContext(
 		modelLookup: {
 			find: (provider, id) => availableModels.find(model => model.provider === provider && model.id === id),
 			hasProvider: provider => availableModels.some(model => model.provider === provider),
+			getAll: () => availableModels,
 		},
 	};
 }

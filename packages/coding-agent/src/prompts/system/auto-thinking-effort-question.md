@@ -1,0 +1,1 @@
+Choose the reasoning effort for the coding agent's current request, using the preceding diary and uncovered active-branch transcript as context. Judge inherent task difficulty, not phrasing or desired verbosity. Return exactly one of the listed effort labels. NEVER choose an unlisted effort. When unsure between eligible labels, choose the lower one.
