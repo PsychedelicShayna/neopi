@@ -1,0 +1,110 @@
+name: promote-nightly
+
+# Weekly promotion of the integration branch into the default branch.
+# Opens a sync/promote-<date> PR from nightly into neopi and merges it with
+# a merge commit. The neopi ruleset requires a PR and forbids non-fast-forward
+# pushes; it requires no approvals and no status checks, so GITHUB_TOKEN can
+# complete the merge. If the merge is refused, the PR is left open and
+# labelled ready-for-human, and the run fails so it is visible.
+
+on:
+   schedule:
+      - cron: "0 6 * * 1" # Mondays 06:00 UTC
+   workflow_dispatch:
+
+permissions:
+   contents: write
+   pull-requests: write
+
+concurrency:
+   group: promote-nightly
+   cancel-in-progress: false
+
+jobs:
+   promote:
+      runs-on: ubuntu-latest
+      env:
+         GH_TOKEN: ${{ github.token }}
+         BASE: neopi
+         SOURCE: nightly
+      steps:
+         - uses: actions/checkout@v4
+           with:
+              fetch-depth: 0
+              ref: nightly
+
+         - name: Decide whether there is anything to promote
+           id: diff
+           run: |
+              ahead=$(git rev-list --count "origin/$BASE..origin/$SOURCE")
+              echo "ahead=$ahead" >> "$GITHUB_OUTPUT"
+              echo "$SOURCE is $ahead commits ahead of $BASE"
+
+         - name: Open the promotion PR
+           if: steps.diff.outputs.ahead != '0'
+           id: pr
+           run: |
+              set -euo pipefail
+              date=$(date -u +%Y-%m-%d)
+              branch="sync/promote-$date"
+              git config user.name "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+              if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+                 git push origin "origin/$SOURCE:refs/heads/$branch"
+              else
+                 git push origin "origin/$SOURCE:refs/heads/$branch"
+              fi
+              existing=$(gh pr list --base "$BASE" --head "$branch" --state open --json number --jq '.[0].number // empty')
+              if [ -n "$existing" ]; then
+                 echo "number=$existing" >> "$GITHUB_OUTPUT"
+                 exit 0
+              fi
+              body=$(mktemp)
+              {
+                 echo "> [!NOTE]"
+                 echo "> promote-nightly workflow on behalf of PsychedelicShayna"
+                 echo
+                 echo "## What"
+                 echo
+                 echo "Weekly promotion of \`$SOURCE\` into \`$BASE\` (${{ steps.diff.outputs.ahead }} commits)."
+                 echo
+                 echo "## Why"
+                 echo
+                 echo "Scheduled promotion per \`docs/policy/README.md\` › Promotion. Everything here already merged into \`$SOURCE\` through its own PR."
+                 echo
+                 echo "## Testing"
+                 echo
+                 echo "No new code; each change was verified in its originating PR."
+                 echo
+                 echo "---"
+                 echo
+                 echo "- [ ] \`bun check\` passes (not run: promotion PR)"
+                 echo "- [ ] Tested locally (not run: promotion PR)"
+                 echo "- [ ] CHANGELOG updated (not applicable: promotion PR)"
+              } > "$body"
+              number=$(gh pr create --base "$BASE" --head "$branch" \
+                 --title "chore(promote): nightly into neopi $date" \
+                 --body-file "$body" --label upstream-sync \
+                 --json number --jq .number 2>/dev/null || \
+                 gh pr list --base "$BASE" --head "$branch" --state open --json number --jq '.[0].number')
+              echo "number=$number" >> "$GITHUB_OUTPUT"
+
+         - name: Merge the promotion PR
+           if: steps.diff.outputs.ahead != '0'
+           run: |
+              set -euo pipefail
+              n="${{ steps.pr.outputs.number }}"
+              title=$(gh pr view "$n" --json title --jq .title)
+              if gh pr merge "$n" --merge --delete-branch \
+                    --subject "Merge PR #$n: $title (@github-actions)" \
+                    --body "Automated weekly promotion of nightly into neopi."; then
+                 echo "merged PR #$n"
+              else
+                 gh pr edit "$n" --add-label ready-for-human
+                 gh pr comment "$n" --body "> [!NOTE]
+              > promote-nightly workflow on behalf of PsychedelicShayna
+
+              Automatic merge was refused by the repository rules. The owner needs to merge this promotion by hand."
+                 echo "::error::merge of PR #$n refused; labelled ready-for-human"
+                 exit 1
+              fi

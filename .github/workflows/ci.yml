@@ -2,7 +2,7 @@ name: CI
 
 on:
    push:
-      branches: [neopi]
+      branches: [neopi, nightly]
       paths:
          - "packages/**"
          - "crates/**"
@@ -31,7 +31,7 @@ on:
          - "patches/**"
          - ".github/**"
    pull_request:
-      branches: [neopi, "nightly/**"]
+      branches: [neopi, nightly, "nightly/**"]
       paths:
          - "packages/**"
          - "crates/**"
