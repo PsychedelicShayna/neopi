@@ -307,6 +307,7 @@ export class ChroniclerStore {
 	#committedBatchIds = new Set<string>();
 	#beatIds = new Set<string>();
 	#lastEntryId: string | null = null;
+	#lastCommittedAt: string | undefined;
 
 	/** Latest committed manifest per session, in commit order, for carry recovery. */
 	#ownCarry: { sources: string[]; text: string } | null = null;
@@ -353,6 +354,10 @@ export class ChroniclerStore {
 		return this.#sourcesView;
 	}
 
+	get lastCommittedAt(): string | undefined {
+		return this.#lastCommittedAt;
+	}
+
 	get carry(): { sources: string[]; text: string } | null {
 		return this.#carry;
 	}
@@ -389,6 +394,7 @@ export class ChroniclerStore {
 		this.#committedBatchIds = new Set();
 		this.#beatIds = new Set();
 		this.#lastEntryId = null;
+		this.#lastCommittedAt = undefined;
 		this.#ownCarry = null;
 		this.#ownCarrySeen = false;
 		this.#inheritedCarry = null;
@@ -942,6 +948,7 @@ export class ChroniclerStore {
 	/** Fold one validated batch into the in-memory committed view. */
 	#absorb(batch: LoadedBatch): void {
 		const { checkpoint, records } = batch;
+		this.#lastCommittedAt = checkpoint.committedAt;
 		if (this.#committedBatchIds.has(checkpoint.batchId)) {
 			throw this.#halt(`batch ${checkpoint.batchId} is loaded twice`, checkpoint.batchId);
 		}

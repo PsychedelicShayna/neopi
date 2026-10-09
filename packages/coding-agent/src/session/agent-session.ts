@@ -133,7 +133,7 @@ import {
 } from "../chat/chat-mode";
 import { renderChatCompactionPrompt } from "../chat/chat-system-prompt";
 import { cfgChatInclude } from "../chat/settings";
-import { SessionChronicler } from "../chronicler/session-chronicler";
+import { type ChroniclerHealth, SessionChronicler } from "../chronicler/session-chronicler";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
 import type { EffortOrigin, EffortSelection } from "../config/effort-policy";
 import type { ModelRegistry } from "../config/model-registry";
@@ -1078,10 +1078,16 @@ export class AgentSession implements SettingsScope {
 	#sessionTransitionSettled: Promise<void> | undefined;
 	#resolveSessionTransition: (() => void) | undefined;
 	#sessionTransitionDepth = 0;
+	/** Chronicler stays suspended until the outermost transition settles, so a nested transition cannot resume it while an outer one is still pending. */
+	#chroniclerSuspendedByTransition = false;
 	/** Each using declaration disposes one depth, so nested transitions reuse this token. */
 	readonly #sessionTransitionScope: Disposable = {
 		[Symbol.dispose]: () => {
 			if (--this.#sessionTransitionDepth !== 0) return;
+			if (this.#chroniclerSuspendedByTransition) {
+				this.#chroniclerSuspendedByTransition = false;
+				this.#chronicler.resumeAfterSessionChange();
+			}
 			const resolve = this.#resolveSessionTransition;
 			this.#sessionTransitionSettled = undefined;
 			this.#resolveSessionTransition = undefined;
@@ -5429,6 +5435,11 @@ export class AgentSession implements SettingsScope {
 		while (this.#sessionTransitionSettled) await this.#sessionTransitionSettled;
 	}
 
+	async #suspendChroniclerForTransition(): Promise<void> {
+		this.#chroniclerSuspendedByTransition = true;
+		await this.#chronicler.suspendForSessionChange();
+	}
+
 	#beginSessionTransition(): Disposable {
 		if (this.#sessionTransitionDepth++ === 0) {
 			const settled = Promise.withResolvers<void>();
@@ -6815,6 +6826,11 @@ export class AgentSession implements SettingsScope {
 	/** Current session file path, or undefined if sessions are disabled */
 	get sessionFile(): string | undefined {
 		return this.sessionManager.getSessionFile();
+	}
+
+	/** Current Chronicler binding and actionable capture/recovery state. */
+	get chroniclerHealth(): ChroniclerHealth {
+		return this.#chronicler?.health ?? { status: "off" };
 	}
 
 	/** Current session ID */
@@ -9959,6 +9975,7 @@ export class AgentSession implements SettingsScope {
 		const bashTransition = this.#bash.beginSessionTransition({ persistDetached: options?.drop !== true });
 		let sessionTransitioned = false;
 		try {
+			await this.#suspendChroniclerForTransition();
 			advisorRecordersDetached = true;
 			await this.#advisors.drainAndDetachRecorders();
 			try {
@@ -10098,6 +10115,7 @@ export class AgentSession implements SettingsScope {
 		await this.sessionManager.flush();
 		let advisorRecordersDetached = false;
 		try {
+			await this.#suspendChroniclerForTransition();
 			advisorRecordersDetached = true;
 			// Fork keeps the conversation, but still needs a quiet artifact boundary:
 			// stop and settle in-flight advisors before muting their feeds.
@@ -10153,7 +10171,9 @@ export class AgentSession implements SettingsScope {
 
 	/** Move the active session and artifacts after enforcing mode transition invariants. */
 	async moveSession(newCwd: string, targetSessionDir?: string): Promise<void> {
+		using _transition = this.#beginSessionTransition();
 		this.#assertVibeSessionTransitionAllowed("move the session");
+		await this.#suspendChroniclerForTransition();
 		await this.sessionManager.moveTo(newCwd, targetSessionDir);
 	}
 
@@ -11555,6 +11575,7 @@ export class AgentSession implements SettingsScope {
 
 		let cwdChangeTarget: string | undefined;
 		try {
+			await this.#suspendChroniclerForTransition();
 			if (switchingToDifferentSession) {
 				// Stop and settle in-flight advisors while the old-session feeds can
 				// still observe message_end, then mute before swapping files.
@@ -11919,8 +11940,11 @@ export class AgentSession implements SettingsScope {
 		let sessionTransitioned = false;
 		let advisorRecordersDetached = false;
 		try {
+			await this.#suspendChroniclerForTransition();
 			advisorRecordersDetached = true;
 			await this.#advisors.drainAndDetachRecorders();
+			const previousState = this.sessionManager.captureState();
+			using _previousLease = this.sessionManager.retainLease();
 			try {
 				// Pending prompt setup belongs to the history being replaced.
 				this.#promptGeneration++;
@@ -11932,9 +11956,13 @@ export class AgentSession implements SettingsScope {
 				} else {
 					this.sessionManager.createBranchedSession(selectedEntry.parentId);
 				}
+				await this.sessionManager.flush();
 				this.#bash.markSessionTransition(bashTransition);
 				this.#advisors.clearCost();
 				sessionTransitioned = true;
+			} catch (error) {
+				this.sessionManager.restoreState(previousState);
+				throw error;
 			} finally {
 				this.#bash.finishSessionTransition(bashTransition, sessionTransitioned);
 			}
@@ -12057,8 +12085,11 @@ export class AgentSession implements SettingsScope {
 		let sessionTransitioned = false;
 		let advisorRecordersDetached = false;
 		try {
+			await this.#suspendChroniclerForTransition();
 			advisorRecordersDetached = true;
 			await this.#advisors.drainAndDetachRecorders();
+			const previousState = this.sessionManager.captureState();
+			using _previousLease = this.sessionManager.retainLease();
 			try {
 				if (this.sessionManager.getSessionId() !== sessionId || this.sessionManager.getLeafId() !== leafId) {
 					throw new Error("Cannot branch /btw: session changed since /btw started");
@@ -12067,9 +12098,13 @@ export class AgentSession implements SettingsScope {
 				// after the idle check. It still belongs to the pre-branch context.
 				this.#promptGeneration++;
 				this.sessionManager.createBranchedSession(leafId);
+				await this.sessionManager.flush();
 				this.#bash.markSessionTransition(bashTransition);
 				this.#advisors.clearCost();
 				sessionTransitioned = true;
+			} catch (error) {
+				this.sessionManager.restoreState(previousState);
+				throw error;
 			} finally {
 				this.#bash.finishSessionTransition(bashTransition, sessionTransitioned);
 			}
