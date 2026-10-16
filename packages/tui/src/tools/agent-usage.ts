@@ -5,6 +5,7 @@
  */
 import type { Usage } from "@oh-my-pi/pi-ai";
 import { formatDuration, formatNumber } from "@oh-my-pi/pi-utils";
+import { outputTokensPerSecond } from "../overlays/usage-row";
 
 /** Timing of an agent's most recent completed request. */
 export interface AgentRequestTiming {
@@ -70,7 +71,7 @@ export function addAssistantUsage(into: AgentUsage, message: AssistantUsageSourc
 	into.last = {
 		ttftMs,
 		durationMs,
-		outputTokensPerSecond: durationMs !== undefined && output > 0 ? (output * 1000) / durationMs : undefined,
+		outputTokensPerSecond: outputTokensPerSecond(output, durationMs),
 	};
 }
 

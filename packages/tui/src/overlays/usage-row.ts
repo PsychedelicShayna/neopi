@@ -104,13 +104,16 @@ export function formatTurnUsage(summary: TurnUsageSummary): { text: string; titl
 	return { text: `${text} this turn`, title: `This turn: ${title}` };
 }
 
-/** Output tokens per second over the whole request; undefined when the duration is too short to mean anything. */
-function usageThroughput(usage: Usage, durationMs: number | undefined): number | undefined {
-	if (!durationMs || durationMs <= MIN_DURATION_MS || usage.output <= 0) return undefined;
+/**
+ * Output tokens per second over the whole request; undefined when the request
+ * was too short (≤100ms, e.g. a cached or local reply) for the rate to mean anything.
+ */
+export function outputTokensPerSecond(output: number, durationMs: number | undefined): number | undefined {
+	if (!durationMs || durationMs <= MIN_DURATION_MS || output <= 0) return undefined;
 	// TPS over the total request duration — the post-TTFT window undercounts
 	// generation time when reasoning tokens are hidden before the first
 	// visible byte, inflating the rate.
-	return (usage.output / durationMs) * 1000;
+	return (output / durationMs) * 1000;
 }
 
 /** Every metric except throughput, which the native row declares as a `rate`. */
@@ -148,7 +151,7 @@ function usageRowSpecs(
 	turnElapsedMs?: number,
 ): MetricSpec[] {
 	const specs = usageRowBaseSpecs(usage, ttftMs, timestamp, turnElapsedMs);
-	const tokPerSec = usageThroughput(usage, durationMs);
+	const tokPerSec = outputTokensPerSecond(usage.output, durationMs);
 	if (tokPerSec !== undefined) {
 		specs.push({ leading: theme.icon.throughput, value: `${tokPerSec.toFixed(1)}/s` });
 	}
@@ -214,7 +217,7 @@ class UsageRowBlock extends Container {
 		if (usage.cacheRead > 0) parts.push(`cache ${formatNumber(usage.cacheRead)}`);
 		if (this.#ttftMs && this.#ttftMs > 0) parts.push(`ttft ${(this.#ttftMs / 1000).toFixed(1)}s`);
 		const children: NativeChild[] = [text([span(parts.join(" · "), "dim")])];
-		const tokPerSec = usageThroughput(usage, this.#durationMs);
+		const tokPerSec = outputTokensPerSecond(usage.output, this.#durationMs);
 		if (tokPerSec !== undefined) {
 			children.push(
 				text([span(" · ", "dim")]),
