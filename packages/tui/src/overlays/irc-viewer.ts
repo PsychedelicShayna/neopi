@@ -62,6 +62,8 @@ export class IrcViewerComponent implements Component {
 	#top = 0;
 	/** List rows the last frame had room for. */
 	#listRows = 1;
+	/** List-row span of the selected entry in the last frame. */
+	#selectedSpan = { start: 0, end: 0 };
 	readonly #expanded = new Set<string>();
 	/** The reply being written, and to whom. */
 	#compose: { to: string; replyTo: string } | undefined;
@@ -142,10 +144,13 @@ export class IrcViewerComponent implements Component {
 		});
 
 		this.#listRows = height - CHROME_ROWS;
+		this.#selectedSpan = { start: selectedStart, end: selectedEnd };
 		if (this.#follow) this.#top = Math.max(0, list.length - this.#listRows);
+		else if (selectedEnd - selectedStart > this.#listRows)
+			// Taller than the screen (an expanded long message): keep the viewport inside it, wherever line scrolling left it.
+			this.#top = Math.max(selectedStart, Math.min(this.#top, selectedEnd - this.#listRows));
 		else if (selectedStart < this.#top) this.#top = selectedStart;
-		else if (selectedEnd > this.#top + this.#listRows)
-			this.#top = Math.min(selectedStart, selectedEnd - this.#listRows);
+		else if (selectedEnd > this.#top + this.#listRows) this.#top = selectedEnd - this.#listRows;
 		this.#top = Math.max(0, Math.min(this.#top, Math.max(0, list.length - this.#listRows)));
 
 		const body =
@@ -200,6 +205,26 @@ export class IrcViewerComponent implements Component {
 		this.#selected = Math.max(0, Math.min(count - 1, index));
 		this.#follow = this.#selected === count - 1;
 		this.#options.requestRender();
+	}
+
+	/**
+	 * Scroll by `delta` lines inside the selected entry when it is taller than
+	 * the screen; false when it fits or the edge is already showing, so the
+	 * key moves the selection instead.
+	 */
+	#scrollWithinSelected(delta: number): boolean {
+		const { start, end } = this.#selectedSpan;
+		if (end - start <= this.#listRows) return false;
+		const next = Math.max(start, Math.min(this.#top + delta, end - this.#listRows));
+		if (next === this.#top) return false;
+		this.#top = next;
+		this.#follow = false;
+		this.#options.requestRender();
+		return true;
+	}
+
+	#step(lines: number, entries: number): void {
+		if (!this.#scrollWithinSelected(lines)) this.#select(this.#selected + entries);
 	}
 
 	#toggleExpanded(): void {
@@ -265,7 +290,7 @@ export class IrcViewerComponent implements Component {
 		if (
 			routeSgrMouseInput(data, event => {
 				if (event.wheel === null) return false;
-				this.#select(this.#selected + event.wheel);
+				this.#step(event.wheel * 3, event.wheel);
 				return true;
 			})
 		) {
@@ -298,10 +323,10 @@ export class IrcViewerComponent implements Component {
 			return;
 		}
 		const page = Math.max(1, Math.floor(this.#listRows / 3));
-		if (matchesSelectUp(data)) this.#select(this.#selected - 1);
-		else if (matchesSelectDown(data)) this.#select(this.#selected + 1);
-		else if (matchesSelectPageUp(data)) this.#select(this.#selected - page);
-		else if (matchesSelectPageDown(data)) this.#select(this.#selected + page);
+		if (matchesSelectUp(data)) this.#step(-1, -1);
+		else if (matchesSelectDown(data)) this.#step(1, 1);
+		else if (matchesSelectPageUp(data)) this.#step(-Math.max(1, this.#listRows - 1), -page);
+		else if (matchesSelectPageDown(data)) this.#step(Math.max(1, this.#listRows - 1), page);
 		else if (matchesKey(data, "home")) this.#select(0);
 		else if (matchesKey(data, "end")) this.#select(Number.MAX_SAFE_INTEGER);
 	}

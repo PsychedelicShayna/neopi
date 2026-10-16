@@ -36,13 +36,18 @@ export interface IrcSendOptions {
 /** Which root's operator a history entry belongs to; see {@link IrcBus.history}. */
 export interface IrcHistoryScope {
 	rootId: string;
-	/** The root's session file, so a new or resumed conversation has its own history. */
-	sessionFile: string | undefined;
+	/**
+	 * The root's session id: one per conversation, so `/new` starts a fresh
+	 * history (with or without a session file) and moving a session keeps its own.
+	 */
+	sessionId: string | undefined;
 }
 
 interface IrcHistoryRecord extends IrcLogEntry {
-	/** Root whose UI observes the sender (see {@link ircRelayRoot}); undefined when none resolves. */
+	/** Root whose UI observed the sender when it sent (see {@link ircRelayRoot}); undefined when none resolved. */
 	readonly scope: IrcHistoryScope | undefined;
+	/** Send-start order: a slow delivery still lands where it was sent, not where it finished. */
+	readonly seq: number;
 }
 
 export class IrcBus {
@@ -69,6 +74,7 @@ export class IrcBus {
 	/** Operator-only log of every delivery attempt; agents never read it. */
 	readonly #history: IrcHistoryRecord[] = [];
 	readonly #historyListeners = new Set<() => void>();
+	#nextHistorySeq = 0;
 
 	constructor(registry: AgentRegistry = AgentRegistry.global(), lifecycle?: AgentLifecycleManager) {
 		this.#registry = registry;
@@ -99,8 +105,17 @@ export class IrcBus {
 	 */
 	async send(msg: Omit<IrcMessage, "id" | "ts">, opts?: IrcSendOptions): Promise<IrcDeliveryReceipt> {
 		const message: IrcMessage = { ...msg, id: Snowflake.next(), ts: Date.now() };
+		const seq = this.#nextHistorySeq++;
+		const scope = this.#historyScope(message.from);
 		const receipt = await this.#deliver(message, opts);
-		this.#record(message, receipt, opts?.broadcast === true);
+		this.#record({
+			message,
+			outcome: receipt.outcome,
+			error: receipt.error,
+			broadcast: opts?.broadcast === true,
+			scope,
+			seq,
+		});
 		if (receipt.outcome !== "failed") {
 			let sent = this.#lastSent.get(message.from);
 			if (!sent) {
@@ -131,10 +146,10 @@ export class IrcBus {
 			? this.#history.filter(
 					entry =>
 						entry.scope === undefined ||
-						(entry.scope.rootId === scope.rootId && entry.scope.sessionFile === scope.sessionFile),
+						(entry.scope.rootId === scope.rootId && entry.scope.sessionId === scope.sessionId),
 				)
 			: this.#history;
-		return entries.map(({ scope: _scope, ...entry }) => entry);
+		return entries.map(({ scope: _scope, seq: _seq, ...entry }) => entry);
 	}
 
 	/** Calls `listener` after each history entry; returns the unsubscribe. */
@@ -143,15 +158,16 @@ export class IrcBus {
 		return () => this.#historyListeners.delete(listener);
 	}
 
-	#record(message: IrcMessage, receipt: IrcDeliveryReceipt, broadcast: boolean): void {
-		const root = ircRelayRoot(this.#registry, message.from);
-		this.#history.push({
-			message,
-			outcome: receipt.outcome,
-			error: receipt.error,
-			broadcast,
-			scope: root ? { rootId: root.id, sessionFile: ircHistorySessionFile(root) } : undefined,
-		});
+	#historyScope(senderId: string): IrcHistoryScope | undefined {
+		const root = ircRelayRoot(this.#registry, senderId);
+		return root ? { rootId: root.id, sessionId: ircHistorySessionId(root) } : undefined;
+	}
+
+	#record(record: IrcHistoryRecord): void {
+		// Concurrent sends finish out of order; keep the history in the order they started.
+		let index = this.#history.length;
+		while (index > 0 && this.#history[index - 1]!.seq > record.seq) index--;
+		this.#history.splice(index, 0, record);
 		const excess = this.#history.length - ircHistoryMaxEntries();
 		if (excess > 0) this.#history.splice(0, excess);
 		for (const listener of this.#historyListeners) {
@@ -463,9 +479,9 @@ export function ircRelayRoot(registry: AgentRegistry, senderId: string): AgentRe
 	return registry.rootOf(senderId) ?? registry.get(MAIN_AGENT_ID);
 }
 
-/** The session file `root` currently writes, scoping its IRC history to one conversation. */
-export function ircHistorySessionFile(root: AgentRef): string | undefined {
+/** The session id `root` currently runs, scoping its IRC history to one conversation. */
+export function ircHistorySessionId(root: AgentRef): string | undefined {
 	// Roots without a live session (and test doubles) have no conversation to scope by.
-	const manager: { getSessionFile?(): string | undefined } | undefined = root.session?.sessionManager;
-	return manager?.getSessionFile?.();
+	const manager: { getSessionId?(): string } | undefined = root.session?.sessionManager;
+	return manager?.getSessionId?.();
 }

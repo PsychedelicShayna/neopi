@@ -113,13 +113,13 @@ Each row shows the time, sender `➤` recipient, and the message body. Broadcast
 
 | Key | Action |
 | --- | --- |
-| `↑`/`↓`, `PgUp`/`PgDn`, `Home`/`End`, wheel | Select a message; `End` follows new traffic again |
+| `↑`/`↓`, `PgUp`/`PgDn`, `Home`/`End`, wheel | Select a message; `End` follows new traffic again. An expanded message taller than the screen scrolls through its lines first |
 | `Enter` or the tool-expand key | Expand or collapse the selected message |
 | `/` | Filter by participant (sender or recipient); `Enter` applies, `Esc` clears |
 | `r` | Reply to the selected message as yourself; `Enter` sends, `Esc` cancels |
 | `Esc` or `Alt+I` | Close |
 
-The history belongs to this UI's root session and its current conversation: `/new` or resuming another session shows that conversation's messages. It lives in memory and is lost when the process exits. Settings:
+The history belongs to this UI's root session and its current conversation: `/new` or resuming another session shows that conversation's messages, with or without a session file. It lives in memory and is lost when the process exits. Settings:
 
 - `irc.operator.viewerEnabled` (default `true`) lets the key open the viewer.
 - `irc.operator.relayToMainTranscript` (default `true`) controls the live cards in the main transcript; the viewer keeps messages either way.

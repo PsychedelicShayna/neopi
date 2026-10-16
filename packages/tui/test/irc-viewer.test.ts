@@ -137,6 +137,29 @@ describe("IrcViewerComponent", () => {
 		expect(view.screen().join("\n")).toContain("line 5");
 	});
 
+	it("scrolls line by line through an expanded message taller than the screen before moving on", () => {
+		const body = Array.from({ length: 60 }, (_, index) => `row-${index}-end`).join("\n");
+		const view = mount([entry("0-Alpha", "0-Beta", body), entry("0-Beta", "0-Alpha", "next message")], 20);
+		const firstRow = () => {
+			const match = view
+				.screen()
+				.join("\n")
+				.match(/row-(\d+)-end/);
+			return match ? Number(match[1]) : -1;
+		};
+		view.viewer.handleInput("\x1b[H"); // Home
+		view.viewer.handleInput("\r");
+		expect(firstRow()).toBe(0);
+		for (let i = 0; i < 5; i++) view.viewer.handleInput("\x1b[B");
+		expect(firstRow()).toBe(4);
+		view.viewer.handleInput("\x1b[A");
+		expect(firstRow()).toBe(3);
+		for (let i = 0; i < 100; i++) view.viewer.handleInput("\x1b[B");
+		const end = view.screen().join("\n");
+		expect(end).toContain("row-59-end");
+		expect(end).toContain("next message");
+	});
+
 	it("closes on Esc or its own key and drops its subscription on dispose", () => {
 		const view = mount([entry("0-Alpha", "0-Beta", "note")]);
 		view.viewer.handleInput("\x1b");

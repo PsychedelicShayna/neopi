@@ -503,16 +503,16 @@ describe("IRC", () => {
 				setIrcRelayToMainTranscript(true);
 			});
 
-			/** A main root whose conversation is `file()`. */
-			function registerMain(id: string, file: () => string | undefined): FakeSession {
+			/** A main root whose conversation is `sessionId()`. */
+			function registerMain(id: string, sessionId: () => string): FakeSession {
 				const main = makeFakeSession();
-				Object.assign(main.session, { sessionManager: { getSessionFile: file } });
+				Object.assign(main.session, { sessionManager: { getSessionId: sessionId } });
 				registry.register({ id, displayName: "main", kind: "main", session: main.session });
 				return main;
 			}
 
 			it("records every delivery attempt in order, failures and waiter hand-offs included", async () => {
-				registerMain("Main", () => "/s/one.jsonl");
+				registerMain("Main", () => "one");
 				const sub = makeFakeSession();
 				registry.register({
 					id: "0-Sub",
@@ -549,9 +549,10 @@ describe("IRC", () => {
 			});
 
 			it("scopes history to the root that observes the sender and to its current conversation", async () => {
-				let file = "/s/one.jsonl";
-				registerMain("Main", () => file);
-				registerMain("Other", () => "/s/other.jsonl");
+				// Session ids, not files: with --no-session every conversation has no file.
+				let conversation = "one";
+				registerMain("Main", () => conversation);
+				registerMain("Other", () => "other");
 				const sub = makeFakeSession();
 				registry.register({
 					id: "0-Sub",
@@ -571,14 +572,52 @@ describe("IRC", () => {
 
 				await bus.send({ from: "0-Sub", to: "Main", body: "first conversation" });
 				await bus.send({ from: "1-Sub", to: "Other", body: "another root" });
-				file = "/s/two.jsonl";
+				conversation = "two";
 				await bus.send({ from: "0-Sub", to: "Main", body: "second conversation" });
 
-				const bodies = (sessionFile: string) =>
-					bus.history({ rootId: "Main", sessionFile }).map(entry => entry.message.body);
-				expect(bodies("/s/one.jsonl")).toEqual(["first conversation"]);
-				expect(bodies("/s/two.jsonl")).toEqual(["second conversation"]);
-				expect(bus.history({ rootId: "Other", sessionFile: "/s/other.jsonl" })).toHaveLength(1);
+				const bodies = (sessionId: string) =>
+					bus.history({ rootId: "Main", sessionId }).map(entry => entry.message.body);
+				expect(bodies("one")).toEqual(["first conversation"]);
+				expect(bodies("two")).toEqual(["second conversation"]);
+				expect(bus.history({ rootId: "Other", sessionId: "other" })).toHaveLength(1);
+			});
+
+			it("keeps sends in the order they started when an earlier delivery finishes later", async () => {
+				registerMain("Main", () => "one");
+				const slow = makeFakeSession();
+				const gate = Promise.withResolvers<void>();
+				const deliverSlow = slow.session.deliverIrcMessage.bind(slow.session);
+				Object.assign(slow.session, {
+					deliverIrcMessage: async (message: IrcMessage) => {
+						await gate.promise;
+						return deliverSlow(message);
+					},
+				});
+				registry.register({
+					id: "0-Slow",
+					displayName: "task",
+					kind: "sub",
+					parentId: "Main",
+					session: slow.session,
+				});
+				const fast = makeFakeSession();
+				registry.register({
+					id: "0-Fast",
+					displayName: "task",
+					kind: "sub",
+					parentId: "Main",
+					session: fast.session,
+				});
+
+				const first = bus.send({ from: "Main", to: "0-Slow", body: "sent first" });
+				await bus.send({ from: "Main", to: "0-Fast", body: "sent second" });
+				gate.resolve();
+				await first;
+
+				expect(bus.history({ rootId: "Main", sessionId: "one" }).map(entry => entry.message.body)).toEqual([
+					"sent first",
+					"sent second",
+				]);
 			});
 
 			it("drops the oldest entries beyond the configured size", async () => {
@@ -590,7 +629,7 @@ describe("IRC", () => {
 			});
 
 			it("keeps logging peer traffic when transcript relay cards are turned off", async () => {
-				const main = registerMain("Main", () => undefined);
+				const main = registerMain("Main", () => "one");
 				const a = makeFakeSession();
 				registry.register({ id: "0-A", displayName: "task", kind: "sub", parentId: "Main", session: a.session });
 				const b = makeFakeSession();
@@ -605,7 +644,7 @@ describe("IRC", () => {
 			});
 
 			it("logs one broadcast entry per recipient and notifies listeners per entry", async () => {
-				registerMain("Main", () => undefined);
+				registerMain("Main", () => "one");
 				for (const id of ["0-A", "0-B", "0-C"]) {
 					registry.register({
 						id,
