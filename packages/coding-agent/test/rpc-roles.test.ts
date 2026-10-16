@@ -16,6 +16,9 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { ControlClient } from "@oh-my-pi/pi-coding-agent/control/client";
+import { readControlEntries } from "@oh-my-pi/pi-coding-agent/control/registry";
+import type { ControlSnapshot } from "@oh-my-pi/pi-coding-agent/control/types";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 import { RpcChild, type RpcFrame } from "./helpers/rpc-child";
 
@@ -217,5 +220,45 @@ describe("RPC get_roles / set_role", () => {
 		);
 		expect(direct.success).toBe(true);
 		expect((await state()).activeRole).toBeUndefined();
+	}, 90_000);
+
+	test("control snapshots report the same active role as get_state", async () => {
+		root = await TempDir.create("@rpc-roles-control-");
+		await Bun.write(
+			path.join(root.path(), "agent", "config.yml"),
+			[
+				"modelRoles:",
+				...Object.entries(MODEL_ROLES_CONFIG).map(([role, value]) => `  ${role}: "${value}"`),
+				"",
+			].join("\n"),
+		);
+		const controlDir = path.join(root.path(), "control");
+		child = await RpcChild.spawn({
+			root: root.path(),
+			args: ["--cwd", root.path(), "--model", "@reviewer"],
+			env: { PI_CONTROL_DIR: controlDir },
+		});
+		const rpc = child;
+		await rpc.waitFor(frame => frame.type === "ready", 30_000);
+		const [entry] = await readControlEntries({ dir: controlDir });
+		if (!entry) throw new Error("the RPC child published no control entry");
+		const control = new ControlClient({ metadata: entry.meta, label: "test", kind: "cli" });
+		try {
+			const hello = await control.connect();
+			const rpcRole = async () => ((await rpc.request({ type: "get_state" }, 30_000)).data as RpcFrame).activeRole;
+			const controlRole = async () =>
+				((await control.request({ type: "state" })).data as ControlSnapshot).session?.activeRole;
+
+			// Seeded by the launch selector on both surfaces.
+			expect(hello.session?.activeRole).toBe("reviewer");
+			expect(await rpcRole()).toBe("reviewer");
+
+			// `default` is also what a direct model choice records, so only the shared selection knows it.
+			expect((await rpc.request({ type: "set_role", role: "default" }, 30_000)).success).toBe(true);
+			expect(await rpcRole()).toBe("default");
+			expect(await controlRole()).toBe("default");
+		} finally {
+			control.close();
+		}
 	}, 90_000);
 });

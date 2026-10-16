@@ -29,7 +29,7 @@ import { ControlServer, type ControlConnection } from "./server";
 import { APPROVAL_GATED_SETTINGS, cfgControlApprovals, cfgControlSecretInput } from "./settings";
 import { RpcPlanModeController } from "../modes/rpc/rpc-plan-mode";
 import { RpcSessionSettleWatcher } from "../modes/rpc/rpc-session-settle";
-import { buildRpcSessionState } from "../modes/rpc/rpc-session-state";
+import { buildRpcSessionState, CONTROL_QUEUE_LIMIT, copyQueue } from "../modes/rpc/rpc-session-state";
 import { type RpcSubagentBus, RpcSubagentRegistry } from "../modes/rpc/rpc-subagents";
 import type { EventBus } from "../utils/event-bus";
 import { RpcSessionEventForwarder } from "../modes/rpc/rpc-session-events";
@@ -61,6 +61,11 @@ export interface ControlHostOptions {
 	tmuxPane?: string | null;
 	/** Subagent observability bus behind `get_subagents` and subagent event streaming. */
 	subagentEventBus?: EventBus;
+	/**
+	 * `--model` selector the process launched with (absent with `--provider`).
+	 * A role selector seeds `activeRole` in snapshots, as it does for RPC `get_state`.
+	 */
+	launchModel?: string;
 }
 
 /** Field that failed an optimistic revision check, if any. */
@@ -162,7 +167,7 @@ export class ControlHost {
 
 	constructor(options: ControlHostOptions) {
 		this.#options = options;
-		this.roles = new RpcRoles(options.session);
+		this.roles = new RpcRoles(options.session, options.launchModel);
 		this.promptResults = new RpcPromptResults(options.session, () => {});
 		hosts.set(options.session, this);
 	}
@@ -272,7 +277,17 @@ export class ControlHost {
 			if (event.type === "model_changed") {
 				this.#revisions.model = session.model ? `${session.model.provider}/${session.model.id}` : null;
 			}
-			for (const forwarder of this.#forwarders.values()) forwarder.forward(event);
+			if (this.#forwarders.size === 0) return;
+			// Same cap as the snapshots: a queue past the frame limit would replace the update with an error.
+			const forwarded =
+				event.type === "queue_update"
+					? {
+							...event,
+							steering: copyQueue(event.steering, CONTROL_QUEUE_LIMIT),
+							followUp: copyQueue(event.followUp, CONTROL_QUEUE_LIMIT),
+						}
+					: event;
+			for (const forwarder of this.#forwarders.values()) forwarder.forward(forwarded);
 		});
 	}
 
@@ -357,11 +372,17 @@ export class ControlHost {
 		const viewed = target === "view" ? this.presenter?.viewTarget?.() : undefined;
 		if (viewed) {
 			return {
-				session: buildRpcSessionState(viewed.session, { includeDump: false }),
+				session: buildRpcSessionState(viewed.session, { includeDump: false, queueLimit: CONTROL_QUEUE_LIMIT }),
 				root: { sessionId: root.sessionId, generation: this.#revisions.generation },
 			};
 		}
-		return { session: buildRpcSessionState(root, { activeRole: this.roles.activeRole(), includeDump: false }) };
+		return {
+			session: buildRpcSessionState(root, {
+				activeRole: this.roles.activeRole(),
+				includeDump: false,
+				queueLimit: CONTROL_QUEUE_LIMIT,
+			}),
+		};
 	}
 
 	/** Record a connection's subagent subscription and run the shared registry at the widest one. */

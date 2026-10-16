@@ -3,6 +3,7 @@
  * control socket's `hello` / `get_status` / `state` snapshots.
  */
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
+import { truncate } from "@oh-my-pi/pi-utils";
 import type { AgentSession } from "../../session/agent-session";
 import { calculateTokensPerSecond } from "../../utils/token-rate";
 import { rpcPlanModeState } from "./rpc-plan-mode";
@@ -19,6 +20,30 @@ export interface RpcSessionStateOptions {
 	 * state's size, so control snapshots, which must fit one frame, leave them out.
 	 */
 	includeDump: boolean;
+	/** Cap the queue copy; control snapshots pass {@link CONTROL_QUEUE_LIMIT}. RPC `get_state` copies it whole. */
+	queueLimit?: QueueLimit;
+}
+
+export interface QueueLimit {
+	/** Entries kept per queue, oldest first. */
+	entries: number;
+	/** Characters kept per entry, ellipsis included. */
+	chars: number;
+}
+
+/**
+ * The queue's share of a control frame: snapshots and forwarded
+ * `queue_update` events. Queued prompts are unbounded, and a frame over the
+ * 64 MiB limit is replaced by an error, so `hello` would fail and subscribers
+ * would lose queue state until it drained. Two queues at this cap stay a few
+ * MiB. `queuedMessageCount` stays exact, and `dequeue` returns the full message.
+ */
+export const CONTROL_QUEUE_LIMIT: QueueLimit = { entries: 256, chars: 4096 };
+
+/** Copy of `entries`, capped by `limit` when given. */
+export function copyQueue(entries: readonly string[], limit: QueueLimit | undefined): string[] {
+	if (!limit) return [...entries];
+	return entries.slice(0, limit.entries).map(entry => truncate(entry, limit.chars));
 }
 
 export function buildRpcSessionState(session: AgentSession, options: RpcSessionStateOptions): RpcSessionState {
@@ -38,8 +63,8 @@ export function buildRpcSessionState(session: AgentSession, options: RpcSessionS
 		autoCompactionEnabled: session.autoCompactionEnabled,
 		queuedMessageCount: session.queuedMessageCount,
 		queuedMessages: {
-			steering: [...queuedMessages.steering],
-			followUp: [...queuedMessages.followUp],
+			steering: copyQueue(queuedMessages.steering, options.queueLimit),
+			followUp: copyQueue(queuedMessages.followUp, options.queueLimit),
 			liveSteered: queuedMessages.liveSteered,
 		},
 		hasPendingAsyncWork: session.hasPendingAsyncWork(),

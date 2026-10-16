@@ -81,6 +81,7 @@ import { RpcOutputWriter } from "./rpc-output";
 import { isRpcPlanProposalResponse, RpcPlanModeController, RpcSetModeError } from "./rpc-plan-mode";
 import { RpcExtensionUserMessageTracker, RpcPromptResults, watchAndReportPromptResult } from "./rpc-prompt-results";
 import type { RpcPromptTicket } from "./rpc-prompt-results";
+import { controlHostFor } from "../../control/host";
 import { RpcRoles } from "./rpc-roles";
 import { setRpcChatMode } from "./rpc-chat-mode";
 import { RpcSessionEventForwarder } from "./rpc-session-events";
@@ -2599,7 +2600,8 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	// Live frames go straight to `output`, so `set_event_filter` (session events only) never drops them.
 	const liveBridge = new RpcLiveBridge(session, output, createLiveSession);
 	const subagentRegistry = subagentEventBus ? new RpcSubagentRegistry(subagentEventBus, output) : undefined;
-	const rpcRoles = new RpcRoles(session, launchModel);
+	// One tracker for both surfaces, so control snapshots report the same activeRole as get_state.
+	const rpcRoles = controlHostFor(session)?.roles ?? new RpcRoles(session, launchModel);
 	const planMode = new RpcPlanModeController(session, output);
 
 	// Shutdown request flag (wrapped in object to allow mutation with const)
