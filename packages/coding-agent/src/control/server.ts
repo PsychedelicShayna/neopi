@@ -15,7 +15,15 @@ import {
 	MAX_RPC_FRAME_BYTES,
 	MAX_RPC_REASSEMBLED_BYTES,
 } from "../modes/rpc/rpc-frame";
-import { ADMISSIONS_PER_SECOND, HANDSHAKE_TIMEOUT_MS, HostBudget, MAX_CONNECTIONS, workClass } from "./budget";
+import {
+	ADMISSIONS_PER_SECOND,
+	HANDSHAKE_TIMEOUT_MS,
+	HostBudget,
+	MAX_CONNECTIONS,
+	MAX_MONITOR_CONNECTIONS,
+	MAX_PENDING_HANDSHAKES,
+	workClass,
+} from "./budget";
 import type { MonitorGrant } from "./monitor-service";
 import { isSameUserPeer, peerCredentials, peerCredentialsSupported, type PeerCredentials } from "./peercred";
 import { callerConnectionToken, constantTimeEqual, findControlMetadata, type ControlMetadata } from "./registry";
@@ -75,15 +83,18 @@ export class ControlConnection {
 	#closed = false;
 	#inboundReserved = 0;
 	readonly #chunkReserved = new Map<string, number>();
+	readonly #admit: ((connection: ControlConnection) => boolean) | undefined;
 
 	constructor(
 		readonly socket: net.Socket,
 		readonly host: ControlConnectionHost,
 		peer: PeerCredentials,
+		admit?: (connection: ControlConnection) => boolean,
 	) {
 		this.id = `c${++connectionSeq}`;
 		this.peer = peer;
 		this.budget = host.budget.connection();
+		this.#admit = admit;
 	}
 
 	get origin(): ControlOrigin {
@@ -140,7 +151,8 @@ export class ControlConnection {
 		return false;
 	}
 
-	close(reason?: string): void {
+	/** Optionally flush a final response, but stop accepting work immediately. */
+	close(reason?: string, flush = false): void {
 		if (this.#closed) return;
 		this.#closed = true;
 		if (reason) {
@@ -148,7 +160,8 @@ export class ControlConnection {
 		}
 		this.budget.releaseAll();
 		if (this.#inboundReserved > 0) this.host.budget.releaseInbound(this.#inboundReserved);
-		this.socket.destroy();
+		if (flush) this.socket.end(() => this.socket.destroy());
+		else this.socket.destroy();
 		this.host.onClosed(this);
 	}
 
@@ -208,7 +221,7 @@ export class ControlConnection {
 		this.probe = frame.probe === true;
 		this.protocolVersion = frame.protocolVersion === 2 ? 2 : 1;
 		if (this.protocolVersion === 2) this.encoder.setProtocolVersion(2);
-		this.authenticated = true;
+		if (!this.#admitAuthentication(frame)) return;
 		this.respond({
 			type: "response",
 			command: "hello",
@@ -217,6 +230,26 @@ export class ControlConnection {
 			data: { connectionId: this.id, snapshot: this.host.snapshot() },
 		});
 		this.host.onAuthenticated?.(this);
+	}
+
+	/** Classify an authenticated peer before reserving its connection pool. */
+	#admitAuthentication(frame: Record<string, unknown>): boolean {
+		// Caller verification may have awaited registry I/O while this socket closed.
+		if (this.#closed) return false;
+		if (this.#admit && !this.#admit(this)) {
+			this.respond({
+				type: "response",
+				command: "hello",
+				requestId: typeof frame.requestId === "string" ? frame.requestId : undefined,
+				success: false,
+				error: `${this.monitor ? "monitor" : "control"} connection limit reached`,
+				code: "rate_limited",
+			});
+			this.close("connection limit", true);
+			return false;
+		}
+		this.authenticated = true;
+		return true;
 	}
 
 	/**
@@ -248,7 +281,7 @@ export class ControlConnection {
 		this.monitor = grant;
 		this.protocolVersion = 2;
 		this.encoder.setProtocolVersion(2);
-		this.authenticated = true;
+		if (!this.#admitAuthentication(frame)) return;
 		this.respond({
 			type: "response",
 			command: "hello",
@@ -404,11 +437,15 @@ export class ControlServer {
 			socket.destroy();
 			return;
 		}
-		if (this.connections.size >= MAX_CONNECTIONS) {
+		let pending = 0;
+		for (const connection of this.connections) {
+			if (!connection.authenticated) pending++;
+		}
+		if (pending >= MAX_PENDING_HANDSHAKES) {
 			socket.destroy();
 			return;
 		}
-		const connection = new ControlConnection(socket, this.#options.host, creds);
+		const connection = new ControlConnection(socket, this.#options.host, creds, this.#admit);
 		this.connections.add(connection);
 		const challenge: ControlChallengeFrame = {
 			type: "challenge",
@@ -423,6 +460,17 @@ export class ControlServer {
 		}, HANDSHAKE_TIMEOUT_MS);
 		socket.once("close", () => clearTimeout(timer));
 	}
+
+	/** Monitor panes never spend operator capacity, or vice versa. */
+	readonly #admit = (candidate: ControlConnection): boolean => {
+		const monitor = candidate.monitor !== undefined;
+		const limit = monitor ? MAX_MONITOR_CONNECTIONS : MAX_CONNECTIONS;
+		let authenticated = 0;
+		for (const connection of this.connections) {
+			if (connection.authenticated && (connection.monitor !== undefined) === monitor) authenticated++;
+		}
+		return authenticated < limit;
+	};
 
 	async #read(connection: ControlConnection): Promise<void> {
 		const decoder = new TextDecoder();

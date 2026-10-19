@@ -9,7 +9,12 @@
  * declared size at the first chunk against a host-wide budget.
  */
 
+/** Authenticated operator/tool connections, independent of monitor panes. */
 export const MAX_CONNECTIONS = 32;
+/** Authenticated per-agent monitor attachments. */
+export const MAX_MONITOR_CONNECTIONS = 32;
+/** Unauthenticated sockets cannot consume either authenticated connection pool. */
+export const MAX_PENDING_HANDSHAKES = 32;
 export const HANDSHAKE_TIMEOUT_MS = 5_000;
 /** Ordinary unfinished requests. */
 export const ORDINARY_PER_CONNECTION = 256;
