@@ -1856,7 +1856,7 @@ export class AgentSession implements SettingsScope {
 			session: this,
 			settings: this.settings,
 			registry: evalToolSession.agentRegistry,
-			agentId: evalToolSession.getAgentId?.(),
+			agentId: evalToolSession.getAgentId?.() ?? undefined,
 			entries: () => this.sessionManager.getBranchView(),
 		};
 		evalToolSession.getAgentTelemetry ??= () => this.getAgentTelemetry();
