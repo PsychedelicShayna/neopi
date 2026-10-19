@@ -29,6 +29,7 @@ import { SessionManager } from "../../src/session/session-manager";
 import { transcriptEntryTooLargeError } from "../../src/session/transcript-slice";
 import { createAssistantMessage, createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 import { MonitorAttachConnection } from "../../src/monitor/attach";
+import { ControlServer } from "../../src/control/server";
 
 const cleanups: Array<() => void | Promise<void>> = [];
 
@@ -211,6 +212,62 @@ test("pending hello sockets have a separate bounded admission pool", async () =>
 	// Saturated handshakes must not interrupt a previously authenticated operator.
 	expect((await operator.request({ type: "get_status" })).success).toBe(true);
 });
+
+test("canary: refused socket with blocked flush must not retain a pending slot forever", async () => {
+	const accept = ControlServer.prototype.accept;
+	let server: ControlServer | undefined;
+	vi.spyOn(ControlServer.prototype, "accept").mockImplementation(function (this: ControlServer, socket: net.Socket) {
+		server = this;
+		accept.call(this, socket);
+	});
+	const fixture = await hostFixture();
+	const publication = fixture.host.publication;
+	if (!publication) throw new Error("monitor test host did not publish");
+	const operators: ControlClient[] = [];
+	for (let index = 0; index < MAX_CONNECTIONS; index++) operators.push(await fixture.connect());
+	const rawClients: net.Socket[] = [];
+	cleanups.push(() => {
+		for (const socket of rawClients) socket.destroy();
+	});
+	for (let index = 0; index < MAX_PENDING_HANDSHAKES; index++) {
+		const socket = net.connect(publication.endpoint);
+		rawClients.push(socket);
+		await once(socket, "data", { signal: AbortSignal.timeout(2_000) });
+		socket.pause();
+		socket.write(
+			`${"{\n".repeat(12_000)}${JSON.stringify({
+				type: "hello",
+				protocolVersion: 2,
+				token: publication.token,
+				client: { label: "blocked-refusal", kind: "cli" },
+			})}\n`,
+		);
+		await until(
+			() =>
+				[...server!.connections].filter(connection => !connection.authenticated && connection.socket.writableEnded)
+					.length ===
+				index + 1,
+			"blocked refusal",
+		);
+	}
+	const refused = [...server!.connections].filter(connection => !connection.authenticated);
+	await Bun.sleep(6_000);
+	const closed = Promise.withResolvers<void>();
+	operators[0].onClose(closed.resolve);
+	operators[0].close();
+	await closed.promise;
+	const replacement = await fixture.connect().then(
+		() => "connected",
+		(error: { code: string }) => error.code,
+	);
+	expect({
+		authenticated: [...server!.connections].filter(connection => connection.authenticated).length,
+		pending: [...server!.connections].filter(connection => !connection.authenticated).length,
+		replacement,
+	}).toEqual({ authenticated: MAX_CONNECTIONS, pending: 0, replacement: "connected" });
+	// Reclaim the transport, not just its admission entry.
+	expect(refused.every(connection => connection.socket.destroyed)).toBe(true);
+}, 30_000);
 
 function nextEvent(client: ControlClient, type: string): Promise<Record<string, unknown>> {
 	const pending = Promise.withResolvers<Record<string, unknown>>();

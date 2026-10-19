@@ -48,7 +48,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
-- `npi ctl` and the `ctl` tool remain reachable when live monitor panes fill their connection budget ([#404](https://github.com/PsychedelicShayna/neopi/issues/404)).
+- `npi ctl` and the `ctl` tool remain reachable when live monitor panes fill their connection budget or rejected clients stop reading ([#404](https://github.com/PsychedelicShayna/neopi/issues/404)).
 - Live session pipes pause stdin when their control socket is blocked, and session transcript reads return null timestamps instead of failing on missing or malformed message dates ([#367](https://github.com/PsychedelicShayna/neopi/issues/367)).
 - Control state labels pending steering and follow-up messages together; the first queued follow-up warns each calling session that steering usually reaches an automated agent sooner ([#333](https://github.com/PsychedelicShayna/neopi/issues/333)).
 - Rule toggles in `/status` immediately update the running session's prompt, rulebook, and TTSR matching without restarting ([#4](https://github.com/PsychedelicShayna/neopi/issues/4)).

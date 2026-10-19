@@ -153,7 +153,11 @@ export class ControlConnection {
 
 	/** Optionally flush a final response, but stop accepting work immediately. */
 	close(reason?: string, flush = false): void {
-		if (this.#closed) return;
+		if (this.#closed) {
+			// The handshake deadline or a socket error must still abort a stalled flush.
+			if (!flush) this.socket.destroy();
+			return;
+		}
 		this.#closed = true;
 		if (reason) {
 			logger.info("control: connection closed", { connectionId: this.id, reason });
@@ -456,6 +460,7 @@ export class ControlServer {
 		connection.write(challenge);
 		this.#read(connection);
 		const timer = setTimeout(() => {
+			// This also bounds refusal flushing after logical close stops accepting work.
 			if (!connection.authenticated) connection.close("handshake timeout");
 		}, HANDSHAKE_TIMEOUT_MS);
 		socket.once("close", () => clearTimeout(timer));
