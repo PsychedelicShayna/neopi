@@ -387,8 +387,8 @@ One endpoint, one auth model — **reads are unauthenticated, writes require the
 
 | Client | Endpoint | Writes |
 | --- | --- | --- |
-| omp-kata runner pods (trusted `push`/main + release) | `grpcs://bazel-remote.bazel-cache.svc.cluster.local:9092` | yes - `ci` credentials injected via the `bazel-remote-ci` secret |
-| GitHub-hosted runners (PRs, release packaging and smoke tests) | — never touch this infrastructure, and run no Bazel builds | n/a |
+| omp-kata runner pods (owner-authored same-repository PRs, trusted push/manual/release jobs) | `grpcs://bazel-remote.bazel-cache.svc.cluster.local:9092` | yes - `ci` credentials injected via the `bazel-remote-ci` secret |
+| GitHub-hosted runners (other PRs, metadata checks, release packaging and smoke tests) | — never touch this infrastructure, and run no Bazel builds | n/a |
 
 - **TLS.** The server certificate is signed by a self-signed CA committed at
   [`infra/bazel-remote/ca.crt`](../bazel-remote/ca.crt); every client passes
@@ -456,12 +456,12 @@ The bazel-remote store is content-addressed and **writes require the `ci`
 credentials**, so the poisoning surface is exactly the set of jobs holding those
 credentials. The primary defense is to keep untrusted code away from them:
 
-- `ci.yml` routes every pull-request job to GitHub-hosted runners
-  (`runs-on` resolves to `omp-kata` only for `push`/main, manual dispatch, and
-  release). That expression lives in the base workflow, which GitHub uses
-  verbatim for `pull_request` events, so a fork cannot override it. PR jobs
-  never talk to the cluster at all — they run no Bazel builds — and fork code never sees
-  `bazel-remote-ci` (the cache has no publicly reachable endpoint to attack).
+- `ci.yml` routes Linux PR tests and their prerequisites to `omp-kata` only
+  when `github.event.pull_request.head.repo.full_name == github.repository`
+  and `github.event.pull_request.user.login == 'PsychedelicShayna'`.
+  Contributor-authored same-repository PRs and all fork PRs stay hosted.
+  Hosted PR jobs run no Bazel builds and receive no `bazel-remote-ci`
+  credentials; trusted push, manual, and release routing is unchanged.
 - As defense in depth, set the repo's **Settings -> Actions -> Fork pull request
   workflows** policy to *Require approval for all outside collaborators* (or all
   forks). GitHub's public-repo default only gates first-time contributors.
