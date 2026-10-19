@@ -387,7 +387,7 @@ One endpoint, one auth model — **reads are unauthenticated, writes require the
 
 | Client | Endpoint | Writes |
 | --- | --- | --- |
-| omp-kata runner pods (owner-authored same-repository PRs, trusted push/manual/release jobs) | `grpcs://bazel-remote.bazel-cache.svc.cluster.local:9092` | yes - `ci` credentials injected via the `bazel-remote-ci` secret |
+| omp-kata runner pods (signature-verified owner-authored same-repository PRs, trusted push/manual/release jobs) | `grpcs://bazel-remote.bazel-cache.svc.cluster.local:9092` | yes - `ci` credentials injected via the `bazel-remote-ci` secret |
 | GitHub-hosted runners (other PRs, metadata checks, release packaging and smoke tests) | — never touch this infrastructure, and run no Bazel builds | n/a |
 
 - **TLS.** The server certificate is signed by a self-signed CA committed at
@@ -460,8 +460,13 @@ credentials. The primary defense is to keep untrusted code away from them:
   when `github.event.pull_request.head.repo.full_name == github.repository`
   and `github.event.pull_request.user.login == 'PsychedelicShayna'`.
   Contributor-authored same-repository PRs and all fork PRs stay hosted.
+  A hosted preflight also checks every base-to-head commit for a GitHub-verified
+  owner/registered-agent signature; incomplete or failed API reads stay hosted.
   Hosted PR jobs run no Bazel builds and receive no `bazel-remote-ci`
   credentials; trusted push, manual, and release routing is unchanged.
+  The host's `/opt/neopi-runner/job-started.sh` must separately admit verified
+  owner PR jobs before this routing can work. Its current push/manual-only
+  policy rejects PR events before checkout; the owner controls that policy.
 - As defense in depth, set the repo's **Settings -> Actions -> Fork pull request
   workflows** policy to *Require approval for all outside collaborators* (or all
   forks). GitHub's public-repo default only gates first-time contributors.

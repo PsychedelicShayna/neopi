@@ -109,13 +109,60 @@ jobs:
       # chain, and queueing it behind the 4-runner kata pool adds dead minutes
       # to the release critical path.
       runs-on: ubuntu-22.04
+      permissions:
+         contents: read
+         pull-requests: read
       outputs:
          is-release: ${{ steps.detect.outputs.is-release }}
          release-tag: ${{ steps.detect.outputs.release-tag }}
          # Canary tags publish to npm's canary dist-tag (derived script-side), mark
          # the GitHub release prerelease, and skip the stable-only brew tap.
          channel: ${{ steps.detect.outputs.channel }}
+         trusted-pr: ${{ steps.owner-head.outputs.trusted }}
       steps:
+         # Hosted API-only preflight: never execute PR code to decide trust.
+         - name: Verify owner PR commit signatures
+           id: owner-head
+           if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'PsychedelicShayna'
+           env:
+              GH_TOKEN: ${{ github.token }}
+           shell: bash
+           run: |
+              echo "trusted=false" >> "$GITHUB_OUTPUT"
+              number="$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")"
+              event_head="$(jq -r '.pull_request.head.sha' "$GITHUB_EVENT_PATH")"
+              if ! pr="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$number")"; then
+                echo "::warning::Could not read the PR; retaining hosted runners."
+                exit 0
+              fi
+              if ! jq -e --arg repo "$GITHUB_REPOSITORY" --arg head "$event_head" '
+                .user.login == "PsychedelicShayna" and
+                .head.repo.full_name == $repo and .head.sha == $head
+              ' <<< "$pr" >/dev/null; then
+                echo "PR identity or head changed; retaining hosted runners."
+                exit 0
+              fi
+              base="$(jq -r '.base.sha' <<< "$pr")"
+              head="$(jq -r '.head.sha' <<< "$pr")"
+              count="$(jq -r '.commits' <<< "$pr")"
+              # The PR commits endpoint truncates at 250. Compare pagination
+              # covers the entire range, with a count check to fail closed.
+              if ! pages="$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/compare/$base...$head?per_page=100")"; then
+                echo "::warning::Could not verify the commit range; retaining hosted runners."
+                exit 0
+              fi
+              if jq -e --argjson count "$count" '
+                [.[].commits[]] as $commits |
+                $count > 0 and ($commits | length) == $count and
+                ([$commits[].sha] | unique | length) == $count and
+                all($commits[];
+                  .commit.verification.verified == true and
+                  .committer.login == "PsychedelicShayna")
+              ' <<< "$pages" >/dev/null; then
+                echo "trusted=true" >> "$GITHUB_OUTPUT"
+              else
+                echo "Not every PR commit is verified for the owner; retaining hosted runners."
+              fi
          # Only a main-branch run needs tags fetched, so `git tag --points-at
          # HEAD` can see the freshly-pushed `v*`. A tag-ref dispatch reads the
          # tag straight from `github.ref_name`, and fetching `--tags` while
@@ -154,12 +201,13 @@ jobs:
                 echo "channel=$channel"
               } >> "$GITHUB_OUTPUT"
 
-   # Only owner-authored, same-repository PRs may use the self-hosted pool.
-   # Contributor PRs stay hosted even when their branch is in this repository.
+   # Only owner-authored, same-repository PRs whose entire commit range passed
+   # the hosted signature preflight may use the self-hosted pool.
    # Push and workflow_dispatch events retain their existing omp-kata routing.
    check:
       name: Lint, type check & web build
-      runs-on: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'PsychedelicShayna')) && 'omp-kata' || 'ubuntu-22.04' }}
+      needs: [release_metadata]
+      runs-on: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'PsychedelicShayna' && needs.release_metadata.outputs.trusted-pr == 'true')) && 'omp-kata' || 'ubuntu-22.04' }}
       steps:
          - uses: actions/checkout@v4
          - uses: ./.github/actions/bun-install
@@ -283,7 +331,8 @@ jobs:
    # with required checks.
    native_addons:
       name: Build native addons (bazel)
-      runs-on: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'PsychedelicShayna')) && 'omp-kata' || 'ubuntu-22.04' }}
+      needs: [release_metadata]
+      runs-on: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'PsychedelicShayna' && needs.release_metadata.outputs.trusted-pr == 'true')) && 'omp-kata' || 'ubuntu-22.04' }}
       # actions: write lets main prune superseded addon cache entries.
       permissions:
          contents: read
@@ -579,8 +628,8 @@ jobs:
 
    test_coding_agent_native:
       name: "Test coding-agent native/unit (TS) ${{ matrix.shard }}"
-      runs-on: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'PsychedelicShayna')) && 'omp-kata' || 'ubuntu-22.04' }}
-      needs: [native_addons]
+      runs-on: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'PsychedelicShayna' && needs.release_metadata.outputs.trusted-pr == 'true')) && 'omp-kata' || 'ubuntu-22.04' }}
+      needs: [native_addons, release_metadata]
       if: ${{ !cancelled() && needs.native_addons.result == 'success' }}
       timeout-minutes: 25
       # The longest PR job keeps three shards on either runner pool.
@@ -609,8 +658,8 @@ jobs:
 
    test_workspace:
       name: Test TS workspace fast
-      runs-on: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'PsychedelicShayna')) && 'omp-kata' || 'ubuntu-22.04' }}
-      needs: [native_addons]
+      runs-on: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'PsychedelicShayna' && needs.release_metadata.outputs.trusted-pr == 'true')) && 'omp-kata' || 'ubuntu-22.04' }}
+      needs: [native_addons, release_metadata]
       if: ${{ !cancelled() && needs.native_addons.result == 'success' }}
       timeout-minutes: 20
       steps:
@@ -632,8 +681,8 @@ jobs:
 
    test_coding_agent_singleton:
       name: Test coding-agent singleton/global-state (TS)
-      runs-on: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'PsychedelicShayna')) && 'omp-kata' || 'ubuntu-22.04' }}
-      needs: [native_addons]
+      runs-on: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'PsychedelicShayna' && needs.release_metadata.outputs.trusted-pr == 'true')) && 'omp-kata' || 'ubuntu-22.04' }}
+      needs: [native_addons, release_metadata]
       if: ${{ !cancelled() && needs.native_addons.result == 'success' }}
       timeout-minutes: 20
       steps:
@@ -650,8 +699,8 @@ jobs:
 
    test_ts_native:
       name: Test TS native/integration packages
-      runs-on: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'PsychedelicShayna')) && 'omp-kata' || 'ubuntu-22.04' }}
-      needs: [native_addons]
+      runs-on: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'PsychedelicShayna' && needs.release_metadata.outputs.trusted-pr == 'true')) && 'omp-kata' || 'ubuntu-22.04' }}
+      needs: [native_addons, release_metadata]
       if: ${{ !cancelled() && needs.native_addons.result == 'success' }}
       timeout-minutes: 25
       steps:
@@ -668,8 +717,8 @@ jobs:
 
    test_coding_agent_ui:
       name: Test coding-agent UI/TUI (TS)
-      runs-on: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'PsychedelicShayna')) && 'omp-kata' || 'ubuntu-22.04' }}
-      needs: [native_addons]
+      runs-on: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'PsychedelicShayna' && needs.release_metadata.outputs.trusted-pr == 'true')) && 'omp-kata' || 'ubuntu-22.04' }}
+      needs: [native_addons, release_metadata]
       if: ${{ !cancelled() && needs.native_addons.result == 'success' }}
       timeout-minutes: 25
       steps:
@@ -686,8 +735,8 @@ jobs:
 
    test_coding_agent_runtime:
       name: Test coding-agent runtime/session (TS)
-      runs-on: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'PsychedelicShayna')) && 'omp-kata' || 'ubuntu-22.04' }}
-      needs: [native_addons]
+      runs-on: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'PsychedelicShayna' && needs.release_metadata.outputs.trusted-pr == 'true')) && 'omp-kata' || 'ubuntu-22.04' }}
+      needs: [native_addons, release_metadata]
       if: ${{ !cancelled() && needs.native_addons.result == 'success' }}
       timeout-minutes: 25
       steps:
@@ -706,8 +755,8 @@ jobs:
 
    test_smoke:
       name: Test CLI smoke (TS)
-      runs-on: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'PsychedelicShayna')) && 'omp-kata' || 'ubuntu-22.04' }}
-      needs: [native_addons]
+      runs-on: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'PsychedelicShayna' && needs.release_metadata.outputs.trusted-pr == 'true')) && 'omp-kata' || 'ubuntu-22.04' }}
+      needs: [native_addons, release_metadata]
       if: ${{ !cancelled() && needs.native_addons.result == 'success' }}
       timeout-minutes: 15
       steps:
@@ -722,8 +771,8 @@ jobs:
 
    install_methods:
       name: Install method smoke tests
-      runs-on: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'PsychedelicShayna')) && 'omp-kata' || 'ubuntu-22.04' }}
-      needs: [native_addons]
+      runs-on: ${{ (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'PsychedelicShayna' && needs.release_metadata.outputs.trusted-pr == 'true')) && 'omp-kata' || 'ubuntu-22.04' }}
+      needs: [native_addons, release_metadata]
       if: ${{ !cancelled() && needs.native_addons.result == 'success' }}
       steps:
          - uses: actions/checkout@v4
