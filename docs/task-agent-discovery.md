@@ -129,9 +129,11 @@ slot; single-slot policies also accept `policy:<name>`. Unknown names and
 slots fail before dispatch. The task call preview shows expanded model and
 effort separately; declared slots are also listed in the task tool description.
 
-Policies fill missing fields only: an explicit Eval `model` or per-spawn
-`effort` wins. New assignments receive copies, so editing a policy never changes
-finished work. `fillRoutingPolicy` is the field-filling API for the separate
+Policies fill missing fields only: `fillRoutingPolicy` preserves explicit
+assignment fields, and per-spawn `effort` wins over the slot's effort.
+Eval `agent()` does not accept a per-call `model` override.
+New assignments receive copies, so editing a policy never changes finished
+work. `fillRoutingPolicy` is the field-filling API for the separate
 persistent assignment-record feature (#7); this does not create or authorize
 assignment lifecycle records. Empty settings declare no policies.
 `modelRoles` remain aliases, and `retry.fallbackChains` remain runtime retry
