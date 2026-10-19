@@ -26,10 +26,10 @@ import type { ModelRegistry } from "../config/model-registry";
 import { formatModelString, resolveModelOverride } from "../config/model-resolver";
 import { getKnownRoleIds } from "../config/model-roles";
 import type { Settings } from "../config/settings";
+import { parseSelectorSuffix } from "../config/model-selector-suffix";
 import {
 	type ConfiguredThinkingLevel,
 	concreteThinkingLevel,
-	parseConfiguredThinkingLevel,
 	toReasoningEffort,
 } from "@oh-my-pi/pi-tui/thinking";
 
@@ -38,17 +38,6 @@ export type AgentSelectorModelRegistry = Pick<ModelRegistry, "getAvailable" | "h
 
 /** Loud selector-validation failure; adapters wrap it into their own preflight error surface. */
 export class AgentSelectorError extends Error {}
-
-/**
- * Split a trailing `:<effort>` suffix off a selector when the token parses as
- * a configured thinking level (concrete levels, `max`, or `auto`).
- */
-export function parseSelectorSuffix(value: string): { base: string; level: ConfiguredThinkingLevel } | undefined {
-	const colonIdx = value.lastIndexOf(":");
-	if (colonIdx <= 0 || colonIdx === value.length - 1) return undefined;
-	const level = parseConfiguredThinkingLevel(value.slice(colonIdx + 1));
-	return level === undefined ? undefined : { base: value.slice(0, colonIdx), level };
-}
 
 /**
  * True when an `agent` value is shaped like a model selector rather than an

@@ -93,6 +93,51 @@ With the default batched task schema, supply shared `context` and per-item `task
 
 `/model`'s Roles view can assign and persist custom role mappings such as `review`, `fast`, and `good`. Changing only the active or default session selection does not remap those roles.
 
+## Named routing policies
+
+Declare workflow routing once in user `config.yml` or project `.omp/config.yml`:
+
+```yaml
+routingPolicies:
+  issue-funnel:
+    slots:
+      scout:
+        agent: scout
+        model: "@smol:medium"
+        boundary: Investigate and report evidence only; never edit or publish.
+      authority:
+        model: xai-oauth/grok-4.6
+        effort: medium
+        boundary: Own final issue publication; do not implement repository changes.
+      fallback:
+        model: anthropic/claude-sonnet-5
+        effort: medium
+        boundary: Take over publication only when explicitly assigned.
+```
+
+Use `agent: "policy:issue-funnel/scout"` in task items or Eval `agent()`.
+The slot chooses a specialist hull when `agent` is declared, otherwise the
+session's usual default agent. Normal disabled-agent, spawn/depth, plan-mode,
+model availability, and effort checks still apply. Boundaries are copied into
+the child's assignment prompt; they are instructions, not a new filesystem
+sandbox. Use a read-only specialist such as `scout` for tool-level restrictions.
+
+Each slot requires a model selector, an explicit effort (separate `effort` or
+a matching suffix, including `@role:medium`), and a role boundary. Conflicting
+effort declarations are rejected. Multi-slot policies require an explicit
+slot; single-slot policies also accept `policy:<name>`. Unknown names and
+slots fail before dispatch. The task call preview shows expanded model and
+effort separately; declared slots are also listed in the task tool description.
+
+Policies fill missing fields only: an explicit Eval `model` or per-spawn
+`effort` wins. New assignments receive copies, so editing a policy never changes
+finished work. `fillRoutingPolicy` is the field-filling API for the separate
+persistent assignment-record feature (#7); this does not create or authorize
+assignment lifecycle records. Empty settings declare no policies.
+`modelRoles` remain aliases, and `retry.fallbackChains` remain runtime retry
+routing (#58); a workflow slot named `fallback` does not automatically retry
+or publish. Model-fact source chains and overrides (#70) remain separate.
+
 ## User-tagged model agents
 
 Type `^` in the composer to choose a model from the same scope and ranking as the `Alt+P` session picker. Accepting a completion inserts an atomic chip showing its display name. For example, type `Have ^`, pick a model, then finish with `review this change`.

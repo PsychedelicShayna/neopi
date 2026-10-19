@@ -37,6 +37,8 @@ import taskSpecializationAdvisoryTemplate from "../prompts/tools/task-specializa
 import taskFollowUpTemplate from "../prompts/tools/task-follow-up.md" with { type: "text" };
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
 import { cfgEffortPolicyMode } from "../config/effort-policy";
+import { cfgRoutingPolicies, fillRoutingPolicy, parseRoutingPolicySelector } from "../config/routing-policies";
+import { resolveConfiguredModelPatterns } from "../config/model-resolver";
 import { TASK_EFFORTS, type TaskEffort } from "@oh-my-pi/pi-tui/thinking";
 import { truncateForPrompt } from "../tools/approval";
 import { hasWaitTool } from "../tools/wait";
@@ -178,6 +180,7 @@ interface TaskDescriptionOptions {
 	asyncEnabled: boolean;
 	ircEnabled: boolean;
 	parentSpawns: string;
+	routingPolicies?: { selector: string; model: string; effort: string; boundary: string }[];
 }
 
 /** Render the tool description from a cached agent list and current settings. */
@@ -216,6 +219,7 @@ function renderDescription(options: TaskDescriptionOptions): string {
 		hasBlockingAgents: renderedAgents.some(agent => agent.blocking),
 		hasModelMentions: options.sessionAgents.length > 0,
 		ircEnabled: options.ircEnabled,
+		routingPolicies: options.routingPolicies,
 	});
 }
 
@@ -746,7 +750,20 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	}
 
 	renderCall(args: unknown, options: Parameters<typeof renderTaskCall>[1], theme: Theme) {
-		return renderTaskCall(repairTaskParams(args as TaskParams), options, theme);
+		const params = { ...repairTaskParams(args as TaskParams) };
+		params.routingPreview = [];
+		for (const item of params.tasks ?? [params]) {
+			try {
+				const reference = item.agent ? parseRoutingPolicySelector(item.agent) : undefined;
+				if (!reference) continue;
+				const fields = fillRoutingPolicy(this.session.settings, reference);
+				const model = resolveConfiguredModelPatterns(fields.model, this.session.settings).join(", ");
+				params.routingPreview.push(`${item.agent} · model: ${model} · effort: ${item.effort ?? fields.effort}`);
+			} catch (error) {
+				params.routingPreview.push(error instanceof Error ? error.message : String(error));
+			}
+		}
+		return renderTaskCall(params, options, theme);
 	}
 
 	/** Dynamic description that reflects current task settings. */
@@ -770,6 +787,17 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			asyncEnabled: cfgAsyncEnabled.get(this.session.settings),
 			ircEnabled: isIrcEnabled(this.session.settings, this.session.taskDepth ?? 0),
 			parentSpawns: this.session.getSessionSpawns() ?? "*",
+			routingPolicies: Object.entries(cfgRoutingPolicies.get(this.session.settings)).flatMap(([name, policy]) =>
+				Object.keys(policy.slots).map(slot => {
+					const fields = fillRoutingPolicy(this.session.settings, { policy: name, slot });
+					return {
+						selector: `policy:${name}/${slot}`,
+						model: resolveConfiguredModelPatterns(fields.model, this.session.settings).join(", "),
+						effort: fields.effort!,
+						boundary: fields.boundary!,
+					};
+				}),
+			),
 		});
 	}
 	private constructor(

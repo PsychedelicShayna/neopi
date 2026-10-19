@@ -515,7 +515,7 @@ export function agentTypeBadge(agent: string | undefined, theme: Theme): string 
  * Render the call preview lines for the single spawned agent. The
  * args stream in token by token, so every field access is defensive.
  */
-function renderTaskCallLines(args: Partial<TaskParams> | undefined, theme: Theme): string[] {
+function renderTaskCallLines(args: Partial<TaskParams> | undefined, theme: Theme, width: number): string[] {
 	if (!args) return [];
 	const bullet = theme.fg("dim", "•");
 	const lines: string[] = [];
@@ -532,6 +532,9 @@ function renderTaskCallLines(args: Partial<TaskParams> | undefined, theme: Theme
 		lines.push(line);
 	}
 	lines.push(...renderTaskItemLines(args.tasks, theme));
+	for (const preview of args.routingPreview ?? []) {
+		lines.push(theme.fg("muted", truncateToWidth(sanitizeText(preview), width)));
+	}
 	return lines;
 }
 
@@ -661,7 +664,7 @@ export function renderCall(args: TaskParams, options: TaskRenderOptions, theme: 
 			// already-rendered markdown and pushing it down on every item.
 			if (contextSection) sections.push(contextSection(width));
 			if (assignmentSection) sections.push(assignmentSection(width));
-			const callLines = renderTaskCallLines(args, theme);
+			const callLines = renderTaskCallLines(args, theme, width);
 			// Guarded: an empty trailing section would still draw its divider.
 			if (callLines.length > 0) sections.push({ separator: true, content: callLines });
 		}
@@ -2228,6 +2231,8 @@ export interface TaskItem {
  * transcripts using the flat form keep working under either setting.
  */
 export interface TaskParams {
+	/** Renderer-only resolved routing preview; not part of the task wire schema. */
+	routingPreview?: string[];
 	/** Stable agent name (flat form). */
 	name?: string;
 	/** Agent type to spawn (flat form); omitted values resolve from the session spawn policy. */

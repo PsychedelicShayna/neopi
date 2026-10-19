@@ -38,7 +38,8 @@ import {
 } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import { MAIN_AGENT_ID } from "../registry/agent-registry";
-import { AgentSelectorError, parseSelectorSuffix, validateAgentModelSelector } from "../task/agent-selector";
+import { AgentSelectorError, validateAgentModelSelector } from "../task/agent-selector";
+import { parseSelectorSuffix } from "../config/model-selector-suffix";
 import { Semaphore } from "../task/parallel";
 import type { ToolSession } from "../tools";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";

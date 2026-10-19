@@ -11,6 +11,7 @@ import { $env, prompt, Snowflake } from "@oh-my-pi/pi-utils";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import { resolveAgentModelSelection, resolveConfiguredModelPatterns } from "../config/model-resolver";
 import { type OAuthAccountPools, validateAgentAccountPools } from "../config/account-pools";
+import { fillRoutingPolicy, parseRoutingPolicySelector, type RoutingPolicyFields } from "../config/routing-policies";
 import {
 	type CompactionThresholdPair,
 	validateAgentCompactionThresholdOverrides,
@@ -28,7 +29,7 @@ import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.m
 import isolationRecoveryHintTemplate from "../prompts/tools/isolation-recovery-hint.md" with { type: "text" };
 import salvagedChildHintTemplate from "../prompts/tools/salvaged-child-hint.md" with { type: "text" };
 import { MAIN_AGENT_ID } from "../registry/agent-registry";
-import type { ConfiguredThinkingLevel, TaskEffort } from "@oh-my-pi/pi-tui/thinking";
+import { type ConfiguredThinkingLevel, type TaskEffort, parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { ToolSession } from "../tools";
 import { isIrcEnabled } from "../irc/messaging";
 import { buildOutputValidator } from "../tools/output-schema-validator";
@@ -178,6 +179,8 @@ export interface EffectiveSubagentPolicy {
 	callerModelSelector?: string | string[];
 	/** Explicit level from a `<agent-name>:<effort>` selector; caller-origin, like a model selector suffix. */
 	callerThinkingLevel?: ConfiguredThinkingLevel;
+	/** Copied routing template fields; never a live settings reference. */
+	routing?: RoutingPolicyFields;
 	/** Extension routing note explaining a `before_subagent_spawn` model replacement. */
 	modelRoute?: string;
 	/** Exact-name `task.agentServiceTierOverrides` entry for this agent, applied after model resolution. */
@@ -226,8 +229,8 @@ export class StructuredSubagentError extends Error {
 
 const PLAN_MODE_TOOLS = ["read", "grep", "glob", "web_search"] as const;
 
-function renderSubagentPrompt(assignment: string): string {
-	return prompt.render(subagentUserPromptTemplate, { assignment: assignment.trim() });
+function renderSubagentPrompt(assignment: string, routing?: RoutingPolicyFields): string {
+	return prompt.render(subagentUserPromptTemplate, { assignment: assignment.trim(), routing });
 }
 
 function trimToUndefined(value: string | undefined): string | undefined {
@@ -354,7 +357,24 @@ export async function resolveEffectiveSubagentPolicy(
 ): Promise<EffectiveSubagentPolicy> {
 	await request.session.settings.reloadFromDisk();
 	const spawnPolicy = resolveSpawnPolicy(request.session.getSessionSpawns());
-	const selector = request.agent?.trim() || spawnPolicy.defaultAgent;
+	let selector = request.agent?.trim() || spawnPolicy.defaultAgent;
+	let routing: RoutingPolicyFields | undefined;
+	try {
+		const reference = parseRoutingPolicySelector(selector);
+		if (reference) {
+			routing = fillRoutingPolicy(request.session.settings, {
+				...reference,
+				model: request.model,
+				effort: request.effort,
+			});
+			if (typeof routing.model === "string") {
+				validateAgentModelSelector(routing.model, request.session.modelRegistry, request.session.settings);
+			}
+			selector = routing.agent ?? spawnPolicy.defaultAgent;
+		}
+	} catch (error) {
+		throw new StructuredSubagentError("preflight", error instanceof Error ? error.message : String(error), { cause: error });
+	}
 	const selectorShaped = isAgentModelSelector(selector);
 	const planMode = request.session.getPlanModeState?.()?.enabled === true;
 	assertPlanControlsAllowed(request, planMode);
@@ -372,6 +392,9 @@ export async function resolveEffectiveSubagentPolicy(
 	let selectorModel: string | undefined;
 	/** Explicit effort from `<agent-name>:<effort>` when the base, not the full value, is registered. */
 	let callerThinkingLevel: ConfiguredThinkingLevel | undefined;
+	if (routing?.effort && request.effort === undefined) {
+		callerThinkingLevel = parseConfiguredThinkingLevel(routing.effort);
+	}
 	const named = agent ? undefined : splitNamedAgentSelector(selector);
 	const namedAgent = named ? getAgent(agents, named.base) : undefined;
 	if (agent && selectorShaped) {
@@ -450,7 +473,7 @@ export async function resolveEffectiveSubagentPolicy(
 	const modelResolution = {
 		// A model-selector `agent` value is the most explicit crew choice and
 		// outranks a separately supplied request model.
-		requestModel: selectorModel ?? request.model,
+		requestModel: selectorModel ?? request.model ?? routing?.model,
 		settingsOverride: agentModelOverrides[agentName],
 		agentModel: effectiveAgent.model,
 		settings: request.session.settings,
@@ -493,7 +516,8 @@ export async function resolveEffectiveSubagentPolicy(
 		agent,
 		effectiveAgent,
 		modelOverride,
-		callerModelSelector: selectorModel ?? request.model,
+		routing,
+		callerModelSelector: selectorModel ?? request.model ?? routing?.model,
 		callerThinkingLevel,
 		modelRole,
 		serviceTierOverride,
@@ -615,7 +639,7 @@ function buildExecutorOptions(
 		getApiKey: session.getApiKey,
 		credentialSourceSessionId: session.getCredentialSourceSessionId?.(),
 		agent: policy.effectiveAgent,
-		task: renderSubagentPrompt(request.assignment),
+		task: renderSubagentPrompt(request.assignment, policy.routing),
 		assignment: request.assignment.trim(),
 		context: request.context?.trim() || undefined,
 		planReference: undefined,
