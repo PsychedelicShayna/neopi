@@ -2149,12 +2149,35 @@ export class Settings {
 	}
 
 	/** Validate and persist a fallback chain with all its per-entry effort selections together. */
-	setFallbackChainAndEfforts(role: string, chain: string[], selections: Record<string, EffortSelection>): void {
+	setFallbackChainAndEfforts(
+		role: string,
+		chain: string[],
+		selections: Record<string, EffortSelection>,
+		previousRole?: string,
+	): void {
 		if (!role.trim()) throw new Error("Fallback chain must name a role");
+		if (previousRole && previousRole !== role && Object.hasOwn(cfgRetryFallbackChains.get(this), role)) {
+			throw new Error(`Fallback chain already exists: ${role}`);
+		}
 		const globalChains = getByPath(this.#global, cfgRetryFallbackChains.segments);
 		const chains = isRecord(globalChains) ? { ...globalChains } : {};
 		const globalSelections = getByPath(this.#global, cfgFallbackEffortSelections.segments);
 		const allSelections = isRecord(globalSelections) ? { ...globalSelections } : {};
+		if (previousRole && previousRole !== role) {
+			const segments = [...cfgRetryFallbackChains.segments, previousRole];
+			if (
+				!Object.hasOwn(chains, previousRole) ||
+				[this.#globalToml, this.#project, this.#projectToml, this.#configOverlay, this.#overrides].some(
+					layer => getByPath(layer, segments) !== undefined,
+				)
+			) {
+				throw new Error("Rename this fallback chain in the config file that defines it");
+			}
+		}
+		if (previousRole && previousRole !== role) {
+			delete chains[previousRole];
+			delete allSelections[previousRole];
+		}
 		if (chain.length === 0) {
 			delete chains[role];
 			delete allSelections[role];
@@ -2181,14 +2204,16 @@ export class Settings {
 		);
 		const previousChains = cfgRetryFallbackChains.get(this);
 		const previousEfforts = cfgFallbackEffortSelections.get(this);
-		for (const setting of [cfgRetryFallbackChains, cfgFallbackEffortSelections]) {
-			const segments = [...setting.segments, role];
-			const key = JSON.stringify(segments);
-			this.#captureGlobalMutation(key, this.#modifiedPathMutations, getByPath(this.#global, segments));
-			this.#modified.set(key, segments);
-			this.#releaseSoftPin(setting);
+		for (const changedRole of new Set([role, ...(previousRole ? [previousRole] : [])])) {
+			for (const setting of [cfgRetryFallbackChains, cfgFallbackEffortSelections]) {
+				const segments = [...setting.segments, changedRole];
+				const key = JSON.stringify(segments);
+				this.#captureGlobalMutation(key, this.#modifiedPathMutations, getByPath(this.#global, segments));
+				this.#modified.set(key, segments);
+				this.#releaseSoftPin(setting);
+			}
+			this.#pairedGlobalFallbackMutations.add(changedRole);
 		}
-		this.#pairedGlobalFallbackMutations.add(role);
 		this.#global = staged;
 		this.#persistedMutationGeneration++;
 		this.#rebuildMerged();

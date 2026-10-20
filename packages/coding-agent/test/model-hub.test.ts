@@ -196,6 +196,19 @@ function createHub(options: {
 			onSavePreset: options.callbacks?.onSavePreset,
 			onSwitchPreset: options.callbacks?.onSwitchPreset,
 			onFallbackChainChange: options.callbacks?.onFallbackChainChange ?? onFallbackChainChange,
+			onFallbackChainKeyChange:
+				options.callbacks?.onFallbackChainKeyChange ??
+				((previousKey, key) => {
+					const chains = { ...cfgRetryFallbackChains.get(settings) };
+					const efforts = { ...cfgFallbackEffortSelections.get(settings) };
+					chains[key] = chains[previousKey];
+					delete chains[previousKey];
+					if (efforts[previousKey]) efforts[key] = efforts[previousKey];
+					delete efforts[previousKey];
+					cfgRetryFallbackChains.override(settings, chains);
+					cfgFallbackEffortSelections.override(settings, efforts);
+					return true;
+				}),
 			onEffortRulesChange:
 				options.callbacks?.onEffortRulesChange ?? (rules => cfgEffortRules.override(settings, rules)),
 			onCancel: options.callbacks?.onCancel ?? onCancel,
@@ -1507,6 +1520,99 @@ describe("ModelHub", () => {
 			expect(rendered).toContain("↳ test/model-b");
 		});
 
+		test.each(["re:model-a$", "test/*", "test/vendor/*", "test/not-in-catalog"])(
+			"authors a %s chain key before selecting a fallback model",
+			key => {
+				const settings = Settings.isolated({});
+				const { hub, onAssign } = createHub({ models: [makeModel("test", "model-a")], scoped: true, settings });
+				enterRolesView(hub);
+				hub.handleInput("G"); // New fallback
+				for (const input of ["\n", DOWN, "\n"]) hub.handleInput(input);
+				for (const char of key) hub.handleInput(char);
+				hub.handleInput("\n"); // key -> fallback selector choice, no primary-model picker
+				expect(hub.navigationSnapshot().strip?.kind).toBe("selectorChoice");
+				expect(cfgRetryFallbackChains.get(settings)).toEqual({});
+				for (const input of ["\n", "\n", "\n"]) hub.handleInput(input); // model, effort, save
+				expect(cfgRetryFallbackChains.get(settings)[key]).toEqual(["test/model-a"]);
+				expect(onAssign).not.toHaveBeenCalled();
+				expect(normalize(hub.render(220))).toContain(key);
+			},
+		);
+
+		test.each(["test/model-*", "*/model-a", "test/?", "test/[ab]/*", "re:("])(
+			"rejects unsupported or malformed fallback key %s without changing a chain",
+			key => {
+				const settings = Settings.isolated({});
+				const { hub } = createHub({ models: [makeModel("test", "model-a")], scoped: true, settings });
+				enterRolesView(hub);
+				hub.handleInput("G");
+				for (const input of ["\n", DOWN, "\n"]) hub.handleInput(input);
+				for (const char of key) hub.handleInput(char);
+				hub.handleInput("\n");
+				expect(hub.navigationSnapshot().strip?.kind).toBe("pattern");
+				expect(cfgRetryFallbackChains.get(settings)).toEqual({});
+			},
+		);
+
+		test("cancels a newly authored regex chain without writing an empty chain", () => {
+			const settings = Settings.isolated({});
+			const { hub } = createHub({ models: [], settings });
+			hub.handleNativeEvent({ type: "action", key: "", act: "scope", value: "roles", mods: [] });
+			hub.handleInput("G");
+			for (const input of ["\n", DOWN, "\n"]) hub.handleInput(input);
+			for (const char of "re:not-in-catalog") hub.handleInput(char);
+			hub.handleInput("\n");
+			expect(hub.navigationSnapshot().strip?.kind).toBe("selectorChoice");
+			hub.handleInput(ESC);
+			expect(cfgRetryFallbackChains.get(settings)).toEqual({});
+		});
+
+		test("edits slashless regex keys and preserves chain entries and effort selections", () => {
+			const original = "re:model-a$";
+			const renamed = "re:model-b$";
+			const fallback = "test/model-a";
+			const settings = Settings.isolated({
+				"retry.fallbackChains": { [original]: [fallback] },
+				"retry.fallbackEffortSelections": { [original]: { [fallback]: { mode: "auto", allowed: ["high"] } } },
+			});
+			const { hub } = createHub({ models: [makeModel("test", "model-a")], scoped: true, settings });
+			enterRolesView(hub);
+			hub.handleNativeEvent({ type: "select", key: "", item: `chain:${original}` });
+			hub.handleInput("\n");
+			const strip = hub.navigationSnapshot().strip;
+			if (strip?.kind !== "pattern") throw new Error("Expected chain key editor");
+			expect(strip.input.getValue()).toBe(original);
+			hub.handleInput("\x15"); // clear before typing the replacement
+			for (const char of renamed) hub.handleInput(char);
+			hub.handleInput("\n");
+			expect(cfgRetryFallbackChains.get(settings)).toEqual({ [renamed]: [fallback] });
+			expect(cfgFallbackEffortSelections.get(settings)).toEqual({
+				[renamed]: { [fallback]: { mode: "auto", allowed: [Effort.High] } },
+			});
+			hub.handleInput("f"); // renamed header remains selected and can add entries
+			expect(hub.navigationSnapshot().strip?.kind).toBe("selectorChoice");
+		});
+
+		test("cancelled key edits and duplicate keys leave existing chains intact", () => {
+			const settings = Settings.isolated({
+				"retry.fallbackChains": { "re:model-a": ["test/model-a"], "test/*": ["test/model-b"] },
+			});
+			const { hub } = createHub({ models: [makeModel("test", "model-a")], scoped: true, settings });
+			enterRolesView(hub);
+			hub.handleNativeEvent({ type: "select", key: "", item: "chain:re:model-a" });
+			hub.handleInput("\n");
+			hub.handleInput("\x15");
+			for (const char of "test/*") hub.handleInput(char);
+			hub.handleInput("\n");
+			expect(normalize(hub.render(220))).toContain("Fallback chain already exists");
+			hub.handleInput(ESC); // blur field
+			hub.handleInput(ESC); // cancel editor
+			expect(cfgRetryFallbackChains.get(settings)).toEqual({
+				"re:model-a": ["test/model-a"],
+				"test/*": ["test/model-b"],
+			});
+		});
+
 		test("f on a role offers exact or pattern and saves fallback effort with its selector", () => {
 			const a = makeModel("test", "model-a");
 			const settings = Settings.isolated({});
@@ -2040,6 +2146,8 @@ describe("ModelHub", () => {
 			enterRolesView(hub);
 			hub.handleInput("G"); // trailing "+ New fallback…"
 			hub.handleInput("\n");
+			expect(footerLine(hub.render(220))).toContain("pattern");
+			hub.handleInput("\n"); // pick model remains the first choice
 			expect(normalize(hub.render(220))).toContain("New fallback chain");
 
 			hub.handleInput("/");

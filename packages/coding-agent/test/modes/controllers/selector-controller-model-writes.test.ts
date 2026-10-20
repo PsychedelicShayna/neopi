@@ -3,6 +3,8 @@ import { mkdir } from "node:fs/promises";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
+import type { EffortSelection } from "@oh-my-pi/pi-coding-agent/config/effort-policy";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { type RawSettings, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -79,6 +81,33 @@ describe("SelectorController model hub writes", () => {
 		return callbacks;
 	}
 
+	it("rich session-only selection changes the live model without changing saved defaults or roles", async () => {
+		const agentDir = tempDir.join("agent");
+		const configPath = path.join(agentDir, "config.yml");
+		const original = YAML.stringify({
+			modelRoles: { default: "anthropic/claude-opus-4-5", smol: "anthropic/claude-sonnet-4-5" },
+		});
+		await Bun.write(configPath, original);
+		const settings = await Settings.init({ agentDir, cwd: tempDir.path() });
+		const { controller, showError } = start(settings, model("claude-opus-4-5"));
+		let callbacks: modelHubModule.ModelHubCallbacks | undefined;
+		let options: modelHubModule.ModelHubOptions | undefined;
+		vi.spyOn(modelHubModule, "ModelHubComponent").mockImplementation(function (...args: unknown[]) {
+			callbacks = args[4] as modelHubModule.ModelHubCallbacks;
+			options = args[5] as modelHubModule.ModelHubOptions;
+			return { refreshAfterExternalMutation: () => {}, dispose: () => {} };
+		} as never);
+		controller.showModelSelector({ sessionOnly: true });
+		expect(options?.sessionOnly).toBe(true);
+		expect(options?.pinnedProviders).toEqual([]);
+		expect(await callbacks?.onPick?.(model("claude-sonnet-4-5"), "anthropic/claude-sonnet-4-5")).toBe(true);
+		await settings.flush();
+		expect(showError).not.toHaveBeenCalled();
+		expect(session?.model?.id).toBe("claude-sonnet-4-5");
+		expect(settings.getModelRole("default")).toBe("anthropic/claude-opus-4-5");
+		expect(settings.getModelRole("smol")).toBe("anthropic/claude-sonnet-4-5");
+		expect(await Bun.file(configPath).text()).toBe(original);
+	});
 	it("saves only the edited fallback chain, never the chains a --config overlay supplies", async () => {
 		const agentDir = tempDir.join("agent");
 		const overlayPath = tempDir.join("overlay.yml");
@@ -147,6 +176,58 @@ describe("SelectorController model hub writes", () => {
 				fallbackEffortSelections: { default: { "user/default": { mode: "inherit" } } },
 			},
 		});
+	});
+
+	it("renames a pattern chain and persists its effort metadata without changing other chains", async () => {
+		const agentDir = tempDir.join("agent");
+		const oldKey = "re:primary";
+		const key = "anthropic/*";
+		const fallback = "anthropic/claude-sonnet-4-5";
+		const policy: EffortSelection = { mode: "auto", allowed: [Effort.Low, Effort.High] };
+		await Bun.write(
+			path.join(agentDir, "config.yml"),
+			YAML.stringify({
+				retry: {
+					fallbackChains: { [oldKey]: [fallback], default: ["anthropic/claude-opus-4-5"] },
+					fallbackEffortSelections: { [oldKey]: { [fallback]: policy } },
+				},
+			}),
+		);
+		const settings = await Settings.init({ agentDir, cwd: tempDir.path() });
+		const { controller, showError } = start(settings, model("claude-sonnet-4-5"));
+		const hub = openModelHub(controller);
+		expect(hub.onFallbackChainKeyChange?.(oldKey, key)).toBe(true);
+		await settings.flush();
+		expect(showError).not.toHaveBeenCalled();
+		expect(YAML.parse(await Bun.file(path.join(agentDir, "config.yml")).text())).toEqual({
+			retry: {
+				fallbackChains: { [key]: [fallback], default: ["anthropic/claude-opus-4-5"] },
+				fallbackEffortSelections: { [key]: { [fallback]: policy } },
+			},
+		});
+		expect(hub.onFallbackChainKeyChange?.(key, "default")).toBe(false);
+		await settings.flush();
+		expect(showError).toHaveBeenCalledWith("Fallback chain already exists: default");
+		expect(settings.getGlobalFallbackEffortSelections(key)).toEqual({ [fallback]: policy });
+	});
+
+	it("initializes real settings when no fallback chains are configured", async () => {
+		const settings = await Settings.init({ agentDir: tempDir.join("agent"), cwd: tempDir.path() });
+		const { controller, showError } = start(settings, model("claude-sonnet-4-5"));
+		expect(openModelHub(controller).onFallbackChainKeyChange?.("re:missing", "anthropic/*")).toBe(false);
+		expect(showError).not.toHaveBeenCalled();
+	});
+
+	it("does not copy an overlay-only chain when its defining key cannot be renamed", async () => {
+		const agentDir = tempDir.join("agent");
+		const overlayPath = tempDir.join("overlay.yml");
+		await Bun.write(overlayPath, YAML.stringify({ retry: { fallbackChains: { "re:primary": ["user/backup"] } } }));
+		const settings = await Settings.init({ agentDir, cwd: tempDir.path(), configFiles: [overlayPath] });
+		const { controller, showError } = start(settings, model("claude-sonnet-4-5"));
+		expect(openModelHub(controller).onFallbackChainKeyChange?.("re:primary", "anthropic/*")).toBe(false);
+		await settings.flush();
+		expect(showError).toHaveBeenCalledWith("Rename this fallback chain in the config file that defines it");
+		expect(await Bun.file(path.join(agentDir, "config.yml")).exists()).toBe(false);
 	});
 
 	it.each(["default", "smol"])(

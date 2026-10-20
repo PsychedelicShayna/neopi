@@ -10,6 +10,8 @@
 ### Added
 
 - Named profiles can preload selected persistent memory files before the first turn through `launch-memory.json`; inspect the loaded snapshot with `/launch-profile` ([#65](https://github.com/PsychedelicShayna/neopi/issues/65)).
+- `/model` opens the rich provider-sidebar picker on recently used models and switches only the current session; `/models` retains role management and `/switch` and Alt+P keep the compact picker ([#55](https://github.com/PsychedelicShayna/neopi/issues/55)).
+- Create and rename regex or provider-prefix fallback chains directly in the model hub, including regex keys without a slash ([#248](https://github.com/PsychedelicShayna/neopi/issues/248)).
 - Added optional global and project `settings.toml` overlays with whole-key precedence over YAML, plus `npi config dump-toml` for documented defaults ([#34](https://github.com/PsychedelicShayna/neopi/issues/34)).
 - Opt-in agent context telemetry now reports checkpoint availability and estimated recent-turn footprint, with pressure-based guidance that respects configured compaction boundaries ([#21](https://github.com/PsychedelicShayna/neopi/issues/21)).
 - Inspect, propose, set, and reset session compaction policy with `/compact control` or `compaction://`, with explicit project/user persistence and propose-only agent access by default ([#28](https://github.com/PsychedelicShayna/neopi/issues/28)).

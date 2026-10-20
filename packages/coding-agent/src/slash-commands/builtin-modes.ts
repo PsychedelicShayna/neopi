@@ -505,8 +505,9 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			);
 			return commandConsumed();
 		},
-		handleTui: (_command, runtime) => {
-			runtime.ctx.showModelSelector();
+		handleTui: (command, runtime) => {
+			// Fork-local /model scope; the /models alias retains the full role hub.
+			runtime.ctx.showModelSelector(command.name === "model" ? { sessionOnly: true } : undefined);
 			clearSubmittedText(runtime);
 		},
 	},

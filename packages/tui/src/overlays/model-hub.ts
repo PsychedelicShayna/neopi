@@ -7,8 +7,8 @@ import { parseModelString, splitUpstreamRouting } from "./model-selector";
  * {@link ModelBrowser} body. The Roles view manages assignments directly:
  * pick a role, pick a model, adjust thinking in an inline strip, or clear the
  * role back to auto-selection. Locked providers forward to the /login flow.
- * Fully mouse-navigable (hover, wheel, click). Session-only switching lives
- * in the compact alt+p picker ({@link ./model-picker}).
+ * Fully mouse-navigable (hover, wheel, click). `/model` reuses the browser in
+ * session-only mode; alt+p keeps its compact picker ({@link ./model-picker}).
  */
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type {
@@ -231,6 +231,8 @@ export interface ScopedModelItem {
 export type ModelRoleSelectionScope = "global" | "project";
 
 export interface ModelHubCallbacks {
+	/** Select a model without authoring a role or changing saved preferences. */
+	onPick?: (model: Model, selector: string) => void | boolean | Promise<void | boolean>;
 	/** Persist a role assignment. */
 	onAssign: (
 		model: Model,
@@ -251,6 +253,8 @@ export interface ModelHubCallbacks {
 		effort?: { selector: string; selection: HubEffortSelection },
 		copiedSelections?: Readonly<Record<string, HubEffortSelection>>,
 	) => boolean | void;
+	/** Rename a chain and its per-entry effort selections atomically. False retains the draft. */
+	onFallbackChainKeyChange?: (previousKey: string, key: string) => boolean | void;
 	/** Locked provider activation: forward to the /login flow. */
 	onLoginRequest?: (providerId: string) => void;
 	/** Open the mixture graph editor from a selected mixture model. */
@@ -291,6 +295,8 @@ export interface ModelHubCallbacks {
 export type CompactionPointChangeResult = { kind: "error"; message: string } | { kind: "confirm"; message: string };
 
 export interface ModelHubOptions {
+	/** Browse recent models and providers without any role or policy editing. */
+	sessionOnly?: boolean;
 	/** Preselect this provider's sidebar entry (e.g. when reopening after /login). */
 	initialProviderId?: string;
 	/** `provider/id` of the session's model, marked current in the native picker. */
@@ -364,7 +370,7 @@ type StripState =
 	| {
 			kind: "pattern";
 			input: Input;
-			target: "rule" | "fallback" | "role";
+			target: "rule" | "fallback" | "role" | "fallbackKey";
 			role?: string;
 			fallbackTarget?: { role: string; index: number | null };
 	  }
@@ -378,7 +384,10 @@ type StripState =
 	  }
 	| {
 			kind: "selectorChoice";
-			target: { kind: "role"; role: string } | { kind: "fallback"; role: string; index: number | null };
+			target:
+				| { kind: "role"; role: string }
+				| { kind: "fallback"; role: string; index: number | null }
+				| { kind: "fallbackKey" };
 			chips: StripChip[];
 			index: number;
 	  }
@@ -557,6 +566,7 @@ export class ModelHubComponent implements Component {
 	#registry: ModelHubRegistry;
 	#scopedModels: ReadonlyArray<ScopedModelItem>;
 	#callbacks: ModelHubCallbacks;
+	readonly #sessionOnly: boolean;
 
 	#browser: ModelBrowser;
 	#roles: RoleAssignments = {};
@@ -746,6 +756,7 @@ export class ModelHubComponent implements Component {
 		this.#registry = registry;
 		this.#scopedModels = scopedModels;
 		this.#callbacks = callbacks;
+		this.#sessionOnly = options.sessionOnly === true;
 		this.#currentSelector = options.currentSelector;
 		this.#pinnedProviders = options.pinnedProviders ?? [];
 
@@ -768,7 +779,7 @@ export class ModelHubComponent implements Component {
 		if (initialProvider && this.#entries.some(entry => entry.providerId === initialProvider)) {
 			this.#setActiveEntry(`provider:${initialProvider}`);
 		} else {
-			this.#setActiveEntry("all");
+			this.#setActiveEntry(this.#sessionOnly ? "recent" : "all");
 		}
 
 		// Reconcile catalogs in the background. This is online discovery only —
@@ -1134,15 +1145,20 @@ export class ModelHubComponent implements Component {
 
 		// Roles leads the fixed section so downward hops from Recent head into
 		// model scopes instead of being captured by the roles view.
-		const fixed: SidebarEntry[] = [
-			{
-				id: "roles",
-				kind: "roles",
-				label: "Roles",
-				annotation: `${assignedCount}/${visibleRoles.length}`,
-			},
-			{ id: "all", kind: "all", label: "All models", annotation: String(availableModels.length) },
-		];
+		const fixed: SidebarEntry[] = this.#sessionOnly
+			? [
+					{ id: "recent", kind: "recent", label: "Recently used", annotation: String(this.#recentItems.length) },
+					{ id: "all", kind: "all", label: "All models", annotation: String(availableModels.length) },
+				]
+			: [
+					{
+						id: "roles",
+						kind: "roles",
+						label: "Roles",
+						annotation: `${assignedCount}/${visibleRoles.length}`,
+					},
+					{ id: "all", kind: "all", label: "All models", annotation: String(availableModels.length) },
+				];
 
 		this.#fixedEntries = fixed;
 		this.#unlockedProviderEntries = [...unlocked]
@@ -1172,11 +1188,18 @@ export class ModelHubComponent implements Component {
 			});
 		}
 
-		const entries: SidebarEntry[] = [
-			...this.#fixedEntries,
-			{ id: "sep:effort", kind: "separator", label: "" },
-			{ id: "effort", kind: "effort", label: "Effort rules", annotation: String(this.#settings.effortRules.length) },
-		];
+		const entries: SidebarEntry[] = [...this.#fixedEntries];
+		if (!this.#sessionOnly) {
+			entries.push(
+				{ id: "sep:effort", kind: "separator", label: "" },
+				{
+					id: "effort",
+					kind: "effort",
+					label: "Effort rules",
+					annotation: String(this.#settings.effortRules.length),
+				},
+			);
+		}
 		if (providers.length > 0) {
 			entries.push({ id: "sep:providers", kind: "separator", label: "" }, ...providers);
 		}
@@ -1380,7 +1403,7 @@ export class ModelHubComponent implements Component {
 		if (!query) rows.push({ kind: "newRole" });
 		rows.push({ kind: "separator" });
 		const modelKeys = Object.keys(chains)
-			.filter(key => key.includes("/"))
+			.filter(key => key.includes("/") || selectorKind(key) === "regex")
 			.sort();
 		for (const key of modelKeys) {
 			if (query && ![key, ...(chains[key] ?? [])].some(value => value.toLowerCase().includes(query))) continue;
@@ -1409,7 +1432,7 @@ export class ModelHubComponent implements Component {
 		// "New role…" and "New fallback chain…", then each role and model chain with its fallback entries.
 		let count = 2;
 		for (const role of this.#visibleRoleIds()) count += 1 + (chains[role]?.length ?? 0);
-		for (const key in chains) if (key.includes("/")) count += 1 + chains[key].length;
+		for (const key in chains) if (key.includes("/") || selectorKind(key) === "regex") count += 1 + chains[key].length;
 		return count;
 	}
 
@@ -1651,6 +1674,11 @@ export class ModelHubComponent implements Component {
 	#activateItem(item: ModelBrowserItem): void {
 		// Also reached from the browser's own native list events, which bypass handleInput.
 		this.#nativeVersion++;
+		if (this.#sessionOnly) {
+			const result = this.#callbacks.onPick?.(item.model, item.selector);
+			this.#finishAssignment(result, () => this.#requestRender());
+			return;
+		}
 		if (this.#assigning) {
 			const target = this.#assigning;
 			this.#assigning = null;
@@ -1910,12 +1938,13 @@ export class ModelHubComponent implements Component {
 	}
 
 	#openSelectorPattern(
-		target: "rule" | "fallback" | "role",
+		target: "rule" | "fallback" | "role" | "fallbackKey",
 		fallbackTarget?: { role: string; index: number | null },
 		role?: string,
 	): void {
 		const input = new Input();
 		input.focused = true;
+		if (target === "fallbackKey" && role) input.setValue(role);
 		if (fallbackTarget?.index !== null && fallbackTarget?.index !== undefined) {
 			const previous = this.#fallbackChains()[fallbackTarget.role]?.[fallbackTarget.index];
 			if (previous) input.setValue(previous);
@@ -1944,6 +1973,14 @@ export class ModelHubComponent implements Component {
 				this.#configError = "Enter a provider/model selector, provider/* glob, or re: regex";
 				return;
 			}
+			if (
+				strip.target === "fallbackKey" &&
+				selectorKind(selector) === "glob" &&
+				!/^([^/*?[\]{}]+\/)+\*$/.test(selector)
+			) {
+				this.#configError = "Chain keys support provider/* or provider/prefix/* only; use re: for other patterns";
+				return;
+			}
 			try {
 				if (isPatternSelector(selector)) new Bun.Glob(selector);
 			} catch {
@@ -1952,6 +1989,29 @@ export class ModelHubComponent implements Component {
 			}
 		}
 		this.#configError = undefined;
+		if (strip.target === "fallbackKey") {
+			const chains = this.#fallbackChains();
+			if (selector !== strip.role && Object.hasOwn(chains, selector)) {
+				this.#configError = `Fallback chain already exists: ${selector}`;
+				return;
+			}
+			if (strip.role) {
+				if (selector !== strip.role) {
+					if (!this.#callbacks.onFallbackChainKeyChange) {
+						this.#configError = "Renaming fallback chains is unavailable";
+						return;
+					}
+					if (this.#callbacks.onFallbackChainKeyChange(strip.role, selector) === false) return;
+				}
+				this.#strip = null;
+				this.#refreshAfterMutation();
+				const index = this.#rolesRows.findIndex(row => row.kind === "chainKey" && row.role === selector);
+				if (index >= 0) this.#roleIndex = index;
+			} else {
+				this.#openFallbackSelectorChoice(selector, null);
+			}
+			return;
+		}
 		if (strip.target === "rule") {
 			const index = this.#settings.effortRules.findIndex(rule => rule.selector === selector);
 			this.#openEffortLevels({ ruleIndex: index < 0 ? undefined : index, pendingRuleSelector: selector });
@@ -1982,6 +2042,23 @@ export class ModelHubComponent implements Component {
 		};
 	}
 
+	#selectorStripLabel(strip: Extract<StripState, { kind: "selectorChoice" | "patternEffort" }>): string {
+		if (strip.kind === "patternEffort") return strip.selector;
+		return strip.target.kind === "fallbackKey" ? "New fallback chain" : strip.target.role;
+	}
+
+	#openFallbackKeySelectorChoice(): void {
+		this.#strip = {
+			kind: "selectorChoice",
+			target: { kind: "fallbackKey" },
+			index: 0,
+			chips: [
+				{ action: "thinking", label: "pick model…", styled: theme.fg("accent", "pick model…") },
+				{ action: "thinking", label: "pattern…", styled: theme.fg("muted", "pattern…") },
+			],
+		};
+	}
+
 	#openRoleSelectorChoice(role: string): void {
 		this.#strip = {
 			kind: "selectorChoice",
@@ -2000,6 +2077,9 @@ export class ModelHubComponent implements Component {
 		if (target.kind === "role") {
 			if (strip.index === 0) this.#startAssign(target.role);
 			else this.#openSelectorPattern("role", undefined, target.role);
+		} else if (target.kind === "fallbackKey") {
+			if (strip.index === 0) this.#startAssignFallbackKey();
+			else this.#openSelectorPattern("fallbackKey");
 		} else if (strip.index === 0) this.#startAssignFallback(target.role, target.index);
 		else this.#openSelectorPattern("fallback", target);
 	}
@@ -3164,13 +3244,13 @@ export class ModelHubComponent implements Component {
 				this.#openRoleSelectorChoice(row.role);
 				return;
 			case "chainKey":
-				this.#openFallbackSelectorChoice(row.role, null);
+				this.#openSelectorPattern("fallbackKey", undefined, row.role);
 				return;
 			case "fallback":
 				this.#openFallbackSelectorChoice(row.role, row.chainIndex);
 				return;
 			case "newFallback":
-				this.#startAssignFallbackKey();
+				this.#openFallbackKeySelectorChoice();
 				return;
 			case "newRole":
 				this.#openNameStrip("role");
@@ -3291,7 +3371,7 @@ export class ModelHubComponent implements Component {
 				else if (row?.kind === "chainKey") this.#setFallbackChain(row.role, []);
 				return;
 			case "fallback":
-				if (row?.kind === "newFallback") this.#startAssignFallbackKey();
+				if (row?.kind === "newFallback") this.#openFallbackKeySelectorChoice();
 				else if (row && row.kind !== "newRole" && row.kind !== "separator") {
 					this.#openFallbackSelectorChoice(row.role, null);
 				}
@@ -3925,6 +4005,9 @@ export class ModelHubComponent implements Component {
 			return `h/l ${leftRight} effort · ${enter}/Space apply · ${cancel} keep`;
 		}
 		if (this.#filterEditing) return "Search · Esc back to list";
+		if (this.#sessionOnly && this.#isBrowserView(this.#activeEntry())) {
+			return `${enter} use for session · ${upDown} models · ${left} providers · ${cancel} close`;
+		}
 		if (this.#assigning !== null) {
 			if (this.#focus === "scope") {
 				return `${enterRight} models · ${upDown} providers · / search · ${altLeftRight} kind · ${cancel} cancel`;
@@ -3963,10 +4046,10 @@ export class ModelHubComponent implements Component {
 				return `${upDown} rows · ${enter} exact/pattern · ${formatKeyHint("f")} add · ${formatKeyHints(["y", "shift+y"])} yank · ${formatKeyHint("p")} append · ${formatKeyHint("x")} remove${thinking}${compaction} · [/] reorder · ${left} scopes`;
 			}
 			if (row?.kind === "chainKey") {
-				return `${upDown} rows · ${formatKeyHints(["enter", "f"])} add fallback · ${formatKeyHint("p")} append · ${formatKeyHint("x")} clear chain · ${left} providers`;
+				return `${upDown} rows · ${enter} edit key · ${formatKeyHint("f")} add fallback · ${formatKeyHint("p")} append · ${formatKeyHint("x")} clear chain · ${left} providers`;
 			}
 			if (row?.kind === "newFallback") {
-				return `${upDown} rows · ${enter} new model/provider fallback chain · ${left} providers`;
+				return `${upDown} rows · ${enter} new exact/pattern fallback chain · ${left} providers`;
 			}
 			// Thinking is editable only when the assigned model has reasoning levels.
 			const editable = row?.kind === "role" && this.#roleThinkingTarget(row.role) !== undefined;
@@ -4053,9 +4136,14 @@ export class ModelHubComponent implements Component {
 					? "Model effort pattern:"
 					: strip.target === "role"
 						? "Role model pattern:"
-						: "Fallback model pattern:",
+						: strip.target === "fallbackKey"
+							? "Fallback chain key:"
+							: "Fallback model pattern:",
 			);
-			const hint = patternStripHint(strip.input.getValue().trim());
+			const hint =
+				strip.target === "fallbackKey"
+					? theme.fg("dim", "provider/*, provider/prefix/*, or re: regex")
+					: patternStripHint(strip.input.getValue().trim());
 			const inputWidth = Math.max(8, width - visibleWidth(label) - visibleWidth(hint) - 4);
 			return truncateToWidth(`${label} ${strip.input.render(inputWidth)[0] ?? ""} ${hint}`, width);
 		}
@@ -4076,11 +4164,7 @@ export class ModelHubComponent implements Component {
 			);
 		}
 		if (strip.kind === "selectorChoice" || strip.kind === "patternEffort") {
-			return this.#renderChipWindow(
-				width,
-				theme.fg("accent", `${strip.kind === "selectorChoice" ? strip.target.role : strip.selector} → `),
-				strip,
-			);
+			return this.#renderChipWindow(width, theme.fg("accent", `${this.#selectorStripLabel(strip)} → `), strip);
 		}
 
 		const prefix =
@@ -4551,7 +4635,7 @@ export class ModelHubComponent implements Component {
 					? this.#footerHint()
 					: "j/k rows · h/l pane · / search · gg/G ends · Ctrl-u/d half";
 		const props: TspPickerProps = {
-			title: "Models",
+			title: this.#sessionOnly ? "Session model" : "Models",
 			subtitle: [
 				...(typeof subtitle === "string" ? [span(subtitle)] : (subtitle ?? [])),
 				span(` · ${plainText(navigation)}`, "dim"),
@@ -4694,6 +4778,7 @@ export class ModelHubComponent implements Component {
 	/** What the hub is doing when it is more than browsing: applying, assigning, refreshing, a config error. */
 	#pickerSubtitle(entry: SidebarEntry, rolesView: boolean): TspPickerProps["subtitle"] {
 		if (this.#assignmentPending) return "Applying model…";
+		if (this.#sessionOnly) return "Current session only";
 		const assigning = this.#assigning;
 		if (assigning !== null) {
 			if (assigning.kind === "fallbackKey") return "New fallback chain — pick the model it protects";
@@ -4970,7 +5055,7 @@ export class ModelHubComponent implements Component {
 		return compact([
 			pickerAction(
 				"assign",
-				"Assign role",
+				this.#sessionOnly ? "Use for session" : "Assign role",
 				"enter",
 				this.#browser.pickerSelected ? { primary: true } : { primary: true, disabled: "No model selected" },
 			),
@@ -5029,7 +5114,7 @@ export class ModelHubComponent implements Component {
 		}
 		if (strip.kind === "selectorChoice" || strip.kind === "patternEffort") {
 			return {
-				label: [span(strip.kind === "selectorChoice" ? strip.target.role : strip.selector, "accent")],
+				label: [span(this.#selectorStripLabel(strip), "accent")],
 				items: strip.chips.map((chip, index) => ({ id: String(index), label: chip.label })),
 				selected: String(strip.index),
 			};
@@ -5507,10 +5592,7 @@ export class ModelHubComponent implements Component {
 		}
 		let prefix: TspSpan[];
 		if (strip.kind === "selectorChoice" || strip.kind === "patternEffort") {
-			prefix = [
-				span(strip.kind === "selectorChoice" ? strip.target.role : strip.selector, "accent"),
-				span(" →", "dim"),
-			];
+			prefix = [span(this.#selectorStripLabel(strip), "accent"), span(" →", "dim")];
 		} else if (strip.kind === "role") {
 			prefix = [span(strip.item.id, "accent"), span(" →", "dim")];
 		} else {

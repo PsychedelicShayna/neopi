@@ -108,6 +108,22 @@ describe("retry fallback selector resolution", () => {
 		);
 	});
 
+	it("applies a slashless regex key to every matching model while exact keys still win", () => {
+		const key = "re:gemini";
+		const context = createContext({
+			"google/*": ["google-vertex/*"],
+			[key]: ["openai/gpt-4o-mini"],
+			"google/gemini-3.5-flash": ["google-vertex/*"],
+		});
+		expect(resolveRetryFallbackChainKey(context, "google/gemini-3.5-flash")).toBe("google/gemini-3.5-flash");
+		for (const selector of ["google-vertex/gemini-3.5-flash", "openrouter/google/gemini-3.5-flash"]) {
+			expect(resolveRetryFallbackChainKey(context, selector)).toBe(key);
+			expect(findRetryFallbackCandidates(context, key, selector).map(candidate => candidate.raw)).toEqual([
+				"openai/gpt-4o-mini",
+			]);
+		}
+	});
+
 	it("resolves regex entries against the catalog, retaining glob entries", () => {
 		const context = createContext({
 			default: ["re:^(google|google-vertex)/gemini-3\\.5-flash$", "openrouter/google/*"],

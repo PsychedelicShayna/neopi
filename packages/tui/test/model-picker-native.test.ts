@@ -187,6 +187,76 @@ test("the model hub describes a data-first picker when the terminal has the kind
 	expect(hub.describe(withPicker)).toBe(root);
 });
 
+test.each(["keyboard", "native"])(
+	"session-only rich hub starts on recent models and picks without roles via %s",
+	mode => {
+		const picked: string[] = [];
+		let assignments = 0;
+		const hub = new ModelHubComponent(
+			ui,
+			source({ default: "demo/demo" }, ["openai/gpt-5.6", "demo/demo"]),
+			registry(MODELS),
+			MODELS.map(entry => ({ model: entry })),
+			{
+				onPick: (_model, selector) => {
+					picked.push(selector);
+				},
+				onAssign: () => {
+					assignments++;
+				},
+				onUnassign: () => {
+					assignments++;
+				},
+				onCancel: () => {},
+			},
+			{ sessionOnly: true, currentSelector: "demo/demo" },
+		);
+		hubs.push(hub);
+		const p = props(hub.describe(withPicker));
+		expect(p.scope).toBe("recent");
+		expect(p.scopes?.map(scope => scope.id)).toEqual([
+			"recent",
+			"all",
+			"provider:anthropic",
+			"provider:demo",
+			"provider:openai",
+		]);
+		expect(p.order).toEqual(["openai/gpt-5.6", "demo/demo"]);
+		expect(p.actions?.find(action => action.id === "assign")?.label).toBe("Use for session");
+		expect(hub.render(120).join("\n")).not.toContain("Effort rules");
+		if (mode === "keyboard") {
+			hub.handleInput("l");
+			hub.handleInput("g");
+			hub.handleInput("g");
+			hub.handleInput("\r");
+		} else {
+			hub.handleNativeEvent({ type: "activate", key: "", item: "openai/gpt-5.6" });
+		}
+		expect(picked).toEqual(["openai/gpt-5.6"]);
+		expect(assignments).toBe(0);
+		expect(props(hub.describe(withPicker)).strip).toBeNull();
+		hub.handleNativeEvent({ type: "action", key: "", act: "scope", value: "roles", mods: [] });
+		expect(props(hub.describe(withPicker)).scope).toBe("recent");
+		hub.handleNativeEvent({ type: "action", key: "", act: "scope", value: "provider:anthropic", mods: [] });
+		expect(props(hub.describe(withPicker)).selected).toStartWith("anthropic/");
+	},
+);
+
+test("session-only rich hub has an empty recent view before its first selection", () => {
+	const hub = new ModelHubComponent(
+		ui,
+		source({}, []),
+		registry(MODELS),
+		MODELS.map(entry => ({ model: entry })),
+		{ onPick: () => {}, onAssign: () => {}, onUnassign: () => {}, onCancel: () => {} },
+		{ sessionOnly: true },
+	);
+	hubs.push(hub);
+	expect(props(hub.describe(withPicker))).toMatchObject({ scope: "recent", order: [], total: 0 });
+	hub.handleInput("j");
+	expect(props(hub.describe(withPicker)).scope).toBe("all");
+});
+
 test("Factory Droid rows carry the base credit rate and a credit-only model is never free", () => {
 	const priced = { ...model("factory-droid", "claude-opus-5"), factoryDroidCredits: 2 };
 	const creditOnly = {
