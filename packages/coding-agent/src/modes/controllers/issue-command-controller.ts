@@ -74,7 +74,7 @@ export class IssueCommandController {
 		const selection = resolveIssuesRoleSelection(this.ctx.settings, modelRegistry.getAvailable());
 		if (!selection) {
 			this.ctx.showError(
-				"/issue needs the issues model role. Assign it in /model (Issue filing) or set modelRoles.issues; it never borrows the current model.",
+				"/issue needs the issues model role. Assign it in /models (Issue filing) or set modelRoles.issues; it never borrows the current model.",
 			);
 			return;
 		}

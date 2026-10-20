@@ -91,7 +91,7 @@ With the default batched task schema, supply shared `context` and per-item `task
 }
 ```
 
-`/model`'s Roles view can assign and persist custom role mappings such as `review`, `fast`, and `good`. Changing only the active or default session selection does not remap those roles.
+`/models`' Roles view can assign and persist custom role mappings such as `review`, `fast`, and `good`. Changing only the active session selection in `/model` or `/switch` does not remap those roles.
 
 ## Named routing policies
 

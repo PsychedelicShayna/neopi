@@ -178,7 +178,7 @@ import type { SessionObserverRegistry } from "@oh-my-pi/pi-tui/overlays/session-
 import { cfgAdvisorSyncBacklog } from "../../advisor/settings";
 import { cfgBranchSummaryEnabled } from "../../session/context-settings";
 import { cfgCycleOrder, cfgDisabledProviders, cfgModelRoleStorage } from "../../config/model-settings";
-import { cfgDefaultThinkingLevel } from "../../session/settings";
+import { cfgDefaultThinkingLevel, cfgRetryFallbackChains } from "../../session/settings";
 import { cfgEffortRules, cfgFallbackEffortSelections } from "../../config/effort-policy";
 import {
 	cfgComposerShape,
@@ -238,6 +238,7 @@ export type MenuKind =
 	| "status-line-config"
 	| "model-picker"
 	| "model-hub"
+	| "session-model-hub"
 	| "agents-dashboard"
 	| "agent-hub"
 	| "irc-viewer"
@@ -1412,12 +1413,12 @@ export class SelectorController {
 		this.ctx.session.setThinkingLevel(level);
 	}
 
-	showModelSelector(options?: { temporaryOnly?: boolean }): void {
+	showModelSelector(options?: { temporaryOnly?: boolean; sessionOnly?: boolean }): void {
 		if (options?.temporaryOnly) {
 			this.#showModelPicker();
 			return;
 		}
-		this.#showModelHub({});
+		this.#showModelHub({ sessionOnly: options?.sessionOnly });
 	}
 
 	/**
@@ -1458,7 +1459,7 @@ export class SelectorController {
 			this.ctx.statusLine.invalidate();
 			this.ctx.updateEditorBorderColor();
 			const roleSelectorHint = appKey(this.ctx.keybindings, "app.model.select") || formatKeyHint("alt+m");
-			this.ctx.showStatus(`Session-only model: ${selector}. Use ${roleSelectorHint} or /model for roles.`);
+			this.ctx.showStatus(`Session-only model: ${selector}. Use ${roleSelectorHint} or /models for roles.`);
 		};
 		if (!compactFirst) {
 			await apply();
@@ -1583,8 +1584,9 @@ export class SelectorController {
 	 * untouched underneath. `initialProviderId` preselects a provider's sidebar
 	 * entry — used when reopening the hub after a /login round-trip.
 	 */
-	#showModelHub(hubOptions: { initialProviderId?: string }): void {
-		if (this.#focusOpenMenu("model-hub")) return;
+	#showModelHub(hubOptions: { initialProviderId?: string; sessionOnly?: boolean }): void {
+		const menuKind = hubOptions.sessionOnly ? "session-model-hub" : "model-hub";
+		if (this.#focusOpenMenu(menuKind)) return;
 		const { ModelHubComponent } = loadModelOverlayComponents();
 		let closed = false;
 		const done = () => {
@@ -1594,7 +1596,7 @@ export class SelectorController {
 			closed = true;
 			hub?.dispose();
 			menu.handle?.hide();
-			this.#releaseMenu("model-hub", menu);
+			this.#releaseMenu(menuKind, menu);
 			this.focusActiveEditorArea();
 			this.ctx.ui.requestRender();
 		};
@@ -1604,6 +1606,20 @@ export class SelectorController {
 			this.ctx.session.modelRegistry,
 			this.ctx.session.scopedModels,
 			{
+				onPick: async (model, selector) => {
+					const tokens = this.ctx.session.getContextUsage()?.tokens ?? 0;
+					const contextWindow = model.contextWindow ?? 0;
+					const overContext = contextWindow > 0 && tokens > contextWindow;
+					try {
+						if (overContext) done();
+						await this.#applySessionModel(model, selector, undefined, overContext);
+						if (!overContext) done();
+						return true;
+					} catch (error) {
+						this.ctx.showError(error instanceof Error ? error.message : String(error));
+						return false;
+					}
+				},
 				onAssign: async (
 					model,
 					role,
@@ -1802,6 +1818,23 @@ export class SelectorController {
 						return false;
 					}
 				},
+				onFallbackChainKeyChange: (previousKey, key) => {
+					try {
+						const chain = cfgRetryFallbackChains.get(this.ctx.settings)[previousKey];
+						if (!chain) return false;
+						this.ctx.settings.setFallbackChainAndEfforts(
+							key,
+							chain,
+							this.ctx.settings.getGlobalFallbackEffortSelections(previousKey) ?? {},
+							previousKey,
+						);
+						hub?.refreshAfterExternalMutation();
+						return true;
+					} catch (error) {
+						this.ctx.showError(error instanceof Error ? error.message : String(error));
+						return false;
+					}
+				},
 
 				onDefineMixture: name => {
 					done();
@@ -1809,7 +1842,7 @@ export class SelectorController {
 				},
 				onLoginRequest: providerId => {
 					done();
-					void this.#loginThenReopenModelHub(providerId);
+					void this.#loginThenReopenModelHub(providerId, hubOptions.sessionOnly);
 				},
 				onCycleOrderChange: order => {
 					try {
@@ -1883,34 +1916,37 @@ export class SelectorController {
 				onCancel: () => done(),
 			},
 			{
+				sessionOnly: hubOptions.sessionOnly,
 				initialProviderId: hubOptions.initialProviderId,
 				currentSelector: this.ctx.session.model
 					? `${this.ctx.session.model.provider}/${this.ctx.session.model.id}`
 					: undefined,
-				pinnedProviders: [
-					{
-						id: "mixture",
-						label: "Mixture of Agents",
-						action: {
-							label: "+ Define mixture model…",
-							onSelect: () => {
-								done();
-								this.showMixtureConfigure(undefined, true);
+				pinnedProviders: hubOptions.sessionOnly
+					? []
+					: [
+							{
+								id: "mixture",
+								label: "Mixture of Agents",
+								action: {
+									label: "+ Define mixture model…",
+									onSelect: () => {
+										done();
+										this.showMixtureConfigure(undefined, true);
+									},
+								},
 							},
-						},
-					},
-				],
+						],
 			},
 		);
-		const menu = this.#claimMenu("model-hub", () => this.#showModelHub(hubOptions));
+		const menu = this.#claimMenu(menuKind, () => this.#showModelHub(hubOptions));
 		this.#mountMenu(menu, hub, () => this.#showFullscreenMenu(hub));
 	}
 
 	/** /login round-trip for a locked provider; reopen the hub on that provider only after a successful login. */
-	async #loginThenReopenModelHub(providerId: string): Promise<void> {
+	async #loginThenReopenModelHub(providerId: string, sessionOnly?: boolean): Promise<void> {
 		const succeeded = await this.#handleOAuthLogin(providerId);
 		if (succeeded) {
-			this.#showModelHub({ initialProviderId: providerId });
+			this.#showModelHub({ initialProviderId: providerId, sessionOnly });
 		}
 	}
 
