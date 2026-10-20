@@ -245,6 +245,13 @@ import {
 } from "@oh-my-pi/pi-tui/thinking";
 import { isAttachmentOnlyTitleInput, isLowSignalTitleInput } from "../tiny/text";
 import type { ImageAttachmentEntry, ToolSession } from "../tools";
+import {
+	listEnabledTools,
+	type ToolCatalogSession,
+	toolCatalogDocs,
+	toolCatalogListing,
+} from "../tools/tool-catalog";
+import { toolSummary } from "../tools/xdev";
 import { resolveApproval } from "../tools/approval";
 import { type AskToolDetails } from "@oh-my-pi/pi-tui/tools/ask";
 import { type AskToolInput, recoverAskQuestions } from "../tools/ask";
@@ -6714,6 +6721,28 @@ export class AgentSession implements SettingsScope {
 	/** Enabled top-level and discoverable tool names. */
 	getEnabledToolNames(): string[] {
 		return this.#tools.getEnabledToolNames();
+	}
+
+	#toolCatalogSource(): ToolCatalogSession {
+		return {
+			toolRegistry: this.#tools.registry,
+			settings: this.settings,
+			getEnabledToolNames: () => this.getEnabledToolNames(),
+			isToolActive: name => this.getActiveToolNames().includes(name),
+		};
+	}
+
+	/** Slash discovery uses the same enabled instances as tool://. */
+	getToolCatalogEntries(): { name: string; description: string }[] {
+		return listEnabledTools(this.#toolCatalogSource()).map(tool => ({
+			name: tool.name,
+			description: toolSummary(tool),
+		}));
+	}
+
+	getToolCatalogDocs(name?: string): string {
+		const source = this.#toolCatalogSource();
+		return name ? toolCatalogDocs(source, name) : toolCatalogListing(source);
 	}
 
 	/** Names of dynamic tools mounted under `xd://`. */

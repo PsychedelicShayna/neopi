@@ -5,8 +5,13 @@ import type { Tool, ToolSession } from "./index";
 import { cfgToolsIntentTracing } from "./settings";
 import { toolSummary } from "./xdev";
 
+export type ToolCatalogSession = Pick<
+	ToolSession,
+	"toolRegistry" | "xdev" | "getEnabledToolNames" | "isToolActive" | "settings"
+>;
+
 /** Shared catalog for URL and command consumers. Never instantiates or executes tools. */
-export function listEnabledTools(session: ToolSession): Tool[] {
+export function listEnabledTools(session: ToolCatalogSession): Tool[] {
 	const registry = session.toolRegistry ?? session.xdev?.tools;
 	if (!registry) return [];
 	const enabledNames = session.getEnabledToolNames?.();
@@ -18,7 +23,7 @@ export function listEnabledTools(session: ToolSession): Tool[] {
 	);
 }
 
-export function toolCatalogListing(session: ToolSession): string {
+export function toolCatalogListing(session: ToolCatalogSession): string {
 	const tools = listEnabledTools(session);
 	return [
 		`# Enabled tools (${tools.length})`,
@@ -33,7 +38,7 @@ export function toolCatalogListing(session: ToolSession): string {
 }
 
 /** Resolve metadata from the same enabled instances used by ordinary dispatch. */
-export function toolCatalogDocs(session: ToolSession, name: string): string {
+export function toolCatalogDocs(session: ToolCatalogSession, name: string): string {
 	const tool = listEnabledTools(session).find(tool => tool.name === name);
 	if (!tool) throw new ToolError(`Tool '${name}' is not enabled in this session. Read tool:// for available tools.`);
 	// Only top-level tools get harness intent injection. Mounted/Code Mode tools

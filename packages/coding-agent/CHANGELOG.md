@@ -11,6 +11,7 @@
 
 - Added opt-in session work contracts with `/contract`, policy-gated agent edits, durable provenance, explicit rule promotion, and intact reinjection after compaction or resume ([#25](https://github.com/PsychedelicShayna/neopi/issues/25)).
 - Configure independent prewalk planning and execution crews with ordered fallbacks in settings, see both resolved models before launch, and retain the execution brief across the handoff ([#30](https://github.com/PsychedelicShayna/neopi/issues/30)).
+- Inspect enabled tools with `/tool:` and `/tool:<name>`, with slash completion and the same live docs and schemas as `tool://`, without invoking them ([#15](https://github.com/PsychedelicShayna/neopi/issues/15)).
 - Choose the centered NPI startup banner or the original boxed NeoPi/Pi-tower banner with Startup Branding in Settings > Appearance; new remains the default.
 - Browse every enabled session tool with `tool://` and read its schema, examples, and restrictions at `tool://<name>` without invoking it ([#15](https://github.com/PsychedelicShayna/neopi/issues/15)).
 - Added opt-in provider quota and context-pressure notice cards with configurable thresholds, cache age, reset times, and separately gated agent delivery ([#27](https://github.com/PsychedelicShayna/neopi/issues/27)).
