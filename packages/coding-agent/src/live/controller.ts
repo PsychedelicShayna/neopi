@@ -893,7 +893,7 @@ export class LiveSessionController {
 			scope === "turns" || this.#userTurns.size > 0 || receipts ? ids : undefined,
 			receipts,
 		);
-		if (forced) this.#queueSend(buildSessionContextAppend("Operator Message Sent To Main Agent", "commentary"));
+		if (forced) void this.sendOperatorText(text, "both");
 	}
 
 	#handleSessionEvent(event: AgentSessionEvent): void {
