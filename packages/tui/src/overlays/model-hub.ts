@@ -7,8 +7,8 @@ import { parseModelString, splitUpstreamRouting } from "./model-selector";
  * {@link ModelBrowser} body. The Roles view manages assignments directly:
  * pick a role, pick a model, adjust thinking in an inline strip, or clear the
  * role back to auto-selection. Locked providers forward to the /login flow.
- * Fully mouse-navigable (hover, wheel, click). Session-only switching lives
- * in the compact alt+p picker ({@link ./model-picker}).
+ * Fully mouse-navigable (hover, wheel, click). `/model` reuses the browser in
+ * session-only mode; alt+p keeps its compact picker ({@link ./model-picker}).
  */
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type {
@@ -231,6 +231,8 @@ export interface ScopedModelItem {
 export type ModelRoleSelectionScope = "global" | "project";
 
 export interface ModelHubCallbacks {
+	/** Select a model without authoring a role or changing saved preferences. */
+	onPick?: (model: Model, selector: string) => void | boolean | Promise<void | boolean>;
 	/** Persist a role assignment. */
 	onAssign: (
 		model: Model,
@@ -291,6 +293,8 @@ export interface ModelHubCallbacks {
 export type CompactionPointChangeResult = { kind: "error"; message: string } | { kind: "confirm"; message: string };
 
 export interface ModelHubOptions {
+	/** Browse recent models and providers without any role or policy editing. */
+	sessionOnly?: boolean;
 	/** Preselect this provider's sidebar entry (e.g. when reopening after /login). */
 	initialProviderId?: string;
 	/** `provider/id` of the session's model, marked current in the native picker. */
@@ -557,6 +561,7 @@ export class ModelHubComponent implements Component {
 	#registry: ModelHubRegistry;
 	#scopedModels: ReadonlyArray<ScopedModelItem>;
 	#callbacks: ModelHubCallbacks;
+	readonly #sessionOnly: boolean;
 
 	#browser: ModelBrowser;
 	#roles: RoleAssignments = {};
@@ -746,6 +751,7 @@ export class ModelHubComponent implements Component {
 		this.#registry = registry;
 		this.#scopedModels = scopedModels;
 		this.#callbacks = callbacks;
+		this.#sessionOnly = options.sessionOnly === true;
 		this.#currentSelector = options.currentSelector;
 		this.#pinnedProviders = options.pinnedProviders ?? [];
 
@@ -768,7 +774,7 @@ export class ModelHubComponent implements Component {
 		if (initialProvider && this.#entries.some(entry => entry.providerId === initialProvider)) {
 			this.#setActiveEntry(`provider:${initialProvider}`);
 		} else {
-			this.#setActiveEntry("all");
+			this.#setActiveEntry(this.#sessionOnly ? "recent" : "all");
 		}
 
 		// Reconcile catalogs in the background. This is online discovery only —
@@ -1134,15 +1140,20 @@ export class ModelHubComponent implements Component {
 
 		// Roles leads the fixed section so downward hops from Recent head into
 		// model scopes instead of being captured by the roles view.
-		const fixed: SidebarEntry[] = [
-			{
-				id: "roles",
-				kind: "roles",
-				label: "Roles",
-				annotation: `${assignedCount}/${visibleRoles.length}`,
-			},
-			{ id: "all", kind: "all", label: "All models", annotation: String(availableModels.length) },
-		];
+		const fixed: SidebarEntry[] = this.#sessionOnly
+			? [
+					{ id: "recent", kind: "recent", label: "Recently used", annotation: String(this.#recentItems.length) },
+					{ id: "all", kind: "all", label: "All models", annotation: String(availableModels.length) },
+				]
+			: [
+					{
+						id: "roles",
+						kind: "roles",
+						label: "Roles",
+						annotation: `${assignedCount}/${visibleRoles.length}`,
+					},
+					{ id: "all", kind: "all", label: "All models", annotation: String(availableModels.length) },
+				];
 
 		this.#fixedEntries = fixed;
 		this.#unlockedProviderEntries = [...unlocked]
@@ -1172,11 +1183,18 @@ export class ModelHubComponent implements Component {
 			});
 		}
 
-		const entries: SidebarEntry[] = [
-			...this.#fixedEntries,
-			{ id: "sep:effort", kind: "separator", label: "" },
-			{ id: "effort", kind: "effort", label: "Effort rules", annotation: String(this.#settings.effortRules.length) },
-		];
+		const entries: SidebarEntry[] = [...this.#fixedEntries];
+		if (!this.#sessionOnly) {
+			entries.push(
+				{ id: "sep:effort", kind: "separator", label: "" },
+				{
+					id: "effort",
+					kind: "effort",
+					label: "Effort rules",
+					annotation: String(this.#settings.effortRules.length),
+				},
+			);
+		}
 		if (providers.length > 0) {
 			entries.push({ id: "sep:providers", kind: "separator", label: "" }, ...providers);
 		}
@@ -1651,6 +1669,11 @@ export class ModelHubComponent implements Component {
 	#activateItem(item: ModelBrowserItem): void {
 		// Also reached from the browser's own native list events, which bypass handleInput.
 		this.#nativeVersion++;
+		if (this.#sessionOnly) {
+			const result = this.#callbacks.onPick?.(item.model, item.selector);
+			this.#finishAssignment(result, () => this.#requestRender());
+			return;
+		}
 		if (this.#assigning) {
 			const target = this.#assigning;
 			this.#assigning = null;
@@ -3925,6 +3948,9 @@ export class ModelHubComponent implements Component {
 			return `h/l ${leftRight} effort · ${enter}/Space apply · ${cancel} keep`;
 		}
 		if (this.#filterEditing) return "Search · Esc back to list";
+		if (this.#sessionOnly && this.#isBrowserView(this.#activeEntry())) {
+			return `${enter} use for session · ${upDown} models · ${left} providers · ${cancel} close`;
+		}
 		if (this.#assigning !== null) {
 			if (this.#focus === "scope") {
 				return `${enterRight} models · ${upDown} providers · / search · ${altLeftRight} kind · ${cancel} cancel`;
@@ -4551,7 +4577,7 @@ export class ModelHubComponent implements Component {
 					? this.#footerHint()
 					: "j/k rows · h/l pane · / search · gg/G ends · Ctrl-u/d half";
 		const props: TspPickerProps = {
-			title: "Models",
+			title: this.#sessionOnly ? "Session model" : "Models",
 			subtitle: [
 				...(typeof subtitle === "string" ? [span(subtitle)] : (subtitle ?? [])),
 				span(` · ${plainText(navigation)}`, "dim"),
@@ -4694,6 +4720,7 @@ export class ModelHubComponent implements Component {
 	/** What the hub is doing when it is more than browsing: applying, assigning, refreshing, a config error. */
 	#pickerSubtitle(entry: SidebarEntry, rolesView: boolean): TspPickerProps["subtitle"] {
 		if (this.#assignmentPending) return "Applying model…";
+		if (this.#sessionOnly) return "Current session only";
 		const assigning = this.#assigning;
 		if (assigning !== null) {
 			if (assigning.kind === "fallbackKey") return "New fallback chain — pick the model it protects";
@@ -4970,7 +4997,7 @@ export class ModelHubComponent implements Component {
 		return compact([
 			pickerAction(
 				"assign",
-				"Assign role",
+				this.#sessionOnly ? "Use for session" : "Assign role",
 				"enter",
 				this.#browser.pickerSelected ? { primary: true } : { primary: true, disabled: "No model selected" },
 			),

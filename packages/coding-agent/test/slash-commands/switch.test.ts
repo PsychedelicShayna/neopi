@@ -40,14 +40,16 @@ function createRuntime() {
 }
 
 describe("/model slash command", () => {
-	it("opens the model setup picker for role and thinking assignment", async () => {
+	it("opens the rich session-only picker without replacing the full /models alias", async () => {
 		const harness = createRuntime();
 
 		const handled = await executeBuiltinSlashCommand("/model", harness.runtime);
 
 		expect(handled).toBe(true);
-		expect(harness.showModelSelector.mock.calls).toEqual([[]]);
+		expect(harness.showModelSelector).toHaveBeenCalledWith({ sessionOnly: true });
 		expect(harness.setText).toHaveBeenCalledWith("");
+		await executeBuiltinSlashCommand("/models", harness.runtime);
+		expect(harness.showModelSelector.mock.calls).toEqual([[{ sessionOnly: true }], [undefined]]);
 	});
 });
 

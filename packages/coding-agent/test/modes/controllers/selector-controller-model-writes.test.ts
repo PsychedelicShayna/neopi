@@ -79,6 +79,33 @@ describe("SelectorController model hub writes", () => {
 		return callbacks;
 	}
 
+	it("rich session-only selection changes the live model without changing saved defaults or roles", async () => {
+		const agentDir = tempDir.join("agent");
+		const configPath = path.join(agentDir, "config.yml");
+		const original = YAML.stringify({
+			modelRoles: { default: "anthropic/claude-opus-4-5", smol: "anthropic/claude-sonnet-4-5" },
+		});
+		await Bun.write(configPath, original);
+		const settings = await Settings.init({ agentDir, cwd: tempDir.path() });
+		const { controller, showError } = start(settings, model("claude-opus-4-5"));
+		let callbacks: modelHubModule.ModelHubCallbacks | undefined;
+		let options: modelHubModule.ModelHubOptions | undefined;
+		vi.spyOn(modelHubModule, "ModelHubComponent").mockImplementation(function (...args: unknown[]) {
+			callbacks = args[4] as modelHubModule.ModelHubCallbacks;
+			options = args[5] as modelHubModule.ModelHubOptions;
+			return { refreshAfterExternalMutation: () => {}, dispose: () => {} };
+		} as never);
+		controller.showModelSelector({ sessionOnly: true });
+		expect(options?.sessionOnly).toBe(true);
+		expect(options?.pinnedProviders).toEqual([]);
+		expect(await callbacks?.onPick?.(model("claude-sonnet-4-5"), "anthropic/claude-sonnet-4-5")).toBe(true);
+		await settings.flush();
+		expect(showError).not.toHaveBeenCalled();
+		expect(session?.model?.id).toBe("claude-sonnet-4-5");
+		expect(settings.getModelRole("default")).toBe("anthropic/claude-opus-4-5");
+		expect(settings.getModelRole("smol")).toBe("anthropic/claude-sonnet-4-5");
+		expect(await Bun.file(configPath).text()).toBe(original);
+	});
 	it("saves only the edited fallback chain, never the chains a --config overlay supplies", async () => {
 		const agentDir = tempDir.join("agent");
 		const overlayPath = tempDir.join("overlay.yml");
