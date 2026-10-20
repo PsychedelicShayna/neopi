@@ -2833,7 +2833,17 @@ export class InteractiveMode implements InteractiveModeContext {
 			}
 		}
 
-		return [...builtinCommands, ...hookCommands, ...customCommands, ...skillCommandList];
+		const toolCommands: SlashCommand[] = [
+			{ name: "tool:", description: "Browse enabled tools without invoking them" },
+			...this.session.getToolCatalogEntries().map(tool => ({
+				name: `tool:${tool.name}`,
+				description: tool.description,
+				icon: getSlashCommandTypeIcon("tools"),
+				iconName: "tools" as const,
+			})),
+		];
+
+		return [...builtinCommands, ...hookCommands, ...customCommands, ...skillCommandList, ...toolCommands];
 	}
 
 	/** Reload session skills and the `/skill:<name>` command list. */
@@ -7911,6 +7921,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	handleToolsCommand(): void {
 		this.#commandController.handleToolsCommand();
+	}
+
+	handleToolCatalogCommand(name?: string): void {
+		this.#commandController.handleToolCatalogCommand(name);
 	}
 
 	handleContextCommand(): void {

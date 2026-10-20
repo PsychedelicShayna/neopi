@@ -508,6 +508,27 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
+		name: "tool",
+		icon: "tools",
+		description: "Inspect enabled tool docs and schemas without invoking",
+		allowArgs: true,
+		handle: async ({ args }, runtime) => {
+			if (/\s/.test(args)) {
+				return usage("Use /tool: or /tool:<name>. Tool inspection takes no arguments.", runtime);
+			}
+			await runtime.output(runtime.session.getToolCatalogDocs(args || undefined));
+			return commandConsumed();
+		},
+		handleTui: ({ args }, runtime) => {
+			if (/\s/.test(args)) {
+				runtime.ctx.showError("Use /tool: or /tool:<name>. Tool inspection takes no arguments.");
+			} else {
+				runtime.ctx.handleToolCatalogCommand(args || undefined);
+			}
+			clearSubmittedText(runtime);
+		},
+	},
+	{
 		name: "tools",
 		icon: "tools",
 		description: "Show tools currently visible to the agent",
