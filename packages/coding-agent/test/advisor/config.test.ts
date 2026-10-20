@@ -15,7 +15,9 @@ import {
 	serializeWatchdogConfig,
 	slugifyAdvisorName,
 } from "../../src/advisor/config";
-import type { WatchdogConfigDoc } from "@oh-my-pi/pi-tui/overlays/advisor-config";
+import type { TUI } from "@oh-my-pi/pi-tui";
+import { AdvisorConfigOverlayComponent, type WatchdogConfigDoc } from "@oh-my-pi/pi-tui/overlays/advisor-config";
+import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
 
 describe("discoverAdvisorConfigs", () => {
 	let tmp: string;
@@ -326,6 +328,57 @@ describe("WATCHDOG.yml file round-trip", () => {
 		await saveWatchdogConfigFile(file, doc);
 		const loaded = await loadWatchdogConfigFile(file);
 		expect(loaded).toEqual(doc);
+	});
+
+	it("keeps all advisors after cloning a name whose copy slug is already occupied", async () => {
+		const theme = await getThemeByName("dark");
+		if (!theme) throw new Error("theme unavailable");
+		setThemeInstance(theme);
+		const original: WatchdogConfigDoc = { advisors: [{ name: "Review" }, { name: "Review-copy" }] };
+		const overlay = new AdvisorConfigOverlayComponent(
+			{} as TUI,
+			{
+				getDefaultSystemPrompt: () => "",
+				getAvailableModels: () => [],
+				browserSource: {
+					revision: 0,
+					defaultThinkingLevel: "high",
+					modelProviderOrder: [],
+					knownRoleIds: [],
+					mruOrder: [],
+					modelPerf: new Map(),
+					getModelRole: () => undefined,
+					getRoleInfo: role => ({ name: role, section: "chat", accepts: () => true }),
+					defaultRoleChain: () => [],
+					resolveRoleValue: () => ({ model: undefined, explicitThinkingLevel: false }),
+				},
+				defaultToolNames: new Set(),
+				scopedModels: [],
+				availableToolNames: [],
+			},
+			"project",
+			original,
+			{
+				loadDoc: async () => original,
+				save: async () => {},
+				apply: async () => {},
+				close: () => {},
+				requestRender: () => {},
+				notify: () => {},
+			},
+		);
+		try {
+			overlay.handleInput("c");
+			await saveWatchdogConfigFile(path.join(tmp, "WATCHDOG.yml"), original);
+			const discovered = await discoverAdvisorConfigs(tmp, tmp);
+			expect(discovered.advisors.map(advisor => advisor.name)).toEqual([
+				"Review",
+				"Review (copy) 2",
+				"Review-copy",
+			]);
+		} finally {
+			overlay.dispose();
+		}
 	});
 	it("persists each advisor's thinking preference through discovery and editor saves", async () => {
 		const file = path.join(tmp, "WATCHDOG.yml");

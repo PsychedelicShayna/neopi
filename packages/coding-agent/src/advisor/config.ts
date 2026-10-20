@@ -17,10 +17,11 @@ import {
 	type AdvisorConfig,
 	type AdvisorConfigScope,
 	type AdvisorSyncBacklog,
+	slugifyAdvisorName,
 	type WatchdogConfigDoc,
 } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 
-export { ADVISOR_REVIEW_MODES, ADVISOR_SYNC_BACKLOG_MODES } from "@oh-my-pi/pi-tui/overlays/advisor-config";
+export { ADVISOR_REVIEW_MODES, ADVISOR_SYNC_BACKLOG_MODES, slugifyAdvisorName } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 export type { AdvisorReviewMode, AdvisorSyncBacklog } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 
 const WATCHDOG_ADVISOR_KEYS = [
@@ -199,20 +200,6 @@ export function resolveAdvisorMaxNotesPerUpdate(
 			: undefined;
 
 	return clamp(advisorBudget) ?? clamp(sharedBudget) ?? clamp(settingsBudget) ?? ADVISOR_DEFAULT_BUDGET_PER_UPDATE;
-}
-
-/**
- * Normalize an advisor name into a filesystem-/id-safe slug used for its
- * transcript filename and session id: lowercase, non-alphanumerics collapsed to
- * `-`, leading/trailing `-` trimmed. Falls back to `"advisor"` when nothing
- * survives; callers dedupe collisions.
- */
-export function slugifyAdvisorName(name: string): string {
-	const slug = name
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, "-")
-		.replace(/^-+|-+$/g, "");
-	return slug || "advisor";
 }
 
 const UUID_V7_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;

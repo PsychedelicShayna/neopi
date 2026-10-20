@@ -168,6 +168,22 @@ export interface AdvisorConfigDeps {
 	/** Formatted advisor-role model shown on the seeded default row (e.g. "anthropic/claude-..."). */
 	defaultModelLabel?: string;
 	effectiveRoster?: readonly EffectiveAdvisorConfig[];
+	/** Resolved files edited by each scope, including WATCHDOG.yaml when present. */
+	configFiles?: Record<AdvisorConfigScope, string>;
+}
+
+/**
+ * Normalize an advisor name into a filesystem-/id-safe slug used for its
+ * transcript filename and session id: lowercase, non-alphanumerics collapsed to
+ * `-`, leading/trailing `-` trimmed. Falls back to `"advisor"` when nothing
+ * survives; callers dedupe collisions.
+ */
+export function slugifyAdvisorName(name: string): string {
+	const slug = name
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "");
+	return slug || "advisor";
 }
 
 const PREVIEW_WIDTH = 60;
@@ -307,6 +323,7 @@ function wrap(text: string, width: number): string[] {
 type Screen =
 	| "list"
 	| "detail"
+	| "delete-confirm"
 	| "name"
 	| "model"
 	| "tools"
@@ -351,10 +368,19 @@ function screenHints(screen: Screen): (NativeHint | undefined)[] {
 			return [
 				actionHint(["tui.select.up", "tui.select.down"], "move"),
 				actionHint("tui.select.confirm", "select"),
+				{ keys: ["c"], label: "clone advisor" },
+				{ keys: ["delete"], label: "delete advisor" },
 				actionHint("tui.select.cancel", "close"),
 			];
 		case "detail":
-			return [actionHint("tui.select.confirm", "edit field"), actionHint("tui.select.cancel", "back")];
+			return [
+				actionHint("tui.select.confirm", "edit field"),
+				{ keys: ["c"], label: "clone advisor" },
+				{ keys: ["delete"], label: "delete advisor" },
+				actionHint("tui.select.cancel", "back"),
+			];
+		case "delete-confirm":
+			return [actionHint("tui.select.confirm", "choose"), actionHint("tui.select.cancel", "cancel")];
 		case "name":
 			return [actionHint("tui.input.submit", "save"), actionHint("tui.select.cancel", "cancel")];
 		case "model":
@@ -681,7 +707,6 @@ export class AdvisorConfigOverlayComponent implements Component {
 					hint: previewLineOrNone(advisor.instructions),
 					control: { k: "action", label: "Edit…", act: "edit" },
 				},
-				{ id: "delete", label: "Delete this advisor", control: { k: "action", label: "Delete", act: "delete" } },
 			];
 			sections.push({ id: "advisor", title: advisor.name || "Advisor", rows });
 		} else {
@@ -733,6 +758,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 			this.#active instanceof SelectList && (this.#active.filterFocused || this.#active.getFilter().length > 0);
 		const overlay =
 			filteredList ||
+			this.#screen === "delete-confirm" ||
 			this.#screen === "model" ||
 			this.#screen === "thinking" ||
 			this.#screen === "review-mode" ||
@@ -751,7 +777,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 			page: shared ? "shared" : `advisor:${index}`,
 			lead: shared
 				? "Instructions every advisor gets before its own."
-				: "An advisor watches the session and leaves notes; set its model, tools and instructions here.",
+				: "Set this advisor's model, tools and instructions. Press c to clone or Delete to request deletion.",
 			sections,
 			focus,
 			editing,
@@ -955,8 +981,8 @@ export class AdvisorConfigOverlayComponent implements Component {
 					return;
 				}
 				if (event.value === "shared") this.#showInstructionsEditor(-1);
-				else if (index >= 0 && event.value)
-					this.#onDetailSelect(index, event.act === "delete" ? "delete" : event.value);
+				else if (index >= 0 && event.value && event.act !== "delete" && event.value !== "delete")
+					this.#onDetailSelect(index, event.value);
 				return;
 			}
 			case "change": {
@@ -1173,6 +1199,19 @@ export class AdvisorConfigOverlayComponent implements Component {
 			else active.handleInput?.(data);
 			return;
 		}
+		if (this.#screen === "list" || this.#screen === "detail") {
+			const value = active instanceof SelectList ? active.getSelectedItem()?.value : undefined;
+			const match = this.#screen === "list" && value ? /^advisor:(\d+)$/.exec(value) : undefined;
+			const index = this.#screen === "detail" ? this.#detailIndex : match ? Number(match[1]) : -1;
+			if (matchesKey(data, "c") || matchesKey(data, "delete")) {
+				this.#keys.reset();
+				if (index >= 0) {
+					if (matchesKey(data, "c")) this.#cloneAdvisor(index);
+					else this.#showDeleteConfirmation(index);
+				}
+				return;
+			}
+		}
 		const action = this.#keys.read(data);
 		if (action === "pending") return;
 		if (action?.kind === "horizontal") {
@@ -1215,7 +1254,6 @@ export class AdvisorConfigOverlayComponent implements Component {
 			if (this.#previewFocused && action && this.#applyPreviewMotion(action)) return;
 		}
 		if (action?.kind === "toggle" && active instanceof SelectList) {
-			if (active.getSelectedItem()?.value === "delete") return;
 			if (this.#screen === "list") {
 				active.handleInput?.(data);
 				return;
@@ -1588,7 +1626,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#setScreen(
 			"list",
 			list,
-			`${editorKeys("tui.select.up", "tui.select.down")} move · Space toggle advisor, else select · ${editorKey("tui.select.confirm")} / click select · s save · a apply · scroll preview on the right · ${editorKey("tui.select.cancel")} close`,
+			`${editorKeys("tui.select.up", "tui.select.down")} move · Space toggle advisor, else select · ${editorKey("tui.select.confirm")} / click select · c clone · Delete delete advisor · s save · a apply · scroll preview on the right · ${editorKey("tui.select.cancel")} close`,
 		);
 	}
 
@@ -1720,7 +1758,6 @@ export class AdvisorConfigOverlayComponent implements Component {
 				description:
 					advisor.systemPrompt === undefined ? "(bundled default)" : previewLineOrNone(advisor.systemPrompt),
 			},
-			{ value: "delete", label: "Delete this advisor" },
 			{ value: "back", label: "Back" },
 		);
 		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme(), { search: "always" });
@@ -1746,8 +1783,52 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#setScreen(
 			"detail",
 			list,
-			`Editing "${advisor.name}" · ${editorKey("tui.select.confirm")} / click edit field · Backspace on System prompt resets · ${editorKey("tui.select.cancel")} back`,
+			`Editing "${advisor.name}" · ${editorKey("tui.select.confirm")} / click edit field · c clone · Delete delete advisor · Backspace on System prompt resets · ${editorKey("tui.select.cancel")} back`,
 		);
+	}
+
+	#cloneAdvisor(index: number): void {
+		const advisor = structuredClone(this.#doc.advisors[index]);
+		const base = `${advisor.name} (copy)`;
+		const existingSlugs = new Set(this.#doc.advisors.map(entry => slugifyAdvisorName(entry.name)));
+		advisor.name = base;
+		for (let suffix = 2; existingSlugs.has(slugifyAdvisorName(advisor.name)); suffix++) {
+			advisor.name = `${base} ${suffix}`;
+		}
+		this.#previousNavigationSnapshot = this.navigationSnapshot();
+		this.#doc.advisors.splice(index + 1, 0, advisor);
+		this.#dirty = true;
+		this.#showDetail(index + 1);
+	}
+
+	#showDeleteConfirmation(index: number): void {
+		const advisor = this.#doc.advisors[index];
+		if (!advisor) return;
+		const fromList = this.#screen === "list";
+		const cancel = () => (fromList ? this.#showList(`advisor:${index}`) : this.#showDetail(index));
+		const file = this.#deps.configFiles?.[this.#scope] ?? `${this.#scope} WATCHDOG.yml`;
+		const title = `Delete "${sanitizeDisplayLine(advisor.name)}"?`;
+		const subtitle = `From ${sanitizeDisplayLine(shortenPath(file))}. Save to persist; apply to update live advisors.`;
+		const list = new SelectList(
+			[
+				{ value: "cancel", label: "Cancel", description: "Keep this advisor" },
+				{ value: "confirm", label: "Delete advisor", description: `${advisor.name} · ${file}` },
+			],
+			2,
+			getSelectListTheme(),
+			{ search: "never", activateOnSpace: false },
+		);
+		list.onCancel = cancel;
+		list.onSelect = item => {
+			if (item.value !== "confirm") return cancel();
+			this.#previousNavigationSnapshot = this.navigationSnapshot();
+			this.#doc.advisors.splice(index, 1);
+			this.#dirty = true;
+			this.#showList();
+		};
+		this.#detailIndex = index;
+		this.#setScreen("delete-confirm", list, `${title} ${subtitle} · Enter choose · Esc cancel`, { title, subtitle });
+		list.setSelectedIndex(0);
 	}
 
 	#onDetailSelect(index: number, field: string): void {
@@ -1796,12 +1877,6 @@ export class AdvisorConfigOverlayComponent implements Component {
 				return;
 			case "systemPrompt":
 				this.#showSystemPromptEditor(index);
-				return;
-			case "delete":
-				this.#previousNavigationSnapshot = this.navigationSnapshot();
-				this.#doc.advisors.splice(index, 1);
-				this.#dirty = true;
-				this.#showList();
 				return;
 			default:
 				this.#showList();
@@ -2185,6 +2260,9 @@ export class AdvisorConfigOverlayComponent implements Component {
 				case "detail":
 					this.#showDetail(state.context.index);
 					break;
+				case "delete-confirm":
+					this.#showDeleteConfirmation(state.context.index);
+					break;
 				case "name":
 					this.#showNameEditor(state.context.index);
 					break;
@@ -2223,7 +2301,8 @@ export class AdvisorConfigOverlayComponent implements Component {
 				const input = state.content as { value?: string; cursor?: number };
 				if (typeof input.value === "string") this.#active.setValue(input.value);
 				if (typeof input.cursor === "number") this.#active.setCursor(input.cursor);
-			} else if (isMenuHistoryParticipant(this.#active)) this.#active.restoreNavigation(state.content);
+			} else if (this.#screen !== "delete-confirm" && isMenuHistoryParticipant(this.#active))
+				this.#active.restoreNavigation(state.content);
 			this.#previewScroll = state.previewScroll;
 			this.#previewFocused = state.previewFocused;
 		} finally {

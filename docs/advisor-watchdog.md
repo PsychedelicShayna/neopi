@@ -329,6 +329,8 @@ The editor's Project scope targets the repository-root `WATCHDOG.yml` (cwd when 
 
 The editor also opens on a read-only **Effective roster** overview showing every winning entry across all discovered files, its enabled/disabled state, scope, and source path. Native settings show the same overview above the editable fields. Saving refreshes the overview; reopening picks up external edits. The overview does not merge entries into the file being edited or rewrite other rosters. To change an ancestor or `.omp` roster not targeted by the two scope buttons, edit its displayed source file.
 
+On an advisor row or its detail page, `c` clones every field into a new entry in the same file and opens the copy for editing. The name starts as `<name> (copy)` with a number added if needed. `Delete` opens a confirmation naming the advisor and its source file. Cancel is selected first; `Esc` cancels, and Space never confirms deletion. Deletion is not a menu row. These edits still require Save to persist and Apply to update the live advisors.
+
 Example:
 
 ```yaml
