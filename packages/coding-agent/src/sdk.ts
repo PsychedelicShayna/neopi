@@ -45,6 +45,7 @@ import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { DEFAULT_FRAME_DATA_BYTES_BUDGET, frameDataBytesBudget } from "@oh-my-pi/snapcompact";
 import { type LaunchProfileMemory, renderLaunchProfileMemory, setSessionLaunchProfile } from "./neopi/launch-profile";
 import {
+	advisorRosterForRuntime,
 	discoverAdvisorConfigs,
 	discoverWatchdogFiles,
 	formatActiveRepoWatchdogPrompt,
@@ -5066,7 +5067,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			advisorMemoryPrompt,
 			advisorSharedInstructions: discoveredAdvisors.sharedInstructions,
 			advisorSharedMaxNotesPerUpdate: discoveredAdvisors.sharedMaxNotesPerUpdate,
-			advisorConfigs: discoveredAdvisors.advisors,
+			advisorConfigs: advisorRosterForRuntime(discoveredAdvisors),
 			advisorConfigWarnings: discoveredAdvisors.warnings,
 			agent,
 			thinkingLevel,
@@ -5286,7 +5287,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				watchAdvisorConfigs(cwd, agentDir, discovered => {
 					if (session.isDisposed) return;
 					session.applyAdvisorConfigs(
-						discovered.advisors,
+						advisorRosterForRuntime(discovered),
 						discovered.sharedInstructions,
 						discovered.sharedMaxNotesPerUpdate,
 					);

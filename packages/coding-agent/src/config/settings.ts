@@ -966,9 +966,8 @@ export class Settings {
 	 * supplies the default. Read settings through their handles, not this.
 	 *
 	 * A configured `null` is treated as unset: YAML writes `null` for a key left
-	 * without a value (`fallbackChains:`), and no schema entry has a null
-	 * default, so returning it verbatim would hand callers a value the schema
-	 * says is impossible (#13183).
+	 * without a value (`fallbackChains:`). The handle supplies its declared default,
+	 * which can itself be null for an optional selection such as advisor.activationSet.
 	 */
 	rawValue(setting: AnySetting): unknown {
 		const merged = this.#mergedView();
@@ -1097,7 +1096,8 @@ export class Settings {
 	writeMember(setting: AnySetting, item: string, { member }: { member: boolean }): void {
 		if (setting.type !== "array") throw new Error(`Setting ${setting.id} is not a list`);
 		const list = getByPath(this.#global, setting.segments);
-		const base: readonly unknown[] = Array.isArray(list) ? list : (setting.default as readonly unknown[]);
+		const defaultList = setting.default;
+		const base: readonly unknown[] = Array.isArray(list) ? list : Array.isArray(defaultList) ? defaultList : [];
 		const present = base.includes(item);
 		if (present === member && !this.#softPins.has(setting)) return;
 		let next = [...base];
@@ -1241,6 +1241,8 @@ export class Settings {
 			const setting = settings[i];
 			if (!settingValuesEqual(setting.get(this), previous[i])) this.#notifyChange(setting);
 		}
+		// Role-setting consumers can also depend on the supplying scope, not just its value.
+		this.#notifyChange(cfgRoleSettings);
 	}
 
 	#fireIfChanged(setting: AnySetting, prev: unknown): void {
@@ -1855,6 +1857,21 @@ export class Settings {
 		if (!setting.roleScoped) return undefined;
 		const value = cfgRoleSettings.get(this)[role]?.[setting.id];
 		return value === null || value === undefined ? undefined : (value as T);
+	}
+
+	/** Persisted scope supplying a role value. Null restores inheritance and has no source. */
+	getRoleSettingSourceScope<T>(role: string, setting: Setting<T>): "user" | "project" | undefined {
+		if (!setting.roleScoped || this.getRoleSetting(role, setting) === undefined) return undefined;
+		const segments = ["roleSettings", role, setting.id];
+		for (const [layer, scope] of [
+			[this.#overrides, "user"],
+			[this.#configOverlay, "user"],
+			[overlaySettingsToml(this.#project, this.#projectToml), "project"],
+			[overlaySettingsToml(this.#global, this.#globalToml), "user"],
+		] as const) {
+			if (getByPath(layer, segments) !== undefined) return scope;
+		}
+		return this.#parent?.getRoleSettingSourceScope(role, setting);
 	}
 
 	/** Persist one role setting. Undefined restores inheritance, including over a lower layer. */

@@ -3,7 +3,9 @@
  * settings-panel order; `config/all-settings.ts` registers every domain.
  */
 import { ADVISOR_REVIEW_MODES, ADVISOR_SYNC_BACKLOG_MODES } from "@oh-my-pi/pi-tui/overlays/advisor-config";
-import { register } from "../config/registry";
+import { Derived, register, type AnySetting } from "../config/registry";
+import { cfgRoleSettings } from "../config/role-settings";
+import type { Settings } from "../config/settings";
 import { ADVISOR_DEFAULT_BUDGET_PER_UPDATE } from "./emission-guard";
 
 // Advisor is interactive-session assistance: protocol hosts opt in explicitly instead of inheriting the
@@ -21,6 +23,52 @@ export const cfgAdvisorEnabled = register({
 			"Pair a second model (assigned to the 'advisor' role) that passively reviews each turn and injects notes.",
 	},
 });
+
+export const cfgAdvisorActivationSet = register({
+	id: "advisor.activationSet",
+	roleScoped: true,
+	type: "array",
+	default: null as string[] | null,
+	validate: raw => {
+		if (raw === undefined || raw === null) return;
+		if (!Array.isArray(raw) || raw.some(id => typeof id !== "string" || !id.trim())) {
+			throw new Error("advisor.activationSet must be null or a list of advisor IDs");
+		}
+	},
+});
+
+export interface AdvisorActivation {
+	ids: string[] | null;
+	role: string | undefined;
+	scope: "user" | "project";
+}
+
+/** Scope is part of activation even when two roles list the same IDs. */
+class AdvisorActivationSetting extends Derived<AdvisorActivation> {
+	get sources(): readonly AnySetting[] {
+		return [cfgAdvisorActivationSet, cfgRoleSettings];
+	}
+
+	inputs(settings: Settings): readonly unknown[] {
+		const role = settings.activeRole;
+		const provenance = cfgAdvisorActivationSet.provenance(settings);
+		const scope =
+			(provenance === "role" && role !== undefined
+				? settings.getRoleSettingSourceScope(role, cfgAdvisorActivationSet)
+				: undefined) ?? (provenance === "project" ? "project" : "user");
+		return [cfgAdvisorActivationSet.get(settings), role, scope];
+	}
+
+	compute(inputs: readonly unknown[]): AdvisorActivation {
+		return {
+			ids: inputs[0] as string[] | null,
+			role: inputs[1] as string | undefined,
+			scope: inputs[2] as "user" | "project",
+		};
+	}
+}
+
+export const cfgAdvisorActivation = new AdvisorActivationSetting();
 
 export const cfgAdvisorSyncBacklog = register({
 	id: "advisor.syncBacklog",

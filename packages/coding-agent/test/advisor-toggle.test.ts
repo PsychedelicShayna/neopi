@@ -417,7 +417,7 @@ describe("AgentSession advisor toggle", () => {
 		expect(active).toBe(false);
 		expect(session.isAdvisorActive()).toBe(false);
 		expect(session.isAdvisorEnabled()).toBe(true);
-		expect(session.formatAdvisorStatus()).toBe(
+		expect(session.formatAdvisorStatus()).toContain(
 			"Advisor setting is enabled, but no model is assigned to the 'advisor' role.",
 		);
 	});
@@ -507,7 +507,7 @@ describe("AgentSession advisor toggle", () => {
 
 		expect(sessionB.isAdvisorEnabled()).toBe(false);
 		expect(sessionB.isAdvisorActive()).toBe(false);
-		expect(sessionB.formatAdvisorStatus()).toBe("Advisor is disabled.");
+		expect(sessionB.formatAdvisorStatus()).toContain("Advisor is disabled.");
 
 		const activeB = sessionB.toggleAdvisorEnabled();
 		expect(activeB).toBe(true);

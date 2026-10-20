@@ -28,16 +28,16 @@ import {
 	sanitizeText,
 } from "@oh-my-pi/pi-utils";
 import {
+	advisorRosterForRuntime,
 	ADVISOR_DEFAULT_TOOL_NAMES,
 	discoverAdvisorConfigs,
 	loadWatchdogConfigFile,
 	resolveAdvisorConfigEditPath,
 	resolveAdvisorMaxNotesPerUpdate,
 	saveWatchdogConfigFile,
-	slugifyAdvisorName,
 } from "../../advisor";
 import { reset as resetCapabilities } from "../../capability";
-import type { AdvisorConfigScope, EffectiveAdvisorConfig } from "@oh-my-pi/pi-tui/overlays/advisor-config";
+import type { AdvisorConfigScope } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { type ChainConfigDeps, ChainConfigOverlayComponent } from "@oh-my-pi/pi-tui/overlays/chain-config";
 import type { ChainConfigScope } from "@oh-my-pi/pi-tui/overlays/chain-types";
 import {
@@ -127,7 +127,8 @@ import { copyToClipboard } from "../../utils/clipboard";
 import { openPath } from "../../utils/open";
 import { setSessionTerminalTitle } from "../../utils/title-generator";
 import { getAssistantMessageLinkTargets } from "@oh-my-pi/pi-tui/prompt/interactive-context-helpers";
-import { type AdvisorConfigDeps, AdvisorConfigOverlayComponent } from "@oh-my-pi/pi-tui/overlays/advisor-config";
+import type { AdvisorConfigDeps } from "@oh-my-pi/pi-tui/overlays/advisor-config";
+import { AdvisorScopeOverlayComponent } from "@oh-my-pi/pi-tui/overlays/advisor-scopes";
 import { PersonaConfigOverlayComponent, type PersonaConfigDoc } from "@oh-my-pi/pi-tui/overlays/persona-config";
 import {
 	loadPersonaConfigDoc,
@@ -789,7 +790,6 @@ export class SelectorController {
 		const menu = this.#claimMenu("advisor-config", () => this.showAdvisorConfigure());
 		const cwd = this.ctx.sessionManager.getCwd();
 		const agentDir = getAgentDir() ?? getProjectDir();
-		const initialScope: AdvisorConfigScope = "project";
 		void (async () => {
 			// "Project" scope edits the repo-root WATCHDOG.yml (the project-level file
 			// discovery walks), not the launch subdir — `getProjectDir()` is only cwd.
@@ -799,20 +799,23 @@ export class SelectorController {
 			} catch {
 				projectDir = cwd;
 			}
-			const dirs = { projectDir, agentDir };
-			const initialDoc = await loadWatchdogConfigFile(await resolveAdvisorConfigEditPath(initialScope, dirs));
-			const getEffectiveRoster = async (): Promise<EffectiveAdvisorConfig[]> => {
-				const discovered = await discoverAdvisorConfigs(cwd, agentDir);
-				return discovered.advisors.map(advisor => {
-					const source = discovered.sources.get(slugifyAdvisorName(advisor.name))!;
-					return { name: advisor.name, enabled: advisor.enabled, sourceFile: source.path, scope: source.scope };
-				});
-			};
-			const effectiveRoster = await getEffectiveRoster();
+			const discovered = await discoverAdvisorConfigs(cwd, agentDir);
+			const candidates =
+				discovered.files.length > 0
+					? discovered.files
+					: [
+							{
+								path: await resolveAdvisorConfigEditPath("project", { projectDir, agentDir }),
+								scope: "project" as AdvisorConfigScope,
+							},
+						];
+			const files = await Promise.all(
+				candidates.map(async file => ({
+					...file,
+					doc: await loadWatchdogConfigFile(file.path),
+				})),
+			);
 			if (this.#openMenus.get(menu.kind) !== menu) return;
-			if (initialDoc.warnings?.length) {
-				this.ctx.showWarning(`WATCHDOG.yml: ${sanitizeDisplayWarnings(initialDoc.warnings).join("; ")}`);
-			}
 			// Fullscreen editor on the alternate screen (the /settings idiom): the
 			// overlay holds the alt buffer + mouse tracking; the transcript stays put.
 			const done = () => {
@@ -829,7 +832,6 @@ export class SelectorController {
 			);
 			const defaultAdvisorModel = advisorRoleSel?.model;
 			const deps: AdvisorConfigDeps = {
-				effectiveRoster,
 				getDefaultSystemPrompt: (advisor, doc) => {
 					const maxNotesPerUpdate = resolveAdvisorMaxNotesPerUpdate(
 						advisor.maxNotesPerUpdate,
@@ -860,12 +862,11 @@ export class SelectorController {
 					? `${defaultAdvisorModel.provider}/${defaultAdvisorModel.id}`
 					: undefined,
 			};
-			const overlay = new AdvisorConfigOverlayComponent(this.ctx.ui, deps, initialScope, initialDoc, {
-				getEffectiveRoster,
-				loadDoc: async scope => loadWatchdogConfigFile(await resolveAdvisorConfigEditPath(scope, dirs)),
-				save: async (scope, doc) => {
-					await saveWatchdogConfigFile(await resolveAdvisorConfigEditPath(scope, dirs), doc);
-					this.ctx.showStatus(`Saved ${scope} WATCHDOG.yml — press a to apply it to the live advisors.`);
+			const overlay = new AdvisorScopeOverlayComponent(this.ctx.ui, deps, files, {
+				loadFile: loadWatchdogConfigFile,
+				saveFile: async (filePath, doc) => {
+					await saveWatchdogConfigFile(filePath, doc);
+					this.ctx.showStatus(`Saved ${shortenPath(filePath)}. Press a to apply it to the live advisors.`);
 					this.ctx.ui.requestRender();
 				},
 				apply: async () => {
@@ -874,7 +875,7 @@ export class SelectorController {
 					// advisors whose effective configuration changed restart.
 					const discovered = await discoverAdvisorConfigs(cwd, agentDir);
 					const count = this.ctx.session.applyAdvisorConfigs(
-						discovered.advisors,
+						advisorRosterForRuntime(discovered),
 						discovered.sharedInstructions,
 						discovered.sharedMaxNotesPerUpdate,
 					);

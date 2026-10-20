@@ -10,6 +10,8 @@
 ### Added
 
 - Named profiles can preload selected persistent memory files before the first turn through `launch-memory.json`; inspect the loaded snapshot with `/launch-profile` ([#65](https://github.com/PsychedelicShayna/neopi/issues/65)).
+- Disable an entire advisor file without deleting its entries; the saved file switch survives restart and applies to the live roster ([#323](https://github.com/PsychedelicShayna/neopi/issues/323)).
+- Bind each role to its own advisor activation set, keep advisor references stable across renames, and show activation precedence in advisor status ([#89](https://github.com/PsychedelicShayna/neopi/issues/89)).
 - Added optional global and project `settings.toml` overlays with whole-key precedence over YAML, plus `npi config dump-toml` for documented defaults ([#34](https://github.com/PsychedelicShayna/neopi/issues/34)).
 - Opt-in agent context telemetry now reports checkpoint availability and estimated recent-turn footprint, with pressure-based guidance that respects configured compaction boundaries ([#21](https://github.com/PsychedelicShayna/neopi/issues/21)).
 - Inspect, propose, set, and reset session compaction policy with `/compact control` or `compaction://`, with explicit project/user persistence and propose-only agent access by default ([#28](https://github.com/PsychedelicShayna/neopi/issues/28)).

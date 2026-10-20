@@ -146,7 +146,7 @@ describe("advisor sync backlog picker", () => {
 
 		// A real edit must survive: the seeded row is no longer synthetic, so the
 		// save must not collapse the roster to empty (which would delete the file).
-		expect(saved?.advisors).toEqual([{ name: "default", syncBacklog: "strict" }]);
+		expect(saved?.advisors).toEqual([{ id: expect.any(String), name: "default", syncBacklog: "strict" }]);
 	});
 
 	it("edits cadence from the native prefs page, saving defaults and inherit as omitted fields", async () => {
@@ -210,7 +210,7 @@ describe("advisor sync backlog picker", () => {
 		overlay.handleInput("\x1b"); // Roster.
 		overlay.handleInput("s");
 		await Bun.sleep(0);
-		expect(saved?.advisors).toEqual([{ name: "default", includeThinking: false }]);
+		expect(saved?.advisors).toEqual([{ id: expect.any(String), name: "default", includeThinking: false }]);
 	});
 
 	it("toggles the highlighted advisor with Space and saves it with s, all from the list", async () => {
@@ -413,7 +413,11 @@ describe("advisor menu navigation and history", () => {
 		let closed = 0;
 		const overlay = new AdvisorConfigOverlayComponent(
 			{ terminal: { rows: 14 } } as unknown as TUI,
-			{ ...deps, availableToolNames: ["read", "grep", "glob", "write"] },
+			{
+				...deps,
+				availableToolNames: ["read", "grep", "glob", "write"],
+				configFiles: { project: "/workspace/WATCHDOG.yaml", user: "/user/WATCHDOG.yml" },
+			},
 			"project",
 			doc,
 			{
@@ -613,9 +617,8 @@ describe("advisor menu navigation and history", () => {
 		};
 		try {
 			h.overlay.handleInput("\r");
-			h.overlay.handleInput("/");
-			h.overlay.handleInput("Delete");
-			h.overlay.handleInput("\x1b");
+			h.overlay.handleInput("\x1b[3~");
+			h.overlay.handleInput("j");
 			h.overlay.handleInput(" ");
 			h.overlay.handleInput("l");
 			expect(h.overlay.navigationSnapshot().doc.advisors[0]?.name).toBe("Reviewer");
@@ -623,7 +626,7 @@ describe("advisor menu navigation and history", () => {
 			expect(previous).toMatchObject({ doc: { advisors: [{ name: "Reviewer" }] } });
 			h.overlay.restoreNavigation(previous);
 			expect(h.overlay.navigationSnapshot()).toMatchObject({
-				context: { screen: "detail" },
+				context: { screen: "delete-confirm" },
 				doc: { advisors: [{ name: "Reviewer" }] },
 			});
 			expect(h.events).toEqual([]);
@@ -739,6 +742,181 @@ describe("advisor menu navigation and history", () => {
 			sheet().component.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 			expect(h.closed()).toBe(1);
 			expect(visits).toEqual([]);
+		} finally {
+			h.overlay.dispose();
+		}
+	});
+	it("assigns a hidden identity immediately when adding an advisor", () => {
+		const doc: WatchdogConfigDoc = { advisors: [{ id: "existing-advisor", name: "Reviewer" }] };
+		const h = make(doc);
+		try {
+			h.overlay.handleNativeEvent({ type: "action", key: "", act: "add", mods: [] });
+			const created = doc.advisors[1];
+			expect(created.id).toBeTruthy();
+			expect(created.id).not.toBe(doc.advisors[0].id);
+			expect(Bun.stripANSI(h.overlay.render(120).join("\n"))).not.toContain(created.id!);
+			expect(h.events).toEqual([]);
+		} finally {
+			h.overlay.dispose();
+		}
+	});
+
+	it("clones every field into an independent editable entry without saving or applying", () => {
+		const doc: WatchdogConfigDoc = {
+			instructions: "shared",
+			advisors: [
+				{
+					id: "original-advisor",
+					name: "Reviewer",
+					model: "provider/model:high",
+					tools: ["read", "write"],
+					instructions: "specialization",
+					systemPrompt: "baseline",
+					enabled: false,
+					includeThinking: false,
+					maxNotesPerUpdate: 7,
+					reviewMode: "agent-end",
+					reviewInterval: 3,
+					syncBacklog: "strict",
+				},
+			],
+		};
+		const original = structuredClone(doc.advisors[0]);
+		const h = make(doc);
+		try {
+			h.overlay.handleInput("c");
+			expect(doc.advisors).toEqual([original, { ...original, id: expect.any(String), name: "Reviewer (copy)" }]);
+			expect(doc.advisors[1].id).not.toBe(original.id);
+			expect(h.overlay.navigationSnapshot().context).toMatchObject({ screen: "detail", index: 1 });
+			h.overlay.handleInput("\r"); // Edit the copy's name.
+			h.overlay.handleInput(" variant");
+			h.overlay.handleInput("\r");
+			doc.advisors[1].tools?.push("grep");
+			expect(doc.advisors[0]).toEqual(original);
+			expect(doc.advisors[1].name).toBe("Reviewer (copy) variant");
+			expect(h.events).toEqual([]);
+			h.overlay.handleInput("c");
+			expect(doc.advisors[2].name).toBe("Reviewer (copy) variant (copy)");
+		} finally {
+			h.overlay.dispose();
+		}
+	});
+
+	it("avoids duplicate copy names and ignores clone/delete keys inside search", () => {
+		const doc: WatchdogConfigDoc = { advisors: [{ name: "Reviewer" }, { name: "Reviewer (copy)" }] };
+		const h = make(doc);
+		try {
+			h.overlay.handleInput("/");
+			h.overlay.handleInput("c");
+			h.overlay.handleInput("\x1b[3~");
+			expect(doc.advisors).toHaveLength(2);
+			h.overlay.handleInput("\x15"); // Clear the focused filter.
+			h.overlay.handleInput("\x1b");
+			h.overlay.handleInput("g");
+			h.overlay.handleInput("g");
+			h.overlay.handleInput("c");
+			expect(doc.advisors[1].name).toBe("Reviewer (copy) 2");
+		} finally {
+			h.overlay.dispose();
+		}
+	});
+
+	it.each(["Reviewer-copy", "REVIEWER / COPY", "Reviewer (copy)"])(
+		"skips canonical copy identities already occupied by %s",
+		existingName => {
+			const doc: WatchdogConfigDoc = {
+				advisors: [{ name: "Reviewer" }, { name: existingName }, { name: "reviewer-copy-2" }],
+			};
+			const h = make(doc);
+			try {
+				h.overlay.handleInput("c");
+				expect(doc.advisors.map(advisor => advisor.name)).toEqual([
+					"Reviewer",
+					"Reviewer (copy) 3",
+					existingName,
+					"reviewer-copy-2",
+				]);
+			} finally {
+				h.overlay.dispose();
+			}
+		},
+	);
+
+	it("requires Delete and a cancel-first named confirmation, preserving save/apply semantics", () => {
+		const doc: WatchdogConfigDoc = { advisors: [{ name: "Reviewer" }, { name: "Other" }] };
+		const h = make(doc);
+		try {
+			h.overlay.handleInput("\x1b[3~");
+			const rendered = Bun.stripANSI(h.overlay.render(180).join("\n"));
+			expect(rendered).toContain('Delete "Reviewer"?');
+			expect(rendered).toContain("/workspace/WATCHDOG.yaml");
+			h.overlay.handleInput("\r"); // Default is Cancel.
+			expect(doc.advisors).toHaveLength(2);
+			h.overlay.handleInput("\x1b[3~");
+			h.overlay.handleInput("j"); // Highlight destructive choice.
+			h.overlay.handleInput(" ");
+			expect(doc.advisors).toHaveLength(2);
+			const pending = h.overlay.navigationSnapshot();
+			h.overlay.handleInput("\x1b");
+			expect(doc.advisors).toHaveLength(2);
+			h.overlay.handleInput("\x1b[3~");
+			h.overlay.handleInput("\r"); // Reopening still defaults to Cancel.
+			expect(doc.advisors).toHaveLength(2);
+			h.overlay.restoreNavigation(pending);
+			h.overlay.handleInput("\r"); // History cannot restore destructive selection.
+			expect(doc.advisors).toHaveLength(2);
+			h.overlay.handleInput("\r"); // Detail.
+			h.overlay.handleInput("\x1b[3~");
+			h.overlay.handleInput("j");
+			h.overlay.handleInput("\r");
+			expect(doc.advisors).toEqual([{ name: "Other" }]);
+			expect(h.events).toEqual([]);
+		} finally {
+			h.overlay.dispose();
+		}
+	});
+
+	it("has no ordinary delete row in ANSI or native prefs", () => {
+		const doc: WatchdogConfigDoc = { advisors: [{ name: "Reviewer" }] };
+		const h = make(doc);
+		try {
+			h.overlay.handleInput("\r");
+			expect(Bun.stripANSI(h.overlay.render(180).join("\n"))).not.toContain("Delete this advisor");
+			const root = h.overlay.describe({
+				cols: 180,
+				dark: true,
+				reduceMotion: false,
+				supports: () => true,
+				feature: () => true,
+			});
+			const props = root.p as TspPrefsProps;
+			expect(props.sections.flatMap(section => section.rows).some(row => row.id === "delete")).toBe(false);
+			h.overlay.handleNativeEvent({ type: "action", key: "", act: "delete", value: "delete", mods: [] });
+			h.overlay.handleInput("G");
+			h.overlay.handleInput(" "); // Back, never deletion.
+			expect(doc.advisors).toEqual([{ name: "Reviewer" }]);
+		} finally {
+			h.overlay.dispose();
+		}
+	});
+
+	it("describes the confirmation as a native picker with Cancel selected", () => {
+		const h = make({ advisors: [{ name: "Reviewer" }] });
+		try {
+			h.overlay.handleInput("\r");
+			h.overlay.handleInput("\x1b[3~");
+			const root = h.overlay.describe({
+				cols: 180,
+				dark: true,
+				reduceMotion: false,
+				supports: () => true,
+				feature: () => true,
+			});
+			const component = root.c?.[0] as unknown as { describe(): NativeNode };
+			const picker = component.describe().p as TspPickerProps;
+			expect(picker.title).toBe('Delete "Reviewer"?');
+			expect(picker.subtitle).toContain("/workspace/WATCHDOG.yaml");
+			expect(h.overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "cancel" });
 		} finally {
 			h.overlay.dispose();
 		}

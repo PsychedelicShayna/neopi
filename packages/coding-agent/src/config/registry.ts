@@ -156,7 +156,7 @@ export interface EnumDefinition<T extends readonly string[] = readonly string[]>
 
 export interface ArrayDefinition<T = unknown> extends DefinitionBase {
 	type: "array";
-	default: readonly T[];
+	default: readonly T[] | null;
 	env?: SettingEnv<readonly T[]>;
 	/**
 	 * Closed vocabulary for the entries (`label` names one entry in messages, e.g. "status line
@@ -628,7 +628,7 @@ export class Setting<T, Id extends string = string> extends Derived<T> {
 			case "enum":
 				return typeof value === "string" && this.definition.values.includes(value);
 			case "array":
-				return Array.isArray(value);
+				return Array.isArray(value) || (value === null && this.definition.default === null);
 			case "record":
 				return typeof value === "object" && value !== null && !Array.isArray(value);
 		}
