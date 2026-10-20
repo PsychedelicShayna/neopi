@@ -1,8 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { mkdtempSync } from "node:fs";
-import { rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { AgentSession } from "../src/session/agent-session";
 import { setAgentDir } from "@oh-my-pi/pi-utils";
 import { Settings, settings } from "../src/config/settings";
@@ -14,7 +13,7 @@ import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } f
 let savedSettings: SettingsTestState | undefined;
 const temporaryDirs: string[] = [];
 afterEach(async () => {
-	for (const path of temporaryDirs.splice(0)) await rm(path, { recursive: true, force: true });
+	for (const dir of temporaryDirs.splice(0)) await fs.rm(dir, { recursive: true, force: true });
 	restoreSettingsTestState(savedSettings);
 	savedSettings = undefined;
 	vi.restoreAllMocks();
@@ -41,7 +40,7 @@ describe("dictation during a live call", () => {
 	});
 
 	it("records and inserts xAI text from the same mic without interrupting live audio", async () => {
-		const dir = mkdtempSync(join(tmpdir(), "neopi-live-dictation-"));
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "neopi-live-dictation-"));
 		temporaryDirs.push(dir);
 		savedSettings = beginSettingsTest();
 		await Settings.init({ inMemory: true });

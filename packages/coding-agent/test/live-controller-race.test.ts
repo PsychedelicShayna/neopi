@@ -671,6 +671,7 @@ describe("operator-owned live floor", () => {
 			await settle();
 			expect(h.prompts).toEqual(["fix the cache"]);
 			const voiceText = h.sent.filter(message => message.type === "session.context.append")
+				.filter(message => message.channel !== "commentary")
 				.flatMap(message => message.content.map(item => item.text)).join("\n");
 			expect(voiceText).toContain("tell me a joke");
 			expect(voiceText).not.toContain("fix the cache");
@@ -1129,9 +1130,9 @@ describe("live controller delegation ownership", () => {
 		await settle();
 		expect(h.prompts).toEqual(["typed context Fix the cache."]);
 		expect(h.sentSpeech).toEqual(["typed context Fix the cache."]);
-		expect(h.sent.filter(item => item.type === "session.context.append").map(item => item.content[0]?.text)).toEqual([
-			"Operator Message Sent To Main Agent",
-		]);
+		expect(
+			h.sent.filter(item => item.type === "session.context.append").map(item => [item.channel, item.content[0]?.text]),
+		).toEqual([["commentary", '"Operator Message Sent To Main Agent":\n\ntyped context Fix the cache.']]);
 		await h.controller.stop();
 	});
 

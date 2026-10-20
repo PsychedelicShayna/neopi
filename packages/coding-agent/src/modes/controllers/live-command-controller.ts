@@ -105,7 +105,7 @@ export class LiveCommandController {
 	#assistantCaption: LiveAssistantCaption | undefined;
 	#assistantTranscriptTurn = 0;
 	#assistantTranscriptStartedAt = 0;
-	#keywordTimer: ReturnType<typeof setTimeout> | undefined;
+	#keywordTimer: NodeJS.Timeout | undefined;
 	#keywordSettingsUnsubscribe: Array<() => void> = [];
 
 	constructor(ctx: InteractiveModeContext, createSession?: LiveSessionFactory) {
