@@ -830,6 +830,10 @@ export class SelectorController {
 			const defaultAdvisorModel = advisorRoleSel?.model;
 			const deps: AdvisorConfigDeps = {
 				effectiveRoster,
+				configFiles: {
+					project: await resolveAdvisorConfigEditPath("project", dirs),
+					user: await resolveAdvisorConfigEditPath("user", dirs),
+				},
 				getDefaultSystemPrompt: (advisor, doc) => {
 					const maxNotesPerUpdate = resolveAdvisorMaxNotesPerUpdate(
 						advisor.maxNotesPerUpdate,
