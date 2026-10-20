@@ -1,6 +1,6 @@
 import { createModelBrowserSource } from "../src/modes/model-browser-source";
 import { beforeAll, describe, expect, type Mock, test, vi } from "bun:test";
-import { stripVTControlCharacters } from "node:util";
+import { plainText } from "@oh-my-pi/pi-tui/native/spans";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -12,7 +12,7 @@ import type { ResolvedRoleModel } from "@oh-my-pi/pi-coding-agent/session/agent-
 import type { TUI } from "@oh-my-pi/pi-tui";
 
 function normalize(lines: readonly string[]): string {
-	return stripVTControlCharacters(lines.join("\n")).replace(/\s+/g, " ").trim();
+	return plainText(lines.join("\n")).replace(/\s+/g, " ").trim();
 }
 
 function makeModel(provider: string, id: string, contextWindow = 128_000, kind?: Model["kind"]): Model {
@@ -122,6 +122,8 @@ describe("ModelPicker", () => {
 		expect(rendered).toContain("compacts with current model");
 
 		picker.handleInput("\n");
+		expect(onPick).not.toHaveBeenCalled();
+		picker.handleInput("\n");
 		expect(onPick).toHaveBeenCalledTimes(1);
 		expect(onPick.mock.calls[0]?.[0]).toBe(small);
 		expect(onPick.mock.calls[0]?.[2]).toEqual({ overContext: true });
@@ -138,6 +140,7 @@ describe("ModelPicker", () => {
 
 		picker.handleInput("/");
 		picker.handleInput("large");
+		picker.handleInput("\n");
 		picker.handleInput("\n");
 		expect(onPick).toHaveBeenCalledTimes(1);
 		expect(onPick.mock.calls[0]?.[0]).toBe(large);
@@ -208,6 +211,7 @@ describe("ModelPicker", () => {
 		picker.handleInput("/");
 		picker.handleInput("match");
 		picker.handleInput("\n");
+		picker.handleInput("\n");
 
 		expect(onPick.mock.calls[0]?.[0]?.id).toBe("bb-match");
 	});
@@ -222,6 +226,7 @@ describe("ModelPicker", () => {
 
 		picker.handleInput("/");
 		picker.handleInput("shared");
+		picker.handleInput("\n");
 		picker.handleInput("\n");
 
 		expect(onPick.mock.calls[0]?.[0]?.id).toBe("cc-shared");
@@ -255,20 +260,61 @@ describe("ModelPicker", () => {
 		expect(frame).toContain(`${theme.getFgAnsi(palette[1])}@slow`);
 
 		picker.handleInput("\n");
+		expect(onPickRole).not.toHaveBeenCalled();
+		picker.handleInput("\n");
 		expect(onPickRole).toHaveBeenCalledWith(quickRoles[1]);
 		expect(onPick).not.toHaveBeenCalled();
 	});
 
-	test("search field types hjkl literally and double-Esc cancels with the query preserved", () => {
+	test("search field types hjkl literally and Escape clears before a second Escape cancels", () => {
 		const { picker, onCancel } = createPicker({ models: [makeModel("test", "test-model")], scoped: true });
 
 		picker.handleInput("/");
 		picker.handleInput("hjkl");
 		picker.handleInput(ESC);
 		expect(onCancel).not.toHaveBeenCalled();
-		expect(normalize(picker.render(220))).toContain("hjkl");
+		expect(normalize(picker.render(220))).not.toContain("hjkl");
+		expect(normalize(picker.render(220))).toContain("test-model");
 
 		picker.handleInput(ESC);
 		expect(onCancel).toHaveBeenCalledTimes(1);
+	});
+
+	test.each(["/<live>|<voice>", "re:<live>|<voice>"])(
+		"filters with Vim regex %s and confirms editing separately from picking",
+		query => {
+			const live = makeModel("test", "live");
+			const voice = makeModel("test", "voice");
+			const { picker, onPick } = createPicker({
+				models: [live, voice, makeModel("test", "lively"), makeModel("test", "voicemail")],
+				scoped: true,
+			});
+			picker.handleInput("/");
+			for (const ch of query) picker.handleInput(ch);
+			const rendered = normalize(picker.render(220));
+			expect(rendered).toContain("test/live");
+			expect(rendered).toContain("test/voice");
+			expect(rendered).not.toContain("lively");
+			expect(rendered).not.toContain("voicemail");
+			for (const key of ["\x1b[B", "\x1b[A", "\x1b[5~", "\x1b[6~", "\t"]) picker.handleInput(key);
+			expect(onPick).not.toHaveBeenCalled();
+			picker.handleInput("\n");
+			expect(onPick).not.toHaveBeenCalled();
+			expect(normalize(picker.render(220))).not.toContain("lively");
+			picker.handleInput("\n");
+			expect(onPick.mock.calls[0]?.[0]).toBe(live);
+		},
+	);
+
+	test.each(["/(", "re:("])("invalid Vim regex %s shows an error and cannot pick a row", query => {
+		const { picker, onPick } = createPicker({ models: [makeModel("test", "live")], scoped: true });
+		picker.handleInput("/");
+		for (const ch of query) picker.handleInput(ch);
+		const rendered = normalize(picker.render(220));
+		expect(rendered).toMatch(/invalid.*(?:regex|pattern)|(?:regex|pattern).*error/i);
+		expect(rendered).not.toContain("test/live");
+		picker.handleInput("\n");
+		picker.handleInput("\n");
+		expect(onPick).not.toHaveBeenCalled();
 	});
 });

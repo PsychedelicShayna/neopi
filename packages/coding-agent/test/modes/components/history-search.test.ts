@@ -98,8 +98,11 @@ describe("HistorySearchComponent normal navigation and history", () => {
 		const cancelled = vi.fn();
 		const component = new HistorySearchComponent(fakeStorage([]), () => {}, cancelled);
 		type(component, "jkgG/ ");
-		component.handleInput("\x1b");
+		component.handleInput("\n");
 		expect(component.navigationSnapshot()).toMatchObject({ search: { value: "jkgG/ ", focused: false, cursor: 6 } });
+		expect(cancelled).not.toHaveBeenCalled();
+		component.handleInput("\x1b");
+		expect(component.navigationSnapshot()).toMatchObject({ search: { value: "", focused: false } });
 		expect(cancelled).not.toHaveBeenCalled();
 		component.handleInput("\x1b");
 		expect(cancelled).toHaveBeenCalledTimes(1);
@@ -140,7 +143,7 @@ describe("HistorySearchComponent normal navigation and history", () => {
 		const reopened = new HistorySearchComponent(storage, inserted, () => {});
 		type(component, "prompt");
 		component.handleInput("\x1b[D");
-		component.handleInput("\x1b");
+		component.handleInput("\n");
 		component.handleInput("j");
 		render(component);
 		component.handleInput("\x05");
@@ -232,6 +235,8 @@ describe("HistorySearchComponent debounced search", () => {
 		let renders = 0;
 		component.setOnRequestRender(() => renders++);
 		type(component, "needle");
+		component.handleInput("\n");
+		expect(selected).toEqual([]);
 		component.handleInput("\n");
 		expect(selected).toEqual(["needle in a haystack"]);
 		vi.advanceTimersByTime(150);

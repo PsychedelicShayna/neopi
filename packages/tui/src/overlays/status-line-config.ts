@@ -2,6 +2,7 @@ import type { UsageReport } from "@oh-my-pi/pi-ai/usage";
 import { bottomBorder, dividerSplit, PanelRows, row, topBorderSplit } from "../chrome/overlay-box";
 import { sanitizeStatusText } from "../chrome/shared";
 import { Input } from "../components/input";
+import { compileMenuRegex } from "../menu-search";
 import { MenuKeyReader, MenuSearchField, MenuViewport } from "../components/menu-navigation";
 import type { MenuWindow } from "../components/menu-selection";
 import { SplitPane } from "../components/layout/split-pane";
@@ -120,7 +121,7 @@ const SEGMENT_DESCRIPTIONS: Record<BuiltinStatusLineSegmentId, string> = {
 const LIST_HINTS =
 	"j/k select · h/l move · Space toggle · </> composer · Tab template · / search · s apply · R reset · Esc close";
 const TEMPLATE_HINTS = "Type the template · Enter/Tab/Esc back to the list";
-const SEARCH_HINTS = "Type to filter · ↑/↓ select · Enter/Tab/Esc back to the list";
+const SEARCH_HINTS = "Type to filter · Enter apply · Esc clear and return to the list";
 const PROMPT_HINTS = "Apply pending changes?  y apply · n keep draft, close · Esc/c stay";
 const RESET_HINTS = "Reset the draft to the active layout?  y reset · n/Esc keep the draft";
 
@@ -475,6 +476,8 @@ export class StatusLineConfigOverlayComponent implements Component {
 	// ── List model ────────────────────────────────────────────────────────
 
 	#matches(row: StatusLineWidgetRow): boolean {
+		const regex = compileMenuRegex(this.#search.value);
+		if (regex) return !!regex.regex && [row.id, segmentLabel(row.id)].some(text => regex.regex!.test(text));
 		const query = this.#search.value.trim().toLowerCase();
 		if (!query) return true;
 		return row.id.toLowerCase().includes(query) || segmentLabel(row.id).toLowerCase().includes(query);
@@ -746,6 +749,11 @@ export class StatusLineConfigOverlayComponent implements Component {
 		if (action === "pending") return;
 		switch (action?.kind) {
 			case "cancel":
+				if (this.#search.value) {
+					this.#search.setValue("");
+					this.#moved();
+					return;
+				}
 				this.#requestClose();
 				return;
 			case "move":
@@ -835,27 +843,13 @@ export class StatusLineConfigOverlayComponent implements Component {
 	}
 
 	#handleSearchInput(data: string): void {
-		if (
-			matchesKey(data, "escape") ||
-			matchesKey(data, "enter") ||
-			matchesKey(data, "tab") ||
-			matchesKey(data, "shift+tab")
-		) {
-			this.#setFocus("list");
-			return;
-		}
 		const before = this.#search.value;
 		const result = this.#search.handleInput(data);
 		if (result === "exited") {
 			this.#setFocus("list");
 			return;
 		}
-		if (result === "pass") {
-			const kb = getKeybindings();
-			if (kb.matches(data, "tui.select.down")) this.#moveSelection(1);
-			else if (kb.matches(data, "tui.select.up")) this.#moveSelection(-1);
-			return;
-		}
+		if (result === "pass") return;
 		const query = sanitizeDisplaySingleLine(this.#search.value);
 		if (query !== this.#search.value) this.#search.setValue(query);
 		if (query === before) {
@@ -969,7 +963,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 		}
 		if (this.#focus === "search" || this.#search.value) {
 			lines.push("", theme.fg(this.#focus === "search" ? "accent" : "muted", "Search"));
-			lines.push(...this.#search.input.render(Math.max(1, width)));
+			lines.push(this.#search.render(Math.max(1, width), { muted: text => theme.fg("muted", text) }));
 		}
 		lines.push(
 			"",

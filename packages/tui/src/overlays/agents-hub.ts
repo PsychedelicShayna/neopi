@@ -12,6 +12,7 @@
 
 import type { Model } from "@oh-my-pi/pi-ai";
 import type { TspPickerAction, TspPickerColumn, TspPickerItem, TspPickerScope, TspSpan } from "@oh-my-pi/pi-wire";
+import { compileMenuRegex } from "../menu-search";
 import {
 	type Component,
 	Editor,
@@ -457,9 +458,7 @@ export class AgentsHubComponent implements Component {
 		const query = this.#search.value;
 		let filtered = scoped;
 		if (query) {
-			const tokens = query
-				.trim()
-				.split(/\s+/)
+			const tokens = (compileMenuRegex(query) ? [query] : query.trim().split(/\s+/))
 				.map(token => new FuzzyQuery(token));
 			filtered = scoped.filter(agent => matchAgent(agent, tokens));
 		}
@@ -1635,7 +1634,7 @@ export class AgentsHubComponent implements Component {
 		return picker(
 			{
 				title: "Agents",
-				subtitle: this.#notice ?? undefined,
+				subtitle: compileMenuRegex(this.#search.value)?.error ?? this.#notice ?? undefined,
 				icon: "users",
 				noun: "agents",
 				size: "lg",

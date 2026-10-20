@@ -136,6 +136,7 @@ describe("SessionSelectorComponent current session marker", () => {
 		);
 		selector.handleInput("/");
 		for (const ch of "alpha") selector.handleInput(ch);
+		selector.handleInput("\n"); // confirm filtering before navigating results
 		selector.handleInput("\x1b[B");
 		selector.getSessionList().removeSession(bravo.path);
 		const rendered = stripAnsi(selector.render(120).join("\n"));

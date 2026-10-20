@@ -30,12 +30,14 @@
 
 ### Changed
 
+- Search menus with `/`, confirm patterns with Enter without activating a result, and clear with Escape; `//` and `re:` use Vim very-magic regex by default, with bare groups/alternation, `\m` for default-magic, and inline errors ([#416](https://github.com/PsychedelicShayna/neopi/issues/416)).
 - The selected model role's reasoning label and glyph use the model's highlight color, including Auto effort allowlists, even while the sidebar has focus ([#245](https://github.com/PsychedelicShayna/neopi/issues/245)).
 - `/statusline` keeps edits in an unapplied draft that survives closing and restarts: `s` applies without leaving, Escape asks before applying, and Reset to Active is the only way to discard it ([#341](https://github.com/PsychedelicShayna/neopi/issues/341)).
 - `/statusline` keeps enabled and disabled widgets in one stable list and navigates with `j`/`k`, `h`/`l` to move, Ctrl+D/U, `gg`/`G`, Ctrl+E/Y scrolling, `/` filtering, and `<`/`>` composer cycling that keeps the selection ([#341](https://github.com/PsychedelicShayna/neopi/issues/341)).
 
 ### Fixed
 
+- Escape and native Close clear confirmed search filters before leaving Git or a picker; Vim search now handles collections, POSIX classes, lazy repetition, noncapturing groups and lookaround without silently literalizing unsupported atoms ([#416](https://github.com/PsychedelicShayna/neopi/issues/416)).
 - Closing a settings choice or leaving its page through menu history restores the uncommitted preview, and Space still toggles chain steps with normal menu navigation enabled ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Session pickers honor remapped cancel keys, annotation source editors retain their configured shortcuts, and aborted agent transcripts drop stale message-editor focus and send hints ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Tree row-navigation remaps take precedence over the built-in Alt-Up/Down turn shortcuts ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).

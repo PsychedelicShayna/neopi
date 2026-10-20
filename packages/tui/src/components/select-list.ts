@@ -8,7 +8,7 @@ import {
 	type MenuNavAction,
 	type MenuViewportPosition,
 } from "./menu-navigation";
-import { getKeybindings } from "../keybindings";
+import { compileMenuRegex } from "../menu-search";
 import { type MouseRoutable, routeSelectListMouse, type SgrMouseEvent } from "../mouse";
 import { col, node, span } from "../native/describe";
 import { sameItems, sameProps } from "../native/memo";
@@ -575,7 +575,8 @@ export class SelectList implements Component, MouseRoutable {
 				if (this.#canEditSearch()) this.#search.focused = true;
 				return;
 			case "cancel":
-				if (!this.#selection.cancelConfirmation()) this.onCancel?.();
+				if (this.#selection.query) this.setFilter("");
+				else if (!this.#selection.cancelConfirmation()) this.onCancel?.();
 				return;
 			case "toggle":
 				if (this.layout.activateOnSpace === false) return;
@@ -597,34 +598,11 @@ export class SelectList implements Component, MouseRoutable {
 		}
 	}
 
-	/**
-	 * Keys while the filter holds focus: text and its editing keys go to the
-	 * field, Esc hands focus back to the list (keeping the query), and the
-	 * non-text keys (arrows, PageUp/PageDown, Enter) still drive the list.
-	 */
+	/** Focused search owns every key; Enter confirms the pattern and Esc clears it. */
 	#handleFilterInput(rawData: string): void {
 		const before = this.#search.value;
-		const result = this.#search.handleInput(rawData);
-		if (result !== "pass") {
-			if (this.#search.value !== before) this.#setFilter(this.#search.value, true);
-			return;
-		}
-		const kb = getKeybindings();
-		if (kb.matches(rawData, "tui.select.confirm") || rawData === "\n") {
-			this.#activateSelected();
-			return;
-		}
-		let selectionChanged = false;
-		const wrap = this.layout.wrapNavigation !== false;
-		if (kb.matches(rawData, "tui.select.up")) selectionChanged = this.#selection.move(-1, wrap);
-		else if (kb.matches(rawData, "tui.select.down")) selectionChanged = this.#selection.move(1, wrap);
-		else if (kb.matches(rawData, "tui.select.pageUp"))
-			selectionChanged = this.#selection.move(-this.#viewport.visibleItems);
-		else if (kb.matches(rawData, "tui.select.pageDown"))
-			selectionChanged = this.#selection.move(this.#viewport.visibleItems);
-		else return;
-		this.#viewport.reveal();
-		if (selectionChanged) this.#notifySelectionChange();
+		this.#search.handleInput(rawData);
+		if (this.#search.value !== before) this.#setFilter(this.#search.value, true);
 	}
 
 	#renderItem(
@@ -831,6 +809,8 @@ export class SelectList implements Component, MouseRoutable {
 	}
 
 	#statusText(): string {
+		const error = compileMenuRegex(this.#selection.query)?.error;
+		if (error) return `Invalid regex: ${error}`;
 		const pendingItem =
 			this.#selection.pendingKey === undefined
 				? undefined
@@ -847,10 +827,10 @@ export class SelectList implements Component, MouseRoutable {
 			? (custom ?? "")
 			: (pendingItem?.confirmation ??
 					(query
-						? `  Search: ${query}${this.#search.focused ? " · Esc back to list" : " · / edit"}`
+						? `  Search: ${query}${this.#search.focused ? " · Enter confirm · Esc clear" : " · / edit · Esc clear"}`
 						: this.#canEditSearch()
 							? this.#search.focused
-								? "  Search: type to narrow · Esc back to list"
+								? "  Search: type to narrow · Enter confirm · Esc clear"
 								: "  / search"
 							: ""));
 	}

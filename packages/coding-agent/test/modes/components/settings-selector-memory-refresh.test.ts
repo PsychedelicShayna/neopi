@@ -5,6 +5,7 @@ import { SettingsSelectorComponent } from "@oh-my-pi/pi-tui/overlays/settings-se
 import { createSettingsHost } from "@oh-my-pi/pi-coding-agent/config/settings-ui";
 import { createPluginSettingsHost } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/settings-host";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { plainText } from "@oh-my-pi/pi-tui/native/spans";
 
 import { cfgHindsightApiToken } from "@oh-my-pi/pi-coding-agent/hindsight/settings";
 import { cfgMemoryBackend } from "@oh-my-pi/pi-coding-agent/memory-backend/settings";
@@ -109,6 +110,7 @@ describe("SettingsSelectorComponent memory tab", () => {
 		expect(row).not.toContain("saved-secret-token");
 
 		comp.handleInput("\n");
+		comp.handleInput("\n"); // Open the row after confirming its search pattern.
 		expect(comp.render(120).join("\n")).not.toContain("saved-secret-token");
 		comp.handleInput("\n");
 		expect(cfgHindsightApiToken.get(settings)).toBe("saved-secret-token");
@@ -155,7 +157,7 @@ describe("SettingsSelectorComponent memory tab", () => {
 		// Explicit search focus starts cross-tab filtering with a query and match count.
 		comp.handleInput("/");
 		comp.handleInput("b");
-		const strip = (line: string): string => line.replace(/\x1b\[[0-9;]*m/g, "");
+		const strip = plainText;
 		const searching = comp.render(120).map(strip).join("\n");
 		const banner =
 			comp
@@ -165,11 +167,10 @@ describe("SettingsSelectorComponent memory tab", () => {
 		expect(banner).toContain(" b ");
 		expect(searching).toMatch(/\d+ match/);
 
-		// First Escape leaves the field, retaining the query and filtered results.
+		// First Escape clears the query and returns to the ordinary tab.
 		comp.handleInput("\x1b");
 		expect(cancelCount).toBe(0);
-		expect(comp.render(120).map(strip).join("\n")).toMatch(/\d+ match/);
-		expect(comp.render(120).map(strip).join("\n")).toContain(" b ");
+		expect(comp.render(120).map(strip).join("\n")).not.toMatch(/\d+ match/);
 
 		comp.handleInput("\x1b");
 		expect(cancelCount).toBe(1);
@@ -180,7 +181,7 @@ describe("SettingsSelectorComponent memory tab", () => {
 		comp.handleInput("/");
 		for (const ch of "fetch provider") comp.handleInput(ch);
 
-		const strip = (line: string): string => line.replace(/\x1b\[[0-9;]*m/g, "");
+		const strip = plainText;
 		const rendered = comp.render(120).map(strip).join("\n");
 		const providersIndex = rendered.indexOf("Providers");
 		const appearanceIndex = rendered.indexOf("Appearance");
@@ -196,7 +197,7 @@ describe("SettingsSelectorComponent memory tab", () => {
 
 	it("supports editor hotkeys in the global search bar", () => {
 		const comp = createSelector();
-		const strip = (line: string): string => line.replace(/\x1b\[[0-9;]*m/g, "");
+		const strip = plainText;
 		const banner = (): string =>
 			comp
 				.render(120)
