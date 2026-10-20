@@ -1,8 +1,9 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
-import { logger, prompt } from "@oh-my-pi/pi-utils";
+import { logger } from "@oh-my-pi/pi-utils";
 import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions";
 import commandResumeTemplate from "./command-resume.md" with { type: "text" };
 import { createDashboardController } from "@oh-my-pi/pi-tui/apps/autoresearch-dashboard";
@@ -204,11 +205,16 @@ export const createAutoresearchExtension: ExtensionFactory = api => {
 				dashboard.updateWidget(ctx, runtime);
 				await api.setActiveTools([...new Set([...api.getActiveTools(), ...EXPERIMENT_TOOL_NAMES])]);
 				api.sendUserMessage(
-					prompt.render(commandResumeTemplate, {
-						branch_status_line: branchStatusLine,
-						has_resume_context: resumeContext.length > 0,
-						resume_context: resumeContext,
-					}),
+					renderPromptAsset(
+						"autoresearch/command-resume.md",
+						commandResumeTemplate,
+						{
+							branch_status_line: branchStatusLine,
+							has_resume_context: resumeContext.length > 0,
+							resume_context: resumeContext,
+						},
+						{ cwd: ctx.cwd },
+					),
 				);
 				return;
 			}
@@ -280,9 +286,14 @@ export const createAutoresearchExtension: ExtensionFactory = api => {
 		api.sendMessage(
 			{
 				customType: "autoresearch-resume",
-				content: prompt.render(resumeMessageTemplate, {
-					has_pending_run: Boolean(pendingRun),
-				}),
+				content: renderPromptAsset(
+					"autoresearch/resume-message.md",
+					resumeMessageTemplate,
+					{
+						has_pending_run: Boolean(pendingRun),
+					},
+					{ cwd: ctx.cwd },
+				),
 				display: false,
 				attribution: "agent",
 			},
@@ -361,56 +372,66 @@ export const createAutoresearchExtension: ExtensionFactory = api => {
 				: "Heads up: you are not on a dedicated `autoresearch/*` branch. `log_experiment discard` will only revert run-modified files, not reset to baseline — so harness files written before `init_experiment` may not survive a discard. Clean the worktree and re-run `/autoresearch` if you want full revert safety.";
 			return {
 				systemPrompt: [
-					prompt.render(setupPromptTemplate, {
-						base_system_prompt: basePrompt,
-						has_goal: goal.trim().length > 0,
-						goal,
-						working_dir: ctx.cwd,
-						has_branch: Boolean(currentBranch),
-						branch: currentBranch ?? "",
-						has_baseline_warning: baselineWarning !== null,
-						baseline_warning: baselineWarning ?? "",
-					}),
+					renderPromptAsset(
+						"autoresearch/prompt-setup.md",
+						setupPromptTemplate,
+						{
+							base_system_prompt: basePrompt,
+							has_goal: goal.trim().length > 0,
+							goal,
+							working_dir: ctx.cwd,
+							has_branch: Boolean(currentBranch),
+							branch: currentBranch ?? "",
+							has_baseline_warning: baselineWarning !== null,
+							baseline_warning: baselineWarning ?? "",
+						},
+						{ cwd: ctx.cwd },
+					),
 				],
 			};
 		}
 		return {
 			systemPrompt: [
-				prompt.render(promptTemplate, {
-					base_system_prompt: basePrompt,
-					has_goal: goal.trim().length > 0,
-					goal,
-					working_dir: ctx.cwd,
-					default_metric_name: state.metricName,
-					metric_name: state.metricName,
-					has_branch: Boolean(state.branch),
-					branch: state.branch,
-					has_baseline_commit: Boolean(state.baselineCommit),
-					baseline_commit: state.baselineCommit ? state.baselineCommit.slice(0, 12) : "",
-					has_notes: state.notes.trim().length > 0,
-					notes: state.notes,
-					current_segment: state.currentSegment + 1,
-					current_segment_run_count: currentSegmentResults.length,
-					has_baseline_metric: baselineMetric !== null,
-					baseline_metric_display: formatNum(baselineMetric, state.metricUnit),
-					baseline_run_number: baselineRunNumber,
-					has_best_result: bestResult !== null && bestMetric !== null,
-					best_metric_display: bestMetric !== null ? formatNum(bestMetric, state.metricUnit) : "-",
-					best_run_number: bestResult ? (bestResult.runNumber ?? state.results.indexOf(bestResult) + 1) : null,
-					has_recent_results: recentResults.length > 0,
-					recent_results: recentResults,
-					has_unjustified_runs: unjustifiedRuns.length > 0,
-					unjustified_runs: unjustifiedRuns,
-					has_pending_run: Boolean(pendingRun),
-					pending_run_number: pendingRun?.runNumber,
-					pending_run_command: pendingRun?.command,
-					pending_run_passed: pendingRun?.passed ?? false,
-					has_pending_run_metric: pendingRun?.parsedPrimary !== null && pendingRun?.parsedPrimary !== undefined,
-					pending_run_metric_display:
-						pendingRun?.parsedPrimary !== null && pendingRun?.parsedPrimary !== undefined
-							? formatNum(pendingRun.parsedPrimary, state.metricUnit)
-							: null,
-				}),
+				renderPromptAsset(
+					"autoresearch/prompt.md",
+					promptTemplate,
+					{
+						base_system_prompt: basePrompt,
+						has_goal: goal.trim().length > 0,
+						goal,
+						working_dir: ctx.cwd,
+						default_metric_name: state.metricName,
+						metric_name: state.metricName,
+						has_branch: Boolean(state.branch),
+						branch: state.branch,
+						has_baseline_commit: Boolean(state.baselineCommit),
+						baseline_commit: state.baselineCommit ? state.baselineCommit.slice(0, 12) : "",
+						has_notes: state.notes.trim().length > 0,
+						notes: state.notes,
+						current_segment: state.currentSegment + 1,
+						current_segment_run_count: currentSegmentResults.length,
+						has_baseline_metric: baselineMetric !== null,
+						baseline_metric_display: formatNum(baselineMetric, state.metricUnit),
+						baseline_run_number: baselineRunNumber,
+						has_best_result: bestResult !== null && bestMetric !== null,
+						best_metric_display: bestMetric !== null ? formatNum(bestMetric, state.metricUnit) : "-",
+						best_run_number: bestResult ? (bestResult.runNumber ?? state.results.indexOf(bestResult) + 1) : null,
+						has_recent_results: recentResults.length > 0,
+						recent_results: recentResults,
+						has_unjustified_runs: unjustifiedRuns.length > 0,
+						unjustified_runs: unjustifiedRuns,
+						has_pending_run: Boolean(pendingRun),
+						pending_run_number: pendingRun?.runNumber,
+						pending_run_command: pendingRun?.command,
+						pending_run_passed: pendingRun?.passed ?? false,
+						has_pending_run_metric: pendingRun?.parsedPrimary !== null && pendingRun?.parsedPrimary !== undefined,
+						pending_run_metric_display:
+							pendingRun?.parsedPrimary !== null && pendingRun?.parsedPrimary !== undefined
+								? formatNum(pendingRun.parsedPrimary, state.metricUnit)
+								: null,
+					},
+					{ cwd: ctx.cwd },
+				),
 			],
 		};
 	});

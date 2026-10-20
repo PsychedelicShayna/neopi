@@ -108,18 +108,20 @@ function buildSubagentFailureMessage(agentName: string, result: SingleResult): s
 	);
 }
 
-async function buildEvalAgentResult(execution: StructuredSubagentResult): Promise<EvalAgentResult> {
+async function buildEvalAgentResult(execution: StructuredSubagentResult, cwd: string): Promise<EvalAgentResult> {
 	const { result, policy, mergeSummary, changesApplied, artifactsDir } = execution;
 	if (result.exitCode !== 0 || result.error || result.aborted) {
 		const failureMessage = buildSubagentFailureMessage(policy.agentName, result)
 			.replace(/<\/?system-notification>/g, "")
 			.trim();
-		const recoveryHint = policy.isIsolated ? await buildStructuredSubagentRecoveryHint(result, artifactsDir) : "";
+		const recoveryHint = policy.isIsolated
+			? await buildStructuredSubagentRecoveryHint(result, artifactsDir, cwd)
+			: "";
 		throw new ToolError(`${failureMessage}${recoveryHint}`);
 	}
 	if (policy.isIsolated && changesApplied === false) {
 		const summary = mergeSummary.replace(/<\/?system-notification>/g, "").trim();
-		const recoveryHint = await buildStructuredSubagentRecoveryHint(result, artifactsDir);
+		const recoveryHint = await buildStructuredSubagentRecoveryHint(result, artifactsDir, cwd);
 		throw new ToolError(
 			`agent() isolated apply failed for ${result.id}${summary ? `: ${summary}` : ""}${recoveryHint}`,
 		);
@@ -128,7 +130,7 @@ async function buildEvalAgentResult(execution: StructuredSubagentResult): Promis
 	const structuredOutput = result.structuredOutput;
 	const structured = structuredOutput?.source !== undefined && structuredOutput.source !== "none";
 	if (structured && mergeSummary.includes("<system-notification>")) {
-		const recoveryHint = await buildStructuredSubagentRecoveryHint(result, artifactsDir);
+		const recoveryHint = await buildStructuredSubagentRecoveryHint(result, artifactsDir, cwd);
 		throw new ToolError(
 			`agent() isolated nested patch apply failed for ${result.id}: ${mergeSummary.replace(/<\/?system-notification>/g, "").trim()}${recoveryHint}`,
 		);
@@ -232,7 +234,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 							void reportProgress(`Running agent ${progress.id}...`, { progress: [progress] });
 						},
 					});
-					const result = await buildEvalAgentResult(execution);
+					const result = await buildEvalAgentResult(execution, options.session.cwd);
 					await reportProgress(result.text, {
 						progress: latestProgress ? [latestProgress] : [],
 						evalResult: result,

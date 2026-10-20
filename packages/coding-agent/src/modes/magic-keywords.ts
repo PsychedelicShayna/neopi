@@ -1,4 +1,5 @@
-import { prompt } from "@oh-my-pi/pi-utils";
+import { resolvePromptAsset, renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
+
 import jevifyNotice from "../prompts/system/jevify-notice.md" with { type: "text" };
 import orchestrateNotice from "../prompts/system/orchestrate-notice.md" with { type: "text" };
 import ultrathinkNotice from "../prompts/system/ultrathink-notice.md" with { type: "text" };
@@ -46,14 +47,12 @@ export interface MagicKeyword {
 }
 
 /** Hidden notice for "ultrathink": careful multi-step reasoning. */
-export const ULTRATHINK_NOTICE: string = ultrathinkNotice.trim();
 
 /** Hidden notice for "jevify": bulk classification through the eval kernel's `judge()`. */
-export const JEVIFY_NOTICE: string = jevifyNotice.trim();
 
 /** Hidden notice for "orchestrate", naming only the tools the session actually exposes. */
 export function renderOrchestrateNotice({ tools }: Pick<MagicKeywordContext, "tools">): string {
-	return prompt.render(orchestrateNotice, { tools }).trim();
+	return renderPromptAsset("system/orchestrate-notice.md", orchestrateNotice, { tools }, { kind: "notice" }).trim();
 }
 
 /** Hidden notice for "workflowz", shaped by the active task/eval capabilities. */
@@ -62,7 +61,12 @@ export function renderWorkflowNotice({
 	scoutAvailable,
 	evalTools,
 }: Pick<MagicKeywordContext, "taskBatch" | "scoutAvailable" | "evalTools">): string {
-	return prompt.render(workflowNotice, { taskBatch, scoutAvailable, evalTools }).trim();
+	return renderPromptAsset(
+		"system/workflow-notice.md",
+		workflowNotice,
+		{ taskBatch, scoutAvailable, evalTools },
+		{ kind: "notice" },
+	).trim();
 }
 
 export const MAGIC_KEYWORDS = [
@@ -73,7 +77,7 @@ export const MAGIC_KEYWORDS = [
 		label: "Ultrathink Keyword",
 		description: "Let standalone ultrathink request maximum automatic thinking and append its hidden notice",
 		requires: [],
-		notice: () => ULTRATHINK_NOTICE,
+		notice: () => resolvePromptAsset("system/ultrathink-notice.md", ultrathinkNotice, { kind: "notice" }).text.trim(),
 	},
 	{
 		id: "orchestrate",
@@ -102,7 +106,7 @@ export const MAGIC_KEYWORDS = [
 		description: "Let standalone jevify append its hidden bulk-judge classification notice",
 		// The contract is entirely about the eval kernel's `judge()` helper.
 		requires: ["eval"],
-		notice: () => JEVIFY_NOTICE,
+		notice: () => resolvePromptAsset("system/jevify-notice.md", jevifyNotice, { kind: "notice" }).text.trim(),
 	},
 ] as const satisfies readonly MagicKeyword[];
 

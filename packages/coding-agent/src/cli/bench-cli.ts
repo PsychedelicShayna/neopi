@@ -1,3 +1,4 @@
+import { resolvePromptAsset, renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import type { ResolvedThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type {
 	Api,
@@ -20,13 +21,13 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
-import { APP_NAME, formatDuration, formatNumber, prompt } from "@oh-my-pi/pi-utils";
+import { APP_NAME, formatDuration, formatNumber } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import { formatModelStringWithRouting } from "../config/model-resolver";
 import { buildServiceTierByFamily, serviceTierForAllFamilies, serviceTierSettingToTier } from "../config/service-tier";
 import cachePrefixTemplate from "../prompts/bench/cache-prefix.md" with { type: "text" };
-import cachePrefixChunk from "../prompts/bench/cache-prefix-chunk.md" with { type: "text" };
+import bundledCachePrefixChunk from "../prompts/bench/cache-prefix-chunk.md" with { type: "text" };
 import cacheSuffixTemplate from "../prompts/bench/cache-suffix.md" with { type: "text" };
 import chatTemplate from "../prompts/bench/chat.md" with { type: "text" };
 import generationTemplate from "../prompts/bench/generation.md" with { type: "text" };
@@ -62,9 +63,7 @@ const DETAILED_DEFAULT_RUNS = 4;
 const ERROR_WIDTH = 110;
 const UTF8_ENCODER = new TextEncoder();
 const UTF8_DECODER = new TextDecoder();
-const CACHE_PREFIX_CHUNK = cachePrefixChunk;
 const CACHE_PREFIX_PLACEHOLDER = "__OMP_CACHE_BENCH_RAW_PREFIX__";
-const CACHE_PREFIX_CHUNK_BYTES = UTF8_ENCODER.encode(CACHE_PREFIX_CHUNK).byteLength;
 const RESPONSE_CACHE_STATUS_HEADERS = ["cf-aig-cache-status"] as const;
 
 /**
@@ -483,11 +482,12 @@ function truncateUtf8(text: string, maxBytes: number): string {
 }
 
 function generatedCachePrefix(bytes: number): string {
-	return truncateUtf8(CACHE_PREFIX_CHUNK.repeat(Math.ceil(bytes / CACHE_PREFIX_CHUNK_BYTES)), bytes);
+	const chunk = resolvePromptAsset("bench/cache-prefix-chunk.md", bundledCachePrefixChunk).text;
+	return truncateUtf8(chunk.repeat(Math.ceil(bytes / UTF8_ENCODER.encode(chunk).byteLength)), bytes);
 }
 
 function renderCacheBenchmarkPrefix(prefix: string, namespace: string): string {
-	const rendered = prompt.render(cachePrefixTemplate, {
+	const rendered = renderPromptAsset("bench/cache-prefix.md", cachePrefixTemplate, {
 		prefix: CACHE_PREFIX_PLACEHOLDER,
 		namespace,
 	});
@@ -551,14 +551,20 @@ function buildBenchChallenge(kind: BenchChallengeKind, opts: BenchChallengeOptio
 			return {
 				kind,
 				maxTokens,
-				messages: user(opts.promptOverride ?? prompt.render(chatTemplate, { topic: pick(CHAT_TOPICS) }).trim()),
+				messages: user(
+					opts.promptOverride ??
+						renderPromptAsset("bench/chat.md", chatTemplate, { topic: pick(CHAT_TOPICS) }).trim(),
+				),
 			};
 		case "generation":
 			return {
 				kind,
 				maxTokens,
 				messages: user(
-					opts.promptOverride ?? prompt.render(generationTemplate, { topic: pick(GENERATION_TOPICS) }).trim(),
+					opts.promptOverride ??
+						renderPromptAsset("bench/generation.md", generationTemplate, {
+							topic: pick(GENERATION_TOPICS),
+						}).trim(),
 				),
 			};
 		case "prefill":
@@ -566,7 +572,7 @@ function buildBenchChallenge(kind: BenchChallengeKind, opts: BenchChallengeOptio
 				kind,
 				maxTokens,
 				messages: user(
-					`Benchmark run ${opts.nonce}.\n\n${generatedCachePrefix(opts.prefillBytes)}\n\n${prefillInstruction.trim()}`,
+					`Benchmark run ${opts.nonce}.\n\n${generatedCachePrefix(opts.prefillBytes)}\n\n${resolvePromptAsset("bench/prefill-instruction.md", prefillInstruction).text.trim()}`,
 				),
 			};
 	}
@@ -1211,8 +1217,12 @@ export async function runBenchCommand(command: BenchCommandArgs, deps: BenchDepe
 						board?.repaint();
 						const promptCacheKey = `bench-cache:${cacheNamespace}`;
 						const stablePrefix = renderCacheBenchmarkPrefix(cachePrefix!, cacheNamespace);
-						const coldSuffix = prompt.render(cacheSuffixTemplate, { variant: "A" }).trim();
-						const warmSuffix = prompt.render(cacheSuffixTemplate, { variant: "B" }).trim();
+						const coldSuffix = renderPromptAsset("bench/cache-suffix.md", cacheSuffixTemplate, {
+							variant: "A",
+						}).trim();
+						const warmSuffix = renderPromptAsset("bench/cache-suffix.md", cacheSuffixTemplate, {
+							variant: "B",
+						}).trim();
 						const coldCapture: CacheRequestCapture = {
 							requestIdObserved: false,
 							responseCacheHit: false,

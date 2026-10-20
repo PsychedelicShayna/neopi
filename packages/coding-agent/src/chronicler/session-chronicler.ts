@@ -1,3 +1,4 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * Serialized session Chronicler runtime.
  *
@@ -18,7 +19,7 @@ import { Agent, type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core
 import { estimateTranscriptTokens } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Api, Model, ProviderSessionState } from "@oh-my-pi/pi-ai";
 import { streamSimple } from "@oh-my-pi/pi-ai";
-import { acquireFileLock, FileLockContentionError, type FileLockHandle, logger, prompt } from "@oh-my-pi/pi-utils";
+import { acquireFileLock, FileLockContentionError, type FileLockHandle, logger } from "@oh-my-pi/pi-utils";
 import { AdvisorTranscriptRecorder, deriveAdvisorTelemetry } from "../advisor";
 import type { ModelRegistry } from "../config/model-registry";
 import { formatModelString, resolveChroniclerRoleSelection } from "../config/model-resolver";
@@ -1005,20 +1006,25 @@ export class SessionChronicler {
 		const message = rendered[0];
 		const block = message?.role === "user" && Array.isArray(message.content) ? message.content[0] : undefined;
 		const delta = block?.type === "text" ? block.text : "";
-		return prompt.render(contextTemplate, {
-			sessionId: binding.descriptor.sessionId,
-			cwd: binding.descriptor.cwd,
-			beatCount: binding.store.beats.length,
-			beats: listing.map(beat => ({
-				id: beat.id,
-				title: beat.title,
-				kind: beat.kind,
-				eventTime: beat.eventTime,
-			})),
-			omitted,
-			carry,
-			delta,
-		});
+		return renderPromptAsset(
+			"chronicler/context.md",
+			contextTemplate,
+			{
+				sessionId: binding.descriptor.sessionId,
+				cwd: binding.descriptor.cwd,
+				beatCount: binding.store.beats.length,
+				beats: listing.map(beat => ({
+					id: beat.id,
+					title: beat.title,
+					kind: beat.kind,
+					eventTime: beat.eventTime,
+				})),
+				omitted,
+				carry,
+				delta,
+			},
+			{ cwd: binding.descriptor.cwd },
+		);
 	}
 
 	#buildKnownSources(binding: ChroniclerBinding, batch: CaptureBatch): ReadonlyMap<string, CaptureSource> {
@@ -1130,10 +1136,15 @@ export class SessionChronicler {
 			() => descriptor.cwd,
 			RECORDER_FILENAME,
 		);
-		const renderedSystem = prompt.render(systemTemplate, {
-			sessionId: descriptor.sessionId,
-			cwd: descriptor.cwd,
-		});
+		const renderedSystem = renderPromptAsset(
+			"chronicler/system.md",
+			systemTemplate,
+			{
+				sessionId: descriptor.sessionId,
+				cwd: descriptor.cwd,
+			},
+			{ cwd: descriptor.cwd },
+		);
 		const systemText = this.#host.obfuscator?.obfuscate(renderedSystem) ?? renderedSystem;
 		const agent = this.#buildAgent(descriptor, selection, systemText);
 		// Ordinary revocation still owns the billed completion until this binding

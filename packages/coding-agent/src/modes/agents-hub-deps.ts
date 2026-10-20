@@ -1,10 +1,11 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { Model, ServiceTier } from "@oh-my-pi/pi-ai";
 import type { AgentsHubDeps } from "@oh-my-pi/pi-tui/overlays/agents-hub";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
-import { isEnoent, prompt } from "@oh-my-pi/pi-utils";
+import { isEnoent } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 import type { EffectiveExtensionRoots } from "../capability/types";
 import { getConfigDirs } from "../config";
@@ -155,7 +156,7 @@ export function createAgentsHubDeps(
 				modelRegistry,
 				settings,
 				model: selectedModel,
-				systemPrompt: [prompt.render(agentCreationArchitectPrompt, {})],
+				systemPrompt: [renderPromptAsset("system/agent-creation-architect.md", agentCreationArchitectPrompt, {})],
 				hasUI: false,
 				enableLsp: false,
 				enableMCP: false,
@@ -179,9 +180,12 @@ export function createAgentsHubDeps(
 				}
 			});
 			try {
-				await session.prompt(prompt.render(agentCreationUserPrompt, { request: description }), {
-					expandPromptTemplates: false,
-				});
+				await session.prompt(
+					renderPromptAsset("system/agent-creation-user.md", agentCreationUserPrompt, { request: description }),
+					{
+						expandPromptTemplates: false,
+					},
+				);
 				const raw = extractAssistantText(session.state.messages);
 				if (!raw) throw new Error("No response returned by agent creation architect.");
 				return raw;

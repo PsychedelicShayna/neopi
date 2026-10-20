@@ -1,21 +1,34 @@
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { prompt } from "@oh-my-pi/pi-utils";
-import analysisPrompt from "./prompts/analysis.md" with { type: "text" };
-import fastPrompt from "./prompts/fast.md" with { type: "text" };
-import mapPrompt from "./prompts/map.md" with { type: "text" };
-import reducePrompt from "./prompts/reduce.md" with { type: "text" };
-import summaryPrompt from "./prompts/summary.md" with { type: "text" };
-import summaryRewritePrompt from "./prompts/summary-rewrite.md" with { type: "text" };
+import bundledAnalysisPrompt from "./prompts/analysis.md" with { type: "text" };
+import bundledFastPrompt from "./prompts/fast.md" with { type: "text" };
+import bundledMapPrompt from "./prompts/map.md" with { type: "text" };
+import bundledReducePrompt from "./prompts/reduce.md" with { type: "text" };
+import bundledSummaryPrompt from "./prompts/summary.md" with { type: "text" };
+import bundledSummaryRewritePrompt from "./prompts/summary-rewrite.md" with { type: "text" };
 
 /** Prompt families used by llm-git's standard commit algorithm. */
 export type ConventionalPromptFamily = "analysis" | "fast" | "map" | "reduce" | "summary" | "summary-rewrite";
 
 const PROMPT_BY_FAMILY: Record<ConventionalPromptFamily, string> = {
-	analysis: analysisPrompt,
-	fast: fastPrompt,
-	map: mapPrompt,
-	reduce: reducePrompt,
-	summary: summaryPrompt,
-	"summary-rewrite": summaryRewritePrompt,
+	get analysis() {
+		return resolvePromptAsset("commit/conventional/analysis.md", bundledAnalysisPrompt).text;
+	},
+	get fast() {
+		return resolvePromptAsset("commit/conventional/fast.md", bundledFastPrompt).text;
+	},
+	get map() {
+		return resolvePromptAsset("commit/conventional/map.md", bundledMapPrompt).text;
+	},
+	get reduce() {
+		return resolvePromptAsset("commit/conventional/reduce.md", bundledReducePrompt).text;
+	},
+	get summary() {
+		return resolvePromptAsset("commit/conventional/summary.md", bundledSummaryPrompt).text;
+	},
+	get "summary-rewrite"() {
+		return resolvePromptAsset("commit/conventional/summary-rewrite.md", bundledSummaryRewritePrompt).text;
+	},
 };
 
 const USER_SEPARATOR = "<!-- USER -->";

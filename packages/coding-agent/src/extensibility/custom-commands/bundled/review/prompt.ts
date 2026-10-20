@@ -1,4 +1,5 @@
-import { prompt } from "@oh-my-pi/pi-utils";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
+
 import annotationsTemplate from "./prompts/annotations.md" with { type: "text" };
 import reviewRequestTemplate from "../../../../prompts/review-request.md" with { type: "text" };
 import type { CodeReviewAnnotation, ReviewDiffFile } from "@oh-my-pi/pi-tui/overlays/annotation-types";
@@ -71,7 +72,7 @@ export function formatCodeReviewAnnotations(
 					isLine: false,
 				},
 	);
-	return prompt.render(annotationsTemplate, {
+	return renderPromptAsset("extensibility/custom-commands/bundled/review/annotations.md", annotationsTemplate, {
 		forReviewer: options.forReviewer,
 		annotations: renderedAnnotations,
 		supplementalInstructions,
@@ -112,7 +113,7 @@ export function buildReviewPrompt(target: ResolvedReviewTarget, additionalInstru
 	const linesPerFile = skipDiff ? Math.max(5, Math.floor(100 / target.snapshot.files.length)) : 0;
 	const files = target.snapshot.files.map(file => renderReviewPromptFile(file, linesPerFile));
 	const agentCount = getRecommendedReviewAgentCount(target.snapshot);
-	return prompt.render(reviewRequestTemplate, {
+	return renderPromptAsset("review-request.md", reviewRequestTemplate, {
 		mode: target.mode,
 		files,
 		excluded: target.snapshot.excluded,

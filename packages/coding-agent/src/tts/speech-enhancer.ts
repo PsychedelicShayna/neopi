@@ -1,3 +1,4 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * Enhanced speech rewriting (`speech.enhanced`): turn assistant markdown into
  * natural spoken prose with the tiny/smol model before synthesis.
@@ -16,14 +17,13 @@
  *   model.
  */
 import { type AssistantMessage, completeSimple, retryTransientCompletion } from "@oh-my-pi/pi-ai";
-import { logger, prompt } from "@oh-my-pi/pi-utils";
+import { logger } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import { roleCandidatePool } from "../config/model-roles";
 import { getModelMatchPreferences, resolveModelRoleValue } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import speechRewritePrompt from "../prompts/system/speech-rewrite.md" with { type: "text" };
 
-const SYSTEM_PROMPT = prompt.render(speechRewritePrompt);
 // Rewrite budget: a paragraph in, a spoken paragraph (usually shorter) out.
 // Always reserve enough room to survive backends that ignore `disableReasoning`
 // (e.g. Qwen3 via llama.cpp catalogued `reasoning: false` but still emitting
@@ -89,7 +89,7 @@ export class SpeechEnhancer {
 					return completeSimple(
 						model,
 						{
-							systemPrompt: [SYSTEM_PROMPT],
+							systemPrompt: [renderPromptAsset("system/speech-rewrite.md", speechRewritePrompt, {})],
 							messages: [{ role: "user", content: boundBlock(block), timestamp: Date.now() }],
 						},
 						{

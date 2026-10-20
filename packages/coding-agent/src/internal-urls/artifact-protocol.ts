@@ -13,6 +13,8 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { LRUCache } from "@oh-my-pi/pi-utils/lru";
+import { render as renderPrompt } from "@oh-my-pi/pi-utils/prompt";
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import artifactDoc from "../prompts/internal-urls/artifact.md" with { type: "text" };
 import { artifactsDirsFromRegistry } from "./registry-helpers";
 import type {
@@ -157,7 +159,8 @@ export class ArtifactProtocolHandler implements ProtocolHandler {
 	};
 
 	promptDoc(): string {
-		return artifactDoc.trim();
+		const { text } = resolvePromptAsset("internal-urls/artifact.md", artifactDoc);
+		return (text === artifactDoc ? text : renderPrompt(text)).trim();
 	}
 
 	/** Backing artifact file; null for unknown ids, throws the resolve errors for malformed ones. */

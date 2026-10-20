@@ -1,8 +1,9 @@
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import chronicleDescription from "../prompts/chronicler/chronicle-tool.md" with { type: "text" };
-import finishDescription from "../prompts/chronicler/finish-tool.md" with { type: "text" };
-import readDescription from "../prompts/chronicler/read-tool.md" with { type: "text" };
+import bundledChronicleDescription from "../prompts/chronicler/chronicle-tool.md" with { type: "text" };
+import bundledFinishDescription from "../prompts/chronicler/finish-tool.md" with { type: "text" };
+import bundledReadDescription from "../prompts/chronicler/read-tool.md" with { type: "text" };
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import {
 	type BeatRecord,
@@ -32,15 +33,25 @@ const readSchema = type({
 
 const chronicleDefinition = {
 	name: "chronicle",
-	description: chronicleDescription,
+	get description() {
+		return resolvePromptAsset("chronicler/chronicle-tool.md", bundledChronicleDescription).text;
+	},
 	parameters: chronicleSchema,
 } as const;
 const finishDefinition = {
 	name: "finish_chronicle",
-	description: finishDescription,
+	get description() {
+		return resolvePromptAsset("chronicler/finish-tool.md", bundledFinishDescription).text;
+	},
 	parameters: finishSchema,
 } as const;
-const readDefinition = { name: "read_chronicle", description: readDescription, parameters: readSchema } as const;
+const readDefinition = {
+	name: "read_chronicle",
+	get description() {
+		return resolvePromptAsset("chronicler/read-tool.md", bundledReadDescription).text;
+	},
+	parameters: readSchema,
+} as const;
 
 /** Budget the actual tool surfaces without constructing an executable capture batch. */
 export const CHRONICLER_TOOL_SCHEMAS = [chronicleDefinition, finishDefinition, readDefinition] as const;

@@ -1,3 +1,4 @@
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
@@ -336,7 +337,7 @@ export function createSecurityPublicationTool(
 	return {
 		name: "security_publish",
 		label: "Publish Security Scan",
-		description: securityPublishDescription.trim(),
+		description: resolvePromptAsset("tools/security-publish.md", securityPublishDescription).text.trim(),
 		parameters: securityPublishSchema,
 		approval: "write",
 		strict: true,

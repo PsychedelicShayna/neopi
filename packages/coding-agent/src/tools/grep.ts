@@ -11,7 +11,7 @@ import type {
 	ToolTier,
 } from "@oh-my-pi/pi-agent-core";
 import { type EditStore, type GrepMatch, GrepOutputMode, type GrepResult, grep } from "@oh-my-pi/pi-natives";
-import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
+import { untilAborted } from "@oh-my-pi/pi-utils";
 import { LRUCache } from "@oh-my-pi/pi-utils/lru";
 import {
 	type ArchiveReader,
@@ -23,6 +23,7 @@ import { getEditStore } from "../edit/store";
 import { sessionResolveContext } from "../internal-urls/context";
 import { InternalUrlRouter } from "../internal-urls/router";
 import { InternalUrlFilesystem } from "../internal-urls/url-filesystem";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import grepDescription from "../prompts/tools/grep.md" with { type: "text" };
 import { DEFAULT_MAX_COLUMN, truncateHead } from "@oh-my-pi/pi-tui/tools/streaming-output";
 import { sessionDelegationBias } from "../task/prompt-policy";
@@ -429,24 +430,18 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 			cfgTaskDisabledAgents.get(this.session.settings),
 			this.session.getSessionSpawns?.() ?? "*",
 		);
-		// Every render input is a boolean; pack them so repeat reads skip the template render.
-		const key =
-			(isHlMode ? 1 : 0) |
-			(isLineNumberMode ? 2 : 0) |
-			(hasFind ? 4 : 0) |
-			(eagerDelegation ? 8 : 0) |
-			(scoutAvailable ? 16 : 0);
-		if (key !== this.#descriptionKey) {
-			this.#description = prompt.render(grepDescription, {
+		return renderPromptAsset(
+			"tools/grep.md",
+			grepDescription,
+			{
 				IS_HL_MODE: isHlMode,
 				IS_LINE_NUMBER_MODE: isLineNumberMode,
 				hasFind,
 				eagerDelegation,
 				scoutAvailable,
-			});
-			this.#descriptionKey = key;
-		}
-		return this.#description;
+			},
+			{ cwd: this.session.cwd },
+		);
 	}
 	readonly parameters = searchSchema;
 	readonly strict = true;
@@ -454,8 +449,6 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 	readonly #contextBeforeOverride?: number;
 	readonly #contextAfterOverride?: number;
 	readonly #totalMatchLimit?: number;
-	#descriptionKey = -1;
-	#description = "";
 
 	constructor(
 		private readonly session: ToolSession,

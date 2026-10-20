@@ -1,3 +1,4 @@
+import { resolvePromptAsset, renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * Background `/issue` filing (#305). Two agents run inside one async job:
  *
@@ -15,7 +16,7 @@
 import * as path from "node:path";
 import type { Api, AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
-import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
+import { untilAborted } from "@oh-my-pi/pi-utils";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import { formatModelString } from "../config/model-resolver";
@@ -110,7 +111,7 @@ export function renderIssueNotice(requestId: string, prose: string, notice: Issu
 			}
 			break;
 	}
-	return prompt.render(noticeTemplate, context).trim();
+	return renderPromptAsset("issues/notice.md", noticeTemplate, context, { kind: "notice" }).trim();
 }
 
 function lastAssistantText(message: AssistantMessage | undefined): string {
@@ -296,7 +297,7 @@ export async function runIssueFiling(
 			}),
 		],
 		toolNames: ["issue_target", "issue_decline"],
-		systemPrompt: [targetSystemPrompt.trim()],
+		systemPrompt: [resolvePromptAsset("issues/target-system.md", targetSystemPrompt).text.trim()],
 		discoverContext: false,
 	});
 	await notify({ kind: "dispatched", agentId: targetAgentId });
@@ -306,7 +307,7 @@ export async function runIssueFiling(
 		await converse({
 			session: targetSession,
 			agentId: targetAgentId,
-			request: prompt.render(targetRequestTemplate, {
+			request: renderPromptAsset("issues/target-request.md", targetRequestTemplate, {
 				requestId: request.requestId,
 				prose: request.prose,
 				foregroundCwd: shortenPath(request.cwd),
@@ -358,7 +359,7 @@ export async function runIssueFiling(
 			"issue_existing_owner",
 			"issue_decline",
 		],
-		appendSystemPrompt: prompt.render(authorSystemTemplate, {
+		appendSystemPrompt: renderPromptAsset("issues/author-system.md", authorSystemTemplate, {
 			repo: target.candidate.repo,
 			checkoutPath,
 			modelName: request.model.name ?? formatModelString(request.model),
@@ -373,7 +374,7 @@ export async function runIssueFiling(
 		await converse({
 			session: authorSession,
 			agentId: authorAgentId,
-			request: prompt.render(authorRequestTemplate, {
+			request: renderPromptAsset("issues/author-request.md", authorRequestTemplate, {
 				requestId: request.requestId,
 				prose: request.prose,
 				repo: target.candidate.repo,

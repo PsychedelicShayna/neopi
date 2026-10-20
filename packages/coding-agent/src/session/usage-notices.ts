@@ -1,7 +1,8 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { USAGE_REPORT_TTL_MS } from "@oh-my-pi/pi-ai/auth/sqlite-credential-store";
 import { resolveUsedFraction, type UsageReport } from "@oh-my-pi/pi-ai/usage";
-import { prompt } from "@oh-my-pi/pi-utils";
+
 import type { Settings } from "../config/settings";
 import template from "../prompts/system/agent-telemetry.md" with { type: "text" };
 import {
@@ -158,7 +159,9 @@ export class UsageNotices {
 			{
 				role: "custom",
 				customType: "agent-usage-notices",
-				content: prompt.render(template, { json: JSON.stringify({ type: "usage_threshold_events", events }) }),
+				content: renderPromptAsset("system/agent-telemetry.md", template, {
+					json: JSON.stringify({ type: "usage_threshold_events", events }),
+				}),
 				display: false,
 				attribution: "agent",
 				timestamp: now,

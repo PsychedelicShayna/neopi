@@ -1,9 +1,10 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * Headless `/btw` turn lifecycle shared by the TUI controller and RPC mode:
  * record bookkeeping for a new topic or follow-up, and the ephemeral model turn.
  */
 import type { AssistantMessage, Message } from "@oh-my-pi/pi-ai";
-import { prompt, Snowflake } from "@oh-my-pi/pi-utils";
+import { Snowflake } from "@oh-my-pi/pi-utils";
 import btwUserPrompt from "../prompts/system/btw-user.md" with { type: "text" };
 import type { AgentSession } from "./agent-session";
 import { type BtwHistoryRecord, type BtwHistoryTurn, getBtwTurns } from "./btw-history";
@@ -60,7 +61,9 @@ export function runBtwTurn(
 	for (const turn of args.history ?? []) {
 		history.push({
 			role: "user",
-			content: [{ type: "text", text: prompt.render(btwUserPrompt, { question: turn.question }) }],
+			content: [
+				{ type: "text", text: renderPromptAsset("system/btw-user.md", btwUserPrompt, { question: turn.question }) },
+			],
 			attribution: "agent",
 			timestamp: turn.createdAt,
 		});
@@ -86,7 +89,7 @@ export function runBtwTurn(
 		});
 	}
 	return session.runEphemeralTurn({
-		promptText: prompt.render(btwUserPrompt, { question: args.question }),
+		promptText: renderPromptAsset("system/btw-user.md", btwUserPrompt, { question: args.question }),
 		history,
 		conversationKey: args.conversationKey,
 		// /btw answers are read in full and saved to history: keep the

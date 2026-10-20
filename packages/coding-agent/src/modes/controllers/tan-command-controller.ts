@@ -1,9 +1,10 @@
+import { resolvePromptAsset, renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { prompt, Snowflake, untilAborted } from "@oh-my-pi/pi-utils";
+import { Snowflake, untilAborted } from "@oh-my-pi/pi-utils";
 import backgroundTanDispatchPrompt from "../../prompts/system/background-tan-dispatch.md" with { type: "text" };
-import tanContextSwitchPrompt from "../../prompts/system/tan-context-switch.md" with { type: "text" };
+import bundledTanContextSwitchPrompt from "../../prompts/system/tan-context-switch.md" with { type: "text" };
 import { AgentRegistry, MAIN_AGENT_ID } from "../../registry/agent-registry";
 import * as sdk from "../../sdk";
 import type { AgentSession } from "../../session/agent-session";
@@ -205,7 +206,10 @@ export class TanCommandController {
 						const injectContextSwitch = () => {
 							clone?.agent.appendMessage({
 								role: "developer",
-								content: tanContextSwitchPrompt,
+								content: resolvePromptAsset("system/tan-context-switch.md", bundledTanContextSwitchPrompt, {
+									cwd: this.ctx.sessionManager.getCwd(),
+									kind: "notice",
+								}).text,
 								attribution: "agent",
 								timestamp: Date.now(),
 							});
@@ -296,7 +300,12 @@ export class TanCommandController {
 			return;
 		}
 
-		const content = prompt.render(backgroundTanDispatchPrompt, { jobId, work: trimmedWork });
+		const content = renderPromptAsset(
+			"system/background-tan-dispatch.md",
+			backgroundTanDispatchPrompt,
+			{ jobId, work: trimmedWork },
+			{ cwd: this.ctx.sessionManager.getCwd(), kind: "notice" },
+		);
 		// /tan is meant to run alongside an active session. While the parent turn is
 		// still streaming, queue the dispatch breadcrumb for the next turn rather than
 		// steering the in-flight response; when idle this same call appends + persists

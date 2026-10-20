@@ -1,3 +1,4 @@
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { CONFIG_DIR_NAME } from "@oh-my-pi/pi-utils";
@@ -14,7 +15,7 @@ import {
 	type ContractEvent,
 	type ContractRequest,
 } from "./store";
-import toolDescription from "./tool.md" with { type: "text" };
+import bundledToolDescription from "./tool.md" with { type: "text" };
 
 const HELP =
 	"/contract list | show <id> | set <id> <text> | edit <id> [text] | enable <id> | disable <id> | remove <id> | promote <id> user|project | policy on|off. JSON requests use the contract tool schema.";
@@ -82,7 +83,7 @@ export const createWorkContractsExtension =
 		api.registerTool({
 			name: "contract",
 			label: "Session contract",
-			description: toolDescription,
+			description: resolvePromptAsset("work-contracts/tool.md", bundledToolDescription).text,
 			parameters: contractRequestSchema,
 			defaultInactive: true,
 			async execute(toolCallId, params, _signal, _onUpdate, ctx) {

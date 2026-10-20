@@ -1,3 +1,4 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import * as path from "node:path";
 import {
 	Agent,
@@ -39,7 +40,6 @@ import { $env } from "@oh-my-pi/pi-utils/env";
 import { APP_NAME, getAgentDir, getModelDbPath, getProjectDir } from "@oh-my-pi/pi-utils/dirs";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
-import * as prompt from "@oh-my-pi/pi-utils/prompt";
 import { Snowflake } from "@oh-my-pi/pi-utils/snowflake";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { DEFAULT_FRAME_DATA_BYTES_BUDGET, frameDataBytesBudget } from "@oh-my-pi/snapcompact";
@@ -178,8 +178,8 @@ import { resolveMCPToolAlias } from "./mcp/tool-bridge";
 import { createSessionMemoryRuntimeContext, resolveMemoryBackend } from "./memory-backend";
 import { MEMORY_BACKEND_TOOL_NAMES } from "./memory-backend/tool-names";
 import type { MnemopiSessionState } from "./mnemopi/state";
-import mcpXdevGuidanceTemplate from "./prompts/system/mcp-xdev-guidance.md" with { type: "text" };
-import lateDiagnosticTemplate from "./prompts/tools/lsp-late-diagnostic.md" with { type: "text" };
+import bundledMcpXdevGuidanceTemplate from "./prompts/system/mcp-xdev-guidance.md" with { type: "text" };
+import bundledLateDiagnosticTemplate from "./prompts/tools/lsp-late-diagnostic.md" with { type: "text" };
 import { AgentLifecycleManager } from "./registry/agent-lifecycle";
 import { trackLiveAdvisors } from "./registry/live-advisors";
 import {
@@ -463,6 +463,7 @@ type LateDiagnosticsDetails = {
 
 function buildLateDiagnosticsBatchMessage(
 	entries: DeferredDiagnosticsEntry[],
+	cwd?: string,
 ): CustomMessage<LateDiagnosticsDetails> | null {
 	if (entries.length === 0) return null;
 	const files = entries.map(entry => ({
@@ -482,10 +483,15 @@ function buildLateDiagnosticsBatchMessage(
 	return {
 		role: "custom",
 		customType: LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE,
-		content: prompt.render(lateDiagnosticTemplate, {
-			multiple: files.length > 1,
-			files,
-		}),
+		content: renderPromptAsset(
+			"tools/lsp-late-diagnostic.md",
+			bundledLateDiagnosticTemplate,
+			{
+				multiple: files.length > 1,
+				files,
+			},
+			{ cwd, kind: "notice" },
+		),
 		display: true,
 		attribution: "agent",
 		details,
@@ -4270,6 +4276,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						appendPrompt: composeAppendPrompt(
 							[memoryInstructions, launchProfilePrompt].filter((part): part is string => part !== undefined),
 							options.appendSystemPromptDiscovered ? undefined : options.appendSystemPrompt,
+							promptCwd,
 						),
 						contextFiles,
 						cwd: promptCwd,
@@ -4324,8 +4331,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			);
 			if (projection.mappings.length > 0 || projection.hasOmittedMappings) {
 				appendParts.push(
-					prompt
-						.render(mcpXdevGuidanceTemplate, {
+					renderPromptAsset(
+						"system/mcp-xdev-guidance.md",
+						bundledMcpXdevGuidanceTemplate,
+						{
 							tools: projection.mappings.map(mapping => ({
 								mcpToolName: mapping.label,
 								path: mapping.path,
@@ -4333,8 +4342,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 							})),
 							hasCatalogOnlyTools: routedCatalogNames.size > 0,
 							hasOmittedTools: projection.hasOmittedMappings,
-						})
-						.trim(),
+						},
+						{ cwd: promptCwd },
+					).trim(),
 				);
 			}
 			if (serverInstructions && serverInstructions.size > 0) {
@@ -4349,7 +4359,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					appendParts.push(`### ${srvName}\n${truncated}`);
 				}
 			}
-			const appendPrompt = composeAppendPrompt(appendParts, options.appendSystemPrompt);
+			const appendPrompt = composeAppendPrompt(appendParts, options.appendSystemPrompt, promptCwd);
 			// Owned/in-band tool dialects (non-native) require the full functions-
 			// namespace catalog; native tool calling lets the compact name list suffice.
 			const nativeTools = resolveDialect(cfgToolsFormat.get(settings), agent?.state.model ?? model) === undefined;
@@ -4577,7 +4587,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// a provider that 400s on them (#5400). Read both dynamically so a `/model`
 		// switch or setting change takes effect on the next turn.
 		const convertToLlmWithBlockImages = (messages: AgentMessage[]): Message[] => {
-			const converted = convertToLlm(messages);
+			const converted = convertToLlm(messages, sessionManager.getCwd());
 			if (cfgImagesBlockImages.get(settings)) {
 				return replaceLlmImagesWithText(converted, "Image reading is disabled.");
 			}
@@ -4623,6 +4633,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// so `snapcompact.*` changes apply on the next call (a no-op while both are off).
 		const snapcompactInline = new SnapcompactInlineTransformer(
 			{
+				get cwd() {
+					return sessionManager.getCwd();
+				},
 				get renderSystemPrompt() {
 					return cfgSnapcompactSystemPrompt.get(settings);
 				},
@@ -5564,7 +5577,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			build: buildMcpNotificationBatchMessage,
 		});
 		session.yieldQueue.register<DeferredDiagnosticsEntry>(LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE, {
-			build: buildLateDiagnosticsBatchMessage,
+			build: entries => buildLateDiagnosticsBatchMessage(entries, session.sessionManager.getCwd()),
 			isStale: entry => entry.isStale(),
 		});
 

@@ -1,6 +1,8 @@
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolResult, ToolTier } from "@oh-my-pi/pi-agent-core";
 import { PRODUCT_NAME } from "@oh-my-pi/pi-utils";
+import { render as renderPrompt } from "@oh-my-pi/pi-utils/prompt";
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import securityScanDescription from "../prompts/tools/security-scan.md" with { type: "text" };
 import { selectSecurityOAuthAccount } from "../security/auth";
 import {
@@ -111,7 +113,10 @@ export class SecurityScanTool implements AgentTool<typeof securityScanSchema, Se
 	readonly label = "Security Scan";
 	readonly loadMode = "discoverable";
 	readonly summary = `Run ${PRODUCT_NAME}-native scans and explicit Codex Security cloud operations`;
-	readonly description = securityScanDescription.trim();
+	get description(): string {
+		const { text } = resolvePromptAsset("tools/security-scan.md", securityScanDescription, { cwd: this.session.cwd });
+		return (text === securityScanDescription ? text : renderPrompt(text)).trim();
+	}
 	readonly parameters = securityScanSchema;
 	readonly strict = true;
 

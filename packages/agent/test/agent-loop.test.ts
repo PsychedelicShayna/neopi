@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import {
@@ -27,6 +30,7 @@ import { kCursorExecResolved, setStreamingPartialJson } from "@oh-my-pi/pi-ai/ut
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import type { HarmonyDetection } from "@oh-my-pi/pi-ai/utils/harmony-leak";
 import * as harmonyLeak from "@oh-my-pi/pi-ai/utils/harmony-leak";
+import { Snowflake } from "@oh-my-pi/pi-utils/snowflake";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { createAssistantMessage, createHarmonyMitigationModel, createUserMessage } from "./helpers";
 
@@ -245,6 +249,43 @@ describe("agentLoop with AgentMessage", () => {
 		expect(nudgeText).toContain("Tool call failed");
 		// The correction teaches the complete envelope the model must emit.
 		expect(nudgeText).toContain('<｜DSML｜invoke name=\\"TOOL_NAME\\">');
+	});
+
+	it("resolves DSML recovery notices from the current session cwd", async () => {
+		const root = path.join(os.homedir(), ".cache/npi-canary/dsml-prompt-assets", Snowflake.next());
+		try {
+			let cwd = path.join(root, "first");
+			const noticePath = (project: string) =>
+				path.join(project, ".omp/builtin-prompts/agent/dsml-tool-call-leak.md");
+			await Bun.write(noticePath(cwd), "Session one recovery notice.");
+			await Bun.write(noticePath(path.join(root, "second")), "Session two recovery notice, changed.");
+			for (const expected of ["Session one recovery notice.", "Session two recovery notice, changed."]) {
+				const context: AgentContext = { systemPrompt: ["You are helpful."], messages: [], tools: [] };
+				let notice = "";
+				const mock = createMockModel({
+					id: deepseekId,
+					responses: [
+						{ content: [strayDsml] },
+						context => {
+							const nudge = context.messages.at(-1);
+							notice = nudge?.role === "developer" ? JSON.stringify(nudge.content) : "";
+							return { content: ["Recovered."] };
+						},
+					],
+				});
+				const config: AgentLoopConfig = {
+					model: mock.model,
+					cwd: path.join(root, "unused-static-cwd"),
+					getCwd: () => cwd,
+					convertToLlm: messages => messages.filter(m => m.role !== "custom") as Message[],
+				};
+				await agentLoop([createUserMessage("Hello")], context, config, undefined, mock.stream).result();
+				expect(notice).toContain(expected);
+				cwd = path.join(root, "second");
+			}
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
 	});
 
 	it("keeps prose that follows a removed DSML call", async () => {

@@ -13,7 +13,7 @@ import {
 import {
 	buildCompactionV2Request,
 	buildOpenAiNativeHistory,
-	CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE,
+	getContextWindowTruncatedOutputMessage,
 	countResponsesHistoryTokens,
 	getCompactionV2PreserveData,
 	requestCompactionV2Streaming,
@@ -779,7 +779,7 @@ describe("remote compaction input forwarding", () => {
 		expect(trimmed.estimatedTokensAfter).toBeLessThanOrEqual(1_000);
 		expect(requestInput?.some(item => item.type === "custom_tool_call")).toBe(true);
 		expect(requestInput?.find(item => item.type === "custom_tool_call_output")?.output).toBe(
-			CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE,
+			getContextWindowTruncatedOutputMessage(),
 		);
 	});
 
@@ -796,8 +796,8 @@ describe("remote compaction input forwarding", () => {
 		expect(result.rewrittenOutputs).toBe(2);
 		expect(result.input.slice(0, 2)).toEqual(input.slice(0, 2));
 		expect(result.input.slice(2).map(item => item.output)).toEqual([
-			CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE,
-			CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE,
+			getContextWindowTruncatedOutputMessage(),
+			getContextWindowTruncatedOutputMessage(),
 		]);
 		expect(result.estimatedTokensAfter).toBeLessThanOrEqual(1_000);
 		expect(input[2].output).toHaveLength(8_000);
@@ -888,7 +888,7 @@ describe("remote compaction input forwarding", () => {
 
 		expect(result.estimatedTokensBefore).toBeGreaterThan(3_000);
 		expect(result.rewrittenOutputs).toBe(1);
-		expect(result.input[0].output).toBe(CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE);
+		expect(result.input[0].output).toBe(getContextWindowTruncatedOutputMessage());
 		expect(result.estimatedTokensAfter).toBeLessThanOrEqual(3_000);
 	});
 
@@ -909,7 +909,7 @@ describe("remote compaction input forwarding", () => {
 		const result = trimRemoteCompactionInputToContextWindow(input, new Tokenizer(), 15_000, "compact");
 
 		expect(result.rewrittenOutputs).toBe(1);
-		expect(result.input[0].output).toBe(CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE);
+		expect(result.input[0].output).toBe(getContextWindowTruncatedOutputMessage());
 		expect(result.input[1]).toEqual(attachment);
 		expect(result.estimatedTokensAfter).toBeLessThanOrEqual(15_000);
 	});
@@ -929,7 +929,7 @@ describe("remote compaction input forwarding", () => {
 		const result = trimRemoteCompactionInputToContextWindow(input, new Tokenizer(), 15_000, "compact");
 
 		expect(result.rewrittenOutputs).toBe(1);
-		expect(result.input[0].output).toBe(CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE);
+		expect(result.input[0].output).toBe(getContextWindowTruncatedOutputMessage());
 		expect(result.estimatedTokensAfter).toBeLessThanOrEqual(15_000);
 	});
 
@@ -2726,7 +2726,7 @@ describe("compact() remote compaction failure handling", () => {
 
 		expect(requestInput.some(item => item.type === "function_call" && item.call_id === "call_read_large")).toBe(true);
 		expect(requestInput.find(item => item.type === "function_call_output")?.output).toBe(
-			CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE,
+			getContextWindowTruncatedOutputMessage(),
 		);
 		expect(requestInput.at(-1)).toEqual({ type: "compaction_trigger" });
 	});

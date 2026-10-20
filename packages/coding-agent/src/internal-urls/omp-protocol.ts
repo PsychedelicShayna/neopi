@@ -9,6 +9,8 @@
  */
 import * as path from "node:path";
 import { resolveContainedPath, resolveContainedPathSync } from "../discovery/contained-path";
+import { render as renderPrompt } from "@oh-my-pi/pi-utils/prompt";
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import ompDoc from "../prompts/internal-urls/omp.md" with { type: "text" };
 import { getDocFilenames, getDocsDiskRoot, getEmbeddedDoc } from "./docs-index";
 import { ompDocFilename, ompDocRel, ompDocsScopeEntries } from "./omp-scope";
@@ -53,7 +55,8 @@ export class OmpProtocolHandler implements ProtocolHandler {
 
 	/** Always advertised: harness docs are embedded in every build. */
 	promptDoc(): string {
-		return ompDoc.trim();
+		const { text } = resolvePromptAsset("internal-urls/omp.md", ompDoc);
+		return (text === ompDoc ? text : renderPrompt(text)).trim();
 	}
 
 	async resolve(url: InternalUrl): Promise<InternalResource> {

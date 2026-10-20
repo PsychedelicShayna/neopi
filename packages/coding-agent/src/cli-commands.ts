@@ -59,6 +59,11 @@ export const commands: CommandEntry[] = [
 		help: commandHelp.agentsHelp,
 	},
 	{
+		name: "prompts",
+		load: () => import("./commands/prompts").then(m => m.default),
+		help: commandHelp.promptsHelp,
+	},
+	{
 		name: "anonymize",
 		load: () => import("./commands/anonymize").then(m => m.default),
 		help: commandHelp.anonymizeHelp,

@@ -1,7 +1,8 @@
+import { resolvePromptAsset, renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import type { Agent, AgentMessage, AgentToolResult, AgentTurnEndContext } from "@oh-my-pi/pi-agent-core";
 import { invalidateMessageCache } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Model, ToolResultMessage } from "@oh-my-pi/pi-ai";
-import { logger, prompt } from "@oh-my-pi/pi-utils";
+import { logger } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../config/settings";
 import type { LocalProtocolOptions } from "../internal-urls";
 import { resolveApprovedPlan } from "../plan-mode/approved-plan";
@@ -9,9 +10,9 @@ import { autosaveApprovedPlan } from "../plan-mode/plan-autosave";
 import { listPlanFiles, readPlanFile } from "../plan-mode/plan-files";
 import type { PlanModeState } from "../plan-mode/state";
 import planYoloHandoffPrompt from "../prompts/system/plan-yolo-handoff.md" with { type: "text" };
-import prewalkChecklistPrompt from "../prompts/system/prewalk-checklist.md" with { type: "text" };
-import prewalkContinuePrompt from "../prompts/system/prewalk-continue.md" with { type: "text" };
-import prewalkPlanPrompt from "../prompts/system/prewalk-plan.md" with { type: "text" };
+import bundledPrewalkChecklistPrompt from "../prompts/system/prewalk-checklist.md" with { type: "text" };
+import bundledPrewalkContinuePrompt from "../prompts/system/prewalk-continue.md" with { type: "text" };
+import bundledPrewalkPlanPrompt from "../prompts/system/prewalk-plan.md" with { type: "text" };
 import prewalkHandoffPrompt from "../prompts/system/prewalk-handoff.md" with { type: "text" };
 import { type ConfiguredThinkingLevel, prewalkWouldBeNoop } from "@oh-my-pi/pi-tui/thinking";
 import { isMCPToolName } from "../tools/builtin-names";
@@ -271,7 +272,10 @@ export class PrewalkCoordinator {
 			this.#host.agent.steer({
 				role: "custom",
 				customType: PREWALK_CONTINUE_MESSAGE_TYPE,
-				content: prewalkContinuePrompt,
+				content: resolvePromptAsset("system/prewalk-continue.md", bundledPrewalkContinuePrompt, {
+					cwd: this.#host.sessionManager.getCwd(),
+					kind: "notice",
+				}).text,
 				attribution: "agent",
 				display: false,
 				timestamp: Date.now(),
@@ -289,7 +293,10 @@ export class PrewalkCoordinator {
 				this.#host.agent.steer({
 					role: "custom",
 					customType: PREWALK_PLAN_MESSAGE_TYPE,
-					content: prewalkPlanPrompt,
+					content: resolvePromptAsset("system/prewalk-plan.md", bundledPrewalkPlanPrompt, {
+						cwd: this.#host.sessionManager.getCwd(),
+						kind: "notice",
+					}).text,
 					display: false,
 					attribution: "agent",
 					timestamp: Date.now(),
@@ -332,8 +339,20 @@ export class PrewalkCoordinator {
 			role: "custom",
 			customType: PREWALK_CHECKLIST_MESSAGE_TYPE,
 			content: brief
-				? prompt.render(prewalkHandoffPrompt, { plan: brief.plan, checklist: prewalkChecklistPrompt })
-				: prewalkChecklistPrompt,
+				? renderPromptAsset(
+						"system/prewalk-handoff.md",
+						prewalkHandoffPrompt,
+						{
+							plan: brief.plan,
+							checklist: resolvePromptAsset("system/prewalk-checklist.md", bundledPrewalkChecklistPrompt, {
+								cwd: this.#host.sessionManager.getCwd(),
+							}).text,
+						},
+						{ cwd: this.#host.sessionManager.getCwd() },
+					)
+				: resolvePromptAsset("system/prewalk-checklist.md", bundledPrewalkChecklistPrompt, {
+						cwd: this.#host.sessionManager.getCwd(),
+					}).text,
 			details: brief,
 			attribution: "agent",
 			display: false,
@@ -382,7 +401,10 @@ export class PrewalkCoordinator {
 		this.#host.agent.steer({
 			role: "custom",
 			customType: PREWALK_PLAN_MESSAGE_TYPE,
-			content: prewalkPlanPrompt,
+			content: resolvePromptAsset("system/prewalk-plan.md", bundledPrewalkPlanPrompt, {
+				cwd: this.#host.sessionManager.getCwd(),
+				kind: "notice",
+			}).text,
 			display: false,
 			attribution: "agent",
 			timestamp: Date.now(),
@@ -549,7 +571,12 @@ export class PrewalkCoordinator {
 		this.#host.agent.steer({
 			role: "custom",
 			customType: PLAN_YOLO_HANDOFF_MESSAGE_TYPE,
-			content: prompt.render(planYoloHandoffPrompt, { planFilePath, title: resolvedTitle }),
+			content: renderPromptAsset(
+				"system/plan-yolo-handoff.md",
+				planYoloHandoffPrompt,
+				{ planFilePath, title: resolvedTitle },
+				{ cwd: this.#host.sessionManager.getCwd() },
+			),
 			attribution: "agent",
 			display: false,
 			timestamp: Date.now(),

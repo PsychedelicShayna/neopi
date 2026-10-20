@@ -3,6 +3,10 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { type AgentDefinition, TaskTool } from "@oh-my-pi/pi-coding-agent/task";
 import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { TempDir } from "@oh-my-pi/pi-utils";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 
 const DISCOVERED: AgentDefinition[] = [
 	{
@@ -26,9 +30,10 @@ function tagged(name: string, selector: string): AgentDefinition {
 function createSession(
 	sessionAgents: () => AgentDefinition[],
 	advertisedSessionAgents?: () => AgentDefinition[],
+	cwd = "/tmp/omp-session-agent-description",
 ): ToolSession {
 	return {
-		cwd: "/tmp/omp-session-agent-description",
+		cwd,
 		hasUI: false,
 		settings: Settings.isolated(),
 		getSessionFile: () => null,
@@ -73,5 +78,25 @@ describe("task description session agents", () => {
 
 		live.push(tagged("m1", "b/y"));
 		expect(tool.description).toContain("`m1`");
+	});
+
+	it("reloads project prompt templates through the description getter without freezing agent data", async () => {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: DISCOVERED, projectAgentsDir: null });
+		const scratch = path.join(os.homedir(), ".cache", "npi-canary");
+		await fs.mkdir(scratch, { recursive: true });
+		await using project = await TempDir.create(path.join(scratch, "task-description-prompts-"));
+		const tool = await TaskTool.create(createSession(() => [], undefined, project.path()));
+		const bundledDescription = tool.description;
+		const override = project.join(".omp", "builtin-prompts", "tools", "task.md");
+
+		await Bun.write(override, "Delegates {{len agents}}: {{#each agents}}{{name}}={{blocking}}{{/each}}");
+		expect(tool.description).toBe("Delegates 1: task=false");
+		await Bun.write(override, "Updated {{#each agents}}{{name}}{{/each}}");
+		expect(tool.description).toBe("Updated task");
+
+		await Bun.write(override, "{{#each agents}}unclosed");
+		expect(() => tool.description).toThrow();
+		await fs.unlink(override);
+		expect(tool.description).toBe(bundledDescription);
 	});
 });

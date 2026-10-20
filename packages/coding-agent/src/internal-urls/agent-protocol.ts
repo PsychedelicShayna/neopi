@@ -26,6 +26,7 @@ import { formatDuration, isEnoent, prompt } from "@oh-my-pi/pi-utils";
 import { type AgentRef, AgentRegistry } from "../registry/agent-registry";
 import { ensurePersistedRoster } from "../registry/persisted-agents";
 import { executeSend, isIrcEnabled } from "../irc/messaging";
+import { resolvePromptAsset, renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import agentPromptDoc from "../prompts/internal-urls/agent.md" with { type: "text" };
 import agentProgressTemplate from "../prompts/tools/agent-url-progress.md" with { type: "text" };
 import agentSupersededTemplate from "../prompts/tools/agent-url-superseded.md" with { type: "text" };
@@ -150,7 +151,8 @@ export class AgentProtocolHandler implements ProtocolHandler {
 	};
 
 	promptDoc(): string {
-		return agentPromptDoc.trim();
+		const { text } = resolvePromptAsset("internal-urls/agent.md", agentPromptDoc);
+		return (text === agentPromptDoc ? text : prompt.render(text)).trim();
 	}
 
 	/**
@@ -221,7 +223,7 @@ export class AgentProtocolHandler implements ProtocolHandler {
 			// non-terminal yield, or parked before publishing) is the same
 			// registry `write agent://<id>` delivers to: answer with its progress.
 			const ref = registry.get(outputId);
-			if (ref && ref.kind !== "advisor") return this.#resolveProgress(url, ref, extraction);
+			if (ref && ref.kind !== "advisor") return this.#resolveProgress(url, ref, extraction, context?.cwd);
 			if (!scan) throw new Error("No session - agent outputs unavailable");
 			if (!scan.anyDirExists) throw new Error("No artifacts directory found");
 			const registered = registry
@@ -248,10 +250,15 @@ export class AgentProtocolHandler implements ProtocolHandler {
 		// unmarked, a reader takes it as the current state.
 		if (!extraction && isSuperseded(registry, outputId)) {
 			const publishedAt = (await fs.stat(scan.foundPath)).mtimeMs;
-			content = `${prompt.render(agentSupersededTemplate, {
-				id: outputId,
-				age: formatDuration(Math.max(0, Date.now() - publishedAt)),
-			})}${rawContent}`;
+			content = `${renderPromptAsset(
+				"tools/agent-url-superseded.md",
+				agentSupersededTemplate,
+				{
+					id: outputId,
+					age: formatDuration(Math.max(0, Date.now() - publishedAt)),
+				},
+				{ cwd: context?.cwd, kind: "notice" },
+			)}${rawContent}`;
 			notes.push(`Superseded: ${outputId} is running a newer turn`);
 		}
 		let contentType: InternalResource["contentType"] = "text/markdown";
@@ -312,7 +319,12 @@ export class AgentProtocolHandler implements ProtocolHandler {
 	 * its latest assistant text. Reads the live session's messages, else the
 	 * retained session file. JSON-path extraction needs the published output.
 	 */
-	async #resolveProgress(url: InternalUrl, ref: AgentRef, extraction: boolean): Promise<InternalResource> {
+	async #resolveProgress(
+		url: InternalUrl,
+		ref: AgentRef,
+		extraction: boolean,
+		cwd?: string,
+	): Promise<InternalResource> {
 		if (extraction) {
 			throw new Error(
 				`Output ${ref.id} is not published yet (status: ${ref.status}); read agent://${ref.id} for its progress.`,
@@ -329,13 +341,18 @@ export class AgentProtocolHandler implements ProtocolHandler {
 		}
 		const sections = yieldSections(messages);
 		const lastText = lastAssistantText(messages);
-		const content = `${prompt.render(agentProgressTemplate, {
-			id: ref.id,
-			status: ref.status,
-			sections,
-			lastText,
-			empty: sections.length === 0 && !lastText,
-		})}\n`;
+		const content = `${renderPromptAsset(
+			"tools/agent-url-progress.md",
+			agentProgressTemplate,
+			{
+				id: ref.id,
+				status: ref.status,
+				sections,
+				lastText,
+				empty: sections.length === 0 && !lastText,
+			},
+			{ cwd, kind: "notice" },
+		)}\n`;
 		return {
 			url: url.href,
 			content,

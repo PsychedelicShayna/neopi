@@ -1,3 +1,4 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { type } from "@oh-my-pi/omptype";
 import type {
 	AgentTool,
@@ -6,8 +7,6 @@ import type {
 	AgentToolUpdateCallback,
 	ToolTier,
 } from "@oh-my-pi/pi-agent-core";
-
-import { prompt } from "@oh-my-pi/pi-utils";
 
 import goalDescription from "../../prompts/tools/goal.md" with { type: "text" };
 
@@ -65,7 +64,9 @@ export class GoalTool implements AgentTool<typeof goalSchema, GoalToolDetails> {
 	readonly approval = (args: unknown): ToolTier =>
 		args !== null && typeof args === "object" && "op" in args && args.op === "get" ? "read" : "write";
 	readonly label = "Goal";
-	readonly description = prompt.render(goalDescription);
+	get description(): string {
+		return renderPromptAsset("tools/goal.md", goalDescription, {}, { cwd: this.#session.cwd });
+	}
 	readonly parameters = goalSchema;
 	readonly strict = true;
 	readonly intent = "omit" as const;

@@ -1,3 +1,4 @@
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * Tools of the two `/issue` agents (#305). The resolver gets only
  * `issue_target`; the author gets read-only tracker access plus one
@@ -100,7 +101,7 @@ export function createIssueDeclineTool(options: {
 	return {
 		name: "issue_decline",
 		label: "Decline filing",
-		description: declineDescription.trim(),
+		description: resolvePromptAsset("issues/tool-decline.md", declineDescription).text.trim(),
 		parameters: declineSchema,
 		approval: "read",
 		strict: true,
@@ -207,7 +208,7 @@ export function createIssueTargetTool(options: {
 	return {
 		name: "issue_target",
 		label: "Issue target",
-		description: targetDescription.trim(),
+		description: resolvePromptAsset("issues/tool-target.md", targetDescription).text.trim(),
 		parameters: targetSchema,
 		approval: "read",
 		strict: true,
@@ -426,7 +427,7 @@ export function createIssueAuthorTools(options: IssueAuthorToolOptions): CustomT
 		{
 			name: "issue_labels",
 			label: "Issue labels",
-			description: labelsDescription.trim(),
+			description: resolvePromptAsset("issues/tool-labels.md", labelsDescription).text.trim(),
 			parameters: emptySchema,
 			approval: "read",
 			strict: true,
@@ -440,7 +441,7 @@ export function createIssueAuthorTools(options: IssueAuthorToolOptions): CustomT
 		{
 			name: "issue_samples",
 			label: "Issue samples",
-			description: samplesDescription.trim(),
+			description: resolvePromptAsset("issues/tool-samples.md", samplesDescription).text.trim(),
 			parameters: emptySchema,
 			approval: "read",
 			strict: true,
@@ -475,7 +476,7 @@ export function createIssueAuthorTools(options: IssueAuthorToolOptions): CustomT
 		{
 			name: "issue_search",
 			label: "Issue search",
-			description: searchDescription.trim(),
+			description: resolvePromptAsset("issues/tool-search.md", searchDescription).text.trim(),
 			parameters: searchSchema,
 			approval: "read",
 			strict: true,
@@ -509,7 +510,7 @@ export function createIssueAuthorTools(options: IssueAuthorToolOptions): CustomT
 		{
 			name: "issue_view",
 			label: "Issue view",
-			description: viewDescription.trim(),
+			description: resolvePromptAsset("issues/tool-view.md", viewDescription).text.trim(),
 			parameters: viewSchema,
 			approval: "read",
 			strict: true,
@@ -524,7 +525,7 @@ export function createIssueAuthorTools(options: IssueAuthorToolOptions): CustomT
 		{
 			name: "issue_publish",
 			label: "Publish issue",
-			description: publishDescription.trim(),
+			description: resolvePromptAsset("issues/tool-publish.md", publishDescription).text.trim(),
 			parameters: publishSchema,
 			approval: "write",
 			strict: true,
@@ -562,7 +563,7 @@ export function createIssueAuthorTools(options: IssueAuthorToolOptions): CustomT
 		{
 			name: "issue_existing_owner",
 			label: "Existing owner",
-			description: existingOwnerDescription.trim(),
+			description: resolvePromptAsset("issues/tool-existing-owner.md", existingOwnerDescription).text.trim(),
 			parameters: existingOwnerSchema,
 			approval: "read",
 			strict: true,

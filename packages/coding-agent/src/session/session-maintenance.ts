@@ -1,3 +1,4 @@
+import { resolvePromptAsset, renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /** Context maintenance for an active coding-agent session. */
 
 import { scheduler } from "node:timers/promises";
@@ -13,7 +14,7 @@ import {
 } from "@oh-my-pi/pi-agent-core";
 import {
 	AGGRESSIVE_SHAKE_CONFIG,
-	AUTO_HANDOFF_THRESHOLD_FOCUS,
+	getAutoHandoffThresholdFocus,
 	applyShakeRegions,
 	CompactionCancelledError,
 	type CompactionDetails,
@@ -65,7 +66,7 @@ import { openAIResponsesReplaysNativeHistory } from "@oh-my-pi/pi-ai/providers/o
 import { resolvePromptCacheLookback } from "@oh-my-pi/pi-catalog/compat/prompt-cache-lookback";
 import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
-import { isRecord, logger, prompt, Snowflake } from "@oh-my-pi/pi-utils";
+import { isRecord, logger, Snowflake } from "@oh-my-pi/pi-utils";
 import * as snapcompact from "@oh-my-pi/snapcompact";
 import { writeArtifact } from "./artifacts";
 import type { ModelRegistry } from "../config/model-registry";
@@ -111,8 +112,8 @@ import type { CompactionEntry, SessionEntry } from "./session-entries";
 import type { SessionManager } from "./session-manager";
 import type { ShakeMode, ShakeResult } from "./shake-types";
 import { resolveSpeculationLeadTokens, SPECULATION_LEAD_MIN_TOKENS } from "./speculation-lead";
-import experimentalContextNotesReminderPrompt from "../prompts/system/experimental-context-notes-reminder.md" with { type: "text" };
-import experimentalContextRolloverPrompt from "../prompts/system/experimental-context-rollover.md" with { type: "text" };
+import bundledExperimentalContextNotesReminderPrompt from "../prompts/system/experimental-context-notes-reminder.md" with { type: "text" };
+import bundledExperimentalContextRolloverPrompt from "../prompts/system/experimental-context-rollover.md" with { type: "text" };
 import lengthStopRetryTemplate from "../prompts/system/length-stop-retry.md" with { type: "text" };
 
 import {
@@ -385,10 +386,11 @@ function mergeLlmCompactionPreserveData(
 function handoffSummaryFromDocument(
 	document: string,
 	preparation: CompactionPreparation,
+	cwd: string,
 ): { summary: string; details: CompactionDetails } {
 	const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
 	return {
-		summary: upsertFileOperations(document, readFiles, modifiedFiles, preparation.fileOps.read),
+		summary: upsertFileOperations(document, readFiles, modifiedFiles, preparation.fileOps.read, cwd),
 		details: { readFiles, modifiedFiles },
 	};
 }
@@ -616,7 +618,13 @@ export class SessionMaintenance {
 			"empty";
 		if (this.#experimentalNotesReminderBoundaryId === boundaryId) return;
 		this.#experimentalNotesReminderBoundaryId = boundaryId;
-		this.#host.queueExperimentalContextNotesReminder(experimentalContextNotesReminderPrompt);
+		this.#host.queueExperimentalContextNotesReminder(
+			resolvePromptAsset(
+				"system/experimental-context-notes-reminder.md",
+				bundledExperimentalContextNotesReminderPrompt,
+				{ cwd: this.#host.sessionManager.getCwd(), kind: "notice" },
+			).text,
+		);
 	}
 
 	/** Clears per-prompt recovery counters when a new user prompt starts. */
@@ -1665,7 +1673,11 @@ export class SessionMaintenance {
 						preserveData: prepared.preserveData,
 					}
 				: {
-						summary: experimentalContextRolloverPrompt,
+						summary: resolvePromptAsset(
+							"system/experimental-context-rollover.md",
+							bundledExperimentalContextRolloverPrompt,
+							{ cwd: this.#host.sessionManager.getCwd() },
+						).text,
 						shortSummary: undefined,
 						firstKeptEntryId: preparation.firstKeptEntryId,
 						tokensBefore: preparation.tokensBefore,
@@ -1824,7 +1836,11 @@ export class SessionMaintenance {
 							preserveData: prepared.preserveData,
 						}
 					: {
-							summary: experimentalContextRolloverPrompt,
+							summary: resolvePromptAsset(
+								"system/experimental-context-rollover.md",
+								bundledExperimentalContextRolloverPrompt,
+								{ cwd: this.#host.sessionManager.getCwd() },
+							).text,
 							shortSummary: undefined,
 							firstKeptEntryId: preparation.firstKeptEntryId,
 							tokensBefore: options.triggerContextTokens ?? preparation.tokensBefore,
@@ -2059,7 +2075,11 @@ export class SessionMaintenance {
 		try {
 			const result = await this.#host.generateHandoffDocument(customInstructions, options);
 			if (!result) return undefined;
-			const { summary, details } = handoffSummaryFromDocument(result.document, preparation);
+			const { summary, details } = handoffSummaryFromDocument(
+				result.document,
+				preparation,
+				this.#host.sessionManager.getCwd(),
+			);
 			await this.#commitCompactionEntry({
 				summary,
 				shortSummary: undefined,
@@ -2243,12 +2263,19 @@ export class SessionMaintenance {
 		const signal = run.controller.signal;
 		let armed: ArmedSpeculation;
 		if (method === "handoff") {
-			const generated = await this.#host.generateHandoffDocument(AUTO_HANDOFF_THRESHOLD_FOCUS, {
-				autoTriggered: true,
-				signal,
-			});
+			const generated = await this.#host.generateHandoffDocument(
+				getAutoHandoffThresholdFocus(this.#host.sessionManager.getCwd()),
+				{
+					autoTriggered: true,
+					signal,
+				},
+			);
 			if (!generated) return clear();
-			const { summary, details } = handoffSummaryFromDocument(generated.document, preparation);
+			const { summary, details } = handoffSummaryFromDocument(
+				generated.document,
+				preparation,
+				this.#host.sessionManager.getCwd(),
+			);
 			armed = {
 				result: {
 					summary,
@@ -3217,11 +3244,16 @@ export class SessionMaintenance {
 							content: [
 								{
 									type: "text",
-									text: prompt.render(lengthStopRetryTemplate, {
-										outputTokens: assistantMessage.usage.output,
-										retryCount: this.#incompleteRecoveryAttempts,
-										maxRetries: INCOMPLETE_RECOVERY_MAX_RETRIES,
-									}),
+									text: renderPromptAsset(
+										"system/length-stop-retry.md",
+										lengthStopRetryTemplate,
+										{
+											outputTokens: assistantMessage.usage.output,
+											retryCount: this.#incompleteRecoveryAttempts,
+											maxRetries: INCOMPLETE_RECOVERY_MAX_RETRIES,
+										},
+										{ cwd: this.#host.sessionManager.getCwd(), kind: "notice" },
+									),
 								},
 							],
 							attribution: "agent",
@@ -3520,6 +3552,7 @@ export class SessionMaintenance {
 					signal,
 					{
 						...options,
+						cwd: this.#host.sessionManager.getCwd(),
 						metadata: this.#host.agent.metadataForProvider(candidate.provider),
 						convertToLlm: messages => this.#host.convertToLlmForSideRequest(messages),
 						buildProviderContext: (summarized, retained, signal) =>
@@ -3795,6 +3828,7 @@ export class SessionMaintenance {
 		settings: EngineCompactionSettings,
 		pendingTokens: number,
 	): Promise<{ result: snapcompact.CompactionResult; framePayloadBytes: number }> {
+		options = { ...options, cwd: this.#host.sessionManager.getCwd() };
 		let result = await snapcompact.compact(preparation, options);
 		let framePayloadBytes = this.#snapcompactFramePayloadBytes(result);
 		const ctxWindow = this.#model?.contextWindow ?? 0;
@@ -4334,6 +4368,7 @@ export class SessionMaintenance {
 					fileOps,
 				},
 				{
+					cwd: this.#host.sessionManager.getCwd(),
 					convertToLlm,
 					model: this.#model,
 					...(shapeSetting === "auto" ? {} : { shape }),
@@ -4826,10 +4861,13 @@ export class SessionMaintenance {
 			// configured preference.
 			let handoffDocument: HandoffResult | undefined;
 			if (action === "handoff" && compactionPrep.kind !== "fromHook") {
-				handoffDocument = await this.#host.generateHandoffDocument(AUTO_HANDOFF_THRESHOLD_FOCUS, {
-					autoTriggered: true,
-					signal: autoCompactionSignal,
-				});
+				handoffDocument = await this.#host.generateHandoffDocument(
+					getAutoHandoffThresholdFocus(this.#host.sessionManager.getCwd()),
+					{
+						autoTriggered: true,
+						signal: autoCompactionSignal,
+					},
+				);
 				if (autoCompactionSignal.aborted) {
 					await this.#emitLifecycleEvent(
 						{
@@ -5057,7 +5095,11 @@ export class SessionMaintenance {
 				details = compactionPrep.details;
 				preserveData = compactionPrep.preserveData;
 			} else if (handoffDocument) {
-				const handoffSummary = handoffSummaryFromDocument(handoffDocument.document, preparation);
+				const handoffSummary = handoffSummaryFromDocument(
+					handoffDocument.document,
+					preparation,
+					this.#host.sessionManager.getCwd(),
+				);
 				summary = handoffSummary.summary;
 				shortSummary = undefined;
 				firstKeptEntryId = preparation.firstKeptEntryId;
@@ -5115,6 +5157,7 @@ export class SessionMaintenance {
 								undefined,
 								autoCompactionSignal,
 								{
+									cwd: this.#host.sessionManager.getCwd(),
 									promptOverride: this.#host.obfuscateTextForProvider(compactionPrep.hookPrompt),
 									extraContext: compactionPrep.hookContext,
 									remoteSystemPrompt: this.#host.agent.state.systemPrompt,

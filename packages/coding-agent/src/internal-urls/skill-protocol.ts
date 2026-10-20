@@ -16,6 +16,8 @@ import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { resolveContainedPath } from "../discovery/contained-path";
 import { getActiveSkills, type Skill } from "../extensibility/skills";
 import { MCPManager } from "../mcp/manager";
+import { render as renderPrompt } from "@oh-my-pi/pi-utils/prompt";
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import skillDoc from "../prompts/internal-urls/skill.md" with { type: "text" };
 import {
 	buildDirectoryResource,
@@ -121,7 +123,9 @@ export class SkillProtocolHandler implements ProtocolHandler {
 
 	/** Advertised only when loaded skills are readable through an active tool. */
 	promptDoc(host: SchemeHost): string | undefined {
-		return host.skillUriAccess ? skillDoc.trim() : undefined;
+		if (!host.skillUriAccess) return undefined;
+		const { text } = resolvePromptAsset("internal-urls/skill.md", skillDoc);
+		return (text === skillDoc ? text : renderPrompt(text)).trim();
 	}
 
 	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {

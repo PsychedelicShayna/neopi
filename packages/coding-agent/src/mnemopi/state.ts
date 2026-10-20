@@ -1,10 +1,11 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { dirname } from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type * as MnemopiNs from "@oh-my-pi/pi-mnemopi";
 import type { Mnemopi, RecallResult } from "@oh-my-pi/pi-mnemopi";
 import type * as MnemopiCoreNs from "@oh-my-pi/pi-mnemopi/core";
 import type { LocalModelInitializer } from "@oh-my-pi/pi-mnemopi/core";
-import { logger, prompt, toError, withLoopPhase } from "@oh-my-pi/pi-utils";
+import { logger, toError, withLoopPhase } from "@oh-my-pi/pi-utils";
 import {
 	composeRecallQuery,
 	prepareEmbeddableRetentionTranscript,
@@ -555,9 +556,14 @@ export class MnemopiSessionState {
 	 * that ends in "…" when it cut one.
 	 */
 	budgetRecallBlock(block: string): string {
-		const instructions = prompt.render(mnemopiInstructions, {
-			toolRefs: memoryToolRefs(this.session.getXdevToolEntries()),
-		});
+		const instructions = renderPromptAsset(
+			"system/mnemopi-instructions.md",
+			mnemopiInstructions,
+			{
+				toolRefs: memoryToolRefs(this.session.getXdevToolEntries()),
+			},
+			{ cwd: this.session.sessionManager.getCwd() },
+		);
 		return truncateApproxTokens(
 			[instructions, block].join("\n\n").trim(),
 			cfgMnemopiInjectionTokenLimit.get(this.session.settings),
@@ -612,7 +618,15 @@ export class MnemopiSessionState {
 			updated.push({ before: quoteMemoryText(memory.text), after: quoteMemoryText(text) });
 		}
 		if (removed.length === 0 && updated.length === 0) return undefined;
-		return { content: prompt.render(memoryRecallChangesPrompt, { removed, updated }), memories: current };
+		return {
+			content: renderPromptAsset(
+				"system/memory-recall-changes.md",
+				memoryRecallChangesPrompt,
+				{ removed, updated },
+				{ cwd: this.session.sessionManager.getCwd() },
+			),
+			memories: current,
+		};
 	}
 
 	/**

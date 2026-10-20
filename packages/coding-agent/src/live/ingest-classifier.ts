@@ -17,6 +17,7 @@ import type { ModelRegistry } from "../config/model-registry";
 import { resolveRoleChain } from "../config/model-resolver";
 import { LIVE_DELEGATION_MESSAGE_TYPE } from "../session/messages";
 import systemPrompt from "./prompts/subagent-importance.md" with { type: "text" };
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 
 export const LIVE_INGEST_FALLBACK_WINDOW_TOKENS = 128_000;
 const FRAMING_RESERVE = 2_048;
@@ -194,7 +195,7 @@ export function resolveClassifierSelections(settings: Settings, registry: ModelR
 export function budgetClassifierInput(
 	input: ClassifierInput,
 	selection: ClassifierSelection,
-	systemText = systemPrompt,
+	systemText = resolvePromptAsset("live/subagent-importance.md", systemPrompt).text,
 ): string | undefined {
 	const { effectiveOutputAllowance: output, window, tokenizer } = selection;
 	if (
@@ -343,7 +344,7 @@ export async function classifySubagentImportance(
 	const sessionId = Bun.randomUUIDv7();
 	const agent = new Agent({
 		initialState: {
-			systemPrompt: [systemPrompt],
+			systemPrompt: [resolvePromptAsset("live/subagent-importance.md", systemPrompt).text],
 			model: deps.selection.model,
 			thinkingLevel: toReasoningEffort(deps.selection.thinkingLevel),
 			tools: [],

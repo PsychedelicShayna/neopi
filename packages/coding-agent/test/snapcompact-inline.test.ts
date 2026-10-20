@@ -1,4 +1,7 @@
 import { describe, expect, it, spyOn } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import type {
 	AssistantMessage,
 	Context,
@@ -16,6 +19,8 @@ import {
 	type SnapcompactInlineOptions,
 	SnapcompactInlineTransformer,
 } from "@oh-my-pi/pi-coding-agent/session/snapcompact-inline";
+import * as dirs from "@oh-my-pi/pi-utils/dirs";
+import { Snowflake } from "@oh-my-pi/pi-utils/snowflake";
 import * as snapcompact from "@oh-my-pi/snapcompact";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
@@ -104,6 +109,69 @@ function imageCount(context: Context): number {
 }
 
 describe("SnapcompactInlineTransformer", () => {
+	it("reloads system, context and tool-result notices while keeping cached image frames", async () => {
+		const root = path.join(os.homedir(), ".cache/npi-canary/snapcompact-prompt-assets", Snowflake.next());
+		await fs.mkdir(root, { recursive: true });
+		const cwd = spyOn(dirs, "getProjectDir").mockReturnValue(root);
+		const agentDir = spyOn(dirs, "getAgentDir").mockReturnValue(path.join(root, "user-agent"));
+		try {
+			const writeNotice = (name: string, text: string) =>
+				Bun.write(path.join(root, ".omp/builtin-prompts/system", `snapcompact-${name}.md`), text);
+			await writeNotice("system-stub", "System stub one");
+			await writeNotice("system-frames-note", "System frames one");
+			await writeNotice("toolresult-note", "Tool frames one");
+			await writeNotice("context-stub", "Context stub");
+			await writeNotice("context-frames-note", "Context frames");
+			const options = withTestShape({ renderSystemPrompt: "all", renderToolResults: true });
+			let renders = 0;
+			const transformer = new SnapcompactInlineTransformer(options, undefined, {
+				async framesFor(text, shape) {
+					renders++;
+					return Array.from({ length: snapcompact.frames(text, { shape }) }, () => ({
+						type: "image" as const,
+						data: "ZnJhbWU=",
+						mimeType: "image/png",
+					}));
+				},
+			});
+			const context: Context = {
+				systemPrompt: [denseText(3000)],
+				messages: [userMessage("go"), toolResult("call_1", LARGE)],
+			};
+			const first = await transformer.transform(context, makeModel());
+			expect(first.systemPrompt).toEqual(["System stub one"]);
+			expect((first.messages[0].content as TextContent[])[0].text).toBe("System frames one");
+			expect((first.messages[1].content as TextContent[])[0].text).toBe("Tool frames one");
+			const firstRenders = renders;
+			expect(firstRenders).toBeGreaterThan(0);
+
+			await writeNotice("system-stub", "System stub two, changed");
+			await writeNotice("system-frames-note", "System frames two, changed");
+			await writeNotice("toolresult-note", "Tool frames two, changed");
+			const second = await transformer.transform(context, makeModel());
+			expect(second.systemPrompt).toEqual(["System stub two, changed"]);
+			expect((second.messages[0].content as TextContent[])[0].text).toBe("System frames two, changed");
+			expect((second.messages[1].content as TextContent[])[0].text).toBe("Tool frames two, changed");
+			expect(renders).toBe(firstRenders);
+
+			options.renderSystemPrompt = "agents-md";
+			options.renderToolResults = false;
+			const scoped = await transformer.transform(
+				{
+					systemPrompt: [`Core\n<repo-rules>\n${denseText(3000)}\n</repo-rules>\nTail`],
+					messages: [userMessage("go")],
+				},
+				makeModel(),
+			);
+			expect(scoped.systemPrompt).toEqual(["Core\nContext stub\nTail"]);
+			expect((scoped.messages[0].content as TextContent[])[0].text).toBe("Context frames");
+		} finally {
+			cwd.mockRestore();
+			agentDir.mockRestore();
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
+
 	it("is a no-op for text-only models", async () => {
 		const transformer = new SnapcompactInlineTransformer(
 			withTestShape({ renderSystemPrompt: "all", renderToolResults: true }),

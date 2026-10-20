@@ -1,4 +1,5 @@
-import { prompt } from "@oh-my-pi/pi-utils";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
+
 import { settings } from "../../config/settings";
 import xReadPrompt from "../../prompts/system/x-read.md" with { type: "text" };
 import { ToolAbortError } from "../../tools/tool-errors";
@@ -79,7 +80,7 @@ export const handleTwitter: SpecialHandler = async (url, timeout, signal, _stora
 		);
 	}
 
-	const systemPrompt = prompt.render(xReadPrompt, promptContext(target));
+	const systemPrompt = renderPromptAsset("system/x-read.md", xReadPrompt, promptContext(target));
 	// Handle filters bind every keyword/semantic search, so a profile read cannot drift to other authors.
 	const xSearch =
 		target.kind === "profile" ? { type: "x_search", allowed_x_handles: [target.handle] } : { type: "x_search" };

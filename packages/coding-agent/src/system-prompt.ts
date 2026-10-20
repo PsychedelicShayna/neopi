@@ -9,6 +9,7 @@ import type { ToolExample, TSchema } from "@oh-my-pi/pi-ai";
 import { renderToolInventory } from "@oh-my-pi/pi-ai/dialect";
 import type { DelegationBias } from "@oh-my-pi/pi-catalog/compat/delegation";
 import { $env, getAgentDir, getProjectDir, hasFsCode, isEnoent, logger, prompt } from "@oh-my-pi/pi-utils";
+import { compilePromptAsset, renderPromptAsset, resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { contextFileCapability } from "./capability/context-file";
 import { systemPromptCapability } from "./capability/system-prompt";
 import { findConfigFile } from "./config";
@@ -21,6 +22,7 @@ import { SkillDescriptionCatalog } from "./extensibility/skill-descriptions";
 import { loadSkills, type Skill } from "./extensibility/skills";
 import { InternalUrlRouter } from "./internal-urls/router";
 import type { SchemeHost } from "./internal-urls/types";
+import { buildSystemPromptContext } from "./prompts/contexts";
 import activeRepoContextTemplate from "./prompts/system/active-repo-context.md" with { type: "text" };
 import customSystemPromptTemplate from "./prompts/system/custom-system-prompt.md" with { type: "text" };
 import defaultPersonality from "./prompts/system/personalities/default.md" with { type: "text" };
@@ -207,13 +209,16 @@ function firstNonEmpty(...values: (string | undefined | null)[]): string | null 
 	return null;
 }
 
-function renderActiveRepoContextPrompt(activeRepoContext: ActiveRepoContext | null): string {
+function renderActiveRepoContextPrompt(activeRepoContext: ActiveRepoContext | null, cwd: string): string {
 	if (!activeRepoContext) return "";
-	return prompt
-		.render(activeRepoContextTemplate, {
+	return renderPromptAsset(
+		"system/active-repo-context.md",
+		activeRepoContextTemplate,
+		{
 			relativeRepoRoot: normalizePromptPath(activeRepoContext.relativeRepoRoot),
-		})
-		.trim();
+		},
+		{ cwd },
+	).trim();
 }
 
 const SYSTEM_PROMPT_PREP_TIMEOUT_MS = 5000;
@@ -641,15 +646,23 @@ export interface BuildSystemPromptResult {
 	xdevCatalogNames?: readonly string[];
 }
 
-/** Static wrapper; compiled (not rendered) so user-authored Markdown passes through byte-for-byte. */
-const renderUserAppend = prompt.compile(userAppendPromptTemplate.trimEnd());
+/** Compile on each read so overrides reload while inserted Markdown remains literal. */
+function renderUserAppend(data: { generatedAppend: string; userAppend: string | undefined }, cwd?: string): string {
+	return prompt.compile(resolvePromptAsset("system/user-append.md", userAppendPromptTemplate, { cwd }).text.trimEnd())(
+		data,
+	);
+}
 
 /**
  * Join generated append blocks (memory, auto-learn, `xd://` routes, MCP server
  * instructions) with the user's append prompt. Keep the user text in its own
  * section so it is not misclassified as MCP server-controlled instructions.
  */
-export function composeAppendPrompt(appendParts: readonly string[], appendSystemPrompt?: string): string | undefined {
+export function composeAppendPrompt(
+	appendParts: readonly string[],
+	appendSystemPrompt?: string,
+	cwd?: string,
+): string | undefined {
 	const generated = appendParts.length > 0 ? appendParts.join("\n\n") : undefined;
 	if (!appendSystemPrompt || appendSystemPrompt.trim().length === 0) {
 		return generated;
@@ -657,7 +670,7 @@ export function composeAppendPrompt(appendParts: readonly string[], appendSystem
 	if (!generated) {
 		return appendSystemPrompt;
 	}
-	return renderUserAppend({ generatedAppend: generated, userAppend: appendSystemPrompt });
+	return renderUserAppend({ generatedAppend: generated, userAppend: appendSystemPrompt }, cwd);
 }
 
 /** Build the system prompt with tools, guidelines, and context */
@@ -840,13 +853,8 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 			? Promise.resolve(providedActiveRepoContext)
 			: logger.time("resolveActiveRepoContext", () => resolveActiveRepoContext(resolvedCwd));
 	// "none" (explicit off — and every subagent) omits the block and skips the file lookup.
-	const bundledPersonality = personality === "none" ? "" : PERSONALITY_SPECS[personality].trim();
-	const personalityPromise: Promise<string> =
-		personality === "none"
-			? Promise.resolve("")
-			: logger
-					.time("loadPersonalityOverride", loadPersonalityOverride)
-					.then(override => override ?? bundledPersonality);
+	const personalityPromise: Promise<string | null> =
+		personality === "none" ? Promise.resolve("") : logger.time("loadPersonalityOverride", loadPersonalityOverride);
 
 	const [
 		resolvedCustomPrompt,
@@ -856,7 +864,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		skills,
 		workspaceTree,
 		activeRepoContext,
-		personalityBlock,
+		personalityOverride,
 	] = await Promise.all([
 		withDeadline(
 			"customPrompt",
@@ -879,9 +887,16 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		withDeadline("loadSkills", skillsPromise, prepDefaults.skills),
 		withDeadline("buildWorkspaceTree", workspaceTreePromise, prepDefaults.workspaceTree),
 		withDeadline("resolveActiveRepoContext", activeRepoContextPromise, prepDefaults.activeRepoContext),
-		withDeadline("loadPersonalityOverride", personalityPromise, bundledPersonality),
+		withDeadline("loadPersonalityOverride", personalityPromise, null),
 	]);
 	clearTimeout(deadlineTimer);
+	const personalityBlock =
+		personality === "none"
+			? ""
+			: (personalityOverride ??
+				compilePromptAsset(`system/personalities/${personality}.md`, PERSONALITY_SPECS[personality], {
+					cwd: resolvedCwd,
+				})({}).trim());
 	const agentsMdFiles = Array.from(new Set(workspaceTree.agentsMdFiles)).sort().slice(0, AGENTS_MD_LIMIT);
 
 	if (timedOut.length > 0) {
@@ -905,7 +920,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	}
 
 	const promptCwd = normalizePromptPath(resolvedCwd);
-	const activeRepoContextPrompt = renderActiveRepoContextPrompt(activeRepoContext);
+	const activeRepoContextPrompt = renderActiveRepoContextPrompt(activeRepoContext, resolvedCwd);
 
 	// Build tool metadata for system prompt rendering.
 	// Priority: explicit list > tools map > conservative SDK fallback.
@@ -993,7 +1008,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	const injectedAlwaysApplyRules = dedupeAlwaysApplyRules(alwaysApplyRules, promptSources);
 
 	const environment = getEnvironmentInfo();
-	const data = {
+	const data = buildSystemPromptContext({
 		systemPromptCustomization: effectiveSystemPromptCustomization,
 		customPrompt: resolvedCustomPrompt,
 		appendPrompt: resolvedAppendPrompt ?? "",
@@ -1041,13 +1056,18 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		autoQaEnabled,
 		writeTransportOnly,
 		subagent,
-	};
-	const selectedTemplate = resolvedCustomPrompt
-		? customSystemPromptTemplate
-		: (resolvedSystemPromptTemplate ?? systemPromptTemplate);
+	});
 	let rendered: string;
 	try {
-		rendered = prompt.render(selectedTemplate, data);
+		rendered =
+			resolvedSystemPromptTemplate !== undefined && !resolvedCustomPrompt
+				? prompt.render(resolvedSystemPromptTemplate, data)
+				: renderPromptAsset(
+						resolvedCustomPrompt ? "system/custom-system-prompt.md" : "system/system-prompt.md",
+						resolvedCustomPrompt ? customSystemPromptTemplate : systemPromptTemplate,
+						data,
+						{ cwd: resolvedCwd },
+					);
 	} catch (error) {
 		if (resolvedSystemPromptTemplate === undefined) throw error;
 		if (!hasDiscoveredTemplate) {
@@ -1057,7 +1077,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 			error: String(error),
 		});
 		resolvedSystemPromptTemplate = undefined;
-		rendered = prompt.render(systemPromptTemplate, data);
+		rendered = renderPromptAsset("system/system-prompt.md", systemPromptTemplate, data, { cwd: resolvedCwd });
 	}
 	const systemPrompt = [rendered];
 	for (const prelude of evalPreludes) {
@@ -1069,9 +1089,15 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	// `<project-context>` block after every static block, so sessions in
 	// different directories share the static prefix and the Anthropic head
 	// cache breakpoint lands right before this block.
-	const projectPrompt = prompt
-		.render(projectPromptTemplate, { ...data, activeRepoContext: activeRepoContextPrompt })
-		.trim();
+	const projectPrompt = renderPromptAsset(
+		"system/project-prompt.md",
+		projectPromptTemplate,
+		{
+			...data,
+			activeRepoContext: activeRepoContextPrompt,
+		},
+		{ cwd: resolvedCwd },
+	).trim();
 	if (projectPrompt) {
 		systemPrompt.push(projectPrompt);
 	}

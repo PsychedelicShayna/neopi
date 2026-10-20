@@ -1,5 +1,6 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import type { Agent, AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { prompt } from "@oh-my-pi/pi-utils";
+
 import { type IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import parentIrcSteerTemplate from "../prompts/steering/parent-irc.md" with { type: "text" };
 import ircIncomingTemplate from "../prompts/system/irc-incoming.md" with { type: "text" };
@@ -198,13 +199,18 @@ export class IrcBridge {
 		const record: CustomMessage = {
 			role: "custom",
 			customType: "irc:incoming",
-			content: prompt.render(ircIncomingTemplate, {
-				from: msg.from,
-				message: envelopeBody,
-				replyTo: msg.replyTo ?? "",
-				interrupting: streaming,
-				relayOnStop,
-			}),
+			content: renderPromptAsset(
+				"system/irc-incoming.md",
+				ircIncomingTemplate,
+				{
+					from: msg.from,
+					message: envelopeBody,
+					replyTo: msg.replyTo ?? "",
+					interrupting: streaming,
+					relayOnStop,
+				},
+				{ cwd: this.#host.sessionManager.getCwd() },
+			),
 			display: true,
 			details: {
 				id: msg.id,
@@ -222,7 +228,12 @@ export class IrcBridge {
 			if (fromParent) {
 				this.#host.agent.steer({
 					role: "user",
-					content: prompt.render(parentIrcSteerTemplate, { from: msg.from, message: envelopeBody }),
+					content: renderPromptAsset(
+						"steering/parent-irc.md",
+						parentIrcSteerTemplate,
+						{ from: msg.from, message: envelopeBody },
+						{ cwd: this.#host.sessionManager.getCwd(), kind: "notice" },
+					),
 					attribution: "agent",
 					timestamp: msg.ts,
 					steering: true,

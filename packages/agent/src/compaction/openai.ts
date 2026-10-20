@@ -53,7 +53,8 @@ import {
 	OPENAI_HEADER_VALUES,
 	OPENAI_HEADERS,
 } from "@oh-my-pi/pi-catalog/wire/codex";
-import { $env, isRecord, logger, prompt, ptree, stringifyJson, structuredCloneJSON } from "@oh-my-pi/pi-utils";
+import { $env, isRecord, logger, ptree, stringifyJson, structuredCloneJSON } from "@oh-my-pi/pi-utils";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { dataUrlImageSize } from "../image-tokens";
 import { Tokenizer } from "../tokenizer";
 import { appendAzureApiVersion, resolveAzureOpenAiBaseUrl } from "./azure-openai-endpoint";
@@ -79,7 +80,17 @@ export const OPENAI_REMOTE_COMPACTION_PRESERVE_KEY = "openaiRemoteCompaction";
  */
 export const REMOTE_COMPACTION_TIMEOUT_MS = 300_000;
 
-export const CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE = prompt.render(contextWindowTruncatedOutputPrompt);
+export function getContextWindowTruncatedOutputMessage(cwd?: string): string {
+	return renderPromptAsset(
+		"compaction/context-window-truncated-output.md",
+		contextWindowTruncatedOutputPrompt,
+		{},
+		{
+			cwd,
+			kind: "notice",
+		},
+	);
+}
 
 const REMOTE_COMPACTION_REQUEST_OVERHEAD_TOKENS = 256;
 /**
@@ -208,9 +219,12 @@ function probeRemoteCompactionInputBudget(
 	};
 }
 
-function rewriteToolOutputForContextWindow(item: Record<string, unknown>): Record<string, unknown> | undefined {
+function rewriteToolOutputForContextWindow(
+	item: Record<string, unknown>,
+	cwd?: string,
+): Record<string, unknown> | undefined {
 	if (item.type === "function_call_output" || item.type === "custom_tool_call_output") {
-		return { ...item, output: CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE };
+		return { ...item, output: getContextWindowTruncatedOutputMessage(cwd) };
 	}
 	if (item.type === "tool_search_output") {
 		return { ...item, tools: [] };
@@ -245,6 +259,7 @@ export function trimRemoteCompactionInputToContextWindow(
 	contextWindow: number | null | undefined,
 	instructions: string,
 	tools?: unknown[],
+	cwd?: string,
 ): TrimRemoteCompactionInputResult {
 	const before = probeRemoteCompactionInputBudget(input, tokenizer, instructions, tools, contextWindow);
 	if (before.fits) {
@@ -263,7 +278,7 @@ export function trimRemoteCompactionInputToContextWindow(
 	for (let index = input.length - 1; index >= 0 && !after.fits; index--) {
 		const item = input[index];
 		if (isToolResultImageAttachment(item)) continue;
-		const rewritten = rewriteToolOutputForContextWindow(item);
+		const rewritten = rewriteToolOutputForContextWindow(item, cwd);
 		if (!rewritten) break;
 		rewrittenInput ??= input.slice();
 		rewrittenInput[index] = rewritten;
@@ -823,6 +838,7 @@ export async function requestOpenAiRemoteCompaction(
 	instructions: string,
 	signal?: AbortSignal,
 	opts?: {
+		cwd?: string;
 		fetch?: FetchImpl;
 		timeoutMs?: number;
 		sessionId?: string;
@@ -841,6 +857,8 @@ export async function requestOpenAiRemoteCompaction(
 		new Tokenizer(model),
 		model.contextWindow,
 		instructions,
+		undefined,
+		opts?.cwd,
 	);
 	if (trimmed.rewrittenOutputs > 0) {
 		logger.info("Rewrote trailing tool outputs before OpenAI remote compaction", {

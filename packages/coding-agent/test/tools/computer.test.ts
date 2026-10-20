@@ -12,7 +12,7 @@ import {
 	type ComputerWorkerInbound,
 	type ComputerWorkerOutbound,
 	type ComputerWorkerTransport,
-	SCREEN_LOCKED_CAPTURE_NOTE,
+	screenLockedCaptureNotice,
 } from "@oh-my-pi/pi-coding-agent/tools/computer/protocol";
 import {
 	type ComputerController,
@@ -1307,7 +1307,7 @@ describe("computer worker round trips", () => {
 			const lines = caption?.type === "text" ? caption.text.split("\n") : [];
 			if (locked) {
 				expect(lines).toHaveLength(2);
-				expect(lines[1]).toBe(SCREEN_LOCKED_CAPTURE_NOTE);
+				expect(lines[1]).toBe(screenLockedCaptureNotice());
 				expect(result.payload.screenshots[0]?.screenLocked).toBe(true);
 				expect(result.payload.returnValue).toMatchObject({ screenLocked: true });
 			} else {

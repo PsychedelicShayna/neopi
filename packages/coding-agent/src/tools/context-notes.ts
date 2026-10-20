@@ -12,6 +12,8 @@ import {
 	MAX_CONTEXT_NOTES_BYTES,
 	type ContextNotesEntry,
 } from "../session/context-notes";
+import { render as renderPrompt } from "@oh-my-pi/pi-utils/prompt";
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import contextNotesDescription from "../prompts/tools/context-notes.md" with { type: "text" };
 import newContextDescription from "../prompts/tools/new-context.md" with { type: "text" };
 import type { ToolSession } from ".";
@@ -81,7 +83,10 @@ export class ContextNotesTool implements AgentTool<typeof contextNotesSchema, Co
 	readonly approval = (args: unknown): ToolApprovalDecision =>
 		args !== null && typeof args === "object" && Object.hasOwn(args, "text") ? "write" : "read";
 	readonly label = "Context Notes";
-	readonly description = contextNotesDescription;
+	get description(): string {
+		const { text } = resolvePromptAsset("tools/context-notes.md", contextNotesDescription, { cwd: this.session.cwd });
+		return text === contextNotesDescription ? text : renderPrompt(text);
+	}
 	readonly parameters = contextNotesSchema;
 	readonly strict = true;
 	readonly loadMode = "essential" as const;
@@ -151,7 +156,10 @@ export class NewContextTool implements AgentTool<typeof newContextSchema, NewCon
 	readonly name = "new_context";
 	readonly approval = "write" as const;
 	readonly label = "New Context";
-	readonly description = newContextDescription;
+	get description(): string {
+		const { text } = resolvePromptAsset("tools/new-context.md", newContextDescription, { cwd: this.session.cwd });
+		return text === newContextDescription ? text : renderPrompt(text);
+	}
 	readonly parameters = newContextSchema;
 	readonly strict = true;
 	readonly loadMode = "essential" as const;

@@ -95,6 +95,7 @@ describe("live persona generation catalogue and completion", () => {
 			browserSource: createModelBrowserSource(settings),
 			personas,
 			sessionId: "generation-test",
+			cwd: dir,
 			templates: [
 				{
 					name: "storyteller",
@@ -105,6 +106,42 @@ describe("live persona generation catalogue and completion", () => {
 			],
 		});
 	}
+
+	test("resolves generator templates from the session project without freezing reference values", async () => {
+		await Bun.write(
+			path.join(dir, ".omp/builtin-prompts/live/generate-persona.md"),
+			"Custom generator instructions.\n",
+		);
+		await Bun.write(
+			path.join(dir, ".omp/builtin-prompts/live/generate-persona-user.md"),
+			"Description: {{description}}\n{{#each references}}{{label}}: {{instructions}}{{/each}}",
+		);
+		const deps = await generation();
+		const completion = vi.spyOn(ai, "completeSimple").mockResolvedValue(response("Generated instructions."));
+		await deps.generate({
+			model,
+			references: ["live:1"],
+			description: "A cartographer",
+			doc,
+			signal: new AbortController().signal,
+		});
+		const context = completion.mock.calls[0][1];
+		expect(context.systemPrompt).toEqual(["Custom generator instructions.\n"]);
+		expect(context.messages[0].content).toContain("Description: A cartographer");
+		expect(context.messages[0].content).toContain("Speak in nautical riddles, {{firstName}}.");
+		await Bun.write(
+			path.join(dir, ".omp/builtin-prompts/live/generate-persona.md"),
+			"Updated generator instructions.",
+		);
+		await deps.generate({
+			model,
+			references: ["live:1"],
+			description: "A navigator",
+			doc,
+			signal: new AbortController().signal,
+		});
+		expect(completion.mock.calls[1][1].systemPrompt).toEqual(["Updated generator instructions."]);
+	});
 
 	test("lists all references without reading unselected file-backed prompts", async () => {
 		await fs.rm(path.join(dir, "file.md"));

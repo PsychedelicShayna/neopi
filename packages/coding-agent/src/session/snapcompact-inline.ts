@@ -16,6 +16,7 @@
 
 import { Tokenizer } from "@oh-my-pi/pi-agent-core";
 import type { Context, ImageContent, Message, Model, TextContent, UserMessage } from "@oh-my-pi/pi-ai";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import * as snapcompact from "@oh-my-pi/snapcompact";
 import type { SnapcompactFrameSink } from "../blob-broker/service";
 import contextFramesNote from "../prompts/system/snapcompact-context-frames-note.md" with { type: "text" };
@@ -27,6 +28,7 @@ import toolResultNote from "../prompts/system/snapcompact-toolresult-note.md" wi
 export type SnapcompactSystemPromptMode = "none" | "agents-md" | "all";
 
 export interface SnapcompactInlineOptions {
+	cwd?: string;
 	renderSystemPrompt: SnapcompactSystemPromptMode;
 	renderToolResults: boolean;
 	/** Frame variant override; `"auto"`/omitted picks the provider's eval winner. */
@@ -86,12 +88,17 @@ const CONTEXT_SECTION_PATTERNS = [
 	/## Context\n<instructions>\n[\s\S]*?\n<\/instructions>/g,
 ] as const;
 
-function replaceContextSections(block: string, extracted: string[]): string {
+function replaceContextSections(block: string, extracted: string[], cwd?: string): string {
 	let replaced = block;
 	for (const pattern of CONTEXT_SECTION_PATTERNS) {
 		replaced = replaced.replace(pattern, match => {
 			extracted.push(match.trim());
-			return contextStub.trim();
+			return renderPromptAsset(
+				"system/snapcompact-context-stub.md",
+				contextStub,
+				{},
+				{ cwd, kind: "notice" },
+			).trim();
 		});
 	}
 	return replaced;
@@ -100,6 +107,7 @@ function replaceContextSections(block: string, extracted: string[]): string {
 function selectSystemPromptImageTarget(
 	systemPrompt: readonly string[] | undefined,
 	mode: SnapcompactSystemPromptMode,
+	cwd?: string,
 ): SystemPromptImageTarget | undefined {
 	if (!systemPrompt?.length || mode === "none") return undefined;
 	if (mode === "all") {
@@ -108,20 +116,30 @@ function selectSystemPromptImageTarget(
 		return {
 			scope: "all",
 			text,
-			replacement: [systemStub],
-			userNote: systemFramesNote,
+			replacement: [renderPromptAsset("system/snapcompact-system-stub.md", systemStub, {}, { cwd, kind: "notice" })],
+			userNote: renderPromptAsset(
+				"system/snapcompact-system-frames-note.md",
+				systemFramesNote,
+				{},
+				{ cwd, kind: "notice" },
+			),
 		};
 	}
 
 	const extracted: string[] = [];
-	const replacement = systemPrompt.map(block => replaceContextSections(block, extracted));
+	const replacement = systemPrompt.map(block => replaceContextSections(block, extracted, cwd));
 	const text = extracted.join("\n\n");
 	if (!text) return undefined;
 	return {
 		scope: "agents-md",
 		text,
 		replacement,
-		userNote: contextFramesNote,
+		userNote: renderPromptAsset(
+			"system/snapcompact-context-frames-note.md",
+			contextFramesNote,
+			{},
+			{ cwd, kind: "notice" },
+		),
 	};
 }
 
@@ -503,7 +521,7 @@ export function estimateInlineSavings(input: {
 	let systemPromptTarget: SystemPromptImageTarget | undefined;
 	let systemPromptCandidate: InlineSystemPromptCandidate | undefined;
 	if (options.renderSystemPrompt !== "none") {
-		systemPromptTarget = selectSystemPromptImageTarget(input.systemPrompt, options.renderSystemPrompt);
+		systemPromptTarget = selectSystemPromptImageTarget(input.systemPrompt, options.renderSystemPrompt, options.cwd);
 		if (systemPromptTarget) {
 			systemPromptCandidate = {
 				textTokens: tokenizer.countTokens(systemPromptTarget.text),
@@ -616,6 +634,7 @@ export class SnapcompactInlineTransformer {
 	async transform(context: Context, model: Model): Promise<Context> {
 		// One consistent snapshot per request, even if settings change mid-transform.
 		const options: SnapcompactInlineOptions = {
+			cwd: this.options.cwd,
 			renderSystemPrompt: this.options.renderSystemPrompt,
 			renderToolResults: this.options.renderToolResults,
 			shape: this.options.shape,
@@ -641,7 +660,11 @@ export class SnapcompactInlineTransformer {
 		let systemPromptTarget: SystemPromptImageTarget | undefined;
 		let systemPromptCandidate: InlineSystemPromptCandidate | undefined;
 		if (options.renderSystemPrompt !== "none") {
-			systemPromptTarget = selectSystemPromptImageTarget(context.systemPrompt, options.renderSystemPrompt);
+			systemPromptTarget = selectSystemPromptImageTarget(
+				context.systemPrompt,
+				options.renderSystemPrompt,
+				options.cwd,
+			);
 			if (systemPromptTarget) {
 				systemPromptCandidate = {
 					textTokens: tokenizer.countTokens(systemPromptTarget.text),
@@ -671,7 +694,21 @@ export class SnapcompactInlineTransformer {
 			const message = messages[target.index];
 			if (message.role !== "toolResult") continue;
 			const frames = await this.#framesFor(this.#toolCache, swap.id, target.text, shape, shapeKey);
-			const content: (TextContent | ImageContent)[] = [{ type: "text", text: toolResultNote }, ...frames];
+			const content: (TextContent | ImageContent)[] = [
+				{
+					type: "text",
+					text: renderPromptAsset(
+						"system/snapcompact-toolresult-note.md",
+						toolResultNote,
+						{},
+						{
+							cwd: options.cwd,
+							kind: "notice",
+						},
+					),
+				},
+				...frames,
+			];
 			let sourceImageIndex = 0;
 			for (const block of message.content) {
 				if (block.type !== "image") continue;

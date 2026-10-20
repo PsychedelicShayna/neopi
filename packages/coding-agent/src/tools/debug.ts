@@ -9,7 +9,7 @@ import type {
 	ToolApprovalDecision,
 } from "@oh-my-pi/pi-agent-core";
 import type { ToolExample } from "@oh-my-pi/pi-ai";
-import { isEnoent, prompt } from "@oh-my-pi/pi-utils";
+import { isEnoent } from "@oh-my-pi/pi-utils";
 import {
 	type DapBreakpointRecord,
 	type DapCapabilities,
@@ -37,6 +37,7 @@ import {
 	selectAttachAdapter,
 	selectLaunchAdapter,
 } from "../dap";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import debugDescription from "../prompts/tools/debug.md" with { type: "text" };
 import type { ToolSession } from ".";
 import { truncateForPrompt } from "./approval";
@@ -557,7 +558,9 @@ export class DebugTool implements AgentTool<typeof debugSchema, DebugExecutionDe
 	};
 	readonly label = "Debug";
 	readonly summary = "Debug a running process with DAP (debugger adapter protocol)";
-	readonly description: string;
+	get description(): string {
+		return renderPromptAsset("tools/debug.md", debugDescription, {}, { cwd: this.session.cwd });
+	}
 	readonly parameters = debugSchema;
 	readonly strict = true;
 
@@ -579,9 +582,7 @@ export class DebugTool implements AgentTool<typeof debugSchema, DebugExecutionDe
 	readonly concurrency = "exclusive";
 	readonly loadMode = "discoverable";
 
-	constructor(private readonly session: ToolSession) {
-		this.description = prompt.render(debugDescription);
-	}
+	constructor(private readonly session: ToolSession) {}
 
 	static createIf(session: ToolSession): DebugTool | null {
 		return cfgDebugEnabled.get(session.settings) ? new DebugTool(session) : null;

@@ -1,5 +1,6 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { type } from "@oh-my-pi/omptype";
-import { prompt } from "@oh-my-pi/pi-utils";
+
 import analyzeFilePrompt from "../../../commit/agentic/prompts/analyze-file.md" with { type: "text" };
 import type { CommitAgentState } from "../../../commit/agentic/state";
 import type { NumstatEntry } from "../../../commit/types";
@@ -77,11 +78,16 @@ export function createAnalyzeFileTool(options: {
 			const analyses = await Promise.all(
 				params.files.map((file, index) => {
 					const relatedFiles = formatRelatedFiles(params.files, file, numstat);
-					const assignment = prompt.render(analyzeFilePrompt, {
-						file,
-						goal: params.goal,
-						related_files: relatedFiles,
-					});
+					const assignment = renderPromptAsset(
+						"commit/agentic/analyze-file.md",
+						analyzeFilePrompt,
+						{
+							file,
+							goal: params.goal,
+							related_files: relatedFiles,
+						},
+						{ cwd: options.cwd },
+					);
 					const taskParams: TaskParams = {
 						name: `AnalyzeFile${index + 1}`,
 						agent: "sonic",

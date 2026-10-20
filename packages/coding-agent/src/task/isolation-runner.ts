@@ -22,7 +22,8 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type * as natives from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { prompt } from "@oh-my-pi/pi-utils";
+
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import isolationErrorTemplate from "../prompts/tools/isolation-error.md" with { type: "text" };
 import isolationSummaryTemplate from "../prompts/tools/isolation-summary.md" with { type: "text" };
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
@@ -80,8 +81,8 @@ export interface IsolationSummaryContext {
  * result. Always starts with a blank line so it separates from the output it
  * follows.
  */
-export function renderIsolationSummary(context: IsolationSummaryContext): string {
-	return `\n\n${prompt.render(isolationSummaryTemplate, { ...context })}`;
+export function renderIsolationSummary(context: IsolationSummaryContext, cwd?: string): string {
+	return `\n\n${renderPromptAsset("tools/isolation-summary.md", isolationSummaryTemplate, { ...context }, { cwd, kind: "notice" })}`;
 }
 
 /** Record artifact locations for `agent://` and mark the result as an isolated run. */
@@ -352,8 +353,13 @@ interface IsolationErrorContext {
 	sidecarMissing?: boolean;
 }
 
-function renderIsolationError(context: IsolationErrorContext): string {
-	return prompt.render(isolationErrorTemplate, { ...context });
+function renderIsolationError(context: IsolationErrorContext, cwd?: string): string {
+	return renderPromptAsset(
+		"tools/isolation-error.md",
+		isolationErrorTemplate,
+		{ ...context },
+		{ cwd, kind: "notice" },
+	);
 }
 
 /**
@@ -415,12 +421,15 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 					retainWorkspace = true;
 					const retained = await retainIsolationWorkspace(handle.mergedDir, handle.backend);
 					throw new Error(
-						renderIsolationError({
-							kind: "patch-capture-failed",
-							message: captureErr instanceof Error ? captureErr.message : String(captureErr),
-							retainedDir: retained.dir,
-							sidecarMissing: !retained.sidecarOk,
-						}),
+						renderIsolationError(
+							{
+								kind: "patch-capture-failed",
+								message: captureErr instanceof Error ? captureErr.message : String(captureErr),
+								retainedDir: retained.dir,
+								sidecarMissing: !retained.sidecarOk,
+							},
+							opts.baseOptions.cwd,
+						),
 					);
 				}
 				const patchResult = capture.artifacts;
@@ -510,21 +519,27 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 					return rememberAgentArtifacts({
 						...result,
 						...capture.artifacts,
-						error: renderIsolationError({ kind: "merge-failed", message: msg, rescueBranch }),
+						error: renderIsolationError(
+							{ kind: "merge-failed", message: msg, rescueBranch },
+							opts.baseOptions.cwd,
+						),
 					});
 				} catch (patchErr) {
 					retainWorkspace = true;
 					const retained = await retainIsolationWorkspace(isolationDir, isolationBackend);
 					return rememberAgentArtifacts({
 						...result,
-						error: renderIsolationError({
-							kind: "merge-failed",
-							message: msg,
-							captureError: patchErr instanceof Error ? patchErr.message : String(patchErr),
-							rescueBranch,
-							retainedDir: retained.dir,
-							sidecarMissing: !retained.sidecarOk,
-						}),
+						error: renderIsolationError(
+							{
+								kind: "merge-failed",
+								message: msg,
+								captureError: patchErr instanceof Error ? patchErr.message : String(patchErr),
+								rescueBranch,
+								retainedDir: retained.dir,
+								sidecarMissing: !retained.sidecarOk,
+							},
+							opts.baseOptions.cwd,
+						),
 					});
 				}
 			}
@@ -552,12 +567,15 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 					branchName: commitResult?.branchName,
 					branchBaseSha: commitResult?.baseSha,
 					nestedPatches: commitResult?.nestedPatches,
-					error: renderIsolationError({
-						kind: "nested-capture-failed",
-						message: persistErr instanceof Error ? persistErr.message : String(persistErr),
-						retainedDir: retained.dir,
-						sidecarMissing: !retained.sidecarOk,
-					}),
+					error: renderIsolationError(
+						{
+							kind: "nested-capture-failed",
+							message: persistErr instanceof Error ? persistErr.message : String(persistErr),
+							retainedDir: retained.dir,
+							sidecarMissing: !retained.sidecarOk,
+						},
+						opts.baseOptions.cwd,
+					),
 				});
 			}
 		}
@@ -571,12 +589,15 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				const retained = await retainIsolationWorkspace(isolationDir, isolationBackend);
 				return rememberAgentArtifacts({
 					...result,
-					error: renderIsolationError({
-						kind: "patch-capture-failed",
-						message: patchErr instanceof Error ? patchErr.message : String(patchErr),
-						retainedDir: retained.dir,
-						sidecarMissing: !retained.sidecarOk,
-					}),
+					error: renderIsolationError(
+						{
+							kind: "patch-capture-failed",
+							message: patchErr instanceof Error ? patchErr.message : String(patchErr),
+							retainedDir: retained.dir,
+							sidecarMissing: !retained.sidecarOk,
+						},
+						opts.baseOptions.cwd,
+					),
 				});
 			}
 		}
@@ -638,12 +659,15 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
 		if (mergeMode === "branch") {
 			if (!result.branchName && result.exitCode === 0 && !result.aborted && result.error) {
 				return {
-					summary: renderIsolationSummary({
-						kind: "branch-capture-failed",
-						error: result.error,
-						rootPatchPath: result.patchPath,
-						nestedPatchPaths: result.nestedPatchPaths,
-					}),
+					summary: renderIsolationSummary(
+						{
+							kind: "branch-capture-failed",
+							error: result.error,
+							rootPatchPath: result.patchPath,
+							nestedPatchPaths: result.nestedPatchPaths,
+						},
+						repoRoot,
+					),
 					changesApplied: false,
 					hadAnyChanges: false,
 					mergedBranchForNestedPatches: false,
@@ -679,12 +703,15 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
 			} else {
 				// The nested patches are skipped when the branch did not merge; name
 				// their files so the parent can recover them alongside the branch.
-				summary = renderIsolationSummary({
-					kind: "branch-merge-failed",
-					branchName: result.branchName,
-					conflict: mergeResult.conflict,
-					nestedPatchPaths: result.nestedPatchPaths,
-				});
+				summary = renderIsolationSummary(
+					{
+						kind: "branch-merge-failed",
+						branchName: result.branchName,
+						conflict: mergeResult.conflict,
+						nestedPatchPaths: result.nestedPatchPaths,
+					},
+					repoRoot,
+				);
 			}
 
 			// Clean up the merged branch (keep failed ones for manual resolution)
@@ -747,22 +774,28 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
 		} else {
 			// Nested apply is skipped when the root patch did not apply; the
 			// persisted nested patches are the parent's only pointer to that work.
-			summary = renderIsolationSummary({
-				kind: "not-applied",
-				rootPatchPath: result.patchPath,
-				nestedPatchPaths: result.nestedPatchPaths,
-			});
+			summary = renderIsolationSummary(
+				{
+					kind: "not-applied",
+					rootPatchPath: result.patchPath,
+					nestedPatchPaths: result.nestedPatchPaths,
+				},
+				repoRoot,
+			);
 		}
 		return { summary, changesApplied, hadAnyChanges, mergedBranchForNestedPatches: false };
 	} catch (mergeErr) {
 		return {
-			summary: renderIsolationSummary({
-				kind: "merge-error",
-				error: mergeErr instanceof Error ? mergeErr.message : String(mergeErr),
-				branchName: result.branchName,
-				rootPatchPath: result.patchPath,
-				nestedPatchPaths: result.nestedPatchPaths,
-			}),
+			summary: renderIsolationSummary(
+				{
+					kind: "merge-error",
+					error: mergeErr instanceof Error ? mergeErr.message : String(mergeErr),
+					branchName: result.branchName,
+					rootPatchPath: result.patchPath,
+					nestedPatchPaths: result.nestedPatchPaths,
+				},
+				repoRoot,
+			),
 			changesApplied: false,
 			hadAnyChanges: false,
 			mergedBranchForNestedPatches: false,
@@ -809,10 +842,13 @@ export async function applyEligibleNestedPatches(opts: NestedPatchApplyOptions):
 	} catch (applyErr) {
 		// Nested patch failures are non-fatal to the parent merge, but the patch
 		// files are the only surviving copy of that work — name them.
-		return renderIsolationSummary({
-			kind: "nested-apply-failed",
-			error: applyErr instanceof Error ? applyErr.message : String(applyErr),
-			nestedPatchPaths: result.nestedPatchPaths,
-		});
+		return renderIsolationSummary(
+			{
+				kind: "nested-apply-failed",
+				error: applyErr instanceof Error ? applyErr.message : String(applyErr),
+				nestedPatchPaths: result.nestedPatchPaths,
+			},
+			repoRoot,
+		);
 	}
 }

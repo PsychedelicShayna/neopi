@@ -3,6 +3,8 @@ import * as path from "node:path";
 import { $which } from "@oh-my-pi/pi-utils";
 import { isSettingsInitialized, settings } from "../config/settings";
 
+import { render as renderPrompt } from "@oh-my-pi/pi-utils/prompt";
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import vaultDoc from "../prompts/internal-urls/vault.md" with { type: "text" };
 import {
 	containedRealPath,
@@ -639,7 +641,9 @@ export class VaultProtocolHandler implements ProtocolHandler {
 
 	/** Advertised only when vault:// is enabled and the Obsidian CLI is available. */
 	promptDoc(): string | undefined {
-		return hasObsidian() ? vaultDoc.trim() : undefined;
+		if (!hasObsidian()) return undefined;
+		const { text } = resolvePromptAsset("internal-urls/vault.md", vaultDoc);
+		return (text === vaultDoc ? text : renderPrompt(text)).trim();
 	}
 
 	/**

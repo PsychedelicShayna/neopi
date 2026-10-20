@@ -1,3 +1,4 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * `npi compress` — rewrite text files into the dense prompt register.
  *
@@ -12,7 +13,7 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { getProjectDir, prompt, sanitizeText } from "@oh-my-pi/pi-utils";
+import { getProjectDir, sanitizeText } from "@oh-my-pi/pi-utils";
 import { createProgressReporter } from "../cli/progress-reporter";
 import type { AgentSession } from "../session/agent-session";
 import { mapWithConcurrencyLimitAllSettled } from "../task/parallel";
@@ -191,12 +192,17 @@ async function compressFile(input: {
 	try {
 		await turn(
 			session,
-			prompt.render(requestPrompt, {
-				path: shortenPath(target),
-				source_size: `Source: ${protocol.sourceWords} words, ${protocol.sourceTokens} tokens.`,
-				source,
-				nonce,
-			}),
+			renderPromptAsset(
+				"compress/request.md",
+				requestPrompt,
+				{
+					path: shortenPath(target),
+					source_size: `Source: ${protocol.sourceWords} words, ${protocol.sourceTokens} tokens.`,
+					source,
+					nonce,
+				},
+				{ cwd: cwd },
+			),
 		);
 		let reviewed = 0;
 		while (!protocol.approved) {
@@ -254,7 +260,7 @@ function renderReview(input: {
 		draft.losses.length === 0
 			? "You declared no losses. If that is wrong, the next draft must say so."
 			: draft.losses.map(loss => `- ${loss.content}\n  Accepted because: ${loss.reason}`).join("\n");
-	return prompt.render(reviewPrompt, {
+	return renderPromptAsset("compress/review.md", reviewPrompt, {
 		round: String(draft.round),
 		metrics: `${metrics.sourceWords} → ${metrics.draftWords} words, ${metrics.sourceTokens} → ${metrics.draftTokens} tokens (${percent}% smaller).`,
 		losses,

@@ -4,11 +4,12 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import type { ToolExample } from "@oh-my-pi/pi-ai";
 import { type AstFindMatch, astGrep, type ShellFilesystem } from "@oh-my-pi/pi-natives";
 
-import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
+import { untilAborted } from "@oh-my-pi/pi-utils";
 import { getEditStore } from "../edit/store";
 
 import { sessionResolveContext } from "../internal-urls/context";
 import { InternalUrlFilesystem } from "../internal-urls/url-filesystem";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import astGrepDescription from "../prompts/tools/ast-grep.md" with { type: "text" };
 import { sessionDelegationBias } from "../task/prompt-policy";
 import { isScoutSpawnable } from "../task/spawn-policy";
@@ -144,13 +145,12 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 			cfgTaskDisabledAgents.get(this.session.settings),
 			this.session.getSessionSpawns?.() ?? "*",
 		);
-		// Both render inputs are booleans; pack them so repeat reads skip the template render.
-		const key = (eagerDelegation ? 1 : 0) | (scoutAvailable ? 2 : 0);
-		if (key !== this.#descriptionKey) {
-			this.#description = prompt.render(astGrepDescription, { eagerDelegation, scoutAvailable });
-			this.#descriptionKey = key;
-		}
-		return this.#description;
+		return renderPromptAsset(
+			"tools/ast-grep.md",
+			astGrepDescription,
+			{ eagerDelegation, scoutAvailable },
+			{ cwd: this.session.cwd },
+		);
 	}
 	readonly parameters = astGrepSchema;
 	readonly strict = true;
@@ -178,8 +178,6 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 		},
 	];
 	readonly loadMode = "discoverable";
-	#descriptionKey = -1;
-	#description = "";
 
 	constructor(private readonly session: ToolSession) {}
 

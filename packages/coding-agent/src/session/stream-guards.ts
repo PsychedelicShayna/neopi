@@ -1,3 +1,4 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import {
 	type Agent,
 	type AgentEvent,
@@ -8,7 +9,7 @@ import {
 import type { AssistantMessage, AssistantMessageEvent, Model } from "@oh-my-pi/pi-ai";
 import { GeminiHeaderRunDetector } from "@oh-my-pi/pi-ai/utils/thinking-loop";
 import { type RepeatedToolCallDetection, ToolCallLoopGuard } from "@oh-my-pi/pi-ai/utils/tool-call-loop-guard";
-import { logger, prompt } from "@oh-my-pi/pi-utils";
+import { logger } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../config/settings";
 import geminiToolReminderTemplate from "../prompts/system/gemini-tool-call-reminder.md" with { type: "text" };
 import { setMessageEntryId } from "./message-entry-ids";
@@ -234,7 +235,12 @@ export class LoopGuards {
 					message.role === "assistant" && message.timestamp === targetTimestamp,
 			);
 			if (aborted) this.#host.discardAssistantTurn(aborted);
-			const content = prompt.render(geminiToolReminderTemplate, { count: headerCount });
+			const content = renderPromptAsset(
+				"system/gemini-tool-call-reminder.md",
+				geminiToolReminderTemplate,
+				{ count: headerCount },
+				{ cwd: this.#host.sessionManager.getCwd(), kind: "notice" },
+			);
 			const details = { headers: headerCount };
 			const reminder: CustomMessage = {
 				role: "custom",

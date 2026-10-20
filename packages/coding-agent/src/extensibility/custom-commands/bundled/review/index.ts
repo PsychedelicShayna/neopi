@@ -1,5 +1,6 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
-import { prompt } from "@oh-my-pi/pi-utils";
+
 import type { CustomCommand, CustomCommandAPI } from "../../../../extensibility/custom-commands/types";
 import type { HookCommandContext } from "../../../../extensibility/hooks/types";
 import reviewCustomRequestTemplate from "../../../../prompts/review-custom-request.md" with { type: "text" };
@@ -371,7 +372,7 @@ function reviewTargetPrompt(
 }
 
 function buildHeadlessReviewPrompt(focus?: string): string {
-	return prompt.render(reviewHeadlessRequestTemplate, { focus });
+	return renderPromptAsset("review-headless-request.md", reviewHeadlessRequestTemplate, { focus });
 }
 
 /**
@@ -383,7 +384,7 @@ export function liveCommandCwd(api: CustomCommandAPI, ctx: HookCommandContext): 
 }
 
 function buildCustomReviewPrompt(instructions: string): string {
-	return prompt.render(reviewCustomRequestTemplate, { instructions });
+	return renderPromptAsset("review-custom-request.md", reviewCustomRequestTemplate, { instructions });
 }
 
 export class ReviewCommand implements CustomCommand {

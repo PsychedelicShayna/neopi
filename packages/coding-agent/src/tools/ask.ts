@@ -21,12 +21,13 @@ import { type as arkType } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { type ImageContent, type TextContent, type ToolExample, validateToolArguments } from "@oh-my-pi/pi-ai";
 import { replaceTabs, TERMINAL, truncateToWidth } from "@oh-my-pi/pi-tui";
-import { isRecord, logger, prompt, untilAborted } from "@oh-my-pi/pi-utils";
+import { isRecord, logger, untilAborted } from "@oh-my-pi/pi-utils";
 
 import type { ExtensionUISelectItem } from "../extensibility/extensions";
 import { formatKeyHint, formatKeyHints } from "@oh-my-pi/pi-tui/app-keybindings";
 import { editorKey, editorKeys } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
 import { theme } from "@oh-my-pi/pi-tui/theme";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import askDescription from "../prompts/tools/ask.md" with { type: "text" };
 import { vocalizer } from "../tts/vocalizer";
 
@@ -564,7 +565,9 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 	readonly approval = "read" as const;
 	readonly label = "Ask";
 	readonly summary = "Ask the user a clarifying question";
-	readonly description: string;
+	get description(): string {
+		return renderPromptAsset("tools/ask.md", askDescription, {}, { cwd: this.session.cwd });
+	}
 	readonly parameters = askSchema;
 	readonly strict = true;
 
@@ -591,9 +594,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 	readonly concurrency = "exclusive";
 	readonly loadMode = "discoverable";
 
-	constructor(private readonly session: ToolSession) {
-		this.description = prompt.render(askDescription);
-	}
+	constructor(private readonly session: ToolSession) {}
 
 	static createIf(session: ToolSession): AskTool | null {
 		return (session.canPromptUser ?? session.hasUI) ? new AskTool(session) : null;
