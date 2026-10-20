@@ -21,6 +21,8 @@ import { isPosixShell } from "@oh-my-pi/pi-utils/procmgr";
 import { raceJobSettlement, resolveAutoBackgroundWaitMs } from "../async";
 import type { Settings } from "../config/settings";
 import { applyDirenvPreflight, type BashResult, executeBash } from "../exec/bash-executor";
+import { applySessionEnvironment } from "../exec/session-environment";
+import { sessionEnvironment } from "../session/environment";
 import { InternalUrlRouter } from "../internal-urls";
 import { sessionResolveContext } from "../internal-urls/context";
 import { InternalUrlFilesystem, UrlFsError } from "../internal-urls/url-filesystem";
@@ -1240,7 +1242,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		// `callerTimeoutMs` clamps the direnv load to a positive command timeout
 		// (the backend's own timeout is installed only after this await), matching
 		// the executeBash branch so a cold `.envrc` can't outlast a short call.
-		const backendPreflight =
+		const rawBackendPreflight =
 			bridgeTerminalAvailable || canUseInteractiveBashPty(pty === true, ctx)
 				? await applyDirenvPreflight(command, commandCwd, {
 						signal,
@@ -1249,6 +1251,14 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 						direnvSetting: cfgBashDirenv.get(this.session.settings),
 					})
 				: undefined;
+		const backendPreflight =
+			rawBackendPreflight && canUseInteractiveBashPty(pty === true, ctx)
+				? applySessionEnvironment(
+						rawBackendPreflight.command,
+						rawBackendPreflight.env,
+						sessionEnvironment(this.session),
+					)
+				: rawBackendPreflight;
 
 		// Route through the client terminal when the client advertises the terminal capability.
 		// Skip when pty=true (PTY needs the local terminal UI) or the cwd is a URL
@@ -1551,6 +1561,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				await executeBash(command, {
 					cwd: commandCwd,
 					sessionKey: this.session.getSessionId?.() ?? undefined,
+					environment: sessionEnvironment(this.session),
 					timeout: timeoutMs ?? 0,
 					signal,
 					gitGuard: cfgBashGitGuard.get(this.session.settings),

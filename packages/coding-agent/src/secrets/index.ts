@@ -185,8 +185,18 @@ const MIN_ENV_VALUE_LENGTH = 8;
 /** Env var name patterns that indicate secret values. */
 const SECRET_ENV_PATTERNS = /(?:KEY|SECRET|TOKEN|PASSWORD|PASS|AUTH|CREDENTIAL|PRIVATE|OAUTH)(?:_|$)/i;
 
+/** Shared name policy, including short or empty credentials in inspection views. */
+export function isSecretEnvName(name: string): boolean {
+	return SECRET_ENV_PATTERNS.test(name);
+}
+
 /** Extracts the password group from a `scheme://user:password@host` value. */
 const CONNECTION_URL_PASSWORD_RE = /^[a-z][a-z0-9+.-]*:\/\/[^/:@?#\s]*:([^/?#\s]+)@/i;
+
+/** Inspection views redact named credentials and connection strings regardless of length. */
+export function isSecretEnvValue(name: string, value: string): boolean {
+	return isSecretEnvName(name) || CONNECTION_URL_PASSWORD_RE.test(value);
+}
 
 /** Collect environment variable values that look like secrets. */
 export function collectEnvSecrets(): SecretEntry[] {
@@ -194,7 +204,7 @@ export function collectEnvSecrets(): SecretEntry[] {
 	const seen = new Set<string>();
 	for (const [name, value] of Object.entries(process.env)) {
 		if (!value || value.length < MIN_ENV_VALUE_LENGTH) continue;
-		if (!SECRET_ENV_PATTERNS.test(name)) continue;
+		if (!isSecretEnvName(name)) continue;
 		if (seen.has(value)) continue;
 		seen.add(value);
 		entries.push({ type: "plain", content: value, mode: "obfuscate" });

@@ -216,6 +216,7 @@ import {
 	formatCredentialDisabledNotice,
 } from "./session/credential-disabled-notice";
 import { DateCwdReminderInjector } from "./session/date-cwd-reminder";
+import { SessionEnvironment } from "./session/environment";
 import { createInterruptedToolResults, createInterruptedTurnAbortMessage } from "./session/exit-diagnostics";
 import { recoverInlineSloppyEdit } from "./session/inline-edit-recovery";
 import { describePrewalkCrew, getPrewalkPatterns } from "./session/prewalk-crew";
@@ -2470,6 +2471,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			}
 		};
 		const toolSession: ToolSession = {
+			environment: new SessionEnvironment(),
 			get cwd() {
 				return sessionManager.getCwd();
 			},

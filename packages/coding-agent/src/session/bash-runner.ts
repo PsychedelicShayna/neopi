@@ -8,6 +8,7 @@ import { outputMeta } from "../tools/output-meta";
 import { clampTimeout } from "../tools/tool-timeouts";
 import type { BashExecutionMessage } from "./messages";
 import type { SessionManager } from "./session-manager";
+import type { SessionEnvironment } from "./environment";
 
 import { cfgToolsMaxTimeout } from "../tools/settings";
 
@@ -47,6 +48,7 @@ export interface BashRunnerHost {
 	agent: Agent;
 	sessionManager: SessionManager;
 	settings: Settings;
+	environment?: SessionEnvironment;
 	extensionRunner(): ExtensionRunner | undefined;
 	isStreaming(): boolean;
 }
@@ -121,6 +123,7 @@ export class BashRunner {
 					timeout: clampTimeout("bash", undefined, cfgToolsMaxTimeout.get(this.#host.settings)) * 1000,
 					onMinimizedSave: originalText => this.#saveOriginalArtifact(target, originalText),
 					env: shellEnv,
+					environment: this.#host.environment,
 					useUserShell: options?.useUserShell,
 					pty: options?.pty,
 				});

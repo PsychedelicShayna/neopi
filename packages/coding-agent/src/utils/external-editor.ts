@@ -35,8 +35,8 @@ export function extractExternalEditorMessage(content: string): string | null {
  * POSIX returns `undefined` when neither variable is set so the caller can
  * surface a warning that nudges the user to configure one.
  */
-export function getEditorCommand(): string | undefined {
-	const configured = $env.VISUAL?.trim() || $env.EDITOR?.trim();
+export function getEditorCommand(env: Readonly<Record<string, string | undefined>> = $env): string | undefined {
+	const configured = env.VISUAL?.trim() || env.EDITOR?.trim();
 	if (configured) return configured;
 	if (process.platform === "win32") return "notepad";
 	return undefined;
@@ -47,6 +47,8 @@ export interface OpenInEditorOptions {
 	extension?: string;
 	/** Keep the file's trailing newline instead of trimming it from the returned text. */
 	trimTrailingNewline?: boolean;
+	/** Owning session's environment, including removed variables. */
+	env?: Record<string, string>;
 }
 
 /** Subprocess argv and Windows quoting mode used to launch an external editor. */
@@ -86,7 +88,7 @@ export async function openInEditor(
 
 	try {
 		await Bun.write(tmpFile, content);
-		const exitCode = await openEditorOnPath(editorCmd, tmpFile);
+		const exitCode = await openEditorOnPath(editorCmd, tmpFile, options?.env);
 		if (exitCode === 0) {
 			const text = await Bun.file(tmpFile).text();
 			if (options?.trimTrailingNewline === false) {
@@ -111,11 +113,16 @@ export async function openInEditor(
  *
  * The caller is responsible for stopping/starting the TUI around this call.
  */
-export async function openEditorOnPath(editorCmd: string, filePath: string): Promise<number> {
+export async function openEditorOnPath(
+	editorCmd: string,
+	filePath: string,
+	env?: Record<string, string>,
+): Promise<number> {
 	const spawnCommand = resolveEditorSpawnCommand(editorCmd, filePath);
 	// Inherit the real pane pty so terminal editors (including emacsclient,
 	// which resolves the device via ttyname) render into the visible pane.
 	const child = Bun.spawn(spawnCommand.cmd, {
+		env,
 		stdin: "inherit",
 		stdout: "inherit",
 		stderr: "inherit",

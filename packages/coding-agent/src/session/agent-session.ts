@@ -377,6 +377,7 @@ import {
 import { recordCredentialPin, seedCredentialPins } from "./credential-pin";
 import { isDateCwdReminderControl } from "./date-cwd-reminder";
 import { EvalRunner, type EvalRunnerHost } from "./eval-runner";
+import { SessionEnvironment, sessionEnvironment } from "./environment";
 import {
 	collectPendingToolCalls,
 	createInterruptedToolResults,
@@ -842,6 +843,7 @@ export class AgentSession implements SettingsScope {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
 	readonly settings: Settings;
+	readonly environment: SessionEnvironment;
 	#usageNotices = new UsageNotices();
 	/** Serializes receipt-backed preparation through acceptance, not turn completion. */
 	#customMessageReceiptPreparation: Promise<void> = Promise.resolve();
@@ -1855,6 +1857,8 @@ export class AgentSession implements SettingsScope {
 				modelRegistry: config.modelRegistry,
 				settings: config.settings,
 			};
+		this.environment = sessionEnvironment(evalToolSession);
+		bashHost.environment = this.environment;
 		this.#agentTelemetryHost = {
 			session: this,
 			settings: this.settings,

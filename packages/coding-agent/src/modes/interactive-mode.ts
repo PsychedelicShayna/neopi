@@ -5665,7 +5665,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async #openPlanInExternalEditor(planFilePath: string): Promise<void> {
-		const editorCmd = getEditorCommand();
+		const env = this.session.environment.snapshot();
+		const editorCmd = getEditorCommand(env);
 		if (!editorCmd) {
 			this.showWarning("No editor configured. Set $VISUAL or $EDITOR environment variable.");
 			return;
@@ -5689,6 +5690,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			const result = await openInEditor(editorCmd, currentText, {
 				extension: path.extname(resolvedPath) || ".md",
 				trimTrailingNewline: false,
+				env,
 			});
 			if (result !== null) {
 				await Bun.write(resolvedPath, result);
@@ -5704,7 +5706,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async #openPlanAnnotationInExternalEditor(draft: string, commit: (text: string | null) => void): Promise<void> {
-		const editorCmd = getEditorCommand();
+		const env = this.session.environment.snapshot();
+		const editorCmd = getEditorCommand(env);
 		if (!editorCmd) {
 			this.showWarning("No editor configured. Set $VISUAL or $EDITOR environment variable.");
 			return;
@@ -5712,7 +5715,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		try {
 			this.ui.stop();
-			const result = await openInEditor(editorCmd, draft, { extension: ".md" });
+			const result = await openInEditor(editorCmd, draft, { extension: ".md", env });
 			if (result !== null) {
 				commit(result);
 			}

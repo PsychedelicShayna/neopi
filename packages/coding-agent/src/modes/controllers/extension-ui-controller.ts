@@ -74,9 +74,9 @@ function withTerminalLauncher(uiContext: ExtensionUIContext, hasUI: boolean): Ex
 	return Object.create(Object.getPrototypeOf(uiContext), descriptors) as ExtensionUIContext;
 }
 
-async function editDialogExternally(text: string): Promise<string | null> {
-	const command = getEditorCommand();
-	return command ? openInEditor(command, text) : null;
+async function editDialogExternally(text: string, env: Record<string, string>): Promise<string | null> {
+	const command = getEditorCommand(env);
+	return command ? openInEditor(command, text, { env }) : null;
 }
 
 interface CollabDialogWinner {
@@ -770,7 +770,12 @@ export class ExtensionUiController {
 					prefill,
 					(text, images) => finishPrompt({ text, images }),
 					() => finishPrompt(undefined),
-					{ promptStyle: true, externalEditor: editDialogExternally, question: prompt.question, ...options },
+					{
+						promptStyle: true,
+						externalEditor: text => editDialogExternally(text, this.ctx.session.environment.snapshot()),
+						question: prompt.question,
+						...options,
+					},
 				);
 				this.ctx.editorContainer.clear();
 				this.ctx.editorContainer.addChild(promptEditor);
@@ -1163,7 +1168,10 @@ export class ExtensionUiController {
 				prefill,
 				value => settle(value),
 				() => settle(undefined),
-				{ ...editorOptions, externalEditor: editDialogExternally },
+				{
+					...editorOptions,
+					externalEditor: text => editDialogExternally(text, this.ctx.session.environment.snapshot()),
+				},
 			);
 			this.ctx.editorContainer.clear();
 			this.ctx.editorContainer.addChild(this.ctx.hookEditor);

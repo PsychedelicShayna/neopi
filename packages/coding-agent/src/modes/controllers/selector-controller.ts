@@ -850,8 +850,9 @@ export class SelectorController {
 				),
 				defaultToolNames: ADVISOR_DEFAULT_TOOL_NAMES,
 				externalEditor: text => {
-					const command = getEditorCommand();
-					return command ? openInEditor(command, text) : Promise.resolve(null);
+					const env = this.ctx.session.environment.snapshot();
+					const command = getEditorCommand(env);
+					return command ? openInEditor(command, text, { env }) : Promise.resolve(null);
 				},
 				scopedModels: this.ctx.session.scopedModels,
 				availableToolNames: this.ctx.session.getAdvisorAvailableToolNames(),
@@ -1078,8 +1079,9 @@ export class SelectorController {
 				getAvailableModels: () => this.ctx.session.modelRegistry.getAvailable(),
 				browserSource: createModelBrowserSource(this.ctx.settings),
 				externalEditor: text => {
-					const command = getEditorCommand();
-					return command ? openInEditor(command, text) : Promise.resolve(null);
+					const env = this.ctx.session.environment.snapshot();
+					const command = getEditorCommand(env);
+					return command ? openInEditor(command, text, { env }) : Promise.resolve(null);
 				},
 				scopedModels: this.ctx.session.scopedModels,
 				availableToolNames: this.ctx.session.getAdvisorAvailableToolNames(),
@@ -1148,8 +1150,9 @@ export class SelectorController {
 				getAvailableModels: () => this.ctx.session.getAvailableModels(),
 				browserSource: createModelBrowserSource(this.ctx.settings),
 				externalEditor: text => {
-					const command = getEditorCommand();
-					return command ? openInEditor(command, text) : Promise.resolve(null);
+					const env = this.ctx.session.environment.snapshot();
+					const command = getEditorCommand(env);
+					return command ? openInEditor(command, text, { env }) : Promise.resolve(null);
 				},
 				availableToolNames: this.ctx.session.getAdvisorAvailableToolNames(),
 				activeName: () => (this.ctx.session.model?.api === "mixture" ? this.ctx.session.model.id : undefined),
@@ -1254,8 +1257,9 @@ export class SelectorController {
 							}
 						: {}),
 					externalEditor: text => {
-						const command = getEditorCommand();
-						return command ? openInEditor(command, text) : Promise.resolve(null);
+						const env = this.ctx.session.environment.snapshot();
+						const command = getEditorCommand(env);
+						return command ? openInEditor(command, text, { env }) : Promise.resolve(null);
 					},
 				},
 				doc,

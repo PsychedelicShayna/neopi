@@ -9,6 +9,7 @@
 
 ### Added
 
+- Inspect and repair the running session's environment through `env://`, including editor preferences, empty values and explicit unsetting, without changing other sessions or unattended editor policy ([#235](https://github.com/PsychedelicShayna/neopi/issues/235)).
 - Added opt-in session work contracts with `/contract`, policy-gated agent edits, durable provenance, explicit rule promotion, and intact reinjection after compaction or resume ([#25](https://github.com/PsychedelicShayna/neopi/issues/25)).
 - Configure independent prewalk planning and execution crews with ordered fallbacks in settings, see both resolved models before launch, and retain the execution brief across the handoff ([#30](https://github.com/PsychedelicShayna/neopi/issues/30)).
 - Choose the centered NPI startup banner or the original boxed NeoPi/Pi-tower banner with Startup Branding in Settings > Appearance; new remains the default.

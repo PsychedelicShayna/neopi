@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { InputController } from "../src/modes/controllers/input-controller";
 import type { InteractiveModeContext } from "../src/modes/types";
+import { SessionEnvironment } from "../src/session/environment";
 import {
 	extractExternalEditorMessage,
 	formatExternalEditorDraft,
@@ -173,7 +174,12 @@ describe("Ctrl-G external editor", () => {
 					requestRender: vi.fn(),
 				};
 				const showWarning = vi.fn();
-				const ctx = { editor, ui, showWarning } as unknown as InteractiveModeContext;
+				const ctx = {
+					session: { environment: new SessionEnvironment() },
+					editor,
+					ui,
+					showWarning,
+				} as unknown as InteractiveModeContext;
 				await new InputController(ctx).openExternalEditor();
 
 				const captured = await Bun.file(capturePath).text();

@@ -28,6 +28,8 @@ import { TerminalGraphicsDecoder } from "../utils/terminal-graphics";
 import { loadDirenvEnv } from "./direnv";
 import { getHostEnvForTools } from "./host-env";
 import { buildNonInteractiveEnv } from "./non-interactive-env";
+import type { SessionEnvironment } from "../session/environment";
+import { applySessionEnvironment } from "./session-environment";
 
 import {
 	cfgBashDirenv,
@@ -56,6 +58,8 @@ export interface BashExecutorOptions {
 	sessionKey?: string;
 	/** Additional environment variables to inject */
 	env?: Record<string, string>;
+	/** Live session overrides, below explicit env and the non-interactive policy. */
+	environment?: SessionEnvironment;
 	/** Run through the configured user shell instead of brush parsing directly. */
 	useUserShell?: boolean;
 	/** Run supported user shells (zsh/fish) on a headless PTY; requires `useUserShell`. */
@@ -557,7 +561,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 	// the configured shell `prefix` after any `unset -v` it prepends. A URL cwd
 	// has no `.envrc` on the host. The rc snapshot is independent, so both load
 	// concurrently.
-	const [snapshotPath, preflight] = await Promise.all([
+	const [snapshotPath, direnvPreflight] = await Promise.all([
 		bashShell ? getOrCreateSnapshot(shell, shellEnv) : null,
 		applyDirenvPreflight(command, commandCwd ?? process.cwd(), {
 			callerEnv: options?.env,
@@ -568,6 +572,12 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 			commandPrefix: prefix,
 		}),
 	]);
+	const preflight = applySessionEnvironment(
+		direnvPreflight.command,
+		direnvPreflight.env,
+		options?.environment,
+		options?.env,
+	);
 	const hostEnv = await getHostEnvForTools(preflight.env);
 	const commandEnv = buildNonInteractiveEnv({
 		...hostEnv,

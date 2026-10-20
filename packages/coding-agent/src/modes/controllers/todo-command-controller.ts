@@ -407,7 +407,8 @@ export class TodoCommandController {
 	// ------------------------------------------------------------- editor
 
 	async #editInExternalEditor(): Promise<void> {
-		const editorCmd = getEditorCommand();
+		const env = this.ctx.session.environment.snapshot();
+		const editorCmd = getEditorCommand(env);
 		if (!editorCmd) {
 			this.ctx.showWarning("No editor configured. Set $VISUAL or $EDITOR environment variable.");
 			return;
@@ -419,7 +420,7 @@ export class TodoCommandController {
 
 		this.ctx.ui.stop();
 		try {
-			const result = await openInEditor(editorCmd, initialMarkdown, { extension: ".todo.md" });
+			const result = await openInEditor(editorCmd, initialMarkdown, { extension: ".todo.md", env });
 			if (result === null) {
 				this.ctx.showWarning("Editor exited without saving; todos unchanged.");
 				return;

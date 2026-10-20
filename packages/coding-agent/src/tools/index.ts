@@ -36,6 +36,7 @@ import type { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import type { AgentRegistry } from "../registry/agent-registry";
 import type { ArtifactManager } from "../session/artifacts";
 import type { ClientBridge } from "../session/client-bridge";
+import type { SessionEnvironment } from "../session/environment";
 import type { CustomMessage } from "../session/messages";
 import type { UsageStatistics } from "../session/session-entries";
 import type { SessionManager } from "../session/session-manager";
@@ -216,6 +217,8 @@ export interface DeferredDiagnosticsEntry {
 
 /** Session context for tool factories */
 export interface ToolSession {
+	/** Live environment owned by this session, separate from process.env and other sessions. */
+	environment?: SessionEnvironment;
 	/** Current agent context telemetry snapshot, when provided by the session. */
 	getAgentTelemetry?: () => AgentContextTelemetry | undefined;
 	/** Current working directory */
