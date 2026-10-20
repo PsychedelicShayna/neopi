@@ -81,9 +81,9 @@ Menus, pickers, and overlays open in normal navigation; arrows, PageUp/PageDown,
 | `Tab` / `Shift+Tab`, also `Ctrl+N` / `Ctrl+P` (`tui.select.nextContext` / `prevContext`) | Next / previous tab, section, or focus region; an existing surface-specific binding takes precedence |
 | `/` (`tui.select.search`) | Focus the search or filter field |
 
-While a search, rename, or form field has focus, every printable key (including `h`, `j`, `k`, `l`, `g`, `/`, Space) types literally and the field keeps its editing keys. Esc returns focus to the list without closing the menu. Esc on a nested page returns to its parent; Esc at the root closes.
+While a search, rename, or form field has focus, every printable key (including `h`, `j`, `k`, `l`, `g`, `/`, Space) types literally and the field keeps its editing keys. Search fields consume navigation keys while editing: arrows and page keys do not move the list. Enter confirms the pattern and returns to navigation without activating a result; Esc clears the search and returns to the unfiltered list. Press `/` again to edit the retained pattern. Rename and form fields keep their own submit/cancel behavior. Esc on a nested page returns to its parent; Esc at the root closes.
 
-The prompt-history search (`Ctrl+R`) and move-path chooser are search-first exceptions: their text field opens focused. Esc returns to their list before closing. Pure viewers use `j`/`k` and `Ctrl+E`/`Ctrl+Y` to scroll a line, half/page keys for larger movement, and `gg`/`G` for top/bottom.
+The prompt-history search (`Ctrl+R`) and move-path chooser are search-first exceptions: their text field opens focused. Pure viewers use `j`/`k` and `Ctrl+E`/`Ctrl+Y` to scroll a line, half/page keys for larger movement, and `gg`/`G` for top/bottom.
 
 Advisor, chain, and persona roots use `h`/`l` to switch between their list and preview; the preview accepts viewer motions, and Enter on the list opens a detail page. Existing radio-with-editor rows keep Space activation and Enter editing. Inside nested configuration pages, `h` returns to the parent and `l` opens a navigable child, never an action.
 
@@ -98,6 +98,29 @@ One-shot custom dialogs are excluded from history even when built in: the `/move
 Native TSP lists and pickers retain selection, filtering, and history. Their terminal consumer owns scrolling and the protocol does not expose a viewport position, so `Ctrl+E`/`Ctrl+Y` cannot scroll their native viewport independently; they never move the selection as a substitute. Native viewers forward line, page, and start/end requests, but half-page and absolute viewport restoration are unsupported. Native Git diffs also cannot restore a hunk cursor/range. ANSI menus and viewers support the full navigation and viewport contract.
 
 `Ctrl+O` and `Ctrl+I` walk a timeline of visited views: each reopenable menu and return to the conversation is an entry. Esc out of `/statusline`, press `Ctrl+O`, and `/statusline` reopens where you left it; `Ctrl+I` returns to the conversation. Opening a menu from an older position adds it at the newest end without dropping the newer entries, and `Ctrl+O` from that new menu first returns to where you opened it: after `Ctrl+O` from `/statusline` back to the conversation and opening `/model`, `Ctrl+O` returns to the conversation, `Ctrl+I` to `/statusline`, and `Ctrl+I` again to `/model`.
+
+### Menu search
+
+Ordinary patterns keep fuzzy matching. A pattern beginning with `/` selects the supported **Vim search syntax, very-magic by default**: type `//` from navigation (the first slash focuses search; the second becomes the pattern prefix). `re:` selects the same dialect explicitly. Confirm with Enter, then use `j`/`k` to navigate matches. Invalid or unsupported expressions show an inline error and match nothing.
+
+| Pattern text | Meaning |
+| --- | --- |
+| `/live\|voice` or `re:live\|voice` | Match either `live` or `voice` (the pattern contains a bare pipe) |
+| `/<voice>` | Match the whole word `voice`, not `revoice` |
+| `/^(live\|voice)\s\d+$` | Bare groups/alternation, whitespace, one or more digits |
+| `/\CVoice` / `/\cVoice` | Case-sensitive / case-insensitive matching (the default is insensitive) |
+
+Very-magic mode treats punctuation such as `|`, `()`, `+`, `?`, and `{n,m}` as operators without backslashes. `<` / `>` mark word start/end; `\d`, `\w`, and `\s` remain character classes. Escape punctuation to match it literally. Use `\m` inside a pattern for Vim's default-magic dialect (`/\m\(live\|voice\)`); `\M` and `\V` select nomagic and very-nomagic modes. These menu patterns do not change the ECMAScript `re:` syntax used by saved model selectors.
+
+Supported search atoms:
+
+- Literal text, dot, anchors, alternation, capturing and noncapturing groups (`%(` in very-magic, `\%(` in default-magic), backreferences `\1`–`\9`, and word boundaries. Default-magic `^` / `$` are literal away from branch boundaries.
+- Greedy and lazy repetition: `*`, `+`, `?` / `=`, `{n,m}` and `{-}` / `{-n,m}` in very-magic; the corresponding Vim backslash forms in default-magic.
+- Vim character classes `\a`, `\l`, `\u`, `\d`, `\x`, `\o`, `\h`, `\w`, `\s`, `\p` and their uppercase complements; `\l` and `\u` remain case-specific. Collections support ranges, negation and POSIX classes (`alnum`, `alpha`, `blank`, `cntrl`, `digit`, `graph`, `lower`, `print`, `punct`, `space`, `upper`, `xdigit`, `return`, `tab`, `escape`, `backspace`). Collection escapes follow Vim: `[\d]` matches a literal `d`, not a digit.
+- Postfix lookaround (`@=`, `@!`, `@<=`, `@<!` in very-magic; `\@…` in default-magic), case flags, magic switches, and `\zs` / `\ze` for row membership. Menu search tests whether a row matches; it does not expose match-span boundaries.
+
+This is not a complete Vim engine. Unknown atoms, numeric/positional `%` atoms, atomic `@>` groups, conjunction/replacement atoms, and collating/equivalence collections are rejected rather than silently interpreted as literal letters.
+
 
 ## Side panel views
 

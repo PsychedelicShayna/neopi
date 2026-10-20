@@ -697,7 +697,7 @@ export class GitTuiComponent implements Component {
 			return;
 		}
 		if (this.#handleMouse(data)) return;
-		if (this.#sidebar.search.focused && this.#sidebar.handleSearchInput(data)) return;
+		if (this.#sidebar.handleSearchInput(data)) return;
 		if (
 			this.#focus === "sidebar" &&
 			this.#sidebar.editing &&

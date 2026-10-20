@@ -1,6 +1,7 @@
 import type { TspScrollBy } from "@oh-my-pi/pi-wire";
 import { getKeybindings, type KeybindingsManager } from "../keybindings";
 import { extractPrintableText, matchesKey } from "../keys";
+import { compileMenuRegex } from "../menu-search";
 import { getMenuWindow, type MenuWindow } from "./menu-selection";
 import { Input } from "./input";
 import { replaceTabs, truncateToWidth, visibleWidth } from "../utils";
@@ -161,7 +162,12 @@ export class MenuSearchField {
 	}
 
 	handleInput(data: string): "edited" | "exited" | "pass" {
-		if (!this.focused) return "pass";
+		if (!this.focused) {
+			if (!this.value || extractPrintableText(data) !== undefined) return "pass";
+			if (!matchesKey(data, "escape") && !getKeybindings().matches(data, "tui.select.cancel")) return "pass";
+			this.setValue("");
+			return "exited";
+		}
 		const text = extractPrintableText(data);
 		if (text !== undefined) {
 			this.#input.insertText(text);
@@ -169,26 +175,26 @@ export class MenuSearchField {
 		}
 		const kb = getKeybindings();
 		if (matchesKey(data, "escape") || kb.matches(data, "tui.select.cancel")) {
+			this.setValue("");
 			this.focused = false;
 			return "exited";
 		}
-		if (
-			kb.matches(data, "tui.select.up") ||
-			kb.matches(data, "tui.select.down") ||
-			kb.matches(data, "tui.select.pageUp") ||
-			kb.matches(data, "tui.select.pageDown") ||
-			kb.matches(data, "tui.select.confirm") ||
-			data === "\n"
-		)
-			return "pass";
-		return this.#input.handleInput(data) ? "edited" : "pass";
+		if (matchesKey(data, "enter") || kb.matches(data, "tui.select.confirm") || data === "\n") {
+			this.focused = false;
+			return "exited";
+		}
+		this.#input.handleInput(data);
+		return "edited";
 	}
 
 	render(width: number, theme: MenuSearchTheme): string {
 		const columns = Math.max(0, Math.trunc(width));
 		if (!this.focused && this.value.length === 0) return theme.muted(truncateToWidth("/ search", columns));
 		const prefix = "Search: ";
-		const hint = this.focused ? " · Esc back to list" : " · / search";
+		const error = compileMenuRegex(this.value)?.error;
+		const hint = error
+			? ` · Invalid regex: ${error}`
+			: this.focused ? " · Enter confirm · Esc clear" : " · / search · Esc clear";
 		const fieldWidth = Math.max(0, columns - visibleWidth(prefix) - visibleWidth(hint));
 		const value = this.focused
 			? (this.#input.render(fieldWidth)[0] ?? "")

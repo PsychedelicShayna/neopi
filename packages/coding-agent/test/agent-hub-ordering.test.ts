@@ -228,7 +228,7 @@ describe("Agent hub row ordering", () => {
 		}
 	});
 
-	it("keeps an applied fuzzy filter after Escape and clears it through the search field", () => {
+	it("keeps an applied fuzzy filter after Enter and clears it through the search field", () => {
 		vi.useFakeTimers();
 		let hub: AgentHubOverlayComponent | undefined;
 		try {
@@ -245,7 +245,7 @@ describe("Agent hub row ordering", () => {
 			hub.handleInput("a");
 			hub.handleInput("p");
 			expect(renderedAgentIds(hub)).toEqual(["alpha-one"]);
-			hub.handleInput("\u001b");
+			hub.handleInput("\r");
 			expect(renderedAgentIds(hub)).toEqual(["alpha-one"]);
 			hub.handleInput("/");
 			hub.handleInput("\x7f");
@@ -1235,6 +1235,8 @@ describe("Agent hub row ordering", () => {
 			expect(open).toHaveBeenCalledWith("Worker", "entry-42");
 			expect(Bun.stripANSI(hub.render(120).join("\n"))).toContain("Agent Hub  ·  Worker");
 			hub.handleInput("\x1b");
+			hub.handleInput(" ");
+			expect(hub.navigationSnapshot().activityFollow).toBe(true);
 			hub.handleInput(" ");
 			expect(Bun.stripANSI(hub.render(120).join("\n"))).toContain("paused");
 			hub.handleInput("1");

@@ -16,6 +16,7 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "../index";
+import { compileMenuRegex } from "../menu-search";
 import { getMarkdownTheme, type ThemeColor, theme } from "../theme/theme";
 import { matchesAppExternalEditor } from "../keybinding-matchers";
 import { CountdownTimer } from "../chrome/countdown-timer";
@@ -636,16 +637,15 @@ export class HookSelectorComponent extends OverlayPanel {
 
 	handleInput(rawData: string): void {
 		this.#resetCountdown();
-		if (this.#search.focused) {
+		const before = this.#search.value;
+		const result = this.#search.handleInput(rawData);
+		if (result !== "pass") {
 			this.#keys.reset();
-			const before = this.#search.value;
-			const result = this.#search.handleInput(rawData);
-			if (result !== "pass") {
-				if (this.#search.value !== before) this.#syncSearchQuery();
-				else this.#updateList();
-				return;
-			}
-		} else if (this.#handleQuickSelect(rawData)) {
+			if (this.#search.value !== before) this.#syncSearchQuery();
+			else this.#updateList();
+			return;
+		}
+		if (!this.#search.focused && this.#handleQuickSelect(rawData)) {
 			this.#keys.reset();
 			return;
 		}
@@ -732,7 +732,7 @@ export class HookSelectorComponent extends OverlayPanel {
 		const checkbox = this.#selectionMarker === "checkbox";
 		const result = dockedPicker({
 			title: fixed.title,
-			...(this.#detailLines.length > 0 ? { subtitle: plainText(this.#detailLines.join("\n")) } : {}),
+			subtitle: compileMenuRegex(query)?.error ?? (this.#detailLines.length > 0 ? plainText(this.#detailLines.join("\n")) : undefined),
 			noun: "options",
 			size: "md",
 			layout: "rows",
@@ -805,8 +805,8 @@ export class HookSelectorComponent extends OverlayPanel {
 				"list",
 				{
 					selected: selectedItem && !this.#menu.isDisabled(selectedItem) ? (selected ?? null) : null,
-					filter: query.trim() || undefined,
-					empty: "No matching options",
+					filter: (compileMenuRegex(query) ? query : query.trim()) || undefined,
+					empty: compileMenuRegex(query)?.error ?? "No matching options",
 					max: { lines: this.#maxVisible },
 				},
 				rows,
@@ -842,9 +842,10 @@ export class HookSelectorComponent extends OverlayPanel {
 			this.#resetCountdown();
 			this.#keys.reset();
 			if (ev.act === "close" || ev.act === "cancel") {
-				if (this.#search.focused) {
+				if (this.#search.focused || this.#search.value) {
+					this.#search.setValue("");
 					this.#search.focused = false;
-					this.#updateList();
+					this.#syncSearchQuery();
 				} else this.#onCancelCallback();
 			} else if (ev.act === "clear") {
 				this.#search.setValue("");

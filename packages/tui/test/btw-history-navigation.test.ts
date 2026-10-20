@@ -75,7 +75,7 @@ describe("BTW menu navigation and safe history", () => {
 			panel.handleInput("/");
 			panel.handleInput("jkG /");
 			expect(state(panel).search).toMatchObject({ value: "jkG /", focused: true });
-			panel.handleInput("\x1b");
+			panel.handleInput("\n");
 			expect(state(panel).search).toMatchObject({ value: "jkG /", focused: false });
 		} finally {
 			panel.dispose();
@@ -100,12 +100,15 @@ describe("BTW menu navigation and safe history", () => {
 		}
 	});
 
-	it("leaves the filter on Tab before moving to the answer pane", () => {
+	it("consumes Tab while filtering and moves to the answer pane after Enter", () => {
 		const panel = create();
 		try {
 			panel.render(100);
 			panel.handleInput("/");
 			panel.handleInput("Question");
+			panel.handleInput("\t");
+			expect(state(panel)).toMatchObject({ search: { value: "Question", focused: true } });
+			panel.handleInput("\n");
 			panel.handleInput("\t");
 			panel.handleInput("j");
 			expect(state(panel)).toMatchObject({ focus: "answer", search: { value: "Question", focused: false } });
@@ -123,7 +126,7 @@ describe("BTW menu navigation and safe history", () => {
 			panel.handleInput("/");
 			panel.handleInput("Question");
 			panel.handleInput("\x1b[D");
-			panel.handleInput("\x1b");
+			panel.handleInput("\n");
 			panel.handleInput("j");
 			panel.handleInput("l");
 			panel.openFollowUp("question-1");
