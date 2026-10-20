@@ -927,6 +927,10 @@ export class CommandController {
 		this.#showMarkdownPanel("Available Tools", tools);
 	}
 
+	handleToolCatalogCommand(name?: string): void {
+		this.#showMarkdownPanel(name ? `Tool: ${name}` : "Enabled tools", this.ctx.session.getToolCatalogDocs(name));
+	}
+
 	handleContextCommand(): void {
 		const breakdown = computeSessionContextBreakdown(this.ctx.session, { snapcompactSavings: true });
 		if (breakdown.contextWindow <= 0) {

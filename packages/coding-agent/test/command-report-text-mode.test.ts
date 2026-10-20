@@ -111,6 +111,19 @@ describe("text-mode command reports on a real terminal core", () => {
 		expect(screen(term).indexOf(last)).toBe(lastRow);
 	});
 
+	it("opens /tool: from slash discovery and Esc returns to the composer", async () => {
+		const last = await mountTranscript(40);
+		expect(mode.slashCommandNames.has("tool:")).toBe(true);
+		const blocks = mode.chatContainer.children.length;
+		await runCommand("/tool:", "Enabled tools");
+		expect(mode.chatContainer.children).toHaveLength(blocks);
+		term.sendInput("\x1b");
+		await term.waitForRender(() => !screen(term).some(row => row.includes("Enabled tools")));
+		expect(screen(term).some(row => row.includes(last))).toBe(true);
+		term.sendInput("draft after closing");
+		await term.waitForRender(() => mode.editor.getText().includes("draft after closing"));
+	});
+
 	it.each([
 		["/mcp help", "MCP Server Management"],
 		["/mcp list", "MCP Servers"],
