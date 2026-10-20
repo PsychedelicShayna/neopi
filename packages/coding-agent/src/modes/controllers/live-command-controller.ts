@@ -105,7 +105,7 @@ export class LiveCommandController {
 	#assistantCaption: LiveAssistantCaption | undefined;
 	#assistantTranscriptTurn = 0;
 	#assistantTranscriptStartedAt = 0;
-	#keywordTimer: ReturnType<typeof setTimeout> | undefined;
+	#keywordTimer: NodeJS.Timeout | undefined;
 	#keywordSettingsUnsubscribe: Array<() => void> = [];
 
 	constructor(ctx: InteractiveModeContext, createSession?: LiveSessionFactory) {
@@ -262,13 +262,17 @@ export class LiveCommandController {
 			if (!session || this.#ctx.editor.chainLocked || this.#ctx.editor.getText() !== text) return;
 			const force = stripLiveKeyword(text, cfgLiveForceDelegateKeyword.get(this.#ctx.settings), true);
 			if (force.matched && force.text) {
-				session.forceDelegateComposer(force.text);
+				session.forceDelegateComposer(
+					stripLiveKeyword(this.#ctx.editor.getExpandedText(), cfgLiveForceDelegateKeyword.get(this.#ctx.settings), true).text,
+				);
 				return;
 			}
 			const submit = stripLiveKeyword(text, cfgLiveSubmitKeyword.get(this.#ctx.settings), true);
 			if (!submit.matched || !submit.text) return;
 			if (cfgLiveHoldMode.get(this.#ctx.settings)) {
-				session.forceDelegateComposer(submit.text);
+				session.forceDelegateComposer(
+					stripLiveKeyword(this.#ctx.editor.getExpandedText(), cfgLiveSubmitKeyword.get(this.#ctx.settings), true).text,
+				);
 				return;
 			}
 			this.#editing = true;

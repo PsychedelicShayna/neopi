@@ -51,6 +51,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Live force-keyword and hold-submit handoffs now send collapsed pastes and text attachments as their full content instead of composer placeholders ([#182](https://github.com/PsychedelicShayna/neopi/issues/182)).
 - `npi update --check` and other ordinary update invocations now accept upstream binary assets while keeping the installed executable named `npi` ([#327](https://github.com/PsychedelicShayna/neopi/issues/327)).
 - Live microphone admission now counts audio waiting for the encoder, so burst overflow is reported instead of silently discarding accepted speech ([#174](https://github.com/PsychedelicShayna/neopi/issues/174)).
 - Live speaker playback stays open through device priming, and completed delegations no longer replay held tool progress after their final answer ([#175](https://github.com/PsychedelicShayna/neopi/issues/175)).

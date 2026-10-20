@@ -635,6 +635,34 @@ describe("LiveCommandController", () => {
 		}
 	});
 
+	for (const hold of [false, true]) {
+		for (const attachment of ["collapsed paste", "text chip"] as const) {
+			it(`expands a ${attachment} in a ${hold ? "hold-submit" : "force-keyword"} handoff without routing attachment text`, async () => {
+				const h = createHarness();
+				const forced = vi.spyOn(LiveSessionController.prototype, "forceDelegateComposer").mockReturnValue(true);
+				cfgLiveHoldMode.set(h.ctx.settings, hold);
+				cfgLiveForceDelegateKeyword.set(h.ctx.settings, "send it now");
+				cfgLiveSubmitKeyword.set(h.ctx.settings, "thanks");
+				cfgLiveSubmitSilenceMs.set(h.ctx.settings, 10);
+				await h.controller.handleCommand();
+				try {
+					const content = "const value = 1;\n\n// send it now\n// thanks";
+					h.editor.insertText("Review:\n");
+					if (attachment === "collapsed paste") h.editor.insertPaste(content);
+					else h.editor.insertTextAttachment(content);
+					await Bun.sleep(30);
+					expect(forced).not.toHaveBeenCalled();
+					h.editor.insertText(hold ? "\nTHANKS!" : "\nSEND... IT, NOW!");
+					await Bun.sleep(30);
+					expect(forced).toHaveBeenCalledTimes(1);
+					expect(forced).toHaveBeenCalledWith(`Review:\n${content}`);
+				} finally {
+					await h.controller.stop();
+				}
+			});
+		}
+	}
+
 	it("keeps an unfinished utterance as draft text when the call ends", async () => {
 		const h = createHarness();
 		await h.controller.handleCommand();
