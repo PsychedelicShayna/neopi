@@ -1,3 +1,4 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * Hindsight memory backend.
  *
@@ -8,7 +9,7 @@
  */
 
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { logger, prompt } from "@oh-my-pi/pi-utils";
+import { logger } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../config/settings";
 import { memoryToolRefs } from "../memory-backend/tool-names";
 import type { MemoryBackend, MemoryBackendStartOptions, MemoryPromptPreparation } from "../memory-backend/types";
@@ -88,7 +89,11 @@ export const hindsightBackend: MemoryBackend = {
 		// Order: static instructions → mental models (stable, curated) → recall
 		// (volatile per turn). Stable context first so the LLM's prior is
 		// anchored on curated knowledge.
-		const parts = [prompt.render(hindsightInstructions, { toolRefs: memoryToolRefs(session?.getXdevToolEntries()) })];
+		const parts = [
+			renderPromptAsset("system/hindsight-instructions.md", hindsightInstructions, {
+				toolRefs: memoryToolRefs(session?.getXdevToolEntries()),
+			}),
+		];
 		if (mentalModelsSnippet) parts.push(mentalModelsSnippet);
 		if (recallSnippet) parts.push(recallSnippet);
 		return parts.join("\n\n");

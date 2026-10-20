@@ -18,7 +18,8 @@ import {
 	sanitizeSchemaForStrictMode,
 	tryEnforceStrictSchema,
 } from "@oh-my-pi/pi-ai/utils/schema";
-import { prompt } from "@oh-my-pi/pi-utils";
+
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import yieldDescription from "../prompts/tools/yield.md" with { type: "text" };
 import { subprocessToolRegistry } from "../task/subprocess-tool-registry";
 import type { WorkPoolYieldItem } from "../task/workpool-yield";
@@ -314,10 +315,15 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 	}
 
 	get description(): string {
-		return prompt.render(yieldDescription, {
-			hasOutputSchema: this.#validate !== undefined,
-			workPoolItems: this.#workPoolItems().length > 0,
-		});
+		return renderPromptAsset(
+			"tools/yield.md",
+			yieldDescription,
+			{
+				hasOutputSchema: this.#validate !== undefined,
+				workPoolItems: this.#workPoolItems().length > 0,
+			},
+			{ cwd: this.#session.cwd },
+		);
 	}
 
 	get parameters(): TSchema {

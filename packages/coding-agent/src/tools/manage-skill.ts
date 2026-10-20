@@ -8,6 +8,8 @@ import {
 	writeManagedSkill,
 } from "../autolearn/managed-skills";
 import { isNameClaimedByAuthoredSkill } from "../extensibility/skills";
+import { render as renderPrompt } from "@oh-my-pi/pi-utils/prompt";
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import manageSkillDescription from "../prompts/tools/manage-skill.md" with { type: "text" };
 import type { ToolSession } from ".";
 
@@ -41,17 +43,23 @@ export class ManageSkillTool implements AgentTool<typeof manageSkillSchema> {
 	readonly name = "manage_skill";
 	readonly approval = "write" as const;
 	readonly label = "Manage Skill";
-	readonly description = manageSkillDescription;
+	get description(): string {
+		const { text } = resolvePromptAsset("tools/manage-skill.md", manageSkillDescription, { cwd: this.cwd });
+		return text === manageSkillDescription ? text : renderPrompt(text);
+	}
 	readonly parameters = manageSkillSchema;
 	readonly strict = true;
 	readonly loadMode = "essential" as const;
 	readonly summary = "Create, update, or delete an isolated managed skill";
 
-	constructor(private readonly refreshSkills?: () => Promise<void>) {}
+	constructor(
+		private readonly refreshSkills?: () => Promise<void>,
+		private readonly cwd?: string,
+	) {}
 
 	static createIf(session: ToolSession): ManageSkillTool | null {
 		if (!cfgAutolearnEnabled.get(session.settings)) return null;
-		return new ManageSkillTool(session.refreshSkills);
+		return new ManageSkillTool(session.refreshSkills, session.cwd);
 	}
 
 	async execute(_id: string, params: ManageSkillParams): Promise<AgentToolResult> {

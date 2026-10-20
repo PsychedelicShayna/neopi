@@ -1,5 +1,6 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import type { Model } from "@oh-my-pi/pi-ai";
-import { isRecord, prompt } from "@oh-my-pi/pi-utils";
+import { isRecord } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import { formatModelString } from "../config/model-resolver";
 import modelMentionDescription from "../prompts/agents/model-mention.md" with { type: "text" };
@@ -120,7 +121,12 @@ export class ModelMentionRegistry {
 				.map(mention => ({
 					...task,
 					name: mention.agent,
-					description: prompt.render(modelMentionDescription, { name: mention.name, selector: mention.selector }),
+					description: renderPromptAsset(
+						"agents/model-mention.md",
+						modelMentionDescription,
+						{ name: mention.name, selector: mention.selector },
+						{ cwd: this.#host.sessionManager.getCwd() },
+					),
 					model: [mention.selector],
 					filePath: undefined,
 				})),

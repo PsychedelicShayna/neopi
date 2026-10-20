@@ -1,3 +1,4 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import {
 	type VibeSessionState,
 	type VibeScreenSnapshot,
@@ -24,7 +25,7 @@ import {
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { logger, prompt, Snowflake } from "@oh-my-pi/pi-utils";
+import { logger, Snowflake } from "@oh-my-pi/pi-utils";
 import type { AsyncJob, AsyncJobManager } from "../async/job-manager";
 import { validateAgentAccountPools } from "../config/account-pools";
 import { resolveAgentModelSelection } from "../config/model-resolver";
@@ -1502,24 +1503,22 @@ export class VibeSessionRegistry {
 		}
 		let text: string;
 		try {
-			text = prompt
-				.render(vibeTurnResultTemplate, {
-					id: record.id,
-					cli: record.cli,
-					turn: turnIndex,
-					status,
-					duration: formatDuration(result.durationMs),
-					requests: result.requests,
-					toolCount: turn.toolCount,
-					model: result.resolvedModel ?? record.resolvedModel ?? "",
-					trace: traceLines,
-					traceOverflow: traceOverflow > 0 ? traceOverflow : undefined,
-					response,
-					responseTruncated,
-					error: failed ? (result.abortReason ?? result.error ?? result.stderr ?? "") : "",
-					alive: record.state !== "dead",
-				})
-				.trim();
+			text = renderPromptAsset("tools/vibe-turn-result.md", vibeTurnResultTemplate, {
+				id: record.id,
+				cli: record.cli,
+				turn: turnIndex,
+				status,
+				duration: formatDuration(result.durationMs),
+				requests: result.requests,
+				toolCount: turn.toolCount,
+				model: result.resolvedModel ?? record.resolvedModel ?? "",
+				trace: traceLines,
+				traceOverflow: traceOverflow > 0 ? traceOverflow : undefined,
+				response,
+				responseTruncated,
+				error: failed ? (result.abortReason ?? result.error ?? result.stderr ?? "") : "",
+				alive: record.state !== "dead",
+			}).trim();
 		} catch (error) {
 			// A formatting bug must never turn a finished worker turn into a false
 			// failure — the work is done; degrade to a plain-text assembly.

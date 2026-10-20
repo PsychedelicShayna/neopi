@@ -1,3 +1,5 @@
+import { render as renderPrompt } from "@oh-my-pi/pi-utils/prompt";
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import compactionDoc from "../prompts/internal-urls/compaction.md" with { type: "text" };
 import { runCompactionControl } from "../session/compaction-controls";
 import type {
@@ -20,7 +22,8 @@ export class CompactionProtocolHandler implements ProtocolHandler {
 	};
 
 	promptDoc(): string {
-		return compactionDoc.trim();
+		const { text } = resolvePromptAsset("internal-urls/compaction.md", compactionDoc);
+		return (text === compactionDoc ? text : renderPrompt(text)).trim();
 	}
 
 	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {

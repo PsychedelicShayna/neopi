@@ -7,16 +7,13 @@ import type {
 	TextContent,
 	ToolResultMessage,
 } from "@oh-my-pi/pi-ai";
-import { prompt } from "@oh-my-pi/pi-utils";
+
+import { resolvePromptAsset, renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import type { AgentMessage } from "../types";
 import type { SessionEntry } from "./entries";
 import branchSummaryContextPrompt from "./prompts/branch-summary-context.md" with { type: "text" };
 import compactionSummaryContextPrompt from "./prompts/compaction-summary-context.md" with { type: "text" };
 import handoffSummaryContextPrompt from "./prompts/handoff-summary-context.md" with { type: "text" };
-
-const COMPACTION_SUMMARY_TEMPLATE = compactionSummaryContextPrompt;
-const HANDOFF_SUMMARY_TEMPLATE = handoffSummaryContextPrompt;
-const BRANCH_SUMMARY_TEMPLATE = branchSummaryContextPrompt;
 
 export interface CustomMessage<T = unknown> {
 	role: "custom";
@@ -108,12 +105,39 @@ function getPrunedToolResultContent(message: ToolResultMessage): (TextContent | 
 	return content;
 }
 
-export function renderBranchSummaryContext(summary: string): string {
-	return prompt.render(BRANCH_SUMMARY_TEMPLATE, { summary });
+/** Cache identity for the templates used when replaying summary messages. */
+export function getSummaryContextPromptCacheKey(cwd?: string): string {
+	const branch = resolvePromptAsset("compaction/branch-summary-context.md", branchSummaryContextPrompt, {
+		cwd,
+		kind: "notice",
+	});
+	const compaction = resolvePromptAsset("compaction/compaction-summary-context.md", compactionSummaryContextPrompt, {
+		cwd,
+		kind: "notice",
+	});
+	const handoff = resolvePromptAsset("compaction/handoff-summary-context.md", handoffSummaryContextPrompt, {
+		cwd,
+		kind: "notice",
+	});
+	return `${branch.hash}:${compaction.hash}:${handoff.hash}`;
 }
 
-export function renderCompactionSummaryContext(summary: string): string {
-	return prompt.render(COMPACTION_SUMMARY_TEMPLATE, { summary });
+export function renderBranchSummaryContext(summary: string, cwd?: string): string {
+	return renderPromptAsset(
+		"compaction/branch-summary-context.md",
+		branchSummaryContextPrompt,
+		{ summary },
+		{ cwd, kind: "notice" },
+	);
+}
+
+export function renderCompactionSummaryContext(summary: string, cwd?: string): string {
+	return renderPromptAsset(
+		"compaction/compaction-summary-context.md",
+		compactionSummaryContextPrompt,
+		{ summary },
+		{ cwd, kind: "notice" },
+	);
 }
 /**
  * Wrap a handoff document for injection into the successor context. Unlike the
@@ -122,8 +146,13 @@ export function renderCompactionSummaryContext(summary: string): string {
  * this framing the successor misreads first-person "Next Steps" as fresh user
  * instructions (or tries to write the handoff again).
  */
-export function renderHandoffSummaryContext(summary: string): string {
-	return prompt.render(HANDOFF_SUMMARY_TEMPLATE, { summary });
+export function renderHandoffSummaryContext(summary: string, cwd?: string): string {
+	return renderPromptAsset(
+		"compaction/handoff-summary-context.md",
+		handoffSummaryContextPrompt,
+		{ summary },
+		{ cwd, kind: "notice" },
+	);
 }
 
 export function createBranchSummaryMessage(summary: string, fromId: string, timestamp: string): BranchSummaryMessage {
@@ -214,7 +243,7 @@ function isCoreCompactionMessage(message: AgentMessage): message is AgentMessage
  * roles and delegate every core role here — duplicating these cases is how
  * snapcompact frames once silently fell off the provider request.
  */
-export function convertMessageToLlm(message: AgentMessage): Message | undefined {
+export function convertMessageToLlm(message: AgentMessage, cwd?: string): Message | undefined {
 	if (isCoreCompactionMessage(message)) {
 		switch (message.role) {
 			case "custom":
@@ -236,7 +265,7 @@ export function convertMessageToLlm(message: AgentMessage): Message | undefined 
 					content: [
 						{
 							type: "text" as const,
-							text: renderBranchSummaryContext(message.summary),
+							text: renderBranchSummaryContext(message.summary, cwd),
 						},
 					],
 					attribution: "agent",
@@ -254,8 +283,8 @@ export function convertMessageToLlm(message: AgentMessage): Message | undefined 
 										type: "text" as const,
 										text:
 											message.method === "handoff"
-												? renderHandoffSummaryContext(message.summary)
-												: renderCompactionSummaryContext(message.summary),
+												? renderHandoffSummaryContext(message.summary, cwd)
+												: renderCompactionSummaryContext(message.summary, cwd),
 									},
 									...(message.images ?? []),
 								],
@@ -292,8 +321,8 @@ export function convertMessageToLlm(message: AgentMessage): Message | undefined 
  * `SummaryOptions.convertToLlm`; this default intentionally preserves only the
  * core LLM roles and the compaction messages owned by this package.
  */
-export function defaultConvertToLlm(messages: AgentMessage[]): Message[] {
-	return messages.map(convertMessageToLlm).filter(message => message !== undefined);
+export function defaultConvertToLlm(messages: AgentMessage[], cwd?: string): Message[] {
+	return messages.map(message => convertMessageToLlm(message, cwd)).filter(message => message !== undefined);
 }
 
 /**

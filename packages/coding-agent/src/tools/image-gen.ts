@@ -13,12 +13,13 @@ import {
 	parseAntigravityCredentials,
 } from "@oh-my-pi/pi-ai";
 import { ProviderHttpError } from "@oh-my-pi/pi-ai/error";
-import { isEnoent, logger, parseImageMetadata, prompt, ptree, Snowflake, untilAborted } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger, parseImageMetadata, ptree, Snowflake, untilAborted } from "@oh-my-pi/pi-utils";
 import { type RoleChainCandidate, resolveModelRoleValue, resolveRoleChain } from "../config/model-resolver";
 import { roleCandidatePool } from "../config/model-roles";
 import { isAuthenticated, type ModelRegistry } from "../config/model-registry";
 import { settings } from "../config/settings";
 import type { CustomTool } from "../extensibility/custom-tools/types";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import imageGenDescription from "../prompts/tools/image-gen.md" with { type: "text" };
 import { resolveConfiguredModelTarget } from "../session/role-models";
 import { resolveReadPath, specialFileKind } from "./path-utils";
@@ -232,7 +233,9 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 	label: "GenerateImage",
 	strict: false,
 	approval: "write",
-	description: prompt.render(imageGenDescription),
+	get description(): string {
+		return renderPromptAsset("tools/image-gen.md", imageGenDescription, {});
+	},
 	parameters: imageGenSchema,
 	async execute(_toolCallId, params, _onUpdate, ctx, signal) {
 		return untilAborted(signal, async () => {

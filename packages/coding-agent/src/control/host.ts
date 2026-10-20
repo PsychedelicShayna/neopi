@@ -1,3 +1,4 @@
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * Per-session control host (issue #171).
  *
@@ -630,7 +631,7 @@ export class ControlHost {
 			if (!warned) {
 				if (caller) this.#followUpWarnedCallers.add(caller);
 				else this.#followUpWarnedConnections.add(connection);
-				warning = followUpWarning.trim();
+				warning = resolvePromptAsset("control-follow-up-warning.md", followUpWarning).text.trim();
 			}
 		}
 		connection.write({ ...response, requestId: response.id, ...(warning ? { warning } : {}) });

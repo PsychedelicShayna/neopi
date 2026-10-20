@@ -1,6 +1,7 @@
 import { type } from "@oh-my-pi/omptype";
-import { prompt } from "@oh-my-pi/pi-utils";
+
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import memoryEditDescription from "../prompts/tools/memory-edit.md" with { type: "text" };
 import { sessionMemoryToolRefs } from "../memory-backend/tool-names";
 import type { ToolSession } from ".";
@@ -22,9 +23,14 @@ export class MemoryEditTool implements AgentTool<typeof memoryEditSchema> {
 	readonly approval = "read" as const;
 	readonly label = "Memory Edit";
 	get description(): string {
-		return prompt.render(memoryEditDescription, {
-			toolRefs: sessionMemoryToolRefs(this.session),
-		});
+		return renderPromptAsset(
+			"tools/memory-edit.md",
+			memoryEditDescription,
+			{
+				toolRefs: sessionMemoryToolRefs(this.session),
+			},
+			{ cwd: this.session.cwd },
+		);
 	}
 	readonly parameters = memoryEditSchema;
 	readonly strict = true;

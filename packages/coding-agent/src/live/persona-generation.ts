@@ -1,7 +1,7 @@
 import { completeSimple } from "@oh-my-pi/pi-ai";
 import type { PersonaGenerationDeps, PersonaConfigDoc } from "@oh-my-pi/pi-tui/overlays/persona-config";
 import type { ModelBrowserSource } from "@oh-my-pi/pi-tui/overlays/model-browser";
-import { prompt } from "@oh-my-pi/pi-utils";
+import { compilePromptAsset, renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import type { ModelRegistry } from "../config/model-registry";
 import type { PromptTemplate } from "../config/prompt-templates";
 import { personaFeature, type PersonaFeature } from "../neopi/persona";
@@ -47,6 +47,7 @@ export function createLivePersonaGeneration(options: {
 	templates: readonly PromptTemplate[];
 	sessionId: string;
 	personas?: PersonaFeature;
+	cwd?: string;
 }): PersonaGenerationDeps {
 	const personas = options.personas ?? personaFeature();
 	return {
@@ -68,11 +69,18 @@ export function createLivePersonaGeneration(options: {
 			const message = await completeSimple(
 				model,
 				{
-					systemPrompt: [generationSystem],
+					systemPrompt: [
+						compilePromptAsset("live/generate-persona.md", generationSystem, { cwd: options.cwd })({}),
+					],
 					messages: [
 						{
 							role: "user",
-							content: prompt.render(generationUser, { description, references }),
+							content: renderPromptAsset(
+								"live/generate-persona-user.md",
+								generationUser,
+								{ description, references },
+								{ cwd: options.cwd },
+							),
 							timestamp: Date.now(),
 						},
 					],

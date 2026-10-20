@@ -11,7 +11,7 @@ import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import type { OutputMeta } from "@oh-my-pi/pi-tui/tools/output-meta";
 import { enforceInlineByteCap } from "@oh-my-pi/pi-tui/tools/streaming-output";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
-import { prompt } from "@oh-my-pi/pi-utils";
+
 import {
 	acquireIdaDatabase,
 	cfgIdaAvailable,
@@ -21,6 +21,7 @@ import {
 	locateIdb,
 	splitSliceRef,
 } from "../ida";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import idaDescription from "../prompts/tools/ida.md" with { type: "text" };
 import type { ToolSession } from ".";
 import { truncateForPrompt } from "./approval";
@@ -96,14 +97,14 @@ export class IdaTool implements AgentTool<typeof idaSchema, IdaToolDetails> {
 	};
 	readonly label = "IDA";
 	readonly summary = "Open, edit, and script IDA Pro databases shared across agents";
-	readonly description: string;
+	get description(): string {
+		return renderPromptAsset("tools/ida.md", idaDescription, {}, { cwd: this.session.cwd });
+	}
 	readonly parameters = idaSchema;
 	readonly strict = true;
 	readonly loadMode = "discoverable";
 
-	constructor(private readonly session: ToolSession) {
-		this.description = prompt.render(idaDescription);
-	}
+	constructor(private readonly session: ToolSession) {}
 
 	/** Create the tool when `ida.enabled` is on. */
 	static createIf(session: ToolSession): IdaTool | null {

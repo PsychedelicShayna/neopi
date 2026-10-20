@@ -1,8 +1,9 @@
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import { logger, prompt, untilAborted } from "@oh-my-pi/pi-utils";
+import { logger, untilAborted } from "@oh-my-pi/pi-utils";
 import { isHindsightConfigured, loadHindsightConfig } from "../hindsight/config";
 import { ensureBankExists } from "../hindsight/bank";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import reflectDescription from "../prompts/tools/reflect.md" with { type: "text" };
 import { sessionMemoryToolRefs } from "../memory-backend/tool-names";
 import type { ToolSession } from ".";
@@ -21,9 +22,14 @@ export class MemoryReflectTool implements AgentTool<typeof memoryReflectSchema> 
 	readonly approval = "read" as const;
 	readonly label = "Reflect";
 	get description(): string {
-		return prompt.render(reflectDescription, {
-			toolRefs: sessionMemoryToolRefs(this.session),
-		});
+		return renderPromptAsset(
+			"tools/reflect.md",
+			reflectDescription,
+			{
+				toolRefs: sessionMemoryToolRefs(this.session),
+			},
+			{ cwd: this.session.cwd },
+		);
 	}
 	readonly parameters = memoryReflectSchema;
 	readonly strict = true;

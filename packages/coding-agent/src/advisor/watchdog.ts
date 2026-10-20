@@ -1,9 +1,10 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { getAgentDir, isEnoent, logger, prompt } from "@oh-my-pi/pi-utils";
+import { getAgentDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { expandAtImports } from "../discovery/at-imports";
 import activeRepoWatchdogTemplate from "../prompts/advisor/active-repo-watchdog.md" with { type: "text" };
 import contextFilesTemplate from "../prompts/advisor/context-files.md" with { type: "text" };
@@ -12,11 +13,9 @@ import type { ActiveRepoContext } from "@oh-my-pi/pi-tui/status-line/host";
 import { normalizePromptPath } from "../utils/prompt-path";
 
 export function formatActiveRepoWatchdogPrompt(activeRepoContext: ActiveRepoContext): string {
-	return prompt
-		.render(activeRepoWatchdogTemplate, {
-			relativeRepoRoot: normalizePromptPath(activeRepoContext.relativeRepoRoot),
-		})
-		.trim();
+	return renderPromptAsset("advisor/active-repo-watchdog.md", activeRepoWatchdogTemplate, {
+		relativeRepoRoot: normalizePromptPath(activeRepoContext.relativeRepoRoot),
+	}).trim();
 }
 
 /**
@@ -30,7 +29,7 @@ export function formatAdvisorContextPrompt(
 	contextFiles: ReadonlyArray<{ path: string; content: string }>,
 ): string | undefined {
 	if (contextFiles.length === 0) return undefined;
-	return prompt.render(contextFilesTemplate, { contextFiles }).trim() || undefined;
+	return renderPromptAsset("advisor/context-files.md", contextFilesTemplate, { contextFiles }).trim() || undefined;
 }
 
 /**
@@ -42,7 +41,11 @@ export function formatAdvisorContextPrompt(
  */
 export function formatAdvisorMemoryPrompt(memoryInstructions: string | undefined): string | undefined {
 	if (!memoryInstructions?.trim()) return undefined;
-	return prompt.render(memoryContextTemplate, { memoryInstructions: memoryInstructions.trim() }).trim() || undefined;
+	return (
+		renderPromptAsset("advisor/memory-context.md", memoryContextTemplate, {
+			memoryInstructions: memoryInstructions.trim(),
+		}).trim() || undefined
+	);
 }
 
 /**

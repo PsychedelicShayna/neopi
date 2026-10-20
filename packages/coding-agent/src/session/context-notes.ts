@@ -1,4 +1,5 @@
-import { prompt } from "@oh-my-pi/pi-utils";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
+
 import type { CustomEntry, SessionEntry } from "./session-entries";
 import contextNotesPrompt from "../prompts/system/context-notes.md" with { type: "text" };
 
@@ -55,5 +56,5 @@ export function getContextNotes(entries: readonly SessionEntry[]): ContextNotesR
 export function renderContextNotes(entries: readonly SessionEntry[]): string {
 	const notes = getContextNotes(entries);
 	if (!notes || notes.text.length === 0) return "";
-	return prompt.render(contextNotesPrompt, { notes: notes.text }).trim();
+	return renderPromptAsset("system/context-notes.md", contextNotesPrompt, { notes: notes.text }).trim();
 }

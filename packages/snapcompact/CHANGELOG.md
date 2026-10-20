@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Archive prompt text can be inspected and overridden through the coding agent's `npi prompts` catalog, with session-local override resolution ([#2](https://github.com/PsychedelicShayna/neopi/issues/2)).
+
 ## [18.10.3] - 2026-10-12
 
 ### Breaking Changes

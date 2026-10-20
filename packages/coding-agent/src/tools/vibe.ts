@@ -15,8 +15,7 @@ import { type VibeToolDetails } from "@oh-my-pi/pi-tui/tools/vibe";
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 
-import { prompt } from "@oh-my-pi/pi-utils";
-
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import vibeKillDescription from "../prompts/tools/vibe-kill.md" with { type: "text" };
 import vibeListDescription from "../prompts/tools/vibe-list.md" with { type: "text" };
 import vibeSendDescription from "../prompts/tools/vibe-send.md" with { type: "text" };
@@ -88,12 +87,12 @@ export class VibeSpawnTool implements AgentTool<typeof vibeSpawnSchema, VibeTool
 	readonly approval = "exec" as const;
 	readonly label = "Vibe Spawn";
 	readonly summary = "Start a persistent fast/good worker session";
-	readonly description: string;
+	get description(): string {
+		return renderPromptAsset("tools/vibe-spawn.md", vibeSpawnDescription, {}, { cwd: this.session.cwd });
+	}
 	readonly parameters = vibeSpawnSchema;
 	readonly strict = true;
-	constructor(private readonly session: ToolSession) {
-		this.description = prompt.render(vibeSpawnDescription);
-	}
+	constructor(private readonly session: ToolSession) {}
 
 	async execute(_toolCallId: string, params: typeof vibeSpawnSchema.infer): Promise<AgentToolResult<VibeToolDetails>> {
 		const { id, jobId } = await VibeSessionRegistry.global().spawn(this.session, params);
@@ -109,12 +108,12 @@ export class VibeSendTool implements AgentTool<typeof vibeSendSchema, VibeToolDe
 	readonly approval = "exec" as const;
 	readonly label = "Vibe Send";
 	readonly summary = "Message a worker session (steer or next turn)";
-	readonly description: string;
+	get description(): string {
+		return renderPromptAsset("tools/vibe-send.md", vibeSendDescription, {}, { cwd: this.session.cwd });
+	}
 	readonly parameters = vibeSendSchema;
 	readonly strict = true;
-	constructor(private readonly session: ToolSession) {
-		this.description = prompt.render(vibeSendDescription);
-	}
+	constructor(private readonly session: ToolSession) {}
 
 	async execute(_toolCallId: string, params: typeof vibeSendSchema.infer): Promise<AgentToolResult<VibeToolDetails>> {
 		const outcome = await VibeSessionRegistry.global().send(this.session, params);
@@ -135,13 +134,13 @@ export class VibeWaitTool implements AgentTool<typeof vibeWaitSchema, VibeToolDe
 	readonly approval = "read" as const;
 	readonly label = "Vibe Wait";
 	readonly summary = "Block until a worker session finishes its turn";
-	readonly description: string;
+	get description(): string {
+		return renderPromptAsset("tools/vibe-wait.md", vibeWaitDescription, {}, { cwd: this.session.cwd });
+	}
 	readonly parameters = vibeWaitSchema;
 	readonly strict = true;
 	readonly interruptible = true;
-	constructor(private readonly session: ToolSession) {
-		this.description = prompt.render(vibeWaitDescription);
-	}
+	constructor(private readonly session: ToolSession) {}
 
 	async execute(
 		_toolCallId: string,
@@ -212,12 +211,12 @@ export class VibeKillTool implements AgentTool<typeof vibeKillSchema, VibeToolDe
 	readonly approval = "read" as const;
 	readonly label = "Vibe Kill";
 	readonly summary = "Terminate a worker session";
-	readonly description: string;
+	get description(): string {
+		return renderPromptAsset("tools/vibe-kill.md", vibeKillDescription, {}, { cwd: this.session.cwd });
+	}
 	readonly parameters = vibeKillSchema;
 	readonly strict = true;
-	constructor(private readonly session: ToolSession) {
-		this.description = prompt.render(vibeKillDescription);
-	}
+	constructor(private readonly session: ToolSession) {}
 
 	async execute(_toolCallId: string, params: typeof vibeKillSchema.infer): Promise<AgentToolResult<VibeToolDetails>> {
 		const outcome = await VibeSessionRegistry.global().kill(this.session, params.session);
@@ -238,12 +237,12 @@ export class VibeListTool implements AgentTool<typeof vibeListSchema, VibeToolDe
 	readonly approval = "read" as const;
 	readonly label = "Vibe List";
 	readonly summary = "List worker sessions and their states";
-	readonly description: string;
+	get description(): string {
+		return renderPromptAsset("tools/vibe-list.md", vibeListDescription, {}, { cwd: this.session.cwd });
+	}
 	readonly parameters = vibeListSchema;
 	readonly strict = true;
-	constructor(private readonly session: ToolSession) {
-		this.description = prompt.render(vibeListDescription);
-	}
+	constructor(private readonly session: ToolSession) {}
 
 	async execute(): Promise<AgentToolResult<VibeToolDetails>> {
 		const { screens, hiddenKilled } = wallOf(this.session);

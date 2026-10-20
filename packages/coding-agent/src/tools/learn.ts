@@ -1,10 +1,11 @@
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import { prompt } from "@oh-my-pi/pi-utils";
+
 import { sanitizeSkillName, writeManagedSkill } from "../autolearn/managed-skills";
 import { isNameClaimedByAuthoredSkill } from "../extensibility/skills";
 import { isHindsightConfigured, loadHindsightConfig } from "../hindsight/config";
 import { localBackend } from "../memory-backend/local-backend";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import learnDescription from "../prompts/tools/learn.md" with { type: "text" };
 import type { ToolSession } from ".";
 
@@ -57,7 +58,12 @@ export class LearnTool implements AgentTool<LearnSchema> {
 	};
 	readonly label = "Learn";
 	get description(): string {
-		return prompt.render(learnDescription, { globalScope: isGlobalMemoryScopeAvailable(this.session.settings) });
+		return renderPromptAsset(
+			"tools/learn.md",
+			learnDescription,
+			{ globalScope: isGlobalMemoryScopeAvailable(this.session.settings) },
+			{ cwd: this.session.cwd },
+		);
 	}
 	get parameters(): LearnSchema {
 		return isGlobalMemoryScopeAvailable(this.session.settings) ? learnSchemaWithScope : learnSchemaBase;

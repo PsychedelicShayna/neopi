@@ -1,3 +1,4 @@
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { type } from "@oh-my-pi/omptype";
 import { type AdvisorSeverity, type AdvisorNote } from "@oh-my-pi/pi-tui/chat/messages";
 export { type AdvisorSeverity, type AdvisorNote, type AdvisorMessageDetails } from "@oh-my-pi/pi-tui/chat/messages";
@@ -10,7 +11,7 @@ import type {
 	AgentToolUpdateCallback,
 } from "@oh-my-pi/pi-agent-core";
 import { escapeXmlAttribute, escapeXmlText, logger } from "@oh-my-pi/pi-utils";
-import adviseDescription from "../prompts/advisor/advise-tool.md" with { type: "text" };
+import bundledAdviseDescription from "../prompts/advisor/advise-tool.md" with { type: "text" };
 import { AdvisorEmissionGuard, type AdvisorSuppressionReason, normalizeAdvisorNote } from "./emission-guard";
 
 const adviseSchema = type({
@@ -190,7 +191,9 @@ const ADVISOR_ACK_SUPPRESSED: Record<AdvisorSuppressionReason, string> = {
 export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails> {
 	readonly name = "advise";
 	readonly label = "Advise";
-	readonly description = adviseDescription;
+	get description(): string {
+		return resolvePromptAsset("advisor/advise-tool.md", bundledAdviseDescription).text;
+	}
 	readonly parameters = adviseSchema;
 	readonly intent = "omit" as const;
 	/**

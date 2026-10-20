@@ -1,3 +1,4 @@
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * Auto-learn session controller (experimental).
  *
@@ -21,8 +22,6 @@ import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 
 import { cfgAutolearnAutoContinue, cfgAutolearnEnabled, cfgAutolearnMinToolCalls } from "./settings";
 
-const AUTOLEARN_NUDGE_AUTOCONTINUE = autolearnNudgeAutoContinue.trim();
-
 /**
  * Build the standing auto-learn guidance for the system prompt from the tools
  * actually present in the active set, or null when `manage_skill` is absent.
@@ -35,8 +34,9 @@ const AUTOLEARN_NUDGE_AUTOCONTINUE = autolearnNudgeAutoContinue.trim();
  */
 export function buildAutoLearnInstructions(available: { manageSkill: boolean; learn: boolean }): string | null {
 	if (!available.manageSkill) return null;
-	const parts = [autolearnGuidance.trim()];
-	if (available.learn) parts.push(autolearnGuidanceLearn.trim());
+	const parts = [resolvePromptAsset("system/autolearn-guidance.md", autolearnGuidance).text.trim()];
+	if (available.learn)
+		parts.push(resolvePromptAsset("system/autolearn-guidance-learn.md", autolearnGuidanceLearn).text.trim());
 	return parts.join("\n\n");
 }
 
@@ -139,7 +139,9 @@ export class AutoLearnController {
 
 	#startCapture(): void {
 		this.#captureInFlight = true;
-		void this.#capture(AUTOLEARN_NUDGE_AUTOCONTINUE)
+		void this.#capture(
+			resolvePromptAsset("system/autolearn-nudge-autocontinue.md", autolearnNudgeAutoContinue).text.trim(),
+		)
 			.catch(err => {
 				logger.warn("auto-learn capture failed", { err });
 			})

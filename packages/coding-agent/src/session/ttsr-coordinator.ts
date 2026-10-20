@@ -1,3 +1,4 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
@@ -14,7 +15,7 @@ import {
 	createToolScopedAbortReason,
 } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Judge, ToolCall } from "@oh-my-pi/pi-ai";
-import { logger, prompt, relativePathWithinRoot, withTimeout } from "@oh-my-pi/pi-utils";
+import { logger, relativePathWithinRoot, withTimeout } from "@oh-my-pi/pi-utils";
 import type { Rule } from "../capability/rule";
 import type { Settings } from "../config/settings";
 import {
@@ -227,11 +228,16 @@ export class TtsrCoordinator {
 
 		const reminder = matches
 			.map(rule =>
-				prompt.render(ttsrInterruptTemplate, {
-					name: rule.name,
-					path: this.#displayRulePath(rule.path),
-					content: rule.content,
-				}),
+				renderPromptAsset(
+					"system/ttsr-interrupt.md",
+					ttsrInterruptTemplate,
+					{
+						name: rule.name,
+						path: this.#displayRulePath(rule.path),
+						content: rule.content,
+					},
+					{ cwd: this.#host.sessionManager.getCwd() },
+				),
 			)
 			.join("\n\n");
 		this.#markInjected(matches.map(rule => rule.name));
@@ -317,11 +323,16 @@ export class TtsrCoordinator {
 		this.#perToolInjections.delete(toolCallId);
 		const reminder = rules
 			.map(rule =>
-				prompt.render(ttsrToolReminderTemplate, {
-					name: rule.name,
-					path: this.#displayRulePath(rule.path),
-					content: rule.content,
-				}),
+				renderPromptAsset(
+					"system/ttsr-tool-reminder.md",
+					ttsrToolReminderTemplate,
+					{
+						name: rule.name,
+						path: this.#displayRulePath(rule.path),
+						content: rule.content,
+					},
+					{ cwd: this.#host.sessionManager.getCwd(), kind: "notice" },
+				),
 			)
 			.join("\n\n");
 		const ruleNames = rules.map(rule => rule.name.trim()).filter(name => name.length > 0);
@@ -354,11 +365,16 @@ export class TtsrCoordinator {
 		const rules = this.#pendingInjections;
 		const content = rules
 			.map(rule =>
-				prompt.render(ttsrInterruptTemplate, {
-					name: rule.name,
-					path: this.#displayRulePath(rule.path),
-					content: rule.content,
-				}),
+				renderPromptAsset(
+					"system/ttsr-interrupt.md",
+					ttsrInterruptTemplate,
+					{
+						name: rule.name,
+						path: this.#displayRulePath(rule.path),
+						content: rule.content,
+					},
+					{ cwd: this.#host.sessionManager.getCwd() },
+				),
 			)
 			.join("\n\n");
 		this.#pendingInjections = [];
@@ -577,12 +593,17 @@ export class TtsrCoordinator {
 		this.#host.emitSessionEvent({ type: "ttsr_triggered", rules }).catch(() => {});
 		const warning = rules
 			.map(rule =>
-				prompt.render(ttsrWarningTemplate, {
-					name: rule.name,
-					path: this.#displayRulePath(rule.path),
-					subject: output.subject,
-					content: rule.content,
-				}),
+				renderPromptAsset(
+					"system/ttsr-warning.md",
+					ttsrWarningTemplate,
+					{
+						name: rule.name,
+						path: this.#displayRulePath(rule.path),
+						subject: output.subject,
+						content: rule.content,
+					},
+					{ cwd: this.#host.sessionManager.getCwd() },
+				),
 			)
 			.join("\n\n");
 		await this.#host.deliverRuleWarning(

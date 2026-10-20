@@ -1,3 +1,4 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * Vision fallback for text-only models. When a user attaches an image to a model
  * that cannot accept image input, this:
@@ -20,7 +21,7 @@ import {
 } from "@oh-my-pi/pi-agent-core";
 import { sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
 import type { Api, completeSimple, ImageContent, Model, TextContent } from "@oh-my-pi/pi-ai";
-import { logger, prompt, toError } from "@oh-my-pi/pi-utils";
+import { logger, toError } from "@oh-my-pi/pi-utils";
 import { extractTextContent } from "../commit/utils";
 import type { ModelRegistry } from "../config/model-registry";
 import { expandRoleAlias, getModelMatchPreferences, resolveModelFromString } from "../config/model-resolver";
@@ -146,13 +147,16 @@ async function describeImage(
 		const response = await instrumentedCompleteSimple(
 			visionModel,
 			{
-				systemPrompt: [prompt.render(describeSystemPrompt)],
+				systemPrompt: [renderPromptAsset("tools/image-attachment-describe-system.md", describeSystemPrompt, {})],
 				messages: [
 					{
 						role: "user",
 						content: [
 							{ type: "image", data: image.data, mimeType: image.mimeType },
-							{ type: "text", text: prompt.render(describeUserPrompt) },
+							{
+								type: "text",
+								text: renderPromptAsset("tools/image-attachment-describe.md", describeUserPrompt, {}),
+							},
 						],
 						timestamp: Date.now(),
 					},

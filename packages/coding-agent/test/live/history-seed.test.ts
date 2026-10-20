@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { type AgentMessage, Tokenizer } from "@oh-my-pi/pi-agent-core";
+import { TempDir } from "@oh-my-pi/pi-utils";
 import { Settings } from "../../src/config/settings";
 import { LiveSessionController } from "../../src/live/controller";
 import { buildLiveHistorySeed } from "../../src/live/history-seed";
@@ -19,6 +20,20 @@ const count = (chunks: string[]) => chunks.reduce((sum, chunk) => sum + tokenize
 afterEach(() => vi.restoreAllMocks());
 
 describe("bounded live history", () => {
+	it("resolves and reloads the history template from the live session project", async () => {
+		using temp = TempDir.createSync("@omp-live-history-override-");
+		const cwd = temp.path();
+		const file = path.join(cwd, ".omp/builtin-prompts/live/primary-history.md");
+		await Bun.write(file, "Custom silent history: {{message}}");
+		expect(buildLiveHistorySeed([user("ongoing work")], 1000, cwd).join("\n")).toContain("Custom silent history:");
+		await Bun.write(file, "Updated history: {{message}}");
+		expect(buildLiveHistorySeed([user("ongoing work")], 1000, cwd).join("\n")).toContain("Updated history:");
+		await Bun.write(file, "{{unknownHistoryHelper message}}");
+		expect(buildLiveHistorySeed([user("ongoing work")], 1000, cwd).join("\n")).toStartWith(
+			"Primary transcript history.",
+		);
+	});
+
 	it("keeps recent authored prose in order without tool output or private reasoning", () => {
 		const messages: AgentMessage[] = [
 			user("the prior question"),
@@ -112,6 +127,7 @@ function harness(
 			messages,
 			modelRegistry: { authStorage: {} },
 			sessionId: "history-seed-test",
+			sessionManager: { getCwd: () => process.cwd() },
 			subscribe: () => () => {},
 			sendCustomMessageWithReceipt: delegate,
 		} as unknown as AgentSession,

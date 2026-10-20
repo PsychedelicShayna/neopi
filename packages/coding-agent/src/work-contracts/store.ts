@@ -1,10 +1,9 @@
+import { compilePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { type } from "@oh-my-pi/omptype";
-import { prompt } from "@oh-my-pi/pi-utils";
+
 import type { SessionEntry } from "../session/session-entries";
 import type { ReadonlySessionManager } from "../session/session-manager";
 import blockTemplate from "./block.md" with { type: "text" };
-
-const renderBlock = prompt.compile(blockTemplate);
 
 export const CONTRACT_ENTRY = "work-contract";
 export const contractRequestSchema = type({
@@ -114,5 +113,5 @@ export function renderContractBlock(state: ContractState): string | undefined {
 		.filter(clause => clause.active)
 		.sort((a, b) => a.id.localeCompare(b.id, "en"));
 	if (clauses.length === 0) return undefined;
-	return renderBlock({ clauses });
+	return compilePromptAsset("work-contracts/block.md", blockTemplate)({ clauses });
 }

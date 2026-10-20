@@ -51,6 +51,7 @@ import { type EditMode } from "@oh-my-pi/pi-tui/tools/edit";
 import { resolveEditMode } from "../utils/edit-mode";
 import { attemptEditAutoRepair, type EditAutoRepairOutcome } from "./auto-repair";
 import { type AppliedEditSnapshot, createEditBlackboxRecorder } from "./blackbox";
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import hashlineCompactPrompt from "./hashline-compact.md" with { type: "text" };
 import { getLspBatchRequest } from "../lsp/batch";
 import { type EditToolDetails, type EditToolPerFileResult, type Operation } from "@oh-my-pi/pi-tui/tools/edit";
@@ -140,10 +141,10 @@ const APPLY_PATCH_EXAMPLES = [
  * source (not the native addon) so PR CI — which tests against the latest
  * *release* addons — exercises the same rendering production does.
  */
-export function editDescriptionCompact(mode: EditMode): string | undefined {
+export function editDescriptionCompact(mode: EditMode, cwd?: string): string | undefined {
 	switch (mode) {
 		case "hashline":
-			return hashlineCompactPrompt;
+			return resolvePromptAsset("edit/hashline-compact.md", hashlineCompactPrompt, { cwd }).text;
 		default:
 			return undefined;
 	}
@@ -158,10 +159,11 @@ export function editDescriptionCompact(mode: EditMode): string | undefined {
 export function resolveEditToolDescription(
 	mode: EditMode,
 	model: Pick<Model, "editPromptVariant"> | undefined,
+	cwd?: string,
 ): string {
 	const source =
 		model?.editPromptVariant === "compact"
-			? (editDescriptionCompact(mode) ?? editDescription(mode))
+			? (editDescriptionCompact(mode, cwd) ?? editDescription(mode))
 			: editDescription(mode);
 	return prompt.render(source);
 }
@@ -343,7 +345,7 @@ export class EditTool implements AgentTool<TInput> {
 	}
 
 	get description(): string {
-		return resolveEditToolDescription(this.mode, this.session.getActiveModel?.());
+		return resolveEditToolDescription(this.mode, this.session.getActiveModel?.(), this.session.cwd);
 	}
 
 	get parameters(): TInput {

@@ -1,3 +1,4 @@
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * NeoPi operator commands: `/notice`, `/persona`, `/loadout`, `/repl`, `/kernel`.
  */
@@ -31,7 +32,6 @@ import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers
 import type { SlashCommandSpec, SubcommandDef, TuiSlashCommandRuntime } from "./types";
 
 // Compile the static wrapper without prompt.format(), which would rewrite payload whitespace.
-const renderNotice = prompt.compile(noticeTemplate.trimEnd());
 
 const PERSONA_DEFS: SubcommandDef[] = PERSONA_SUBCOMMANDS.map(item => ({ ...item }));
 const LIVE_PERSONA_DEFS = PERSONA_DEFS.filter(item => item.name !== "live");
@@ -308,7 +308,9 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				ctx.showStatus("Usage: /notice <text>");
 				return;
 			}
-			const notice = renderNotice({ text });
+			const notice = prompt.compile(
+				resolvePromptAsset("system/operator-notice.md", noticeTemplate, { kind: "notice" }).text.trimEnd(),
+			)({ text });
 			const options = {
 				synthetic: true,
 				userInitiated: true,

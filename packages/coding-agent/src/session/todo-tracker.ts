@@ -1,6 +1,7 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import type { Agent, AgentMessage, AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Message, Model, TextContent, ToolChoice } from "@oh-my-pi/pi-ai";
-import { isRecord, logger, prompt, stringProperty } from "@oh-my-pi/pi-utils";
+import { isRecord, logger, stringProperty } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../config/settings";
 import eagerTaskPrompt from "../prompts/system/eager-task.md" with { type: "text" };
 import eagerTodoPrompt from "../prompts/system/eager-todo.md" with { type: "text" };
@@ -167,7 +168,12 @@ export class TodoTracker {
 		const message: AgentMessage = {
 			role: "custom",
 			customType: "eager-todo-prelude",
-			content: prompt.render(eagerTodoPrompt, { ...this.#buildEagerPreludeContext(), forced: mode === "always" }),
+			content: renderPromptAsset(
+				"system/eager-todo.md",
+				eagerTodoPrompt,
+				{ ...this.#buildEagerPreludeContext(), forced: mode === "always" },
+				{ cwd: this.#host.sessionManager.getCwd() },
+			),
 			display: false,
 			attribution: "agent",
 			timestamp: Date.now(),
@@ -198,7 +204,9 @@ export class TodoTracker {
 		return {
 			role: "custom",
 			customType: "eager-task-prelude",
-			content: prompt.render(eagerTaskPrompt, this.#buildEagerPreludeContext()),
+			content: renderPromptAsset("system/eager-task.md", eagerTaskPrompt, this.#buildEagerPreludeContext(), {
+				cwd: this.#host.sessionManager.getCwd(),
+			}),
 			display: false,
 			attribution: "agent",
 			timestamp: Date.now(),
@@ -320,11 +328,16 @@ export class TodoTracker {
 		this.#mutationsSinceLastTouch = 0;
 		this.#midRunNudgeCount++;
 		const { toolRefs } = this.#buildEagerPreludeContext();
-		const reminder = prompt.render(midRunTodoNudgePrompt, {
-			toolRefs,
-			incompleteCount: incomplete.length,
-			plural: incomplete.length !== 1,
-		});
+		const reminder = renderPromptAsset(
+			"system/mid-run-todo-nudge.md",
+			midRunTodoNudgePrompt,
+			{
+				toolRefs,
+				incompleteCount: incomplete.length,
+				plural: incomplete.length !== 1,
+			},
+			{ cwd: this.#host.sessionManager.getCwd() },
+		);
 		logger.debug("Mid-run todo nudge fired", {
 			incomplete: incomplete.length,
 			nudge: this.#midRunNudgeCount,

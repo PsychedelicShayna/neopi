@@ -1,9 +1,10 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * Bottom-up node summaries: one overview plus one description per child,
  * generated only from the children's own texts and bounded so a node's whole
  * routing text fits one traversal hop.
  */
-import { prompt } from "@oh-my-pi/pi-utils";
+
 import summaryInputTemplate from "../../prompts/chronicler/temporal/summary-input.md" with { type: "text" };
 import summarySystemTemplate from "../../prompts/chronicler/temporal/summary-system.md" with { type: "text" };
 import { type ChronicleModelClient, parseJsonObject } from "./model";
@@ -62,11 +63,11 @@ export function createSummarizer(client: ChronicleModelClient): ChronicleSummari
 	return {
 		identity: client.identity,
 		async summarize(node, children, budget, signal) {
-			const system = prompt.render(summarySystemTemplate, {
+			const system = renderPromptAsset("chronicler/temporal/summary-system.md", summarySystemTemplate, {
 				overviewWords: words(budget.overviewTokens),
 				childWords: words(budget.childTokens),
 			});
-			const input = prompt.render(summaryInputTemplate, {
+			const input = renderPromptAsset("chronicler/temporal/summary-input.md", summaryInputTemplate, {
 				...node,
 				projects: node.projects.join(", ") || "none",
 				children: children.map(child => ({ ...child, projects: child.projects.join(", ") || "none" })),

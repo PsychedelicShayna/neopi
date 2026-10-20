@@ -20,6 +20,8 @@ import {
 	stopService,
 } from "../launch/services";
 import type { ProcReadDetails } from "@oh-my-pi/pi-tui/tools/proc-render";
+import { render as renderPrompt } from "@oh-my-pi/pi-utils/prompt";
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import procPromptDoc from "../prompts/internal-urls/proc.md" with { type: "text" };
 import type { ToolSession } from "../tools";
 import type {
@@ -91,7 +93,8 @@ export class ProcProtocolHandler implements ProtocolHandler {
 	};
 
 	promptDoc(): string {
-		return procPromptDoc.trim();
+		const { text } = resolvePromptAsset("internal-urls/proc.md", procPromptDoc);
+		return (text === procPromptDoc ? text : renderPrompt(text)).trim();
 	}
 
 	/**

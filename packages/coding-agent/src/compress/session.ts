@@ -1,3 +1,4 @@
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * Session factory for `npi compress`.
  *
@@ -54,7 +55,7 @@ export async function createCompressSession(options: {
 		// the coding-agent workflow. Every discovery source below defaults to ON when
 		// omitted, and each one would inject instruction-shaped project text into a
 		// session whose only legitimate input is the source document.
-		systemPrompt: [systemPrompt.trim()],
+		systemPrompt: [resolvePromptAsset("compress/system.md", systemPrompt, { cwd: cwd }).text.trim()],
 		skills: [],
 		rules: [],
 		contextFiles: [],

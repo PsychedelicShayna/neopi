@@ -42,7 +42,7 @@ import {
 	type ComputerWorkerInbound,
 	type ComputerWorkerTransport,
 	type RunErrorPayload,
-	SCREEN_LOCKED_CAPTURE_NOTE,
+	screenLockedCaptureNotice,
 	screenStateNotice,
 	type ToolReply,
 } from "./protocol";
@@ -337,7 +337,7 @@ async function emitScreenshot(
 			: `screenshot ${frame.target} ${dimensions}; ${coordinates} → ${destination}`;
 		context.output.push({
 			type: "text",
-			text: frame.screenLocked ? `${captured}\n${SCREEN_LOCKED_CAPTURE_NOTE}` : captured,
+			text: frame.screenLocked ? `${captured}\n${screenLockedCaptureNotice(context.snapshot.cwd)}` : captured,
 		});
 		context.output.push({
 			type: "image",
@@ -952,7 +952,7 @@ export class ComputerWorkerCore {
 				type: "result",
 				id: message.id,
 				ok: false,
-				error: this.#withScreenState(errorPayload(failure.error)),
+				error: this.#withScreenState(errorPayload(failure.error), message.session.cwd),
 			});
 			return;
 		}
@@ -984,9 +984,9 @@ export class ComputerWorkerCore {
 	 * sessions that never started are returned unchanged. The state is read
 	 * without queuing, since the failure may be a native request that hangs.
 	 */
-	#withScreenState(payload: RunErrorPayload): RunErrorPayload {
+	#withScreenState(payload: RunErrorPayload, cwd: string): RunErrorPayload {
 		if (payload.isAbort || !this.#session) return payload;
-		const notice = screenStateNotice(this.#session.screenState);
+		const notice = screenStateNotice(this.#session.screenState, cwd);
 		if (!notice) return payload;
 		const message = payload.message ? `${payload.message}\n${notice}` : notice;
 		const stack =

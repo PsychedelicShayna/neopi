@@ -1,7 +1,8 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, Model } from "@oh-my-pi/pi-ai";
 import { Markdown } from "@oh-my-pi/pi-tui";
-import { prompt, Snowflake } from "@oh-my-pi/pi-utils";
+import { Snowflake } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import typesDescriptionPrompt from "../../commit/prompts/types-description.md" with { type: "text" };
@@ -40,10 +41,20 @@ export interface ExistingChangelogEntries {
 }
 
 export async function runCommitAgentSession(input: CommitAgentInput): Promise<CommitAgentState> {
-	const typesDescription = prompt.render(typesDescriptionPrompt);
-	const systemPrompt = prompt.render(agentSystemPrompt, {
-		types_description: typesDescription,
-	});
+	const typesDescription = renderPromptAsset(
+		"commit/types-description.md",
+		typesDescriptionPrompt,
+		{},
+		{ cwd: input.cwd },
+	);
+	const systemPrompt = renderPromptAsset(
+		"commit/agentic/system.md",
+		agentSystemPrompt,
+		{
+			types_description: typesDescription,
+		},
+		{ cwd: input.cwd },
+	);
 	const state: CommitAgentState = { diffText: input.diffText };
 	const spawns = "sonic";
 	const tools = createCommitTools({
@@ -162,11 +173,16 @@ export async function runCommitAgentSession(input: CommitAgentInput): Promise<Co
 	});
 
 	try {
-		const agentUserMessage = prompt.render(agentUserPrompt, {
-			user_context: input.userContext,
-			changelog_targets: input.changelogTargets.length > 0 ? input.changelogTargets.join("\n") : undefined,
-			existing_changelog_entries: input.existingChangelogEntries,
-		});
+		const agentUserMessage = renderPromptAsset(
+			"commit/agentic/session-user.md",
+			agentUserPrompt,
+			{
+				user_context: input.userContext,
+				changelog_targets: input.changelogTargets.length > 0 ? input.changelogTargets.join("\n") : undefined,
+				existing_changelog_entries: input.existingChangelogEntries,
+			},
+			{ cwd: input.cwd },
+		);
 		const MAX_RETRIES = 3;
 		let retryCount = 0;
 		const needsChangelog = input.requireChangelog && input.changelogTargets.length > 0;

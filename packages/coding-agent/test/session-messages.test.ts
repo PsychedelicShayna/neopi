@@ -1,4 +1,7 @@
 import { describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { invalidateMessageCache } from "@oh-my-pi/pi-agent-core/compaction/message-cache";
 import { type AgentMessage, filterProviderReplayMessages } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, Message, TextContent } from "@oh-my-pi/pi-ai";
@@ -8,6 +11,7 @@ import {
 	SKILL_PROMPT_MESSAGE_TYPE,
 	wrapSteeringForModel,
 } from "@oh-my-pi/pi-coding-agent/session/messages";
+import { Snowflake } from "@oh-my-pi/pi-utils/snowflake";
 import { COLLAB_PROMPT_MESSAGE_TYPE } from "@oh-my-pi/pi-wire";
 
 function expectAttribution(message: Message | undefined, expected: "user" | "agent" | undefined): void {
@@ -20,6 +24,38 @@ function expectAttribution(message: Message | undefined, expected: "user" | "age
 }
 
 describe("convertToLlm compaction summary", () => {
+	it("refreshes cached summary wrappers for template edits and session moves", async () => {
+		const root = path.join(os.homedir(), ".cache/npi-canary/summary-conversion-assets", Snowflake.next());
+		const firstCwd = path.join(root, "first");
+		const secondCwd = path.join(root, "second");
+		const assets = ["branch-summary-context.md", "compaction-summary-context.md", "handoff-summary-context.md"];
+		const writeTemplates = async (cwd: string, prefix: string) => {
+			for (const asset of assets) {
+				await Bun.write(path.join(cwd, ".omp/builtin-prompts/compaction", asset), `${prefix} {{summary}}`);
+			}
+		};
+		try {
+			await writeTemplates(firstCwd, "First");
+			await writeTemplates(secondCwd, "Moved");
+			const messages: AgentMessage[] = [
+				{ role: "branchSummary", summary: "branch", fromId: "old", timestamp: 1 },
+				{ role: "compactionSummary", summary: "history", tokensBefore: 1000, timestamp: 2 },
+				{ role: "compactionSummary", summary: "handoff", method: "handoff", tokensBefore: 1000, timestamp: 3 },
+			];
+			const text = (converted: Message[]) => converted.map(message => (message.content as TextContent[])[0].text);
+			const first = convertToLlm(messages, firstCwd);
+			expect(text(first)).toEqual(["First branch", "First history", "First handoff"]);
+			expect(convertToLlm(messages, firstCwd)).toBe(first);
+			await writeTemplates(firstCwd, "Updated");
+			const updated = convertToLlm(messages, firstCwd);
+			expect(text(updated)).toEqual(["Updated branch", "Updated history", "Updated handoff"]);
+			expect(convertToLlm(messages, firstCwd)).toBe(updated);
+			expect(text(convertToLlm(messages, secondCwd))).toEqual(["Moved branch", "Moved history", "Moved handoff"]);
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
+
 	it("appends snapcompact frames as image blocks after the summary text", () => {
 		// Regression: the live session uses THIS converter (not agent-core's
 		// defaultConvertToLlm). Dropping the frames here silently severs the

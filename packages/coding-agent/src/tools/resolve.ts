@@ -25,10 +25,9 @@ import {
  */
 import type { AgentToolResult, CustomMessage } from "@oh-my-pi/pi-agent-core";
 
-import { prompt } from "@oh-my-pi/pi-utils";
-
 import { parseXdUrl, XD_URL_PREFIX } from "@oh-my-pi/pi-tui/tools/xd-url";
 
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import resolveReminderPrompt from "../prompts/system/resolve-device-reminder.md" with { type: "text" };
 
 import type { ToolSession } from ".";
@@ -194,11 +193,16 @@ export function queueResolveHandler(
  * once per pending-preview head) instead of a host-side steer, so it lands as a
  * stable mid-history append and never churns the cached prefix.
  */
-export function buildResolveReminderMessage(sourceToolName: string): CustomMessage {
+export function buildResolveReminderMessage(sourceToolName: string, cwd?: string): CustomMessage {
 	return {
 		role: "custom",
 		customType: "resolve-reminder",
-		content: prompt.render(resolveReminderPrompt, { toolName: sourceToolName }).trim(),
+		content: renderPromptAsset(
+			"system/resolve-device-reminder.md",
+			resolveReminderPrompt,
+			{ toolName: sourceToolName },
+			{ cwd, kind: "notice" },
+		).trim(),
 		display: false,
 		details: { toolName: sourceToolName },
 		attribution: "agent",

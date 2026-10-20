@@ -37,6 +37,8 @@ import {
 } from "../session/messages";
 import { loadSessionMessagesReadOnly } from "../session/session-loader";
 import type { SessionEntry } from "../session/session-entries";
+import { render as renderPrompt } from "@oh-my-pi/pi-utils/prompt";
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import historyPromptDoc from "../prompts/internal-urls/history.md" with { type: "text" };
 import { artifactsDirsFromRegistry, sessionFilesFromDisk } from "./registry-helpers";
 import type {
@@ -310,7 +312,8 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 	readonly spec: SchemeSpec = { backing: "virtual", selectors: "lines", immutable: false, linkable: true };
 
 	promptDoc(): string {
-		return historyPromptDoc.trim();
+		const { text } = resolvePromptAsset("internal-urls/history.md", historyPromptDoc);
+		return (text === historyPromptDoc ? text : renderPrompt(text)).trim();
 	}
 
 	/**

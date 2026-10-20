@@ -1,5 +1,6 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { prompt } from "@oh-my-pi/pi-utils";
+
 import type { CustomCommand, CustomCommandAPI } from "../../../../extensibility/custom-commands/types";
 import type { HookCommandContext } from "../../../../extensibility/hooks/types";
 import ciGreenRequestTemplate from "../../../../prompts/ci-green-request.md" with { type: "text" };
@@ -51,6 +52,6 @@ export class GreenCommand implements CustomCommand {
 
 	async execute(_args: string[], _ctx: HookCommandContext): Promise<string> {
 		const { headTag, branch, remote } = await getHeadTagContext(this.api);
-		return prompt.render(ciGreenRequestTemplate, { headTag, branch, remote });
+		return renderPromptAsset("ci-green-request.md", ciGreenRequestTemplate, { headTag, branch, remote });
 	}
 }

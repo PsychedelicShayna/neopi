@@ -1,6 +1,6 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { prompt } from "@oh-my-pi/pi-utils";
 import { parseInternalUrl } from "../../internal-urls/parse";
 import { SecurityProtocolHandler } from "../../internal-urls/security-protocol";
 import validationRequestPrompt from "../../prompts/security/validate-request.md" with { type: "text" };
@@ -418,13 +418,11 @@ export async function handleSecurityCommand(
 			case "validate": {
 				const target = findingTarget(rest);
 				return {
-					prompt: prompt
-						.render(validationRequestPrompt, {
-							findingUri: target.uri,
-							scanId: target.scanId,
-							findingId: target.findingId,
-						})
-						.trim(),
+					prompt: renderPromptAsset("security/validate-request.md", validationRequestPrompt, {
+						findingUri: target.uri,
+						scanId: target.scanId,
+						findingId: target.findingId,
+					}).trim(),
 				};
 			}
 			case "compare": {

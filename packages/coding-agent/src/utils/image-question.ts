@@ -1,7 +1,8 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { instrumentedCompleteSimple, resolveTelemetry } from "@oh-my-pi/pi-agent-core";
 import { sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
 import { type Api, type AssistantMessage, completeSimple, type Model, type Usage } from "@oh-my-pi/pi-ai";
-import { prompt } from "@oh-my-pi/pi-utils";
+
 import { extractTextContent } from "../commit/utils";
 import {
 	expandRoleAlias,
@@ -139,7 +140,7 @@ export async function askImageQuestion(
 		response = await instrumentedCompleteSimple(
 			model,
 			{
-				systemPrompt: [prompt.render(imageQuestionSystemPromptTemplate)],
+				systemPrompt: [renderPromptAsset("tools/image-question-system.md", imageQuestionSystemPromptTemplate, {})],
 				messages: [
 					{
 						role: "user",

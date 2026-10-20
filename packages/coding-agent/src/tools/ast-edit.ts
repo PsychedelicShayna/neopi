@@ -10,13 +10,14 @@ import type {
 import type { ToolExample } from "@oh-my-pi/pi-ai";
 import { type AstReplaceChange, type AstReplaceFileChange, astEdit, type ShellFilesystem } from "@oh-my-pi/pi-natives";
 
-import { $envpos, isRecord, prompt, untilAborted } from "@oh-my-pi/pi-utils";
+import { $envpos, isRecord, untilAborted } from "@oh-my-pi/pi-utils";
 import { getEditStore } from "../edit/store";
 import { normalizeToLF } from "../edit/normalize";
 import { InternalUrlRouter, sessionResolveContext } from "../internal-urls";
 import { InternalUrlFilesystem } from "../internal-urls/url-filesystem";
 import { formatHashlineHeader } from "@oh-my-pi/pi-tui/tools/hashline-format";
 
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import astEditDescription from "../prompts/tools/ast-edit.md" with { type: "text" };
 
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
@@ -187,7 +188,9 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 	};
 	readonly label = "AST Edit";
 	readonly summary = "Perform AST-aware code edits (structural refactoring)";
-	readonly description: string;
+	get description(): string {
+		return renderPromptAsset("tools/ast-edit.md", astEditDescription, {}, { cwd: this.session.cwd });
+	}
 	readonly parameters = astEditSchema;
 	readonly strict = true;
 
@@ -237,9 +240,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 	];
 	readonly deferrable = true;
 	readonly loadMode = "discoverable";
-	constructor(private readonly session: ToolSession) {
-		this.description = prompt.render(astEditDescription);
-	}
+	constructor(private readonly session: ToolSession) {}
 
 	async execute(
 		_toolCallId: string,

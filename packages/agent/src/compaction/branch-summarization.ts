@@ -7,7 +7,8 @@
 
 import type { Api, ApiKey, AssistantMessage, Context, Model, SimpleStreamOptions } from "@oh-my-pi/pi-ai";
 import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
-import { prompt } from "@oh-my-pi/pi-utils";
+
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { type AgentTelemetry, instrumentedCompleteSimple } from "../telemetry";
 import { Tokenizer } from "../tokenizer";
 import type { AgentMessage } from "../types";
@@ -26,7 +27,7 @@ import {
 	createFileOps,
 	extractFileOpsFromMessage,
 	type FileOperations,
-	SUMMARIZATION_SYSTEM_PROMPT,
+	getSummarizationSystemPrompt,
 	serializeConversationForSummary,
 	stripReadSelector,
 	truncateToolResultForSummary,
@@ -70,6 +71,7 @@ export interface CollectEntriesResult {
 }
 
 export interface GenerateBranchSummaryOptions {
+	cwd?: string;
 	/** Model to use for summarization */
 	model: Model;
 	/** API key for the model */
@@ -305,10 +307,6 @@ export function prepareBranchEntries(
 // Summary Generation
 // ============================================================================
 
-const BRANCH_SUMMARY_PREAMBLE = prompt.render(branchSummaryPreamble);
-
-const BRANCH_SUMMARY_PROMPT = prompt.render(branchSummaryPrompt);
-
 /**
  * Generate a summary of abandoned branch entries.
  *
@@ -334,11 +332,15 @@ export async function generateBranchSummary(
 
 	// Transform to LLM-compatible messages, then serialize to text
 	// Serialization prevents the model from treating it as a conversation to continue
-	const llmMessages = (options.convertToLlm ?? defaultConvertToLlm)(messages);
+	const llmMessages = options.convertToLlm
+		? options.convertToLlm(messages)
+		: defaultConvertToLlm(messages, options.cwd);
 	const conversationText = serializeConversationForSummary(llmMessages, preferredDialect(model.id));
 
 	// Build prompt
-	const instructions = customInstructions || BRANCH_SUMMARY_PROMPT;
+	const instructions =
+		customInstructions ||
+		renderPromptAsset("compaction/branch-summary.md", branchSummaryPrompt, {}, { cwd: options.cwd });
 	const promptText = `<conversation>\n${conversationText}\n</conversation>\n\n${instructions}`;
 
 	const summarizationMessages = [
@@ -354,7 +356,7 @@ export async function generateBranchSummary(
 	try {
 		response = await instrumentedCompleteSimple(
 			model,
-			{ systemPrompt: [SUMMARIZATION_SYSTEM_PROMPT], messages: summarizationMessages },
+			{ systemPrompt: [getSummarizationSystemPrompt(options.cwd)], messages: summarizationMessages },
 			{ apiKey, signal, maxTokens: 2048, metadata },
 			{ telemetry: options.telemetry, oneshotKind: "branch_summary", completeImpl: options.completeImpl, retry: {} },
 		);
@@ -377,11 +379,20 @@ export async function generateBranchSummary(
 		.join("\n");
 
 	// Prepend preamble to provide context about the branch summary
-	summary = BRANCH_SUMMARY_PREAMBLE + summary;
+	summary =
+		renderPromptAsset(
+			"compaction/branch-summary-preamble.md",
+			branchSummaryPreamble,
+			{},
+			{
+				cwd: options.cwd,
+				kind: "notice",
+			},
+		) + summary;
 
 	// Compute file lists and append to summary
 	const { readFiles, modifiedFiles } = computeFileLists(fileOps);
-	summary = upsertFileOperations(summary, readFiles, modifiedFiles, fileOps.read);
+	summary = upsertFileOperations(summary, readFiles, modifiedFiles, fileOps.read, options.cwd);
 
 	return {
 		summary: summary || "No summary generated",

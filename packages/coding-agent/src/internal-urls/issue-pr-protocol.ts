@@ -20,6 +20,8 @@
  * - `issue://owner/repo?state=closed&limit=20` — list options pass through to
  *   `gh`.
  */
+import { render as renderPrompt } from "@oh-my-pi/pi-utils/prompt";
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import issueDoc from "../prompts/internal-urls/issue.md" with { type: "text" };
 import { AgentRegistry } from "../registry/agent-registry";
 import {
@@ -508,7 +510,9 @@ export class IssueProtocolHandler implements ProtocolHandler {
 
 	/** Advertised when `gh` is on PATH; the entry documents `pr://` too. */
 	promptDoc(): string | undefined {
-		return github.available() ? issueDoc.trim() : undefined;
+		if (!github.available()) return undefined;
+		const { text } = resolvePromptAsset("internal-urls/issue.md", issueDoc);
+		return (text === issueDoc ? text : renderPrompt(text)).trim();
 	}
 
 	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {

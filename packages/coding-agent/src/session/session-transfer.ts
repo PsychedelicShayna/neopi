@@ -1,3 +1,4 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * Moving a session between machines (`omp session pack|unpack|moved`).
  *
@@ -15,17 +16,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import {
-	getBlobsDir,
-	isEnoent,
-	isEnotdir,
-	isRecord,
-	logger,
-	prompt,
-	Snowflake,
-	TempDir,
-	VERSION,
-} from "@oh-my-pi/pi-utils";
+import { getBlobsDir, isEnoent, isEnotdir, isRecord, logger, Snowflake, TempDir, VERSION } from "@oh-my-pi/pi-utils";
 import {
 	type ArchiveMemberContent,
 	ArchiveError,
@@ -164,11 +155,26 @@ export function lastSessionTransfer(entries: readonly FileEntry[]): SessionTrans
 function renderTransferNotice(details: SessionTransferDetails): string {
 	switch (details.kind) {
 		case "arrived":
-			return prompt.render(transferArrivedTemplate, { fromCwd: details.fromCwd, cwd: details.cwd }).trim();
+			return renderPromptAsset(
+				"session/transfer-arrived.md",
+				transferArrivedTemplate,
+				{ fromCwd: details.fromCwd, cwd: details.cwd },
+				{ kind: "notice" },
+			).trim();
 		case "departed":
-			return prompt.render(transferDepartedTemplate, { to: details.to }).trim();
+			return renderPromptAsset(
+				"session/transfer-departed.md",
+				transferDepartedTemplate,
+				{ to: details.to },
+				{ kind: "notice" },
+			).trim();
 		case "forked":
-			return prompt.render(transferStaleForkTemplate, { to: details.to, source: details.source }).trim();
+			return renderPromptAsset(
+				"session/transfer-stale-fork.md",
+				transferStaleForkTemplate,
+				{ to: details.to, source: details.source },
+				{ kind: "notice" },
+			).trim();
 	}
 }
 

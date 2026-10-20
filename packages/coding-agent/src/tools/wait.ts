@@ -5,8 +5,9 @@ import {
 	type AgentToolUpdateCallback,
 	TOOL_INTERRUPT_ABORT_REASON,
 } from "@oh-my-pi/pi-agent-core";
-import { prompt } from "@oh-my-pi/pi-utils";
+
 import { IrcBus } from "../irc/bus";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import waitDescription from "../prompts/tools/wait.md" with { type: "text" };
 import type { ToolSession } from ".";
 import type { AsyncJob, AsyncJobManager } from "../async/job-manager";
@@ -50,7 +51,9 @@ export class WaitTool implements AgentTool<typeof waitSchema, CoordinationDetail
 	readonly name = "wait";
 	readonly label = "Wait";
 	readonly summary = "Wait for the next result of a background job or service you started";
-	readonly description = prompt.render(waitDescription);
+	get description(): string {
+		return renderPromptAsset("tools/wait.md", waitDescription, {}, { cwd: this.session.cwd });
+	}
 	readonly parameters = waitSchema;
 	readonly strict = true;
 	readonly interruptible = true;

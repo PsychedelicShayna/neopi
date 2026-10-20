@@ -1,3 +1,4 @@
+import { resolvePromptAsset, renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import {
 	type Agent,
 	AgentBusyError,
@@ -26,7 +27,7 @@ import { resolveModelPolicy } from "@oh-my-pi/pi-catalog/compat/resolve";
 import { isFireworksFastModelId, toFireworksBaseModelId } from "@oh-my-pi/pi-catalog/fireworks-model-id";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
-import { isUnexpectedSocketCloseMessage, logger, prompt, sleepLong } from "@oh-my-pi/pi-utils";
+import { isUnexpectedSocketCloseMessage, logger, sleepLong } from "@oh-my-pi/pi-utils";
 import {
 	cfgEffortPolicyMode,
 	EffortPolicyError,
@@ -42,7 +43,7 @@ import type { RetryErrorUpdate } from "../extensibility/shared-events";
 import emptyStopRetryTemplate from "../prompts/system/empty-stop-retry.md" with { type: "text" };
 import malformedFunctionCallRetryTemplate from "../prompts/system/malformed-function-call-retry.md" with { type: "text" };
 import streamStallContinueTemplate from "../prompts/system/stream-stall-continue.md" with { type: "text" };
-import thinkingLoopRedirectTemplate from "../prompts/system/thinking-loop-redirect.md" with { type: "text" };
+import bundledThinkingLoopRedirectTemplate from "../prompts/system/thinking-loop-redirect.md" with { type: "text" };
 import unexpectedStopRetryTemplate from "../prompts/system/unexpected-stop-retry.md" with { type: "text" };
 import {
 	AUTO_THINKING,
@@ -663,10 +664,15 @@ export class TurnRecovery {
 			content: [
 				{
 					type: "text",
-					text: prompt.render(malformedFunctionCallRetryTemplate, {
-						retryCount: this.#malformedFunctionCallRetryCount,
-						maxRetries: MALFORMED_FUNCTION_CALL_MAX_RETRIES,
-					}),
+					text: renderPromptAsset(
+						"system/malformed-function-call-retry.md",
+						malformedFunctionCallRetryTemplate,
+						{
+							retryCount: this.#malformedFunctionCallRetryCount,
+							maxRetries: MALFORMED_FUNCTION_CALL_MAX_RETRIES,
+						},
+						{ cwd: this.#host.sessionManager.getCwd(), kind: "notice" },
+					),
 				},
 			],
 			attribution: "agent",
@@ -734,10 +740,15 @@ export class TurnRecovery {
 			content: [
 				{
 					type: "text",
-					text: prompt.render(streamStallContinueTemplate, {
-						retryCount: this.#streamStallContinueCount,
-						maxRetries: STREAM_STALL_CONTINUE_MAX_RETRIES,
-					}),
+					text: renderPromptAsset(
+						"system/stream-stall-continue.md",
+						streamStallContinueTemplate,
+						{
+							retryCount: this.#streamStallContinueCount,
+							maxRetries: STREAM_STALL_CONTINUE_MAX_RETRIES,
+						},
+						{ cwd: this.#host.sessionManager.getCwd() },
+					),
 				},
 			],
 			attribution: "agent",
@@ -1120,10 +1131,15 @@ export class TurnRecovery {
 	}
 
 	#emptyStopRetryReminder(): string {
-		return prompt.render(emptyStopRetryTemplate, {
-			retryCount: this.#emptyStopRetryCount,
-			maxRetries: EMPTY_STOP_MAX_RETRIES,
-		});
+		return renderPromptAsset(
+			"system/empty-stop-retry.md",
+			emptyStopRetryTemplate,
+			{
+				retryCount: this.#emptyStopRetryCount,
+				maxRetries: EMPTY_STOP_MAX_RETRIES,
+			},
+			{ cwd: this.#host.sessionManager.getCwd(), kind: "notice" },
+		);
 	}
 	async #handleUnexpectedAssistantStop(assistantMessage: AssistantMessage): Promise<boolean> {
 		const mode = cfgFeaturesUnexpectedStopDetection.get(this.#host.settings);
@@ -1215,10 +1231,15 @@ export class TurnRecovery {
 	}
 
 	#unexpectedStopRetryReminder(): string {
-		return prompt.render(unexpectedStopRetryTemplate, {
-			retryCount: this.#unexpectedStopRetryCount,
-			maxRetries: UNEXPECTED_STOP_MAX_RETRIES,
-		});
+		return renderPromptAsset(
+			"system/unexpected-stop-retry.md",
+			unexpectedStopRetryTemplate,
+			{
+				retryCount: this.#unexpectedStopRetryCount,
+				maxRetries: UNEXPECTED_STOP_MAX_RETRIES,
+			},
+			{ cwd: this.#host.sessionManager.getCwd(), kind: "notice" },
+		);
 	}
 
 	removeAssistantMessageFromActiveContext(
@@ -3221,7 +3242,10 @@ export class TurnRecovery {
 		const redirect: CustomMessage = {
 			role: "custom",
 			customType: THINKING_LOOP_REDIRECT_TYPE,
-			content: thinkingLoopRedirectTemplate,
+			content: resolvePromptAsset("system/thinking-loop-redirect.md", bundledThinkingLoopRedirectTemplate, {
+				cwd: this.#host.sessionManager.getCwd(),
+				kind: "notice",
+			}).text,
 			display: false,
 			attribution: "agent",
 			timestamp: Date.now(),
@@ -3231,7 +3255,10 @@ export class TurnRecovery {
 			redirect,
 			this.#host.sessionManager.appendCustomMessageEntry(
 				THINKING_LOOP_REDIRECT_TYPE,
-				thinkingLoopRedirectTemplate,
+				resolvePromptAsset("system/thinking-loop-redirect.md", bundledThinkingLoopRedirectTemplate, {
+					cwd: this.#host.sessionManager.getCwd(),
+					kind: "notice",
+				}).text,
 				false,
 				undefined,
 				"agent",

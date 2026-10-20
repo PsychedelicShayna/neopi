@@ -1,3 +1,4 @@
+import { resolvePromptAsset, renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { directoryIsMissing, PRODUCT_NAME } from "@oh-my-pi/pi-utils/dirs";
 /**
  * AgentSession - Core abstraction for agent lifecycle and session management.
@@ -103,7 +104,6 @@ import {
 	isRecord,
 	logger,
 	postmortem,
-	prompt,
 	Snowflake,
 	stringProperty,
 	toError,
@@ -211,8 +211,8 @@ import { loadOverallPlanReference } from "../plan-mode/plan-handoff";
 import type { PlanModeState } from "../plan-mode/state";
 import goalModeContextPrompt from "../prompts/goals/goal-mode-context.md" with { type: "text" };
 import goalTodoContextPrompt from "../prompts/goals/goal-todo-context.md" with { type: "text" };
-import anthropicUsageWrapUpPrompt from "../prompts/system/anthropic-usage-wrap-up.md" with { type: "text" };
-import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
+import bundledAnthropicUsageWrapUpPrompt from "../prompts/system/anthropic-usage-wrap-up.md" with { type: "text" };
+import bundledAutoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
 import checkpointActiveNoticeTemplate from "../prompts/system/checkpoint-active-notice.md" with { type: "text" };
 import interruptedThinkingTemplate from "../prompts/system/interrupted-thinking.md" with { type: "text" };
 import planModeActivePrompt from "../prompts/system/plan-mode-active.md" with { type: "text" };
@@ -220,7 +220,7 @@ import planModeReferencePrompt from "../prompts/system/plan-mode-reference.md" w
 import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool-decision-reminder.md" with { type: "text" };
 import rewindReportTemplate from "../prompts/system/rewind-report.md" with { type: "text" };
 import sessionStopBlockedPrompt from "../prompts/system/session-stop-blocked.md" with { type: "text" };
-import sideChannelNoToolsReminder from "../prompts/system/side-channel-no-tools.md" with { type: "text" };
+import bundledSideChannelNoToolsReminder from "../prompts/system/side-channel-no-tools.md" with { type: "text" };
 import titleCardPrompt from "../prompts/system/title-card.md" with { type: "text" };
 import titleForkPrompt from "../prompts/system/title-fork.md" with { type: "text" };
 import skillfulNoticePrompt from "../prompts/system/skillful-notice.md" with { type: "text" };
@@ -2268,7 +2268,7 @@ export class AgentSession implements SettingsScope {
 			}
 			return thunks;
 		});
-		this.#convertToLlm = config.convertToLlm ?? convertToLlm;
+		this.#convertToLlm = config.convertToLlm ?? (messages => convertToLlm(messages, this.sessionManager.getCwd()));
 		this.getXdevToolEntries = config.getXdevToolEntries ?? (() => []);
 		const sessionToolsHost: SessionToolsHost = {
 			agent: this.agent,
@@ -2417,6 +2417,7 @@ export class AgentSession implements SettingsScope {
 		this.#todo.syncFromBranch();
 		this.#modelMentions.syncFromBranch();
 		this.#goalRuntime = new GoalRuntime({
+			getCwd: () => this.sessionManager.getCwd(),
 			getState: () => this.#goalModeState,
 			setState: state => {
 				this.#goalModeState = state;
@@ -2589,7 +2590,8 @@ export class AgentSession implements SettingsScope {
 				this.#experimentalContextNotesReminder = { prompt, generation: this.#promptGeneration };
 			},
 			memoryBackendSession: () => this,
-			chatCompactionPrompt: () => (this.#chatMode ? renderChatCompactionPrompt(this.#chatMode.mode) : undefined),
+			chatCompactionPrompt: () =>
+				this.#chatMode ? renderChatCompactionPrompt(this.#chatMode.mode, this.sessionManager.getCwd()) : undefined,
 			emitSessionEvent: (event, options) => this.#emitSessionEvent(event, options),
 			emitNotice: (level, message, source) => this.emitNotice(level, message, source),
 			scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
@@ -2988,7 +2990,7 @@ export class AgentSession implements SettingsScope {
 				// elsewhere is a detour.
 				toolName: "write",
 				satisfies: isPreviewResolutionToolCall,
-				reminder: [buildResolveReminderMessage(head.sourceToolName)],
+				reminder: [buildResolveReminderMessage(head.sourceToolName, this.sessionManager.getCwd())],
 			};
 		}
 		return undefined;
@@ -4087,7 +4089,12 @@ export class AgentSession implements SettingsScope {
 		return {
 			role: "custom",
 			customType: CHECKPOINT_ACTIVE_REMINDER_TYPE,
-			content: prompt.render(checkpointActiveNoticeTemplate),
+			content: renderPromptAsset(
+				"system/checkpoint-active-notice.md",
+				checkpointActiveNoticeTemplate,
+				{},
+				{ cwd: this.sessionManager.getCwd(), kind: "notice" },
+			),
 			display: false,
 			details: { goal, startedAt },
 			attribution: "agent",
@@ -4164,7 +4171,12 @@ export class AgentSession implements SettingsScope {
 		return {
 			role: "custom",
 			customType: INTERRUPTED_THINKING_MESSAGE_TYPE,
-			content: prompt.render(interruptedThinkingTemplate, { reasoning: demoted.reasoning }),
+			content: renderPromptAsset(
+				"system/interrupted-thinking.md",
+				interruptedThinkingTemplate,
+				{ reasoning: demoted.reasoning },
+				{ cwd: this.sessionManager.getCwd(), kind: "notice" },
+			),
 			display: false,
 			details: {
 				interruptedAt,
@@ -5284,7 +5296,15 @@ export class AgentSession implements SettingsScope {
 			await this.#promptWithMessage(
 				{
 					role: "developer",
-					content: [{ type: "text", text: autoContinuePrompt }],
+					content: [
+						{
+							type: "text",
+							text: resolvePromptAsset("system/auto-continue.md", bundledAutoContinuePrompt, {
+								cwd: this.sessionManager.getCwd(),
+								kind: "notice",
+							}).text,
+						},
+					],
 					attribution: "agent",
 					timestamp: Date.now(),
 					// Distinguishes this run-initiating prompt from same-turn
@@ -5292,7 +5312,10 @@ export class AgentSession implements SettingsScope {
 					// developer messages; replay uses it for the prompt→yield anchor.
 					synthetic: true,
 				},
-				autoContinuePrompt,
+				resolvePromptAsset("system/auto-continue.md", bundledAutoContinuePrompt, {
+					cwd: this.sessionManager.getCwd(),
+					kind: "notice",
+				}).text,
 				{
 					skipPostPromptRecoveryWait: true,
 					prependMessages: eagerNudges.length > 0 ? eagerNudges : undefined,
@@ -5489,7 +5512,16 @@ export class AgentSession implements SettingsScope {
 				: undefined;
 		const reason = typeof result.reason === "string" && result.reason.length > 0 ? result.reason : undefined;
 		if (result.decision === "block") {
-			return reason ?? additionalContext ?? prompt.render(sessionStopBlockedPrompt);
+			return (
+				reason ??
+				additionalContext ??
+				renderPromptAsset(
+					"system/session-stop-blocked.md",
+					sessionStopBlockedPrompt,
+					{},
+					{ cwd: this.sessionManager.getCwd() },
+				)
+			);
 		}
 		if (result.continue === true) {
 			return additionalContext ?? reason;
@@ -7588,10 +7620,15 @@ export class AgentSession implements SettingsScope {
 		const plan = await loadOverallPlanReference(this.#planReferencePath, this.#localProtocolOptions());
 		if (!plan) return null;
 
-		const content = prompt.render(planModeReferencePrompt, {
-			planFilePath: plan.path,
-			planContent: plan.content,
-		});
+		const content = renderPromptAsset(
+			"system/plan-mode-reference.md",
+			planModeReferencePrompt,
+			{
+				planFilePath: plan.path,
+				planContent: plan.content,
+			},
+			{ cwd: this.sessionManager.getCwd() },
+		);
 
 		return {
 			role: "custom",
@@ -7623,19 +7660,24 @@ export class AgentSession implements SettingsScope {
 		// Capability gates, not the visible surface: a Code Mode partition keeps
 		// `task` and `ask` callable through the eval bridge after demoting them.
 		const capableToolNames = this.getEnabledToolNames();
-		const content = prompt.render(planModeActivePrompt, {
-			planFilePath: displayPlanPath,
-			planExists,
-			askToolName: "ask",
-			writeToolName: "write",
-			editToolName: "edit",
-			askAvailable: capableToolNames.includes("ask"),
-			taskAvailable: capableToolNames.includes("task"),
-			isHashlineEditMode: this.#resolveActiveEditMode() === "hashline",
-			reentry: state.reentry ?? false,
-			iterative: state.workflow === "iterative",
-			scoutAvailable: this.#isScoutAvailable(),
-		});
+		const content = renderPromptAsset(
+			"system/plan-mode-active.md",
+			planModeActivePrompt,
+			{
+				planFilePath: displayPlanPath,
+				planExists,
+				askToolName: "ask",
+				writeToolName: "write",
+				editToolName: "edit",
+				askAvailable: capableToolNames.includes("ask"),
+				taskAvailable: capableToolNames.includes("task"),
+				isHashlineEditMode: this.#resolveActiveEditMode() === "hashline",
+				reentry: state.reentry ?? false,
+				iterative: state.workflow === "iterative",
+				scoutAvailable: this.#isScoutAvailable(),
+			},
+			{ cwd: this.sessionManager.getCwd() },
+		);
 
 		return {
 			role: "custom",
@@ -7654,7 +7696,12 @@ export class AgentSession implements SettingsScope {
 		return {
 			role: "custom",
 			customType: "goal-mode-context",
-			content: prompt.render(goalModeContextPrompt, { goalContext: content, todoContext }),
+			content: renderPromptAsset(
+				"goals/goal-mode-context.md",
+				goalModeContextPrompt,
+				{ goalContext: content, todoContext },
+				{ cwd: this.sessionManager.getCwd(), kind: "notice" },
+			),
 			display: false,
 			attribution: "agent",
 			timestamp: Date.now(),
@@ -7666,9 +7713,14 @@ export class AgentSession implements SettingsScope {
 		return {
 			role: "custom",
 			customType: VIBE_MODE_CONTEXT_MESSAGE_TYPE,
-			content: prompt.render(vibeModeActivePrompt, {
-				todoAvailable: this.getActiveToolNames().includes("todo"),
-			}),
+			content: renderPromptAsset(
+				"system/vibe-mode-active.md",
+				vibeModeActivePrompt,
+				{
+					todoAvailable: this.getActiveToolNames().includes("todo"),
+				},
+				{ cwd: this.sessionManager.getCwd() },
+			),
 			display: false,
 			attribution: "agent",
 			timestamp: Date.now(),
@@ -7707,13 +7759,18 @@ export class AgentSession implements SettingsScope {
 			}),
 		}));
 
-		return prompt.render(goalTodoContextPrompt, {
-			canCallTodoTool,
-			closed: String(closed),
-			open: String(open),
-			phases: promptPhases,
-			total: String(total),
-		});
+		return renderPromptAsset(
+			"goals/goal-todo-context.md",
+			goalTodoContextPrompt,
+			{
+				canCallTodoTool,
+				closed: String(closed),
+				open: String(open),
+				phases: promptPhases,
+				total: String(total),
+			},
+			{ cwd: this.sessionManager.getCwd(), kind: "notice" },
+		);
 	}
 
 	#normalizeImagesForModel(images: ImageContent[] | undefined): Promise<ImageContent[] | undefined> {
@@ -10220,10 +10277,15 @@ export class AgentSession implements SettingsScope {
 		const started = performance.now();
 		const icons = this.#cardIcons();
 		this.runEphemeralTurn({
-			promptText: prompt.render(titleForkPrompt, {
-				card: icons !== "boring",
-				nerdFonts: icons === "nf+emoji",
-			}),
+			promptText: renderPromptAsset(
+				"system/title-fork.md",
+				titleForkPrompt,
+				{
+					card: icons !== "boring",
+					nerdFonts: icons === "nf+emoji",
+				},
+				{ cwd: this.sessionManager.getCwd() },
+			),
 			signal: AbortSignal.any([signal, AbortSignal.timeout(TITLE_FORK_TIMEOUT_MS)]),
 		})
 			.then(
@@ -10443,7 +10505,12 @@ export class AgentSession implements SettingsScope {
 		const named = context === undefined ? title : await this.#retitle(context, signal);
 		if (stale()) return undefined;
 		if (!named || !needsCard(named)) return named ?? null;
-		const cardPrompt = prompt.render(titleCardPrompt, { nerdFonts: icons === "nf+emoji" });
+		const cardPrompt = renderPromptAsset(
+			"system/title-card.md",
+			titleCardPrompt,
+			{ nerdFonts: icons === "nf+emoji" },
+			{ cwd: this.sessionManager.getCwd() },
+		);
 		const reply = await this.generateTitle(named, cardPrompt, signal);
 		if (stale()) return undefined;
 		const card = reply ? parseCardReply(reply, icons) : undefined;
@@ -11149,7 +11216,10 @@ export class AgentSession implements SettingsScope {
 		this.agent.steer({
 			role: "custom",
 			customType: "anthropic-usage-wrap-up",
-			content: anthropicUsageWrapUpPrompt,
+			content: resolvePromptAsset("system/anthropic-usage-wrap-up.md", bundledAnthropicUsageWrapUpPrompt, {
+				cwd: this.sessionManager.getCwd(),
+				kind: "notice",
+			}).text,
 			attribution: "agent",
 			display: false,
 			timestamp: Date.now(),
@@ -11294,7 +11364,12 @@ export class AgentSession implements SettingsScope {
 				await this.sendCustomMessage(
 					{
 						customType: "skillful-notice",
-						content: prompt.render(skillfulNoticePrompt, { skills: renderedSkills }),
+						content: renderPromptAsset(
+							"system/skillful-notice.md",
+							skillfulNoticePrompt,
+							{ skills: renderedSkills },
+							{ cwd: this.sessionManager.getCwd(), kind: "notice" },
+						),
 						display: false,
 					},
 					{ deliverAs: "nextTurn" },
@@ -11491,7 +11566,12 @@ export class AgentSession implements SettingsScope {
 		const details = { report, startedAt: checkpointState.startedAt, rewoundAt };
 		this.sessionManager.appendCustomMessageEntry(
 			"rewind-report",
-			prompt.render(rewindReportTemplate, { report }),
+			renderPromptAsset(
+				"system/rewind-report.md",
+				rewindReportTemplate,
+				{ report },
+				{ cwd: this.sessionManager.getCwd(), kind: "notice" },
+			),
 			false,
 			details,
 			"agent",
@@ -11590,9 +11670,14 @@ export class AgentSession implements SettingsScope {
 		this.#planModeReminderCount++;
 		this.#planModeReminderAwaitingProgress = true;
 		this.#toolChoiceQueue.pushOnce("required", { label: "plan-mode-decision" });
-		const reminder = prompt.render(planModeToolDecisionReminderPrompt, {
-			askToolName: "ask",
-		});
+		const reminder = renderPromptAsset(
+			"system/plan-mode-tool-decision-reminder.md",
+			planModeToolDecisionReminderPrompt,
+			{
+				askToolName: "ask",
+			},
+			{ cwd: this.sessionManager.getCwd(), kind: "notice" },
+		);
 		const reminderMessage: Message = {
 			role: "developer",
 			content: [{ type: "text", text: reminder }],
@@ -12295,7 +12380,14 @@ export class AgentSession implements SettingsScope {
 		}
 		messages.push({
 			role: "developer",
-			content: [{ type: "text", text: sideChannelNoToolsReminder }],
+			content: [
+				{
+					type: "text",
+					text: resolvePromptAsset("system/side-channel-no-tools.md", bundledSideChannelNoToolsReminder, {
+						cwd: this.sessionManager.getCwd(),
+					}).text,
+				},
+			],
 			attribution: "agent",
 			timestamp: Date.now(),
 		});
@@ -13292,6 +13384,7 @@ export class AgentSession implements SettingsScope {
 				throw new Error(`No API key for ${model.provider}`);
 			}
 			const result = await generateBranchSummary(entriesToSummarize, {
+				cwd: this.sessionManager.getCwd(),
 				model,
 				apiKey: this.#modelRegistry.resolver(model, this.sessionId),
 				signal: this.#branchSummaryAbortController.signal,
@@ -14347,6 +14440,7 @@ export class AgentSession implements SettingsScope {
 	 */
 	formatSessionAsText(): string {
 		return formatSessionDumpText({
+			cwd: this.sessionManager.getCwd(),
 			messages: this.messages,
 			systemPrompt: this.agent.state.systemPrompt,
 			model: this.agent.state.model,

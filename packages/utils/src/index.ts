@@ -27,6 +27,7 @@ export * as postmortem from "./postmortem";
 export * from "./process-name";
 export * as procmgr from "./procmgr";
 export * as prompt from "./prompt";
+export * from "./prompt-assets";
 export * as ptree from "./ptree";
 export { AbortError, ChildProcess, Exception, NonZeroExitError } from "./ptree";
 export * from "./runtime-install";

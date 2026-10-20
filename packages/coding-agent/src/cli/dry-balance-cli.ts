@@ -1,3 +1,4 @@
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import type {
 	Api,
 	ApiKeyResolver,
@@ -34,7 +35,6 @@ const BENCH_MAX_TOKENS = 512;
 const BENCH_RENDER_INTERVAL_MS = 80;
 const BENCH_ACCOUNT_WIDTH = 60;
 const BENCH_ERROR_WIDTH = 110;
-const DRY_BALANCE_BENCH_PROMPT = dryBalanceBenchPrompt.trim();
 
 export interface DryBalanceCommandArgs {
 	model?: string;
@@ -419,7 +419,7 @@ async function runBenchRequest(
 			messages: [
 				{
 					role: "user",
-					content: DRY_BALANCE_BENCH_PROMPT,
+					content: resolvePromptAsset("dry-balance-bench.md", dryBalanceBenchPrompt).text.trim(),
 					timestamp: Date.now(),
 					attribution: "user",
 				},

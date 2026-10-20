@@ -5,7 +5,8 @@
  * when a woken subagent re-yields, so a parent reads the same shape (status,
  * preview, `agent://` pointer) regardless of which path delivered it.
  */
-import { prompt } from "@oh-my-pi/pi-utils";
+
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import taskSummaryTemplate from "../prompts/tools/task-summary.md" with { type: "text" };
 import { AgentRegistry } from "../registry/agent-registry";
 import { escapeHarnessTags } from "../session/harness-tags";
@@ -41,7 +42,7 @@ function previewHead(output: string): string {
 /** Render the `<task-result>` envelope for a settled run. */
 export function formatTaskResultSummary(
 	result: SingleResult,
-	options: { totalDurationMs: number; mergeSummary?: string },
+	options: { totalDurationMs: number; mergeSummary?: string; cwd?: string },
 ): string {
 	const status = result.aborted
 		? "cancelled"
@@ -65,33 +66,38 @@ export function formatTaskResultSummary(
 	// "parked" status must not read as resumable.
 	const refStatus = AgentRegistry.global().get(result.id)?.status;
 	const resumable = result.aborted && !result.isolated && (refStatus === "idle" || refStatus === "parked");
-	return prompt.render(taskSummaryTemplate, {
-		agentName: result.agent,
-		id: result.id,
-		status,
-		duration: formatDuration(options.totalDurationMs),
-		abortReason: result.aborted ? escapeHarnessTags(result.abortReason ?? "") || undefined : undefined,
-		error: error === undefined ? undefined : escapeHarnessTags(error),
-		effortPolicy: result.effortPolicy
-			? {
-					model: result.effortPolicy.model,
-					requested: result.effortPolicy.requested ?? result.effortPolicy.model,
-					origin: result.effortPolicy.origin ?? "default",
-					supported: result.effortPolicy.supported.join(", ") || "none",
-					permitted: result.effortPolicy.permitted.join(", ") || "none",
-					rule: result.effortPolicy.selector ?? "none",
-					alternatives: result.effortPolicy.alternatives.join(", ") || "none",
-				}
-			: undefined,
-		resumable,
-		preview: escapeHarnessTags(preview),
-		truncated,
-		meta: result.outputMeta
-			? {
-					lineCount: result.outputMeta.lineCount,
-					charSize: formatBytes(result.outputMeta.charCount),
-				}
-			: undefined,
-		mergeSummary: options.mergeSummary === undefined ? "" : escapeHarnessTags(options.mergeSummary),
-	});
+	return renderPromptAsset(
+		"tools/task-summary.md",
+		taskSummaryTemplate,
+		{
+			agentName: result.agent,
+			id: result.id,
+			status,
+			duration: formatDuration(options.totalDurationMs),
+			abortReason: result.aborted ? escapeHarnessTags(result.abortReason ?? "") || undefined : undefined,
+			error: error === undefined ? undefined : escapeHarnessTags(error),
+			effortPolicy: result.effortPolicy
+				? {
+						model: result.effortPolicy.model,
+						requested: result.effortPolicy.requested ?? result.effortPolicy.model,
+						origin: result.effortPolicy.origin ?? "default",
+						supported: result.effortPolicy.supported.join(", ") || "none",
+						permitted: result.effortPolicy.permitted.join(", ") || "none",
+						rule: result.effortPolicy.selector ?? "none",
+						alternatives: result.effortPolicy.alternatives.join(", ") || "none",
+					}
+				: undefined,
+			resumable,
+			preview: escapeHarnessTags(preview),
+			truncated,
+			meta: result.outputMeta
+				? {
+						lineCount: result.outputMeta.lineCount,
+						charSize: formatBytes(result.outputMeta.charCount),
+					}
+				: undefined,
+			mergeSummary: options.mergeSummary === undefined ? "" : escapeHarnessTags(options.mergeSummary),
+		},
+		{ cwd: options.cwd, kind: "notice" },
+	);
 }

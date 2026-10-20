@@ -1,9 +1,10 @@
+import { resolvePromptAsset, renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { Model } from "@oh-my-pi/pi-ai";
 import type { VcsGitRepo } from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { logger, PRODUCT_NAME, prompt } from "@oh-my-pi/pi-utils";
+import { logger, PRODUCT_NAME } from "@oh-my-pi/pi-utils";
 import type { AsyncJobManager } from "../async/job-manager";
 import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
@@ -46,12 +47,14 @@ import { cfgSecurityEnabled } from "../tools/settings";
 import { cfgTaskAgentModelOverrides, cfgTaskAgentPrewalk } from "../task/settings";
 
 const SECURITY_SESSION_TOOLS = ["read", "grep", "glob", "lsp", "ast_grep", "task", "security_publish"];
-const SECURITY_WORKFLOW_FINGERPRINT = createSecurityWorkflowFingerprint([
-	securityCoordinatorPrompt,
-	securityRequestPrompt,
-	securityReviewerPrompt,
-	securityPublishDescription,
-]);
+function securityWorkflowFingerprint(cwd: string): string {
+	return createSecurityWorkflowFingerprint([
+		resolvePromptAsset("security/scan-coordinator.md", securityCoordinatorPrompt, { cwd }).text,
+		resolvePromptAsset("security/scan-request.md", securityRequestPrompt, { cwd }).text,
+		securityReviewerPrompt,
+		resolvePromptAsset("tools/security-publish.md", securityPublishDescription, { cwd }).text,
+	]);
+}
 
 export type SecurityOperationPhase =
 	| "queued"
@@ -261,7 +264,9 @@ async function createDefaultSecuritySession(input: SecurityScanSessionFactoryInp
 		restrictToolNames: true,
 		allowRestrictedCustomTools: true,
 		spawns: "security-reviewer",
-		appendSystemPrompt: securityCoordinatorPrompt.trim(),
+		appendSystemPrompt: resolvePromptAsset("security/scan-coordinator.md", securityCoordinatorPrompt, {
+			cwd: input.executionRoot,
+		}).text.trim(),
 		disableExtensionDiscovery: true,
 		enableMCP: false,
 		enableIrc: false,
@@ -279,8 +284,10 @@ async function createDefaultSecuritySession(input: SecurityScanSessionFactoryInp
 }
 
 function requestText(plan: SecurityScanPlan, executionRoot: string, diffText?: string): string {
-	return prompt
-		.render(securityRequestPrompt, {
+	return renderPromptAsset(
+		"security/scan-request.md",
+		securityRequestPrompt,
+		{
 			repositoryRoot: executionRoot,
 			targetKind: plan.target.kind,
 			revision: plan.target.revision ?? "",
@@ -292,8 +299,9 @@ function requestText(plan: SecurityScanPlan, executionRoot: string, diffText?: s
 				plan.knowledgeBases.length > 0 ? plan.knowledgeBases.map(item => item.path).join(", ") : "none",
 			planFingerprint: plan.fingerprint,
 			diffText: diffText ?? "",
-		})
-		.trim();
+		},
+		{ cwd: executionRoot },
+	).trim();
 }
 
 function terminalText(snapshot: SecurityOperationSnapshot): string {
@@ -451,7 +459,7 @@ export class SecurityCoordinator {
 				model: modelRef,
 				account,
 				config: securityConfigSnapshot(this.#host.settings),
-				workflowFingerprint: SECURITY_WORKFLOW_FINGERPRINT,
+				workflowFingerprint: securityWorkflowFingerprint(this.#host.cwd),
 				signal: input.signal,
 			},
 			this.#gitAdapter,
@@ -472,7 +480,7 @@ export class SecurityCoordinator {
 			plan,
 			{
 				config: securityConfigSnapshot(this.#host.settings),
-				workflowFingerprint: SECURITY_WORKFLOW_FINGERPRINT,
+				workflowFingerprint: securityWorkflowFingerprint(this.#host.cwd),
 			},
 			this.#gitAdapter,
 		);

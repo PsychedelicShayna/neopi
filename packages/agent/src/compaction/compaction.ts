@@ -38,6 +38,7 @@ import { stripOpenAIResponsesOutputOnlyStatusesForReplay } from "@oh-my-pi/pi-ai
 import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
 import { isRecord, logger, prompt } from "@oh-my-pi/pi-utils";
+import { resolvePromptAsset, renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import * as snapcompact from "@oh-my-pi/snapcompact";
 import { type AgentTelemetry, instrumentedCompleteSimple } from "../telemetry";
 import { ThinkingLevel } from "../thinking";
@@ -93,7 +94,7 @@ import {
 	escapeSummaryBoundaryTags,
 	extractFileOpsFromMessage,
 	type FileOperations,
-	SUMMARIZATION_SYSTEM_PROMPT,
+	getSummarizationSystemPrompt,
 	serializeConversationForSummary,
 	stripReadSelector,
 	upsertFileOperations,
@@ -571,15 +572,9 @@ export function findCutPoint(
 // Summarization
 // ============================================================================
 
-const SUMMARIZATION_PROMPT = prompt.render(compactionSummaryPrompt);
-
-const UPDATE_SUMMARIZATION_PROMPT = prompt.render(compactionUpdateSummaryPrompt);
-
-const SHORT_SUMMARY_PROMPT = prompt.render(compactionShortSummaryPrompt);
-
-const HANDOFF_DOCUMENT_PROMPT = prompt.render(handoffDocumentPrompt);
-
-export const AUTO_HANDOFF_THRESHOLD_FOCUS = prompt.render(autoHandoffThresholdFocusPrompt);
+export function getAutoHandoffThresholdFocus(cwd?: string): string {
+	return renderPromptAsset("compaction/auto-handoff-threshold-focus.md", autoHandoffThresholdFocusPrompt, {}, { cwd });
+}
 
 function formatAdditionalContext(context: string[] | undefined): string {
 	if (!context || context.length === 0) return "";
@@ -663,6 +658,7 @@ function shouldRetryHandoffWithAutoToolChoice(response: AssistantMessage): boole
  * If previousSummary is provided, uses the update prompt to merge.
  */
 export interface SummaryOptions {
+	cwd?: string;
 	promptOverride?: string;
 	extraContext?: string[];
 	remoteEndpoint?: string;
@@ -766,23 +762,29 @@ function localCodexCompaction(options: SummaryOptions | undefined) {
 	});
 }
 
-function formatPreviousSnapcompactArchive(archiveText: string): string {
-	return prompt.render(snapcompactArchiveContextPrompt, { archiveText });
+function formatPreviousSnapcompactArchive(archiveText: string, cwd?: string): string {
+	return renderPromptAsset(
+		"compaction/snapcompact-archive-context.md",
+		snapcompactArchiveContextPrompt,
+		{ archiveText },
+		{ cwd },
+	);
 }
 
 function mergePreviousSummaryWithSnapcompactArchive(
 	previousSummary: string | undefined,
 	archiveText: string | undefined,
+	cwd?: string,
 ): string | undefined {
 	if (!archiveText) return previousSummary;
-	const archiveSummary = formatPreviousSnapcompactArchive(archiveText);
+	const archiveSummary = formatPreviousSnapcompactArchive(archiveText, cwd);
 	return previousSummary ? `${previousSummary}\n\n${archiveSummary}` : archiveSummary;
 }
 
-function createSnapcompactArchiveMigrationMessage(archiveText: string): Message {
+function createSnapcompactArchiveMigrationMessage(archiveText: string, cwd?: string): Message {
 	return {
 		role: "user",
-		content: [{ type: "text", text: formatPreviousSnapcompactArchive(archiveText) }],
+		content: [{ type: "text", text: formatPreviousSnapcompactArchive(archiveText, cwd) }],
 		timestamp: Date.now(),
 	};
 }
@@ -883,7 +885,9 @@ export async function generateSummary(
 
 	// Serialize conversation to text so model doesn't try to continue it
 	// Convert to LLM messages first (handles custom app messages when caller provides a transformer).
-	const llmMessages = (options?.convertToLlm ?? defaultConvertToLlm)(currentMessages);
+	const llmMessages = options?.convertToLlm
+		? options.convertToLlm(currentMessages)
+		: defaultConvertToLlm(currentMessages, options?.cwd);
 	const dialect = preferredDialect(model.id);
 	const tokenizer = new Tokenizer(model);
 	const wholeConversation = serializeConversationForSummary(llmMessages, dialect);
@@ -964,10 +968,16 @@ async function summarizeConversationWindow(
 	options: SummaryOptions | undefined,
 ): Promise<string> {
 	// Use update prompt if we have a previous summary, otherwise initial prompt
-	let basePrompt = previousSummary ? UPDATE_SUMMARIZATION_PROMPT : SUMMARIZATION_PROMPT;
-	if (options?.promptOverride) {
-		basePrompt = options.promptOverride;
-	}
+	let basePrompt =
+		options?.promptOverride ??
+		prompt.render(
+			previousSummary
+				? resolvePromptAsset("compaction/compaction-update-summary.md", compactionUpdateSummaryPrompt, {
+						cwd: options?.cwd,
+					}).text
+				: resolvePromptAsset("compaction/compaction-summary.md", compactionSummaryPrompt, { cwd: options?.cwd })
+						.text,
+		);
 	if (customInstructions) {
 		basePrompt = `${basePrompt}\n\nAdditional focus: ${customInstructions}`;
 	}
@@ -995,7 +1005,7 @@ async function summarizeConversationWindow(
 			key =>
 				requestRemoteCompaction(
 					endpoint,
-					{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, prompt: promptText, maxTokens },
+					{ systemPrompt: getSummarizationSystemPrompt(options?.cwd), prompt: promptText, maxTokens },
 					signal,
 					{ fetch: options.fetch, model, apiKey: key },
 				),
@@ -1006,7 +1016,7 @@ async function summarizeConversationWindow(
 
 	const response = await instrumentedCompleteSimple(
 		model,
-		{ systemPrompt: [SUMMARIZATION_SYSTEM_PROMPT], messages: summarizationMessages },
+		{ systemPrompt: [getSummarizationSystemPrompt(options?.cwd)], messages: summarizationMessages },
 		{
 			maxTokens,
 			signal,
@@ -1045,6 +1055,7 @@ async function summarizeConversationWindow(
 // ============================================================================
 
 export interface HandoffOptions {
+	cwd?: string;
 	/** Live agent system prompt — passed verbatim so providers hit the cached prefix. */
 	systemPrompt: string[];
 	/** Live agent tool list — same purpose. Forced to `toolChoice: "none"`. */
@@ -1067,11 +1078,15 @@ export interface HandoffOptions {
 	thinkingLevel?: ThinkingLevel;
 }
 
-export function renderHandoffPrompt(customInstructions?: string): string {
-	if (!customInstructions) return HANDOFF_DOCUMENT_PROMPT;
-	return prompt.render(handoffDocumentPrompt, {
-		additionalFocus: customInstructions,
-	});
+export function renderHandoffPrompt(customInstructions?: string, cwd?: string): string {
+	return renderPromptAsset(
+		"compaction/handoff-document.md",
+		handoffDocumentPrompt,
+		{
+			additionalFocus: customInstructions,
+		},
+		{ cwd },
+	);
 }
 
 export interface HandoffFromContextOptions {
@@ -1152,12 +1167,14 @@ export async function generateHandoff(
 	options: HandoffOptions,
 	signal?: AbortSignal,
 ): Promise<string> {
-	const llmMessages = (options.convertToLlm ?? defaultConvertToLlm)(messages);
+	const llmMessages = options.convertToLlm
+		? options.convertToLlm(messages)
+		: defaultConvertToLlm(messages, options.cwd);
 	const requestMessages: Message[] = [
 		...llmMessages,
 		{
 			role: "user",
-			content: [{ type: "text", text: renderHandoffPrompt(options.customInstructions) }],
+			content: [{ type: "text", text: renderHandoffPrompt(options.customInstructions, options.cwd) }],
 			attribution: "agent",
 			timestamp: Date.now(),
 		},
@@ -1189,7 +1206,9 @@ async function generateShortSummary(
 	options?: SummaryOptions,
 ): Promise<string> {
 	const maxTokens = Math.min(512, Math.floor(0.2 * reserveTokens));
-	const llmMessages = (options?.convertToLlm ?? defaultConvertToLlm)(recentMessages);
+	const llmMessages = options?.convertToLlm
+		? options.convertToLlm(recentMessages)
+		: defaultConvertToLlm(recentMessages, options?.cwd);
 	const conversationText = serializeConversationForSummary(llmMessages, preferredDialect(model.id));
 
 	let promptText = `<conversation>\n${conversationText}\n</conversation>\n\n`;
@@ -1197,7 +1216,12 @@ async function generateShortSummary(
 		promptText += `<previous-summary>\n${escapeSummaryBoundaryTags(historySummary)}\n</previous-summary>\n\n`;
 	}
 	promptText += formatAdditionalContext(options?.extraContext);
-	promptText += SHORT_SUMMARY_PROMPT;
+	promptText += renderPromptAsset(
+		"compaction/compaction-short-summary.md",
+		compactionShortSummaryPrompt,
+		{},
+		{ cwd: options?.cwd },
+	);
 
 	if (options?.remoteEndpoint) {
 		const endpoint = options.remoteEndpoint;
@@ -1206,7 +1230,7 @@ async function generateShortSummary(
 			key =>
 				requestRemoteCompaction(
 					endpoint,
-					{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, prompt: promptText, maxTokens },
+					{ systemPrompt: getSummarizationSystemPrompt(options?.cwd), prompt: promptText, maxTokens },
 					signal,
 					{ fetch: options?.fetch, model, apiKey: key },
 				),
@@ -1218,7 +1242,7 @@ async function generateShortSummary(
 	const response = await instrumentedCompleteSimple(
 		model,
 		{
-			systemPrompt: [SUMMARIZATION_SYSTEM_PROMPT],
+			systemPrompt: [getSummarizationSystemPrompt(options?.cwd)],
 			messages: [{ role: "user", content: [{ type: "text", text: promptText }], timestamp: Date.now() }],
 		},
 		{
@@ -1493,7 +1517,6 @@ export function prepareCompaction(
 // Main compaction function
 // ============================================================================
 
-const TURN_PREFIX_SUMMARIZATION_PROMPT = prompt.render(compactionTurnPrefixPrompt);
 function isCodexResponsesModel(model: Model): model is Model<"openai-codex-responses"> {
 	return model.api === "openai-codex-responses";
 }
@@ -1618,6 +1641,7 @@ export async function compact(
 	const reserveTokens = settings.reserveTokens ?? DEFAULT_RESERVE_TOKENS;
 
 	const summaryOptions: SummaryOptions = {
+		cwd: options?.cwd,
 		promptOverride: options?.promptOverride,
 		extraContext: options?.extraContext,
 		remoteEndpoint: settings.remoteEnabled === false ? undefined : settings.remoteEndpoint,
@@ -1654,9 +1678,10 @@ export async function compact(
 	const previousSummaryForCompaction = mergePreviousSummaryWithSnapcompactArchive(
 		previousSummary,
 		previousSnapcompactArchiveText,
+		summaryOptions.cwd,
 	);
 	const snapcompactArchiveMigrationMessage = previousSnapcompactArchiveText
-		? createSnapcompactArchiveMigrationMessage(previousSnapcompactArchiveText)
+		? createSnapcompactArchiveMigrationMessage(previousSnapcompactArchiveText, summaryOptions.cwd)
 		: undefined;
 	const previousNativeHistory =
 		getCompactionV2PreserveData(previousPreserveData) ?? getPreservedOpenAiRemoteCompactionData(previousPreserveData);
@@ -1690,7 +1715,9 @@ export async function compact(
 			previousRemoteCompaction?.provider === model.provider
 				? previousRemoteCompaction.replacementHistory
 				: undefined;
-		const convertToLlm = summaryOptions.convertToLlm ?? defaultConvertToLlm;
+		const convertToLlm =
+			summaryOptions.convertToLlm ??
+			((messages: AgentMessage[]) => defaultConvertToLlm(messages, summaryOptions.cwd));
 		const messages = convertToLlm(remoteMessages);
 		// Replacement history keeps what the user wrote. Summaries, archive
 		// migrations, and custom/hook messages can serialize as user-role items
@@ -1701,7 +1728,9 @@ export async function compact(
 			[...messagesToSummarize, ...turnPrefixMessages, ...recentMessages].filter(isUserAuthored),
 		);
 		const retainedUserItems: unknown[] = [...(previousReplacementHistory ?? [])];
-		const remoteSystemPrompt = summaryOptions.remoteSystemPrompt ?? [SUMMARIZATION_SYSTEM_PROMPT];
+		const remoteSystemPrompt = summaryOptions.remoteSystemPrompt ?? [
+			getSummarizationSystemPrompt(summaryOptions.cwd),
+		];
 		let codexBody: OpenAICodexCompactionBody | undefined;
 		let remoteHistory: Array<Record<string, unknown>>;
 		if (isCodexResponsesModel(model)) {
@@ -1778,6 +1807,7 @@ export async function compact(
 					model.contextWindow,
 					instructions,
 					tools,
+					summaryOptions.cwd,
 				);
 				if (trimmed.rewrittenOutputs > 0) {
 					logger.info("Rewrote trailing tool outputs before OpenAI V2 remote compaction", {
@@ -1847,7 +1877,9 @@ export async function compact(
 					? previousV2Compaction.replacementHistory
 					: undefined;
 		const remoteHistory = buildOpenAiNativeHistory(
-			(summaryOptions.convertToLlm ?? defaultConvertToLlm)(remoteMessages),
+			summaryOptions.convertToLlm
+				? summaryOptions.convertToLlm(remoteMessages)
+				: defaultConvertToLlm(remoteMessages, summaryOptions.cwd),
 			model,
 			previousReplacementHistory,
 			openAiCompatSupportsImageDetailOriginal(model),
@@ -1861,9 +1893,11 @@ export async function compact(
 							model,
 							key,
 							remoteHistory,
-							summaryOptions.remoteSystemPrompt?.join("\n\n") ?? SUMMARIZATION_SYSTEM_PROMPT,
+							summaryOptions.remoteSystemPrompt?.join("\n\n") ??
+								getSummarizationSystemPrompt(summaryOptions.cwd),
 							signal,
 							{
+								cwd: summaryOptions.cwd,
 								fetch: summaryOptions.fetch,
 								sessionId: summaryOptions.sessionId,
 								providerSessionState: summaryOptions.providerSessionState,
@@ -1988,7 +2022,9 @@ export async function compact(
 				? await summaryOptions.buildProviderContext(summarizedMessages, allMessages.slice(safeCut), signal)
 				: {
 						systemPrompt: summaryOptions.remoteSystemPrompt ?? [],
-						messages: (summaryOptions.convertToLlm ?? defaultConvertToLlm)(summarizedMessages),
+						messages: summaryOptions.convertToLlm
+							? summaryOptions.convertToLlm(summarizedMessages)
+							: defaultConvertToLlm(summarizedMessages, summaryOptions.cwd),
 						tools: summaryOptions.tools,
 					};
 			const remote = await requestAnthropicNativeCompaction(
@@ -1998,9 +2034,18 @@ export async function compact(
 					context,
 					filesDueBefore,
 					instructions: buildAnthropicCompactionInstructions(
-						summaryOptions.promptOverride ?? SUMMARIZATION_PROMPT,
+						summaryOptions.promptOverride ??
+							renderPromptAsset(
+								"compaction/compaction-summary.md",
+								compactionSummaryPrompt,
+								{},
+								{
+									cwd: summaryOptions.cwd,
+								},
+							),
 						customInstructions,
 						formatAdditionalContext(summaryOptions.extraContext).trim() || undefined,
+						summaryOptions.cwd,
 					),
 					maxTokens: Math.min(Math.floor(0.8 * reserveTokens), MAX_SUMMARY_TOKENS),
 					reasoning: resolveCompactionEffort(model, summaryOptions.thinkingLevel),
@@ -2105,14 +2150,15 @@ export async function compact(
 
 	// Compute file lists and append to summary
 	const { readFiles, modifiedFiles } = computeFileLists(fileOps);
-	summary = upsertFileOperations(summary, readFiles, modifiedFiles, fileOps.read);
+	summary = upsertFileOperations(summary, readFiles, modifiedFiles, fileOps.read, summaryOptions.cwd);
 	if (nativeSummary !== undefined) {
 		// The replayed block stays byte-identical to the API's summary so it
 		// matches its signature. The harness file lists above travel
 		// separately: the converter replaces the summary message with the
 		// block and skips its text, so they would otherwise be invisible to
 		// this provider. Every other provider keeps reading the entry text.
-		const filesText = upsertFileOperations("", readFiles, modifiedFiles, fileOps.read) || undefined;
+		const filesText =
+			upsertFileOperations("", readFiles, modifiedFiles, fileOps.read, summaryOptions.cwd) || undefined;
 		preserveData = withAnthropicCompactionPreserveData(preserveData, {
 			provider: model.provider,
 			content: nativeSummary,
@@ -2160,9 +2206,17 @@ async function generateTurnPrefixSummary(
 ): Promise<string> {
 	const maxTokens = Math.min(Math.floor(0.5 * reserveTokens), MAX_SUMMARY_TOKENS); // Smaller budget for turn prefix
 
-	const llmMessages = (options?.convertToLlm ?? defaultConvertToLlm)(messages);
+	const llmMessages = options?.convertToLlm
+		? options.convertToLlm(messages)
+		: defaultConvertToLlm(messages, options?.cwd);
 	const conversationText = serializeConversationForSummary(llmMessages, preferredDialect(model.id));
-	const promptText = `<conversation>\n${conversationText}\n</conversation>\n\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`;
+	const instructions = renderPromptAsset(
+		"compaction/compaction-turn-prefix.md",
+		compactionTurnPrefixPrompt,
+		{},
+		{ cwd: options?.cwd },
+	);
+	const promptText = `<conversation>\n${conversationText}\n</conversation>\n\n${instructions}`;
 	const summarizationMessages = [
 		{
 			role: "user" as const,
@@ -2173,7 +2227,7 @@ async function generateTurnPrefixSummary(
 
 	const response = await instrumentedCompleteSimple(
 		model,
-		{ systemPrompt: [SUMMARIZATION_SYSTEM_PROMPT], messages: summarizationMessages },
+		{ systemPrompt: [getSummarizationSystemPrompt(options?.cwd)], messages: summarizationMessages },
 		{
 			maxTokens,
 			signal,

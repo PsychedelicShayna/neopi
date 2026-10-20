@@ -30,6 +30,7 @@ import { DeferredDiagnostics } from "../lsp/deferred-diagnostics";
 import { getLspBatchRequest } from "../lsp/batch";
 import { getDiagnosticsLedger } from "../lsp/diagnostics-ledger";
 
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import writeDescription from "../prompts/tools/write.md" with { type: "text" };
 import writeDeviceOnlyDescription from "../prompts/tools/write-device-only.md" with { type: "text" };
 import type { ToolSession } from "../sdk";
@@ -479,7 +480,12 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 	readonly label = "Write";
 	get description(): string {
 		const deviceOnly = this.session.deviceOnlyWrite === true && this.session.pendingFullWriteDescription !== true;
-		return prompt.render(deviceOnly ? writeDeviceOnlyDescription : writeDescription);
+		return prompt.render(
+			deviceOnly
+				? resolvePromptAsset("tools/write-device-only.md", writeDeviceOnlyDescription, { cwd: this.session.cwd })
+						.text
+				: resolvePromptAsset("tools/write.md", writeDescription, { cwd: this.session.cwd }).text,
+		);
 	}
 	readonly parameters = writeSchema;
 	readonly strict = true;

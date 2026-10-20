@@ -20,7 +20,8 @@ import type {
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { resolveAnthropicCompactionEffort } from "@oh-my-pi/pi-ai/providers/anthropic";
 import { supportsAnthropicCompaction } from "@oh-my-pi/pi-ai/providers/anthropic-compaction";
-import { isRecord, prompt } from "@oh-my-pi/pi-utils";
+import { isRecord } from "@oh-my-pi/pi-utils";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { type InstrumentedChatSpanOptions, instrumentedCompleteSimple } from "../telemetry";
 import type { AgentMessage } from "../types";
 import anthropicCompactionInstructionsPrompt from "./prompts/anthropic-compaction-instructions.md" with { type: "text" };
@@ -175,12 +176,18 @@ export function buildAnthropicCompactionInstructions(
 	basePrompt: string,
 	customInstructions: string | undefined,
 	extraContext: string | undefined,
+	cwd?: string,
 ): string {
-	return prompt.render(anthropicCompactionInstructionsPrompt, {
-		basePrompt,
-		customInstructions,
-		extraContext,
-	});
+	return renderPromptAsset(
+		"compaction/anthropic-compaction-instructions.md",
+		anthropicCompactionInstructionsPrompt,
+		{
+			basePrompt,
+			customInstructions,
+			extraContext,
+		},
+		{ cwd },
+	);
 }
 
 export interface AnthropicNativeCompactionRequest {

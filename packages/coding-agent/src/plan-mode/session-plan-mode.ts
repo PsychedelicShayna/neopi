@@ -1,3 +1,4 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * Session-level plan-mode transitions shared by the headless hosts (ACP, RPC)
  * and the interactive mode: the plan state a host enters, the tool set plan
@@ -6,7 +7,7 @@
  * built here so every host answers a proposal the same way.
  */
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import { logger, prompt } from "@oh-my-pi/pi-utils";
+import { logger } from "@oh-my-pi/pi-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import planProposalApprovedPrompt from "../prompts/system/plan-proposal-approved.md" with { type: "text" };
 import planProposalRefinePrompt from "../prompts/system/plan-proposal-refine.md" with { type: "text" };
@@ -127,7 +128,7 @@ export function refinedPlanProposalResult(
 	proposal: PlanProposal,
 	feedback?: string,
 ): AgentToolResult<PlanApprovalDetails> {
-	const text = prompt.render(planProposalRefinePrompt, {
+	const text = renderPromptAsset("system/plan-proposal-refine.md", planProposalRefinePrompt, {
 		title: normalizePlanTitle(proposal.title).title,
 		feedback: feedback?.trim() || undefined,
 	});
@@ -174,6 +175,9 @@ export function approvedPlanProposalResult(
 	proposal: PlanProposal,
 	autosaveFailed: boolean,
 ): AgentToolResult<PlanApprovalDetails> {
-	const text = prompt.render(planProposalApprovedPrompt, { planFilePath: proposal.planFilePath, autosaveFailed });
+	const text = renderPromptAsset("system/plan-proposal-approved.md", planProposalApprovedPrompt, {
+		planFilePath: proposal.planFilePath,
+		autosaveFailed,
+	});
 	return { content: [{ type: "text", text }], details: proposal.details };
 }

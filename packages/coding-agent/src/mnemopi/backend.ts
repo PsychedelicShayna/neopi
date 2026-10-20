@@ -1,3 +1,4 @@
+import { resolvePromptAsset, renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { rm } from "node:fs/promises";
 import * as path from "node:path";
 import { type ApiKeyResolver, completeSimple, retryTransientCompletion } from "@oh-my-pi/pi-ai";
@@ -6,7 +7,7 @@ import type { Mnemopi } from "@oh-my-pi/pi-mnemopi";
 import type { MnemopiLlmCompleteOptions } from "@oh-my-pi/pi-mnemopi/core/runtime-options";
 import type * as MnemopiDiagnoseNs from "@oh-my-pi/pi-mnemopi/diagnose";
 import type { DiagnosticSummary } from "@oh-my-pi/pi-mnemopi/diagnose";
-import { logger, prompt, withLoopPhase } from "@oh-my-pi/pi-utils";
+import { logger, withLoopPhase } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import { roleCandidatePool } from "../config/model-roles";
 import { resolveRoleChain } from "../config/model-resolver";
@@ -20,8 +21,8 @@ import type {
 	MemoryPromptPreparation,
 } from "../memory-backend/types";
 import { memoryToolRefs } from "../memory-backend/tool-names";
-import memoryConsolidationPrompt from "../prompts/system/memory-consolidation-system.md" with { type: "text" };
-import memoryExtractionPrompt from "../prompts/system/memory-extraction-system.md" with { type: "text" };
+import bundledMemoryConsolidationPrompt from "../prompts/system/memory-consolidation-system.md" with { type: "text" };
+import bundledMemoryExtractionPrompt from "../prompts/system/memory-extraction-system.md" with { type: "text" };
 import mnemopiInstructions from "../prompts/system/mnemopi-instructions.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
 import { tinyModelClient } from "../tiny/title-client";
@@ -74,7 +75,10 @@ export function resolveMemoryCompletionInput(
 	options?: MnemopiLlmCompleteOptions,
 ): MemoryCompletionInput {
 	if (options?.task?.kind === "memory-extraction") {
-		return { prompt: options.task.input, systemPrompt: memoryExtractionPrompt };
+		return {
+			prompt: options.task.input,
+			systemPrompt: resolvePromptAsset("system/memory-extraction-system.md", bundledMemoryExtractionPrompt).text,
+		};
 	}
 	return { prompt };
 }
@@ -141,7 +145,9 @@ export const mnemopiBackend: MemoryBackend = {
 			const state = getMnemopiSessionState(session);
 			const primary = state?.aliasOf ?? state;
 			const parts = [
-				prompt.render(mnemopiInstructions, { toolRefs: memoryToolRefs(session?.getXdevToolEntries()) }),
+				renderPromptAsset("system/mnemopi-instructions.md", mnemopiInstructions, {
+					toolRefs: memoryToolRefs(session?.getXdevToolEntries()),
+				}),
 			];
 			if (primary?.lastRecallSnippet) parts.push(primary.lastRecallSnippet);
 			const rendered = parts.join("\n\n").trim();
@@ -680,7 +686,10 @@ async function resolveMnemopiProviderOptions(
 							// No `extractionPrompt`: resolveMemoryCompletionInput supplies the
 							// instructions as a system turn for every extraction call, so anything
 							// rendered here would be built in code and then discarded.
-							consolidationPrompt: memoryConsolidationPrompt,
+							consolidationPrompt: resolvePromptAsset(
+								"system/memory-consolidation-system.md",
+								bundledMemoryConsolidationPrompt,
+							).text,
 						}
 					: complete,
 		};

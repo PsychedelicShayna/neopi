@@ -1,9 +1,10 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import { completeSimple, Effort, retryTransientCompletion } from "@oh-my-pi/pi-ai";
 import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
-import { prompt, withFileLock } from "@oh-my-pi/pi-utils";
+import { withFileLock } from "@oh-my-pi/pi-utils";
 
 import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
@@ -144,16 +145,26 @@ async function consolidateLocked(
 		const currentFiles = await readCurrentMemoryFiles(options.agentDir, options.cwd);
 		const projectDocs = await readProjectDocs(options.cwd);
 		const sessions = renderSharpshooterSessions(groups);
-		const input = prompt.render(consolidateInputTemplate, {
-			architecture: currentFiles["architecture.md"],
-			product: currentFiles["product.md"],
-			style: currentFiles["style.md"],
-			projectDocs,
-			sessions,
-		});
-		const system = prompt.render(consolidateSystemTemplate, {
-			maxFileLines: SHARPSHOOTER_MAX_FILE_LINES,
-		});
+		const input = renderPromptAsset(
+			"memories/sharpshooter-consolidate-input.md",
+			consolidateInputTemplate,
+			{
+				architecture: currentFiles["architecture.md"],
+				product: currentFiles["product.md"],
+				style: currentFiles["style.md"],
+				projectDocs,
+				sessions,
+			},
+			{ cwd: options.cwd },
+		);
+		const system = renderPromptAsset(
+			"memories/sharpshooter-consolidate-system.md",
+			consolidateSystemTemplate,
+			{
+				maxFileLines: SHARPSHOOTER_MAX_FILE_LINES,
+			},
+			{ cwd: options.cwd },
+		);
 
 		const response = await retryTransientCompletion(
 			() =>

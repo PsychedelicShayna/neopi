@@ -6,6 +6,8 @@ import type { DesktopCapabilities } from "@oh-my-pi/pi-natives";
 import { once } from "@oh-my-pi/pi-utils";
 import { callSessionTool } from "../eval/js/tool-bridge";
 import type { EvalPreludeContext, EvalPreludeDefinition } from "../eval/preludes";
+import { render as renderPrompt } from "@oh-my-pi/pi-utils/prompt";
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import computerUsePrompt from "../prompts/system/computer-use.md" with { type: "text" };
 import { enforceInlineByteCap } from "@oh-my-pi/pi-tui/tools/streaming-output";
 import { type ComputerCallStep, isReadOnlyComputerCall, renderComputerCall } from "./computer/call";
@@ -127,7 +129,7 @@ export function createComputerPrelude(
 	const unregisterOwner = registerComputerController(session.getEvalKernelOwnerId?.() ?? undefined, controller);
 	// Eval-first-use boundary: source/declaration assets stay unloaded until a
 	// JavaScript or Python kernel actually asks for its enabled preludes.
-	const { computerPreludeAssets } = require("./computer/prelude-definition");
+	const { computerPreludeAssets, getComputerPreludeDocumentation } = require("./computer/prelude-definition");
 	let closed = false;
 	const lifetime: ComputerLifetime = {
 		isClosed: () => closed,
@@ -145,12 +147,17 @@ export function createComputerPrelude(
 
 	return {
 		name: "computer",
-		documentation: computerPreludeAssets.documentation,
+		get documentation(): string {
+			return getComputerPreludeDocumentation(session.cwd);
+		},
 		javascript: computerPreludeAssets.javascript,
 		python: computerPreludeAssets.python,
 		exports: ["computer"],
 		codeModeDeclarations: computerPreludeAssets.codeModeDeclarations,
-		guidance: computerUsePrompt,
+		get guidance(): string {
+			const { text } = resolvePromptAsset("system/computer-use.md", computerUsePrompt, { cwd: session.cwd });
+			return text === computerUsePrompt ? text : renderPrompt(text);
+		},
 		approval: computerApproval,
 		enabled: () => cfgComputerEnabled.get(session.settings) === true,
 		invoke: async (parameters, context) => {
@@ -288,7 +295,7 @@ async function runComputer(
 		saveArtifact: full => saveComputerOutputArtifact(session, full),
 	});
 	const content: AgentToolResult<ComputerPreludeDetails>["content"] = [];
-	const notice = screenStateNotice(run.capabilities);
+	const notice = screenStateNotice(run.capabilities, session.cwd);
 	if (notice) content.push({ type: "text", text: notice });
 	if (cappedText) content.push({ type: "text", text: cappedText });
 	for (const image of run.displays) {

@@ -1,4 +1,5 @@
-import { getProjectDir, isRecord, prompt } from "@oh-my-pi/pi-utils";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
+import { getProjectDir, isRecord } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../config/model-registry";
 import { formatModelString, resolveCliModel } from "../config/model-resolver";
 import { Settings } from "../config/settings";
@@ -137,7 +138,7 @@ export async function createCleanseAgentRuntime(options: {
 			const result = await runStructuredSubagent({
 				session: toolSession,
 				invocationKind: "task",
-				assignment: prompt.render(discoveryPrompt, { request }),
+				assignment: renderPromptAsset("cleanse/discovery.md", discoveryPrompt, { request }, { cwd: cwd }),
 				agent: "task",
 				model: modelSelector,
 				outputSchema: DISCOVERY_SCHEMA,
@@ -171,7 +172,7 @@ export async function createCleanseAgentRuntime(options: {
 				const result = await runStructuredSubagent({
 					session: toolSession,
 					invocationKind: "task",
-					assignment: renderAssignment(assignment, context.peers, context.worker, context.checkers),
+					assignment: renderAssignment(assignment, context.peers, context.worker, context.checkers, cwd),
 					agent: "sonic",
 					model: modelSelector,
 					identity: { id: agentId, label: name },
@@ -209,7 +210,12 @@ export async function createCleanseAgentRuntime(options: {
 			const receipt = await IrcBus.global().send({
 				from: MAIN_AGENT_ID,
 				to: agentId,
-				body: prompt.render(followUpPrompt, { diagnostics: formatDiagnostics(diagnostics) }),
+				body: renderPromptAsset(
+					"cleanse/follow-up.md",
+					followUpPrompt,
+					{ diagnostics: formatDiagnostics(diagnostics) },
+					{ cwd: cwd },
+				),
 			});
 			if (receipt.outcome === "failed") return false;
 			sessionManager.appendCustomEntry("cleanse_follow_up", { worker, count: diagnostics.length });
@@ -254,6 +260,7 @@ function renderAssignment(
 	peers: readonly CleanseAssignment[],
 	worker: number,
 	checkers: readonly CleanseCheckerDescriptor[],
+	cwd: string,
 ): string {
 	const hasProjectIssues = assignment.groups.some(group => group.file === undefined);
 	const files = assignment.groups.flatMap(group => (group.file ? [group.file] : []));
@@ -261,13 +268,18 @@ function renderAssignment(
 		...(files.length > 0 ? files.map(file => `- ${file}`) : ["- No file is named by the project-level diagnostic."]),
 		...(hasProjectIssues ? ["- Minimal additional files strictly required by project-level diagnostics."] : []),
 	].join("\n");
-	return prompt.render(assignmentPrompt, {
-		worker,
-		write_scope: writeScope,
-		diagnostics: formatDiagnostics(assignment.groups.flatMap(group => group.diagnostics)),
-		checker_commands: formatCheckerCommands(checkers),
-		peer_assignments: formatPeerAssignments(assignment, peers),
-	});
+	return renderPromptAsset(
+		"cleanse/assignment.md",
+		assignmentPrompt,
+		{
+			worker,
+			write_scope: writeScope,
+			diagnostics: formatDiagnostics(assignment.groups.flatMap(group => group.diagnostics)),
+			checker_commands: formatCheckerCommands(checkers),
+			peer_assignments: formatPeerAssignments(assignment, peers),
+		},
+		{ cwd },
+	);
 }
 
 function formatDiagnostics(diagnostics: readonly CleanseDiagnostic[]): string {

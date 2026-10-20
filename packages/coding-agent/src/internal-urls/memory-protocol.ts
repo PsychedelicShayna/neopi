@@ -3,6 +3,8 @@ import * as path from "node:path";
 import { getAgentDir, isEnoent, withLoopPhase } from "@oh-my-pi/pi-utils";
 import { getMemoryRoot } from "../memories";
 import { getMnemopiSessionState, type MnemopiScopedMemoryHit, type MnemopiSessionState } from "../mnemopi/state";
+import { render as renderPrompt } from "@oh-my-pi/pi-utils/prompt";
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import memoryDoc from "../prompts/internal-urls/memory.md" with { type: "text" };
 import { AgentRegistry } from "../registry/agent-registry";
 import type { AgentSession } from "../session/agent-session";
@@ -334,7 +336,9 @@ export class MemoryProtocolHandler implements ProtocolHandler {
 
 	/** Advertised only when the session's memory backend owns the file-backed `memory://root` namespace. */
 	promptDoc(host: SchemeHost): string | undefined {
-		return host.memoryBackend === "local" ? memoryDoc.trim() : undefined;
+		if (host.memoryBackend !== "local") return undefined;
+		const { text } = resolvePromptAsset("internal-urls/memory.md", memoryDoc);
+		return (text === memoryDoc ? text : renderPrompt(text)).trim();
 	}
 
 	/**

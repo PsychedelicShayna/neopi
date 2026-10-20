@@ -1,8 +1,9 @@
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { imageAttachmentSource } from "@oh-my-pi/pi-tui/prompt/image-source";
 import { prompt } from "@oh-my-pi/pi-utils";
-import imageAttachmentPrompt from "../prompts/system/image-attachment.md" with { type: "text" };
-import videoAttachmentPrompt from "../prompts/system/video-attachment.md" with { type: "text" };
+import bundledImageAttachmentPrompt from "../prompts/system/image-attachment.md" with { type: "text" };
+import bundledVideoAttachmentPrompt from "../prompts/system/video-attachment.md" with { type: "text" };
 import { IMAGE_ATTACHMENT_TYPE, VIDEO_ATTACHMENT_TYPE } from "./queued-messages";
 
 /** Structured copy of the notice's attachment index and source path for transcript renderers. */
@@ -32,11 +33,16 @@ export function renderAttachmentSourceNotice(
 	const isVideo = source.kind === "video";
 	return {
 		customType: isVideo ? VIDEO_ATTACHMENT_TYPE : IMAGE_ATTACHMENT_TYPE,
-		content: prompt.render(isVideo ? videoAttachmentPrompt : imageAttachmentPrompt, {
-			index: String(index),
-			path: source.path,
-			askAnswer: options?.askAnswer,
-		}),
+		content: prompt.render(
+			isVideo
+				? resolvePromptAsset("system/video-attachment.md", bundledVideoAttachmentPrompt).text
+				: resolvePromptAsset("system/image-attachment.md", bundledImageAttachmentPrompt).text,
+			{
+				index: String(index),
+				path: source.path,
+				askAnswer: options?.askAnswer,
+			},
+		),
 		details: { index, path: source.path },
 	};
 }

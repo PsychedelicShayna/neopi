@@ -1,8 +1,13 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { AssistantMessage, Message, Model, Usage } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { toModelSpec } from "@oh-my-pi/pi-catalog/provider-models/bundled-references";
+import * as dirs from "@oh-my-pi/pi-utils/dirs";
+import { Snowflake } from "@oh-my-pi/pi-utils/snowflake";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import * as snapcompact from "../src";
 
@@ -1037,6 +1042,32 @@ describe("serializeConversation", () => {
 });
 
 describe("compact", () => {
+	it("reloads its summary template with current archive fields", async () => {
+		const root = path.join(os.homedir(), ".cache/npi-canary/snapcompact-summary-assets", Snowflake.next());
+		await fs.mkdir(root, { recursive: true });
+		const cwd = spyOn(dirs, "getProjectDir").mockReturnValue(root);
+		const agentDir = spyOn(dirs, "getAgentDir").mockReturnValue(path.join(root, "user-agent"));
+		try {
+			const overridePath = path.join(root, ".omp/builtin-prompts/compaction/snapcompact/snapcompact-summary.md");
+			await Bun.write(overridePath, "Frames {{frameCount}}, thinking {{includeThinking}}. {{files}}");
+			const fileOps = snapcompact.createFileOps();
+			fileOps.read.add("src/auth.ts");
+			const first = await snapcompact.compact(makePreparation({ fileOps }), {
+				frameSize: TEST_FRAME_SIZE,
+				includeThinking: false,
+			});
+			expect(first.summary).toStartWith("Frames 0, thinking false.");
+			expect(first.summary).toContain("auth.ts (Read)");
+			await Bun.write(overridePath, "Updated frames {{frameCount}}, thinking {{includeThinking}}.");
+			const second = await snapcompact.compact(makePreparation(), { frameSize: TEST_FRAME_SIZE });
+			expect(second.summary).toBe("Updated frames 0, thinking true.");
+		} finally {
+			cwd.mockRestore();
+			agentDir.mockRestore();
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
+
 	it("stores small archives as plain text with no frames", async () => {
 		const fileOps = snapcompact.createFileOps();
 		fileOps.read.add("src/auth.ts");

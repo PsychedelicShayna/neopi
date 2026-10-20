@@ -1,3 +1,4 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * Generate session titles using a smol, fast model.
  */
@@ -19,7 +20,7 @@ import { writeTerminalSequence } from "@oh-my-pi/pi-tui";
 import { isNativeRendering, onNativeRenderingChange } from "@oh-my-pi/pi-tui/native/state";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import { SPINNER_FRAMES } from "@oh-my-pi/pi-tui/theme/symbols";
-import { $env, isTerminalHeadless, isWsl, logger, prompt } from "@oh-my-pi/pi-utils";
+import { $env, isTerminalHeadless, isWsl, logger } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 
 import { roleCandidatePool } from "../config/model-roles";
@@ -28,15 +29,12 @@ import { isMixtureModel } from "../moa/provider";
 import { collectOnlineTinyCandidates, expandOnlineTinyModelFallbacks } from "../tiny/online-candidates";
 import type { Settings } from "../config/settings";
 import titleMarkerInstruction from "../prompts/system/title-marker-instruction.md" with { type: "text" };
-import titleSystemPrompt from "../prompts/system/title-system.md" with { type: "text" };
+import bundledTitleSystemPrompt from "../prompts/system/title-system.md" with { type: "text" };
 import { formatTitleUserMessage } from "../tiny/message-preproc";
 import { isLowSignalTitleInput, normalizeGeneratedTitle } from "../tiny/text";
 import { tinyTitleClient } from "../tiny/title-client";
 
 import { cfgRetryModelFallback } from "../session/settings";
-
-const TITLE_SYSTEM_PROMPT = prompt.render(titleSystemPrompt);
-const TITLE_MARKER_INSTRUCTION = prompt.render(titleMarkerInstruction);
 
 // Plain π, not the nerd-font `icon.omp` glyph: window/tab titles render in the
 // OS UI font, which has no nerd-font PUA coverage.
@@ -284,7 +282,9 @@ async function generateTitleOnlineWithModels(
 	// scheme, but hosts that ignore or reject forced `tool_choice` then echoed
 	// the prompt's `{"title": ...}` JSON example verbatim as the session title;
 	// markers work uniformly everywhere.
-	const systemPrompt = titleSystemPrompt ? [titleSystemPrompt, TITLE_MARKER_INSTRUCTION] : [TITLE_SYSTEM_PROMPT];
+	const systemPrompt = titleSystemPrompt
+		? [titleSystemPrompt, renderPromptAsset("system/title-marker-instruction.md", titleMarkerInstruction, {})]
+		: [renderPromptAsset("system/title-system.md", bundledTitleSystemPrompt, {})];
 	const userMessage = formatTitleUserMessage(firstMessage);
 
 	for (const model of models) {

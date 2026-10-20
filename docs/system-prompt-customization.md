@@ -94,6 +94,89 @@ Which automatic inputs reach each kind of session. An input applies only when it
 2. Context discovery selects one user file and one project file per directory depth, and higher-priority providers win. Foreign user files require `enabledProviders` opt-in. A standalone `CLAUDE.md` is supported; `GEMINI.md` is read from the user and project `.gemini` directories.
 3. A task agent's `tools:` list does not remove MCP tools or server instructions: the tools stay available top-level or under `xd://`. Plan-mode tasks and children of restricted sessions run with `restrictToolNames`, which drops both.
 
+## Built-in template overrides
+
+`npi prompts` exposes the embedded template source without requiring a source checkout.
+Nothing is written during installation or ordinary startup. With no override, the
+provider-facing prompts are unchanged.
+
+```sh
+npi prompts unpack
+npi prompts unpack --project --only 'system/system-prompt.md'
+npi prompts show tools/bash.md --vars
+npi prompts list --json
+npi prompts diff 'tools/*'
+npi prompts keys live/live-instructions.md
+npi prompts lexicon --unused --scope system
+npi prompts check --strict --runtime --fixture ./prompt-fixture.json
+npi prompts reset tools/bash.md --user
+```
+
+The default unpack group is `core`. Use `--include feature`, `--include compaction`,
+or `--include all` for other catalogued assets. `--only` narrows the selection.
+Existing files are skipped unless `--force` is supplied. `--json` produces
+structured command output. `--dir` selects an explicit export or inspection root
+and cannot be combined with `--user` or `--project`.
+
+Templates retain their Handlebars source. Unpacking `{{firstName}}` does not freeze
+the current account name into a file. The accompanying `OMP_PROMPT_MANIFEST.json`
+records the bundled hashes and interpolation contracts at unpack time.
+
+Each asset resolves independently, with whole-file replacement:
+
+1. `<cwd>/.omp/builtin-prompts/<asset path>`
+2. `<active agent directory>/builtin-prompts/<asset path>`
+3. The bundled template
+
+There is no ancestor-directory search for this override layer. The user root
+follows `getAgentDir()`, including the active profile and `PI_CODING_AGENT_DIR`.
+The `builtin-prompts` directory is separate from `prompts`, which holds slash
+templates, and from `agents`, which remains owned by `npi agents unpack`.
+Catalogued agent definitions are exported for inspection only.
+
+These files change the templates surrounding the existing plain-text slots.
+Unpacking `system/system-prompt.md` does not disable `SYSTEM.md`; a discovered
+literal still selects `custom-system-prompt.md`. `APPEND_SYSTEM.md`,
+`TITLE_SYSTEM.md`, and `PERSONALITY.md` keep their existing precedence and remain
+plain text. A `PERSONALITY.md` file still wins over a built-in personality preset.
+The SDK's full `systemPrompt` replacement and explicit system-template routes
+also retain their existing precedence.
+
+Edits take effect at the next existing consumer boundary: system-prompt refresh
+or session start, advisor rebuild, or tool-description read. There is no file
+watcher and no change to an in-flight provider request. A malformed core override
+fails that rebuild with its file path. Malformed notices are logged and use the
+bundled text instead. `show` and `check` can still inspect a broken override.
+
+`list` and `show` report effective source, path and content hash. `/dump` includes
+the observed asset provenance alongside the assembled prompt. Manifest hashes
+identify overrides unchanged from an older bundled template, which can be
+refreshed, and edited overrides, which must not be silently overwritten.
+`reset` deletes selected overrides only. It never deletes the plain-text slots
+or files in the separate agent-discovery directory.
+
+### Lexicon and validation
+
+`npi prompts lexicon` lists the engine helpers and the exposed variables for
+each scope. The **used** set is derived from the shipped templates. **Unused**
+means exposed but not currently referenced, not forbidden. `keys <asset>` shows
+the same contract for one template. Live identity exposes only `username` and
+`firstName` from the OS account, not hostname or home directory.
+
+`npi prompts check` validates installed overrides or supplied files, asset ids,
+and globs. It also accepts agent prompt bodies with `--agents` or `--scope
+agent-body`. `--fixture <json>` supplies representative context; `--runtime`
+requires declared runtime-only values rather than merely noting their absence.
+`--strict-warnings` turns warnings into errors. Validation checks syntax,
+registered helper availability, scope, declared paths and a dry render without
+changing the runtime engine's permissive `strict: false` setting.
+
+Diagnostics identify the file, line, column, expression and scope, with the
+expected type and nearby names where available. Exit codes are `0` for no
+errors, `1` for validation errors, `2` for invalid usage or a missing target,
+and `3` for an internal validator failure. `SYSTEM.md` and the other plain slots
+are never recursively interpreted as templates by this command or the runtime.
+
 ## Handlebars template route
 
 `SYSTEM_TEMPLATE.md` and `--system-prompt-template <path>` select raw Handlebars source from a file. Programmatic callers can instead pass raw Handlebars source through `CreateAgentSessionOptions.systemPromptTemplate` or `buildSystemPrompt({ systemPromptTemplate })`; those programmatic options are the template itself, not a path. Each route is rendered instead of the bundled `system-prompt.md` with the same live data and registered helpers as that bundled template.
@@ -124,7 +207,7 @@ on
 
 those characters reach the model literally. Internal values such as `cwd`, `skills`, `rules`, and `toolRefs` remain private implementation details for the plain route. The calendar date is not exposed as a template value — it rides a per-request reminder on the first user turn together with the session cwd.
 
-Only the opt-in `SYSTEM_TEMPLATE.md` / `--system-prompt-template` / programmatic `CreateAgentSessionOptions.systemPromptTemplate` and `buildSystemPrompt({ systemPromptTemplate })` routes compile Handlebars. An explicit malformed or empty template fails clearly and is never downgraded to plain text. Discovered empty templates are skipped. Malformed templates discovered by `buildSystemPrompt()` warn and fall back to the bundled prompt; CLI-discovered source is forwarded as explicit SDK input and therefore fails on malformed Handlebars.
+The opt-in `SYSTEM_TEMPLATE.md`, explicit template options, and `builtin-prompts` overrides compile Handlebars. An explicit malformed or empty system template fails clearly and is never downgraded to plain text. Discovered empty `SYSTEM_TEMPLATE.md` files are skipped. Malformed templates discovered by `buildSystemPrompt()` warn and fall back to the bundled prompt; CLI-discovered source is forwarded as explicit SDK input and therefore fails on malformed Handlebars. Core `builtin-prompts` overrides fail closed at their next rebuild.
 
 ## Recipes
 

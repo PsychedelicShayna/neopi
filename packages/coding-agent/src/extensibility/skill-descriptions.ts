@@ -1,3 +1,4 @@
+import { resolvePromptAsset, renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { Database, type Statement } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -10,7 +11,6 @@ import {
 	isEexist,
 	logger,
 	postmortem,
-	prompt,
 } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import { getModelMatchPreferences, parseModelPattern, resolveRoleSelection } from "../config/model-resolver";
@@ -84,7 +84,7 @@ export function createSkillDescriptionCompressor(
 
 function keyFor(skill: Pick<Skill, "name" | "description">): string {
 	return new Bun.CryptoHasher("sha256")
-		.update(compressDescriptionPrompt)
+		.update(resolvePromptAsset("skills/compress-description.md", compressDescriptionPrompt).text)
 		.update("\0")
 		.update(skill.name)
 		.update("\0")
@@ -313,7 +313,7 @@ export class SkillDescriptionCatalog {
 			try {
 				await compressionSlots.acquire();
 				try {
-					const request = prompt.render(compressDescriptionPrompt, {
+					const request = renderPromptAsset("skills/compress-description.md", compressDescriptionPrompt, {
 						name: skill.name,
 						description: skill.description,
 					});

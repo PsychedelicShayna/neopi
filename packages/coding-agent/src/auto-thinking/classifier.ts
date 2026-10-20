@@ -1,3 +1,4 @@
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * On-demand Auto effort classification. Replacement mode asks the dedicated
  * @effort role to choose directly among the resolved sparse candidates, using
@@ -23,7 +24,7 @@ import {
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import type { ModelRegistry } from "../config/model-registry";
 import { cfgEffortPolicyMode, resolveImplicitEffort } from "../config/effort-policy";
-import effortQuestionInstructions from "../prompts/system/auto-thinking-effort-question.md" with { type: "text" };
+import bundledEffortQuestionInstructions from "../prompts/system/auto-thinking-effort-question.md" with { type: "text" };
 import minimalCriterion from "../prompts/system/auto-thinking-minimal-criterion.md" with { type: "text" };
 import type { Settings } from "../config/settings";
 import { type JudgmentUsage, resolveEffortJudge, resolveJudge, sharedJudgmentCache } from "../judgment";
@@ -147,14 +148,20 @@ export async function classifyDifficulty(
 		const criteria = Object.fromEntries(
 			candidates.map(effort => [
 				effort,
-				effort === Effort.Minimal ? minimalCriterion.trim() : QUESTIONS.level.criteria[effort as Level],
+				effort === Effort.Minimal
+					? resolvePromptAsset("system/auto-thinking-minimal-criterion.md", minimalCriterion, {
+							cwd: deps.sessionManager?.getCwd?.(),
+						}).text.trim()
+					: QUESTIONS.level.criteria[effort as Level],
 			]),
 		) as Record<Effort, string>;
 		const question: ChoiceQuestion = {
 			type: "choice",
 			instructions: solutionSpace
 				? renderQuestion(QUESTIONS.solutionSpace, { withMax: candidates.includes(Effort.Max) }).instructions
-				: effortQuestionInstructions,
+				: resolvePromptAsset("system/auto-thinking-effort-question.md", bundledEffortQuestionInstructions, {
+						cwd: deps.sessionManager?.getCwd?.(),
+					}).text,
 			criteria,
 		};
 		const judge = resolveEffortJudge({

@@ -1,3 +1,4 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * Date/cwd reminder injection.
  *
@@ -11,12 +12,17 @@
  * for the lifetime of a session/day and refresh automatically at midnight.
  */
 import type { Context, Message, UserMessage } from "@oh-my-pi/pi-ai";
-import { prompt } from "@oh-my-pi/pi-utils";
+
 import dateCwdReminderTemplate from "../prompts/system/date-cwd-reminder.md" with { type: "text" };
 
 /** Renders the reminder text for the given local calendar date and cwd. */
 export function renderDateCwdReminder(date: string, cwd: string): string {
-	return prompt.render(dateCwdReminderTemplate, { date, cwd }).trim();
+	return renderPromptAsset(
+		"system/date-cwd-reminder.md",
+		dateCwdReminderTemplate,
+		{ date, cwd },
+		{ cwd, kind: "notice" },
+	).trim();
 }
 
 function messageStartsWithReminder(message: UserMessage, reminder: string): boolean {

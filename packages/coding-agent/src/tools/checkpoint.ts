@@ -1,6 +1,7 @@
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import { prompt } from "@oh-my-pi/pi-utils";
+
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import checkpointDescription from "../prompts/tools/checkpoint.md" with { type: "text" };
 import rewindDescription from "../prompts/tools/rewind.md" with { type: "text" };
 import type { ToolSession } from ".";
@@ -56,15 +57,15 @@ export class CheckpointTool implements AgentTool<typeof checkpointSchema, Checkp
 	readonly label = "Checkpoint";
 	readonly summary =
 		"Start a non-nestable context transaction by saving the conversation boundary; rewind before yielding to replace intermediate exploration messages with a report";
-	readonly description: string;
+	get description(): string {
+		return renderPromptAsset("tools/checkpoint.md", checkpointDescription, {}, { cwd: this.session.cwd });
+	}
 	readonly parameters = checkpointSchema;
 	readonly strict = true;
 	readonly loadMode = "discoverable";
 	readonly intent = (args: Partial<CheckpointParams>) => (args.goal ? `checkpointing: ${args.goal}` : "checkpointing");
 
-	constructor(private readonly session: ToolSession) {
-		this.description = prompt.render(checkpointDescription);
-	}
+	constructor(private readonly session: ToolSession) {}
 
 	static createIf(session: ToolSession): CheckpointTool | null {
 		return new CheckpointTool(session);
@@ -93,15 +94,15 @@ export class RewindTool implements AgentTool<typeof rewindSchema, RewindToolDeta
 	readonly label = "Rewind";
 	readonly summary =
 		"Close the active context transaction before yielding; rewind removes intermediate exploration messages from active context and retains your report";
-	readonly description: string;
+	get description(): string {
+		return renderPromptAsset("tools/rewind.md", rewindDescription, {}, { cwd: this.session.cwd });
+	}
 	readonly parameters = rewindSchema;
 	readonly strict = true;
 	readonly loadMode = "discoverable";
 	readonly intent = (): string => "rewinding";
 
-	constructor(private readonly session: ToolSession) {
-		this.description = prompt.render(rewindDescription);
-	}
+	constructor(private readonly session: ToolSession) {}
 
 	static createIf(session: ToolSession): RewindTool | null {
 		return new RewindTool(session);

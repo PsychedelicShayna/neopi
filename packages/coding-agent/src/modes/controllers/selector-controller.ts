@@ -1,8 +1,9 @@
+import { resolvePromptAsset, renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { trackMountedDialog } from "../../control/dialogs";
 import { cfgControlSecretInput } from "../../control/settings";
 import * as fs from "node:fs";
 import advisorSystemPrompt from "../../prompts/advisor/system.md" with { type: "text" };
-import liveClientProtocolTemplate from "../../live/prompts/live-client-protocol.md" with { type: "text" };
+import bundledLiveClientProtocolTemplate from "../../live/prompts/live-client-protocol.md" with { type: "text" };
 import { renderChatAdvisorPrompt } from "../../chat/chat-system-prompt";
 import { type AgentMessage, type AgentToolResult, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
@@ -24,7 +25,6 @@ import {
 	getProjectDir,
 	logger,
 	normalizePathForComparison,
-	prompt,
 	sanitizeText,
 } from "@oh-my-pi/pi-utils";
 import {
@@ -52,7 +52,7 @@ import { MixtureCatalog } from "../../moa/provider";
 import { discoverRegistrableMixtures, readMixtureDefinitionFile, saveMixtureDefinition } from "../../moa/registration";
 import { type MixtureConfigDeps, MixtureConfigOverlayComponent } from "@oh-my-pi/pi-tui/overlays/mixture-config";
 import type { MixtureConfigScope } from "@oh-my-pi/pi-tui/overlays/mixture-types";
-import { CHAIN_DEFAULT_ROLE, CHAIN_SYSTEM_PROMPT } from "../../chains/runner";
+import { CHAIN_DEFAULT_ROLE, getChainSystemPrompt } from "../../chains/runner";
 import { formatModelRoleAlias } from "../../config/model-roles";
 import { showGitOverlay } from "../../cli/git-tui";
 import { formatLoginIdentity } from "../../cli/oauth-terminal";
@@ -839,11 +839,16 @@ export class SelectorController {
 					);
 					const chatMode = this.ctx.session.chatMode;
 					return chatMode
-						? renderChatAdvisorPrompt(chatMode.mode, maxNotesPerUpdate)
-						: prompt.render(advisorSystemPrompt, {
-								max_notes_per_update: maxNotesPerUpdate,
-								include_thinking: advisor.includeThinking !== false,
-							});
+						? renderChatAdvisorPrompt(chatMode.mode, maxNotesPerUpdate, this.ctx.sessionManager.getCwd())
+						: renderPromptAsset(
+								"advisor/system.md",
+								advisorSystemPrompt,
+								{
+									max_notes_per_update: maxNotesPerUpdate,
+									include_thinking: advisor.includeThinking !== false,
+								},
+								{ cwd: this.ctx.sessionManager.getCwd() },
+							);
 				},
 				getAvailableModels: () => this.ctx.session.modelRegistry.getAvailable(),
 				browserSource: createModelBrowserSource(this.ctx.settings, model =>
@@ -1085,7 +1090,7 @@ export class SelectorController {
 				scopedModels: this.ctx.session.scopedModels,
 				availableToolNames: this.ctx.session.getAdvisorAvailableToolNames(),
 				defaultModelLabel: proseModel ? `${proseModel.provider}/${proseModel.id}` : undefined,
-				defaultSystemPrompt: CHAIN_SYSTEM_PROMPT,
+				defaultSystemPrompt: getChainSystemPrompt(this.ctx.session.sessionManager.getCwd()),
 			};
 			const overlay = new ChainConfigOverlayComponent(this.ctx.ui, deps, initialScope, initialDoc, {
 				loadDoc: scope => loadChainsConfigFile(chainsConfigFilePath(scope, dirs)),
@@ -1246,12 +1251,17 @@ export class SelectorController {
 					newEntryContent: newPersonaContent(scope),
 					...(scope === "live"
 						? {
-								protocolLinesText: liveClientProtocolTemplate,
+								protocolLinesText: resolvePromptAsset(
+									"live/live-client-protocol.md",
+									bundledLiveClientProtocolTemplate,
+									{ cwd: this.ctx.sessionManager.getCwd() },
+								).text,
 								generation: createLivePersonaGeneration({
 									registry: this.ctx.session.modelRegistry,
 									browserSource: createModelBrowserSource(this.ctx.settings),
 									templates: this.ctx.session.promptTemplates,
 									sessionId: this.ctx.session.sessionId,
+									cwd: this.ctx.sessionManager.getCwd(),
 								}),
 								protocolMarker: "<client-protocol>",
 								newEntrySources: () => ({

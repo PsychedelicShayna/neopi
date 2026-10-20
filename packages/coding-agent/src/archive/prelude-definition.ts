@@ -2,6 +2,8 @@ import { type } from "@oh-my-pi/omptype";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import type { EvalPreludeDefinition } from "../eval/preludes";
+import { render as renderPrompt } from "@oh-my-pi/pi-utils/prompt";
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import archiveDocumentation from "../prompts/tools/archive.md" with { type: "text" };
 import type { ToolSession } from "../tools";
 import { resolveToCwd } from "../tools/path-utils";
@@ -81,7 +83,10 @@ function describeArchiveCall(parameters: unknown): string | undefined {
 export function createArchivePrelude(session: ToolSession): EvalPreludeDefinition {
 	return {
 		name: "archive",
-		documentation: archiveDocumentation,
+		get documentation(): string {
+			const { text } = resolvePromptAsset("tools/archive.md", archiveDocumentation, { cwd: session.cwd });
+			return text === archiveDocumentation ? text : renderPrompt(text);
+		},
 		javascript: archiveJavascript,
 		python: archivePython,
 		exports: ["archive"],

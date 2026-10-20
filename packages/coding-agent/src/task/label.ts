@@ -1,13 +1,12 @@
 /**
  * Tiny-model UI labels for spawned subagents.
  */
-import { logger, prompt } from "@oh-my-pi/pi-utils";
+import { logger } from "@oh-my-pi/pi-utils";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
 import taskLabelSystemPrompt from "../prompts/system/task-label.md" with { type: "text" };
 import { generateSessionTitle } from "../utils/title-generator";
-
-const TASK_LABEL_SYSTEM_PROMPT = prompt.render(taskLabelSystemPrompt);
 
 /** True when a generated label is just the spawn handle, including `Name-2`. */
 export function labelEchoesHandle(handle: string | undefined, label: string): boolean {
@@ -27,6 +26,7 @@ export async function generateTaskLabel(
 	settings: Settings,
 	sessionId?: string,
 	signal?: AbortSignal,
+	cwd?: string,
 ): Promise<string | null> {
 	const text = assignment.trim();
 	if (!text) return null;
@@ -38,7 +38,7 @@ export async function generateTaskLabel(
 			sessionId,
 			undefined,
 			undefined,
-			TASK_LABEL_SYSTEM_PROMPT,
+			renderPromptAsset("system/task-label.md", taskLabelSystemPrompt, {}, { cwd }),
 			signal,
 		);
 		if (!label || labelEchoesHandle(sessionId, label)) return null;

@@ -1,3 +1,4 @@
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { type } from "@oh-my-pi/omptype";
 import type { AgentToolResult, ToolApprovalDecision } from "@oh-my-pi/pi-agent-core";
 import type { ModelCost } from "@oh-my-pi/pi-catalog/types";
@@ -6,7 +7,7 @@ import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { untilAborted } from "@oh-my-pi/pi-utils";
 import type { EvalPreludeContext, EvalPreludeDefinition } from "../eval/preludes";
 import { cfgRatchetEnabled } from "../tools/settings";
-import ratchetDocumentation from "../prompts/tools/ratchet.md" with { type: "text" };
+import bundledRatchetDocumentation from "../prompts/tools/ratchet.md" with { type: "text" };
 import type { ToolSession } from "../tools";
 // @ts-expect-error Bun imports this JavaScript source as text instead of evaluating its module shape.
 import ratchetJavascript from "./prelude.js" with { type: "text" };
@@ -280,7 +281,7 @@ export function createRatchetPrelude(session: ToolSession): EvalPreludeDefinitio
 	const lookup = catalogPriceLookup(session);
 	return {
 		name: "ratchet",
-		documentation: ratchetDocumentation,
+		documentation: resolvePromptAsset("tools/ratchet.md", bundledRatchetDocumentation).text,
 		javascript: ratchetJavascript,
 		python: ratchetPython,
 		exports: ["ratchet"],

@@ -9,7 +9,7 @@ import type {
 import type { ImageContent, ToolExample } from "@oh-my-pi/pi-ai";
 import { formatBackgroundNotice } from "@oh-my-pi/pi-tui/tools/bash";
 import { parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
-import { isRecord, prompt, withTimeout } from "@oh-my-pi/pi-utils";
+import { isRecord, withTimeout } from "@oh-my-pi/pi-utils";
 import { raceJobSettlement, resolveAutoBackgroundWaitMs } from "../async";
 import { jsBackend, pythonBackend } from "../eval";
 import type { ExecutorBackend, ExecutorBackendResult } from "../eval/backend";
@@ -22,6 +22,7 @@ import { defaultEvalSessionId } from "../eval/session-id";
 import { EvalShadowCellSession } from "../eval/speculation/cell-session";
 import { runWithEvalShadowCell } from "../eval/speculation/runtime-context";
 import type { EvalCellResult, EvalLanguage, EvalStatusEvent, EvalToolDetails } from "@oh-my-pi/pi-tui/tools/eval";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import evalDescription from "../prompts/tools/eval.md" with { type: "text" };
 import evalAgentsTopic from "../prompts/tools/eval-agents.md" with { type: "text" };
 import evalJudgeTopic from "../prompts/tools/eval-judge.md" with { type: "text" };
@@ -194,6 +195,7 @@ function formatDisplayJson(value: unknown, canSpill: boolean): FormattedDisplayJ
 }
 
 export interface EvalToolDescriptionOptions {
+	cwd?: string;
 	py?: boolean;
 	js?: boolean;
 	/**
@@ -244,10 +246,11 @@ function evalTemplateContext(options: EvalToolDescriptionOptions) {
 export function getEvalDocTopics(options: EvalToolDescriptionOptions = {}): Record<string, string> {
 	const context = evalTemplateContext(options);
 	const topics: Record<string, string> = {
-		judge: prompt.render(evalJudgeTopic, context),
-		helpers: prompt.render(evalHelpersTopic, context),
+		judge: renderPromptAsset("tools/eval-judge.md", evalJudgeTopic, context, { cwd: options.cwd }),
+		helpers: renderPromptAsset("tools/eval-helpers.md", evalHelpersTopic, context, { cwd: options.cwd }),
 	};
-	if (context.spawns) topics.agents = prompt.render(evalAgentsTopic, context);
+	if (context.spawns)
+		topics.agents = renderPromptAsset("tools/eval-agents.md", evalAgentsTopic, context, { cwd: options.cwd });
 	for (const prelude of options.preludes ?? []) {
 		const doc = prelude.documentation.trim();
 		if (doc) topics[prelude.name] = doc;
@@ -262,11 +265,16 @@ export function getEvalToolDescription(options: EvalToolDescriptionOptions = {})
 		const summary = evalPreludeSummary(prelude);
 		if (summary) preludes.push({ name: prelude.name, summary });
 	}
-	return prompt.render(evalDescription, {
-		...evalTemplateContext(options),
-		preludes,
-		inlineTopics: options.inlineTopics ? Object.values(getEvalDocTopics(options)).join("\n\n") : undefined,
-	});
+	return renderPromptAsset(
+		"tools/eval.md",
+		evalDescription,
+		{
+			...evalTemplateContext(options),
+			preludes,
+			inlineTopics: options.inlineTopics ? Object.values(getEvalDocTopics(options)).join("\n\n") : undefined,
+		},
+		{ cwd: options.cwd },
+	);
 }
 
 export interface EvalToolOptions {
@@ -413,6 +421,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 			session.taskDepth ?? 0,
 		);
 		return {
+			cwd: session.cwd,
 			py: backends.python,
 			js: backends.js,
 			spawns: depthAllowsSpawning ? (session.getSessionSpawns?.() ?? "*") : false,
@@ -453,7 +462,12 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 			.map(definition => definition.codeModeDeclarations?.trim())
 			.filter((declaration): declaration is string => Boolean(declaration))
 			.join("\n\n");
-		return prompt.render(evalCodeModeDescription, { baseDescription, declarations, preludeDeclarations });
+		return renderPromptAsset(
+			"tools/eval-code-mode.md",
+			evalCodeModeDescription,
+			{ baseDescription, declarations, preludeDeclarations },
+			{ cwd: session.cwd },
+		);
 	}
 	/** Only syntax not obvious from the field schema; filtered by enabled language. */
 	static readonly #examples: readonly ToolExample<typeof evalSchema.infer>[] = [

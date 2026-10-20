@@ -1,8 +1,9 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { type Component, Loader, TERMINAL } from "@oh-my-pi/pi-tui";
-import { formatDuration, isRecord, logger, PRODUCT_NAME, prompt, sanitizeText } from "@oh-my-pi/pi-utils";
+import { formatDuration, isRecord, logger, PRODUCT_NAME, sanitizeText } from "@oh-my-pi/pi-utils";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { chatModeLabel } from "../../chat/chat-mode";
 import { extractTextContent } from "../../commit/utils";
@@ -2829,10 +2830,15 @@ export class EventController {
 		if (!this.ctx.viewSession.model) return;
 		if (this.ctx.viewSession.messages.length === 0) return;
 
-		const promptText = prompt.render(idleRecapPrompt, {
-			goal: this.#idleRecapGoalText() ?? "",
-			task: nextActionableTask(this.ctx.todoPhases)?.content ?? "",
-		});
+		const promptText = renderPromptAsset(
+			"system/recap-user.md",
+			idleRecapPrompt,
+			{
+				goal: this.#idleRecapGoalText() ?? "",
+				task: nextActionableTask(this.ctx.todoPhases)?.content ?? "",
+			},
+			{ cwd: this.ctx.sessionManager.getCwd() },
+		);
 
 		const abort = new AbortController();
 		this.#idleRecapAbort = abort;

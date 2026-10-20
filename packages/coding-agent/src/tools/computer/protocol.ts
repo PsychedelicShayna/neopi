@@ -1,6 +1,7 @@
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import type { CaptureRegion, DesktopCapabilities, DesktopScreenState } from "@oh-my-pi/pi-natives";
-import * as prompt from "@oh-my-pi/pi-utils/prompt";
+
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import screenLockedCaptureNote from "../../prompts/tools/computer-screen-locked-capture.md" with { type: "text" };
 import screenStateTemplate from "../../prompts/tools/computer-screen-state.md" with { type: "text" };
 
@@ -38,19 +39,31 @@ export interface ComputerRunOk {
 }
 
 /** Appended to a screenshot taken while the macOS lock screen is up. */
-export const SCREEN_LOCKED_CAPTURE_NOTE = prompt.render(screenLockedCaptureNote);
+export function screenLockedCaptureNotice(cwd?: string): string {
+	return renderPromptAsset(
+		"tools/computer-screen-locked-capture.md",
+		screenLockedCaptureNote,
+		{},
+		{ cwd, kind: "notice" },
+	);
+}
 
 /**
  * Tells the model a run ended with the macOS screen locked or the session's
  * display asleep, so lock-screen pixels and failed captures are not taken
  * for the app's state. Input is never refused because of it.
  */
-export function screenStateNotice(state: DesktopScreenState | undefined): string | undefined {
+export function screenStateNotice(state: DesktopScreenState | undefined, cwd?: string): string | undefined {
 	if (!state?.screenLocked && !state?.displayAsleep) return undefined;
-	return prompt.render(screenStateTemplate, {
-		screenLocked: state.screenLocked,
-		displayAsleep: state.displayAsleep,
-	});
+	return renderPromptAsset(
+		"tools/computer-screen-state.md",
+		screenStateTemplate,
+		{
+			screenLocked: state.screenLocked,
+			displayAsleep: state.displayAsleep,
+		},
+		{ cwd, kind: "notice" },
+	);
 }
 
 /** Screenshot or zoom emitted during one computer run, with its full input coordinate frame. */

@@ -1,5 +1,6 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { completeSimple } from "@oh-my-pi/pi-ai";
-import { prompt } from "@oh-my-pi/pi-utils";
+
 import type { CustomCommandContext } from "../../../../extensibility/custom-commands/types";
 import summaryPrompt from "./prompts/text-summary.md" with { type: "text" };
 import { normalizeTextReviewContextSummary } from "./text-review";
@@ -20,7 +21,14 @@ export async function generateTextReviewContextSummary(
 	const message = await completeSimple(
 		model,
 		{
-			systemPrompt: [prompt.render(summaryPrompt)],
+			systemPrompt: [
+				renderPromptAsset(
+					"extensibility/custom-commands/bundled/annotate/text-summary.md",
+					summaryPrompt,
+					{},
+					{ cwd: ctx.sessionManager.getCwd() },
+				),
+			],
 			messages: [{ role: "user", content: sourceText, timestamp: Date.now() }],
 		},
 		{

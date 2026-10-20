@@ -1,8 +1,9 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { type } from "@oh-my-pi/omptype";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, ApiKey, AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import { completeSimple, retryTransientCompletion, validateToolCall } from "@oh-my-pi/pi-ai";
-import { prompt } from "@oh-my-pi/pi-utils";
+
 import changelogSystemPrompt from "../../commit/prompts/changelog-system.md" with { type: "text" };
 import changelogUserPrompt from "../../commit/prompts/changelog-user.md" with { type: "text" };
 import type { ChangelogGenerationResult } from "../../commit/types";
@@ -50,7 +51,7 @@ export async function generateChangelogEntries({
 	stat,
 	diff,
 }: ChangelogPromptInput): Promise<ChangelogGenerationResult> {
-	const userContent = prompt.render(changelogUserPrompt, {
+	const userContent = renderPromptAsset("commit/changelog-user.md", changelogUserPrompt, {
 		changelog_path: changelogPath,
 		is_package_changelog: isPackageChangelog,
 		existing_entries: existingEntries,
@@ -62,7 +63,7 @@ export async function generateChangelogEntries({
 			completeSimple(
 				model,
 				{
-					systemPrompt: [prompt.render(changelogSystemPrompt)],
+					systemPrompt: [renderPromptAsset("commit/changelog-system.md", changelogSystemPrompt, {})],
 					messages: [{ role: "user", content: userContent, timestamp: Date.now() }],
 					tools: [changelogTool],
 				},

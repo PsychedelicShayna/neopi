@@ -3,9 +3,10 @@ import * as fs from "node:fs";
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import * as natives from "@oh-my-pi/pi-natives";
-import { formatGroupedPaths, hasFsCode, isEnoent, prompt, untilAborted } from "@oh-my-pi/pi-utils";
+import { formatGroupedPaths, hasFsCode, isEnoent, untilAborted } from "@oh-my-pi/pi-utils";
 import { InternalUrlRouter, sessionResolveContext } from "../internal-urls";
 import { InternalUrlFilesystem, type UrlFileStat } from "../internal-urls/url-filesystem";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import globDescription from "../prompts/tools/glob.md" with { type: "text" };
 import { truncateHead } from "@oh-my-pi/pi-tui/tools/streaming-output";
 import { sessionDelegationBias } from "../task/prompt-policy";
@@ -126,13 +127,12 @@ export class GlobTool implements AgentTool<typeof findSchema, GlobToolDetails> {
 			cfgTaskDisabledAgents.get(this.session.settings),
 			this.session.getSessionSpawns?.() ?? "*",
 		);
-		// Every render input is a boolean; pack them so repeat reads skip the template render.
-		const key = (hasFind ? 1 : 0) | (eagerDelegation ? 2 : 0) | (scoutAvailable ? 4 : 0);
-		if (key !== this.#descriptionKey) {
-			this.#description = prompt.render(globDescription, { hasFind, eagerDelegation, scoutAvailable });
-			this.#descriptionKey = key;
-		}
-		return this.#description;
+		return renderPromptAsset(
+			"tools/glob.md",
+			globDescription,
+			{ hasFind, eagerDelegation, scoutAvailable },
+			{ cwd: this.session.cwd },
+		);
 	}
 	readonly parameters = findSchema;
 
@@ -143,8 +143,6 @@ export class GlobTool implements AgentTool<typeof findSchema, GlobToolDetails> {
 	readonly #nativeGlob: typeof natives.glob;
 	readonly #stat: typeof fs.promises.stat;
 	readonly #timeoutMs: number;
-	#descriptionKey = -1;
-	#description = "";
 
 	constructor(
 		private readonly session: ToolSession,

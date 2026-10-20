@@ -15,6 +15,7 @@
  */
 import * as nodePath from "node:path";
 import { getAgentDir, logger } from "@oh-my-pi/pi-utils";
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { isRecord, JsonStateStore } from "../neopi/json-state";
 import { normalizeLiveIngestSettings, type LiveIngestPersonaSettings } from "./ingest-settings";
 import liveInstructionsTemplate from "./prompts/live-instructions.md" with { type: "text" };
@@ -276,7 +277,7 @@ export function createLivePersonaFeature(store: LivePersonaStore = new LivePerso
  * Template variables ({{firstName}}, {{username}}) are preserved verbatim for
  * the controller's existing `prompt.render(instructions, user)` call.
  */
-export async function resolveLiveInstructions(statePath?: string): Promise<string> {
+export async function resolveLiveInstructions(statePath?: string, cwd?: string): Promise<string> {
 	const store = new LivePersonaStore(statePath);
 	let state: LivePersonaState;
 	try {
@@ -286,17 +287,19 @@ export async function resolveLiveInstructions(statePath?: string): Promise<strin
 			path: store.path,
 			error: error instanceof Error ? error.message : String(error),
 		});
-		return liveInstructionsTemplate;
+		return resolvePromptAsset("live/live-instructions.md", liveInstructionsTemplate, { cwd }).text;
 	}
 	const active = state.active;
-	if (!active || active === DEFAULT_LIVE_PERSONA) return liveInstructionsTemplate;
+	if (!active || active === DEFAULT_LIVE_PERSONA) {
+		return resolvePromptAsset("live/live-instructions.md", liveInstructionsTemplate, { cwd }).text;
+	}
 	const definition = state.personas[active];
 	if (!definition?.instructions.trim()) {
 		logger.warn("Active live persona missing or empty; using default live instructions", {
 			path: store.path,
 			active,
 		});
-		return liveInstructionsTemplate;
+		return resolvePromptAsset("live/live-instructions.md", liveInstructionsTemplate, { cwd }).text;
 	}
 	return definition.instructions;
 }

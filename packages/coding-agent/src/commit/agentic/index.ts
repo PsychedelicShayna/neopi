@@ -1,8 +1,9 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import * as path from "node:path";
 import { createInterface } from "node:readline/promises";
 import type { VcsGitRepo } from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { $env, getProjectDir, isEnoent, prompt } from "@oh-my-pi/pi-utils";
+import { $env, getProjectDir, isEnoent } from "@oh-my-pi/pi-utils";
 import { applyChangelogProposals } from "../../commit/changelog";
 import { detectChangelogBoundaries } from "../../commit/changelog/detect";
 import { parseUnreleasedSection } from "../../commit/changelog/parse";
@@ -370,7 +371,9 @@ async function confirmSplitCommitPlan(plan: SplitCommitPlan): Promise<boolean> {
 	}
 	const rl = createInterface({ input: process.stdin, output: process.stdout });
 	try {
-		const splitConfirmQuestion = prompt.render(splitConfirmPrompt, { count: plan.commits.length });
+		const splitConfirmQuestion = renderPromptAsset("commit/agentic/split-confirm.md", splitConfirmPrompt, {
+			count: plan.commits.length,
+		});
 		const answer = await rl.question(splitConfirmQuestion);
 		return ["y", "yes"].includes(answer.trim().toLowerCase());
 	} finally {

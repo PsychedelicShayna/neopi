@@ -11,6 +11,7 @@ import type { AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Model, ToolExample, TSchema } from "@oh-my-pi/pi-ai";
 import { renderDelimitedThinking, renderToolInventory } from "@oh-my-pi/pi-ai/dialect";
 import { formatDuration } from "@oh-my-pi/pi-utils";
+import { getPromptAssetProvenance } from "@oh-my-pi/pi-utils/prompt-assets";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { YAML } from "bun";
 import { canonicalizeMessage } from "@oh-my-pi/pi-tui/chat/thinking-display";
@@ -74,6 +75,7 @@ export interface FormatSessionDumpTextOptions {
 	thinkingLevel?: ThinkingLevel | string | null;
 	tools?: readonly SessionDumpToolInfo[];
 	inlineToolDescriptors?: boolean;
+	cwd?: string;
 }
 
 interface InventoryTool {
@@ -106,6 +108,19 @@ function renderDumpHeader(options: FormatSessionDumpTextOptions, inventoryTools:
 			lines.push(systemPrompt[index]);
 			lines.push("\n");
 		}
+	}
+	const provenance = getPromptAssetProvenance({ cwd: options.cwd });
+	if (provenance.length > 0) {
+		const cell = (value: string) => value.replaceAll("|", "\\|").replaceAll("\n", " ");
+		lines.push("## Prompt asset provenance\n");
+		lines.push("| Asset | Source | Path | Content hash | Bundled hash |");
+		lines.push("| --- | --- | --- | --- | --- |");
+		for (const asset of provenance) {
+			lines.push(
+				`| ${cell(asset.id)} | ${asset.source} | ${cell(asset.path ?? "")} | ${asset.hash} | ${asset.bundledHash} |`,
+			);
+		}
+		lines.push("\n");
 	}
 
 	const model = options.model;

@@ -1,8 +1,9 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { type } from "@oh-my-pi/omptype";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { completeSimple, Effort, type Model, retryTransientCompletion } from "@oh-my-pi/pi-ai";
 import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
-import { logger, prompt } from "@oh-my-pi/pi-utils";
+import { logger } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import { getModelMatchPreferences, resolveModelRoleValue, resolveRoleSelection } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
@@ -213,13 +214,25 @@ async function runSharpshooterExtraction(
 	const model = await resolveSharpshooterModel(settings, modelRegistry);
 	if (!model || session.isDisposed) return;
 
-	const input = prompt.render(extractInputTemplate, { ...envelope });
+	const input = renderPromptAsset(
+		"memories/sharpshooter-extract-input.md",
+		extractInputTemplate,
+		{ ...envelope },
+		{ cwd: options.session.sessionManager.getCwd() },
+	);
 	const response = await retryTransientCompletion(
 		() =>
 			completeSimple(
 				model,
 				{
-					systemPrompt: [prompt.render(extractSystemTemplate)],
+					systemPrompt: [
+						renderPromptAsset(
+							"memories/sharpshooter-extract-system.md",
+							extractSystemTemplate,
+							{},
+							{ cwd: options.session.sessionManager.getCwd() },
+						),
+					],
 					messages: [{ role: "user", content: [{ type: "text", text: input }], timestamp: Date.now() }],
 					tools: [recordDeltasTool],
 				},

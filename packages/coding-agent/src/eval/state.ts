@@ -1,6 +1,7 @@
 import * as path from "node:path";
 
-import { escapeXmlText, prompt } from "@oh-my-pi/pi-utils";
+import { escapeXmlText } from "@oh-my-pi/pi-utils";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import evalStateContextPrompt from "../prompts/system/eval-state-context.md" with { type: "text" };
 import type { ToolSession } from "../tools";
 import { defaultEvalSessionId } from "./session-id";
@@ -344,5 +345,10 @@ export function formatEvalStateContext(
 		}
 		stateSummary = `Current host registry:\n${lines.join("\n")}`;
 	}
-	return prompt.render(evalStateContextPrompt, { stateSummary }).trim();
+	return renderPromptAsset(
+		"system/eval-state-context.md",
+		evalStateContextPrompt,
+		{ stateSummary },
+		{ cwd: session.cwd, kind: "notice" },
+	).trim();
 }

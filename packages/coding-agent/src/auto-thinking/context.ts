@@ -1,5 +1,6 @@
+import { compilePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import * as path from "node:path";
-import { prompt } from "@oh-my-pi/pi-utils";
+
 import { readCommittedChroniclerBatches, type CommittedChroniclerBatch } from "../chronicler/store";
 import contextTemplate from "../prompts/system/auto-thinking-effort-context.md" with { type: "text" };
 import { formatSessionDumpText } from "../session/session-dump-format";
@@ -7,11 +8,10 @@ import type { SessionMessageEntry } from "../session/session-entries";
 import type { SessionManager } from "../session/session-manager";
 
 /** No live Chronicler access: only the session's branch and artifact location. */
-export type EffortContextSession = Pick<SessionManager, "getBranch"> & Partial<Pick<SessionManager, "getArtifactsDir">>;
+export type EffortContextSession = Pick<SessionManager, "getBranch"> &
+	Partial<Pick<SessionManager, "getArtifactsDir" | "getCwd">>;
 
 type TranscriptEntry = Pick<SessionMessageEntry, "id" | "message">;
-
-const renderContext = prompt.compile(contextTemplate);
 
 function messageText(message: TranscriptEntry["message"]): string | undefined {
 	if (message.role !== "user") return undefined;
@@ -27,6 +27,7 @@ export function renderEffortContext(
 	promptText: string,
 	transcript: readonly TranscriptEntry[],
 	batches: readonly CommittedChroniclerBatch[],
+	cwd?: string,
 ): string {
 	const active = new Set(transcript.map(entry => entry.id));
 	const last = transcript[transcript.length - 1];
@@ -48,9 +49,15 @@ export function renderEffortContext(
 		}
 	}
 	const uncovered = transcript.filter(entry => entry.id !== pendingId && !included.has(entry.id));
-	const history = uncovered.length ? formatSessionDumpText({ messages: uncovered.map(entry => entry.message) }) : "";
+	const history = uncovered.length
+		? formatSessionDumpText({ messages: uncovered.map(entry => entry.message), cwd })
+		: "";
 	// Rendering without post-formatting preserves verbatim request and transcript whitespace.
-	return renderContext({ diary, history: history.trim(), request: promptText });
+	return compilePromptAsset("system/auto-thinking-effort-context.md", contextTemplate, { cwd })({
+		diary,
+		history: history.trim(),
+		request: promptText,
+	});
 }
 
 /** Missing or unusable diary is a read-only transcript fallback, never a cache repair. */
@@ -59,20 +66,24 @@ export async function readEffortContext(
 	manager?: EffortContextSession,
 	onFallback?: (reason: string) => void,
 ): Promise<string> {
-	if (!manager) return renderContext({ diary: [], history: "", request: promptText });
+	if (!manager)
+		return compilePromptAsset(
+			"system/auto-thinking-effort-context.md",
+			contextTemplate,
+		)({ diary: [], history: "", request: promptText });
 	const transcript = manager.getBranch().filter(entry => entry.type === "message");
 	const artifacts = manager.getArtifactsDir?.();
 	if (!artifacts) {
 		onFallback?.("No committed Chronicler diary; classifying from the active-branch transcript.");
-		return renderEffortContext(promptText, transcript, []);
+		return renderEffortContext(promptText, transcript, [], manager.getCwd?.());
 	}
 	try {
 		const batches = await readCommittedChroniclerBatches(path.join(artifacts, "chronicler"));
 		if (batches.length === 0)
 			onFallback?.("No committed Chronicler diary; classifying from the active-branch transcript.");
-		return renderEffortContext(promptText, transcript, batches);
+		return renderEffortContext(promptText, transcript, batches, manager.getCwd?.());
 	} catch {
 		onFallback?.("Chronicler diary is unreadable; classifying from the active-branch transcript.");
-		return renderEffortContext(promptText, transcript, []);
+		return renderEffortContext(promptText, transcript, [], manager.getCwd?.());
 	}
 }

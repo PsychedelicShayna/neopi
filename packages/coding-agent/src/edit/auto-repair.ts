@@ -15,11 +15,12 @@
  */
 import { completeSimple, retryTransientCompletion } from "@oh-my-pi/pi-ai";
 import { diffLineRuns, editDiffString, summarizeCode } from "@oh-my-pi/pi-natives";
-import { logger, prompt } from "@oh-my-pi/pi-utils";
+import { logger } from "@oh-my-pi/pi-utils";
 import { resolveRoleSelection } from "../config/model-resolver";
 import type { WritethroughCallback } from "../lsp";
 import type { ToolSession } from "../tools";
 import { invalidateFsScanAfterWrite } from "../tools/fs-cache-invalidation";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import repairPromptSource from "./auto-repair.md" with { type: "text" };
 import type { AppliedEditSnapshot } from "./blackbox";
 
@@ -284,6 +285,7 @@ export interface RegionRepair {
 export async function repairParseRegression(
 	snapshot: AppliedEditSnapshot,
 	complete: (builtPrompt: string) => Promise<string>,
+	cwd?: string,
 ): Promise<RegionRepair | undefined> {
 	const computed = computeRegion(snapshot);
 	if (!computed) return undefined;
@@ -292,12 +294,17 @@ export async function repairParseRegression(
 
 	let previousAttempt: string | undefined;
 	for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-		const built = prompt.render(repairPromptSource, {
-			lang: region.language,
-			before: region.referenceText,
-			after: region.brokenText,
-			previousAttempt,
-		});
+		const built = renderPromptAsset(
+			"edit/auto-repair.md",
+			repairPromptSource,
+			{
+				lang: region.language,
+				before: region.referenceText,
+				after: region.brokenText,
+				previousAttempt,
+			},
+			{ cwd },
+		);
 		const candidate = stripCodeFence(await complete(built));
 		previousAttempt = candidate;
 
@@ -402,7 +409,7 @@ export async function attemptEditAutoRepair(options: {
 		return response.content.map(block => (block.type === "text" ? block.text : "")).join("");
 	};
 
-	const repair = await repairParseRegression({ ...snapshot, next: current }, complete);
+	const repair = await repairParseRegression({ ...snapshot, next: current }, complete, session.cwd);
 	if (!repair) return undefined;
 
 	await writethrough(snapshot.path, repair.content, options.signal, Bun.file(snapshot.path));

@@ -9,8 +9,9 @@ import {
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 
-import { isRecord, prompt } from "@oh-my-pi/pi-utils";
+import { isRecord } from "@oh-my-pi/pi-utils";
 
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import todoDescription from "../prompts/tools/todo.md" with { type: "text" };
 import type { ToolSession } from "../sdk";
 import type { SessionEntry } from "../session/session-entries";
@@ -714,7 +715,9 @@ export class TodoTool implements AgentTool<typeof todoSchema, TodoToolDetails> {
 	readonly approval = "read" as const;
 	readonly label = "Todo";
 	readonly summary = "Write a structured todo list to track progress within a session";
-	readonly description: string;
+	get description(): string {
+		return renderPromptAsset("tools/todo.md", todoDescription, {}, { cwd: this.session.cwd });
+	}
 	readonly parameters = todoSchema;
 	readonly concurrency = "exclusive";
 	readonly strict = true;
@@ -723,9 +726,7 @@ export class TodoTool implements AgentTool<typeof todoSchema, TodoToolDetails> {
 	readonly lenientArgValidation = true;
 
 	readonly loadMode = "discoverable";
-	constructor(private readonly session: ToolSession) {
-		this.description = prompt.render(todoDescription);
-	}
+	constructor(private readonly session: ToolSession) {}
 
 	async execute(
 		_toolCallId: string,

@@ -1,3 +1,4 @@
+import { resolvePromptAsset, renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import type { Database } from "bun:sqlite";
 import type * as fsNode from "node:fs";
 import * as fs from "node:fs/promises";
@@ -5,15 +6,7 @@ import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { type ApiKey, completeSimple, Effort, type Model, retryTransientCompletion } from "@oh-my-pi/pi-ai";
 import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
-import {
-	getAgentDbPath,
-	getMemoriesDir,
-	isEnoent,
-	logger,
-	parseJsonlLenient,
-	peekFile,
-	prompt,
-} from "@oh-my-pi/pi-utils";
+import { getAgentDbPath, getMemoriesDir, isEnoent, logger, parseJsonlLenient, peekFile } from "@oh-my-pi/pi-utils";
 
 import type { ModelRegistry } from "../config/model-registry";
 import { getModelMatchPreferences, resolveModelRoleValue } from "../config/model-resolver";
@@ -21,10 +14,10 @@ import type { Settings } from "../config/settings";
 import { redactMemorySecrets as redactSecrets } from "../memory-backend/redact";
 import type { MemoryBackendSaveInput, MemoryBackendSaveResult } from "../memory-backend/types";
 import consolidationTemplate from "../prompts/memories/consolidation.md" with { type: "text" };
-import consolidationSystemTemplate from "../prompts/memories/consolidation_system.md" with { type: "text" };
+import bundledConsolidationSystemTemplate from "../prompts/memories/consolidation_system.md" with { type: "text" };
 import readPathTemplate from "../prompts/memories/read-path.md" with { type: "text" };
 import stageOneInputTemplate from "../prompts/memories/stage_one_input.md" with { type: "text" };
-import stageOneSystemTemplate from "../prompts/memories/stage_one_system.md" with { type: "text" };
+import bundledStageOneSystemTemplate from "../prompts/memories/stage_one_system.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
 import {
 	claimStage1Jobs,
@@ -238,7 +231,7 @@ function renderMemoryToolDeveloperInstructionsSnapshot(
 		snapshot.learned && learnedBudget > 0 ? truncateByApproxTokens(snapshot.learned, learnedBudget).trim() : "";
 	if (!summaryOut && !learnedOut) return undefined;
 
-	return prompt.render(readPathTemplate, {
+	return renderPromptAsset("memories/read-path.md", readPathTemplate, {
 		memory_summary: summaryOut,
 		learned: learnedOut,
 	});
@@ -585,6 +578,7 @@ async function runPhase2(options: MemoryStartupOptions): Promise<void> {
 		try {
 			if (!isMemoryStartupActive(options)) return;
 			const consolidated = await runConsolidationModel({
+				cwd,
 				memoryRoot,
 				model: phase2Model,
 				apiKey: modelRegistry.resolver(phase2Model, session.sessionId),
@@ -870,17 +864,26 @@ async function runStage1Job(options: {
 			Math.floor(modelMaxTokens * config.rolloutPayloadPercent),
 		);
 		const truncatedItems = await buildStage1RolloutItems(claim.rolloutPath, budgetTokens);
-		const inputPrompt = prompt.render(stageOneInputTemplate, {
-			thread_id: claim.threadId,
-			response_items_json: truncatedItems,
-		});
+		const inputPrompt = renderPromptAsset(
+			"memories/stage_one_input.md",
+			stageOneInputTemplate,
+			{
+				thread_id: claim.threadId,
+				response_items_json: truncatedItems,
+			},
+			{ cwd: claim.cwd },
+		);
 
 		const response = await retryTransientCompletion(
 			() =>
 				completeSimple(
 					model,
 					{
-						systemPrompt: [stageOneSystemTemplate],
+						systemPrompt: [
+							resolvePromptAsset("memories/stage_one_system.md", bundledStageOneSystemTemplate, {
+								cwd: claim.cwd,
+							}).text,
+						],
 						messages: [{ role: "user", content: [{ type: "text", text: inputPrompt }], timestamp: Date.now() }],
 					},
 					{
@@ -995,6 +998,7 @@ async function readRolloutSummaries(memoryRoot: string): Promise<string> {
 
 async function runConsolidationModel(options: {
 	memoryRoot: string;
+	cwd: string;
 	model: Model;
 	apiKey: ApiKey;
 	sessionId: string;
@@ -1013,17 +1017,26 @@ async function runConsolidationModel(options: {
 	const { memoryRoot, model, apiKey } = options;
 	const rawMemories = await Bun.file(path.join(memoryRoot, "raw_memories.md")).text();
 	const rolloutSummaries = await readRolloutSummaries(memoryRoot);
-	const input = prompt.render(consolidationTemplate, {
-		raw_memories: truncateByApproxTokens(rawMemories, 20_000),
-		rollout_summaries: truncateByApproxTokens(rolloutSummaries, 12_000),
-	});
+	const input = renderPromptAsset(
+		"memories/consolidation.md",
+		consolidationTemplate,
+		{
+			raw_memories: truncateByApproxTokens(rawMemories, 20_000),
+			rollout_summaries: truncateByApproxTokens(rolloutSummaries, 12_000),
+		},
+		{ cwd: options.cwd },
+	);
 
 	const response = await retryTransientCompletion(
 		() =>
 			completeSimple(
 				model,
 				{
-					systemPrompt: [consolidationSystemTemplate],
+					systemPrompt: [
+						resolvePromptAsset("memories/consolidation_system.md", bundledConsolidationSystemTemplate, {
+							cwd: options.cwd,
+						}).text,
+					],
 					messages: [{ role: "user", content: [{ type: "text", text: input }], timestamp: Date.now() }],
 				},
 				{

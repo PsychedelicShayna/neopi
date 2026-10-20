@@ -25,7 +25,6 @@ import {
 	isEnoent,
 	logger,
 	parseImageMetadata,
-	prompt,
 	readImageMetadata,
 } from "@oh-my-pi/pi-utils";
 import {
@@ -45,6 +44,7 @@ import {
 	sessionResolveContext,
 } from "../internal-urls";
 import { isMarkdownPath } from "@oh-my-pi/pi-tui/lang-from-path";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import readDescription from "../prompts/tools/read.md" with { type: "text" };
 import type { ToolSession } from "../sdk";
 import {
@@ -986,10 +986,15 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 	readonly loadMode = "essential";
 	/** Rendered per access so the hashline guidance follows a live `edit.mode` change. */
 	get description(): string {
-		return prompt.render(readDescription, {
-			IS_HL_MODE: resolveFileDisplayMode(this.session).hashLines,
-			BINARY_VIEWS: cfgIdaAvailable.get(this.session.settings),
-		});
+		return renderPromptAsset(
+			"tools/read.md",
+			readDescription,
+			{
+				IS_HL_MODE: resolveFileDisplayMode(this.session).hashLines,
+				BINARY_VIEWS: cfgIdaAvailable.get(this.session.settings),
+			},
+			{ cwd: this.session.cwd },
+		);
 	}
 	readonly parameters = readSchema;
 	readonly strict = true;
