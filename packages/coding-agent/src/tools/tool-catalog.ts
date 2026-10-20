@@ -1,12 +1,18 @@
 import { normalizeTools } from "@oh-my-pi/pi-agent-core";
 import { toolWireSchema } from "@oh-my-pi/pi-ai";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
+import { editDistance } from "../utils/edit-distance";
 import type { Tool, ToolSession } from "./index";
 import { cfgToolsIntentTracing } from "./settings";
 import { toolSummary } from "./xdev";
 
+export type ToolCatalogSession = Pick<
+	ToolSession,
+	"toolRegistry" | "xdev" | "getEnabledToolNames" | "isToolActive" | "settings"
+>;
+
 /** Shared catalog for URL and command consumers. Never instantiates or executes tools. */
-export function listEnabledTools(session: ToolSession): Tool[] {
+export function listEnabledTools(session: ToolCatalogSession): Tool[] {
 	const registry = session.toolRegistry ?? session.xdev?.tools;
 	if (!registry) return [];
 	const enabledNames = session.getEnabledToolNames?.();
@@ -18,7 +24,7 @@ export function listEnabledTools(session: ToolSession): Tool[] {
 	);
 }
 
-export function toolCatalogListing(session: ToolSession): string {
+export function toolCatalogListing(session: ToolCatalogSession): string {
 	const tools = listEnabledTools(session);
 	return [
 		`# Enabled tools (${tools.length})`,
@@ -33,9 +39,31 @@ export function toolCatalogListing(session: ToolSession): string {
 }
 
 /** Resolve metadata from the same enabled instances used by ordinary dispatch. */
-export function toolCatalogDocs(session: ToolSession, name: string): string {
-	const tool = listEnabledTools(session).find(tool => tool.name === name);
-	if (!tool) throw new ToolError(`Tool '${name}' is not enabled in this session. Read tool:// for available tools.`);
+export function toolCatalogDocs(
+	session: ToolCatalogSession,
+	name: string,
+	onMissing: "throw" | "report" = "throw",
+): string {
+	const tools = listEnabledTools(session);
+	const tool = tools.find(tool => tool.name === name);
+	if (!tool) {
+		if (onMissing === "throw") {
+			throw new ToolError(`Tool '${name}' is not enabled in this session. Read tool:// for available tools.`);
+		}
+		const needle = name.toLowerCase();
+		const nearest = tools
+			.map(tool => ({ name: tool.name, distance: editDistance(needle, tool.name.toLowerCase()) }))
+			.sort((a, b) => a.distance - b.distance || a.name.localeCompare(b.name))
+			.slice(0, 3);
+		return [
+			`No enabled tool named ${JSON.stringify(name)}.`,
+			"",
+			...(nearest.length > 0
+				? ["Nearest enabled matches:", ...nearest.map(tool => `- /tool:${tool.name}`), ""]
+				: []),
+			"Use /tool: to browse enabled tools.",
+		].join("\n");
+	}
 	// Only top-level tools get harness intent injection. Mounted/Code Mode tools
 	// retain their own schema, exactly as their existing dispatch paths expect.
 	const wireTool = session.isToolActive?.(name)

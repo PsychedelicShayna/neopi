@@ -1386,6 +1386,7 @@ export class SessionTools {
 		} finally {
 			if (upgradeDeviceOnlyWrite) this.#setPendingFullWriteDescription?.(false);
 		}
+		this.#host.notifyCommandMetadataChanged();
 	}
 
 	#setMountedNames(names: Iterable<string>): void {
