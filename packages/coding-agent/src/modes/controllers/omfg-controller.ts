@@ -1,5 +1,6 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import * as path from "node:path";
-import { CONFIG_DIR_NAME, prompt } from "@oh-my-pi/pi-utils";
+import { CONFIG_DIR_NAME } from "@oh-my-pi/pi-utils";
 import { invalidate as invalidateCapabilityCache } from "../../capability";
 import type { Rule } from "../../capability/rule";
 import omfgUserPrompt from "../../prompts/system/omfg-user.md" with { type: "text" };
@@ -152,11 +153,16 @@ export class OmfgController {
 			if (this.#shouldStop(request)) return undefined;
 			request.component.setRule("");
 			request.component.setStatus("generating", `Attempt ${attempt}/${MAX_ATTEMPTS} · generating…`);
-			const promptText = prompt.render(omfgUserPrompt, {
-				complaint: request.complaint,
-				feedback: failedAttempts.length > 0 ? failedAttempts.join("\n\n") : undefined,
-				previousRule,
-			});
+			const promptText = renderPromptAsset(
+				"system/omfg-user.md",
+				omfgUserPrompt,
+				{
+					complaint: request.complaint,
+					feedback: failedAttempts.length > 0 ? failedAttempts.join("\n\n") : undefined,
+					previousRule,
+				},
+				{ cwd: this.ctx.sessionManager.getCwd() },
+			);
 			const { replyText } = await this.ctx.session.runEphemeralTurn({
 				promptText,
 				dedupeReply: false,

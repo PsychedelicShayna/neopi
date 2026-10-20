@@ -1,6 +1,7 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
-import { getProjectDir, parseFrontmatter, prompt } from "@oh-my-pi/pi-utils";
+import { getProjectDir, parseFrontmatter } from "@oh-my-pi/pi-utils";
 import {
 	isValidManagedSkillName,
 	MANAGED_SKILLS_PROVIDER_ID,
@@ -682,24 +683,20 @@ export async function buildSkillPromptMessage(
 	if (invocation === "user") {
 		// User-invoked skills announce themselves and expose their skill directory
 		// so the model resolves the skill's own relative paths (scripts/, templates/).
-		message = prompt
-			.render(userInvocationTemplate, {
-				name: skill.name,
-				body,
-				baseDir: skill.baseDir,
-				userArgs: trimmedArgs || undefined,
-			})
-			.trim();
+		message = renderPromptAsset("skills/user-invocation.md", userInvocationTemplate, {
+			name: skill.name,
+			body,
+			baseDir: skill.baseDir,
+			userArgs: trimmedArgs || undefined,
+		}).trim();
 	} else {
 		// Autoload skills are hidden, non-user context — they MUST NOT claim the
 		// user invoked them; this keeps the minimal provenance-only format.
-		message = prompt
-			.render(autoloadTemplate, {
-				body,
-				filePath: skill.filePath,
-				userArgs: trimmedArgs || undefined,
-			})
-			.trim();
+		message = renderPromptAsset("skills/autoload.md", autoloadTemplate, {
+			body,
+			filePath: skill.filePath,
+			userArgs: trimmedArgs || undefined,
+		}).trim();
 	}
 	return {
 		message,

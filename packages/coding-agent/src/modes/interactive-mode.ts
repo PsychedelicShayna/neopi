@@ -1,3 +1,4 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * Interactive mode for the coding agent.
  * Handles TUI rendering and user interaction, delegating business logic to AgentSession.
@@ -68,7 +69,6 @@ import {
 	isEnoent,
 	logger,
 	postmortem,
-	prompt,
 	sanitizeText,
 	setProjectDir,
 } from "@oh-my-pi/pi-utils";
@@ -594,8 +594,6 @@ const PLAN_SAVE_TITLE_LINE_LIMIT = 6;
 const CFG_APPROVE_SESSION = "Always for this session";
 const CFG_APPROVE_ONCE = "Allow once";
 const CFG_DENY = "Deny";
-
-const PLAN_FILENAME_SYSTEM_PROMPT = prompt.render(planFilenamePrompt);
 
 function planSaveTitleExcerpt(planContent: string): string {
 	return planContent
@@ -5594,7 +5592,15 @@ export class InteractiveMode implements InteractiveModeContext {
 		const excerpt = planSaveTitleExcerpt(planContent);
 		if (excerpt) {
 			void this.session
-				.generateTitle(excerpt, PLAN_FILENAME_SYSTEM_PROMPT)
+				.generateTitle(
+					excerpt,
+					renderPromptAsset(
+						"system/plan-filename.md",
+						planFilenamePrompt,
+						{},
+						{ cwd: this.sessionManager.getCwd() },
+					),
+				)
 				.then(generatedTitle => {
 					if (!generatedTitle) return;
 					suggestedPath = planSaveFileName(generatedTitle);
@@ -5795,9 +5801,14 @@ export class InteractiveMode implements InteractiveModeContext {
 				// past the cancel guard — see the comment at the cancel branch.
 				// Cancellation skips the synthetic-prompt dispatch (operator's explicit
 				// abort is honored); failure proceeds best-effort — approval intent stands.
-				const compactionPrompt = prompt.render(planModeCompactInstructionsPrompt, {
-					planFilePath: options.planFilePath,
-				});
+				const compactionPrompt = renderPromptAsset(
+					"system/plan-mode-compact-instructions.md",
+					planModeCompactInstructionsPrompt,
+					{
+						planFilePath: options.planFilePath,
+					},
+					{ cwd: this.sessionManager.getCwd() },
+				);
 				// Pin the plan reference path BEFORE compaction so any user messages
 				// queued during the compaction await (which `handleCompactCommand`
 				// flushes via `flushCompactionQueue` before returning) see the
@@ -5895,11 +5906,16 @@ export class InteractiveMode implements InteractiveModeContext {
 		// markPlanReferenceSent fires only on the dispatch path so the synthetic
 		// plan-approved prompt is the source of the reference injection.
 		this.session.markPlanReferenceSent();
-		const planModePrompt = prompt.render(planModeApprovedPrompt, {
-			planFilePath: options.planFilePath,
-			planContent,
-			contextPreserved: options.preserveContext === true,
-		});
+		const planModePrompt = renderPromptAsset(
+			"system/plan-mode-approved.md",
+			planModeApprovedPrompt,
+			{
+				planFilePath: options.planFilePath,
+				planContent,
+				contextPreserved: options.preserveContext === true,
+			},
+			{ cwd: this.sessionManager.getCwd() },
+		);
 		// Close the review overlay only now — after the async title write and plan
 		// prompt are prepared, immediately before the execution turn is queued. The
 		// synthetic prompt below blocks in `session.prompt` for the whole run, so
@@ -6342,9 +6358,14 @@ export class InteractiveMode implements InteractiveModeContext {
 			// hidden developer message, the agent asks its questions as regular
 			// assistant turns, and the user answers in the ordinary editor. Queue
 			// behind an in-flight run instead of aborting it.
-			const kickoff = prompt.render(guidedGoalInterviewPrompt, {
-				initial: rest?.trim() || undefined,
-			});
+			const kickoff = renderPromptAsset(
+				"goals/guided-goal-interview.md",
+				guidedGoalInterviewPrompt,
+				{
+					initial: rest?.trim() || undefined,
+				},
+				{ cwd: this.sessionManager.getCwd() },
+			);
 			const images = input?.images?.length ? input.images : undefined;
 			if (this.session.isStreaming) {
 				await this.session.followUp(kickoff, images, { synthetic: true });

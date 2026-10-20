@@ -1,8 +1,9 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { clearSubmittedText, restoreDetachedDraft } from "./helpers/draft";
 import * as path from "node:path";
 import { AgentBusyError } from "@oh-my-pi/pi-agent-core";
 import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
-import { PRODUCT_NAME, prompt } from "@oh-my-pi/pi-utils";
+import { PRODUCT_NAME } from "@oh-my-pi/pi-utils";
 import {
 	formatModelString,
 	getModelMatchPreferences,
@@ -265,7 +266,10 @@ function prepareRatchet(session: AgentSession, request: string): { kickoff: stri
 		if (!previous) cfgRatchetEnabled.override(session.settings, previous);
 		return { error: "The ratchet eval prelude is unavailable in this session." };
 	}
-	const kickoff = prompt.render(ratchetKickoffPrompt, { request: request.trim() || undefined, tools }).trim();
+	const kickoff = renderPromptAsset("ratchet-kickoff.md", ratchetKickoffPrompt, {
+		request: request.trim() || undefined,
+		tools,
+	}).trim();
 	return { kickoff };
 }
 

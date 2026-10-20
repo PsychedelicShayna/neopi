@@ -1,11 +1,13 @@
-import { escapeXmlText, prompt, Snowflake } from "@oh-my-pi/pi-utils";
-import goalBudgetLimitPrompt from "../prompts/goals/goal-budget-limit.md" with { type: "text" };
-import goalContinuationPrompt from "../prompts/goals/goal-continuation.md" with { type: "text" };
-import goalModeActivePrompt from "../prompts/goals/goal-mode-active.md" with { type: "text" };
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
+import { escapeXmlText, Snowflake } from "@oh-my-pi/pi-utils";
+import bundledGoalBudgetLimitPrompt from "../prompts/goals/goal-budget-limit.md" with { type: "text" };
+import bundledGoalContinuationPrompt from "../prompts/goals/goal-continuation.md" with { type: "text" };
+import bundledGoalModeActivePrompt from "../prompts/goals/goal-mode-active.md" with { type: "text" };
 import type { Goal } from "@oh-my-pi/pi-tui/tools/goal";
 import type { GoalBudgetSteering, GoalModeState, GoalRuntimeEvent, GoalTokenUsage } from "./state";
 
 export interface GoalRuntimeHost {
+	getCwd?(): string;
 	getState(): GoalModeState | undefined;
 	setState(state: GoalModeState | undefined): void;
 	getCurrentUsage(): GoalTokenUsage;
@@ -77,20 +79,31 @@ export function goalTokenDelta(current: GoalTokenUsage, baseline: GoalTokenUsage
 	);
 }
 
-export function renderGoalPrompt(kind: GoalPromptKind, goal: Goal): string {
-	const template =
+export function renderGoalPrompt(kind: GoalPromptKind, goal: Goal, cwd?: string): string {
+	const id =
 		kind === "active"
-			? goalModeActivePrompt
+			? "goals/goal-mode-active.md"
 			: kind === "continuation"
-				? goalContinuationPrompt
-				: goalBudgetLimitPrompt;
-	return prompt.render(template, {
-		objective: escapeXmlText(goal.objective),
-		tokensUsed: String(goal.tokensUsed),
-		tokenBudget: budgetValue(goal),
-		remainingTokens: remainingValue(goal),
-		timeUsedSeconds: String(goal.timeUsedSeconds),
-	});
+				? "goals/goal-continuation.md"
+				: "goals/goal-budget-limit.md";
+	const bundled =
+		kind === "active"
+			? bundledGoalModeActivePrompt
+			: kind === "continuation"
+				? bundledGoalContinuationPrompt
+				: bundledGoalBudgetLimitPrompt;
+	return renderPromptAsset(
+		id,
+		bundled,
+		{
+			objective: escapeXmlText(goal.objective),
+			tokensUsed: String(goal.tokensUsed),
+			tokenBudget: budgetValue(goal),
+			remainingTokens: remainingValue(goal),
+			timeUsedSeconds: String(goal.timeUsedSeconds),
+		},
+		{ cwd, kind: "notice" },
+	);
 }
 
 export function completionBudgetReport(goal: Goal): string | null {
@@ -507,14 +520,14 @@ export class GoalRuntime {
 	buildActivePrompt(): string | undefined {
 		const state = this.#host.getState();
 		return state?.enabled && state.goal && state.goal.status === "active"
-			? renderGoalPrompt("active", state.goal)
+			? renderGoalPrompt("active", state.goal, this.#host.getCwd?.())
 			: undefined;
 	}
 
 	buildContinuationPrompt(): string | undefined {
 		const state = this.#host.getState();
 		return state?.enabled && state.goal.status === "active"
-			? renderGoalPrompt("continuation", state.goal)
+			? renderGoalPrompt("continuation", state.goal, this.#host.getCwd?.())
 			: undefined;
 	}
 
@@ -523,7 +536,7 @@ export class GoalRuntime {
 		this.#budgetReportedFor = goal.id;
 		await this.#host.sendHiddenMessage({
 			customType: "goal-budget-limit",
-			content: renderGoalPrompt("budget-limit", goal),
+			content: renderGoalPrompt("budget-limit", goal, this.#host.getCwd?.()),
 			deliverAs: "steer",
 		});
 	}

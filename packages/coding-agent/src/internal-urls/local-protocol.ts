@@ -3,6 +3,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { LRUCache } from "@oh-my-pi/pi-utils/lru";
+import { render as renderPrompt } from "@oh-my-pi/pi-utils/prompt";
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import localDoc from "../prompts/internal-urls/local.md" with { type: "text" };
 import { AgentRegistry } from "../registry/agent-registry";
 import {
@@ -520,7 +522,8 @@ export class LocalProtocolHandler implements ProtocolHandler {
 	}
 
 	promptDoc(): string {
-		return localDoc.trim();
+		const { text } = resolvePromptAsset("internal-urls/local.md", localDoc);
+		return (text === localDoc ? text : renderPrompt(text)).trim();
 	}
 
 	async complete(_query?: string, context?: ResolveContext): Promise<UrlCompletion[]> {

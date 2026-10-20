@@ -1,3 +1,4 @@
+import { resolvePromptAsset, compilePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * Runs a post-processing chain: each step is one bare model pass whose system
  * prompt is the step's `systemPrompt` (or the bundled chain default) followed
@@ -14,7 +15,6 @@ import {
 } from "@oh-my-pi/pi-ai";
 import { classifyDifficulty } from "../auto-thinking/classifier";
 import { cfgEffortPolicyMode, resolveImplicitEffort } from "../config/effort-policy";
-import * as prompt from "@oh-my-pi/pi-utils/prompt";
 import type { ChainConfig, ChainStep } from "@oh-my-pi/pi-tui/overlays/chain-types";
 import {
 	concreteThinkingLevel,
@@ -29,7 +29,7 @@ import type { Settings } from "../config/settings";
 import chainInputWithContext from "../prompts/chains/input-with-context.md" with { type: "text" };
 import { obfuscateMessages, obfuscateProviderContext, obfuscateToolArguments } from "../secrets/message-transform";
 import type { SecretObfuscator } from "../secrets/obfuscator";
-import chainSystemPrompt from "../prompts/chains/system.md" with { type: "text" };
+import bundledChainSystemPrompt from "../prompts/chains/system.md" with { type: "text" };
 import { estimateToolSchemaTokens } from "@oh-my-pi/pi-tui/status-line/context-usage";
 import { formatSessionHistoryMarkdown } from "../session/session-history-format";
 import type { SessionManager } from "../session/session-manager";
@@ -38,7 +38,9 @@ import type { SessionManager } from "../session/session-manager";
 export const CHAIN_DEFAULT_ROLE = "prose";
 
 /** Bundled system prompt a step uses when it sets no `systemPrompt` override. */
-export const CHAIN_SYSTEM_PROMPT = chainSystemPrompt;
+export function getChainSystemPrompt(cwd?: string): string {
+	return resolvePromptAsset("chains/system.md", bundledChainSystemPrompt, { cwd }).text;
+}
 
 const CHAIN_SKIP = "chain step skipped";
 /** Tokens kept free for message framing when fitting the transcript; tool schemas are counted. */
@@ -151,12 +153,13 @@ export function renderChainInput(
 	model?: Model,
 	tools: readonly AgentTool[] = [],
 	streamOptions?: Pick<SimpleStreamOptions, "reasoning" | "disableReasoning">,
+	cwd?: string,
 ): string {
 	if (!step.context || !messages?.length) return input;
 	let transcript: string;
 	if (model?.contextWindow) {
 		const tokenizer = new Tokenizer(model);
-		const system = step.systemPrompt ?? CHAIN_SYSTEM_PROMPT;
+		const system = step.systemPrompt ?? getChainSystemPrompt(cwd);
 		const answerTokens = chainOutputReserve(model);
 		const providerOutputTokens = getSimpleStreamMaxTokens(model, { ...streamOptions, maxTokens: answerTokens });
 		const reserved =
@@ -171,9 +174,11 @@ export function renderChainInput(
 	}
 	if (!transcript) return input;
 	// compile, not render: the post-render formatter would rewrite the draft's whitespace and tables.
-	return prompt
-		.compile(chainInputWithContext)({ transcript, draft: input, boundary: blockBoundary([transcript, input]) })
-		.trimEnd();
+	return compilePromptAsset("chains/input-with-context.md", chainInputWithContext, { cwd })({
+		transcript,
+		draft: input,
+		boundary: blockBoundary([transcript, input]),
+	}).trimEnd();
 }
 
 /**
@@ -279,7 +284,7 @@ export async function runChainStep(
 	const disableReasoning = shouldDisableReasoning(thinkingLevel);
 	const agent = new Agent({
 		initialState: {
-			systemPrompt: [step.systemPrompt ?? CHAIN_SYSTEM_PROMPT, step.prompt],
+			systemPrompt: [step.systemPrompt ?? getChainSystemPrompt(options.cwd), step.prompt],
 			model: resolved.model,
 			thinkingLevel: reasoning,
 			tools,
@@ -317,7 +322,7 @@ export async function runChainStep(
 				? options.messages.map(message => redactMessageText(obfuscator, message))
 				: options.messages;
 		await agent.prompt(
-			renderChainInput(step, input, messages, resolved.model, tools, { reasoning, disableReasoning }),
+			renderChainInput(step, input, messages, resolved.model, tools, { reasoning, disableReasoning }, options.cwd),
 		);
 	} finally {
 		signal?.removeEventListener("abort", onAbort);

@@ -1,3 +1,4 @@
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
@@ -50,7 +51,7 @@ import { invokeSkillCommandFromText, isKnownSkillCommand } from "../../modes/ski
 import type { InteractiveModeContext, SubmittedUserInput } from "../../modes/types";
 import { isDeferredSubmissionActive, waitForDeferredInput } from "../../neopi/defer";
 import type { LiveSubmitRoute } from "./live-command-controller";
-import manualContinuePrompt from "../../prompts/system/manual-continue.md" with { type: "text" };
+import bundledManualContinuePrompt from "../../prompts/system/manual-continue.md" with { type: "text" };
 import { AgentRegistry } from "../../registry/agent-registry";
 import type { RestoredQueuedMessage } from "../../session/agent-session-types";
 import { USER_INTERRUPT_LABEL } from "../../session/messages";
@@ -1319,7 +1320,10 @@ export class InputController {
 				if (this.ctx.onInputCallback) {
 					this.ctx.editor.clearDraft();
 					this.ctx.onInputCallback({
-						text: manualContinuePrompt,
+						text: resolvePromptAsset("system/manual-continue.md", bundledManualContinuePrompt, {
+							cwd: this.ctx.sessionManager.getCwd(),
+							kind: "notice",
+						}).text,
 						cancelled: false,
 						started: true,
 						synthetic: true,
@@ -2083,7 +2087,13 @@ export class InputController {
 			// Continue shortcuts do not request queueing: keep rejecting them while
 			// busy instead of scheduling another continuation behind the active turn.
 			if (isContinueShortcut) {
-				await target.prompt(manualContinuePrompt, { synthetic: true, userInitiated: true });
+				await target.prompt(
+					resolvePromptAsset("system/manual-continue.md", bundledManualContinuePrompt, {
+						cwd: this.ctx.sessionManager.getCwd(),
+						kind: "notice",
+					}).text,
+					{ synthetic: true, userInitiated: true },
+				);
 			} else {
 				await this.ctx.withLocalSubmission(text, () => target.prompt(text, { streamingBehavior, images }), {
 					imageCount: images?.length ?? 0,

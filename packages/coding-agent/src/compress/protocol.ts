@@ -1,3 +1,4 @@
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * The two-tool protocol behind `npi compress`.
  *
@@ -178,7 +179,7 @@ export class CompressProtocol {
 		return {
 			name: "rewrite",
 			label: "Rewrite",
-			description: rewriteDescription.trim(),
+			description: resolvePromptAsset("tools/rewrite.md", rewriteDescription).text.trim(),
 			parameters: rewriteSchema,
 			approval: "read",
 			strict: true,
@@ -204,7 +205,7 @@ export class CompressProtocol {
 		return {
 			name: "approve",
 			label: "Approve",
-			description: approveDescription.trim(),
+			description: resolvePromptAsset("tools/approve.md", approveDescription).text.trim(),
 			parameters: approveSchema,
 			approval: "read",
 			strict: true,

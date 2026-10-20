@@ -10,7 +10,10 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { CONFIG_DIR_NAME, TempDir } from "@oh-my-pi/pi-utils";
 
 type SystemPromptOption = string | string[] | ((defaultPrompt: string[]) => string | string[]);
-type ExplicitSystemPromptOptions = Pick<CreateAgentSessionOptions, "systemPromptTemplate" | "customSystemPrompt">;
+type ExplicitSystemPromptOptions = Pick<
+	CreateAgentSessionOptions,
+	"systemPromptTemplate" | "customSystemPrompt" | "settings"
+>;
 
 async function withSession<T>(
 	nativeTemplate: string,
@@ -23,6 +26,8 @@ async function withSession<T>(
 	await Bun.write(path.join(cwd, CONFIG_DIR_NAME, "SYSTEM_TEMPLATE.md"), nativeTemplate);
 
 	const authStorage = await AuthStorage.create(":memory:");
+	authStorage.keys.setRuntime("openai", "test-key");
+	authStorage.keys.setRuntime("anthropic", "test-key");
 	const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 	let session: AgentSession | undefined;
 	try {
@@ -57,6 +62,22 @@ async function withSession<T>(
 }
 
 describe("SDK systemPrompt replacements", () => {
+	it("adds and removes a family adapter on hidden-model switches through the real SDK rebuild", async () => {
+		await withSession(
+			"BASELINE",
+			defaultPrompt => defaultPrompt,
+			async session => {
+				const baseline = [...session.systemPrompt];
+				await session.setModel(getBundledModel("anthropic", "claude-opus-5"));
+				expect(session.systemPrompt[0]).toBe("BASELINE");
+				expect(session.systemPrompt[1]).toContain("Model adapter: Opus 5");
+				await session.setModel(getBundledModel("openai", "gpt-4o-mini"));
+				expect(session.systemPrompt).toEqual(baseline);
+			},
+			{ settings: Settings.isolated({ includeModelInPrompt: false }) },
+		);
+	});
+
 	it("uses a fixed string without loading a malformed native template", async () => {
 		const fixedPrompt = "sdk fixed prompt";
 		await withSession("{{#if eagerTasks}}", fixedPrompt, async session => {

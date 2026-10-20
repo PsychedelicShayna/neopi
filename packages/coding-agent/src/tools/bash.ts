@@ -16,7 +16,7 @@ import type {
 	ToolTier,
 } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
-import { isEnoent, logger, prompt } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { isPosixShell } from "@oh-my-pi/pi-utils/procmgr";
 import { raceJobSettlement, resolveAutoBackgroundWaitMs } from "../async";
 import type { Settings } from "../config/settings";
@@ -24,6 +24,8 @@ import { applyDirenvPreflight, type BashResult, executeBash } from "../exec/bash
 import { InternalUrlRouter } from "../internal-urls";
 import { sessionResolveContext } from "../internal-urls/context";
 import { InternalUrlFilesystem, UrlFsError } from "../internal-urls/url-filesystem";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
+import { buildBashPromptContext } from "../prompts/contexts";
 import bashDescription from "../prompts/tools/bash.md" with { type: "text" };
 import type {
 	ClientBridgeTerminalExitStatus,
@@ -616,30 +618,35 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		const evalBackends = resolveEvalBackends(this.session);
 		const clientBridge = this.session.getClientBridge?.();
 		const isToolActive = (name: string, fallback: boolean): boolean => this.session.isToolActive?.(name) ?? fallback;
-		return prompt.render(bashDescription, {
-			hasClientTerminal: Boolean(clientBridge?.capabilities.terminal && clientBridge.createTerminal),
-			asyncEnabled: cfgAsyncEnabled.get(this.session.settings),
-			// The deadline an omitted `timeout` resolves to, after the `tools.maxTimeout` cap.
-			defaultTimeoutSec: clampTimeout("bash", undefined, cfgToolsMaxTimeout.get(this.session.settings)),
-			autoBackgroundEnabled: cfgBashAutoBackgroundEnabled.get(this.session.settings),
-			autoBackgroundSeconds: cfgBashAutoBackgroundThresholdMs.get(this.session.settings) / 1000,
-			hasAstGrep: isToolActive("ast_grep", cfgAstGrepEnabled.get(this.session.settings)),
-			hasAstEdit: isToolActive("ast_edit", cfgAstEditEnabled.get(this.session.settings)),
-			hasGrep: isToolActive("grep", cfgGrepEnabled.get(this.session.settings)),
-			hasGlob: isToolActive("glob", cfgGlobEnabled.get(this.session.settings)),
-			hasFind: this.session.isToolActive?.("find") ?? isFindEnabled(this.session),
-			hasRead: isToolActive("read", true),
-			// Frozen at the last prompt rebuild (managed sessions). SDK consumers
-			// building a bare ToolSession lack the rebuild lifecycle, so fall back
-			// to the derived form (skillful && skills) instead of dropping the hint.
-			hasSkills:
-				(this.session.skillHintVisible ??
-					(cfgSkillful.get(this.session.settings) && (this.session.skills?.length ?? 0) > 0)) === true,
-			hasLaunch: this.#launchEnabled,
-			hasEval: isToolActive("eval", evalBackends.python || evalBackends.js),
-			hasShellBuiltins: !shellBuiltinsDisabled(this.session.settings),
-			isWindows: process.platform === "win32",
-		});
+		return renderPromptAsset(
+			"tools/bash.md",
+			bashDescription,
+			buildBashPromptContext({
+				hasClientTerminal: Boolean(clientBridge?.capabilities.terminal && clientBridge.createTerminal),
+				asyncEnabled: cfgAsyncEnabled.get(this.session.settings),
+				// The deadline an omitted `timeout` resolves to, after the `tools.maxTimeout` cap.
+				defaultTimeoutSec: clampTimeout("bash", undefined, cfgToolsMaxTimeout.get(this.session.settings)),
+				autoBackgroundEnabled: cfgBashAutoBackgroundEnabled.get(this.session.settings),
+				autoBackgroundSeconds: cfgBashAutoBackgroundThresholdMs.get(this.session.settings) / 1000,
+				hasAstGrep: isToolActive("ast_grep", cfgAstGrepEnabled.get(this.session.settings)),
+				hasAstEdit: isToolActive("ast_edit", cfgAstEditEnabled.get(this.session.settings)),
+				hasGrep: isToolActive("grep", cfgGrepEnabled.get(this.session.settings)),
+				hasGlob: isToolActive("glob", cfgGlobEnabled.get(this.session.settings)),
+				hasFind: this.session.isToolActive?.("find") ?? isFindEnabled(this.session),
+				hasRead: isToolActive("read", true),
+				// Frozen at the last prompt rebuild (managed sessions). SDK consumers
+				// building a bare ToolSession lack the rebuild lifecycle, so fall back
+				// to the derived form (skillful && skills) instead of dropping the hint.
+				hasSkills:
+					(this.session.skillHintVisible ??
+						(cfgSkillful.get(this.session.settings) && (this.session.skills?.length ?? 0) > 0)) === true,
+				hasLaunch: this.#launchEnabled,
+				hasEval: isToolActive("eval", evalBackends.python || evalBackends.js),
+				hasShellBuiltins: !shellBuiltinsDisabled(this.session.settings),
+				isWindows: process.platform === "win32",
+			}),
+			{ cwd: this.session.cwd },
+		);
 	}
 	/** Schema variant for the live `async.enabled` and `launch.enabled` settings. */
 	get parameters(): BashToolSchema {

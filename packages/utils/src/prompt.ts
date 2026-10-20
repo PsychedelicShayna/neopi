@@ -523,6 +523,11 @@ export function registerHelper(name: string, fn: HelperDelegate): void {
 	handlebars.registerHelper(name, fn);
 }
 
+/** Registered prompt helpers and the template engine's implemented block syntax. */
+export function listPromptHelpers(): string[] {
+	return handlebars.listHelpers();
+}
+
 export function registerPartial(name: string, fn: Template): void {
 	handlebars.registerPartial(name, fn);
 }

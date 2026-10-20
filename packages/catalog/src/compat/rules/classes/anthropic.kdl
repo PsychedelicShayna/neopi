@@ -34,6 +34,11 @@ class "anthropic" {
 		max-tokens 4784
 	}
 	family "opus" {
+		// Issue #23: Opus 5 needs scope/stop discipline, not a core prompt fork.
+		// Keep the adapter on this reviewed revision, not every future Opus.
+		revision "=5" {
+			behavioral-preset "opus-5"
+		}
 		revision "<4.7" {
 			image-tokenization {
 				regime "anthropic-patch"

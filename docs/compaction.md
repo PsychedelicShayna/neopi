@@ -311,7 +311,7 @@ Final stored summary is merged as:
 3. Wrap in `<conversation>...</conversation>`.
 4. Optionally include `<previous-summary>...</previous-summary>`.
 5. Optionally inject extension hook context and active memory-backend compaction context as `<additional-context>` entries.
-6. Execute summarization prompt with `SUMMARIZATION_SYSTEM_PROMPT`.
+6. Execute summarization with `getSummarizationSystemPrompt(cwd)`, resolving the current `compaction/summarization-system.md` override.
 
 Oversized local-summary input is folded through budgeted conversation windows, carrying each summary into the next update. Provider context-overflow rejections halve and re-plan the rejected window down to a minimum input budget; other failures surface normally.
 
@@ -444,7 +444,7 @@ Branch summarization:
 1. Converts and serializes selected messages with `serializeConversationForSummary()` and the target model's preferred dialect.
 2. Wraps in `<conversation>`.
 3. Uses custom instructions if supplied, otherwise `branch-summary.md`.
-4. Calls summarization model with `SUMMARIZATION_SYSTEM_PROMPT` and a 2,048-token output limit.
+4. Calls the summarization model with `getSummarizationSystemPrompt(cwd)` and a 2,048-token output limit.
 5. Prepends `branch-summary-preamble.md`.
 6. Appends file-operation tags.
 

@@ -1,3 +1,4 @@
+import { renderPromptAsset, resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * Unified Web Search Tool
  *
@@ -9,7 +10,7 @@ import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { Api, AuthStorage, Model } from "@oh-my-pi/pi-ai";
 import { modelKind } from "@oh-my-pi/pi-catalog/types";
-import { formatAge, formatCount, prompt, truncate } from "@oh-my-pi/pi-utils";
+import { formatAge, formatCount, truncate } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../../config/model-registry";
 import {
 	formatModelStringWithRouting,
@@ -20,7 +21,7 @@ import {
 import { roleCandidatePool } from "../../config/model-roles";
 import { settings } from "../../config/settings";
 import type { CustomTool, CustomToolContext } from "../../extensibility/custom-tools/types";
-import webSearchSystemPrompt from "../../prompts/system/web-search.md" with { type: "text" };
+import bundledWebSearchSystemPrompt from "../../prompts/system/web-search.md" with { type: "text" };
 import webSearchDescription from "../../prompts/tools/web-search.md" with { type: "text" };
 import { resolveConfiguredModelTarget } from "../../session/role-models";
 import { discoverAuthStorage } from "../../sdk";
@@ -267,7 +268,7 @@ async function executeSearch(
 				parsedQuery,
 				limit: params.limit,
 				recency: params.recency,
-				systemPrompt: webSearchSystemPrompt,
+				systemPrompt: resolvePromptAsset("system/web-search.md", bundledWebSearchSystemPrompt).text,
 				maxOutputTokens: params.max_tokens,
 				numSearchResults: params.num_search_results,
 				temperature: params.temperature,
@@ -391,15 +392,11 @@ export async function runSearchQuery(
 	}
 }
 
-/** Description without the X operators, for hosts without a model registry. */
-const plainDescription = prompt.render(webSearchDescription);
-
 /**
- * Description rendered on first read with a model registry, then reused for
- * the process: re-checking xAI auth per read would rewrite the tool
- * description, and invalidate the prompt cache, whenever auth changes.
+ * Keep the first credential decision stable, but reload the description template
+ * on each read so editing an override does not require restarting the process.
  */
-let registryDescription: string | undefined;
+let registryXSearch: boolean | undefined;
 
 /**
  * Web search tool implementation.
@@ -424,9 +421,15 @@ export class WebSearchTool implements AgentTool<typeof webSearchSchema, SearchRe
 	/** Advertises X search operators when xAI credentials existed at the process's first read. */
 	get description(): string {
 		const modelRegistry = this.#session.modelRegistry;
-		if (!modelRegistry) return plainDescription;
-		registryDescription ??= prompt.render(webSearchDescription, { xSearch: xSearchAvailable(modelRegistry) });
-		return registryDescription;
+		if (!modelRegistry)
+			return renderPromptAsset("tools/web-search.md", webSearchDescription, {}, { cwd: this.#session.cwd });
+		registryXSearch ??= xSearchAvailable(modelRegistry);
+		return renderPromptAsset(
+			"tools/web-search.md",
+			webSearchDescription,
+			{ xSearch: registryXSearch },
+			{ cwd: this.#session.cwd },
+		);
 	}
 
 	async execute(
@@ -452,7 +455,9 @@ export class WebSearchTool implements AgentTool<typeof webSearchSchema, SearchRe
 export const webSearchCustomTool: CustomTool<typeof webSearchSchema, SearchResultDetails> = {
 	name: "web_search",
 	label: "Web Search",
-	description: plainDescription,
+	get description() {
+		return renderPromptAsset("tools/web-search.md", webSearchDescription);
+	},
 	parameters: webSearchSchema,
 
 	approval: "read",

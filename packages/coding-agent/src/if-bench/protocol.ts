@@ -1,3 +1,4 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * Prompt construction and scoring for `npi if-bench`.
  *
@@ -7,7 +8,7 @@
  * The cat directive rotates through the start, middle, and end of the user turn
  * so a model cannot succeed by only attending to the prompt's edges.
  */
-import { prompt } from "@oh-my-pi/pi-utils";
+
 import type { IfBenchFailure } from "@oh-my-pi/pi-tui/apps/if-bench-board";
 import type { Action } from "./actions";
 import { encodeAction } from "./actions";
@@ -38,7 +39,7 @@ export function catSoundPattern(nyaMax: number): RegExp {
 
 /** System prompt: machine semantics plus the response contract. */
 export function buildSystemPrompt(nyaMax: number): string {
-	return prompt.render(systemTemplate, { nyaMax }).trim();
+	return renderPromptAsset("if-bench/system.md", systemTemplate, { nyaMax }).trim();
 }
 
 /** One turn's user message and where its cat directive landed. */
@@ -65,17 +66,17 @@ export function buildTurnPrompt(options: {
 	// action list splits in half around it.
 	const split = placement === "middle" ? Math.ceil(tokens.length / 2) : tokens.length;
 	const tail = tokens.slice(split);
-	const content = prompt
-		.render(turnTemplate, {
-			catDirective: prompt.render(catDirectiveTemplate, { nyaMax: options.nyaMax }).trim(),
-			catBefore: placement === "beginning",
-			catMiddle: placement === "middle",
-			catAfter: placement === "end",
-			start: options.start,
-			actionsHead: tokens.slice(0, split).join(" "),
-			actionsTail: tail.length > 0 ? tail.join(" ") : undefined,
-		})
-		.trim();
+	const content = renderPromptAsset("if-bench/turn.md", turnTemplate, {
+		catDirective: renderPromptAsset("if-bench/cat-directive.md", catDirectiveTemplate, {
+			nyaMax: options.nyaMax,
+		}).trim(),
+		catBefore: placement === "beginning",
+		catMiddle: placement === "middle",
+		catAfter: placement === "end",
+		start: options.start,
+		actionsHead: tokens.slice(0, split).join(" "),
+		actionsTail: tail.length > 0 ? tail.join(" ") : undefined,
+	}).trim();
 	return { content, placement };
 }
 

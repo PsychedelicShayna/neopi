@@ -1,3 +1,4 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * Generate commit messages from diffs using a smol, fast model.
  * Follows the same pattern as title-generator.ts.
@@ -5,7 +6,7 @@
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, Model } from "@oh-my-pi/pi-ai";
 import { completeSimple, retryTransientCompletion } from "@oh-my-pi/pi-ai";
-import { logger, prompt } from "@oh-my-pi/pi-utils";
+import { logger } from "@oh-my-pi/pi-utils";
 
 import type { ModelRegistry } from "../config/model-registry";
 import { getModelMatchPreferences, resolveModelRoleValue } from "../config/model-resolver";
@@ -14,7 +15,6 @@ import MODEL_PRIO from "../priority.json" with { type: "json" };
 import commitSystemPrompt from "../prompts/system/commit-message-system.md" with { type: "text" };
 import { concreteThinkingLevel, toReasoningEffort } from "@oh-my-pi/pi-tui/thinking";
 
-const COMMIT_SYSTEM_PROMPT = prompt.render(commitSystemPrompt);
 const MAX_DIFF_CHARS = 4000;
 // Cover the "backend ignores `disableReasoning`" case unconditionally: the
 // static `model.reasoning` catalog flag can't distinguish a thinking model
@@ -111,7 +111,7 @@ export async function generateCommitMessage(
 					completeSimple(
 						candidate.model,
 						{
-							systemPrompt: [COMMIT_SYSTEM_PROMPT],
+							systemPrompt: [renderPromptAsset("system/commit-message-system.md", commitSystemPrompt, {})],
 							messages: [{ role: "user", content: userMessage, timestamp: Date.now() }],
 						},
 						{

@@ -1,6 +1,8 @@
 import { untilAborted } from "@oh-my-pi/pi-utils";
 import { MCPManager } from "../mcp/manager";
 import type { MCPResourceReadResult } from "../mcp/types";
+import { render as renderPrompt } from "@oh-my-pi/pi-utils/prompt";
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import mcpDoc from "../prompts/internal-urls/mcp.md" with { type: "text" };
 import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext, SchemeSpec } from "./types";
 
@@ -194,7 +196,8 @@ export class McpProtocolHandler implements ProtocolHandler {
 	 * so there is no reliable synchronous "has servers" signal at prompt time.
 	 */
 	promptDoc(): string {
-		return mcpDoc.trim();
+		const { text } = resolvePromptAsset("internal-urls/mcp.md", mcpDoc);
+		return (text === mcpDoc ? text : renderPrompt(text)).trim();
 	}
 
 	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {

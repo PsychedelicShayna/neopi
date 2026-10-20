@@ -6,12 +6,13 @@ import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { MissingApiKeyError, ProviderHttpError } from "@oh-my-pi/pi-ai/error";
 import { DEFAULT_XAI_VOICE_ID, synthesizeSpeech, XAI_MAX_TEXT_LENGTH } from "@oh-my-pi/pi-ai/speech";
-import { prompt } from "@oh-my-pi/pi-utils";
+
 import type { ModelRegistry } from "../config/model-registry";
 import { resolveRoleChain, type RoleChainCandidate } from "../config/model-resolver";
 import { roleCandidatePool } from "../config/model-roles";
 import { settings, type Settings } from "../config/settings";
 import type { CustomTool, CustomToolContext } from "../extensibility/custom-tools/types";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import ttsDescription from "../prompts/tools/tts.md" with { type: "text" };
 import { DEFAULT_TTS_VOICE, KOKORO_VOICES } from "../tts/models";
 import { ttsClient } from "../tts/tts-client";
@@ -178,11 +179,13 @@ export const ttsTool: CustomTool<typeof ttsSchema, TtsToolDetails> = {
 	label: "Speech Generation",
 	strict: false,
 	approval: "write",
-	description: prompt.render(ttsDescription, {
-		localVoices: KOKORO_VOICES.map(v => (v.id === DEFAULT_TTS_VOICE ? `${v.id} (default)` : v.id)).join(", "),
-		xaiVoices: formatVoiceList(),
-		maxLength: XAI_MAX_TEXT_LENGTH.toLocaleString("en-US"),
-	}),
+	get description(): string {
+		return renderPromptAsset("tools/tts.md", ttsDescription, {
+			localVoices: KOKORO_VOICES.map(v => (v.id === DEFAULT_TTS_VOICE ? `${v.id} (default)` : v.id)).join(", "),
+			xaiVoices: formatVoiceList(),
+			maxLength: XAI_MAX_TEXT_LENGTH.toLocaleString("en-US"),
+		});
+	},
 	parameters: ttsSchema,
 	async execute(
 		_toolCallId: string,

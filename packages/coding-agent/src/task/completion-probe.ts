@@ -13,7 +13,8 @@
  * finishes, so without it the estimate stalls near 0% for minutes.
  */
 import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
-import { formatDuration, isInteractiveHost, logger, prompt } from "@oh-my-pi/pi-utils";
+import { formatDuration, isInteractiveHost, logger } from "@oh-my-pi/pi-utils";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import type { Settings } from "../config/settings";
 import completionProbePrompt from "../prompts/system/subagent-completion-probe.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
@@ -102,10 +103,15 @@ export function startCompletionProbe(options: CompletionProbeOptions): void {
 				parentId: session.sessionManager.getLeafId(),
 			};
 			const { replyText, assistantMessage } = await session.runEphemeralTurn({
-				promptText: prompt.render(completionProbePrompt, {
-					inflight: inflightToolCalls(session),
-					previous: previous && { percent: previous.percent, ago: formatDuration(Date.now() - previous.at) },
-				}),
+				promptText: renderPromptAsset(
+					"system/subagent-completion-probe.md",
+					completionProbePrompt,
+					{
+						inflight: inflightToolCalls(session),
+						previous: previous && { percent: previous.percent, ago: formatDuration(Date.now() - previous.at) },
+					},
+					{ cwd: session.sessionManager.getCwd(), kind: "notice" },
+				),
 				signal,
 			});
 			if (assistantMessage.usage) {

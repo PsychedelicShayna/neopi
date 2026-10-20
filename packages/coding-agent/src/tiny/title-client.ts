@@ -1,3 +1,4 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * Client for the per-model tiny-model workers.
  *
@@ -8,7 +9,7 @@
  * die on its own once idle. Prompt construction and title extraction live
  * here so both workers only ever see message-level `chat` requests.
  */
-import { $env, getTinyWorkerRuntimeDir, logger, prompt } from "@oh-my-pi/pi-utils";
+import { $env, getTinyWorkerRuntimeDir, logger } from "@oh-my-pi/pi-utils";
 import packageJson from "../../package.json" with { type: "json" };
 import type { Setting } from "../config/registry";
 import { isSettingsInitialized, settings } from "../config/settings";
@@ -57,7 +58,6 @@ const TITLE_CLOSE = "</title>";
 const TITLE_MAX_NEW_TOKENS = 20;
 const COMPLETION_DEFAULT_MAX_NEW_TOKENS = 256;
 const COMPLETION_MAX_NEW_TOKENS = 1024;
-const TINY_TITLE_SYSTEM_PROMPT = prompt.render(titleSystemPrompt);
 const MLX_IDLE_SECONDS = 15 * 60;
 
 type WorkerHandle = RefCountedWorkerHandle<TinyWorkerRequest, TinyWorkerResponse>;
@@ -253,7 +253,10 @@ export function connectTinyWorker(
 
 function buildTitleMessages(message: string, systemPrompt?: string): TinyChatMessage[] {
 	return [
-		{ role: "system", content: systemPrompt?.trim() || TINY_TITLE_SYSTEM_PROMPT },
+		{
+			role: "system",
+			content: systemPrompt?.trim() || renderPromptAsset("system/title-system.md", titleSystemPrompt, {}),
+		},
 		{ role: "user", content: formatTitleUserMessage(message) },
 	];
 }

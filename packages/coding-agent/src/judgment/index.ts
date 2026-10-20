@@ -1,3 +1,4 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * Resolves the {@link Judge} that answers typed judgments through the `judge`
  * model role. The chain is re-resolved at most every {@link CANDIDATE_TTL_MS}
@@ -44,7 +45,7 @@ import * as AIError from "@oh-my-pi/pi-ai/error";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
-import { logger, prompt } from "@oh-my-pi/pi-utils";
+import { logger } from "@oh-my-pi/pi-utils";
 import { MAX_THINKING_SUFFIX_OPTIONS, splitThinkingSuffix } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import { classifyDifficulty } from "../auto-thinking/classifier";
 import type { EffortContextSession } from "../auto-thinking/context";
@@ -559,7 +560,10 @@ class LocalTextBackend implements TextBackend {
 		// system prompt); one merged turn ending in `Answer:` keeps them classifying.
 		const text = await tinyModelClient.complete(
 			this.model,
-			prompt.render(localPromptTemplate, { system: judgment.system, state: judgment.user }),
+			renderPromptAsset("system/judgment-local.md", localPromptTemplate, {
+				system: judgment.system,
+				state: judgment.user,
+			}),
 			{
 				maxTokens: this.#reasoning ? LOCAL_REASONING_MAX_TOKENS : LOCAL_ANSWER_MAX_TOKENS,
 				signal: options.signal,

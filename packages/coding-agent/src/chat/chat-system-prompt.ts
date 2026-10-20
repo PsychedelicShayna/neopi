@@ -1,15 +1,14 @@
-import { prompt } from "@oh-my-pi/pi-utils";
+import { resolvePromptAsset, renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
+
 import type { Rule } from "../capability/rule";
 import type { Skill } from "../extensibility/skills";
-import chatModePrompt from "../prompts/chat/chat.md" with { type: "text" };
+import bundledChatModePrompt from "../prompts/chat/chat.md" with { type: "text" };
 import chatAdvisorTemplate from "../prompts/chat/advisor.md" with { type: "text" };
 import chatCompactionTemplate from "../prompts/chat/compaction.md" with { type: "text" };
-import erpModePrompt from "../prompts/chat/erp.md" with { type: "text" };
+import bundledErpModePrompt from "../prompts/chat/erp.md" with { type: "text" };
 import chatSystemTemplate from "../prompts/chat/system.md" with { type: "text" };
 import { normalizePromptPath } from "../utils/prompt-path";
 import { type ChatMode, type ChatModeConfig, chatModeIncludes } from "./chat-mode";
-
-const MODE_PROMPTS: Record<ChatMode, string> = { chat: chatModePrompt, erp: erpModePrompt, raw: "" };
 
 export interface ChatSystemPromptInput {
 	config: ChatModeConfig;
@@ -33,16 +32,26 @@ export interface ChatSystemPromptInput {
  */
 export function buildChatSystemPrompt(input: ChatSystemPromptInput): string[] {
 	const { config, toolNames } = input;
-	const rendered = prompt
-		.render(chatSystemTemplate, {
-			modePrompt: (input.customPrompt ?? MODE_PROMPTS[config.mode]).trim(),
+	const modePrompt =
+		input.customPrompt ??
+		(config.mode === "chat"
+			? resolvePromptAsset("chat/chat.md", bundledChatModePrompt, { cwd: input.cwd }).text
+			: config.mode === "erp"
+				? resolvePromptAsset("chat/erp.md", bundledErpModePrompt, { cwd: input.cwd }).text
+				: "");
+	const rendered = renderPromptAsset(
+		"chat/system.md",
+		chatSystemTemplate,
+		{
+			modePrompt: modePrompt.trim(),
 			contextFiles: chatModeIncludes(config, "contextFiles", toolNames) ? input.contextFiles : [],
 			cwd: chatModeIncludes(config, "cwd", toolNames) ? normalizePromptPath(input.cwd) : "",
 			skills: chatModeIncludes(config, "skills", toolNames) ? input.skills.filter(skill => skill.hide !== true) : [],
 			rules: chatModeIncludes(config, "rules", toolNames) ? input.rules : [],
 			appendPrompt: input.appendPrompt?.trim() ?? "",
-		})
-		.trim();
+		},
+		{ cwd: input.cwd },
+	).trim();
 	return rendered.length > 0 ? [rendered] : [];
 }
 
@@ -51,15 +60,20 @@ export function buildChatSystemPrompt(input: ChatSystemPromptInput): string[] {
  * rather than code reviewers. Raw mode has no framing of its own and uses the
  * neutral chat variant.
  */
-export function renderChatAdvisorPrompt(mode: ChatMode, maxNotesPerUpdate: number | undefined): string {
-	return prompt.render(chatAdvisorTemplate, { erp: mode === "erp", max_notes_per_update: maxNotesPerUpdate });
+export function renderChatAdvisorPrompt(mode: ChatMode, maxNotesPerUpdate: number | undefined, cwd?: string): string {
+	return renderPromptAsset(
+		"chat/advisor.md",
+		chatAdvisorTemplate,
+		{ erp: mode === "erp", max_notes_per_update: maxNotesPerUpdate },
+		{ cwd },
+	);
 }
 
 /**
  * Narrative-preserving compaction prompt for chat and erp sessions. Raw mode
  * keeps the stock summary prompt.
  */
-export function renderChatCompactionPrompt(mode: ChatMode): string | undefined {
+export function renderChatCompactionPrompt(mode: ChatMode, cwd?: string): string | undefined {
 	if (mode === "raw") return undefined;
-	return prompt.render(chatCompactionTemplate, { erp: mode === "erp" });
+	return renderPromptAsset("chat/compaction.md", chatCompactionTemplate, { erp: mode === "erp" }, { cwd });
 }

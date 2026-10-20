@@ -1,3 +1,4 @@
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import * as path from "node:path";
 import updatePrompt from "../prompts/npi-update.md" with { type: "text" };
 
@@ -12,5 +13,5 @@ export function isNpiExecutable(executablePath: string): boolean {
 export function resolveNpiUpdateArgv(argv: string[], executablePath: string): string[] {
 	if (argv.length !== 1 || argv[0] !== "update") return argv;
 	if (!isNpiExecutable(executablePath)) return argv;
-	return ["launch", updatePrompt.trim()];
+	return ["launch", resolvePromptAsset("npi-update.md", updatePrompt).text.trim()];
 }

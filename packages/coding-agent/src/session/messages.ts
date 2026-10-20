@@ -1,3 +1,4 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * Custom message types and transformers for the coding agent.
  *
@@ -53,10 +54,11 @@ import {
 	invalidateMessageCache,
 	registerMessageCacheInvalidator,
 } from "@oh-my-pi/pi-agent-core/compaction/message-cache";
-import { convertMessageToLlm } from "@oh-my-pi/pi-agent-core/compaction/messages";
+import { convertMessageToLlm, getSummaryContextPromptCacheKey } from "@oh-my-pi/pi-agent-core/compaction/messages";
 import type { AssistantMessage, ImageContent, Message, TextContent, UserMessage } from "@oh-my-pi/pi-ai";
 import { copyPerCallContextMessage } from "@oh-my-pi/pi-ai/utils/block-symbols";
-import { isRecord, logger, prompt } from "@oh-my-pi/pi-utils";
+import { isRecord, logger } from "@oh-my-pi/pi-utils";
+import { getProjectDir } from "@oh-my-pi/pi-utils/dirs";
 import { COLLAB_PROMPT_MESSAGE_TYPE } from "@oh-my-pi/pi-wire";
 import userInterjectionTemplate from "../prompts/steering/user-interjection.md" with { type: "text" };
 import { formatTitleConversationContext, type TitleConversationTurn } from "../tiny/message-preproc";
@@ -700,7 +702,7 @@ function userMessageWithoutSteering(message: UserMessage): UserMessage {
 }
 
 function renderSteeringEnvelope(message: string): string {
-	return prompt.render(userInterjectionTemplate, { message });
+	return renderPromptAsset("steering/user-interjection.md", userInterjectionTemplate, { message }, { kind: "notice" });
 }
 
 function getArrayContentText(content: (TextContent | ImageContent)[]): string {
@@ -1039,6 +1041,8 @@ function convertImageBearingCustomMessage(message: CustomMessage | HookMessage):
  */
 interface ConvertMemoEntry {
 	interruptedNext: boolean;
+	summaryContextKey?: string;
+	cwd: string;
 	fragment: Message[];
 }
 const convertCache = new WeakMap<AgentMessage, ConvertMemoEntry>();
@@ -1060,6 +1064,9 @@ const convertCache = new WeakMap<AgentMessage, ConvertMemoEntry>();
 // from a stale mid-stream fragment.
 interface ConvertArrayMemo {
 	generation: number;
+	cwd: string;
+	hasSummary: boolean;
+	summaryContextKey?: string;
 	length: number;
 	output: Message[];
 	tail: AgentMessage | undefined;
@@ -1082,7 +1089,7 @@ registerMessageCacheInvalidator(message => {
 
 /** Convert one message to its LLM fragment. `interruptedNext` is true only for an
  *  assistant turn immediately followed by its interrupted-thinking marker. */
-function convertOne(m: AgentMessage, interruptedNext: boolean): Message[] {
+function convertOne(m: AgentMessage, interruptedNext: boolean, cwd: string): Message[] {
 	switch (m.role) {
 		case "bashExecution":
 			if (m.excludeFromContext) {
@@ -1107,7 +1114,7 @@ function convertOne(m: AgentMessage, interruptedNext: boolean): Message[] {
 				},
 			];
 		case "pythonExecution":
-			return convertOne({ ...m, role: "evalExecution", language: "py" }, interruptedNext);
+			return convertOne({ ...m, role: "evalExecution", language: "py" }, interruptedNext, cwd);
 		case "fileMention": {
 			// One `fileMention` can mix `@notes.md` (text) and `@screenshot.png` (image)
 			// in the same turn (`generateFileMentionMessages` packs every `@…` into a
@@ -1198,7 +1205,7 @@ function convertOne(m: AgentMessage, interruptedNext: boolean): Message[] {
 			// Core roles share one transformer with agent-core —
 			// duplicating them here is how snapcompact frames once
 			// silently fell off the provider request.
-			const converted = convertMessageToLlm(m);
+			const converted = convertMessageToLlm(m, cwd);
 			return converted ? [converted] : [];
 		}
 		case "toolResult": {
@@ -1216,12 +1223,24 @@ function convertOne(m: AgentMessage, interruptedNext: boolean): Message[] {
 
 /** Cached per-message conversion. Reuses the stored fragment while identity and
  *  `interruptedNext` neighbor state hold; recomputes on a neighbor flip. */
-function convertOneCached(m: AgentMessage, interruptedNext: boolean): Message[] {
+function convertOneCached(
+	m: AgentMessage,
+	interruptedNext: boolean,
+	cwd: string,
+	summaryContextKey?: string,
+): Message[] {
 	const cached = convertCache.get(m);
-	if (cached !== undefined && cached.interruptedNext === interruptedNext) return cached.fragment;
-	const fragment = convertOne(m, interruptedNext);
+	const promptKey = m.role === "branchSummary" || m.role === "compactionSummary" ? summaryContextKey : undefined;
+	if (
+		cached !== undefined &&
+		cached.interruptedNext === interruptedNext &&
+		cached.cwd === cwd &&
+		cached.summaryContextKey === promptKey
+	)
+		return cached.fragment;
+	const fragment = convertOne(m, interruptedNext, cwd);
 	for (const message of fragment) copyPerCallContextMessage(message, m);
-	convertCache.set(m, { interruptedNext, fragment });
+	convertCache.set(m, { interruptedNext, fragment, cwd, summaryContextKey: promptKey });
 	return fragment;
 }
 
@@ -1251,10 +1270,18 @@ export function isUserAuthoredMessage(message: AgentMessage): boolean {
  * Owner mutations (prune/shake/strip-images) invalidate the affected message
  * through the shared registry before the next pass.
  */
-export function convertToLlm(messages: AgentMessage[]): Message[] {
+export function convertToLlm(messages: AgentMessage[], cwd = getProjectDir()): Message[] {
 	const len = messages.length;
 	const memo = convertArrayCache.get(messages);
-	const sameGeneration = memo !== undefined && memo.generation === convertGeneration;
+	const sameSource = memo !== undefined && memo.generation === convertGeneration && memo.cwd === cwd;
+	let hasSummary = sameSource && memo.hasSummary;
+	const summaryScanStart = sameSource && len >= memo.length ? Math.max(0, memo.length - 1) : 0;
+	for (let index = summaryScanStart; !hasSummary && index < len; index++) {
+		const role = messages[index].role;
+		hasSummary = role === "branchSummary" || role === "compactionSummary";
+	}
+	const summaryContextKey = hasSummary ? getSummaryContextPromptCacheKey(cwd) : undefined;
+	const sameGeneration = sameSource && memo.summaryContextKey === summaryContextKey;
 	const tail = len > 0 ? messages[len - 1] : undefined;
 
 	// Exact-repeat: same array, same length, same trailing identity → reuse the
@@ -1295,7 +1322,7 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 		if (i === len - 1) prefixOutputLen = out.length;
 		const m = messages[i];
 		const interruptedNext = m.role === "assistant" && followedByInterruptedThinking(messages, i);
-		const fragment = convertOneCached(m, interruptedNext);
+		const fragment = convertOneCached(m, interruptedNext, cwd, summaryContextKey);
 		for (const msg of fragment) out.push(msg);
 	}
 	if (len === 0) prefixOutputLen = 0;
@@ -1304,6 +1331,9 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 	// so a prior caller holding the previous memo output never sees it grow.
 	convertArrayCache.set(messages, {
 		generation: convertGeneration,
+		cwd,
+		hasSummary,
+		summaryContextKey,
 		length: len,
 		output: out,
 		tail,

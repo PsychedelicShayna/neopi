@@ -2,6 +2,8 @@ import * as path from "node:path";
 import { PRODUCT_NAME, sanitizeText } from "@oh-my-pi/pi-utils";
 import { isSettingsInitialized, settings } from "../config/settings";
 
+import { render as renderPrompt } from "@oh-my-pi/pi-utils/prompt";
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import securityDoc from "../prompts/internal-urls/security.md" with { type: "text" };
 import type { SecurityFinding } from "../security/contracts";
 import { createPublicSecurityScan, redactPrivateSecurityMetadata } from "../security/provenance";
@@ -116,7 +118,9 @@ export class SecurityProtocolHandler implements ProtocolHandler {
 
 	/** Advertised only when `security.enabled` is on for the session. */
 	promptDoc(host: SchemeHost): string | undefined {
-		return host.securityEnabled ? securityDoc.trim() : undefined;
+		if (!host.securityEnabled) return undefined;
+		const { text } = resolvePromptAsset("internal-urls/security.md", securityDoc);
+		return (text === securityDoc ? text : renderPrompt(text)).trim();
 	}
 
 	async #store(context?: ResolveContext): Promise<SecurityStore> {

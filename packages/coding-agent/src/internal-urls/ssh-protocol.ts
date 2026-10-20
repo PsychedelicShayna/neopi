@@ -30,6 +30,8 @@ import {
 	statRemotePath,
 	writeRemoteFile,
 } from "../ssh/file-transfer";
+import { render as renderPrompt } from "@oh-my-pi/pi-utils/prompt";
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import sshDoc from "../prompts/internal-urls/ssh.md" with { type: "text" };
 import { contentTypeForPath, formatDirectoryListing } from "./filesystem-resource";
 import type {
@@ -252,7 +254,9 @@ export class SshProtocolHandler implements ProtocolHandler {
 
 	/** Advertised only when an `ssh` client is on PATH. */
 	promptDoc(): string | undefined {
-		return $which("ssh") ? sshDoc.trim() : undefined;
+		if (!$which("ssh")) return undefined;
+		const { text } = resolvePromptAsset("internal-urls/ssh.md", sshDoc);
+		return (text === sshDoc ? text : renderPrompt(text)).trim();
 	}
 
 	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {

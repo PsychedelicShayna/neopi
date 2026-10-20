@@ -1,3 +1,4 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import {
@@ -6,7 +7,7 @@ import {
 	emptyAgentUsage,
 	type AgentUsage,
 } from "@oh-my-pi/pi-tui/tools/agent-usage";
-import { prompt } from "@oh-my-pi/pi-utils";
+
 import type { Settings } from "../config/settings";
 import type { ContextUsage } from "../extensibility/extensions/types";
 import template from "../prompts/system/agent-telemetry.md" with { type: "text" };
@@ -232,5 +233,5 @@ export function injectAgentTelemetry(messages: AgentMessage[], host: AgentTeleme
 }
 
 function renderTelemetry(value: object): string {
-	return prompt.render(template, { json: JSON.stringify(value) });
+	return renderPromptAsset("system/agent-telemetry.md", template, { json: JSON.stringify(value) });
 }

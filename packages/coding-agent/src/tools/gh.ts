@@ -13,9 +13,9 @@ import {
 	formatBytes,
 	isProbablyBinaryHeader,
 	parseImageMetadata,
-	prompt,
 	untilAborted,
 } from "@oh-my-pi/pi-utils";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import githubDescription from "../prompts/tools/github.md" with { type: "text" };
 import { github } from "../utils/github";
 import { loadImageAttachmentInput } from "../utils/image-loading";
@@ -143,7 +143,9 @@ export class GithubTool implements AgentTool<typeof githubSchema, GhToolDetails>
 	readonly summary = "Interact with GitHub repositories, files, pull requests, and Actions";
 	readonly loadMode = "discoverable";
 	readonly label = "GitHub";
-	readonly description = prompt.render(githubDescription);
+	get description(): string {
+		return renderPromptAsset("tools/github.md", githubDescription, {}, { cwd: this.session.cwd });
+	}
 	readonly parameters = githubSchema;
 	readonly strict = true;
 

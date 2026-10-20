@@ -55,6 +55,7 @@ import {
 } from "@oh-my-pi/pi-ai/utils/harmony-leak";
 import { isDsmlLeakRecoveryTarget, removeDsmlToolMarkupLeak } from "@oh-my-pi/pi-ai/utils/dsml-leak";
 import { cloneJsonTree, logger, sanitizeText, structuredCloneJSON } from "@oh-my-pi/pi-utils";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { LiveSteeringChannel } from "./live-steering";
 import { agentPauseGate } from "./pause";
@@ -1726,7 +1727,15 @@ async function runLoopBody(
 						currentContext,
 						newMessages,
 						stream,
-						dsmlToolCallLeakPrompt,
+						renderPromptAsset(
+							"agent/dsml-tool-call-leak.md",
+							dsmlToolCallLeakPrompt,
+							{},
+							{
+								cwd: config.getCwd?.() ?? config.cwd,
+								kind: "notice",
+							},
+						),
 					);
 					if (nudge) additionalMessages.push(nudge);
 					dsmlLeakNudges++;

@@ -1,5 +1,6 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import * as path from "node:path";
-import { isEnoent, prompt } from "@oh-my-pi/pi-utils";
+import { isEnoent } from "@oh-my-pi/pi-utils";
 import launchProfileTemplate from "../prompts/launch-profile.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
 
@@ -59,5 +60,5 @@ export async function loadLaunchProfileMemory(
 export function renderLaunchProfileMemory(memory: LaunchProfileMemory | undefined): string | undefined {
 	return memory === undefined
 		? undefined
-		: prompt.render(launchProfileTemplate, { name: memory.name, sources: memory.sources });
+		: renderPromptAsset("launch-profile.md", launchProfileTemplate, { name: memory.name, sources: memory.sources });
 }

@@ -1,4 +1,5 @@
-import { logger, prompt } from "@oh-my-pi/pi-utils";
+import { logger } from "@oh-my-pi/pi-utils";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import type { CustomTool } from "../extensibility/custom-tools/types";
 import workpoolBatchTemplate from "../prompts/tools/workpool-batch.md" with { type: "text" };
 import workpoolTurnResultTemplate from "../prompts/tools/workpool-turn-result.md" with { type: "text" };
@@ -348,11 +349,16 @@ export class WorkPool {
 	}
 
 	#batchMessage(batch: WorkPoolBatch): string {
-		return prompt.render(workpoolBatchTemplate, {
-			pool: this.name,
-			batch: batch.id,
-			items: batch.items.map((item, index) => ({ id: item.id, index: index + 1, text: item.text })),
-		});
+		return renderPromptAsset(
+			"tools/workpool-batch.md",
+			workpoolBatchTemplate,
+			{
+				pool: this.name,
+				batch: batch.id,
+				items: batch.items.map((item, index) => ({ id: item.id, index: index + 1, text: item.text })),
+			},
+			{ cwd: this.session.cwd },
+		);
 	}
 
 	#startTurn(agent: WorkPoolAgent, batch: WorkPoolBatch, message: string): void {
@@ -530,17 +536,22 @@ export class WorkPool {
 			output.length <= DELIVERY_OUTPUT_LIMIT
 				? output
 				: `${output.slice(0, DELIVERY_OUTPUT_LIMIT)}\n[output truncated to ${DELIVERY_OUTPUT_LIMIT} characters]`;
-		return prompt.render(workpoolTurnResultTemplate, {
-			pool: this.name,
-			agent: agent.id,
-			batch: batch.id,
-			status: batch.status,
-			count: batch.items.length,
-			multiple: batch.items.length !== 1,
-			items: batch.items.map(item => ({ id: item.id, status: item.status, text: oneLineLabel(item.text) })),
-			output: renderedOutput,
-			remaining,
-		});
+		return renderPromptAsset(
+			"tools/workpool-turn-result.md",
+			workpoolTurnResultTemplate,
+			{
+				pool: this.name,
+				agent: agent.id,
+				batch: batch.id,
+				status: batch.status,
+				count: batch.items.length,
+				multiple: batch.items.length !== 1,
+				items: batch.items.map(item => ({ id: item.id, status: item.status, text: oneLineLabel(item.text) })),
+				output: renderedOutput,
+				remaining,
+			},
+			{ cwd: this.session.cwd, kind: "notice" },
+		);
 	}
 
 	/** Return current workers, item counts, and context usage. */

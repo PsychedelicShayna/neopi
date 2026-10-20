@@ -67,7 +67,8 @@ import {
 import { resolveImageCountBudget, resolveInlineImageByteBudget } from "@oh-my-pi/pi-catalog/compat/request-size";
 import { classifyModel, compareRevision, parseRevision } from "@oh-my-pi/pi-catalog/identity";
 import { renderSnapcompactPng, snapcompactSupportedChars } from "@oh-my-pi/pi-natives";
-import { formatGroupedPaths, prompt } from "@oh-my-pi/pi-utils";
+import { formatGroupedPaths } from "@oh-my-pi/pi-utils";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import fileOperationsTemplate from "./prompts/file-operations.md" with { type: "text" };
 import snapcompactSummaryPrompt from "./prompts/snapcompact-summary.md" with { type: "text" };
@@ -656,6 +657,7 @@ export interface Geometry {
 }
 
 export interface Options<TMessage = Message> extends SerializeOptions {
+	cwd?: string;
 	/** App-level message transformer (same contract as agent-core's `SummaryOptions.convertToLlm`). */
 	convertToLlm?: ConvertToLlm<TMessage>;
 	/** Model whose provider API and id select the frame shape. */
@@ -779,9 +781,16 @@ function formatFileList(readFiles: string[], modifiedFiles: string[], readSet?: 
 	return files;
 }
 
-function formatFileOperations(readFiles: string[], modifiedFiles: string[], readSet?: ReadonlySet<string>): string {
+function formatFileOperations(
+	readFiles: string[],
+	modifiedFiles: string[],
+	readSet?: ReadonlySet<string>,
+	cwd?: string,
+): string {
 	const files = formatFileList(readFiles, modifiedFiles, readSet);
-	return files.length > 0 ? prompt.render(fileOperationsTemplate, { files }) : "";
+	return files.length > 0
+		? renderPromptAsset("compaction/snapcompact/file-operations.md", fileOperationsTemplate, { files }, { cwd })
+		: "";
 }
 
 export function upsertFileOperations(
@@ -789,9 +798,10 @@ export function upsertFileOperations(
 	readFiles: string[],
 	modifiedFiles: string[],
 	readSet?: ReadonlySet<string>,
+	cwd?: string,
 ): string {
 	const baseSummary = stripFileOperationTags(summary);
-	const fileOperations = formatFileOperations(readFiles, modifiedFiles, readSet);
+	const fileOperations = formatFileOperations(readFiles, modifiedFiles, readSet, cwd);
 	if (!fileOperations) return baseSummary;
 	if (!baseSummary) return fileOperations;
 	return `${baseSummary}\n\n${fileOperations}`;
@@ -2328,20 +2338,25 @@ export async function compact<TMessage = Message>(
 	if (frames.length === 0 && textHead.length === 0 && textTail.length === 0 && files.length === 0) {
 		summary = "No prior history.";
 	} else {
-		summary = prompt.render(snapcompactSummaryPrompt, {
-			frameCount: frames.length,
-			multipleFrames: frames.length > 1,
-			docColumns: high.columns === 2,
-			cols: summaryCols,
-			rows: geo.rows,
-			sentenceInk: high.variant === "sent",
-			stopwordDimmed: high.stopwordDim === true,
-			lineRepeated: high.lineRepeat > 1,
-			truncatedChars,
-			includedPreviousSummary,
-			files: files.length > 0 ? files : undefined,
-			includeThinking: options?.includeThinking !== false,
-		});
+		summary = renderPromptAsset(
+			"compaction/snapcompact/snapcompact-summary.md",
+			snapcompactSummaryPrompt,
+			{
+				frameCount: frames.length,
+				multipleFrames: frames.length > 1,
+				docColumns: high.columns === 2,
+				cols: summaryCols,
+				rows: geo.rows,
+				sentenceInk: high.variant === "sent",
+				stopwordDimmed: high.stopwordDim === true,
+				lineRepeated: high.lineRepeat > 1,
+				truncatedChars,
+				includedPreviousSummary,
+				files: files.length > 0 ? files : undefined,
+				includeThinking: options?.includeThinking !== false,
+			},
+			{ cwd: options?.cwd },
+		);
 	}
 
 	// A snapcompact pass replaces any provider-side compaction payload; strip the

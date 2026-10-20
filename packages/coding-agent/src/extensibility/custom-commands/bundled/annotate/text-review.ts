@@ -1,4 +1,5 @@
-import { prompt } from "@oh-my-pi/pi-utils";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
+
 import { markdownFenceFor } from "../../../../utils/markdown-fence";
 import textReviewTemplate from "./prompts/text-review.md" with { type: "text" };
 import type { TextReviewAnnotation, TextReviewSource } from "@oh-my-pi/pi-tui/overlays/annotation-types";
@@ -106,14 +107,18 @@ export function buildTextReviewPrompt(
 			quoteFence: quoteIsInline ? undefined : markdownFenceFor(annotation.quote),
 		};
 	});
-	const rendered = prompt.render(textReviewTemplate, {
-		sourceLabel,
-		includeSource: shouldIncludeSource(source) || (shouldSummarizeTextReviewSource(source) && !summary),
-		sourceFence: markdownFenceFor(source.text),
-		sourceText,
-		contextSummary: summaryText,
-		summaryFence: summary ? markdownFenceFor(summary) : "```",
-		annotations: renderedAnnotations,
-	});
+	const rendered = renderPromptAsset(
+		"extensibility/custom-commands/bundled/annotate/text-review.md",
+		textReviewTemplate,
+		{
+			sourceLabel,
+			includeSource: shouldIncludeSource(source) || (shouldSummarizeTextReviewSource(source) && !summary),
+			sourceFence: markdownFenceFor(source.text),
+			sourceText,
+			contextSummary: summaryText,
+			summaryFence: summary ? markdownFenceFor(summary) : "```",
+			annotations: renderedAnnotations,
+		},
+	);
 	return restoreExactValues(rendered, replacements);
 }

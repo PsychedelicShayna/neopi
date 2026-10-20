@@ -2,7 +2,8 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 import type { Usage } from "@oh-my-pi/pi-ai";
 import type { AgentProgress, SingleResult } from "@oh-my-pi/pi-tui/tools/task";
-import { PRODUCT_NAME, prompt } from "@oh-my-pi/pi-utils";
+import { PRODUCT_NAME } from "@oh-my-pi/pi-utils";
+import { compilePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import claudeParentContextPrompt from "../../prompts/agents/claude-parent-context.md" with { type: "text" };
 import { type ExternalHarnessAdapter, type ExternalHarnessInput, externalHarnessEnv } from "./types";
 
@@ -200,13 +201,13 @@ export class ClaudeExternalHarnessAdapter implements ExternalHarnessAdapter {
 				tools: input.agent.tools ?? [],
 				env: externalHarnessEnv({ OMP_AGENT_ID: input.agentId }),
 				model: externalModel(input.agent),
-				systemPrompt: prompt
-					.compile(claudeParentContextPrompt)({
-						systemPrompt: input.agent.systemPrompt,
-						parentSessionId: input.parent.parentSessionId,
-						inheritedExtensionState: String(JSON.stringify(input.parent.inheritedExtensionState)),
-					})
-					.trimEnd(),
+				systemPrompt: compilePromptAsset("agents/claude-parent-context.md", claudeParentContextPrompt, {
+					cwd: input.cwd,
+				})({
+					systemPrompt: input.agent.systemPrompt,
+					parentSessionId: input.parent.parentSessionId,
+					inheritedExtensionState: String(JSON.stringify(input.parent.inheritedExtensionState)),
+				}).trimEnd(),
 			});
 			for await (const line of lines(stdout)) {
 				if (Buffer.byteLength(line) > MAX_FRAME_BYTES)

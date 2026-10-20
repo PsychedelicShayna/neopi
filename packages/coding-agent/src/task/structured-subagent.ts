@@ -7,7 +7,8 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import path from "node:path";
-import { $env, prompt, Snowflake } from "@oh-my-pi/pi-utils";
+import { $env, Snowflake } from "@oh-my-pi/pi-utils";
+import { renderPromptAsset, compilePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import { resolveAgentModelSelection, resolveConfiguredModelPatterns } from "../config/model-resolver";
 import { type OAuthAccountPools, validateAgentAccountPools } from "../config/account-pools";
@@ -229,8 +230,13 @@ export class StructuredSubagentError extends Error {
 
 const PLAN_MODE_TOOLS = ["read", "grep", "glob", "web_search"] as const;
 
-function renderSubagentPrompt(assignment: string, routing?: RoutingPolicyFields): string {
-	return prompt.render(subagentUserPromptTemplate, { assignment: assignment.trim(), routing });
+function renderSubagentPrompt(assignment: string, routing?: RoutingPolicyFields, cwd?: string): string {
+	return renderPromptAsset(
+		"system/subagent-user-prompt.md",
+		subagentUserPromptTemplate,
+		{ assignment: assignment.trim(), routing },
+		{ cwd },
+	);
 }
 
 function trimToUndefined(value: string | undefined): string | undefined {
@@ -261,11 +267,11 @@ function resolveSchema(request: StructuredSubagentRequest, agent: AgentDefinitio
 	return { schema: undefined, source: "none", mode, outputSchemaOverridesAgent: false };
 }
 
-function createPlanModeAgent(agent: AgentDefinition): AgentDefinition {
+function createPlanModeAgent(agent: AgentDefinition, cwd: string): AgentDefinition {
 	const tools = [...PLAN_MODE_TOOLS, ...(agent.tools ?? []).filter(tool => tool === "ast_grep")];
 	return {
 		...agent,
-		systemPrompt: `${planModeSubagentPrompt}\n\n${agent.systemPrompt}`,
+		systemPrompt: `${compilePromptAsset("system/plan-mode-subagent.md", planModeSubagentPrompt, { cwd })({})}\n\n${agent.systemPrompt}`,
 		tools,
 		spawns: undefined,
 		prewalk: undefined,
@@ -438,7 +444,7 @@ export async function resolveEffectiveSubagentPolicy(
 		);
 	}
 
-	const effectiveAgent = planMode ? createPlanModeAgent(agent) : agent;
+	const effectiveAgent = planMode ? createPlanModeAgent(agent, request.session.cwd) : agent;
 	try {
 		assertExternalHarnessCapabilities(effectiveAgent);
 	} catch (error) {
@@ -641,7 +647,7 @@ function buildExecutorOptions(
 		getApiKey: session.getApiKey,
 		credentialSourceSessionId: session.getCredentialSourceSessionId?.(),
 		agent: policy.effectiveAgent,
-		task: renderSubagentPrompt(request.assignment, policy.routing),
+		task: renderSubagentPrompt(request.assignment, policy.routing, session.cwd),
 		assignment: request.assignment.trim(),
 		context: request.context?.trim() || undefined,
 		planReference: undefined,
@@ -746,7 +752,7 @@ function buildFailureResult(
 			id,
 			agent: policy.agent.name,
 			agentSource: policy.agent.source,
-			task: renderSubagentPrompt(request.assignment),
+			task: renderSubagentPrompt(request.assignment, undefined, request.session.cwd),
 			assignment: request.assignment.trim(),
 			description: request.invocationKind === "eval" ? trimToUndefined(request.identity?.label) : undefined,
 			exitCode: 1,
@@ -782,14 +788,19 @@ async function resolveNestedPatchPaths(
 }
 
 /** Recovery hint appended to an isolated run's failure: every preserved artifact, and the nested-persist fallback failure when there is one. */
-async function isolationRecoveryHint(result: SingleResult, artifactsDir: string): Promise<string> {
+async function isolationRecoveryHint(result: SingleResult, artifactsDir: string, cwd?: string): Promise<string> {
 	const nested = await resolveNestedPatchPaths(result, artifactsDir);
-	const hint = prompt.render(isolationRecoveryHintTemplate, {
-		patchPath: result.patchPath,
-		nestedPatchPaths: nested.paths,
-		nestedFailure: nested.failure,
-		branchName: result.branchName,
-	});
+	const hint = renderPromptAsset(
+		"tools/isolation-recovery-hint.md",
+		isolationRecoveryHintTemplate,
+		{
+			patchPath: result.patchPath,
+			nestedPatchPaths: nested.paths,
+			nestedFailure: nested.failure,
+			branchName: result.branchName,
+		},
+		{ cwd, kind: "notice" },
+	);
 	return hint ? ` ${hint}` : "";
 }
 
@@ -799,15 +810,18 @@ async function isolationRecoveryHint(result: SingleResult, artifactsDir: string)
  * the root patch only when it holds changes, and each nested-repo patch file,
  * so the parent knows exactly where the work lives.
  */
-function describeCapturedChanges(result: SingleResult): string {
+function describeCapturedChanges(result: SingleResult, cwd: string): string {
 	const nestedPatchPaths = result.nestedPatchPaths ?? [];
-	return renderIsolationSummary({
-		kind: "captured",
-		branchName: result.branchName,
-		rootPatchPath: result.hasRootChanges === false ? undefined : result.patchPath,
-		nestedCount: nestedPatchPaths.length || (result.nestedPatches?.length ?? 0),
-		nestedPatchPaths,
-	});
+	return renderIsolationSummary(
+		{
+			kind: "captured",
+			branchName: result.branchName,
+			rootPatchPath: result.hasRootChanges === false ? undefined : result.patchPath,
+			nestedCount: nestedPatchPaths.length || (result.nestedPatches?.length ?? 0),
+			nestedPatchPaths,
+		},
+		cwd,
+	);
 }
 
 function attachStructuredOutputMetadata(result: SingleResult, schema: StructuredSubagentSchemaResolution): void {
@@ -849,15 +863,20 @@ function attachStructuredOutputMetadata(result: SingleResult, schema: Structured
 }
 
 /** Name a settled child's exit status and artifact for a post-settle failure message. */
-function describeSalvagedWork(result: SingleResult): string {
-	const hint = prompt.render(salvagedChildHintTemplate, {
-		aborted: result.aborted,
-		abortReason: result.abortReason,
-		exitCode: result.exitCode,
-		error: result.error,
-		id: result.id,
-		outputPath: result.outputPath,
-	});
+function describeSalvagedWork(result: SingleResult, cwd: string): string {
+	const hint = renderPromptAsset(
+		"tools/salvaged-child-hint.md",
+		salvagedChildHintTemplate,
+		{
+			aborted: result.aborted,
+			abortReason: result.abortReason,
+			exitCode: result.exitCode,
+			error: result.error,
+			id: result.id,
+			outputPath: result.outputPath,
+		},
+		{ cwd, kind: "notice" },
+	);
 	return `\n${hint.trim()}`;
 }
 
@@ -964,15 +983,18 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 			// The agent finished but the runner could not capture, persist, or
 			// commit its changes. `result.error` names the recovery route (retained
 			// workspace, rescued branch); it is the parent's only way to find it.
-			mergeSummary = renderIsolationSummary({
-				kind: "capture-error",
-				error: result.error,
-				branchName: result.branchName,
-				rootPatchPath: result.hasRootChanges === false ? undefined : result.patchPath,
-				nestedPatchPaths: result.nestedPatchPaths ?? [],
-			});
+			mergeSummary = renderIsolationSummary(
+				{
+					kind: "capture-error",
+					error: result.error,
+					branchName: result.branchName,
+					rootPatchPath: result.hasRootChanges === false ? undefined : result.patchPath,
+					nestedPatchPaths: result.nestedPatchPaths ?? [],
+				},
+				request.session.cwd,
+			);
 		} else if (policy.isIsolated && isolationContext && !policy.applyChanges) {
-			mergeSummary = describeCapturedChanges(result);
+			mergeSummary = describeCapturedChanges(result, request.session.cwd);
 		}
 
 		completedSuccessfully = result.exitCode === 0 && !result.error && !result.aborted;
@@ -991,7 +1013,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 		retainSalvagedArtifact = settled?.outputPath !== undefined;
 		throw new StructuredSubagentError(
 			"execution",
-			`Subagent execution failed: ${error instanceof Error ? error.message : String(error)}${settled ? describeSalvagedWork(settled) : ""}`,
+			`Subagent execution failed: ${error instanceof Error ? error.message : String(error)}${settled ? describeSalvagedWork(settled, request.session.cwd) : ""}`,
 			{ cause: error, result: settled },
 		);
 	} finally {
@@ -1024,6 +1046,10 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 }
 
 /** Build the recovery suffix used by adapters after an isolated failure. */
-export async function buildStructuredSubagentRecoveryHint(result: SingleResult, artifactsDir: string): Promise<string> {
-	return isolationRecoveryHint(result, artifactsDir);
+export async function buildStructuredSubagentRecoveryHint(
+	result: SingleResult,
+	artifactsDir: string,
+	cwd?: string,
+): Promise<string> {
+	return isolationRecoveryHint(result, artifactsDir, cwd);
 }

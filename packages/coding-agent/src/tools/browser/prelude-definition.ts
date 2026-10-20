@@ -1,3 +1,5 @@
+import { render as renderPrompt } from "@oh-my-pi/pi-utils/prompt";
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import type { EvalPreludeDefinition } from "../../eval/preludes";
 import browserDescription from "../../prompts/tools/browser.md" with { type: "text" };
 import type { ToolSession } from "../../sdk";
@@ -16,7 +18,10 @@ export function createBrowserPreludeDefinition(
 ): EvalPreludeDefinition {
 	return {
 		name: "browser",
-		documentation: browserDescription,
+		get documentation(): string {
+			const { text } = resolvePromptAsset("tools/browser.md", browserDescription, { cwd: session.cwd });
+			return text === browserDescription ? text : renderPrompt(text);
+		},
 		javascript: browserJavascript,
 		python: browserPython,
 		exports: ["browser"],

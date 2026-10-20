@@ -1,8 +1,9 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Agent, AgentMessage, AgentTool, AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { resolveDelegationBias } from "@oh-my-pi/pi-catalog/compat/delegation";
-import { isRecord, logger, prompt, stringProperty, structuredCloneJSON, untilAborted } from "@oh-my-pi/pi-utils";
+import { isRecord, logger, stringProperty, structuredCloneJSON, untilAborted } from "@oh-my-pi/pi-utils";
 import { reset as resetCapabilities } from "../capability";
 import type { EffectiveExtensionRoots } from "../capability/types";
 import { shouldInlineToolDescriptors } from "../config/inline-tool-descriptors-mode";
@@ -23,6 +24,7 @@ import { MEMORY_BACKEND_TOOL_NAMES } from "../memory-backend/tool-names";
 import { invalidateToolSchemaMetadata } from "@oh-my-pi/pi-tui/status-line/context-usage";
 import type { MemoryBackendStartOptions, MemoryPromptPreparation } from "../memory-backend/types";
 import type { AgentDefinition } from "../task/types";
+import { resolveModelPreset } from "../prompts/model-presets";
 import evalPreludeNoticePrompt from "../prompts/system/eval-prelude-notice.md" with { type: "text" };
 import sessionAgentNoticePrompt from "../prompts/system/session-agent-notice.md" with { type: "text" };
 import toolRosterNoticePrompt from "../prompts/system/tool-roster-notice.md" with { type: "text" };
@@ -879,7 +881,9 @@ export class SessionTools {
 			cfgInlineToolDescriptors.get(this.#host.settings),
 			activeModel.id,
 		);
-		return `delegation-bias:${resolveDelegationBias(activeModel)}|inline-descriptors:${inlineDescriptors}`;
+		const preset = resolveModelPreset(activeModel);
+		const presetKey = preset ? `${preset.id}:${JSON.stringify(preset.context)}` : "";
+		return `delegation-bias:${resolveDelegationBias(activeModel)}|inline-descriptors:${inlineDescriptors}|model-preset:${presetKey}`;
 	}
 
 	/** Rebuilds model-dependent tool prompts after a model change. */
@@ -1673,10 +1677,15 @@ export class SessionTools {
 		return {
 			role: "custom",
 			customType: TOOL_ROSTER_NOTICE_MESSAGE_TYPE,
-			content: prompt.render(toolRosterNoticePrompt, {
-				added: added.length > 0 ? added.join(", ") : undefined,
-				removed: removed.length > 0 ? removed.join(", ") : undefined,
-			}),
+			content: renderPromptAsset(
+				"system/tool-roster-notice.md",
+				toolRosterNoticePrompt,
+				{
+					added: added.length > 0 ? added.join(", ") : undefined,
+					removed: removed.length > 0 ? removed.join(", ") : undefined,
+				},
+				{ cwd: this.#host.sessionManager.getCwd(), kind: "notice" },
+			),
 			details: { added, removed },
 			attribution: "agent",
 			display: false,
@@ -1715,15 +1724,20 @@ export class SessionTools {
 		return {
 			role: "custom",
 			customType: EVAL_PRELUDE_NOTICE_MESSAGE_TYPE,
-			content: prompt.render(evalPreludeNoticePrompt, {
-				added: added.map(definition => ({ name: definition.name, summary: evalPreludeSummary(definition) })),
-				removed,
-				canRead,
-				sections: added.flatMap(definition => [
-					...(canRead ? [] : [definition.documentation.trim()]),
-					...(definition.guidance ? [definition.guidance.trim()] : []),
-				]),
-			}),
+			content: renderPromptAsset(
+				"system/eval-prelude-notice.md",
+				evalPreludeNoticePrompt,
+				{
+					added: added.map(definition => ({ name: definition.name, summary: evalPreludeSummary(definition) })),
+					removed,
+					canRead,
+					sections: added.flatMap(definition => [
+						...(canRead ? [] : [definition.documentation.trim()]),
+						...(definition.guidance ? [definition.guidance.trim()] : []),
+					]),
+				},
+				{ cwd: this.#host.sessionManager.getCwd(), kind: "notice" },
+			),
 			details: { added: added.map(definition => definition.name), removed },
 			attribution: "agent",
 			display: false,
@@ -1757,10 +1771,15 @@ export class SessionTools {
 		return {
 			role: "custom",
 			customType: SESSION_AGENT_NOTICE_MESSAGE_TYPE,
-			content: prompt.render(sessionAgentNoticePrompt, {
-				added: added.map(agent => ({ name: agent.name, description: agent.description })),
-				removed,
-			}),
+			content: renderPromptAsset(
+				"system/session-agent-notice.md",
+				sessionAgentNoticePrompt,
+				{
+					added: added.map(agent => ({ name: agent.name, description: agent.description })),
+					removed,
+				},
+				{ cwd: this.#host.sessionManager.getCwd(), kind: "notice" },
+			),
 			details: { added: added.map(agent => agent.name), removed },
 			attribution: "agent",
 			display: false,
@@ -1876,7 +1895,12 @@ export class SessionTools {
 			notice: {
 				role: "custom",
 				customType: XDEV_MOUNT_NOTICE_MESSAGE_TYPE,
-				content: prompt.render(xdevMountNoticePrompt, { added, removed, docs }),
+				content: renderPromptAsset(
+					"system/xdev-mount-notice.md",
+					xdevMountNoticePrompt,
+					{ added, removed, docs },
+					{ cwd: this.#host.sessionManager.getCwd(), kind: "notice" },
+				),
 				details: { added: addedNames, removed: removedNames },
 				attribution: "agent",
 				display: false,

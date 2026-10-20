@@ -7,6 +7,8 @@
 import * as fs from "node:fs/promises";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { getActiveRules, type Rule } from "../capability/rule";
+import { render as renderPrompt } from "@oh-my-pi/pi-utils/prompt";
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import ruleDoc from "../prompts/internal-urls/rule.md" with { type: "text" };
 import type {
 	InternalResource,
@@ -51,7 +53,9 @@ export class RuleProtocolHandler implements ProtocolHandler {
 
 	/** Advertised only when the rulebook has addressable rules. */
 	promptDoc(host: SchemeHost): string | undefined {
-		return host.ruleCount > 0 ? ruleDoc.trim() : undefined;
+		if (host.ruleCount <= 0) return undefined;
+		const { text } = resolvePromptAsset("internal-urls/rule.md", ruleDoc);
+		return (text === ruleDoc ? text : renderPrompt(text)).trim();
 	}
 
 	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {

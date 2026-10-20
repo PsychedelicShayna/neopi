@@ -147,4 +147,47 @@ describe("workspace directories in the system prompt", () => {
 			dir.removeSync();
 		}
 	});
+	it("reloads built-in template overrides through refreshBaseSystemPrompt", async () => {
+		using dir = TempDir.createSync("@ws-builtin-prompt-refresh-");
+		const auth = await AuthStorage.create(path.join(dir.path(), "auth.db"));
+		try {
+			auth.keys.setRuntime("mock", "test-key");
+			const overridePath = path.join(dir.path(), ".omp/builtin-prompts/system/system-prompt.md");
+			await Bun.write(overridePath, "FIRST TEMPLATE {{MAX_CONCURRENCY}}");
+			const model = createMockModel({ id: "text", handler: () => ({ content: ["ok"] }) });
+			const { session } = await createAgentSession({
+				cwd: dir.path(),
+				agentDir: dir.path(),
+				authStorage: auth,
+				modelRegistry: new ModelRegistry(auth, path.join(dir.path(), "models.yml")),
+				model,
+				settings: Settings.isolated({
+					"compaction.enabled": false,
+					"todo.enabled": false,
+					"retry.enabled": false,
+				}),
+				sessionManager: SessionManager.inMemory(dir.path()),
+				disableExtensionDiscovery: true,
+				enableMCP: false,
+				enableLsp: false,
+				skills: [],
+				rules: [],
+				contextFiles: [],
+			});
+			try {
+				await session.prompt("first");
+				expect(model.calls?.at(-1)?.context.systemPrompt?.[0]).toStartWith("FIRST TEMPLATE ");
+				await Bun.write(overridePath, "SECOND TEMPLATE {{MAX_CONCURRENCY}}");
+				await session.refreshBaseSystemPrompt();
+				await session.prompt("second");
+				const sent = model.calls?.at(-1)?.context.systemPrompt?.[0];
+				expect(sent).toStartWith("SECOND TEMPLATE ");
+				expect(sent).not.toContain("{{MAX_CONCURRENCY}}");
+			} finally {
+				await session.dispose();
+			}
+		} finally {
+			auth.close();
+		}
+	});
 });

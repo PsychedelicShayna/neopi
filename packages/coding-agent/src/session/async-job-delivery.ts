@@ -1,3 +1,4 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * Owner-routed async job delivery: formatting and batch-message assembly for
  * `async-result` follow-ups.
@@ -8,7 +9,7 @@
  * This replaces the old single hardwired `onJobComplete` closure that routed
  * every completion — regardless of owner — into the first top-level session.
  */
-import { prompt } from "@oh-my-pi/pi-utils";
+
 import type { AsyncJob, AsyncJobType } from "../async";
 import asyncResultTemplate from "../prompts/tools/async-result.md" with { type: "text" };
 import type { StructuredSubagentOutput } from "@oh-my-pi/pi-tui/tools/task";
@@ -141,7 +142,7 @@ export function buildAsyncResultBatchMessage(entries: AsyncResultEntry[]): Custo
 			...(job.structured ? { schema: job.structured } : {}),
 		})),
 	};
-	const text = prompt.render(asyncResultTemplate, {
+	const text = renderPromptAsset("tools/async-result.md", asyncResultTemplate, {
 		multiple: jobs.length > 1,
 		jobs,
 	});

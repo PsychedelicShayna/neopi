@@ -1,6 +1,7 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { logger, prompt, sanitizeText } from "@oh-my-pi/pi-utils";
+import { logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import composerPredictionPrompt from "../../prompts/system/composer-prediction-user.md" with { type: "text" };
 import type { AgentSession } from "../../session/agent-session";
 import { cfgComposerPredictions } from "../settings";
@@ -107,7 +108,12 @@ export class ComposerPredictionController {
 	async #run(source: PredictionSource, abort: AbortController): Promise<void> {
 		try {
 			const { replyText, assistantMessage } = await source.session.runEphemeralTurn({
-				promptText: prompt.render(composerPredictionPrompt, { skip: SKIP_REPLY }),
+				promptText: renderPromptAsset(
+					"system/composer-prediction-user.md",
+					composerPredictionPrompt,
+					{ skip: SKIP_REPLY },
+					{ cwd: source.session.sessionManager.getCwd() },
+				),
 				maxTokens: source.session.ephemeralMaxTokensPreservesRequest() ? PREDICTION_MAX_TOKENS : undefined,
 				minimizeEffort: true,
 				signal: AbortSignal.any([abort.signal, AbortSignal.timeout(this.#deadlineMs)]),

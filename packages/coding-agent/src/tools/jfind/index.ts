@@ -13,6 +13,8 @@ import { formatBytes, formatDuration, formatNumber } from "@oh-my-pi/pi-utils";
 import { sessionResolveContext } from "../../internal-urls/context";
 import { InternalUrlFilesystem } from "../../internal-urls/url-filesystem";
 import { hasNativeJudge, journalJudgmentUsage, resolveJudge, sharedJudgmentCache } from "../../judgment";
+import { render as renderPrompt } from "@oh-my-pi/pi-utils/prompt";
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import findDescription from "../../prompts/tools/find.md" with { type: "text" };
 import type { ToolSession } from "..";
 import { formatPathRelativeToCwd, normalizePathLikeInput, resolveSearchResultPath } from "../path-utils";
@@ -56,7 +58,10 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 	readonly loadMode = "essential";
 	readonly label = "Find";
 	readonly summary = "Semantic grep: find files and line ranges by describing what they do";
-	readonly description = findDescription;
+	get description(): string {
+		const { text } = resolvePromptAsset("tools/find.md", findDescription, { cwd: this.session.cwd });
+		return text === findDescription ? text : renderPrompt(text);
+	}
 	readonly parameters = findSchema;
 	readonly strict = true;
 

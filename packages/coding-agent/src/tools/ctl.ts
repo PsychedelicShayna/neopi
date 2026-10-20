@@ -4,7 +4,8 @@
  */
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import { prompt } from "@oh-my-pi/pi-utils";
+
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import ctlDescription from "../prompts/tools/ctl.md" with { type: "text" };
 import { ctlList, ctlRpc, ctlSend, ctlState, withCtlCaller, withCtlIo } from "../cli/ctl-cli";
 
@@ -24,7 +25,9 @@ const ctlSchema = type({
 export class CtlTool implements AgentTool<typeof ctlSchema> {
 	readonly name = "ctl";
 	readonly label = "Control";
-	readonly description = prompt.render(ctlDescription);
+	get description(): string {
+		return renderPromptAsset("tools/ctl.md", ctlDescription, {});
+	}
 	readonly parameters = ctlSchema;
 
 	async execute(_toolCallId: string, raw: typeof ctlSchema.infer): Promise<AgentToolResult<undefined>> {

@@ -416,6 +416,7 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 		values: ["output", "signature"],
 	},
 	"delegation-bias": { key: "delegationBias", set: "catalog", shape: "scalar", values: DELEGATION_BIASES },
+	"behavioral-preset": { key: "behavioralPreset", set: "catalog", shape: "scalar", values: ["none", "opus-5"] },
 	"discovery-api": { key: "discoveryApi", set: "catalog", shape: "scalar" },
 	"edit-prompt-variant": { key: "editPromptVariant", set: "catalog", shape: "scalar", values: ["full", "compact"] },
 	"edit-revision": { key: "editRevision", set: "catalog", shape: "scalar" },

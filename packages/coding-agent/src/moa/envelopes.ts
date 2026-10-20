@@ -1,3 +1,4 @@
+import { resolvePromptAsset, compilePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * Envelope presets: Handlebars templates that frame what a member receives for
  * its hop. Compiled with `prompt.compile` (not `render`) so member output
@@ -7,36 +8,56 @@
 import { prompt } from "@oh-my-pi/pi-utils";
 import type { Answer, Question } from "@oh-my-pi/pi-ai/judgment";
 import type { JudgeKind } from "../judgment";
-import entryEnvelope from "../prompts/moa/envelopes/entry.md" with { type: "text" };
-import defendEnvelope from "../prompts/moa/envelopes/defend.md" with { type: "text" };
-import disagreeEnvelope from "../prompts/moa/envelopes/disagree.md" with { type: "text" };
-import handoffEnvelope from "../prompts/moa/envelopes/handoff.md" with { type: "text" };
-import judgeEnvelope from "../prompts/moa/envelopes/judge.md" with { type: "text" };
-import limitEnvelope from "../prompts/moa/envelopes/limit.md" with { type: "text" };
-import moaPartsPartial from "../prompts/moa/envelopes/moa-parts.md" with { type: "text" };
+import bundledEntryEnvelope from "../prompts/moa/envelopes/entry.md" with { type: "text" };
+import bundledDefendEnvelope from "../prompts/moa/envelopes/defend.md" with { type: "text" };
+import bundledDisagreeEnvelope from "../prompts/moa/envelopes/disagree.md" with { type: "text" };
+import bundledHandoffEnvelope from "../prompts/moa/envelopes/handoff.md" with { type: "text" };
+import bundledJudgeEnvelope from "../prompts/moa/envelopes/judge.md" with { type: "text" };
+import bundledLimitEnvelope from "../prompts/moa/envelopes/limit.md" with { type: "text" };
+import bundledMoaPartsPartial from "../prompts/moa/envelopes/moa-parts.md" with { type: "text" };
 import limitNotice from "../prompts/moa/notices/limit.md" with { type: "text" };
 import pauseNotice from "../prompts/moa/notices/pause.md" with { type: "text" };
-import defenseRole from "../prompts/moa/roles/defense.md" with { type: "text" };
-import judgeRole from "../prompts/moa/roles/judge.md" with { type: "text" };
-import prosecutionRole from "../prompts/moa/roles/prosecution.md" with { type: "text" };
+import bundledDefenseRole from "../prompts/moa/roles/defense.md" with { type: "text" };
+import bundledJudgeRole from "../prompts/moa/roles/judge.md" with { type: "text" };
+import bundledProsecutionRole from "../prompts/moa/roles/prosecution.md" with { type: "text" };
 import toolTraceTemplate from "../prompts/moa/tool-trace.md" with { type: "text" };
-import verdictTemplate from "../prompts/moa/verdict.md" with { type: "text" };
+import bundledVerdictTemplate from "../prompts/moa/verdict.md" with { type: "text" };
 
 /** Envelope presets shipped with this build, by name. */
 export const BUNDLED_ENVELOPES: Readonly<Record<string, string>> = {
-	entry: entryEnvelope,
-	handoff: handoffEnvelope,
-	disagree: disagreeEnvelope,
-	defend: defendEnvelope,
-	judge: judgeEnvelope,
-	limit: limitEnvelope,
-	verdict: verdictTemplate,
+	get entry() {
+		return resolvePromptAsset("moa/envelopes/entry.md", bundledEntryEnvelope).text;
+	},
+	get handoff() {
+		return resolvePromptAsset("moa/envelopes/handoff.md", bundledHandoffEnvelope).text;
+	},
+	get disagree() {
+		return resolvePromptAsset("moa/envelopes/disagree.md", bundledDisagreeEnvelope).text;
+	},
+	get defend() {
+		return resolvePromptAsset("moa/envelopes/defend.md", bundledDefendEnvelope).text;
+	},
+	get judge() {
+		return resolvePromptAsset("moa/envelopes/judge.md", bundledJudgeEnvelope).text;
+	},
+	get limit() {
+		return resolvePromptAsset("moa/envelopes/limit.md", bundledLimitEnvelope).text;
+	},
+	get verdict() {
+		return resolvePromptAsset("moa/verdict.md", bundledVerdictTemplate).text;
+	},
 };
 
 export const BUNDLED_ROLES: Readonly<Record<string, string>> = {
-	prosecution: prosecutionRole,
-	defense: defenseRole,
-	judge: judgeRole,
+	get prosecution() {
+		return resolvePromptAsset("moa/roles/prosecution.md", bundledProsecutionRole).text;
+	},
+	get defense() {
+		return resolvePromptAsset("moa/roles/defense.md", bundledDefenseRole).text;
+	},
+	get judge() {
+		return resolvePromptAsset("moa/roles/judge.md", bundledJudgeRole).text;
+	},
 };
 
 /** Default envelope of an edge without one. */
@@ -63,12 +84,13 @@ export type EnvelopeContext = {
 	limit?: { kind: "hops" | "budget" | "wall_clock"; value: string };
 };
 
-let partialRegistered = false;
+let registeredPartialSource: string | undefined;
 
 function ensurePartial(): void {
-	if (partialRegistered) return;
-	prompt.registerPartial("moa-parts", moaPartsPartial);
-	partialRegistered = true;
+	const text = resolvePromptAsset("moa/envelopes/moa-parts.md", bundledMoaPartsPartial).text;
+	if (text === registeredPartialSource) return;
+	prompt.registerPartial("moa-parts", text);
+	registeredPartialSource = text;
 }
 
 /** A preset value containing a newline or `{{` is an inline template, not a preset name. */
@@ -90,7 +112,7 @@ export function renderLimitNotice(context: {
 	member?: string;
 	output?: string;
 }): string {
-	return prompt.compile(limitNotice)(context).trim();
+	return compilePromptAsset("moa/notices/limit.md", limitNotice, { kind: "notice" })(context).trim();
 }
 
 /** The operator-facing notice for a run paused at a soft limit. */
@@ -101,7 +123,7 @@ export function renderPauseNotice(context: {
 	hops: number;
 	usd: string;
 }): string {
-	return prompt.compile(pauseNotice)(context).trim();
+	return compilePromptAsset("moa/notices/pause.md", pauseNotice, { kind: "notice" })(context).trim();
 }
 
 export interface VerdictInput {
@@ -135,5 +157,5 @@ export function renderVerdict(template: string, input: VerdictInput): string {
 
 /** One compact, readable list of tool calls; omit it for hops with no calls. */
 export function renderToolTrace(calls: { name: string; summary: string }[]): string {
-	return calls.length === 0 ? "" : prompt.compile(toolTraceTemplate)({ calls }).trim();
+	return calls.length === 0 ? "" : compilePromptAsset("moa/tool-trace.md", toolTraceTemplate)({ calls }).trim();
 }

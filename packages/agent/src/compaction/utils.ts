@@ -5,7 +5,8 @@
 import type { Message, ToolCall } from "@oh-my-pi/pi-ai";
 import { type Dialect, getDialectDefinition } from "@oh-my-pi/pi-ai/dialect";
 import { escapeHarmonyControlTokens } from "@oh-my-pi/pi-ai/utils/harmony-leak";
-import { formatGroupedPaths, prompt, stringifyJson } from "@oh-my-pi/pi-utils";
+import { formatGroupedPaths, stringifyJson } from "@oh-my-pi/pi-utils";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import type { AgentMessage } from "../types";
 import fileOperationsTemplate from "./prompts/file-operations.md" with { type: "text" };
 import summarizationSystemPrompt from "./prompts/summarization-system.md" with { type: "text" };
@@ -175,6 +176,7 @@ export function formatFileOperations(
 	readFiles: string[],
 	modifiedFiles: string[],
 	readSet?: ReadonlySet<string>,
+	cwd?: string,
 ): string {
 	if (readFiles.length === 0 && modifiedFiles.length === 0) return "";
 	const mode = new Map<string, "Read" | "Write" | "RW">();
@@ -185,7 +187,7 @@ export function formatFileOperations(
 	if (all.length > FILE_OPERATION_SUMMARY_LIMIT) {
 		files += `\n[…${all.length - FILE_OPERATION_SUMMARY_LIMIT} files elided…]`;
 	}
-	return prompt.render(fileOperationsTemplate, { files });
+	return renderPromptAsset("compaction/file-operations.md", fileOperationsTemplate, { files }, { cwd });
 }
 
 export function upsertFileOperations(
@@ -193,9 +195,10 @@ export function upsertFileOperations(
 	readFiles: string[],
 	modifiedFiles: string[],
 	readSet?: ReadonlySet<string>,
+	cwd?: string,
 ): string {
 	const baseSummary = stripFileOperationTags(summary);
-	const fileOperations = formatFileOperations(readFiles, modifiedFiles, readSet);
+	const fileOperations = formatFileOperations(readFiles, modifiedFiles, readSet, cwd);
 	if (!fileOperations) return baseSummary;
 	if (!baseSummary) return fileOperations;
 	return `${baseSummary}\n\n${fileOperations}`;
@@ -356,4 +359,6 @@ function renderToolCalls(calls: ToolCall[]): string {
 // Summarization System Prompt
 // ============================================================================
 
-export const SUMMARIZATION_SYSTEM_PROMPT = prompt.render(summarizationSystemPrompt);
+export function getSummarizationSystemPrompt(cwd?: string): string {
+	return renderPromptAsset("compaction/summarization-system.md", summarizationSystemPrompt, {}, { cwd });
+}

@@ -1,5 +1,6 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { prompt } from "@oh-my-pi/pi-utils";
+
 import { ADVISOR_RENDER_OPTIONS } from "../advisor/delta-split";
 import entryTemplate from "../prompts/chronicler/entry.md" with { type: "text" };
 import { formatSessionHistoryMarkdown } from "../session/session-history-format";
@@ -21,7 +22,7 @@ export function renderChronicleDelta(
 	if (!entries.length) return [];
 	const text = entries
 		.map(entry =>
-			prompt.render(entryTemplate, {
+			renderPromptAsset("chronicler/entry.md", entryTemplate, {
 				id: entry.id,
 				parentId: entry.parentId,
 				timestamp: entry.timestamp,
