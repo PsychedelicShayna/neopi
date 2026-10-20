@@ -196,6 +196,7 @@ function parseWatchdogDoc(
 		warnings.push(`${path}: advisors must be a list — ignored`);
 	}
 	const entries: AdvisorYamlEntry[] = [];
+	const ids = new Set<string>();
 	for (const [index, rawEntry] of (Array.isArray(rawAdvisors) ? rawAdvisors : []).entries()) {
 		const result = advisorEntrySchema(rawEntry);
 		if (result instanceof type.errors) {
@@ -204,6 +205,12 @@ function parseWatchdogDoc(
 			const label = typeof rawName === "string" && rawName.trim() ? `"${rawName}"` : `#${index + 1}`;
 			warnings.push(`${path}: advisor ${label} dropped — ${result.summary}`);
 			continue;
+		}
+		if (result.id) {
+			if (ids.has(result.id)) {
+				warnings.push(`${path}: advisor "${result.name}" has duplicate id "${result.id}"; save to repair IDs`);
+			}
+			ids.add(result.id);
 		}
 		entries.push(result);
 	}
@@ -336,14 +343,17 @@ export async function discoverAdvisorConfigs(cwd: string, agentDir?: string): Pr
 
 		if (docSharedMaxNotes !== undefined) sharedMaxNotesPerUpdate = docSharedMaxNotes;
 
-		for (const entry of entries) {
+		const fileIds = new Set<string>();
+		for (const [index, entry] of entries.entries()) {
+			const duplicateId = entry.id !== undefined && fileIds.has(entry.id);
+			if (entry.id) fileIds.add(entry.id);
 			const slug = slugifyAdvisorName(entry.name);
 			sources.set(slug, { path: item.path, scope: item.level });
 			const entryInstructions = entry.instructions?.trim()
 				? (await expandAtImports(entry.instructions, item.path)).trim() || undefined
 				: undefined;
-			advisors.set(entry.id ? `id:${entry.id}` : `name:${slug}`, {
-				id: entry.id,
+			advisors.set(duplicateId ? `duplicate:${item.path}:${index}` : entry.id ? `id:${entry.id}` : `name:${slug}`, {
+				id: duplicateId ? undefined : entry.id,
 				sourceScope: item.level,
 				name: entry.name,
 				model: entry.model?.trim() || undefined,
@@ -646,14 +656,22 @@ function resolveWatchdogAdvisorOrigin(
 	origins: readonly WatchdogAdvisorOrigin[],
 ): { index: number; map: YAMLMap<unknown, unknown> } | undefined {
 	const candidates: { index: number; map: YAMLMap<unknown, unknown> }[] = [];
-	if (origin.base.id) {
+	if (origin.base.id && origins.filter(candidate => candidate.base.id === origin.base.id).length === 1) {
 		for (const [index, item] of sequence.items.entries()) {
-			if (isMap(item) && item.get("id") === origin.base.id) return { index, map: item };
+			if (isMap(item) && item.get("id") === origin.base.id) candidates.push({ index, map: item });
 		}
-		return undefined;
+		return candidates.length === 1 ? candidates[0] : undefined;
 	}
+	const sameNameOrigins = origins.filter(
+		candidate => candidate.name === origin.name && candidate.base.id === origin.base.id,
+	);
+	const occurrence = sameNameOrigins.indexOf(origin);
 	for (const [index, item] of sequence.items.entries()) {
-		if (isMap(item) && watchdogAdvisorMapValues(document, item)?.name === origin.name)
+		if (
+			isMap(item) &&
+			watchdogAdvisorMapValues(document, item)?.name === origin.name &&
+			(origin.base.id === undefined || item.get("id") === origin.base.id)
+		)
 			candidates.push({ index, map: item });
 	}
 	if (origin.fingerprint !== undefined) {
@@ -662,19 +680,18 @@ function resolveWatchdogAdvisorOrigin(
 		);
 		if (exact.length === 1) return exact[0];
 		if (exact.length > 1) {
-			const sameNameOrigins = origins.filter(candidate => candidate.name === origin.name);
+			// Identical rows are safe only while their baseline order is unchanged.
 			const unchangedOrder =
 				candidates.length === sameNameOrigins.length &&
 				candidates.every(
 					(candidate, index) =>
 						watchdogAdvisorFingerprint(candidate.map.toJS(document)) === sameNameOrigins[index].fingerprint,
 				);
-			return unchangedOrder ? candidates[origin.occurrence] : undefined;
+			return unchangedOrder ? candidates[occurrence] : undefined;
 		}
 	}
-	const baselineCount = origins.filter(candidate => candidate.name === origin.name).length;
-	if (candidates.length !== baselineCount) return undefined;
-	return candidates[origin.occurrence];
+	if (candidates.length !== sameNameOrigins.length) return undefined;
+	return candidates[occurrence];
 }
 
 function watchdogAdvisorMapValues(

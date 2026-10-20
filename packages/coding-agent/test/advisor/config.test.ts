@@ -378,6 +378,59 @@ describe("WATCHDOG.yml file round-trip", () => {
 		expect((await discoverAdvisorConfigs(tmp, tmp)).advisors).toHaveLength(2);
 	});
 
+	for (const secondName of ["Second", "First"]) {
+		it(`repairs on-disk duplicate IDs without redirecting edits with second name ${secondName}`, async () => {
+			const file = path.join(tmp, "WATCHDOG.yml");
+			await Bun.write(
+				file,
+				`advisors:\n  - id: dup\n    name: First\n    enabled: true\n    futureId: first\n  - id: dup\n    name: ${secondName}\n    enabled: false\n    futureId: second\n`,
+			);
+			const discovered = await discoverAdvisorConfigs(tmp, tmp);
+			expect(discovered.advisors).toHaveLength(2);
+			expect(discovered.warnings).toHaveLength(1);
+			expect(discovered.warnings[0]).toContain('duplicate id "dup"');
+
+			const loaded = await loadWatchdogConfigFile(file);
+			expect(loaded.warnings?.[0]).toContain('duplicate id "dup"');
+			await saveWatchdogConfigFile(file, loaded);
+			const repaired = await loadWatchdogConfigFile(file);
+			expect(repaired.advisors).toEqual(loaded.advisors);
+			expect(repaired.advisors[0].id).toBe("dup");
+			expect(repaired.advisors[1].id).not.toBe("dup");
+			expect(repaired.warnings).toBeUndefined();
+
+			loaded.advisors[0].enabled = false;
+			await saveWatchdogConfigFile(file, loaded);
+			const reloaded = await loadWatchdogConfigFile(file);
+			expect(reloaded.advisors).toEqual([
+				{ id: loaded.advisors[0].id, name: "First", enabled: false },
+				{ id: loaded.advisors[1].id, name: secondName, enabled: false },
+			]);
+			expect(YAML.parse(await Bun.file(file).text())).toEqual({
+				advisors: [
+					{ ...reloaded.advisors[0], futureId: "first" },
+					{ ...reloaded.advisors[1], futureId: "second" },
+				],
+			});
+		});
+	}
+
+	it("repairs duplicate IDs on indistinguishable rows by their unchanged occurrence order", async () => {
+		const file = path.join(tmp, "WATCHDOG.yml");
+		await Bun.write(file, "advisors:\n  - id: dup\n    name: Review\n  - id: dup\n    name: Review\n");
+		const loaded = await loadWatchdogConfigFile(file);
+		await saveWatchdogConfigFile(file, loaded);
+		expect((await loadWatchdogConfigFile(file)).advisors).toEqual(loaded.advisors);
+		expect(loaded.advisors[0].id).toBe("dup");
+		expect(loaded.advisors[1].id).not.toBe("dup");
+		loaded.advisors[0].enabled = false;
+		await saveWatchdogConfigFile(file, loaded);
+		expect((await loadWatchdogConfigFile(file)).advisors).toEqual([
+			{ id: "dup", name: "Review", enabled: false },
+			{ id: loaded.advisors[1].id, name: "Review" },
+		]);
+	});
+
 	it("keeps all advisors after cloning a name whose copy slug is already occupied", async () => {
 		const theme = await getThemeByName("dark");
 		if (!theme) throw new Error("theme unavailable");

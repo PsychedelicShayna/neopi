@@ -51,6 +51,8 @@ Without an effort suffix, advisors request `medium`, clamped to the model's supp
 
 Each saved roster advisor has a hidden `id`. New advisors and clones get fresh IDs, even when their other fields match. Existing entries receive IDs on their first save in `/advisor configure`. Renaming preserves the ID. Copy the persisted ID from `WATCHDOG.yml` when declaring a role activation set.
 
+Duplicate IDs within one file emit a warning without hiding rows. Only the first row uses the shared ID during discovery. Saving in `/advisor configure` gives later duplicates fresh IDs and preserves each row's settings.
+
 Store the set alongside the role's other settings in the user settings file or the project's `.omp/config.yml`:
 
 ```yaml
