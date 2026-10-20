@@ -15,7 +15,7 @@ import {
 import * as path from "node:path";
 import { formatBytes, getProjectDir } from "@oh-my-pi/pi-utils";
 import type { TspPickerGroup, TspPickerItem, TspSpan, TspText, TspTone } from "@oh-my-pi/pi-wire";
-import { compact, kv, md, node, span } from "../native/describe";
+import { compact, kv, md, node, span, text } from "../native/describe";
 import {
 	picker,
 	pickerAction,
@@ -28,6 +28,7 @@ import {
 import type { DescribeContext, NativeChild, NativeNode, NativeScroll, NativeUiEvent } from "../native/node";
 import { hintsRow, type NativeHint, overlayCard } from "../native/overlay";
 import { plainText } from "../native/spans";
+import { compileMenuRegex } from "../menu-search";
 import { theme } from "../theme/theme";
 import { contentRowWidth, renderScrollableList } from "../chrome/selector-helpers";
 import { matchesAppInterrupt } from "../keybinding-matchers";
@@ -298,9 +299,11 @@ function sessionSearchText(session: SessionSelectorEntry): string {
  * {@link scoreFuzzySession} callers).
  */
 const kSearchTextLower = Symbol("session.searchTextLower");
+const kSearchTextRaw = Symbol("session.searchTextRaw");
 
 interface SearchableSessionInfo extends SessionSelectorEntry {
 	[kSearchTextLower]?: string;
+	[kSearchTextRaw]?: string;
 }
 
 function sessionTextLower(session: SessionSelectorEntry): string {
@@ -311,6 +314,11 @@ function sessionTextLower(session: SessionSelectorEntry): string {
 		tagged[kSearchTextLower] = textLower;
 	}
 	return textLower;
+}
+
+function sessionTextRaw(session: SessionSelectorEntry): string {
+	const tagged = session as SearchableSessionInfo;
+	return tagged[kSearchTextRaw] ??= sessionSearchText(session);
 }
 
 function tokenizeSessionQuery(query: string): string[] {
@@ -411,6 +419,8 @@ function prioritizeTitleMatches<T extends SessionSelectorEntry>(
  * the same primitives incrementally so huge listings never block a keystroke.
  */
 export function rankSessionSearchMatches<T extends SessionSelectorEntry>(allSessions: T[], query: string): T[] {
+	const regex = compileMenuRegex(query);
+	if (regex) return regex.regex ? allSessions.filter(session => regex.regex!.test(sessionTextRaw(session))) : [];
 	const tokens = tokenizeSessionQuery(query);
 	if (tokens.length === 0) return allSessions;
 
@@ -672,8 +682,11 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 	}
 
 	escape(): void {
-		if (this.#search.focused) this.#search.focused = false;
-		else this.onCancel?.();
+		if (this.#search.focused || this.#search.value) {
+			this.#search.setValue("");
+			this.#search.focused = false;
+			this.#filterSessions("");
+		} else this.onCancel?.();
 		this.#keys.reset();
 	}
 
@@ -728,6 +741,18 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		this.#literalRanked = [];
 		this.#fuzzyRanked = [];
 
+		const regex = compileMenuRegex(query);
+		if (regex) {
+			const queryChanged = query !== this.#lastFilterQuery;
+			this.#hadFilterQuery = true;
+			this.#lastFilterQuery = query;
+			this.#fuzzyRanked = rankSessionSearchMatches(this.#allSessions, query)
+				.map((session, index) => ({ session, score: 0, index }));
+			this.#composeFiltered();
+			if (queryChanged) this.#menu.setSelectedIndex(0);
+			this.#scheduleHistoryMerge(query);
+			return;
+		}
 		const tokens = tokenizeSessionQuery(query);
 		const hadQuery = this.#hadFilterQuery;
 		const queryChanged = query !== this.#lastFilterQuery;
@@ -844,12 +869,12 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		}
 		const matcher = this.#historyMatcher;
 		const trimmed = query.trim();
-		if (!matcher || trimmed.length < HISTORY_MERGE_MIN_QUERY) return;
+		if (!matcher || trimmed.length < HISTORY_MERGE_MIN_QUERY || compileMenuRegex(query)?.error) return;
 		this.#historyMergeTimer = setTimeout(() => {
 			this.#historyMergeTimer = undefined;
 			if (this.#searchInput.getValue() !== query) return;
 			if (this.#selectionMoved) return;
-			const historyIds = matcher(trimmed);
+			const historyIds = matcher(compileMenuRegex(query) ? query : trimmed);
 			if (historyIds.length === 0) return;
 			this.#historyIds = historyIds;
 			this.#composeFiltered();
@@ -1004,7 +1029,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 			for (const session of visible) {
 				order.push(session.path);
 				const label = catalogue.byPath.get(session.path)?.label;
-				if (typeof label !== "string") continue;
+				if (typeof label !== "string" || compileMenuRegex(query)) continue;
 				const ranges = pickerHits(label, tokens);
 				if (ranges.length > 0) (hits ??= {})[session.path] = ranges;
 			}
@@ -1882,7 +1907,12 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		if (this.#confirmationDialog) {
 			children.push(this.#confirmationDialog);
 		} else {
-			children.push(this.#sessionList.searchInput, list);
+			const queryError = compileMenuRegex(this.#sessionList.searchInput.getValue())?.error;
+			children.push(
+				this.#sessionList.searchInput,
+				...(queryError ? [text([span(queryError, "error")])] : []),
+				list,
+			);
 		}
 		const hints: (NativeHint | undefined)[] = [
 			{ keys: ["delete"], label: "delete (list)" },
@@ -1963,6 +1993,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		const result = picker(
 			{
 				...(title ? { title, ...(folder ? { subtitle: folder } : {}) } : {}),
+				subtitle: compileMenuRegex(view.query)?.error ?? (title ? folder : undefined),
 				icon: "history",
 				noun: "sessions",
 				size: this.#standalone ? "screen" : "lg",

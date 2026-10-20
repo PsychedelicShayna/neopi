@@ -1,4 +1,5 @@
 import { fuzzyFilter } from "../fuzzy";
+import { compileMenuRegex } from "../menu-search";
 
 /** Describes how a menu identifies, searches, disables, and confirms its items. */
 export interface MenuSelectionAdapter<T> {
@@ -215,7 +216,7 @@ export class MenuSelection<T> {
 	}
 
 	#applyFilter(preferredKey: string | undefined): void {
-		const query = this.#query.trim();
+		const query = compileMenuRegex(this.#query) ? this.#query : this.#query.trim();
 		this.#visibleItems = query
 			? (this.adapter.filter?.(this.#items, query) ??
 				fuzzyFilter([...this.#items], query, item => this.adapter.getSearchText(item)))

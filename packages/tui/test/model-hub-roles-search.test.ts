@@ -107,7 +107,7 @@ test("with no query the Roles rows hide the search field and keep their letter c
 	hub.dispose();
 });
 
-test("slash filters Roles in place and Esc retains query without stealing letter actions", () => {
+test("slash filters Roles in place and Enter retains query without stealing letter actions", () => {
 	const hub = createHub({ knownRoleIds: ["default", "smol"] });
 	hub.handleNativeEvent(CLICK_ROLES);
 	hub.handleInput("i");
@@ -119,7 +119,7 @@ test("slash filters Roles in place and Esc retains query without stealing letter
 	expect(props.query).toBe("default");
 	expect(props.order).toContain("role:default");
 	expect(props.order).not.toContain("role:smol");
-	hub.handleInput("\x1b");
+	hub.handleInput("\n");
 	hub.handleInput("s");
 	props = pickerProps(hub);
 	expect(props.query).toBe("default");
@@ -140,7 +140,7 @@ test("fallback search retains its parent role and actions target visible rows", 
 	expect(props.order).toContain("role:smol");
 	expect(props.order).toContain("fallback:smol:0");
 	expect(props.order).not.toContain("role:default");
-	hub.handleInput("\x1b");
+	hub.handleInput("\n");
 	hub.handleInput("j");
 	expect(pickerProps(hub).selected).toBe("fallback:smol:0");
 	hub.handleInput(" ");

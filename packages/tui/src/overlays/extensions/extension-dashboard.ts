@@ -32,6 +32,7 @@ import { Stack } from "../../components/layout/stack";
 import { ScrollView } from "../../components/scroll-view";
 import { TabBar, type Tab } from "../../components/tab-bar";
 import { MenuKeyReader, menuScrollBy, type MenuNavAction } from "../../components/menu-navigation";
+import { compileMenuRegex } from "../../menu-search";
 import { logger } from "@oh-my-pi/pi-utils";
 import { getTabBarTheme } from "../../chrome/shared";
 import { theme } from "../../theme";
@@ -83,7 +84,7 @@ export interface ExtensionDashboardOptions {
 }
 
 function extFooter(pane: "list" | "inspector", filtering: boolean): string {
-	if (filtering) return "Search extensions · Esc back to list · Tab focus";
+	if (filtering) return "Search extensions · Enter confirm · Esc clear";
 	return `j/k ${pane === "list" ? "select" : "scroll"} · h/l provider tabs · Tab focus · / search · ${
 		pane === "list" ? "Space toggle · " : ""
 	}${expandKeyHint()} expand · Esc close`;
@@ -616,7 +617,8 @@ export class ExtensionDashboard implements Component {
 	}
 
 	#cancel(): void {
-		if (this.#mainList.filterFocused) {
+		if (this.#mainList.filterFocused || this.#mainList.getSearchQuery()) {
+			this.#clearSearch();
 			this.#mainList.focusFilter(false);
 			this.#keys.reset();
 			this.#requestRender();
@@ -714,10 +716,11 @@ export class ExtensionDashboard implements Component {
 	#describePicker(): NativeNode {
 		const view = this.#mainList.pickerView();
 		const activeTab = this.#state.tabs[this.#state.activeTabIndex];
+		const error = compileMenuRegex(this.#state.searchQuery)?.error;
 		return picker(
 			{
 				title: DASHBOARD_TITLE,
-				subtitle: extFooter(this.#pane, this.#mainList.filterFocused),
+				subtitle: error ? `Invalid regex: ${error}` : extFooter(this.#pane, this.#mainList.filterFocused),
 				icon: "extension",
 				noun: "extensions",
 				size: "lg",
@@ -771,6 +774,7 @@ export class ExtensionDashboard implements Component {
 	#describePage(): NativeNode {
 		const selected = this.#mainList.selectedSwitch();
 		const query = this.#state.searchQuery;
+		const error = compileMenuRegex(query)?.error;
 		const shown = this.#state.searchFiltered.length;
 		const total = this.#state.tabFiltered.length;
 		const head = node(
@@ -792,7 +796,10 @@ export class ExtensionDashboard implements Component {
 			"head",
 		);
 		const search = text(
-			[span(this.#mainList.filterFocused ? "Search: " : "/ search · ", "muted"), span(query, "accent")],
+			[
+				span(error ? `Invalid regex: ${error}` : this.#mainList.filterFocused ? "Search: " : "/ search · ", "muted"),
+				span(query, "accent"),
+			],
 			{
 				truncate: "end",
 			},

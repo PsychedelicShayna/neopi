@@ -920,7 +920,6 @@ export class ExtensionList implements Component {
 
 	/** Hosts route literal field input before their own pane/tab/action reader. */
 	handleFilterInput(data: string): boolean {
-		if (!this.#search.focused) return false;
 		const before = this.#search.value;
 		const result = this.#search.handleInput(data);
 		if (result === "pass") return false;
@@ -942,8 +941,10 @@ export class ExtensionList implements Component {
 			this.#syncScroll();
 			if (motion.selectionChanged) this.#notifySelectionChange();
 		} else if (action.kind === "search") this.focusFilter();
-		else if (action.kind === "cancel") this.focusFilter(false);
-		else if (action.kind === "confirm" || action.kind === "toggle") {
+		else if (action.kind === "cancel") {
+			this.clearSearch();
+			this.focusFilter(false);
+		} else if (action.kind === "confirm" || action.kind === "toggle") {
 			this.focusFilter(false);
 			this.activateSelected();
 		}

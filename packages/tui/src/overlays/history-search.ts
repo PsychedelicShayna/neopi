@@ -9,6 +9,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "../index";
+import { compileMenuRegex } from "../menu-search";
 import { theme } from "../theme/theme";
 /** Prompt history fields displayed in search results. */
 export interface HistorySearchEntry {
@@ -76,6 +77,7 @@ const SEARCH_DEBOUNCE_MS = 100;
 
 /** Split a query the same way `HistorySource` tokenizes it, so highlights align with matches. */
 function queryTokens(query: string): string[] {
+	if (compileMenuRegex(query)) return [];
 	return query
 		.toLowerCase()
 		.split(/[^\p{L}\p{N}]+/u)
@@ -298,8 +300,11 @@ export class HistorySearchComponent extends OverlayPanel {
 	}
 
 	#escape(): void {
-		if (this.#search.focused) this.#search.focused = false;
-		else this.#onCancel();
+		if (this.#search.focused || this.#search.value) {
+			this.#search.setValue("");
+			this.#search.focused = false;
+			this.#updateResults();
+		} else this.#onCancel();
 		this.#keys.reset();
 	}
 
@@ -368,7 +373,7 @@ export class HistorySearchComponent extends OverlayPanel {
 		const items = this.#menu.visibleItems;
 		const selected = this.#menu.selectedItem;
 		const usePicker = cx.supports("picker");
-		const query = usePicker ? this.#searchInput.getValue() : this.#searchInput.getValue().trim();
+		const query = this.#searchInput.getValue();
 		const cursor = this.#searchInput.getCursor();
 		const memo = this.#nativeMemo;
 		if (
@@ -430,7 +435,13 @@ export class HistorySearchComponent extends OverlayPanel {
 			{ keys: ["/"], label: "search" },
 			{ keys: ["escape"], label: this.#search.focused ? "back to list" : "close" },
 		]);
-		const root = overlayCard(this.nativeRole, this.title, [this.#searchInput, list, this.#nativeHints]);
+		const queryError = compileMenuRegex(query)?.error;
+		const root = overlayCard(this.nativeRole, this.title, [
+			this.#searchInput,
+			...(queryError ? [node("text", { spans: [span(queryError, "error")] })] : []),
+			list,
+			this.#nativeHints,
+		]);
 		this.#nativeMemo = {
 			picker: false,
 			items,
@@ -457,6 +468,7 @@ export class HistorySearchComponent extends OverlayPanel {
 		}
 		return picker({
 			title: this.title,
+			subtitle: compileMenuRegex(query)?.error,
 			icon: "history",
 			noun: "prompts",
 			size: "md",
@@ -523,18 +535,19 @@ export class HistorySearchComponent extends OverlayPanel {
 	}
 
 	/**
-	 * Refresh results after a query edit: no-op when the trimmed query is
-	 * unchanged (cursor moves, trailing spaces), immediate for the empty query
-	 * or when no repaint hook is wired, debounced otherwise.
+	 * Refresh results after a query edit: fuzzy trailing whitespace is ignored,
+	 * while regex whitespace is literal. Empty queries refresh immediately;
+	 * other changes debounce when a repaint hook is wired.
 	 */
 	#scheduleResults(): void {
-		const query = this.#searchInput.getValue().trim();
+		const rawQuery = this.#searchInput.getValue();
+		const query = compileMenuRegex(rawQuery) ? rawQuery : rawQuery.trim();
 		if (query === this.#resultsQuery) {
 			this.#cancelPendingSearch();
 			return;
 		}
 		const requestRender = this.#onRequestRender;
-		if (!query || !requestRender) {
+		if (!query || !requestRender || compileMenuRegex(rawQuery)?.error) {
 			this.#updateResults();
 			return;
 		}
@@ -561,9 +574,11 @@ export class HistorySearchComponent extends OverlayPanel {
 
 	#updateResults(): void {
 		this.#cancelPendingSearch();
-		const query = this.#searchInput.getValue().trim();
+		const rawQuery = this.#searchInput.getValue();
+		const regex = compileMenuRegex(rawQuery);
+		const query = regex ? rawQuery : rawQuery.trim();
 		this.#resultsQuery = query;
-		const results = query
+		const results = regex?.error ? [] : query
 			? this.#historyStorage.search(query, this.#resultLimit)
 			: this.#historyStorage.getRecent(this.#resultLimit);
 		this.#menu.setItems(results);

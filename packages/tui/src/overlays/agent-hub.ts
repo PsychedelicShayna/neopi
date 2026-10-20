@@ -84,6 +84,7 @@ import { formatAgentUsageBreakdown } from "../tools/agent-usage";
 import { AgentTranscriptViewer, type AgentTranscriptSource } from "./agent-transcript-viewer";
 import type { AgentRoleDisplay } from "./agent-hub-renderer";
 import { fuzzyMatch } from "../fuzzy";
+import { compileMenuRegex } from "../menu-search";
 import { bottomBorder, divider, dividerSplit, PanelRows, row, topBorder, topBorderSplit } from "../chrome/overlay-box";
 import { SplitPane } from "../components/layout/split-pane";
 import { Stack } from "../components/layout/stack";
@@ -1039,6 +1040,9 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 
 	/** Roster totals: `$0.389 · 18.7s · 6 req · 114K tok`. */
 	#pickerSubtitle(): string {
+		const search = this.#section === "activity" ? this.#activitySearch : this.#agentFilter;
+		const error = compileMenuRegex(search.value)?.error;
+		if (error) return `Invalid regex: ${error}`;
 		const metrics = this.#aggregate;
 		if (metrics.reportedAgents === 0) return "No usage reported yet";
 		const parts = [formatCost(metrics.cost)];
@@ -1321,6 +1325,8 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		} else if (this.#agentFilter.value) {
 			children.push(node("text", { spans: [span(`/${this.#agentFilter.value}`, "accent")] }, undefined, "filter"));
 		}
+		const error = compileMenuRegex(this.#agentFilter.value)?.error;
+		if (error) children.push(text([span(`Invalid regex: ${error}`, "error")]));
 		children.push(
 			node(
 				"row",
@@ -1655,6 +1661,8 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 					)
 				: text([span(this.#activitySearch.value ? `search: ${this.#activitySearch.value}` : "search: —", "dim")]),
 		];
+		const error = compileMenuRegex(this.#activitySearch.value)?.error;
+		if (error) status.push(text([span(`Invalid regex: ${error}`, "error")]));
 		const selected = this.#activityRows[this.#selectedActivityRow]?.id ?? null;
 		return [
 			node("row", { gap: "md", wrap: true, align: "baseline" }, status, "status"),
@@ -1734,7 +1742,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			}
 			ordered = refs.sort((a, b) => rowOrder.get(a)! - rowOrder.get(b)!);
 		}
-		const query = this.#agentFilter.value.trim();
+		const query = this.#agentFilter.value;
 		const rosterRows =
 			query.length > 0
 				? ordered.filter(ref => fuzzyMatch(query, `${ref.id} ${ref.displayName ?? ""}`).matches)

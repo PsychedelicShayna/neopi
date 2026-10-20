@@ -14,6 +14,7 @@ import { getModelPricingStatus, modelsAreEqual } from "@oh-my-pi/pi-catalog/mode
 import { modelKind, type ModelKind, type ModelPricingStatus } from "@oh-my-pi/pi-catalog/types";
 import type { Component } from "../tui";
 import { FuzzyCorpus, fuzzyRank } from "../fuzzy";
+import { compileMenuRegex } from "../menu-search";
 import { ScrollView } from "../components/scroll-view";
 import { extractPrintableText } from "../keys";
 import type { SgrMouseEvent } from "../mouse";
@@ -1452,8 +1453,10 @@ export class ModelBrowser implements Component {
 	}
 
 	handleCancel(): void {
-		if (this.#search.focused) this.focusFilter(false);
-		else this.onCancel?.();
+		if (this.query || this.#search.focused) {
+			this.setQuery("");
+			this.focusFilter(false);
+		} else this.onCancel?.();
 	}
 
 	/**
@@ -1831,11 +1834,14 @@ export class ModelBrowser implements Component {
 		}
 		const selected = this.getSelected()?.selector ?? null;
 		const filter = this.query.trim();
+		const error = compileMenuRegex(this.query)?.error;
 		const empty =
-			items.length > 0
-				? ""
-				: plainText(this.#emptyText?.() ?? "").trim() ||
-					(filter ? "No matching models" : "No models available in this scope");
+			error
+				? `Invalid regex: ${error}`
+				: items.length > 0
+					? ""
+					: plainText(this.#emptyText?.() ?? "").trim() ||
+						(filter ? "No matching models" : "No models available in this scope");
 		const prev = this.#nativeListNode;
 		if (
 			prev?.children === cached.children &&
