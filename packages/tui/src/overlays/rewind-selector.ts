@@ -65,6 +65,7 @@ import type { DescribeContext, NativeChild, NativeNode, NativeScreen, NativeUiEv
 import { actionBar, actionButton, actionHint, hintsRow, type NativeHint } from "../native/overlay";
 import { isNativeRendering } from "../native/state";
 import { collectBlocks, targetCopy } from "./copy-selector";
+import { compileMenuRegex } from "../menu-search";
 import { MenuKeyReader, MenuSearchField } from "../components/menu-navigation";
 
 /** One alternate branch at a divergence: its root and message path root → most-recent leaf. */
@@ -215,10 +216,10 @@ export class RewindSelectorComponent implements Component {
 	}
 	/** Main transcript rows from the last frame; the filter matches what is on screen. */
 	#mainRows: readonly (readonly string[])[] = [];
-	/** Lowercased plain text per rendered child row array (row arrays are cached, so identity is stable). */
-	#rowText = new WeakMap<readonly string[], string>();
-	/** Native filter haystack: lowercased turn text per main target (no rendered rows under TSP). */
-	#nativeTexts: { targets: OutlineTarget[]; texts: string[] } | undefined;
+	/** Plain text per rendered child row array, cached by stable row identity. */
+	#rowText = new WeakMap<readonly string[], { raw: string; lower: string }>();
+	/** Native filter haystacks per main target (no rendered rows under TSP). */
+	#nativeTexts: { targets: OutlineTarget[]; texts: { raw: string; lower: string }[] } | undefined;
 	/** Compiled word patterns of the last filter query. */
 	#filterPatterns: { query: string; patterns: RegExp[] } | undefined;
 	/**
@@ -647,13 +648,6 @@ export class RewindSelectorComponent implements Component {
 	// Filter
 	// ========================================================================
 
-	/** Leave the field, retaining the query and its filtered projection. */
-	#closeFilter(): void {
-		this.#search.focused = false;
-		this.#keys.reset();
-		this.deps.requestRender();
-	}
-
 	/** The query changed; keep the selection when it still matches, else rest on the newest match above it. */
 	#filterChanged(): void {
 		const matches = this.#filterMatches();
@@ -717,6 +711,7 @@ export class RewindSelectorComponent implements Component {
 			return memo.matches;
 		}
 		const patterns = this.#compileFilter(query);
+		const regex = compileMenuRegex(query);
 		if (native && this.#nativeTexts?.targets !== this.#targets) {
 			this.#nativeTexts = {
 				targets: this.#targets,
@@ -724,7 +719,8 @@ export class RewindSelectorComponent implements Component {
 				texts: this.#targets.map(target => {
 					const blocks = collectBlocks(target.entries);
 					const parts = [targetCopy(target, blocks).content, ...blocks.map(block => block.content)];
-					return parts.join("\n").toLowerCase();
+					const raw = parts.join("\n");
+					return { raw, lower: raw.toLowerCase() };
 				}),
 			};
 		}
@@ -733,11 +729,11 @@ export class RewindSelectorComponent implements Component {
 			if (!this.#isMainSelectable(index)) continue;
 			const target = this.#targets[index]!;
 			const matched = native
-				? patterns.every(pattern => pattern.test(this.#nativeTexts?.texts[index] ?? ""))
+				? patterns.every(pattern => pattern.test((regex ? this.#nativeTexts?.texts[index]?.raw : this.#nativeTexts?.texts[index]?.lower) ?? ""))
 				: patterns.every(pattern => {
 						for (let child = target.start; child < target.end; child++) {
 							const rows = this.#mainRows[child];
-							if (rows !== undefined && pattern.test(this.#plainRowText(rows))) return true;
+							if (rows !== undefined && pattern.test(this.#plainRowText(rows, !!regex))) return true;
 						}
 						return false;
 					});
@@ -759,6 +755,12 @@ export class RewindSelectorComponent implements Component {
 	#compileFilter(query: string): RegExp[] {
 		const cached = this.#filterPatterns;
 		if (cached?.query === query) return cached.patterns;
+		const regex = compileMenuRegex(query);
+		if (regex) {
+			const patterns = [regex.regex ?? /(?!)/];
+			this.#filterPatterns = { query, patterns };
+			return patterns;
+		}
 		const words = query.toLowerCase().split(/\s+/).filter(Boolean);
 		const patterns = words.map(word =>
 			/^[\p{Script=Latin}\p{N}_]+$/u.test(word)
@@ -769,14 +771,15 @@ export class RewindSelectorComponent implements Component {
 		return patterns;
 	}
 
-	/** Lowercased plain text of one rendered child row array, cached by array identity. */
-	#plainRowText(rows: readonly string[]): string {
+	/** Plain text of one rendered child row array, cached by array identity. */
+	#plainRowText(rows: readonly string[], raw: boolean): string {
 		let text = this.#rowText.get(rows);
 		if (text === undefined) {
-			text = Bun.stripANSI(rows.join("\n")).toLowerCase();
+			const original = Bun.stripANSI(rows.join("\n"));
+			text = { raw: original, lower: original.toLowerCase() };
 			this.#rowText.set(rows, text);
 		}
-		return text;
+		return raw ? text.raw : text.lower;
 	}
 
 	/** Move inside a column; only a single-row Up may leave a sibling's top. */
@@ -1020,6 +1023,7 @@ export class RewindSelectorComponent implements Component {
 			children = [
 				title,
 				this.#search.input,
+				...(compileMenuRegex(filter)?.error ? [text([span(compileMenuRegex(filter)!.error!, "error")])] : []),
 				text(
 					[
 						matches.length === 0
@@ -1058,8 +1062,11 @@ export class RewindSelectorComponent implements Component {
 			if (filtering) this.#selectFiltered();
 			else this.#selectOutlined();
 		} else if (event.act === "cancel") {
-			if (this.#search.focused) this.#closeFilter();
-			else this.deps.onCancel();
+			if (this.#search.focused || this.#search.value) {
+				this.#search.setValue("");
+				this.#search.focused = false;
+				this.#filterChanged();
+			} else this.deps.onCancel();
 		} else if (event.act === "clear-filter") {
 			this.#search.setValue("");
 			this.#search.focused = false;

@@ -10,6 +10,7 @@ import * as path from "node:path";
 import { KeyValueList, type KeyValueRow } from "../components/key-value-list";
 import { ScrollView } from "../components/scroll-view";
 import { MenuKeyReader, MenuSearchField, menuScrollBy } from "../components/menu-navigation";
+import { compileMenuRegex } from "../menu-search";
 import { renderTableRow, type TableColumn } from "../components/table";
 import { fuzzyFilter } from "../fuzzy";
 import { matchesKey } from "../keys";
@@ -403,10 +404,12 @@ export class PsTopComponent implements Component {
 				this.#ui.requestRender();
 				return;
 			case "back":
-				this.#closeView();
+				if (this.#search.focused || this.#search.value) this.handleInput("\x1b");
+				else this.#closeView();
 				return;
 			case "quit":
-				this.#done.resolve();
+				if (this.#search.focused || this.#search.value) this.handleInput("\x1b");
+				else this.#done.resolve();
 				return;
 		}
 	}
@@ -421,6 +424,7 @@ export class PsTopComponent implements Component {
 		if (this.#filteredQuery !== this.#search.value) this.#applyFilter();
 		const statusVisible = Date.now() - this.#statusAt < STATUS_TTL_MS;
 		const search = cx ? this.#search.input.describe(cx) : text(this.#search.value);
+		const queryError = compileMenuRegex(this.#search.value)?.error;
 		return this.#native.get(
 			[
 				this.#view,
@@ -437,6 +441,7 @@ export class PsTopComponent implements Component {
 				this.#statusTone,
 				this.#killConfirm,
 				search,
+				queryError,
 				this.#nativeScroll,
 			],
 			() => {
@@ -450,6 +455,7 @@ export class PsTopComponent implements Component {
 					compact([
 						this.#describeHead(),
 						this.#view === "table" && search,
+						this.#view === "table" && queryError !== undefined && text([span(queryError, "error")]),
 						{ ...body, scroll: this.#nativeScroll },
 						statusVisible &&
 							this.#statusText !== "" &&

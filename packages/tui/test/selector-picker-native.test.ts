@@ -96,11 +96,32 @@ describe("short-list native picker search", () => {
 		expect(sheet(focused).props.actions?.at(-1)?.label).toBe("Back to list");
 		selector.getSelectList().handleInput("h");
 		selector.handleNativeEvent(act("close"));
-		expect(sheet(selector.describe(pickerCx)).props.query).toBe("h");
+		expect(sheet(selector.describe(pickerCx)).props.query).toBeNull();
 		expect(sheet(selector.describe(pickerCx)).props.actions?.at(-1)?.label).toBe("Close");
 		expect(log).not.toContain("cancel");
 		selector.handleNativeEvent(act("close"));
 		expect(log).toContain("cancel");
+	});
+
+	it.each(["close", "cancel"])("clears retained search after Enter before native %s cancels", action => {
+		const { selector, log } = make();
+		const list = selector.getSelectList();
+		selector.describe(pickerCx);
+		list.handleInput("/");
+		list.handleInput("h");
+		list.handleInput("\r");
+		expect(list.filterFocused).toBe(false);
+		expect(sheet(selector.describe(pickerCx)).props.query).toBe("h");
+		expect(sheet(selector.describe(pickerCx)).props.actions?.at(-1)?.label).toBe("Clear search");
+		expect(log).toEqual([]);
+
+		selector.handleNativeEvent(act(action));
+		expect(list.getFilter()).toBe("");
+		expect(sheet(selector.describe(pickerCx)).props.query).toBeNull();
+		expect(log).toEqual([]);
+
+		selector.handleNativeEvent(act(action));
+		expect(log).toEqual(["cancel"]);
 	});
 
 	it("invalidates the native sheet when an empty filter loses focus", () => {

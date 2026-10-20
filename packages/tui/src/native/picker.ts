@@ -236,7 +236,7 @@ export function selectListPicker(list: SelectList, o: SelectPickerOptions): TspP
 		...(o.columns ? { columns: o.columns } : {}),
 		actions: [
 			pickerAction("confirm", o.confirm ?? "Select", "enter", { primary: true }),
-			{ ...CLOSE_ACTION, label: list.filterFocused ? "Back to list" : "Close" },
+			{ ...CLOSE_ACTION, label: list.filterFocused ? "Back to list" : view.query ? "Clear search" : "Close" },
 		],
 		confirm:
 			pending?.confirmation !== undefined ? { text: pending.confirmation, act: "confirm", label: "Confirm" } : null,
@@ -246,7 +246,7 @@ export function selectListPicker(list: SelectList, o: SelectPickerOptions): TspP
 /**
  * Routes a picker event to a {@link SelectList}: a row click selects (and
  * previews, through `onSelectionChange`), a second click or `confirm`
- * activates; `close`/`cancel` leaves a focused filter before canceling the list.
+ * activates; `close`/`cancel` clears a focused or retained filter before canceling the list.
  * Returns whether it handled the event.
  */
 export function routeSelectListPicker(list: SelectList, event: NativeUiEvent, key = ""): boolean {
@@ -255,7 +255,7 @@ export function routeSelectListPicker(list: SelectList, event: NativeUiEvent, ke
 	const view = list.pickerView();
 	if (ev.kind === "action") {
 		if (ev.act === "close" || ev.act === "cancel") {
-			if (list.filterFocused) list.handleInput("\x1b");
+			if (list.filterFocused || view.query) list.handleInput("\x1b");
 			else list.onCancel?.();
 			return true;
 		}

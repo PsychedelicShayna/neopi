@@ -1,4 +1,5 @@
 /** Pure dashboard tree, filtering, and selection state. */
+import { compileMenuRegex } from "../../menu-search";
 import { FuzzyQuery, FuzzyText } from "../../fuzzy";
 import {
 	type DashboardState,
@@ -170,10 +171,7 @@ export function applyFilter(extensions: Extension[], query: string): Extension[]
 		return extensions;
 	}
 
-	const tokens = query
-		.toLowerCase()
-		.split(/\s+/)
-		.filter(Boolean)
+	const tokens = (compileMenuRegex(query) ? [query] : query.toLowerCase().split(/\s+/).filter(Boolean))
 		.map(token => new FuzzyQuery(token));
 	if (tokens.length === 0) {
 		return extensions;

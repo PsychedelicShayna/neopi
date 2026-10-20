@@ -200,9 +200,13 @@ describe("ExtensionDashboard menu navigation", () => {
 		expect(describedPicker(dashboard).actions?.find(action => action.id === "toggle")?.keys).toBeUndefined();
 		dashboard.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 		expect(closes).toBe(0);
-		expect(dashboard.navigationSnapshot().list.search).toMatchObject({ value: "alpha h/l", focused: false });
+		expect(dashboard.navigationSnapshot().list.search).toMatchObject({ value: "", focused: false });
 		expect(describedPicker(dashboard).actions?.find(action => action.id === "close")?.label).toBe("Close");
 		dashboard.handleInput("/");
+		dashboard.handleInput("\t");
+		expect(dashboard.navigationSnapshot().pane).toBe("list");
+		expect(dashboard.navigationSnapshot().list.search.focused).toBe(true);
+		dashboard.handleInput("\n");
 		dashboard.handleInput("\t");
 		expect(dashboard.navigationSnapshot().pane).toBe("inspector");
 		expect(dashboard.navigationSnapshot().list.search.focused).toBe(false);

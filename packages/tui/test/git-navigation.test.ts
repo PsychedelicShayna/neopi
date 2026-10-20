@@ -63,12 +63,12 @@ describe("Git menu navigation", () => {
 		}
 	});
 
-	it("filters file paths only in the shared search field and retains its query on Escape", () => {
+	it("filters file paths only in the shared search field and retains its query on Enter", () => {
 		const view = sidebar();
 		try {
 			view.handleInput("/");
 			for (const key of "file-17") view.handleSearchInput(key);
-			view.handleSearchInput("\x1b");
+			view.handleSearchInput("\n");
 			expect(view.search.value).toBe("file-17");
 			expect(view.search.focused).toBe(false);
 			const output = view

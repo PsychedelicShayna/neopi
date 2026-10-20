@@ -1,4 +1,5 @@
 import { activityOneLine, compareActivityRows } from "@oh-my-pi/pi-tui/overlays/agent-activity";
+import { compileMenuRegex } from "@oh-my-pi/pi-tui/menu-search";
 import type { Stats } from "node:fs";
 import * as fs from "node:fs/promises";
 import type { AgentActivityRow, AgentActivityQuery } from "@oh-my-pi/pi-tui/overlays/agent-activity";
@@ -104,13 +105,14 @@ function sameSet<T>(a: ReadonlySet<T> | undefined, b: ReadonlySet<T> | undefined
 	return true;
 }
 
-/** Lower-cased search haystack per row; rows' text fields never change after creation. */
-const searchTextCache = new WeakMap<AgentActivityRow, string>();
+/** Original and lower-cased haystacks; rows' text fields never change after creation. */
+const searchTextCache = new WeakMap<AgentActivityRow, { raw: string; lower: string }>();
 
-function searchTextOf(row: AgentActivityRow): string {
+function searchTextOf(row: AgentActivityRow): { raw: string; lower: string } {
 	let text = searchTextCache.get(row);
 	if (text === undefined) {
-		text = `${row.agentId} ${row.title} ${row.summary} ${row.from ?? ""} ${row.to ?? ""}`.toLowerCase();
+		const raw = `${row.agentId} ${row.title} ${row.summary} ${row.from ?? ""} ${row.to ?? ""}`;
+		text = { raw, lower: raw.toLowerCase() };
 		searchTextCache.set(row, text);
 	}
 	return text;
@@ -288,6 +290,7 @@ export class AgentActivityIndex {
 			return cached.rows.slice();
 		}
 		const search = query.search?.trim().toLowerCase();
+		const regex = compileMenuRegex(query.search ?? "");
 		const rows: AgentActivityRow[] = [];
 		const ids = new Set([...this.#states.keys(), ...this.#liveRows.keys()]);
 		for (const agentId of ids) {
@@ -300,7 +303,7 @@ export class AgentActivityIndex {
 						(row.timestamp === query.before.timestamp && row.id >= query.before.id);
 					if (afterCursor) continue;
 				}
-				if (search && !searchTextOf(row).includes(search)) continue;
+				if (regex ? !regex.regex?.test(searchTextOf(row).raw) : search && !searchTextOf(row).lower.includes(search)) continue;
 				rows.push(row);
 			}
 		}

@@ -164,7 +164,7 @@ describe("status-line editor list", () => {
 		expect((await h.draft()).selected).toBe(before.selected);
 	});
 
-	it("filters with / using literal text; Esc returns to the list keeping the filter visible", async () => {
+	it("filters with / using literal text; Enter returns to the list keeping the filter visible", async () => {
 		const h = setup();
 		h.press("/", "t", "i", "m", "e");
 		let draft = await h.draft();
@@ -172,13 +172,16 @@ describe("status-line editor list", () => {
 		expect(draft.query).toBe("time");
 		expect(draft.selected).toBe("time");
 		expect(h.text()).not.toContain("Context bar");
-		h.press(ESC);
+		h.press("\r");
 		draft = await h.draft();
 		expect(draft.focus).toBe("list");
 		expect(draft.query).toBe("time");
 		expect(h.text()).toContain("time");
 		expect(h.closed()).toBe(false);
-		// Nothing is pending, so the next Esc leaves the editor like any menu.
+		// First Esc clears the retained filter; the next closes the menu.
+		h.press(ESC);
+		expect(h.closed()).toBe(false);
+		expect((await h.draft()).query).toBe("");
 		h.press(ESC);
 		expect(h.closed()).toBe(true);
 	});

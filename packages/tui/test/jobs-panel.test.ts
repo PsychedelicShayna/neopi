@@ -183,11 +183,14 @@ describe("JobsSheet", () => {
 			expect(prop(list(sheet.describe(CX)), "selected")).toBe("job-0");
 			sheet.handleInput("/");
 			for (const key of "command-17") sheet.handleInput(key);
-			sheet.handleInput("\x1b");
+			sheet.handleInput("\n");
 			expect(source.close).not.toHaveBeenCalled();
 			expect(prop(list(sheet.describe(CX)), "selected")).toBe("job-17");
 			sheet.handleInput(" "); // Nondestructive detail focus, never cancellation.
 			sheet.handleInput("/");
+			sheet.handleInput("\t");
+			expect(sheet.navigationSnapshot()).toMatchObject({ search: { focused: true } });
+			sheet.handleInput("\n");
 			sheet.handleInput("\t");
 			expect(sheet.navigationSnapshot()).toMatchObject({
 				focus: "output",
@@ -200,6 +203,9 @@ describe("JobsSheet", () => {
 			sheet.restoreNavigation(saved);
 			expect(sheet.navigationSnapshot()).toEqual(saved);
 			expect(source.cancel).not.toHaveBeenCalled();
+			sheet.handleInput("\x1b");
+			expect(source.close).not.toHaveBeenCalled();
+			expect(sheet.navigationSnapshot()).toMatchObject({ search: { value: "", focused: false } });
 			sheet.handleInput("\x1b");
 			expect(source.close).toHaveBeenCalledTimes(1);
 		} finally {

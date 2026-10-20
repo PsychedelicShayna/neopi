@@ -67,6 +67,7 @@ import {
 	isMenuHistoryLeaver,
 	isMenuHistoryParticipant,
 } from "../components/menu-navigation";
+import { compileMenuRegex } from "../menu-search";
 import type { KeyName } from "../key-hint-format";
 
 /** The native page id of the plugins tab. */
@@ -840,8 +841,8 @@ export class SettingsSelectorComponent implements Component {
 		const switchTabs = "h/l switch tabs";
 		if (this.#searchList) {
 			return this.#search.focused
-				? `${confirm} to change · ${tab} to jump tabs · ${cancel} back to list`
-				: `j/k select · / search · ${tab} jump tabs · ${cancel} close`;
+				? `${confirm} confirm search · ${cancel} clear search`
+				: `j/k select · / search · ${tab} jump tabs · ${cancel} clear search`;
 		}
 		if (this.#currentTabId === "plugins") {
 			return this.#pluginComponent?.atRoot
@@ -1015,11 +1016,14 @@ export class SettingsSelectorComponent implements Component {
 			children.push(memo.prefsPreview.node);
 		}
 
+		const searchError = searching ? compileMenuRegex(this.#searchQuery)?.error : undefined;
 		const props: TspPrefsProps = {
 			title: "omp settings",
 			pages,
 			page: searching ? this.#preSearchTabId : this.#currentTabId,
-			lead: searching ? undefined : (pluginPage?.lead ?? (tab ? TAB_LEADS[tab] : undefined)),
+			lead: searchError
+				? `Invalid regex: ${searchError}`
+				: searching ? undefined : (pluginPage?.lead ?? (tab ? TAB_LEADS[tab] : undefined)),
 			query: searching ? this.#searchQuery : pluginPage?.query,
 			cursor: searching ? this.#search.input.getCursor() : pluginPage?.cursor,
 			sections,
@@ -1448,7 +1452,7 @@ export class SettingsSelectorComponent implements Component {
 			10,
 			getSettingsListTheme(),
 			(id, newValue) => this.#onSearchSettingChange(id, newValue),
-			() => this.#callbacks.onCancel(),
+			() => this.#endSearch(false),
 			{
 				layout: "flat",
 				typeToSearch: false,
@@ -1537,6 +1541,8 @@ export class SettingsSelectorComponent implements Component {
 		const targetTab: SettingTab | "plugins" = selectedDef?.tab ?? this.#preSearchTabId;
 
 		this.#searchQuery = "";
+		this.#search.setValue("");
+		this.#search.focused = false;
 		this.#searchCorpora = null;
 		this.#searchFirstMatch.clear();
 		this.#searchMatchCount = 0;
@@ -2130,6 +2136,10 @@ export class SettingsSelectorComponent implements Component {
 		const field = this.#search.handleInput(data);
 		if (field !== "pass") {
 			this.#menuKeys.reset();
+			if (field === "exited" && !this.#search.value) {
+				this.#endSearch(false);
+				return;
+			}
 			if (this.#search.value !== this.#searchQuery) this.#setSearchQuery(this.#search.value);
 			return;
 		}

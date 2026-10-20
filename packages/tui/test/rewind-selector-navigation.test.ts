@@ -76,7 +76,7 @@ describe("rewind shared menu navigation and safe history", () => {
 		}
 	});
 
-	it("retains literal filter text/caret after Esc and only closes on the next Esc", () => {
+	it("clears the literal filter after Esc and only closes on the next Esc", () => {
 		const cancelled = vi.fn();
 		const selector = make(vi.fn(), cancelled);
 		try {
@@ -87,7 +87,7 @@ describe("rewind shared menu navigation and safe history", () => {
 			selector.handleInput("\x1b[H");
 			expect(state(selector).search).toMatchObject({ value: "jkgG/ ", cursor: 0, focused: true });
 			selector.handleInput("\x1b");
-			expect(state(selector).search).toMatchObject({ value: "jkgG/ ", focused: false });
+			expect(state(selector).search).toMatchObject({ value: "", focused: false });
 			expect(cancelled).not.toHaveBeenCalled();
 			selector.handleInput("\x1b");
 			expect(cancelled).toHaveBeenCalledTimes(1);
@@ -104,7 +104,7 @@ describe("rewind shared menu navigation and safe history", () => {
 			selector.handleInput("f");
 			selector.handleInput("turn");
 			selector.handleInput("\x1b[D");
-			selector.handleInput("\x1b");
+			selector.handleInput("\n");
 			selector.handleInput("g");
 			selector.handleInput("g");
 			selector.handleInput("j");

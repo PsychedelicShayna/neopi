@@ -148,7 +148,7 @@ describe("ExtensionList menu navigation", () => {
 		list.handleInput("\x1b[D");
 		expect(list.getSearchQuery()).toBe(name);
 		expect(list.nativeQuery().cursor).toBe(name.length - 1);
-		list.handleInput("\x1b");
+		list.handleInput("\n");
 		expect(list.filterFocused).toBe(false);
 		expect(list.getSearchQuery()).toBe(name);
 		const saved = list.navigationSnapshot();

@@ -2,6 +2,7 @@ import type { Database, SQLQueryBindings, Statement } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { checkpointWal, getHistoryDbPath, logger, openSqliteDatabaseSync, postmortem } from "@oh-my-pi/pi-utils";
+import { compileMenuRegex } from "@oh-my-pi/pi-tui/menu-search";
 
 /** A unique prompt with provenance from its most recent submission. */
 export interface HistoryEntry {
@@ -268,6 +269,23 @@ ON CONFLICT(prompt) DO UPDATE SET
 		const safeLimit = this.#normalizeLimit(limit);
 		if (safeLimit === 0) return [];
 
+		const regex = compileMenuRegex(query);
+		if (regex) {
+			if (!regex.regex) return [];
+			try {
+				const entries: HistoryEntry[] = [];
+				for (const value of this.#recentStmt.iterate(filter.cwd ?? null, filter.sessionId ?? null, -1)) {
+					const row = value as HistoryRow;
+					if (!regex.regex.test(row.prompt)) continue;
+					entries.push(this.#toEntry(row));
+					if (entries.length === safeLimit) break;
+				}
+				return entries;
+			} catch (error) {
+				logger.error("HistoryStorage regex search failed", { error: String(error) });
+				return [];
+			}
+		}
 		const tokens = this.#tokenize(query);
 		if (tokens.length === 0) return [];
 

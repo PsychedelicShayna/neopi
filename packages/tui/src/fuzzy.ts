@@ -1,3 +1,5 @@
+import { compileMenuRegex, type MenuRegex } from "./menu-search";
+
 /**
  * Fuzzy matching utilities.
  *
@@ -31,6 +33,7 @@ interface SearchWord {
 }
 
 interface SearchIndex {
+	raw: string;
 	normalized: string;
 	compact: string;
 	/** Start offsets of each word within `compact` (cumulative word lengths). */
@@ -109,7 +112,7 @@ function buildSearchIndex(text: string, admit = true): SearchIndex {
 function buildUncachedSearchIndex(text: string): SearchIndex {
 	const normalized = normalizeForSearch(text);
 	if (normalized.length === 0) {
-		return { normalized, compact: "", compactWordStarts: new Set(), words: [] };
+		return { raw: text, normalized, compact: "", compactWordStarts: new Set(), words: [] };
 	}
 
 	const words: SearchWord[] = [];
@@ -125,7 +128,7 @@ function buildUncachedSearchIndex(text: string): SearchIndex {
 		ordinal++;
 	}
 
-	return { normalized, compact: normalized.replaceAll(" ", ""), compactWordStarts, words };
+	return { raw: text, normalized, compact: normalized.replaceAll(" ", ""), compactWordStarts, words };
 }
 
 function scoreCharacters(queryLower: string, textLower: string): CharacterMatch {
@@ -393,6 +396,8 @@ function fuzzyMatchCore(pq: PreparedQuery | null, index: SearchIndex): FuzzyMatc
 }
 
 export function fuzzyMatch(query: string, text: string): FuzzyMatch {
+	const regex = compileMenuRegex(query);
+	if (regex) return { matches: regex.regex?.test(text) ?? false, score: 0 };
 	const pq = prepareQuery(query);
 	if (pq === null) return { matches: true, score: 0 };
 	return fuzzyMatchCore(pq, buildSearchIndex(text));
@@ -408,13 +413,19 @@ export function fuzzyMatch(query: string, text: string): FuzzyMatch {
  */
 export class FuzzyQuery {
 	readonly #prepared: PreparedQuery | null;
+	readonly #regex: MenuRegex | undefined;
 
 	constructor(query: string) {
-		this.#prepared = prepareQuery(query);
+		this.#regex = compileMenuRegex(query);
+		this.#prepared = this.#regex ? null : prepareQuery(query);
 	}
 
 	/** Same result as `fuzzyMatch(query, text)`; `text` may be a prepared {@link FuzzyText}. */
 	match(text: string | FuzzyText): FuzzyMatch {
+		if (this.#regex) {
+			const raw = typeof text === "string" ? text : fuzzyTextIndex(text).raw;
+			return { matches: this.#regex.regex?.test(raw) ?? false, score: 0 };
+		}
 		const pq = this.#prepared;
 		if (pq === null) return { matches: true, score: 0 };
 		return fuzzyMatchCore(pq, typeof text === "string" ? buildSearchIndex(text) : fuzzyTextIndex(text));
@@ -448,7 +459,10 @@ export class FuzzyText {
 
 	/** Match `query` (space-separated tokens; all must match) against the prepared text. */
 	match(query: string | FuzzyQuery): FuzzyMatch {
-		return typeof query === "string" ? fuzzyMatchCore(prepareQuery(query), this.#index) : query.match(this);
+		if (typeof query !== "string") return query.match(this);
+		const regex = compileMenuRegex(query);
+		if (regex) return { matches: regex.regex?.test(this.#index.raw) ?? false, score: 0 };
+		return fuzzyMatchCore(prepareQuery(query), this.#index);
 	}
 }
 
@@ -471,10 +485,22 @@ export class FuzzyCorpus<T> {
 
 	/** Same results as `fuzzyRank(items, query, getText)` for the prepared items. */
 	rank(query: string): FuzzyFilterResult<T>[] {
+		const regex = compileMenuRegex(query);
+		if (regex) return rankRegex(this.#items, regex, i => this.#indexes[i]!.raw);
 		if (!query.trim()) return this.#items.map(item => ({ item, score: 0 }));
 		const indexes = this.#indexes;
 		return rankIndexed(this.#items, prepareQuery(query), i => indexes[i]!);
 	}
+}
+
+function rankRegex<T>(items: readonly T[], pattern: MenuRegex, textAt: (index: number) => string): FuzzyFilterResult<T>[] {
+	const regex = pattern.regex;
+	if (!regex) return [];
+	const results: FuzzyFilterResult<T>[] = [];
+	for (let index = 0; index < items.length; index++) {
+		if (regex.test(textAt(index))) results.push({ item: items[index]!, score: 0 });
+	}
+	return results;
 }
 
 function rankIndexed<T>(
@@ -500,6 +526,8 @@ function rankIndexed<T>(
  * Supports space-separated tokens: all tokens must match.
  */
 export function fuzzyRank<T>(items: readonly T[], query: string, getText: (item: T) => string): FuzzyFilterResult<T>[] {
+	const regex = compileMenuRegex(query);
+	if (regex) return rankRegex(items, regex, i => getText(items[i]!));
 	if (!query.trim()) {
 		return items.map(item => ({ item, score: 0 }));
 	}

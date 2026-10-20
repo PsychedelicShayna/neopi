@@ -1,4 +1,5 @@
 import { Container, ScrollView, TruncatedText } from "../index";
+import { compileMenuRegex } from "../menu-search";
 import { theme } from "../theme/theme";
 import { OverlayPanel } from "../chrome/overlay-box";
 import { MenuSelection } from "../components/menu-selection";
@@ -181,7 +182,7 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 		if (cx.supports("picker")) {
 			this.#pickerRoot ??= dockedPicker({
 				title: `${this.#providerName} accounts`,
-				subtitle: "Pick the account to sign out",
+				subtitle: compileMenuRegex(this.#search.value)?.error ?? "Pick the account to sign out",
 				icon: "key-round",
 				noun: "accounts",
 				size: "md",
@@ -223,7 +224,7 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 				"list",
 				{
 					selected: this.#menu.selectedKey ?? null,
-					empty: "No stored accounts to log out",
+					empty: compileMenuRegex(this.#search.value)?.error ?? "No stored accounts to log out",
 					max: { lines: LOGOUT_SELECTOR_MAX_VISIBLE },
 				},
 				this.#nativeItems,

@@ -299,10 +299,10 @@ describe("ModelHub", () => {
 		hub.handleInput("/");
 		for (const key of "hjkl") hub.handleInput(key);
 		expect(normalize(hub.render(220))).toContain("hjkl-model");
-		expect(footerLine(hub.render(220))).toContain("Search · Esc back to list");
+		expect(footerLine(hub.render(220))).toContain("Search · Enter confirm · Esc clear");
 		hub.handleInput(ESC);
 		expect(onCancel).not.toHaveBeenCalled();
-		expect(footerLine(hub.render(220))).not.toContain("Search · Esc back to list");
+		expect(footerLine(hub.render(220))).not.toContain("Search · Enter confirm · Esc clear");
 		hub.handleInput("j");
 		hub.handleInput("h"); // back to sidebar, without typing h
 		expect(normalize(hub.render(220))).toContain("hjkl-model");
@@ -610,7 +610,7 @@ describe("ModelHub", () => {
 
 			hub.handleInput("/");
 			for (const ch of "target") hub.handleInput(ch);
-			hub.handleInput(ESC); // return to navigation without losing the query
+			hub.handleInput("\n"); // retain the query and return to navigation
 			hub.handleInput(LEFT); // switch focus to sidebar
 			hub.handleInput("G"); // last matching provider without wrapping
 			expect(normalize(hub.render(220))).toContain("prov-a ·");
@@ -703,7 +703,7 @@ describe("ModelHub", () => {
 			for (const ch of "model") hub.handleInput(ch);
 
 			// Focus is now on the model list
-			expect(footerLine(hub.render(220))).toContain("Search · Esc back to list");
+			expect(footerLine(hub.render(220))).toContain("Search · Enter confirm · Esc clear");
 			hub.handleInput(ESC);
 			// Down arrow navigates within the model list (from model-a to model-b)
 			hub.handleInput(DOWN);
@@ -726,7 +726,7 @@ describe("ModelHub", () => {
 			hub.handleInput("/");
 			hub.handleInput("t");
 			expect(hub.navigationSnapshot()).toMatchObject({ entry: "roles", rolesQuery: "t", focus: "list" });
-			expect(footerLine(hub.render(220))).toContain("Search · Esc back to list");
+			expect(footerLine(hub.render(220))).toContain("Search · Enter confirm · Esc clear");
 			hub.handleInput(ESC);
 			expect(hub.navigationSnapshot().filterFocused).toBe(false);
 		});
@@ -748,7 +748,7 @@ describe("ModelHub", () => {
 			hub.handleInput("/");
 			hub.handleInput("t");
 			expect(normalize(hub.render(220))).toContain("All available models");
-			expect(footerLine(hub.render(220))).toContain("Search · Esc back to list");
+			expect(footerLine(hub.render(220))).toContain("Search · Enter confirm · Esc clear");
 			hub.handleInput(ESC);
 			expect(footerLine(hub.render(220))).toContain("↑/↓ models · ← providers");
 		});
@@ -1414,6 +1414,7 @@ describe("ModelHub", () => {
 			hub.handleInput("/");
 			for (const ch of "chat-model") hub.handleInput(ch);
 			hub.handleInput("\n");
+			hub.handleInput("\n");
 			const chatStrip = footerLine(hub.render(400));
 			expect(chatStrip).toContain("default");
 			expect(chatStrip).toContain("smol");
@@ -1428,6 +1429,7 @@ describe("ModelHub", () => {
 
 			hub.handleInput("\x15"); // clear the query while editing
 			for (const ch of "perplexity") hub.handleInput(ch);
+			hub.handleInput("\n");
 			hub.handleInput("\n");
 			const searchStrip = footerLine(hub.render(400));
 			expect(searchStrip).toContain("web");
@@ -1652,6 +1654,7 @@ describe("ModelHub", () => {
 			hub.handleInput("\n"); // exact picker
 			hub.handleInput("/");
 			for (const ch of "model-b") hub.handleInput(ch);
+			hub.handleInput("\n"); // model → effort choices
 			hub.handleInput("\n"); // model → effort choices
 			hub.handleInput("\n"); // Inherit
 			expect(onFallbackChainChange).toHaveBeenLastCalledWith("default", ["test/model-b"], {
@@ -1990,6 +1993,7 @@ describe("ModelHub", () => {
 			hub.handleInput("/");
 			for (const ch of "model-a") hub.handleInput(ch);
 			hub.handleInput("\n"); // open the strip for model-a
+			hub.handleInput("\n");
 			hub.handleInput("G"); // retry-fallback
 			hub.handleInput(UP); // fallbacks:test/*
 			hub.handleInput(UP); // fallbacks:model-a
@@ -1998,6 +2002,7 @@ describe("ModelHub", () => {
 
 			hub.handleInput("/");
 			for (const ch of "model-b") hub.handleInput(ch);
+			hub.handleInput("\n");
 			hub.handleInput("\n");
 			hub.handleInput("\n"); // confirm fallback effort
 			expect(onFallbackChainChange).toHaveBeenLastCalledWith("test/model-a", ["test/model-b"], {
@@ -2017,6 +2022,7 @@ describe("ModelHub", () => {
 			hub.handleInput("/");
 			for (const ch of "model-a") hub.handleInput(ch);
 			hub.handleInput("\n");
+			hub.handleInput("\n");
 			hub.handleInput("G"); // retry-fallback
 			hub.handleInput(UP); // fallbacks:test/*
 			hub.handleInput("\n");
@@ -2024,6 +2030,7 @@ describe("ModelHub", () => {
 
 			hub.handleInput("/");
 			for (const ch of "model-b") hub.handleInput(ch);
+			hub.handleInput("\n");
 			hub.handleInput("\n");
 			hub.handleInput("\n"); // confirm fallback effort
 			expect(onFallbackChainChange).toHaveBeenLastCalledWith("test/*", ["test/model-b"], {
@@ -2045,6 +2052,7 @@ describe("ModelHub", () => {
 			hub.handleInput("/");
 			for (const ch of "model-a") hub.handleInput(ch);
 			hub.handleInput("\n"); // pick the protected model
+			hub.handleInput("\n");
 			const strip = footerLine(hub.render(220));
 			expect(strip).toContain("for test/model-a");
 			expect(strip).toContain("for test/*");
@@ -2053,6 +2061,7 @@ describe("ModelHub", () => {
 			expect(normalize(hub.render(220))).toContain("Adding fallback for test/model-a");
 			hub.handleInput("/");
 			for (const ch of "model-b") hub.handleInput(ch);
+			hub.handleInput("\n");
 			hub.handleInput("\n");
 			hub.handleInput("\n"); // confirm fallback effort
 			expect(onFallbackChainChange).toHaveBeenLastCalledWith("test/model-a", ["test/model-b"], {
@@ -2312,6 +2321,50 @@ describe("ModelHub", () => {
 	});
 
 	describe("provider scopes and search", () => {
+		test.each(["/<live>|<voice>", "re:<live>|<voice>"])(
+			"models accepts Vim regex %s without activating while editing",
+			query => {
+				const { hub, onAssign } = createHub({
+					models: [
+						makeModel("test", "live"), makeModel("test", "voice"),
+						makeModel("test", "lively"), makeModel("test", "voicemail"),
+					],
+					scoped: true,
+				});
+				hub.handleInput("/");
+				for (const ch of query) hub.handleInput(ch);
+				const rendered = normalize(hub.render(220));
+				expect(rendered).toContain("test/live");
+				expect(rendered).toContain("test/voice");
+				expect(rendered).not.toContain("lively");
+				expect(rendered).not.toContain("voicemail");
+				for (const key of [DOWN, UP, "\x1b[5~", "\x1b[6~", "\t"]) hub.handleInput(key);
+				expect(hub.navigationSnapshot().filterFocused).toBe(true);
+				expect(hub.navigationSnapshot().strip).toBeNull();
+				hub.handleInput("\n");
+				expect(hub.navigationSnapshot().filterFocused).toBe(false);
+				expect(hub.navigationSnapshot().strip).toBeNull();
+				expect(normalize(hub.render(220))).not.toContain("lively");
+				expect(onAssign).not.toHaveBeenCalled();
+				hub.handleInput("\n");
+				expect(footerLine(hub.render(220))).toContain("live →");
+			},
+		);
+
+		test.each(["/(", "re:("])("models reports invalid regex %s with no selectable rows", query => {
+			const { hub, onAssign } = createHub({ models: [makeModel("test", "live")], scoped: true });
+			hub.handleInput("/");
+			for (const ch of query) hub.handleInput(ch);
+			const rendered = normalize(hub.render(220));
+			expect(rendered).toMatch(/invalid.*(?:regex|pattern)|(?:regex|pattern).*error/i);
+			expect(rendered).toContain("No matching models");
+			expect(rendered).not.toContain("test/live");
+			hub.handleInput("\n");
+			hub.handleInput("\n");
+			expect(onAssign).not.toHaveBeenCalled();
+			expect(hub.navigationSnapshot().strip).toBeNull();
+		});
+
 		test("search inside a provider scope keeps that provider's model (#4522)", () => {
 			const openrouterGlm = makeModel("openrouter", "z-ai/glm-5.2");
 			const customGlm = makeModel("custom-provider", "glm-5.2");
@@ -2326,6 +2379,7 @@ describe("ModelHub", () => {
 
 			hub.handleInput("/");
 			for (const ch of "glm-5.2") hub.handleInput(ch);
+			hub.handleInput("\n");
 			hub.handleInput("\n");
 
 			// The role strip opened for the provider-scoped match, not the
@@ -2371,7 +2425,7 @@ describe("ModelHub", () => {
 
 			hub.handleInput("/");
 			for (const ch of "z-ai") hub.handleInput(ch);
-			hub.handleInput(ESC);
+			hub.handleInput("\n");
 			hub.handleInput(LEFT); // switch focus to sidebar
 			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // skips custom-provider (0 matches), lands on openrouter
@@ -2397,12 +2451,12 @@ describe("ModelHub", () => {
 			for (const ch of "target") hub.handleInput(ch);
 			expect(sidebarIndexOf("zzz-provider")).toBeLessThan(sidebarIndexOf("aaa-provider"));
 
-			// Escape returns to normal mode without clearing the query.
-			hub.handleInput("\x1b");
+			// Enter returns to normal mode without clearing the query.
+			hub.handleInput("\n");
 			expect(sidebarIndexOf("zzz-provider")).toBeLessThan(sidebarIndexOf("aaa-provider"));
 		});
 
-		test("Escape returns to normal mode without clearing the query, then closes the hub", () => {
+		test("Escape clears the query and returns to normal mode, then closes the hub", () => {
 			const model = makeModel("test", "escape-model");
 			const { hub, onCancel } = createHub({ models: [model] });
 			installTestTheme();
@@ -2411,6 +2465,8 @@ describe("ModelHub", () => {
 			for (const ch of "esc") hub.handleInput(ch);
 			hub.handleInput("\x1b");
 			expect(onCancel).not.toHaveBeenCalled();
+			expect(hub.navigationSnapshot().filterFocused).toBe(false);
+			expect(hub.navigationSnapshot().browser.query).toBe("");
 			hub.handleInput("\x1b");
 			expect(onCancel).toHaveBeenCalledTimes(1);
 		});

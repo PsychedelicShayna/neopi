@@ -10,6 +10,7 @@ import type { Component } from "../tui";
 import { matchesKey } from "../keys";
 import { replaceTabs, truncateToWidth } from "../utils";
 import { collapseCommand } from "../apps/ps-data";
+import { compileMenuRegex } from "../menu-search";
 import { ansi, code, col, compact, item, node, row, span, stableKey, text } from "../native/describe";
 import type { DescribeContext, NativeChild, NativeNode, NativeScroll, NativeUiEvent } from "../native/node";
 import { actionBar, actionButton, selectList } from "../native/overlay";
@@ -175,8 +176,10 @@ export class JobsSheet implements Component {
 		const detail = selected && this.#source.inspect(selected.id);
 		const now = Date.now();
 		const close = actionButton("Close", "close", { keys: "escape" });
+		const queryError = compileMenuRegex(this.#search.value)?.error;
 		return col([
 			this.#search.input.describe(cx),
+			...(queryError ? [text([span(queryError, "error")])] : []),
 			...(selected
 				? [
 						node(
@@ -314,8 +317,10 @@ export class JobsSheet implements Component {
 			this.#selectedId = event.item;
 			this.#focus = event.type === "activate" ? "output" : "list";
 			this.#viewport.reveal();
-		} else if (event.type === "action" && event.act === "close") this.#source.close();
-		else if (event.type === "action" && event.act === "cancel") this.#cancelSelected();
+		} else if (event.type === "action" && event.act === "close") {
+			if (this.#search.focused || this.#search.value) this.handleInput("\x1b");
+			else this.#source.close();
+		} else if (event.type === "action" && event.act === "cancel") this.#cancelSelected();
 	}
 
 	#listRows(): number {

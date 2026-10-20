@@ -16,6 +16,7 @@ import { Image, type ImageBudget } from "../../components/image";
 import { MenuSelection } from "../../components/menu-selection";
 import { ScrollView } from "../../components/scroll-view";
 import { MenuKeyReader, MenuSearchField, type MenuNavAction } from "../../components/menu-navigation";
+import { compileMenuRegex } from "../../menu-search";
 import { fuzzyFilter } from "../../fuzzy";
 import { TreeView } from "../../components/tree-view";
 import { matchesKey } from "../../keys";
@@ -1053,9 +1054,11 @@ export class Sidebar {
 		const aiInput = editing === "stage-ai-input" ? this.aiInput.input.describe(cx) : undefined;
 		const descriptionEditor = editing === "description" ? editorNode(this.description.describe(cx)) : undefined;
 		const search = this.search.input.describe(cx);
+		const queryError = compileMenuRegex(this.search.value)?.error;
 		return this.#nativeMemo.get(
 			[
 				search,
+				queryError,
 				this.#model.clean,
 				this.#model.unstaged,
 				this.#model.staged,
@@ -1093,7 +1096,11 @@ export class Sidebar {
 							),
 							this.#describeCommit(on, summaryInput, descriptionEditor),
 						];
-				children.unshift(keyed(col([text([span("Search files", "muted")]), search], { gap: "xs" }), "search"));
+				children.unshift(keyed(col([
+					text([span("Search files", "muted")]),
+					search,
+					...(queryError ? [text([span(queryError, "error")])] : []),
+				], { gap: "xs" }), "search"));
 				return col(children, { role: "omp.app.git.side" });
 			},
 		);

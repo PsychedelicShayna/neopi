@@ -122,10 +122,10 @@ describe("IrcViewerComponent", () => {
 		expect(screen).toContain("alpha to beta");
 		expect(screen).toContain("delta to alpha");
 		expect(screen).not.toContain("gamma to delta");
-		expect(screen).toContain("filter: alpha");
-		// Esc leaves the literal field without discarding the active query.
+		expect(screen).toContain("Search: alpha");
+		// Enter leaves the literal field without discarding the active query.
 		view.viewer.handleInput("/");
-		view.viewer.handleInput("\x1b");
+		view.viewer.handleInput("\r");
 		expect(view.closed()).toBe(0);
 		expect(view.screen().join("\n")).not.toContain("gamma to delta");
 		expect(view.viewer.navigationSnapshot().filter).toMatchObject({ value: "alpha", focused: false });
@@ -219,7 +219,7 @@ describe("IrcViewerComponent", () => {
 		const field = view.viewer.navigationSnapshot().filter;
 		expect(field.value).toBe("jkl / hg");
 		expect(field.cursor).toBe(field.value.length - 1);
-		view.viewer.handleInput("\x1b");
+		view.viewer.handleInput("\r");
 		view.viewer.handleInput("g");
 		view.viewer.handleInput("g");
 		view.viewer.handleInput("j");

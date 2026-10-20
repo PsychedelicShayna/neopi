@@ -30,6 +30,7 @@ import { SplitPane } from "../components/layout/split-pane";
 import { contentRowWidth, padLinesToHeight, renderScrollableList } from "../chrome/selector-helpers";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import type { NativeChild, NativeNode, NativeScroll, NativeUiEvent } from "../native/node";
+import { compileMenuRegex } from "../menu-search";
 import { col, md, node, span, text } from "../native/describe";
 import { actionBar, actionButton } from "../native/overlay";
 import {
@@ -644,6 +645,8 @@ export class BtwHistoryPanel implements Component, Focusable {
 		// `section`s (Tern draws those as foldable `##` headings). With one side
 		// question the list is noise: the reader alone.
 		const children: NativeChild[] = [this.#search.input];
+		const queryError = compileMenuRegex(this.#search.value)?.error;
+		if (queryError) children.push(text([span(queryError, "error")]));
 		if (record) {
 			const reader: NativeNode = {
 				...node(
@@ -688,7 +691,8 @@ export class BtwHistoryPanel implements Component, Focusable {
 			const record = this.#selected();
 			switch (event.act) {
 				case "close":
-					this.#options.onClose();
+					if (!this.#composer && (this.#search.focused || this.#search.value)) this.handleInput("\x1b");
+					else this.#options.onClose();
 					return;
 				case "copy":
 					if (record && getBtwCopyText(record) !== undefined) this.#options.onCopy(record);

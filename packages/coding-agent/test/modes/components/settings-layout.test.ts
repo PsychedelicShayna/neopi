@@ -7,6 +7,7 @@ import { createSettingsHost } from "@oh-my-pi/pi-coding-agent/config/settings-ui
 import { createPluginSettingsHost } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/settings-host";
 import { SettingsSelectorComponent } from "@oh-my-pi/pi-tui/overlays/settings-selector";
 import { initTheme, setTheme } from "@oh-my-pi/pi-tui/theme";
+import { plainText } from "@oh-my-pi/pi-tui/native/spans";
 import { cfgRetryUsageAwareFallback } from "@oh-my-pi/pi-coding-agent/session/settings";
 import { cfgAdvisorEnabled } from "@oh-my-pi/pi-coding-agent/advisor/settings";
 
@@ -115,6 +116,7 @@ describe("settings layout", () => {
 
 		selector.handleInput("/");
 		for (const ch of "composer shape") selector.handleInput(ch);
+		selector.handleInput("\n"); // confirm search without opening a setting
 		// Open the composer.shape submenu
 		selector.handleInput("\n");
 
@@ -128,5 +130,63 @@ describe("settings layout", () => {
 		const nextRendered = selector.render(80).join("\n");
 		expect(nextRendered).toContain("Claude Code");
 		expect(nextRendered).toContain("Preview:");
+	});
+
+	it.each(["/<live>|<voice>", "re:<live>|<voice>"])(
+		"searches settings with Vim alternation and boundaries using %s",
+		async query => {
+			await setTheme("dark");
+			let changes = 0;
+			let cancellations = 0;
+			const selector = new SettingsSelectorComponent(
+				{
+					availableThinkingLevels: [],
+					thinkingLevel: undefined,
+					availableThemes: ["dark", "light"],
+					providers: [],
+					settings: createSettingsHost(),
+					plugins: createPluginSettingsHost(process.cwd()),
+				},
+				{ onChange: () => changes++, onCancel: () => cancellations++ },
+			);
+			selector.handleInput("/");
+			for (const ch of query) selector.handleInput(ch);
+			expect(plainText(selector.render(160).join("\n"))).toContain("Live Voice");
+			expect(plainText(selector.render(160).join("\n"))).not.toContain("Composer Shape");
+			for (const key of ["\x1b[B", "\x1b[A", "\x1b[5~", "\x1b[6~", "\t"]) selector.handleInput(key);
+			selector.handleInput("\n");
+			expect(changes).toBe(0);
+			expect(cancellations).toBe(0);
+			expect(plainText(selector.render(160).join("\n"))).toContain("Live Voice");
+			selector.handleInput("/");
+			selector.handleInput("\x1b");
+			expect(cancellations).toBe(0);
+			expect(plainText(selector.render(160).join("\n"))).not.toMatch(/\d+ match/);
+		},
+	);
+
+	it.each(["/(", "re:("])("shows invalid settings regex %s without activating rows", async query => {
+		await setTheme("dark");
+		let changes = 0;
+		const selector = new SettingsSelectorComponent(
+			{
+				availableThinkingLevels: [],
+				thinkingLevel: undefined,
+				availableThemes: ["dark", "light"],
+				providers: [],
+				settings: createSettingsHost(),
+				plugins: createPluginSettingsHost(process.cwd()),
+			},
+			{ onChange: () => changes++, onCancel: () => {} },
+		);
+		selector.handleInput("/");
+		for (const ch of query) selector.handleInput(ch);
+		const rendered = plainText(selector.render(160).join("\n"));
+		expect(rendered).toMatch(/invalid.*(?:regex|pattern)|(?:regex|pattern).*error/i);
+		expect(rendered).not.toContain("Composer Shape");
+		expect(rendered).not.toContain("Live Voice");
+		selector.handleInput("\n");
+		selector.handleInput("\n");
+		expect(changes).toBe(0);
 	});
 });

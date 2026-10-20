@@ -1,6 +1,7 @@
 import { formatKeyHint } from "../app-keybindings";
 import { editorKey } from "../chrome/keybinding-hints";
 import { fuzzyFilter } from "../fuzzy";
+import { compileMenuRegex } from "../menu-search";
 import { getKeybindings } from "../keybindings";
 import type { MouseRoutable, SgrMouseEvent } from "../mouse";
 import type { TspPrefsControl, TspPrefsRow, TspPrefsSection, TspProps, TspSpan } from "@oh-my-pi/pi-wire";
@@ -788,11 +789,14 @@ export class SettingsList implements Component {
 		const items: NativeNode[] = [];
 		for (const item of this.#filteredItems) items.push(this.#describeItem(item));
 		const cachedMax = this.#nativeList?.props.max;
+		const error = compileMenuRegex(this.#filterQuery)?.error;
 		const props: TspProps<"list"> = {
 			selected: this.getSelectedItem()?.id ?? null,
 			filter: this.#filterQuery.trim() || undefined,
 			empty:
-				this.#items.length === 0 ? (this.#options.emptyText ?? "No settings available") : "No matching settings",
+				error
+					? `Invalid regex: ${error}`
+					: this.#items.length === 0 ? (this.#options.emptyText ?? "No settings available") : "No matching settings",
 			max:
 				typeof cachedMax === "object" && cachedMax.lines === this.#maxVisible
 					? cachedMax
@@ -1129,7 +1133,8 @@ export class SettingsList implements Component {
 			return;
 		}
 		if (action.kind === "cancel") {
-			this.#onCancel();
+			if (this.#filterQuery) this.clearSearch();
+			else this.#onCancel();
 			return;
 		}
 		if (action.kind === "context") {

@@ -235,6 +235,7 @@ describe("session picker incremental search", () => {
 
 		harness.type("zzmarker");
 		const before = ids(harness.filtered());
+		harness.selector.getSessionList().handleInput("\n"); // confirm search before navigating
 		harness.selector.getSessionList().handleInput("\x1b[B"); // arrow down
 		vi.runAllTimers();
 

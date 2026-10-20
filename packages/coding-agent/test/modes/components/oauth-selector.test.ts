@@ -48,14 +48,15 @@ describe("OAuthSelectorComponent", () => {
 			.join("\n");
 		expect(rendered).toContain(target.name);
 		expect(rendered).toContain(`Search: ${target.id}`);
-		component.handleInput("\x1b");
+		component.handleInput("\n");
+		expect(selected).toEqual([]);
 		expect(Bun.stripANSI(component.render(80).join("\n"))).toContain(`Search: ${target.id}`);
 
 		component.handleInput("\n");
 		expect(selected).toEqual([target.id]);
 	});
 
-	it("retains an active filter on the first Esc and closes on the second", () => {
+	it("clears an active filter on the first Esc and closes on the second", () => {
 		let cancelled = 0;
 		const component = new OAuthSelectorComponent(
 			"login",
@@ -68,7 +69,7 @@ describe("OAuthSelectorComponent", () => {
 		component.handleInput("j");
 		component.handleInput("\x1b");
 		expect(cancelled).toBe(0);
-		expect(Bun.stripANSI(component.render(80).join("\n"))).toContain("Search: hj");
+		expect(Bun.stripANSI(component.render(80).join("\n"))).not.toContain("Search: hj");
 		component.handleInput("\x1b");
 		expect(cancelled).toBe(1);
 	});
@@ -102,6 +103,7 @@ describe("OAuthSelectorComponent", () => {
 		expect(rendered).toContain("No stored provider credentials to log out");
 
 		component.handleInput("\n");
+		component.handleInput("\n");
 		expect(selected).toEqual([]);
 	});
 
@@ -132,6 +134,7 @@ describe("OAuthSelectorComponent", () => {
 		expect(rendered).toContain("OpenCode Go");
 		expect(rendered).toContain("logged in");
 
+		component.handleInput("\n");
 		component.handleInput("\n");
 		expect(selected).toEqual(["opencode-go"]);
 	});

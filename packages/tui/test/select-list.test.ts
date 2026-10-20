@@ -316,7 +316,7 @@ describe("SelectList", () => {
 		expect(list.debugState().filterText).toBe("og/hjkl");
 		list.handleInput("\x1b");
 		expect(cancelled).toBe(0);
-		expect(list.debugState()).toMatchObject({ filterText: "og/hjkl", filterFocused: false });
+		expect(list.debugState()).toMatchObject({ filterText: "", filterFocused: false });
 		list.handleInput("\x1b");
 		expect(cancelled).toBe(1);
 		list.setFilter("");
@@ -423,9 +423,9 @@ describe("SelectList", () => {
 	it("shows an empty focused search field even when every row fits", () => {
 		const list = new SelectList([{ value: "a", label: "Alpha" }], 5, testTheme, { search: "always" });
 		list.handleInput("/");
-		expect(list.render(80).join("\n")).toContain("Esc back to list");
+		expect(list.render(80).join("\n")).toContain("Enter confirm");
 		list.handleInput("\x1b");
-		expect(list.render(80).join("\n")).not.toContain("Esc back to list");
+		expect(list.render(80).join("\n")).not.toContain("Enter confirm");
 	});
 
 	it("restores literal filter focus and caret without activating the saved row", () => {
@@ -444,9 +444,33 @@ describe("SelectList", () => {
 		reopened.handleInput("lph");
 		expect(reopened.navigationState().filter).toBe("alpha");
 		expect(activated).toBe(false);
-		reopened.handleInput("\x1b");
+		reopened.handleInput("\r");
 		expect(reopened.filterFocused).toBe(false);
 		expect(reopened.getSelectedItem()?.value).toBe("a");
+	});
+
+	it("confirms a Vim search without activating, then navigates and cancels it", () => {
+		const activated: string[] = [];
+		const list = new SelectList(
+			["Live", "Voice", "Revoice"].map(label => ({ value: label, label })),
+			5, testTheme, { search: "always" },
+		);
+		list.onSelect = item => activated.push(item.value);
+		list.handleInput("/");
+		list.handleInput("/<live>|<voice>");
+		const selected = list.getSelectedItem()?.value;
+		list.handleInput("\x1b[B");
+		expect(list.getSelectedItem()?.value).toBe(selected);
+		list.handleInput("\r");
+		expect(list.filterFocused).toBe(false);
+		expect(list.navigationState().filter).toBe("/<live>|<voice>");
+		expect(activated).toEqual([]);
+		list.handleInput("j");
+		expect(list.getSelectedItem()?.value).toBe("Voice");
+		list.handleInput("/");
+		list.handleInput("\x1b");
+		expect(list.navigationState().filter).toBe("");
+		expect(list.render(120).join("\n")).toContain("Revoice");
 	});
 
 	it("keeps printable keys inert when the list does not overflow", () => {
