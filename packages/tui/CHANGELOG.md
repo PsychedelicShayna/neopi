@@ -4,6 +4,7 @@
 
 ### Added
 
+- `/advisor configure` clones the selected advisor with `c`; deletion requires the Delete key and a named, cancel-first confirmation ([#322](https://github.com/PsychedelicShayna/neopi/issues/322)).
 - Ask supports `a` to add a note to any highlighted option and `A` to edit or clear its latest note; notes survive selection changes and appear in answer review ([#321](https://github.com/PsychedelicShayna/neopi/issues/321)).
 - The chain configurator's chain screen toggles the highlighted step on or off with Space, shows `[x]`/`[ ]` on each step row, and counts only enabled steps in its summaries ([#365](https://github.com/PsychedelicShayna/neopi/issues/365)).
 - Terminal image protocols can switch at runtime, with matching Kitty placeholder support and explicit Sixel passthrough gating ([#302](https://github.com/PsychedelicShayna/neopi/issues/302)).
