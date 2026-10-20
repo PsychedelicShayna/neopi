@@ -2963,7 +2963,7 @@ export class Editor implements Component, Focusable {
 	 *  stored content. Single pass so replaced content is never rescanned (a pasted body that
 	 *  happens to contain another token's label must survive verbatim). Longer atom labels are
 	 *  tried first so `#1` never shadows `#10`. */
-	#expandPasteMarkers(text: string): string {
+	expandText(text: string): string {
 		const sources: string[] = [];
 		for (const pasteId of this.#pastes.keys()) {
 			sources.push(`\\[Paste #${pasteId}(?:, (?:\\+\\d+ lines|\\d+ chars))?\\]`);
@@ -3067,7 +3067,7 @@ export class Editor implements Component, Focusable {
 	 * Use this when you need the full content (e.g., for external editor).
 	 */
 	getExpandedText(): string {
-		return this.#expandPasteMarkers(this.#state.lines.join("\n"));
+		return this.expandText(this.#state.lines.join("\n"));
 	}
 
 	getLines(): string[] {
@@ -3476,11 +3476,25 @@ export class Editor implements Component, Focusable {
 	}
 
 	/** Capture submitted draft ranges, excluding unchanged protected utterances. */
-	captureTextWithoutUtterances(ids: readonly number[]): { text: string; receipt: number; excludedIds: number[] } {
+	captureTextWithoutUtterances(
+		ids: readonly number[],
+		preservedTokens: readonly string[] = [],
+	): { text: string; receipt: number; excludedIds: number[] } {
 		this.#reconcileVolatile();
 		const full = this.#draft();
 		this.#reconcileSpans(full);
 		const excluded = this.#removableSpeechSpans(ids, full);
+		// Tokens whose payloads are not part of this delivery remain in the draft.
+		const omitted: Array<{ start: number; end: number }> = [...excluded];
+		for (const token of new Set(preservedTokens)) {
+			if (!token) continue;
+			let start = full.indexOf(token);
+			while (start !== -1) {
+				omitted.push({ start, end: start + token.length });
+				start = full.indexOf(token, start + token.length);
+			}
+		}
+		omitted.sort((a, b) => a.start - b.start);
 		const receipt = this.#nextComposerReceipt--;
 		let start = 0;
 		let text = "";
@@ -3490,8 +3504,7 @@ export class Editor implements Component, Focusable {
 			text += part;
 			this.#speechSpans.push({ id: receipt, start, end, text: part });
 		};
-		for (let index = excluded.length - 1; index >= 0; index--) {
-			const span = excluded[index]!;
+		for (const span of omitted) {
 			capture(span.start);
 			start = Math.max(start, span.end);
 		}
@@ -4019,7 +4032,7 @@ export class Editor implements Component, Focusable {
 	#submitValue(): void {
 		this.#resetKillSequence();
 
-		const result = this.#expandPasteMarkers(this.#state.lines.join("\n")).trim();
+		const result = this.expandText(this.#state.lines.join("\n")).trim();
 		this.#reconcileSpans();
 		this.#submittedDraft = {
 			lines: [...this.#state.lines],

@@ -61,6 +61,8 @@ function truncateToChunk(text: string): string {
 interface UserLedgerTurn {
 	turn: number;
 	text: string;
+	/** Visible composer text controls routing; expanded document contents never do. */
+	routingText?: string;
 	final: boolean;
 	claim?: number;
 	blocked?: boolean;
@@ -96,6 +98,8 @@ export interface LiveComposerReceipt {
 
 export interface LiveComposerSubmission {
 	text: string;
+	/** Visible text, before attachment expansion, used only for routing. */
+	routingText?: string;
 	/** Editor-owned exact draft ranges to retire when the primary accepts this submission. */
 	receipt?: LiveComposerReceipt;
 	/** Only unchanged editor-owned turns remain voice-only after explicit composer edits. */
@@ -669,7 +673,7 @@ export class LiveSessionController {
 		if (this.#seenDelegationIds.has(event.item.id)) return;
 		this.#seenDelegationIds.add(event.item.id);
 		const latest = this.#latestUtterance;
-		if (latest?.final && this.#isDirectAddress(latest.text) &&
+		if (latest?.final && this.#isDirectAddress(latest.routingText ?? latest.text) &&
 			!this.#turnsWhere(turn => this.#mayDelegateTurn(turn) && turn.claim === undefined).length) {
 			this.#rejectDirectDelegation(event.item.id, latest.text);
 			return;
@@ -1158,7 +1162,7 @@ export class LiveSessionController {
 			for (const turn of voiceOnly) {
 				if (preserved.includes(turn.turn)) this.#deliverBlockedTurn(turn);
 			}
-			if (primary.text.trim()) this.#forcePendingComposer(primary.text.trim(), primary.receipt);
+			if (primary.text.trim()) this.#forcePendingComposer(primary.text.trim(), primary.receipt, primary.routingText);
 			return true;
 		}
 		if (block.matched) {
@@ -1175,16 +1179,18 @@ export class LiveSessionController {
 			});
 			return true;
 		}
+		const primary = this.#captureComposerExcludingTurns?.([]) ?? { text: message };
+		if (!primary.text.trim()) return false;
 		if (!this.retireComposerSpeech()) return false;
 		this.#holdReleased = true;
 		this.#deferredVoiceDelegation = undefined;
 		this.refreshTurnGate();
-		this.#forcePendingComposer(message);
+		this.#forcePendingComposer(primary.text.trim(), primary.receipt, primary.routingText);
 		return true;
 	}
 
-	#forcePendingComposer(text: string, composerReceipt?: LiveComposerReceipt): void {
-		const turn: UserLedgerTurn = { turn: ++this.#userLedgerTurn, text, final: true, composerReceipt };
+	#forcePendingComposer(text: string, composerReceipt?: LiveComposerReceipt, routingText?: string): void {
+		const turn: UserLedgerTurn = { turn: ++this.#userLedgerTurn, text, routingText, final: true, composerReceipt };
 		this.#putTurn(turn);
 		this.#latestUtterance = turn;
 		void this.#handleDelegation(
@@ -1364,7 +1370,7 @@ export class LiveSessionController {
 		this.#deferredVoiceDelegation = undefined;
 		if (delegation?.directAnswerTurn !== undefined) {
 			const turn = this.#userTurns.get(delegation.directAnswerTurn);
-			if (turn?.final && this.#isDirectAddress(turn.text)) {
+			if (turn?.final && this.#isDirectAddress(turn.routingText ?? turn.text)) {
 				this.#rejectDirectDelegation(delegation.event.item.id, turn.text);
 			}
 		} else if (delegation && this.#turnsWhere(turn => !turn.blocked && turn.claim === undefined).length > 0) {
@@ -1707,12 +1713,12 @@ export class LiveSessionController {
 	}
 
 	#mayDelegateTurn(turn: UserLedgerTurn): boolean {
-		return !turn.blocked && (!turn.final || !this.#isDirectAddress(turn.text));
+		return !turn.blocked && (!turn.final || !this.#isDirectAddress(turn.routingText ?? turn.text));
 	}
 
 	#rejectDirectDelegation(delegationId: string, text: string): void {
 		this.#answeredTurns = this.#turnsWhere(
-			turn => turn.final && this.#isDirectAddress(turn.text) && turn.claim === undefined,
+			turn => turn.final && this.#isDirectAddress(turn.routingText ?? turn.text) && turn.claim === undefined,
 		).map(turn => turn.turn);
 		const template = operatorTypedMessageTemplate;
 		const labelBytes = Buffer.byteLength(prompt.render(template, { message: "", delegationRejected: true }), "utf8");

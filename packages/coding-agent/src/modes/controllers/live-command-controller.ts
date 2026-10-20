@@ -17,7 +17,7 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { replaceTabs, truncateMiddleToWidth, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
 import { UserMessageComponent } from "@oh-my-pi/pi-tui/chat/user-message";
 import { theme } from "@oh-my-pi/pi-tui/theme";
-import { chipLabel } from "@oh-my-pi/pi-tui/prompt/composer-attachments";
+import { chipLabel, chipLabelKind, COMPOSER_TOKEN_REGEX } from "@oh-my-pi/pi-tui/prompt/composer-attachments";
 import type { InteractiveModeContext } from "../types";
 import { createAssistantMessageComponent } from "@oh-my-pi/pi-tui/prompt/interactive-context-helpers";
 import { createLivePersonaFeature } from "../../live/personas";
@@ -316,20 +316,27 @@ export class LiveCommandController {
 					const id = this.#committedSpeech.get(turn);
 					return id === undefined ? [] : [id];
 				});
-				const captured = this.#ctx.editor.captureTextWithoutUtterances(ids);
+				const editor = this.#ctx.editor;
+				const mediaTokens = [...editor.getText().matchAll(COMPOSER_TOKEN_REGEX)]
+					.filter(match => match[1] === "Image" || match[1] === "Video" ||
+						(!match[1] && chipLabelKind(match[0]) !== "paste"))
+					.map(match => match[0]);
+				const captured = editor.captureTextWithoutUtterances(ids, mediaTokens);
 				const voiceOnlyTurns = turns.filter(turn => {
 					const id = this.#committedSpeech.get(turn);
 					return id !== undefined && captured.excludedIds.includes(id);
 				});
 				const force = stripLiveKeyword(captured.text, cfgLiveForceDelegateKeyword.get(this.#ctx.settings), true);
+				const routingText = force.matched ? force.text :
+					stripLiveKeyword(captured.text, cfgLiveSubmitKeyword.get(this.#ctx.settings), true).text;
 				return {
 					receipt: {
 						id: captured.receipt,
 						turns: [...this.#committedSpeech.keys()].filter(turn => !voiceOnlyTurns.includes(turn)),
 					},
 					voiceOnlyTurns,
-					text: force.matched ? force.text :
-						stripLiveKeyword(captured.text, cfgLiveSubmitKeyword.get(this.#ctx.settings), true).text,
+					routingText,
+					text: editor.expandText(routingText),
 				};
 			},
 			relayGates: () => {

@@ -134,6 +134,42 @@ function createHarness(factory?: (options: LiveSessionControllerOptions) => Live
 		presented,
 	};
 }
+/** Exercise composer capture through real live routing and primary acceptance. */
+function createHandoffHarness(acceptance?: Promise<void>, voiceDelivery?: Promise<void>) {
+	const prompts: string[] = [];
+	let fire: ((event: LiveServerEvent) => void) | undefined;
+	const h = createHarness(options => new LiveSessionController({
+		...options,
+		createTransport: transportOptions => {
+			fire = transportOptions.callbacks.onEvent;
+			return {
+				async connect() {},
+				async send() { await voiceDelivery; },
+				async close() {},
+				async setMuted() {},
+				setOutputSuppressed() {},
+				pushAudio: () => true,
+			};
+		},
+		createRecorder: () => ({ stop() {} }),
+	}));
+	Object.assign(h.ctx.session, {
+		sessionId: "composer-attachment-handoff",
+		modelRegistry: { authStorage: {} },
+		sessionManager: { allocateArtifactPath: async () => ({}) },
+		agent: { peekFollowUpQueue: () => [] },
+		sendCustomMessageWithReceipt(message: { content: string }) {
+			prompts.push(message.content);
+			return { accepted: acceptance ?? Promise.resolve(), completed: Promise.resolve(true), cancel: () => false };
+		},
+	});
+	cfgLiveForceDelegateKeyword.set(h.ctx.settings, "send it now");
+	cfgLiveSubmitKeyword.set(h.ctx.settings, "thanks");
+	cfgLiveBlockDelegateKeyword.set(h.ctx.settings, "do not relate");
+	cfgLiveSubmitSilenceMs.set(h.ctx.settings, 5);
+	return { ...h, prompts, speech: (text: string) => fire?.({ type: "turn.done", turn: { role: "user", transcript: text } }) };
+}
+
 
 function speak(h: Harness, turn: number, text: string, final: boolean): void {
 	h.callbacks().onUserSpeech?.({ role: "user", turn, text, final });
@@ -631,6 +667,96 @@ describe("LiveCommandController", () => {
 			expect(forced).toHaveBeenCalledTimes(1);
 			expect(forced).toHaveBeenCalledWith("fix the cache");
 		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	for (const hold of [false, true]) {
+		for (const attachment of ["collapsed paste", "text chip"] as const) {
+			for (const content of [
+				"code says do not relate exactly",
+				"Iris, this is quoted document content",
+				"const value = 1;\n\n// send it now\n// thanks",
+			]) {
+				it(`delivers ${attachment} contents verbatim without hidden routing (${hold ? "hold-submit" : "force-keyword"}): ${content}`, async () => {
+					const h = createHandoffHarness();
+					cfgLiveHoldMode.set(h.ctx.settings, hold);
+					await h.controller.handleCommand();
+					try {
+						if (attachment === "collapsed paste") h.editor.insertPaste(content);
+						else h.editor.insertTextAttachment(content);
+						await Bun.sleep(20);
+						expect(h.prompts).toEqual([]);
+						h.editor.insertText(hold ? "\nTHANKS!" : "\nSEND... IT, NOW!");
+						await Bun.sleep(40);
+						expect(h.prompts).toEqual([content]);
+					} finally {
+						await h.controller.stop();
+					}
+				});
+			}
+		}
+	}
+
+	for (const attachment of ["collapsed paste", "text chip"] as const) {
+		it(`expands a protected-turn capture's ${attachment} without changing its receipt coordinates`, async () => {
+			const voiceDelivery = Promise.withResolvers<void>();
+			const h = createHandoffHarness(undefined, voiceDelivery.promise);
+			cfgLiveHoldMode.set(h.ctx.settings, true);
+			await h.controller.handleCommand();
+			try {
+				h.editor.insertText("Review: ");
+				if (attachment === "collapsed paste") h.editor.insertPaste("full attachment payload");
+				else h.editor.insertTextAttachment("full attachment payload");
+				h.speech("Iris, tell me a joke");
+				h.editor.insertText(" send it now");
+				await Bun.sleep(40);
+				expect(h.prompts).toEqual(["Review: full attachment payload"]);
+				expect(h.editor.getExpandedText().trim()).toBe("Iris, tell me a joke");
+			} finally {
+				voiceDelivery.resolve();
+				await h.controller.stop();
+			}
+		});
+	}
+
+	it("retires an accepted text attachment before the next forced handoff", async () => {
+		const h = createHandoffHarness();
+		await h.controller.handleCommand();
+		try {
+			h.editor.insertText("Review: ");
+			h.editor.insertTextAttachment("full attachment payload");
+			h.editor.insertText(" send it now");
+			await Bun.sleep(40);
+			expect(h.prompts).toEqual(["Review: full attachment payload"]);
+			h.editor.insertText("Second task send it now");
+			await Bun.sleep(40);
+			expect(h.prompts).toEqual(["Review: full attachment payload", "Second task"]);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	it("preserves new attachments and unsent image chips while retiring an accepted draft", async () => {
+		const accepted = Promise.withResolvers<void>();
+		const h = createHandoffHarness(accepted.promise);
+		await h.controller.handleCommand();
+		try {
+			h.editor.pendingImages = [{ type: "image", data: "img", mimeType: "image/png" }];
+			h.editor.insertText("[Image #1] Review: ");
+			h.editor.insertTextAttachment("delivered attachment");
+			h.editor.insertText(" send it now");
+			await Bun.sleep(40);
+			h.editor.insertText("\nNew draft: ");
+			h.editor.insertTextAttachment("unsent attachment");
+			accepted.resolve();
+			await Bun.sleep(20);
+			expect(h.editor.getExpandedText()).not.toContain("delivered attachment");
+			expect(h.editor.getExpandedText()).toContain("New draft: unsent attachment");
+			expect(h.editor.composerChips().map(chip => chip.kind)).toEqual(["image", "paste"]);
+			expect(h.editor.pendingImages).toEqual([{ type: "image", data: "img", mimeType: "image/png" }]);
+		} finally {
+			accepted.resolve();
 			await h.controller.stop();
 		}
 	});
