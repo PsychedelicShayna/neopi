@@ -1,7 +1,7 @@
 import { describe, expect, it, spyOn } from "bun:test";
 import { TUI } from "@oh-my-pi/pi-tui";
 import { CleanseBoardModel } from "../src/apps/cleanse-board";
-import { showGitOverlay } from "../src/apps/git/git-tui";
+import { GitTuiComponent, showGitOverlay } from "../src/apps/git/git-tui";
 import type { AssetFileContents, ChangedFile, GitTuiModel } from "../src/apps/git/state";
 import { initTheme } from "../src/theme/theme";
 import { TspHarness } from "./native/tsp-harness";
@@ -121,7 +121,7 @@ describe("ps-top native", () => {
 			expect(list()?.p).toEqual(initial);
 			component.handleInput("/");
 			for (const key of "web") component.handleInput(key);
-			component.handleInput("\x1b");
+			component.handleInput("\n");
 			expect(nodes(list()?.c).filter(n => n.k === "item")).toHaveLength(1);
 			rendered = Promise.withResolvers<void>();
 			component.handleInput(" ");
@@ -129,6 +129,8 @@ describe("ps-top native", () => {
 			expect(described).toEqual(["web"]);
 			component.handleInput("h"); // Info → process table, rather than a text shortcut.
 			expect(list()).toBeDefined();
+			component.handleInput("\x1b");
+			expect(nodes(list()?.c).filter(n => n.k === "item")).toHaveLength(2);
 			component.handleInput("\x1b");
 			await running;
 		} finally {
@@ -162,6 +164,49 @@ describe("git native", () => {
 		commit: async () => {},
 		applyPatch: async () => {},
 	};
+
+	it("retains an accepted file search until Escape clears it before closing", async () => {
+		await initTheme();
+		const tui = new TUI(new VirtualTerminal(120, 30));
+		const component = new GitTuiComponent(tui, {
+			model,
+			createAvatarSource: () => ({ get: () => null }),
+			aiStage: async () => ({ matchedFiles: 0, totalFiles: 0, stagedHunks: 0, totalHunks: 0, wholeFiles: 0 }),
+			generateCommitMessage: async () => {
+				throw new Error("unused");
+			},
+		});
+		let closed = false;
+		const running = component.run().then(() => {
+			closed = true;
+		});
+		try {
+			await Bun.sleep(0);
+			component.handleInput("/");
+			for (const key of "README") component.handleInput(key);
+			component.handleInput("\n");
+			await Bun.sleep(0);
+			expect(component.navigationSnapshot()).toMatchObject({
+				sidebar: { search: { value: "README", focused: false } },
+			});
+			expect(closed).toBe(false);
+
+			component.handleInput("\x1b");
+			await Bun.sleep(0);
+			expect(component.navigationSnapshot()).toMatchObject({
+				sidebar: { search: { value: "", focused: false } },
+			});
+			expect(closed).toBe(false);
+
+			component.handleInput("\x1b");
+			await running;
+			expect(closed).toBe(true);
+		} finally {
+			component.leaveMenu();
+			component.dispose();
+			await running;
+		}
+	});
 
 	it("switches the diff layout from the segmented control and opens a clicked file", async () => {
 		await initTheme();

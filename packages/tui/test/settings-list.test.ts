@@ -195,7 +195,7 @@ describe("SettingsList", () => {
 		expect(output).not.toContain("Mode");
 	});
 
-	it("leaves search on Escape without clearing its query before canceling", () => {
+	it("clears search on Escape before canceling", () => {
 		let cancelCount = 0;
 		const list = new SettingsList(
 			[
@@ -215,7 +215,7 @@ describe("SettingsList", () => {
 		expect(list.hasSearchQuery()).toBe(true);
 
 		list.handleInput("\x1b");
-		expect(list.getSearchQuery()).toBe("b");
+		expect(list.getSearchQuery()).toBe("");
 		expect(cancelCount).toBe(0);
 
 		list.handleInput("\x1b");
@@ -696,10 +696,12 @@ describe("SettingsList", () => {
 		expect(list.getSearchQuery()).toBe("XhjklgG /");
 		list.handleInput("\x15");
 		expect(list.getSearchQuery()).toBe("hjklgG /");
-		list.handleInput("\x1b");
+		list.handleInput("\n");
 		expect(list.debugState().filterFocused).toBe(false);
 		list.handleInput("/");
 		list.handleInput("\t");
+		expect(list.debugState().filterFocused).toBe(true);
+		list.handleInput("\n");
 		expect(list.debugState().filterFocused).toBe(false);
 		expect(list.getSearchQuery()).toBe("hjklgG /");
 	});

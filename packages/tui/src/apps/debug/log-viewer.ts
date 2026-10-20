@@ -7,6 +7,7 @@ import type { DescribeContext, NativeNode, NativeUiEvent } from "../../native/no
 import { CLOSE_ACTION, picker, pickerAction, pickerEvent, pickerHits, pickerQuery } from "../../native/picker";
 import { matchesKey } from "../../keys";
 import { MenuKeyReader, MenuSearchField } from "../../components/menu-navigation";
+import { compileMenuRegex } from "../../menu-search";
 import { routeSgrMouseInput, type SgrMouseEvent } from "../../mouse";
 import { padding, truncateToWidth, visibleWidth } from "../../utils";
 import { isRecord, sanitizeText } from "@oh-my-pi/pi-utils";
@@ -492,13 +493,14 @@ export class DebugLogViewerModel {
 		previousAnchorLogIndex = this.#getAnchorLogIndex(),
 	): void {
 		const query = this.#filterQuery.toLowerCase();
+		const regex = compileMenuRegex(this.#filterQuery);
 		const visible: number[] = [];
 		for (let i = this.#loadedStartIndex; i < this.#entries.length; i++) {
 			const entry = this.#entryAt(i);
 			if (!entry) {
 				continue;
 			}
-			if (this.#matchesFilters(entry, query)) {
+			if (this.#matchesFilters(entry, query, regex)) {
 				visible.push(i);
 			}
 		}
@@ -558,8 +560,10 @@ export class DebugLogViewerModel {
 		}
 	}
 
-	#matchesFilters(entry: LogEntry, query: string): boolean {
-		if (query.length > 0 && !(entry.lowerLine ??= entry.rawLine.toLowerCase()).includes(query)) {
+	#matchesFilters(entry: LogEntry, query: string, regex: { regex?: RegExp } | undefined): boolean {
+		if (regex) {
+			if (!regex.regex?.test(entry.rawLine)) return false;
+		} else if (query.length > 0 && !(entry.lowerLine ??= entry.rawLine.toLowerCase()).includes(query)) {
 			return false;
 		}
 		if (!this.#processFilterEnabled) {
@@ -575,9 +579,10 @@ export class DebugLogViewerModel {
 		if (this.#loadedStartIndex === 0) {
 			return false;
 		}
+		const regex = compileMenuRegex(this.#filterQuery);
 		for (let i = 0; i < this.#loadedStartIndex; i++) {
 			const entry = this.#entryAt(i);
-			if (entry && this.#matchesFilters(entry, query)) {
+			if (entry && this.#matchesFilters(entry, query, regex)) {
 				return true;
 			}
 		}
@@ -909,7 +914,7 @@ export class DebugLogViewerComponent implements Component {
 				const items: TspPickerItem[] = [];
 				const order: (string | TspPickerGroup)[] = [];
 				const hits: Record<string, [number, number][]> = {};
-				const needle = query.toLowerCase();
+				const needle = compileMenuRegex(query) ? "" : query.toLowerCase();
 				for (const viewerRow of model.rows) {
 					if (viewerRow.kind === "warning") {
 						order.push({ group: "session", label: "This session" });
@@ -945,7 +950,7 @@ export class DebugLogViewerComponent implements Component {
 				return picker(
 					{
 						title: "Recent logs",
-						subtitle,
+						subtitle: compileMenuRegex(query)?.error ?? subtitle,
 						noun: "entries",
 						size: "lg",
 						layout: "rows",

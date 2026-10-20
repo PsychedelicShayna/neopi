@@ -298,12 +298,12 @@ test("pointer events drive the hub through the same paths as its keys", () => {
 	// The head's total counts the rows Tern counts as shown (fallbacks, chains, "New …" rows), so All reads no "N of M".
 	expect(p.total).toBe(p.order?.filter(entry => typeof entry === "string").length);
 
-	// Esc leaves search without clearing it; explicit Clear search does that.
+	// Esc clears search before closing the picker.
 	act("scope", "all");
 	hub.handleInput("/");
 	hub.handleInput("x");
 	act("close");
-	expect(props(hub.describe(withPicker)).query).toBe("x");
+	expect(props(hub.describe(withPicker)).query).toBe("");
 	expect(calls.cancel).toBe(0);
 	act("clear");
 	expect(props(hub.describe(withPicker)).query).toBe("");
@@ -393,7 +393,7 @@ for (const kind of ["hub", "picker"] as const) {
 		menu.handleInput("/");
 		for (const character of "jkggG/ ") menu.handleInput(character);
 		expect(props(menu.describe(withPicker)).query).toBe("jkggG/ ");
-		menu.handleInput("\x1b");
+		menu.handleInput("\n");
 		menu.handleInput("j");
 		expect(props(menu.describe(withPicker)).query).toBe("jkggG/ ");
 		menu.handleInput("/");
@@ -628,7 +628,7 @@ test("Roles and model scopes keep separate queries while switching panes", () =>
 	const hub = openHub({ assign: [], cancel: 0 });
 	hub.handleInput("/");
 	for (const key of "sonnet") hub.handleInput(key);
-	hub.handleInput("\x1b");
+	hub.handleInput("\n");
 	hub.handleInput("h");
 	hub.handleInput("g");
 	hub.handleInput("g");
@@ -636,7 +636,7 @@ test("Roles and model scopes keep separate queries while switching panes", () =>
 	hub.handleInput("l");
 	hub.handleInput("/");
 	for (const key of "default") hub.handleInput(key);
-	hub.handleInput("\x1b");
+	hub.handleInput("\n");
 	expect(props(hub.describe(withPicker)).query).toBe("default");
 	hub.handleInput("h");
 	hub.handleInput("j");
@@ -677,7 +677,7 @@ test("effort rule search stays in section and destructive actions target the fil
 	expect(p.query).toBe("needle");
 	expect(p.order).toEqual(["effort:1"]);
 	expect(p.selected).toBe("effort:1");
-	hub.handleInput("\x1b");
+	hub.handleInput("\n");
 	const filtered = hub.navigationSnapshot();
 	rules = rules.toReversed();
 	hub.restoreNavigation(filtered);
@@ -700,7 +700,7 @@ test("provider navigation footer stays concise and counts outside All ignore its
 	expect(plainText(hub.render(180).join("\n"))).toContain(hint);
 	hub.handleInput("/");
 	for (const key of "sonnet") hub.handleInput(key);
-	hub.handleInput("\x1b");
+	hub.handleInput("\n");
 	expect(props(hub.describe(withPicker)).scopes?.find(scope => scope.id === "provider:openai")?.count).toBe(0);
 	hub.handleNativeEvent({ type: "action", key: "", act: "scope", value: "roles", mods: [] });
 	expect(props(hub.describe(withPicker)).scopes?.find(scope => scope.id === "provider:openai")?.count).toBe(2);
@@ -730,7 +730,7 @@ test("native Close leaves every model-hub search field before closing and names 
 		);
 		hub.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 		expect(calls.cancel).toBe(0);
-		expect(props(hub.describe(withPicker)).query).toBe("jkl");
+		expect(props(hub.describe(withPicker)).query).toBe(scope === "roles" ? null : "");
 		expect(props(hub.describe(withPicker)).actions?.find(action => action.id === "close")?.label).toBe("Close");
 		hub.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 		expect(calls.cancel).toBe(1);
@@ -793,7 +793,7 @@ test("quick picker native Close leaves literal search, repaints and closes only 
 	picker.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 	expect(renders).toBeGreaterThan(before);
 	expect(closes).toBe(0);
-	expect(props(picker.describe(withPicker)).query).toBe("demo");
+	expect(props(picker.describe(withPicker)).query).toBe("");
 	expect(props(picker.describe(withPicker)).actions?.find(action => action.id === "close")?.label).toBe("Close");
 	picker.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 	expect(closes).toBe(1);
