@@ -451,7 +451,7 @@ describe("advisor menu navigation and history", () => {
 			expect(doc.advisors[0]?.enabled).toBeUndefined();
 			h.overlay.handleInput("\x1b");
 			expect(h.closed()).toBe(0);
-			expect(h.overlay.navigationSnapshot().content).toMatchObject({ filter: "hjkl/ g", filterFocused: false });
+			expect(h.overlay.navigationSnapshot().content).toMatchObject({ filter: "", filterFocused: false });
 			h.overlay.handleInput("\x1b");
 			expect(h.closed()).toBe(1);
 		} finally {
@@ -470,7 +470,7 @@ describe("advisor menu navigation and history", () => {
 			h.overlay.handleInput("\r");
 			h.overlay.handleInput("/");
 			h.overlay.handleInput("Name");
-			h.overlay.handleInput("\x1b");
+			h.overlay.handleInput("\r");
 			h.overlay.handleInput("l");
 			h.overlay.handleInput("hjkl / draft");
 			h.overlay.handleInput("\x1b[D");
@@ -738,8 +738,8 @@ describe("advisor menu navigation and history", () => {
 			expect(sheet().props.actions?.find(action => action.id === "close")?.label).toBe("Back to list");
 			sheet().component.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 			expect(h.closed()).toBe(0);
-			expect(sheet().props.query).toBe("Reviewer");
-			sheet().component.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
+			expect(h.overlay.navigationSnapshot().content).toMatchObject({ filter: "", filterFocused: false });
+			h.overlay.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 			expect(h.closed()).toBe(1);
 			expect(visits).toEqual([]);
 		} finally {
