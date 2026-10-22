@@ -1,7 +1,12 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import { type } from "@oh-my-pi/omptype";
-import type { AgentTool } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ToolCall, ToolResultMessage, Usage } from "@oh-my-pi/pi-ai";
+import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import { RpcSessionEventForwarder } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-session-events";
+import type { RpcProjectedSessionEventFrame } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { ReadToolGroupComponent } from "@oh-my-pi/pi-tui/chat/read-tool-group";
@@ -10,6 +15,7 @@ import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/eve
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type { CustomMessage } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { type Component, TERMINAL } from "@oh-my-pi/pi-tui";
 import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
 
@@ -94,6 +100,120 @@ describe("EventController mixed assistant text/tool rendering", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 		resetSettingsForTest();
+	});
+
+	it("snapshots the quiet gap after an external card, then completes the same reply and renders both", async () => {
+		const { controller, chatContainer, ctx } = createFixture();
+		const helpers = new UiHelpers(ctx);
+		ctx.addMessageToChat = helpers.addMessageToChat.bind(helpers);
+		const releaseProvider = Promise.withResolvers<void>();
+		const firstDelta = Promise.withResolvers<void>();
+		const model = createMockModel().model;
+		const primary = assistantMessage([{ type: "text", text: "PRIMARY_QUIET_PARTIAL" }]);
+		primary.api = model.api;
+		primary.provider = model.provider;
+		primary.model = model.id;
+		primary.responseId = "quiet-snapshot-primary";
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, tools: [], systemPrompt: [] },
+			streamFn: () => {
+				const stream = new AssistantMessageEventStream();
+				stream.push({ type: "start", partial: primary });
+				stream.push({ type: "text_delta", contentIndex: 0, delta: "PRIMARY_QUIET_PARTIAL", partial: primary });
+				void releaseProvider.promise.then(() => {
+					primary.content = [{ type: "text", text: "PRIMARY_QUIET_PARTIAL CONTINUED_AND_COMPLETED" }];
+					stream.push({
+						type: "text_delta",
+						contentIndex: 0,
+						delta: " CONTINUED_AND_COMPLETED",
+						partial: primary,
+					});
+					stream.push({ type: "done", reason: "stop", message: primary });
+				});
+				return stream;
+			},
+		});
+		const handled: Promise<void>[] = [];
+		const stopUi = agent.subscribe(event => {
+			handled.push(controller.dispatchSessionEvent(event));
+			if (
+				event.type === "message_update" &&
+				event.message.role === "assistant" &&
+				event.message.responseId === primary.responseId
+			) firstDelta.resolve();
+		});
+		const manager = SessionManager.inMemory();
+		const frames: RpcProjectedSessionEventFrame[] = [];
+		const forwarder = new RpcSessionEventForwarder(frame => frames.push(frame));
+		let stopLive: (() => void) | undefined;
+		const run = agent.prompt("stream a reply");
+		void run.catch(error => firstDelta.reject(error));
+		try {
+			await firstDelta.promise;
+			const quietMessage = agent.state.streamMessage;
+			if (!quietMessage || quietMessage.role !== "assistant") throw new Error("Missing active assistant");
+			const custom: CustomMessage = {
+				role: "custom",
+				customType: "external-snapshot-card",
+				content: "CUSTOM_CARD_VISIBLE",
+				display: true,
+				timestamp: 2,
+			};
+			agent.emitExternalEvent({ type: "message_start", message: custom });
+			agent.emitExternalEvent({ type: "message_end", message: custom });
+			await Promise.all(handled.splice(0));
+			// The provider is still gated. No later delta can repair a clobbered pointer.
+			expect(agent.state.streamMessage).toBe(quietMessage);
+			stopLive = agent.subscribe(event => forwarder.forward(event));
+			forwarder.observeJournal({
+				sessionManager: manager,
+				agent,
+				isSessionTransitioning: false,
+				obfuscator: undefined,
+				subscribeMessagePersistenceSettled: () => () => {},
+			});
+			const snapshot = frames.find(frame => frame.type === "message_start");
+			if (!snapshot || snapshot.type !== "message_start" || snapshot.message.role !== "assistant") {
+				throw new Error("Missing quiet native assistant snapshot");
+			}
+			expect(snapshot).toMatchObject({ snapshot: true, message: { responseId: primary.responseId } });
+			expect(snapshot.message).toBe(quietMessage);
+			expect(snapshot.message.content).toEqual([{ type: "text", text: "PRIMARY_QUIET_PARTIAL" }]);
+			const quiet = chatContainer.render(120).map(line => Bun.stripANSI(line));
+			expect(quiet.some(line => line.includes("PRIMARY_QUIET_PARTIAL"))).toBe(true);
+			expect(quiet.some(line => line.includes("CUSTOM_CARD_VISIBLE"))).toBe(true);
+			releaseProvider.resolve();
+			await run;
+			await Promise.all(handled.splice(0));
+			expect(agent.state.streamMessage).toBeNull();
+			expect(
+				agent.state.messages.some(
+					message => message.role === "assistant" && message.responseId === primary.responseId,
+				),
+			).toBe(true);
+			expect(agent.state.messages).toContain(custom);
+			const messageFrames = frames.filter(
+				frame => frame.type === "message_start" || frame.type === "message_update" || frame.type === "message_end",
+			);
+			expect(messageFrames.every(frame => "messageId" in frame && frame.messageId === snapshot.messageId)).toBe(
+				true,
+			);
+			expect(messageFrames.at(-1)).toMatchObject({
+				type: "message_end",
+				message: { responseId: primary.responseId },
+			});
+			const finished = chatContainer.render(120).map(line => Bun.stripANSI(line));
+			expect(finished.some(line => line.includes("CONTINUED_AND_COMPLETED"))).toBe(true);
+			expect(finished.some(line => line.includes("CUSTOM_CARD_VISIBLE"))).toBe(true);
+		} finally {
+			releaseProvider.resolve();
+			await run;
+			stopLive?.();
+			forwarder.dispose();
+			stopUi();
+			await manager.close();
+		}
 	});
 
 	it("finalizes and removes an orphaned streaming component on the next message_start", async () => {

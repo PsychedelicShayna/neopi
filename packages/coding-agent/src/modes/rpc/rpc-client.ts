@@ -61,6 +61,7 @@ import type {
 	RpcRemoveQueuedMessageResult,
 	RpcResponse,
 	RpcSessionSettledFrame,
+	RpcJournalEventFrame,
 	RpcSessionState,
 	RpcSetModeResult,
 	RpcSubagentEventFrame,
@@ -74,6 +75,7 @@ import type {
 	RpcToolApprovalRequest,
 	RpcToolApprovalResponse,
 } from "./rpc-types";
+import type { SessionJournalIdentity } from "../../session/session-journal-events";
 import type { RpcUsageRequest, RpcUsageResult } from "./rpc-usage";
 
 /** Distributive Omit that works with union types */
@@ -141,6 +143,7 @@ export type RpcModeChangedListener = (frame: RpcModeChangedFrame) => void;
 export type RpcToolApprovalRequestListener = (request: RpcToolApprovalRequest) => void;
 export type RpcToolApprovalCancelListener = (cancel: RpcToolApprovalCancel) => void;
 export type RpcLiveListener = (frame: RpcLiveFrame) => void;
+export type RpcJournalEventListener = (event: RpcJournalEventFrame) => void;
 
 export interface RpcClientToolContext<TDetails = unknown> {
 	toolCallId: string;
@@ -244,6 +247,19 @@ function isAgentSessionEvent(value: unknown): value is AgentSessionEvent {
 	const type = value.type;
 	if (typeof type !== "string") return false;
 	return sessionEventTypes.has(type as AgentSessionEvent["type"]);
+}
+
+function isRpcJournalEvent(value: unknown): value is RpcJournalEventFrame {
+	if (!isRecord(value) || typeof value.sessionId !== "string" ||
+		!(value.sessionFile === null || typeof value.sessionFile === "string") ||
+		!(value.leafId === null || typeof value.leafId === "string")) return false;
+	if (value.type === "journal_state")
+		return value.reason === "snapshot" || value.reason === "identity" || value.reason === "leaf";
+	if (value.type === "journal_entry") return isRecord(value.entry) && typeof value.entry.id === "string";
+	if (value.type === "message_start")
+		return value.snapshot === true && typeof value.messageId === "string" &&
+			isRecord(value.message) && value.message.role === "assistant";
+	return value.type === "message_persisted" && typeof value.messageId === "string" && typeof value.entryId === "string";
 }
 
 function isRpcSubagentLifecycleFrame(value: unknown): value is RpcSubagentLifecycleFrame {
@@ -389,6 +405,7 @@ export class RpcClient {
 	#reaping: Promise<void> | null = null;
 	#eventListeners: RpcEventListener[] = [];
 	#sessionEventListeners: RpcSessionEventListener[] = [];
+	readonly #journalEventListeners = new Set<RpcJournalEventListener>();
 	#subagentLifecycleListeners = new Set<RpcSubagentLifecycleListener>();
 	#subagentProgressListeners = new Set<RpcSubagentProgressListener>();
 	#subagentEventListeners = new Set<RpcSubagentEventListener>();
@@ -668,6 +685,12 @@ export class RpcClient {
 			}
 		};
 	}
+	/** Native journal notifications. Subscribe before fetching the initial journal pages. */
+	onJournalEvent(listener: RpcJournalEventListener): () => void {
+		this.#journalEventListeners.add(listener);
+		return () => this.#journalEventListeners.delete(listener);
+	}
+
 
 	/**
 	 * Subscribe to subagent lifecycle frames after setSubagentSubscription("progress" | "events").
@@ -1166,12 +1189,17 @@ export class RpcClient {
 		return this.#getData<{ entries: SessionEntry[]; leafId: string | null }>(response);
 	}
 
+	/** Emit an ordered native identity/current-assistant snapshot to existing observers before resolving. */
+	async snapshotSessionJournal(): Promise<SessionJournalIdentity> {
+		const response = await this.#send({ type: "snapshot_session_journal" });
+		return this.#getData<SessionJournalIdentity>(response);
+	}
+
 	/** Read one complete-entry page without folding compaction or dropping alternate branches. */
 	async getEntriesPage(options: RpcJournalPageOptions = {}): Promise<RpcJournalPage> {
 		const response = await this.#send({ type: "get_entries_page", ...options });
 		return this.#getData<RpcJournalPage>(response);
 	}
-
 	/**
 	 * Pi-compatible raw session tree plus the current leaf id.
 	 */
@@ -1781,6 +1809,11 @@ export class RpcClient {
 			for (const listener of this.#btwRecordListeners) listener(data.record);
 			return;
 		}
+		if (isRpcJournalEvent(data)) {
+			for (const listener of this.#journalEventListeners) listener(data);
+			return;
+		}
+
 
 		if (!isAgentSessionEvent(data)) return;
 

@@ -252,11 +252,11 @@ describe("AgentSession advisor auto-resume suppression", () => {
 
 	function capturePersistedAdvice(sessionManager: SessionManager): string[] {
 		const persisted: string[] = [];
-		sessionManager.onEntryAppended = entry => {
+		sessionManager.subscribeEntries(entry => {
 			if (entry.type === "custom_message" && entry.customType === ADVISOR_TYPE) {
 				persisted.push(typeof entry.content === "string" ? entry.content : JSON.stringify(entry.content));
 			}
-		};
+		});
 		return persisted;
 	}
 

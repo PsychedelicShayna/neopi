@@ -18,6 +18,8 @@ import { runSubagentFastCommand } from "../../src/registry/subagent-controls";
 import { InputController } from "../../src/modes/controllers/input-controller";
 import type { InteractiveModeContext } from "../../src/modes/types";
 import type { RpcSubagentSnapshot } from "../../src/modes/rpc/rpc-types";
+import { RpcSessionEventForwarder } from "../../src/modes/rpc/rpc-session-events";
+import type { RpcProjectedSessionEventFrame } from "../../src/modes/rpc/rpc-types";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
@@ -29,12 +31,14 @@ import { ControlHost } from "../../src/control/host";
 import { type ControlMetadata, readControlEntries } from "../../src/control/registry";
 import { InternalUrlRouter } from "../../src/internal-urls/router";
 import { AgentSession } from "../../src/session/agent-session";
+import type { CustomMessage } from "../../src/session/messages";
 import type { AuthStorage } from "../../src/session/auth-storage";
 import { SessionManager } from "../../src/session/session-manager";
 import { type SubagentLifecyclePayload, TASK_SUBAGENT_LIFECYCLE_CHANNEL } from "../../src/task/types";
 import { EventBus } from "../../src/utils/event-bus";
 import type { ControlSnapshot } from "../../src/control/types";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
+import { makeAssistantMessage } from "../session-manager/helpers";
 
 describe("control host", () => {
 	let tempDir: TempDir;
@@ -69,7 +73,10 @@ describe("control host", () => {
 		await tempDir.remove();
 	});
 
-	function createSession(settings: Record<string, unknown> = {}): AgentSession {
+	function createSession(
+		settings: Record<string, unknown> = {},
+		manager = SessionManager.inMemory(tempDir.path()),
+	): AgentSession {
 		const model = createMockModel({ provider: "anthropic", responses: [] });
 		return new AgentSession({
 			agent: new Agent({
@@ -77,7 +84,7 @@ describe("control host", () => {
 				initialState: { model, systemPrompt: [], tools: [] },
 				streamFn: model.stream,
 			}),
-			sessionManager: SessionManager.inMemory(tempDir.path()),
+			sessionManager: manager,
 			settings: Settings.isolated({ "compaction.enabled": false, "retry.enabled": false, ...settings }),
 			modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.yml")),
 		});
@@ -356,12 +363,113 @@ describe("control host", () => {
 		const before = session!.sessionId;
 		expect(host.revisions.generation).toBe(1);
 		await session!.newSession();
-		// The first ordinary session event after the transition observes it.
-		session!.emitNotice("info", "after transition");
 		expect(session!.sessionId).not.toBe(before);
 		expect(host.revisions.generation).toBe(2);
 		const [entry] = await readControlEntries({ dir });
 		expect(entry?.meta.sessionId).toBe(session!.sessionId);
+	});
+
+	test("quiet terminal output is snapshotted on attachment and keeps its ID through persistence", async () => {
+		const manager = SessionManager.create(tempDir.path(), tempDir.join("attached-journal"));
+		await manager.ensureOnDisk();
+		session = createSession({}, manager);
+		dir = tempDir.join("attached-control");
+		host = new ControlHost({ session, role: "tui", dir, tmuxPane: null });
+		await host.start();
+		const publication = host.publication;
+		if (!publication) throw new Error("control host did not publish");
+		const stdioFrames: RpcProjectedSessionEventFrame[] = [];
+		const stdio = new RpcSessionEventForwarder(frame => stdioFrames.push(frame));
+		const stopStdio = session.subscribe(event => stdio.forward(event));
+		stdio.observeJournal(session);
+		const message = makeAssistantMessage();
+		message.content = [{ type: "text", text: "quiet in-flight output" }];
+		session.agent.emitExternalEvent({ type: "message_start", message });
+		const aside: CustomMessage = {
+			role: "custom",
+			customType: "snapshot-aside",
+			content: "external card",
+			display: false,
+			timestamp: Date.now(),
+		};
+		session.agent.emitExternalEvent({ type: "message_start", message: aside });
+		session.agent.emitExternalEvent({ type: "message_end", message: aside });
+		expect(session.agent.state.streamMessage).toBe(message);
+		expect(session.agent.state.messages).toContain(aside);
+		const frames: Record<string, unknown>[] = [];
+		const persisted = Promise.withResolvers<Record<string, unknown>>();
+		client = new ControlClient({
+			metadata: publication.metadata(),
+			label: "journal-reader",
+			kind: "cli",
+			onFrame: frame => {
+				frames.push(frame);
+				if (frame.type === "message_persisted") persisted.resolve(frame);
+			},
+		});
+		await client.connect();
+		await client.request({ type: "subscribe", events: "all" });
+		expect(frames.find(frame => frame.type === "journal_state")).toEqual({
+			type: "journal_state",
+			reason: "snapshot",
+			...manager.getJournalIdentity(),
+		});
+		expect(frames.find(frame => frame.type === "message_start" && frame.snapshot === true)).toMatchObject({
+			messageId: "msg-1",
+			message,
+			...manager.getJournalIdentity(),
+		});
+		const snapshot = await client.request({ type: "snapshot_session_journal" });
+		expect(snapshot).toMatchObject({ success: true, data: manager.getJournalIdentity() });
+		expect(frames.filter(frame => frame.type === "message_start").map(frame => frame.messageId)).toEqual([
+			"msg-1",
+			"msg-1",
+		]);
+		message.content = [{ type: "text", text: "quiet in-flight output, completed" }];
+		session.agent.emitExternalEvent({
+			type: "message_update",
+			message,
+			assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: ", completed", partial: message },
+		});
+		expect(session.agent.state.streamMessage).toBe(message);
+		session.agent.emitExternalEvent({ type: "message_end", message });
+		expect(session.agent.state.streamMessage).toBeNull();
+		expect(session.agent.state.messages).toContain(message);
+		expect(session.agent.state.messages).toContain(aside);
+		const receipt = await persisted.promise;
+		expect(receipt).toMatchObject({ type: "message_persisted", messageId: "msg-1", ...manager.getJournalIdentity() });
+		expect(stdioFrames.find(frame => frame.type === "message_start")).toMatchObject({ messageId: receipt.messageId });
+		expect(
+			stdioFrames.find(frame => frame.type === "message_persisted" && frame.entryId === receipt.entryId),
+		).toMatchObject({
+			messageId: receipt.messageId,
+			entryId: receipt.entryId,
+		});
+		expect(manager.isEntryDurable(String(receipt.entryId))).toBe(true);
+		expect(
+			frames.find(frame => frame.type === "journal_entry" && (frame.entry as { id: string }).id === receipt.entryId),
+		).toMatchObject({
+			sessionId: manager.getSessionId(),
+			sessionFile: manager.getJournalIdentity().sessionFile,
+			entry: { id: receipt.entryId, type: "message" },
+		});
+		manager.resetLeaf();
+		await client.request({ type: "get_entries" });
+		expect(frames).toContainEqual({ type: "journal_state", reason: "leaf", ...manager.getJournalIdentity() });
+		await session.newSession();
+		await client.request({ type: "get_state" });
+		const identity = manager.getJournalIdentity();
+		expect(frames).toContainEqual(
+			expect.objectContaining({
+				type: "journal_state",
+				reason: "identity",
+				sessionId: identity.sessionId,
+				sessionFile: identity.sessionFile,
+			}),
+		);
+		expect(frames.findLast(frame => frame.type === "journal_state")).toMatchObject(identity);
+		stopStdio();
+		stdio.dispose();
 	});
 
 	test("a command larger than one physical frame is chunked and accepted, not rate limited", async () => {

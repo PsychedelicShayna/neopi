@@ -57,6 +57,32 @@ function createHeldSteeringAgent(interruptMode: "immediate" | "wait") {
 }
 
 describe("Agent", () => {
+	it("external non-assistant records do not erase a quiet in-flight assistant snapshot", () => {
+		const agent = new Agent();
+		const partial = createAssistantMessage([{ type: "text", text: "quiet partial" }]);
+		const aside = createUserMessage("external aside");
+		agent.emitExternalEvent({ type: "message_start", message: partial });
+		agent.emitExternalEvent({ type: "message_start", message: aside });
+		expect(agent.state.streamMessage).toBe(partial);
+		agent.emitExternalEvent({ type: "message_end", message: aside });
+		expect(agent.state.streamMessage).toBe(partial);
+		expect(agent.state.messages).toContain(aside);
+		partial.content = [{ type: "text", text: "quiet partial, continued" }];
+		agent.emitExternalEvent({
+			type: "message_update",
+			message: partial,
+			assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: ", continued", partial },
+		});
+		expect(agent.state.streamMessage).toBe(partial);
+		agent.emitExternalEvent({ type: "message_end", message: partial });
+		expect(agent.state.streamMessage).toBeNull();
+		expect(agent.state.messages).toContain(partial);
+		agent.emitExternalEvent({ type: "message_start", message: aside });
+		expect(agent.state.streamMessage).toBe(aside);
+		agent.emitExternalEvent({ type: "message_end", message: aside });
+		expect(agent.state.streamMessage).toBeNull();
+	});
+
 	it("delivers wait steering at the tool boundary without aborting under global immediate", async () => {
 		const { agent, mock, started, release } = createHeldSteeringAgent("immediate");
 		const run = agent.prompt("start");

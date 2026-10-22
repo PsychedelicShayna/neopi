@@ -170,6 +170,35 @@ describe("ctl pipe", () => {
 		}
 	});
 
+	test("relays journal notifications and unknown event kinds without disrupting command responses", async () => {
+		const notifications = [
+			{ type: "journal_state", reason: "snapshot", sessionId: "native", sessionFile: "/sessions/native.jsonl", leafId: null },
+			{ type: "future_session_event", payload: { retained: true } },
+		];
+		const f = await fixture((connection, frame) => {
+			if (frame.type === "echo") for (const notification of notifications) connection.write(notification);
+		});
+		const input = new PassThrough();
+		const frames: Record<string, unknown>[] = [];
+		const result = await ctlPipe(f.instanceId, {
+			registry: { dir: f.dir }, input,
+			io: {
+				stderr: () => {},
+				stdout: text => {
+					for (const line of text.trim().split("\n")) {
+						const frame = JSON.parse(line) as Record<string, unknown>;
+						frames.push(frame);
+						if (frame.type === "ready") input.write(`${JSON.stringify({ type: "echo", id: "barrier" })}\n`);
+						if (frame.id === "barrier") input.end();
+					}
+				},
+			},
+		});
+		expect(result).toBe(0);
+		for (const notification of notifications) expect(frames).toContainEqual(notification);
+		expect(frames.find(frame => frame.id === "barrier")).toMatchObject({ type: "response", success: true });
+	});
+
 	test("slow output bounds queued frames until the consumer drains", async () => {
 		const f = await fixture();
 		const input = new PassThrough();

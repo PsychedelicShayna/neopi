@@ -22,10 +22,10 @@ afterEach(async () => {
 const BIG_IMAGE_B64 = Buffer.alloc(1024, 7).toString("base64");
 
 describe("SessionManager collab replication", () => {
-	it("onEntryAppended receives the in-memory entry with inline image data while the persisted line externalizes it", async () => {
+	it("entry subscribers receive inline image data while the persisted line externalizes it", async () => {
 		const { manager } = makeManager();
 		const captured: SessionEntry[] = [];
-		manager.onEntryAppended = entry => captured.push(entry);
+		manager.subscribeEntries(entry => captured.push(entry));
 
 		manager.appendMessage({
 			role: "user",
@@ -56,9 +56,9 @@ describe("SessionManager collab replication", () => {
 
 	it("swallows hook failures so persistence is never broken by a broadcast error", () => {
 		const { manager } = makeManager();
-		manager.onEntryAppended = () => {
+		manager.subscribeEntries(() => {
 			throw new Error("socket exploded");
-		};
+		});
 		const id = manager.appendMessage({ role: "user", content: "still works", timestamp: Date.now() });
 		expect(manager.getEntry(id)?.id).toBe(id);
 	});

@@ -6,7 +6,8 @@
 import { absentAs, doc, type WireDefs } from "./dsl";
 
 const JSON_OBJECT = "Record<string, unknown>";
-const MESSAGE_ID = doc("string", "Shared by the start, updates, and end of one message; unique per process.");
+const MESSAGE_ID = doc("string", "Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID.");
+const JOURNAL_IDENTITY = { sessionId: "string", sessionFile: "string | null", leafId: "string | null" };
 const MIXTURE_TRACE_HEADER = {
 	v: "number.integer",
 	runId: "string",
@@ -23,6 +24,15 @@ export const eventDefs = {
 	CacheWarmingOutcome: "'hit' | 'miss' | 'error' | 'aborted'",
 	NotifyType: "'info' | 'warning' | 'error'",
 
+	JournalStateEvent: {
+		type: "'journal_state'", ...JOURNAL_IDENTITY, reason: "'snapshot' | 'identity' | 'leaf'",
+	},
+	JournalEntryEvent: {
+		type: "'journal_entry'", ...JOURNAL_IDENTITY, entry: JSON_OBJECT,
+	},
+	MessagePersistedEvent: {
+		type: "'message_persisted'", ...JOURNAL_IDENTITY, messageId: MESSAGE_ID, entryId: "string",
+	},
 	AdvisorMessageEvent: { type: "'advisor_message'", advisor: "string", slug: "string", message: "AgentMessage" },
 	RunOwnersJoinedEvent: { type: "'run_owners_joined'", owners: "string[]", agentStarts: "number.integer" },
 	RunOwnersSkippedEvent: { type: "'run_owners_skipped'", owners: "string[]", reason: "string" },
@@ -128,6 +138,10 @@ export const eventDefs = {
 		type: "'message_start'",
 		message: "AgentMessage",
 		"messageId?": MESSAGE_ID,
+		"snapshot?": doc("boolean", "True for the current unsaved assistant at an ordered native snapshot boundary."),
+		"sessionId?": "string",
+		"sessionFile?": "string | null",
+		"leafId?": "string | null",
 		"requestModelProvider?": "string",
 		"requestModelId?": "string",
 		"requestReasoning?": "Effort",
@@ -283,6 +297,9 @@ export const eventDefs = {
 
 	RpcAgentEvent: doc(
 		[
+			"JournalStateEvent",
+			"JournalEntryEvent",
+			"MessagePersistedEvent",
 			"AdvisorMessageEvent",
 			"RunOwnersJoinedEvent",
 			"RunOwnersSkippedEvent",

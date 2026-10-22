@@ -456,7 +456,7 @@ import {
 	type SessionAdvisorsHost,
 } from "./session-advisors";
 import type { BuildSessionContextOptions, SessionContext } from "./session-context";
-import { getMessageEntryId, setMessageEntryId } from "./message-entry-ids";
+import { clearLiveMessageId, getMessageEntryId, linkMessageEntrySource, observeLiveMessageId, setMessageEntryId } from "./message-entry-ids";
 import { buildSessionContext, getRestorableSessionModels, isTranscriptEntry } from "./session-context";
 import type { CacheWarmer, CacheWarmingMode, CacheWarmingStatus } from "./cache-warmer";
 import { isUserRequestEntry, transcriptEntryMessage, userTurnDraft } from "@oh-my-pi/pi-tui/chat/transcript-entry";
@@ -958,6 +958,7 @@ export class AgentSession implements SettingsScope {
 	#settledAgentEnd: AgentEndEvent | undefined;
 	#commandMetadataChangedListeners: CommandMetadataChangedListener[] = [];
 	#sessionChangeCallbacks = new Set<(origin: SessionChangeOrigin) => void>();
+	readonly #messagePersistenceListeners = new Set<(message: AgentMessage) => void>();
 	#observedSessionId: string | undefined;
 
 	/** Messages queued to be included with the next user prompt as context ("asides"). */
@@ -2554,6 +2555,7 @@ export class AgentSession implements SettingsScope {
 			emitNotice: (level, message, source) => this.emitNotice(level, message, source),
 			cwd: () => this.sessionManager.getCwd(),
 		});
+		this.subscribeMessagePersistenceSettled(message => this.#chronicler.onPrimaryMessagePersisted(message));
 
 		const maintenanceHost: SessionMaintenanceHost = {
 			agent: this.agent,
@@ -3478,6 +3480,9 @@ export class AgentSession implements SettingsScope {
 
 	/** Emit an event to all listeners */
 	#emit(event: AgentSessionEvent): void {
+		if (event.type === "message_start" || event.type === "message_update" || event.type === "message_end")
+			observeLiveMessageId(this.sessionManager, event.message, event.type === "message_end");
+		else if (event.type === "agent_end") clearLiveMessageId(this.sessionManager);
 		if (event.type === "agent_end" && event.isTerminal !== false) {
 			const sessionGeneration = this.#sessionGeneration;
 			const promptSequence = this.#promptSequence;
@@ -4149,7 +4154,13 @@ export class AgentSession implements SettingsScope {
 			// commit advances the run's reporting watermark and input cursor.
 			if (message.role === "assistant") this.#mixtureHost?.commitPersisted(message);
 		}
-		this.#chronicler.onPrimaryMessagePersisted(message);
+		for (const listener of this.#messagePersistenceListeners) {
+			try {
+				listener(message);
+			} catch (error) {
+				logger.warn("Message persistence observer failed", { error: String(error) });
+			}
+		}
 	}
 
 	/**
@@ -4411,7 +4422,9 @@ export class AgentSession implements SettingsScope {
 			const message = event.message;
 			const deobfuscatedContent = deobfuscateAssistantContent(obfuscator, message.content);
 			if (deobfuscatedContent !== message.content) {
-				displayEvent = { ...event, message: { ...message, content: deobfuscatedContent } };
+				const displayMessage = { ...message, content: deobfuscatedContent };
+				linkMessageEntrySource(displayMessage, message);
+				displayEvent = { ...event, message: displayMessage };
 			}
 		}
 		if (runOwners)
@@ -5857,6 +5870,12 @@ export class AgentSession implements SettingsScope {
 		this.#sessionChangeCallbacks.add(callback);
 		return () => this.#sessionChangeCallbacks.delete(callback);
 	}
+	/** The native entry association is available now; storage durability is a separate manager acknowledgement. */
+	subscribeMessagePersistenceSettled(listener: (message: AgentMessage) => void): () => void {
+		this.#messagePersistenceListeners.add(listener);
+		return () => this.#messagePersistenceListeners.delete(listener);
+	}
+
 
 	subscribeCommandMetadataChanged(listener: CommandMetadataChangedListener): () => void {
 		this.#commandMetadataChangedListeners.push(listener);
@@ -6285,6 +6304,7 @@ export class AgentSession implements SettingsScope {
 		this.#eventListeners = [];
 		this.#runStateListeners.clear();
 		this.#sessionChangeCallbacks.clear();
+		this.#messagePersistenceListeners.clear();
 
 		// A dispose triggered mid-turn (Ctrl-C / timeout / hard-killed subagent)
 		// only *signals* the agent loop via the earlier abort(); the loop and the

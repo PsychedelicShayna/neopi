@@ -1214,10 +1214,14 @@ export class Agent {
 		switch (event.type) {
 			case "message_start":
 			case "message_update":
-				this.#state.streamMessage = event.message;
+				if (event.message.role === "assistant" || this.#state.streamMessage?.role !== "assistant") {
+					this.#state.streamMessage = event.message;
+				}
 				break;
 			case "message_end":
-				this.#state.streamMessage = null;
+				if (event.message.role === "assistant" || this.#state.streamMessage?.role !== "assistant") {
+					this.#state.streamMessage = null;
+				}
 				this.appendMessage(event.message);
 				break;
 			case "tool_execution_start":

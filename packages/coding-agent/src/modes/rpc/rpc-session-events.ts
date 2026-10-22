@@ -3,13 +3,25 @@
  * `messageId` and applies the host's `set_event_filter` selection.
  */
 import type { AssistantMessageEvent } from "@oh-my-pi/pi-ai";
-import type { AgentSessionEvent } from "../../session/agent-session";
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
+import { deobfuscateAssistantContent } from "../../secrets/message-transform";
+import { getMessageEntryId, getMessageEntrySource, liveMessageId, observeLiveMessageId } from "../../session/message-entry-ids";
+import type { SessionManager } from "../../session/session-manager";
+import type { SessionJournalEvent, SessionJournalIdentity } from "../../session/session-journal-events";
 import type {
 	RpcAgentSessionEventFrame,
 	RpcDeltaMessageUpdateFrame,
 	RpcMessageUpdates,
 	RpcProjectedSessionEventFrame,
 } from "./rpc-types";
+
+type JournalSnapshotSource = Pick<
+	AgentSession,
+	"sessionManager" | "subscribeMessagePersistenceSettled" | "isSessionTransitioning" | "obfuscator"
+> & {
+	readonly agent: { readonly state: { readonly streamMessage: AgentMessage | null } };
+};
 
 /** Drops the accumulated snapshot a streaming event carries; `done` and `error` have none. */
 function withoutPartial(event: AssistantMessageEvent): RpcDeltaMessageUpdateFrame["assistantMessageEvent"] {
@@ -29,10 +41,98 @@ export class RpcSessionEventForwarder {
 	#messageCount = 0;
 	/** Ids of started, unfinished messages. External records (advisor cards, IRC) nest inside a streaming reply. */
 	#openMessageIds: string[] = [];
+	#assistantMessageId: string | undefined;
+	#messageRevision = 0;
+	#manager: SessionManager | undefined;
+	#unsubscribeJournal: (() => void) | undefined;
+	#unsubscribePersistence: (() => void) | undefined;
+	#endedMessages = new WeakMap<AgentMessage, { messageId: string; generation: number }>();
+	#bindingGeneration = 0;
+	readonly #pendingEntryMessages = new Map<string, string>();
 	readonly #output: (frame: RpcProjectedSessionEventFrame) => void;
 
 	constructor(output: (frame: RpcProjectedSessionEventFrame) => void) {
 		this.#output = output;
+	}
+
+	/** Subscribe first, then publish identity before the host requests its history snapshot. */
+	observeJournal(session: JournalSnapshotSource): void {
+		this.dispose();
+		const manager = session.sessionManager;
+		this.#manager = manager;
+		this.#unsubscribeJournal = manager.subscribeJournal(event => this.#journalEvent(event));
+		this.#unsubscribePersistence = session.subscribeMessagePersistenceSettled(message => {
+			const ended = this.#endedMessages.get(message);
+			this.#endedMessages.delete(message);
+			if (!ended || ended.generation !== this.#bindingGeneration) return;
+			const entryId = getMessageEntryId(message);
+			if (!entryId) return;
+			this.#pendingEntryMessages.set(entryId, ended.messageId);
+			this.#associateEntry(entryId);
+		});
+		this.snapshotJournal(session);
+	}
+
+	/** An ordered, repeatable native snapshot, without replacing the live subscription. */
+	snapshotJournal(session: JournalSnapshotSource): SessionJournalIdentity {
+		const manager = session.sessionManager;
+		const identity = manager.getJournalIdentity();
+		const generation = this.#bindingGeneration;
+		const revision = this.#messageRevision;
+		const streamMessage = session.isSessionTransitioning ? null : session.agent.state.streamMessage;
+		this.#emit({ type: "journal_state", reason: "snapshot", ...identity });
+		const current = manager.getJournalIdentity();
+		if (streamMessage?.role !== "assistant" || session.isSessionTransitioning ||
+			generation !== this.#bindingGeneration || revision !== this.#messageRevision ||
+			current.sessionId !== identity.sessionId || current.sessionFile !== identity.sessionFile ||
+			current.leafId !== identity.leafId) return current;
+		let messageId = this.#assistantMessageId;
+		if (messageId === undefined) {
+			messageId = observeLiveMessageId(manager, streamMessage);
+			this.#assistantMessageId = messageId;
+			this.#openMessageIds.push(messageId);
+		}
+		const obfuscator = session.obfuscator;
+		const content = obfuscator
+			? deobfuscateAssistantContent(obfuscator, streamMessage.content)
+			: streamMessage.content;
+		const message = content === streamMessage.content ? streamMessage : { ...streamMessage, content };
+		this.#emit({ type: "message_start", snapshot: true, ...identity, messageId, message });
+		return manager.getJournalIdentity();
+	}
+
+	dispose(): void {
+		this.#unsubscribeJournal?.();
+		this.#unsubscribeJournal = undefined;
+		this.#unsubscribePersistence?.();
+		this.#unsubscribePersistence = undefined;
+		this.#manager = undefined;
+		this.#invalidateBinding();
+	}
+
+	#invalidateBinding(): void {
+		this.#bindingGeneration++;
+		this.#openMessageIds.length = 0;
+		this.#assistantMessageId = undefined;
+		this.#pendingEntryMessages.clear();
+		this.#endedMessages = new WeakMap();
+	}
+
+	#journalEvent(event: SessionJournalEvent): void {
+		if (event.type === "journal_state" && event.reason === "identity") this.#invalidateBinding();
+		this.#emit(event);
+		if (event.type === "journal_entry") this.#associateEntry(event.entry.id);
+	}
+
+	#associateEntry(entryId: string): void {
+		const messageId = this.#pendingEntryMessages.get(entryId);
+		if (!messageId || !this.#manager?.isEntryDurable(entryId)) return;
+		this.#pendingEntryMessages.delete(entryId);
+		this.#emit({ type: "message_persisted", ...this.#manager.getJournalIdentity(), messageId, entryId });
+	}
+
+	#emit(frame: RpcProjectedSessionEventFrame): void {
+		if (!this.#filter || this.#filter.has(frame.type)) this.#output(frame);
 	}
 
 	/** Forward only the listed event types; `null` forwards everything. Returns the active selection. */
@@ -43,7 +143,16 @@ export class RpcSessionEventForwarder {
 	}
 
 	forward(event: AgentSessionEvent): void {
+		if (event.type === "message_start" || event.type === "message_update" ||
+			event.type === "message_end" || event.type === "agent_end") this.#messageRevision++;
+		// A subscription snapshot or update may beat the session's delayed start notification.
+		if (event.type === "message_start" && event.message.role === "assistant" &&
+			this.#assistantMessageId !== undefined) return;
+		const generation = this.#bindingGeneration;
 		const frame = this.#stamp(event);
+		if (event.type === "message_end" && frame.type === "message_end" && this.#manager) {
+			this.#endedMessages.set(getMessageEntrySource(event.message), { messageId: frame.messageId, generation });
+		}
 		if (this.#filter && !this.#filter.has(frame.type)) return;
 		if (frame.type === "message_update" && this.#messageUpdates === "delta") {
 			this.#output({
@@ -59,30 +168,38 @@ export class RpcSessionEventForwarder {
 	#stamp(event: AgentSessionEvent): RpcAgentSessionEventFrame {
 		switch (event.type) {
 			case "message_start": {
-				const messageId = this.#mintMessageId();
+				const messageId = this.#mintMessageId(event.message);
 				this.#openMessageIds.push(messageId);
+				if (event.message.role === "assistant") this.#assistantMessageId = messageId;
 				return { ...event, messageId };
 			}
 			case "message_update": {
-				let messageId = this.#openMessageIds.at(-1);
+				let messageId = this.#assistantMessageId ?? this.#openMessageIds.at(-1);
 				if (messageId === undefined) {
-					messageId = this.#mintMessageId();
+					messageId = this.#mintMessageId(event.message);
 					this.#openMessageIds.push(messageId);
 				}
+				this.#assistantMessageId = messageId;
+				if (this.#manager) liveMessageId(this.#manager, event.message, messageId);
 				return { ...event, messageId };
 			}
-			case "message_end":
-				return { ...event, messageId: this.#openMessageIds.pop() ?? this.#mintMessageId() };
+			case "message_end": {
+				const messageId = this.#openMessageIds.pop() ?? this.#assistantMessageId ?? this.#mintMessageId(event.message);
+				if (event.message.role === "assistant") this.#assistantMessageId = undefined;
+				if (this.#manager) liveMessageId(this.#manager, event.message, messageId);
+				return { ...event, messageId };
+			}
 			case "agent_end":
 				// A run never leaves a message open; drop anything a dropped frame stranded.
 				this.#openMessageIds.length = 0;
+				this.#assistantMessageId = undefined;
 				return event;
 			default:
 				return event;
 		}
 	}
 
-	#mintMessageId(): string {
-		return `msg-${++this.#messageCount}`;
+	#mintMessageId(message: AgentMessage): string {
+		return this.#manager ? liveMessageId(this.#manager, message) : `msg-${++this.#messageCount}`;
 	}
 }

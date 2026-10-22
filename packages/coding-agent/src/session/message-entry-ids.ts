@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { SessionManager } from "./session-manager";
 
 /**
  * Session entry id behind each in-memory message, keyed by object identity.
@@ -16,6 +17,62 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
  * persisted under before the turn starts.
  */
 const messageEntryIds = new WeakMap<AgentMessage, string>();
+const messageEntrySources = new WeakMap<AgentMessage, AgentMessage>();
+type LiveMessageOwner = Pick<SessionManager, "getSessionId" | "getSessionFile">;
+interface OwnerLiveMessageIds {
+	next: number;
+	sessionId: string;
+	sessionFile: string | undefined;
+	ids: WeakMap<AgentMessage, string>;
+	assistantId: string | undefined;
+}
+const liveMessageIds = new WeakMap<LiveMessageOwner, OwnerLiveMessageIds>();
+
+function ownerLiveMessageIds(owner: LiveMessageOwner): OwnerLiveMessageIds {
+	const sessionId = owner.getSessionId();
+	const sessionFile = owner.getSessionFile();
+	let ownerIds = liveMessageIds.get(owner);
+	if (!ownerIds) {
+		ownerIds = { next: 0, sessionId, sessionFile, ids: new WeakMap(), assistantId: undefined };
+		liveMessageIds.set(owner, ownerIds);
+	} else if (ownerIds.sessionId !== sessionId || ownerIds.sessionFile !== sessionFile) {
+		ownerIds.sessionId = sessionId;
+		ownerIds.sessionFile = sessionFile;
+		ownerIds.ids = new WeakMap();
+		ownerIds.assistantId = undefined;
+	}
+	return ownerIds;
+}
+
+/** Share unsaved identity across transports, without retaining content or inventing journal IDs. */
+export function liveMessageId(owner: LiveMessageOwner, message: AgentMessage, existingId?: string): string {
+	const ownerIds = ownerLiveMessageIds(owner);
+	const native = getMessageEntrySource(message);
+	const id = existingId ?? ownerIds.ids.get(native) ?? `msg-${++ownerIds.next}`;
+	ownerIds.ids.set(native, id);
+	return id;
+}
+
+/** Stamp the native emission before any observer can see its frame. Snapshots use the same active identity. */
+export function observeLiveMessageId(owner: LiveMessageOwner, message: AgentMessage, ended = false): string {
+	const ownerIds = ownerLiveMessageIds(owner);
+	const id = liveMessageId(owner, message, message.role === "assistant" ? ownerIds.assistantId : undefined);
+	if (message.role === "assistant") ownerIds.assistantId = ended ? undefined : id;
+	return id;
+}
+
+export function clearLiveMessageId(owner: LiveMessageOwner): void {
+	ownerLiveMessageIds(owner).assistantId = undefined;
+}
+
+/** Keep a display-only clone tied to its native message before an entry ID exists. */
+export function linkMessageEntrySource(display: AgentMessage, native: AgentMessage): void {
+	messageEntrySources.set(display, getMessageEntrySource(native));
+}
+
+export function getMessageEntrySource(message: AgentMessage): AgentMessage {
+	return messageEntrySources.get(message) ?? message;
+}
 
 /** Record `entryId` as the session entry behind `message`. Returns `entryId`. */
 export function setMessageEntryId(message: AgentMessage, entryId: string): string {

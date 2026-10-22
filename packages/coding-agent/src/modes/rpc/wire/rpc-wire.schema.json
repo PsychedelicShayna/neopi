@@ -307,6 +307,17 @@
 				"clientOmit": []
 			},
 			{
+				"name": "snapshot_session_journal",
+				"doc": "Emit native journal identity and current unsaved assistant before responding, without replacing subscriptions.",
+				"params": null,
+				"result": "JournalIdentity",
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
 				"name": "get_entries_page",
 				"doc": "Read one canonical native journal or selected-branch page.",
 				"params": "GetEntriesPageParams",
@@ -4204,6 +4215,39 @@
 			],
 			"description": "OMP-native session entries in append order."
 		},
+		"JournalIdentity": {
+			"type": "object",
+			"properties": {
+				"sessionId": {
+					"type": "string"
+				},
+				"sessionFile": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"leafId": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				}
+			},
+			"required": [
+				"sessionId",
+				"sessionFile",
+				"leafId"
+			]
+		},
 		"JournalPage": {
 			"type": "object",
 			"properties": {
@@ -4818,6 +4862,141 @@
 				"error"
 			],
 			"type": "string"
+		},
+		"JournalStateEvent": {
+			"type": "object",
+			"properties": {
+				"type": {
+					"const": "journal_state"
+				},
+				"sessionId": {
+					"type": "string"
+				},
+				"sessionFile": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"leafId": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"reason": {
+					"enum": [
+						"snapshot",
+						"identity",
+						"leaf"
+					],
+					"type": "string"
+				}
+			},
+			"required": [
+				"type",
+				"sessionId",
+				"sessionFile",
+				"leafId",
+				"reason"
+			]
+		},
+		"JournalEntryEvent": {
+			"type": "object",
+			"properties": {
+				"type": {
+					"const": "journal_entry"
+				},
+				"sessionId": {
+					"type": "string"
+				},
+				"sessionFile": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"leafId": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"entry": {
+					"type": "object",
+					"properties": {},
+					"additionalProperties": {}
+				}
+			},
+			"required": [
+				"type",
+				"sessionId",
+				"sessionFile",
+				"leafId",
+				"entry"
+			]
+		},
+		"MessagePersistedEvent": {
+			"type": "object",
+			"properties": {
+				"type": {
+					"const": "message_persisted"
+				},
+				"sessionId": {
+					"type": "string"
+				},
+				"sessionFile": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"leafId": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"messageId": {
+					"type": "string",
+					"description": "Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID."
+				},
+				"entryId": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"type",
+				"sessionId",
+				"sessionFile",
+				"leafId",
+				"messageId",
+				"entryId"
+			]
 		},
 		"AdvisorMessageEvent": {
 			"type": "object",
@@ -5587,7 +5766,34 @@
 				},
 				"messageId": {
 					"type": "string",
-					"description": "Shared by the start, updates, and end of one message; unique per process."
+					"description": "Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID."
+				},
+				"snapshot": {
+					"type": "boolean",
+					"description": "True for the current unsaved assistant at an ordered native snapshot boundary."
+				},
+				"sessionId": {
+					"type": "string"
+				},
+				"sessionFile": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"leafId": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
 				},
 				"requestModelProvider": {
 					"type": "string"
@@ -5624,7 +5830,7 @@
 				},
 				"messageId": {
 					"type": "string",
-					"description": "Shared by the start, updates, and end of one message; unique per process."
+					"description": "Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID."
 				},
 				"requestModelProvider": {
 					"type": "string"
@@ -5659,7 +5865,7 @@
 				},
 				"messageId": {
 					"type": "string",
-					"description": "Shared by the start, updates, and end of one message; unique per process."
+					"description": "Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID."
 				},
 				"requestModelProvider": {
 					"type": "string"
@@ -6208,6 +6414,15 @@
 		},
 		"RpcAgentEvent": {
 			"anyOf": [
+				{
+					"$ref": "#/$defs/JournalStateEvent"
+				},
+				{
+					"$ref": "#/$defs/JournalEntryEvent"
+				},
+				{
+					"$ref": "#/$defs/MessagePersistedEvent"
+				},
 				{
 					"$ref": "#/$defs/AdvisorMessageEvent"
 				},

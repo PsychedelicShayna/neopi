@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- External advisor or IRC records no longer erase a quiet primary reply's in-flight snapshot before it finishes ([NeoCode #135](https://github.com/PsychedelicShayna/neocode/issues/135)).
 - Provider-native V2 compaction keeps user-authored custom prompts and operator notices when they serialize as developer messages, without retaining automatic harness notes as user prompts ([#221](https://github.com/PsychedelicShayna/neopi/issues/221)).
 
 ## [18.10.3] - 2026-10-12

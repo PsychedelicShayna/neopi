@@ -84,7 +84,7 @@ function makeHostContext(): { ctx: InteractiveModeContext; state: HostContextSta
 				},
 				entries: [],
 			}),
-			onEntryAppended: undefined,
+			subscribeEntries: () => () => {},
 		},
 		session: {
 			get isSessionTransitioning() {

@@ -1152,6 +1152,13 @@ class SessionEntries:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class JournalIdentity:
+    session_id: str
+    session_file: str | None
+    leaf_id: str | None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class JournalPage:
     entries: tuple[JsonObject, ...]
     session_id: str
@@ -1321,6 +1328,35 @@ class PromptAck:
     """`agentInvoked: false` means the prompt completed locally and no `prompt_result` follows."""
     agent_invoked: bool | None = None
     user_entry_id: str | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class JournalStateEvent:
+    type: Literal["journal_state"] = "journal_state"
+    session_id: str
+    session_file: str | None
+    leaf_id: str | None
+    reason: Literal["snapshot", "identity", "leaf"]
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class JournalEntryEvent:
+    type: Literal["journal_entry"] = "journal_entry"
+    session_id: str
+    session_file: str | None
+    leaf_id: str | None
+    entry: JsonObject
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class MessagePersistedEvent:
+    type: Literal["message_persisted"] = "message_persisted"
+    session_id: str
+    session_file: str | None
+    leaf_id: str | None
+    message_id: str
+    """Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID."""
+    entry_id: str
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -1551,7 +1587,12 @@ class MessageStartEvent:
     type: Literal["message_start"] = "message_start"
     message: AgentMessage
     message_id: str | None = None
-    """Shared by the start, updates, and end of one message; unique per process."""
+    """Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID."""
+    snapshot: bool | None = None
+    """True for the current unsaved assistant at an ordered native snapshot boundary."""
+    session_id: str | None = None
+    session_file: str | None = None
+    leaf_id: str | None = None
     request_model_provider: str | None = None
     request_model_id: str | None = None
     request_reasoning: Effort | None = None
@@ -1565,7 +1606,7 @@ class MessageUpdateEvent:
     message: AgentMessage
     assistant_message_event: AssistantMessageEvent
     message_id: str | None = None
-    """Shared by the start, updates, and end of one message; unique per process."""
+    """Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID."""
     request_model_provider: str | None = None
     request_model_id: str | None = None
     request_reasoning: Effort | None = None
@@ -1578,7 +1619,7 @@ class MessageEndEvent:
     type: Literal["message_end"] = "message_end"
     message: AgentMessage
     message_id: str | None = None
-    """Shared by the start, updates, and end of one message; unique per process."""
+    """Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID."""
     request_model_provider: str | None = None
     request_model_id: str | None = None
     request_reasoning: Effort | None = None
@@ -2270,7 +2311,7 @@ UsageLimitState: TypeAlias = UsageLimitLowPriority | UsageLimitWrapUp
 MixtureAnswer: TypeAlias = MixtureChoiceAnswer | MixtureNoulAnswer | MixtureScoreAnswer
 
 
-RpcAgentEvent: TypeAlias = AdvisorMessageEvent | RunOwnersJoinedEvent | RunOwnersSkippedEvent | ChatModeChangedEvent | MixtureHopEndEvent | MixtureDecisionEvent | MixtureLimitEvent | MixtureCheckpointEvent | MixtureRunEndEvent | AgentStartEvent | AgentEndEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolStreamUpdateEvent | ToolExecutionEndEvent | AutoCompactionStartEvent | AutoCompactionEndEvent | AutoRetryStartEvent | AutoRetryEndEvent | CacheWarmingStartEvent | CacheWarmingEndEvent | RetryFallbackAppliedEvent | RetryFallbackSucceededEvent | ModelChangedEvent | ConfigWarningsChangedEvent | AdvisorCostChangedEvent | AdvisorYieldedEvent | TtsrTriggeredEvent | TodoReminderEvent | TodoAutoClearEvent | IrcMessageEvent | NoticeEvent | ThinkingLevelChangedEvent | GoalUpdatedEvent | QueueUpdateEvent
+RpcAgentEvent: TypeAlias = JournalStateEvent | JournalEntryEvent | MessagePersistedEvent | AdvisorMessageEvent | RunOwnersJoinedEvent | RunOwnersSkippedEvent | ChatModeChangedEvent | MixtureHopEndEvent | MixtureDecisionEvent | MixtureLimitEvent | MixtureCheckpointEvent | MixtureRunEndEvent | AgentStartEvent | AgentEndEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolStreamUpdateEvent | ToolExecutionEndEvent | AutoCompactionStartEvent | AutoCompactionEndEvent | AutoRetryStartEvent | AutoRetryEndEvent | CacheWarmingStartEvent | CacheWarmingEndEvent | RetryFallbackAppliedEvent | RetryFallbackSucceededEvent | ModelChangedEvent | ConfigWarningsChangedEvent | AdvisorCostChangedEvent | AdvisorYieldedEvent | TtsrTriggeredEvent | TodoReminderEvent | TodoAutoClearEvent | IrcMessageEvent | NoticeEvent | ThinkingLevelChangedEvent | GoalUpdatedEvent | QueueUpdateEvent
 """A session event, discriminated by `type`; `set_event_filter` selects which are sent."""
 
 
@@ -3103,6 +3144,15 @@ def parse_session_entries(value: object, path: str = "SessionEntries") -> Sessio
     )
 
 
+def parse_journal_identity(value: object, path: str = "JournalIdentity") -> JournalIdentity:
+    payload = expect_object(value, path)
+    return JournalIdentity(
+        session_id=required(payload, "sessionId", decode_str, path),
+        session_file=required(payload, "sessionFile", nullable(decode_str), path),
+        leaf_id=required(payload, "leafId", nullable(decode_str), path),
+    )
+
+
 def parse_journal_page(value: object, path: str = "JournalPage") -> JournalPage:
     payload = expect_object(value, path)
     return JournalPage(
@@ -3294,6 +3344,40 @@ def parse_prompt_ack(value: object, path: str = "PromptAck") -> PromptAck:
     return PromptAck(
         agent_invoked=optional(payload, "agentInvoked", decode_bool, path),
         user_entry_id=optional(payload, "userEntryId", decode_str, path),
+    )
+
+
+def parse_journal_state_event(value: object, path: str = "JournalStateEvent") -> JournalStateEvent:
+    payload = expect_object(value, path)
+    required(payload, "type", cast('Decoder[Literal["journal_state"]]', literal(frozenset({"journal_state"}))), path)
+    return JournalStateEvent(
+        session_id=required(payload, "sessionId", decode_str, path),
+        session_file=required(payload, "sessionFile", nullable(decode_str), path),
+        leaf_id=required(payload, "leafId", nullable(decode_str), path),
+        reason=required(payload, "reason", cast('Decoder[Literal["snapshot", "identity", "leaf"]]', literal(frozenset({"snapshot", "identity", "leaf"}))), path),
+    )
+
+
+def parse_journal_entry_event(value: object, path: str = "JournalEntryEvent") -> JournalEntryEvent:
+    payload = expect_object(value, path)
+    required(payload, "type", cast('Decoder[Literal["journal_entry"]]', literal(frozenset({"journal_entry"}))), path)
+    return JournalEntryEvent(
+        session_id=required(payload, "sessionId", decode_str, path),
+        session_file=required(payload, "sessionFile", nullable(decode_str), path),
+        leaf_id=required(payload, "leafId", nullable(decode_str), path),
+        entry=required(payload, "entry", decode_json_object, path),
+    )
+
+
+def parse_message_persisted_event(value: object, path: str = "MessagePersistedEvent") -> MessagePersistedEvent:
+    payload = expect_object(value, path)
+    required(payload, "type", cast('Decoder[Literal["message_persisted"]]', literal(frozenset({"message_persisted"}))), path)
+    return MessagePersistedEvent(
+        session_id=required(payload, "sessionId", decode_str, path),
+        session_file=required(payload, "sessionFile", nullable(decode_str), path),
+        leaf_id=required(payload, "leafId", nullable(decode_str), path),
+        message_id=required(payload, "messageId", decode_str, path),
+        entry_id=required(payload, "entryId", decode_str, path),
     )
 
 
@@ -3569,6 +3653,10 @@ def parse_message_start_event(value: object, path: str = "MessageStartEvent") ->
     return MessageStartEvent(
         message=required(payload, "message", parse_agent_message, path),
         message_id=optional(payload, "messageId", decode_str, path),
+        snapshot=optional(payload, "snapshot", decode_bool, path),
+        session_id=optional(payload, "sessionId", decode_str, path),
+        session_file=optional(payload, "sessionFile", nullable(decode_str), path),
+        leaf_id=optional(payload, "leafId", nullable(decode_str), path),
         request_model_provider=optional(payload, "requestModelProvider", decode_str, path),
         request_model_id=optional(payload, "requestModelId", decode_str, path),
         request_reasoning=optional(payload, "requestReasoning", _decode_effort, path),
@@ -4425,6 +4513,9 @@ _MIXTURE_ANSWER_CASES: Final[dict[str, Decoder[MixtureAnswer]]] = {
 
 
 _RPC_AGENT_EVENT_CASES: Final[dict[str, Decoder[RpcAgentEvent]]] = {
+        "journal_state": parse_journal_state_event,
+        "journal_entry": parse_journal_entry_event,
+        "message_persisted": parse_message_persisted_event,
         "advisor_message": parse_advisor_message_event,
         "run_owners_joined": parse_run_owners_joined_event,
         "run_owners_skipped": parse_run_owners_skipped_event,
@@ -4488,6 +4579,9 @@ _RPC_NOTIFICATION_CASES: Final[dict[str, Decoder[RpcNotification]]] = {
         "session_info_update": parse_session_info_update_event,
         "config_update": parse_config_update_event,
         "rpc_frame_error": parse_rpc_frame_error_event,
+        "journal_state": parse_rpc_agent_event,
+        "journal_entry": parse_rpc_agent_event,
+        "message_persisted": parse_rpc_agent_event,
         "advisor_message": parse_rpc_agent_event,
         "run_owners_joined": parse_rpc_agent_event,
         "run_owners_skipped": parse_rpc_agent_event,
@@ -4704,6 +4798,11 @@ class WireClient:
         if since is not None:
             params["since"] = since
         return parse_session_entries(self._command("get_entries", params), "get_entries")
+
+    def snapshot_session_journal(self) -> JournalIdentity:
+        """Emit native journal identity and current unsaved assistant before responding, without replacing subscriptions."""
+        params: dict[str, object] = {}
+        return parse_journal_identity(self._command("snapshot_session_journal", params), "snapshot_session_journal")
 
     def get_entries_page(self, *, scope: Literal["journal", "branch"] | None = None, direction: Literal["forward", "backward"] | None = None, cursor: str | None = None, limit: int | None = None) -> JournalPage:
         """Read one canonical native journal or selected-branch page."""
@@ -5123,6 +5222,18 @@ class WireClient:
         """Subscribe to `rpc_frame_error`: An event could not fit within the transport limits and was dropped."""
         return self._listen("rpc_frame_error", listener)
 
+    def on_journal_state(self, listener: Callable[[JournalStateEvent], None]) -> Callable[[], None]:
+        """Subscribe to `journal_state` frames."""
+        return self._listen("journal_state", listener)
+
+    def on_journal_entry(self, listener: Callable[[JournalEntryEvent], None]) -> Callable[[], None]:
+        """Subscribe to `journal_entry` frames."""
+        return self._listen("journal_entry", listener)
+
+    def on_message_persisted(self, listener: Callable[[MessagePersistedEvent], None]) -> Callable[[], None]:
+        """Subscribe to `message_persisted` frames."""
+        return self._listen("message_persisted", listener)
+
     def on_advisor_message(self, listener: Callable[[AdvisorMessageEvent], None]) -> Callable[[], None]:
         """Subscribe to `advisor_message` frames."""
         return self._listen("advisor_message", listener)
@@ -5383,7 +5494,10 @@ __all__ = [
     "InputUiRequest",
     "InterruptMode",
     "IrcMessageEvent",
+    "JournalEntryEvent",
+    "JournalIdentity",
     "JournalPage",
+    "JournalStateEvent",
     "ListMixturesResult",
     "LiveEndEvent",
     "LiveLevelsEvent",
@@ -5396,6 +5510,7 @@ __all__ = [
     "LogoutResult",
     "MessageContent",
     "MessageEndEvent",
+    "MessagePersistedEvent",
     "MessageStartEvent",
     "MessageUpdateEvent",
     "MessageUpdates",
@@ -5634,7 +5749,10 @@ __all__ = [
     "parse_image_content",
     "parse_input_ui_request",
     "parse_irc_message_event",
+    "parse_journal_entry_event",
+    "parse_journal_identity",
     "parse_journal_page",
+    "parse_journal_state_event",
     "parse_list_mixtures_result",
     "parse_live_end_event",
     "parse_live_levels_event",
@@ -5644,6 +5762,7 @@ __all__ = [
     "parse_logout_account",
     "parse_logout_result",
     "parse_message_end_event",
+    "parse_message_persisted_event",
     "parse_message_start_event",
     "parse_message_update_event",
     "parse_messages_page",

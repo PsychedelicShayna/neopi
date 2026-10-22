@@ -9,6 +9,7 @@
 
 ### Added
 
+- Attached graphical clients can observe native journal commits, tree-leaf and session changes without polling, immediately recover an in-flight reply on reconnect, and match streamed replies to durable journal IDs ([NeoCode #134](https://github.com/PsychedelicShayna/neocode/issues/134)).
 - Navigate the native session tree over RPC or terminal control without forking its file; receive restored drafts, images and native summary/ask outcomes with guarded branch preconditions ([NeoCode #134](https://github.com/PsychedelicShayna/neocode/issues/134)).
 - Inspect, add, edit and delete model overrides and custom models in `/models`, with schema-driven field editors and unknown-field preservation ([#522](https://github.com/PsychedelicShayna/neopi/issues/522)).
 

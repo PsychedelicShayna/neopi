@@ -39,6 +39,7 @@ import type { RpcUsageResult } from "./rpc-usage";
 import type { GoalModeState } from "../../goals/state";
 import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
 import type { BtwHistoryRecord } from "../../session/btw-history";
+import type { SessionJournalEvent, SessionJournalIdentity } from "../../session/session-journal-events";
 
 // ============================================================================
 // RPC Commands (stdin)
@@ -79,6 +80,7 @@ export type RpcCommand =
 	| { id?: string; type: "set_ask_dialog"; enabled: boolean }
 	| { id?: string; type: "get_available_commands" }
 	| { id?: string; type: "get_entries"; since?: string }
+	| { id?: string; type: "snapshot_session_journal" }
 	| ({ id?: string; type: "get_entries_page" } & RpcJournalPageOptions)
 	| { id?: string; type: "get_tree" }
 	| ({ id?: string; type: "navigate_tree" } & RpcNavigateTreeOptions)
@@ -578,6 +580,7 @@ export type RpcResponse =
 			success: true;
 			data: { entries: SessionEntry[]; leafId: string | null };
 	  }
+	| { id?: string; type: "response"; command: "snapshot_session_journal"; success: true; data: SessionJournalIdentity }
 	| { id?: string; type: "response"; command: "get_entries_page"; success: true; data: RpcJournalPage }
 	| {
 			id?: string;
@@ -862,6 +865,10 @@ export type RpcMessageEventType = "message_start" | "message_update" | "message_
  */
 export type RpcMessageEventFrame = Extract<AgentSessionEvent, { type: RpcMessageEventType }> & { messageId: string };
 
+/** Current native unsaved assistant, sent at an ordered subscription/snapshot boundary. */
+export type RpcMessageSnapshotFrame = Extract<RpcMessageEventFrame, { type: "message_start" }> &
+	SessionJournalIdentity & { snapshot: true };
+
 type WithoutPartial<T> = T extends unknown ? Omit<T, "partial"> : never;
 
 /** Raw-protocol opt-in projection; terminal subtype fields are preserved. */
@@ -873,15 +880,23 @@ export type RpcDeltaMessageUpdateFrame = Omit<
 	assistantMessageEvent: WithoutPartial<AssistantMessageEvent>;
 };
 
+/** Links live output to its canonical journal entry only after successful persistence. */
+export type RpcMessagePersistedFrame = SessionJournalIdentity & {
+	type: "message_persisted";
+	messageId: string;
+	entryId: string;
+};
+export type RpcJournalEventFrame = SessionJournalEvent | RpcMessagePersistedFrame | RpcMessageSnapshotFrame;
+
 /** Session event as written to stdout by default: message lifecycle events carry a `messageId`. */
 export type RpcAgentSessionEventFrame =
 	| Exclude<AgentSessionEvent, { type: RpcMessageEventType }>
 	| RpcMessageEventFrame;
 
 /** Every session event shape RPC mode can write, including the opt-in `messageUpdates: "delta"` projection. */
-export type RpcProjectedSessionEventFrame = RpcAgentSessionEventFrame | RpcDeltaMessageUpdateFrame;
+export type RpcProjectedSessionEventFrame = RpcAgentSessionEventFrame | RpcDeltaMessageUpdateFrame | RpcJournalEventFrame;
 
-export type RpcSessionEventFrame = RpcAgentSessionEventFrame | RpcSubagentFrame;
+export type RpcSessionEventFrame = RpcAgentSessionEventFrame | RpcSubagentFrame | RpcJournalEventFrame;
 
 // ============================================================================
 // Extension UI Events (stdout)

@@ -221,6 +221,7 @@ export class CollabHost {
 	/** Rejects the in-flight first-open wait when `stop()` overtakes `start()`. */
 	#abortStart: ((reason: Error) => void) | null = null;
 	#unsubscribe?: () => void;
+	#unsubscribeEntries?: () => void;
 	/**
 	 * Guest identity and permission, keyed by relay peer id. Drives the
 	 * participant list, notices, the status segment and the writable-peer fan-out.
@@ -473,7 +474,7 @@ export class CollabHost {
 			}
 		}
 		this.#registryUnsubscribe = AgentRegistry.global().onChange(() => this.#scheduleAgentsBroadcast());
-		this.#ctx.sessionManager.onEntryAppended = entry => {
+		this.#unsubscribeEntries = this.#ctx.sessionManager.subscribeEntries(entry => {
 			if (isWireSessionEntry(entry) && this.#broadcastAllowed()) {
 				const bounded = serializeReplicatedEntry(entry);
 				const shrunk = bounded.value;
@@ -489,7 +490,7 @@ export class CollabHost {
 			// Model/thinking/title changes land as entries while idle; refresh
 			// guest state promptly (debounce + JSON diff dedupe).
 			this.#scheduleStateBroadcast();
-		};
+		});
 		this.#updateStatusSegment();
 
 		// Publish to the local host registry only after the relay connection
@@ -579,7 +580,8 @@ export class CollabHost {
 				.close()
 				.catch(err => logger.warn("Collab host registry withdrawal failed", { error: String(err) }));
 		}
-		this.#ctx.sessionManager.onEntryAppended = undefined;
+		this.#unsubscribeEntries?.();
+		this.#unsubscribeEntries = undefined;
 		this.#unsubscribe?.();
 		this.#unsubscribe = undefined;
 		for (const unsubscribe of this.#busUnsubscribers) unsubscribe();

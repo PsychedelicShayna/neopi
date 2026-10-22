@@ -47,6 +47,7 @@ Behavior notes:
 | `session_lease` | A process holds an exclusive lifetime lease on every session file it writes, so two processes never append to one transcript. `--session <file>` onto a file another process holds fails at startup with a `startup_error` stderr line; `switch_session` and `branch` onto one fail with `code: "session_in_use"` (see [Session lease](#session-lease)). |
 | `plan_proposal_cancel` | A pending plan proposal that resolves without a host answer is announced with a `plan_proposal_cancel` frame, and a later `plan_proposal_response` for it fails with `code: "proposal_cancelled"`. See [`plan_proposal_cancel`](#plan_proposal_cancel). |
 | `prompt_entry_ids` | `prompt`, `steer`, `follow_up` and `abort_and_prompt` responses carry `data.userEntryId`, the id of the session entry their message is written as, and every `get_messages_page` message carries the `entryId` of its entry. See [Entry ids](#entry-ids). |
+| `session_journal_events` | Native journal commits, active-leaf changes, session identity changes and durable streaming-message associations. See [Native journal events](#native-journal-events). |
 | `session_tree_navigation` | Guarded native same-file `navigate_tree`, restored drafts and images, and explicit `resume_tree` acknowledgement for ask re-answers. See [Native tree navigation](#native-tree-navigation). |
 | `session_journal` | `get_entries_page` reads complete native journal or active-branch entries over RPC/control; `npi sessions entries --json` reads the same persisted records without a writer lease. |
 
@@ -190,6 +191,7 @@ Important edge behavior from runtime:
 - `{ id?, type: "set_ask_dialog", enabled: boolean }`
 - `{ id?, type: "get_available_commands" }`
 - `{ id?, type: "get_entries", since?: string }`
+- `{ id?, type: "snapshot_session_journal" }`
 - `{ id?, type: "get_entries_page", scope?: "journal" | "branch", direction?: "forward" | "backward", cursor?: string, limit?: number }`
 - `{ id?, type: "get_tree" }`
 - `{ id?, type: "navigate_tree", targetId: string, expectedSessionId: string, expectedSessionFile: string | null, expectedLeafId: string | null, summarize?: boolean, customInstructions?: string, allowAskReopen?: boolean, reanswerAskResult?: TreeAskReanswer }`
@@ -437,6 +439,58 @@ Local-only slash commands may emit `command_output` frames before completing. Th
 - A message that never reaches the session writes no entry: a prompt that fails or is dropped before the turn starts (its `prompt_result` reports `agentInvoked: false` or `status: "error"`), or a queued steer/follow-up cancelled before the queue delivers it. Such unused reservations are released; a session change also releases any remaining reservations.
 
 Each `get_messages_page` message carries `entryId`, including custom messages (`custom_message` entries), the compaction summary (`compaction` entry) and branch summaries (`branch_summary` entry). Context the session injects per turn without persisting it (for example Vibe-mode context) has no entry and no `entryId`.
+
+### Native journal events
+
+Stdio RPC and control owners advertise `session_journal_events` and emit:
+
+- `journal_state` with `reason: "snapshot" | "identity" | "leaf"`.
+- `journal_entry` with the complete canonical native `entry`, only after storage acknowledges persistence.
+- `message_persisted` with the streaming `messageId` and canonical journal `entryId`.
+- `message_start` with `snapshot: true`, the current unsaved assistant `message` and its streaming `messageId`, when an assistant is already in flight at the snapshot boundary.
+
+Every frame carries `sessionId`, canonical absolute `sessionFile` and `leafId`.
+`sessionFile` is `null` for an in-memory owner. The leaf describes the running
+owner's current branch, including pointer-only tree navigation. A leaf change
+alone does not claim that a new entry or a pointer change was persisted.
+
+Observers subscribe before the initial `journal_state` snapshot. Attach with
+`npi ctl pipe` or control `subscribe` before requesting native journal pages.
+Buffer notifications while fetching the initial pages, deduplicate entries by
+their native IDs and discard the old binding when either session ID or file
+changes. Restart branch paging when the leaf changes. The initial state frame
+contains identity, not a second copy of the journal.
+
+For a new watcher on an already connected runtime, register the local event
+listener, then send `snapshot_session_journal` before reading history pages.
+The command emits `journal_state` and any current assistant snapshot before
+its response. Its response data is `{ sessionId, sessionFile, leafId }`.
+It never replaces subscriptions or restarts a stream. Repeated snapshots and
+new control connections reuse the native owner's current `messageId` across
+stdio/control updates, end and persistence receipt.
+The snapshot reads the native in-flight assistant directly, so a quiet reply
+appears immediately without waiting for another delta. It is unsaved output,
+not a journal entry. No assistant frame is emitted when none is in flight.
+Native session transitions return `session_busy`.
+
+Snapshot frames carry the same canonical identity fields. An intervening
+newer message event or owner/leaf change suppresses an older captured snapshot.
+The client's ordered event stream remains authoritative; a snapshot is never
+published after a newer event with stale content.
+
+Live `message_start`, updates and `message_end` remain unsaved output until a
+`message_persisted` frame associates them with a journal entry. A process-local
+`msg-N`, an accepted prompt's reserved `userEntryId`, or a completed stream is
+not a durability receipt. Failed or intentionally skipped persistence produces
+no association. Recovery announces entries only after native persistence succeeds.
+Messages already present in the initial history use their native entry IDs;
+they need no live-message association.
+
+These frames respect `set_event_filter`, including `message_start` for snapshots. Protocol v2 uses the existing
+chunking limits for large entries without truncation. The TypeScript client
+exposes journal notifications and assistant snapshots through `onJournalEvent`;
+existing `onEvent` and `onSessionEvent` listeners retain their event types.
+Consumers must ignore unknown event kinds.
 
 ### Yield vs settled
 
@@ -1122,7 +1176,7 @@ Extension runner errors are emitted separately as:
 
 `message_update` includes streaming deltas in `assistantMessageEvent` (text/thinking/toolcall deltas).
 
-`message_start`, `message_update`, and `message_end` carry a `messageId` string assigned by RPC mode. One message keeps the same id from its start through every update to its end; ids are unique within the process. Records injected mid-stream (advisor cards, IRC messages) get their own id and do not disturb the id of the reply streaming around them.
+`message_start`, `message_update`, and `message_end` carry a live `messageId` string. One message keeps its ID across the native owner's stdio and control observers, including a new attachment's in-flight snapshot. IDs are scoped to that owner process, not journal identities. Records injected mid-stream, such as advisor cards and IRC messages, get their own IDs and do not disturb the reply streaming around them.
 
 `set_event_filter` restricts which session event frames are written: pass the event `type` strings to forward, or `null` to forward everything (the default). The response echoes the active selection as `{ events, messageUpdates }`. The filter applies to all events emitted through the session subscription, not just the common types listed above; every other outbound category (responses, `prompt_result`, `session_settled`, extension UI and host tool/URI requests, plan mode frames, `extension_error`, `available_commands_update`, subagent frames, side-question frames, builtin slash-command side channels, and session-persistence and `btw-history` `notice` frames) is unaffected by this filter. Hosts that fail closed on unknown event kinds can pin the set they understand here instead of breaking when NeoPi adds an event.
 

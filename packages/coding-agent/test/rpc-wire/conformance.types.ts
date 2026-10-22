@@ -40,6 +40,7 @@ import type {
 	RpcHostUriRequest,
 	RpcHostUriResult,
 	RpcHostUriSchemeDefinition,
+	RpcJournalEventFrame,
 	RpcLiveEndFrame,
 	RpcLiveLevelsFrame,
 	RpcLivePhaseFrame,
@@ -179,12 +180,13 @@ export type CommandNullability = Assert<
 
 // --- Session events and notifications ---------------------------------------
 
-type ServerEventType = RpcAgentSessionEventFrame["type"];
+type ServerEventFrame = RpcAgentSessionEventFrame | RpcJournalEventFrame;
+type ServerEventType = ServerEventFrame["type"];
 export type SessionEventSet = Assert<Same<Wire.RpcAgentEvent["type"], ServerEventType>>;
 export type SessionEvents = Assert<
 	AllTrue<{
 		[K in ServerEventType]: Outbound<
-			Extract<RpcAgentSessionEventFrame, { type: K }>,
+			Extract<ServerEventFrame, { type: K }>,
 			Extract<Wire.RpcAgentEvent, { type: K }>
 		>;
 	}>
