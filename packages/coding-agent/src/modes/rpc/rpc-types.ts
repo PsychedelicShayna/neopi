@@ -198,7 +198,7 @@ export type RpcCommand =
 
 	// Login
 	| { id?: string; type: "get_login_providers" }
-	| { id?: string; type: "login"; providerId: string }
+	| { id?: string; type: "login"; providerId: string; allowSecretInput?: boolean; allowTrustConfirmation?: boolean }
 	| { id?: string; type: "get_logout_accounts"; providerId: string }
 	| { id?: string; type: "logout"; providerId: string; credentialId: number }
 	| { id?: string; type: "activate_account"; providerId: string; credentialId: number }
@@ -1085,7 +1085,15 @@ export type RpcExtensionUIRequest =
 			optionDetails?: RpcExtensionUISelectOptionDetail[];
 			timeout?: number;
 	  }
-	| { type: "extension_ui_request"; id: string; method: "confirm"; title: string; message: string; timeout?: number }
+	| {
+			type: "extension_ui_request";
+			id: string;
+			method: "confirm";
+			title: string;
+			message: string;
+			loginId?: string;
+			timeout?: number;
+	  }
 	| {
 			type: "extension_ui_request";
 			id: string;
@@ -1112,13 +1120,14 @@ export type RpcExtensionUIRequest =
 			questions: RpcAskDialogQuestion[];
 			timeout?: number;
 	  }
-	| { type: "extension_ui_request"; id: string; method: "cancel"; targetId: string }
+	| { type: "extension_ui_request"; id: string; method: "cancel"; targetId: string; loginId?: string }
 	| {
 			type: "extension_ui_request";
 			id: string;
 			method: "notify";
 			message: string;
 			notifyType?: "info" | "warning" | "error";
+			loginId?: string;
 	  }
 	| {
 			type: "extension_ui_request";
@@ -1151,6 +1160,7 @@ export type RpcExtensionUIRequest =
 			instructions?: string;
 			/** User-facing device verification code; never the private polling device_code. */
 			userCode?: string;
+			loginId?: string;
 	  };
 
 // ============================================================================

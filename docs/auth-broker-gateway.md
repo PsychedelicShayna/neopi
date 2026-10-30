@@ -89,6 +89,33 @@ omp auth-broker status    [--json]
 
 Requests use `Authorization: Bearer <token>`. The server compares against an in-memory token allow-list; the gateway’s implementation uses a timing-safe comparison.
 
+An API-key credential may carry credential-local `tlsTrust`:
+`{ origin, caPem, caFingerprint256 }`. Human-confirmed CA material is retained
+even when the inspection socket already trusted it through ambient roots.
+It travels with that credential in uploads and snapshots, never changing
+process-wide or system certificate trust. Optional `requestOrigin` binds the
+key to an exact origin independently of TLS (also protecting cleartext loopback).
+Authenticated discovery and inference verify the pinned TLS CA where present,
+enforce origin binding, and refuse redirects.
+
+Custom API-key login results may contain an ephemeral `onPersisted()` hook.
+AuthStorage invokes it only after the credential is durably stored, so endpoint
+configuration cannot be activated with a preceding unscoped key. The hook is
+never part of the credential or broker payload. Once persistence begins the
+commit phase finishes activation rather than responding to a late cancellation.
+If configuration activation fails, the committed key stays origin-bound and
+the surfaced error explains the partial commit; prior key rows remain recoverable.
+
+`POST /v1/credential` accepts optional `replaceApiKeys: true` only with an
+API-key credential. Explicit, successfully validated single-endpoint logins
+use it to atomically activate the submitted key and soft-disable prior
+API-key rows for that provider. OAuth rows and other providers are untouched.
+Previous key bytes and row IDs remain recoverable tombstones; the same key
+keeps its active row ID or reactivates its existing disabled row. No server
+key is revoked. Ordinary uploads omit the flag and keep their usual upsert
+semantics; clients must not emulate this operation through separate
+disable/upload calls against an older broker.
+
 A snapshot contains `generation`, `generatedAt`, `serverNowMs`, `refresher`
 (`enabled`, `intervalMs`, `skewMs`, `nextSweepInMs`), and `credentials`.
 Each credential carries its id/provider/redacted credential/`identityKey`,

@@ -14,6 +14,8 @@
  * always seeds {@link tls.rootCertificates} when the caller has not already
  * curated their own CA list.
  */
+import { X509Certificate } from "node:crypto";
+import { isIP } from "node:net";
 import * as fs from "node:fs";
 import * as tls from "node:tls";
 import { $env } from "./env";
@@ -52,6 +54,215 @@ type BunTlsOptions = {
 
 type BunTlsRequestInit = RequestInit & { tls?: BunTlsOptions };
 
+/** Explicit human-confirmed trust, stored only with the credential that needs it. */
+export interface ProviderTlsTrust {
+	origin: string;
+	caPem: string;
+	caFingerprint256: string;
+}
+
+const SCOPED_TLS_INIT = Symbol("omp.providerTlsTrust");
+type ScopedTlsRequestInit = BunTlsRequestInit & { [SCOPED_TLS_INIT]?: true };
+
+/** Explicit credential trust excludes ambient CA configuration, even an invalid ambient file. */
+export function hasProviderTlsTrust(init: RequestInit | undefined): boolean {
+	return (init as ScopedTlsRequestInit | undefined)?.[SCOPED_TLS_INIT] === true;
+}
+
+/** Reject corrupt or broadened stored trust rather than falling back to ambient roots. */
+function validateProviderTlsTrust(trust: ProviderTlsTrust, target?: string | URL): X509Certificate {
+	if (trust === null || typeof trust !== "object")
+		throw new Error("Stored provider TLS trust is invalid; reconnect to confirm trust.");
+	const origin = new URL(trust.origin);
+	if (origin.protocol !== "https:" || origin.origin !== trust.origin) {
+		throw new Error("Provider TLS trust must name an exact HTTPS origin.");
+	}
+	if (target !== undefined && new URL(target).origin !== trust.origin) {
+		throw new Error("Provider TLS trust origin does not match the request; no credentials were sent.");
+	}
+	const ca = new X509Certificate(trust.caPem);
+	if (!ca.ca || ca.fingerprint256 !== trust.caFingerprint256 || !ca.checkIssued(ca) || !ca.verify(ca.publicKey)) {
+		throw new Error("Provider TLS CA fingerprint or certificate is invalid; reconnect to confirm trust.");
+	}
+	const now = Date.now();
+	if (now < Date.parse(ca.validFrom) || now > Date.parse(ca.validTo)) {
+		throw new Error("Provider TLS CA is not currently valid; reconnect after the administrator renews it.");
+	}
+	return ca;
+}
+
+/** Enforce exact-origin, CA-only verified TLS and refuse every redirect on credential-bearing requests. */
+export function wrapFetchForProviderTls(fetchImpl: FetchImpl, trust: ProviderTlsTrust): FetchImpl {
+	const ca = validateProviderTlsTrust(trust);
+	const { origin, caPem } = trust;
+	const validFrom = Date.parse(ca.validFrom);
+	const validTo = Date.parse(ca.validTo);
+	const wrapped: FetchImpl = async (input, init) => {
+		const url = input instanceof Request ? input.url : String(input);
+		if (new URL(url).origin !== origin)
+			throw new Error("Provider TLS trust origin does not match the request; no credentials were sent.");
+		const now = Date.now();
+		if (now < validFrom || now > validTo)
+			throw new Error("Provider TLS CA is not currently valid; reconnect after the administrator renews it.");
+		const scoped: ScopedTlsRequestInit = {
+			...init,
+			redirect: "error",
+			credentials: "omit",
+			tls: { ca: caPem, rejectUnauthorized: true },
+			[SCOPED_TLS_INIT]: true,
+		};
+		return fetchImpl(input, scoped);
+	};
+	// Retain transport composition markers so request retries do not build another outer layer.
+	return Object.assign(wrapped, fetchImpl);
+}
+
+/** Credential-origin binding also protects cleartext loopback during endpoint activation. */
+export interface CredentialRequestScope {
+	requestOrigin?: string;
+	tlsTrust?: ProviderTlsTrust;
+}
+
+export function wrapFetchForCredentialScope(fetchImpl: FetchImpl, scope?: CredentialRequestScope): FetchImpl {
+	if (scope?.tlsTrust !== undefined) {
+		if (scope.requestOrigin !== undefined && scope.requestOrigin !== scope.tlsTrust.origin) {
+			throw new Error("Credential origin and TLS trust origin do not match; no credentials were sent.");
+		}
+		return wrapFetchForProviderTls(fetchImpl, scope.tlsTrust);
+	}
+	const origin = scope?.requestOrigin;
+	if (origin === undefined) return fetchImpl;
+	if (new URL(origin).origin !== origin) throw new Error("Stored credential request origin is invalid.");
+	const wrapped: FetchImpl = async (input, init) => {
+		const url = input instanceof Request ? input.url : String(input);
+		if (new URL(url).origin !== origin)
+			throw new Error("Credential request origin does not match the request; no credentials were sent.");
+		return fetchImpl(input, { ...init, redirect: "error", credentials: "omit" });
+	};
+	return Object.assign(wrapped, fetchImpl);
+}
+
+export interface ProviderCertificateInspection {
+	hostname: string;
+	serverFingerprint256: string;
+	caFingerprint256: string;
+	/** The confirmed CA is always persisted, even if ambient roots already verified inspection. */
+	trust: ProviderTlsTrust;
+}
+
+/**
+ * TLS handshake only: this socket never sends HTTP, credentials, or application data.
+ * An untrusted private server must supply its complete chain, including its root CA.
+ */
+export async function inspectProviderCertificate(
+	target: string,
+	signal?: AbortSignal,
+): Promise<ProviderCertificateInspection> {
+	signal?.throwIfAborted();
+	const url = new URL(target);
+	if (url.protocol !== "https:") throw new Error("Certificate inspection requires HTTPS.");
+	const hostname = url.hostname.replace(/^\[|\]$/g, "");
+	const pending = Promise.withResolvers<ProviderCertificateInspection>();
+	const socket = tls.connect({
+		host: hostname,
+		port: Number(url.port || 443),
+		servername: isIP(hostname) ? undefined : hostname,
+		rejectUnauthorized: false,
+	});
+	const abort = () => socket.destroy(signal?.reason instanceof Error ? signal.reason : new Error("Login cancelled"));
+	signal?.addEventListener("abort", abort, { once: true });
+	socket.once("error", pending.reject);
+	socket.once("close", () =>
+		pending.reject(new Error("TLS certificate inspection closed before completing the handshake.")),
+	);
+	socket.once("secureConnect", () => {
+		try {
+			signal?.throwIfAborted();
+			const peer = socket.getPeerCertificate(true);
+			const hostnameError = tls.checkServerIdentity(hostname, peer);
+			if (hostnameError) throw hostnameError;
+			const leaf = new X509Certificate(peer.raw);
+			const chain: X509Certificate[] = [leaf];
+			let current = peer;
+			while (current.issuerCertificate) {
+				const issuer = current.issuerCertificate;
+				if (chain.some(cert => cert.fingerprint256 === issuer.fingerprint256)) break;
+				current = issuer;
+				chain.push(new X509Certificate(issuer.raw));
+			}
+			// Verified public/ambient chains may omit their root on the wire. Resolve only
+			// the actual issuer of this verified chain, before asking the human to pin it.
+			const last = chain.at(-1)!;
+			if (socket.authorized && (!last.ca || !last.checkIssued(last) || !last.verify(last.publicKey))) {
+				let available: readonly string[] = tls.rootCertificates;
+				if (typeof tls.getCACertificates === "function") {
+					try {
+						available = tls.getCACertificates();
+					} catch {
+						// Some runtimes expose the Node accessor before implementing it.
+					}
+				}
+				const findRoot = (certificates: readonly string[]): X509Certificate | undefined => {
+					for (const pem of certificates) {
+						const candidate = new X509Certificate(pem);
+						if (
+							candidate.ca &&
+							last.checkIssued(candidate) &&
+							last.verify(candidate.publicKey) &&
+							candidate.checkIssued(candidate) &&
+							candidate.verify(candidate.publicKey)
+						)
+							return candidate;
+					}
+					return undefined;
+				};
+				const root =
+					findRoot(available) ??
+					findRoot(resolveExtraCa()?.match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g) ?? []);
+				if (root) chain.push(root);
+			}
+			const now = Date.now();
+			for (let i = 0; i < chain.length; i++) {
+				const cert = chain[i];
+				if (now < Date.parse(cert.validFrom) || now > Date.parse(cert.validTo)) {
+					throw new Error("The server certificate chain is not currently valid.");
+				}
+				const issuer = chain[i + 1];
+				if (issuer && (!issuer.ca || !cert.checkIssued(issuer) || !cert.verify(issuer.publicKey))) {
+					throw new Error("The server supplied an invalid CA chain.");
+				}
+			}
+			const ca = chain.at(-1);
+			if (chain.length < 2 || !ca?.ca || !ca.checkIssued(ca) || !ca.verify(ca.publicKey)) {
+				throw new Error(
+					"The server did not supply a usable CA chain. Ask the administrator to serve the complete certificate chain, including the private root CA; a server leaf certificate is not a CA.",
+				);
+			}
+			const trust = {
+				origin: url.origin,
+				caPem: ca.toString(),
+				caFingerprint256: ca.fingerprint256,
+			};
+			validateProviderTlsTrust(trust, target);
+			pending.resolve({
+				hostname,
+				serverFingerprint256: leaf.fingerprint256,
+				caFingerprint256: ca.fingerprint256,
+				trust,
+			});
+		} catch (error) {
+			pending.reject(error);
+		} finally {
+			socket.destroy();
+		}
+	});
+	try {
+		return await pending.promise;
+	} finally {
+		signal?.removeEventListener("abort", abort);
+		socket.destroy();
+	}
+}
 const EXTRA_CA_FETCH_MARKER = Symbol("omp.extraCaFetch");
 type ExtraCaFetch = FetchImpl & { [EXTRA_CA_FETCH_MARKER]?: true };
 
@@ -123,6 +334,7 @@ export function __resetExtraCaCache(): void {
  * `tls.rootCertificates`), only the extra CA is appended.
  */
 export function withExtraCaInit(init: RequestInit | undefined, extraCa: string): RequestInit {
+	if ((init as ScopedTlsRequestInit | undefined)?.[SCOPED_TLS_INIT]) return init!;
 	const existingTls = (init as BunTlsRequestInit | undefined)?.tls;
 	const existingCa = existingTls?.ca;
 	let mergedCa: string[];
@@ -154,6 +366,7 @@ export function wrapFetchForExtraCa(fetchImpl: FetchImpl): FetchImpl {
 
 	const wrapped = Object.assign(
 		async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+			if (hasProviderTlsTrust(init)) return fetchImpl(input, init);
 			const extraCa = resolveExtraCa();
 			return extraCa ? fetchImpl(input, withExtraCaInit(init, extraCa)) : fetchImpl(input, init);
 		},

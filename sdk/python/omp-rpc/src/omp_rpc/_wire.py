@@ -2274,6 +2274,7 @@ class ConfirmUiRequest:
     title: str
     message: str
     timeout: int | None = None
+    login_id: str | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2315,6 +2316,7 @@ class CancelUiRequest:
     id: str
     method: Literal["cancel"] = "cancel"
     target_id: str
+    login_id: str | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2387,9 +2389,9 @@ class ExtensionUiRequest(ExtensionUiRequestMixin):
     option_details: tuple[SelectOptionDetail, ...] | None = None
     timeout: int | None = None
     message: str | None = None
+    login_id: str | None = None
     placeholder: str | None = None
     secret: bool | None = None
-    login_id: str | None = None
     prefill: str | None = None
     prompt_style: bool | None = None
     questions: tuple[AskQuestion, ...] | None = None
@@ -4658,6 +4660,7 @@ def parse_confirm_ui_request(value: object, path: str = "ConfirmUiRequest") -> C
         title=required(payload, "title", decode_str, path),
         message=required(payload, "message", decode_str, path),
         timeout=optional(payload, "timeout", decode_int, path),
+        login_id=optional(payload, "loginId", decode_str, path),
     )
 
 
@@ -4705,6 +4708,7 @@ def parse_cancel_ui_request(value: object, path: str = "CancelUiRequest") -> Can
     return CancelUiRequest(
         id=required(payload, "id", decode_str, path),
         target_id=required(payload, "targetId", decode_str, path),
+        login_id=optional(payload, "loginId", decode_str, path),
     )
 
 
@@ -4788,9 +4792,9 @@ def parse_extension_ui_request(value: object, path: str = "ExtensionUiRequest") 
         option_details=optional(payload, "optionDetails", array(parse_select_option_detail), path),
         timeout=optional(payload, "timeout", decode_int, path),
         message=optional(payload, "message", decode_str, path),
+        login_id=optional(payload, "loginId", decode_str, path),
         placeholder=optional(payload, "placeholder", decode_str, path),
         secret=optional(payload, "secret", decode_bool, path),
-        login_id=optional(payload, "loginId", decode_str, path),
         prefill=optional(payload, "prefill", decode_str, path),
         prompt_style=optional(payload, "promptStyle", decode_bool, path),
         questions=optional(payload, "questions", array(parse_ask_question), path),
@@ -5734,10 +5738,14 @@ class WireClient:
         params: dict[str, object] = {}
         return required(expect_object(self._command("get_login_providers", params), "get_login_providers"), "providers", array(parse_login_provider), "get_login_providers")
 
-    def login(self, provider_id: str) -> str:
-        """Run OAuth login; the flow arrives as `open_url` and `input` UI requests."""
+    def login(self, provider_id: str, *, allow_secret_input: bool | None = None, allow_trust_confirmation: bool | None = None) -> str:
+        """Run native login with loginId-scoped UI requests; secret input and trust confirmation require explicit capabilities."""
         params: dict[str, object] = {}
         params["providerId"] = provider_id
+        if allow_secret_input is not None:
+            params["allowSecretInput"] = allow_secret_input
+        if allow_trust_confirmation is not None:
+            params["allowTrustConfirmation"] = allow_trust_confirmation
         return required(expect_object(self._command("login", params, timeout=600), "login"), "providerId", decode_str, "login")
 
     def get_logout_accounts(self, provider_id: str) -> tuple[LogoutAccount, ...]:

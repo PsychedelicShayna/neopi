@@ -40,7 +40,7 @@ export default class Config extends Command {
 	};
 
 	static examples = [
-		`# NeoProxy accounts use the login command, not a stored password setting\n  ${APP_NAME} login neoproxy --url https://proxy.example.com`,
+		`# Store an administrator-assigned NeoProxy API key through the hidden login prompt\n  ${APP_NAME} login neoproxy --url https://proxy.example.com`,
 	];
 
 	async run(): Promise<void> {

@@ -1025,7 +1025,7 @@
 			},
 			{
 				"name": "login",
-				"doc": "Run OAuth login; the flow arrives as `open_url` and `input` UI requests.",
+				"doc": "Run native login with loginId-scoped UI requests; secret input and trust confirmation require explicit capabilities.",
 				"params": "LoginParams",
 				"result": "LoginResult",
 				"nullable": false,
@@ -8198,6 +8198,9 @@
 				},
 				"timeout": {
 					"type": "integer"
+				},
+				"loginId": {
+					"type": "string"
 				}
 			},
 			"required": [
@@ -8315,6 +8318,9 @@
 					"const": "cancel"
 				},
 				"targetId": {
+					"type": "string"
+				},
+				"loginId": {
 					"type": "string"
 				}
 			},
@@ -10702,6 +10708,12 @@
 			"properties": {
 				"providerId": {
 					"type": "string"
+				},
+				"allowSecretInput": {
+					"type": "boolean"
+				},
+				"allowTrustConfirmation": {
+					"type": "boolean"
 				}
 			},
 			"required": [

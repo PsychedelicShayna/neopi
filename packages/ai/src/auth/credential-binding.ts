@@ -18,7 +18,13 @@ export function fingerprintCredential(row: StoredAuthCredential, resolvedApiKey?
 					credential.enterpriseUrl ?? null,
 					credential.apiEndpoint ?? null,
 				]
-			: [createHash("sha256").update(resolvedApiKey!).digest("hex")];
+			: [
+					createHash("sha256").update(resolvedApiKey!).digest("hex"),
+					...(credential.tlsTrust !== undefined
+						? [[credential.tlsTrust.origin, credential.tlsTrust.caPem, credential.tlsTrust.caFingerprint256]]
+						: []),
+					...(credential.requestOrigin !== undefined ? [credential.requestOrigin] : []),
+				];
 	return createHash("sha256")
 		.update(JSON.stringify([row.provider, row.id, credential.type, identity]))
 		.digest("hex");

@@ -1049,9 +1049,13 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
 				if (req.method === "POST" && pathname === "/v1/credential") {
 					const parsed = await parseBody(req, credentialUploadRequestSchema);
 					if (!parsed.ok) return parsed.response;
-					const { provider, credential } = parsed.data;
+					const { provider, credential, replaceApiKeys } = parsed.data;
 					try {
-						const entries = await opts.storage.credentials.upsert(provider, credential);
+						const entries = await opts.storage.credentials.upsert(
+							provider,
+							credential,
+							replaceApiKeys ? { replaceApiKeys } : undefined,
+						);
 						const identity =
 							credential.type === "oauth"
 								? (credential.email ?? credential.accountId ?? credential.projectId ?? "(no identity)")

@@ -13,6 +13,7 @@ import type { AuthCredentialStore } from "../auth/store";
 import {
 	type AuthCredential,
 	type AuthCredentialSnapshotEntry,
+	type CredentialUpsertOptions,
 	type DisabledCredentialSummary,
 	type OAuthCredential,
 	type OAuthRefreshReason,
@@ -970,9 +971,16 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	 * snapshot, and the global snapshot is then refreshed in the background so
 	 * any concurrent peer (refresh, generation bump) stays in sync.
 	 */
-	async upsertAuthCredential(provider: string, credential: AuthCredential): Promise<StoredAuthCredential[]> {
+	async upsertAuthCredential(
+		provider: string,
+		credential: AuthCredential,
+		options?: CredentialUpsertOptions,
+	): Promise<StoredAuthCredential[]> {
 		this.#noteActivity();
-		const { entries } = await this.#client.uploadCredential(provider, credential);
+		const { entries } =
+			options === undefined
+				? await this.#client.uploadCredential(provider, credential)
+				: await this.#client.uploadCredential(provider, credential, undefined, options);
 		this.#applyProviderEntries(provider, entries);
 		this.#maybeRefreshSnapshot("upload");
 		return this.listAuthCredentials(provider);

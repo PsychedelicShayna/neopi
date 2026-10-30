@@ -2,7 +2,7 @@ import { untilAborted } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
 import { getProviderDefinition, PASTE_CODE_LOGIN_PROVIDERS } from "../registry";
 import { getOAuthProvider } from "../registry/oauth";
-import type { OAuthProviderId } from "../registry/oauth/types";
+import type { ApiKeyLoginResult, OAuthCredentials, OAuthProviderId } from "../registry/oauth/types";
 import { providerTypeKey } from "./blocks";
 import type { SessionAffinity } from "./affinity";
 import type { KeyOverrides } from "./cascade";
@@ -41,6 +41,10 @@ export interface OAuthAccountsDeps {
 	selector: CredentialSelector;
 	affinity: SessionAffinity;
 	refresher: OAuthRefresher;
+}
+
+function isApiKeyLoginResult(result: OAuthCredentials | ApiKeyLoginResult): result is ApiKeyLoginResult {
+	return "type" in result && result.type === "api_key";
 }
 
 /** OAuth login, per-account access resolution, and account listings. */
@@ -82,6 +86,7 @@ export class OAuthAccounts implements OAuthApi {
 			onAuth: ctrl.onAuth,
 			onProgress: ctrl.onProgress,
 			onPrompt: ctrl.onPrompt,
+			onConfirm: ctrl.onConfirm,
 			onManualCodeInput: ctrl.onManualCodeInput ?? manualCodeInput,
 			onBrowserSession: ctrl.onBrowserSession,
 			signal: ctrl.signal,
@@ -94,6 +99,13 @@ export class OAuthAccounts implements OAuthApi {
 				return undefined;
 			}
 			await this.#deps.pool.storeLoginApiKey(provider, result);
+			return { type: "api_key" };
+		}
+		if (isApiKeyLoginResult(result)) {
+			await this.#deps.pool.storeLoginApiKey(provider, result);
+			// Durable persistence starts the commit phase. Finish activation even if cancellation
+			// arrives now; the hook must not expose the new key to an old endpoint on failure.
+			await result.onPersisted?.();
 			return { type: "api_key" };
 		}
 		// Stamp the interactive-login instant: providers with an absolute grant

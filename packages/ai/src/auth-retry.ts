@@ -1,3 +1,4 @@
+import type { ProviderTlsTrust } from "@oh-my-pi/pi-utils";
 import { extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
 import type { LimitsApi, OAuthAccess, OAuthApi, OAuthRequestIdentity } from "./auth/types";
 import * as AIError from "./error";
@@ -42,6 +43,10 @@ export interface ResolvedApiKey {
 	apiKey: string;
 	/** Durable row id of the credential that supplied this bearer, when known. */
 	credentialId?: number;
+	/** Trust belongs to this exact stored API key, not the provider catalog or global process. */
+	tlsTrust?: ProviderTlsTrust;
+	/** Exact origin binding can also protect credentials for cleartext loopback. */
+	requestOrigin?: string;
 	/**
 	 * The OAuth access token behind this bearer, when the bearer came from a
 	 * stored OAuth credential. A provider whose API key wraps the token in a
@@ -328,7 +333,7 @@ async function runOAuthAttempt<T>(
  */
 export async function withAuth<T>(
 	key: ApiKey | undefined,
-	attempt: (key: string) => Promise<T>,
+	attempt: (key: string, resolved?: ResolvedApiKey) => Promise<T>,
 	opts?: { isAuthError?: (error: unknown) => boolean; signal?: AbortSignal; missingKeyMessage?: string },
 ): Promise<T> {
 	const isAuthError = opts?.isAuthError ?? isAuthRetryableError;
@@ -342,8 +347,11 @@ export async function withAuth<T>(
 	const resolver = key;
 	const signal = opts?.signal;
 	let initialKey: string | undefined;
+	let resolution: ApiKeyResolution;
 	try {
-		initialKey = await resolveApiKeyOnce(resolver, signal);
+		initialKey = await resolveApiKeyOnce(resolver, signal, resolved => {
+			resolution = resolved;
+		});
 	} catch (error) {
 		// A resolver that deliberately reports a missing key keeps that type.
 		if (error instanceof AIError.MissingApiKeyError) throw error;
@@ -359,17 +367,19 @@ export async function withAuth<T>(
 	const state = createAuthRetryKeyState(initialKey);
 	let lastError: unknown;
 	try {
-		return await attempt(initialKey);
+		return await attempt(initialKey, typeof resolution === "object" ? resolution : undefined);
 	} catch (error) {
 		if (!isAuthError(error)) throw error;
 		lastError = error;
 	}
 
 	while (true) {
-		const nextKey = await resolveNextAuthRetryKey(state, resolver, lastError, signal);
+		const nextKey = await resolveNextAuthRetryKey(state, resolver, lastError, signal, resolved => {
+			resolution = resolved;
+		});
 		if (nextKey === undefined) break;
 		try {
-			return await attempt(nextKey);
+			return await attempt(nextKey, typeof resolution === "object" ? resolution : undefined);
 		} catch (error) {
 			if (!isAuthError(error)) throw error;
 			lastError = error;

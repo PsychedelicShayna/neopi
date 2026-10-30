@@ -549,8 +549,8 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 	},
 	{
 		name: "login",
-		doc: "Run OAuth login; the flow arrives as `open_url` and `input` UI requests.",
-		params: { providerId: "string" },
+		doc: "Run native login with loginId-scoped UI requests; secret input and trust confirmation require explicit capabilities.",
+		params: { providerId: "string", "allowSecretInput?": "boolean", "allowTrustConfirmation?": "boolean" },
 		result: { providerId: "string" },
 		unwrap: "providerId",
 		timeoutMs: 600_000,

@@ -1,5 +1,5 @@
 import { authPolicyFor } from "@oh-my-pi/pi-catalog/compat/auth";
-import { $env, $envExact, logger } from "@oh-my-pi/pi-utils";
+import { $env, $envExact, logger, type CredentialRequestScope } from "@oh-my-pi/pi-utils";
 import { type ApiKeyResolver, createOAuthProvenance, markAfterSiblingWait, type ResolvedApiKey } from "../auth-retry";
 import { getEnvApiKey, getEnvApiKeyName } from "../env-api-key";
 import * as AIError from "../error";
@@ -334,15 +334,19 @@ export class KeyCascade implements KeysApi {
 		let credentialId: number | undefined;
 		let oauthIdentity: OAuthRequestIdentity | undefined;
 		let oauthAccess: string | undefined;
-		const apiKey = await this.#resolve(provider, sessionId, options, (id, identity, access) => {
+		let scope: CredentialRequestScope | undefined;
+		const apiKey = await this.#resolve(provider, sessionId, options, (id, identity, access, requestScope) => {
 			credentialId = id;
 			oauthIdentity = identity;
 			oauthAccess = access;
+			scope = requestScope;
 		});
 		if (apiKey === undefined) return undefined;
 		return {
 			apiKey,
 			credentialId,
+			...(scope?.tlsTrust !== undefined ? { tlsTrust: scope.tlsTrust } : {}),
+			...(scope?.requestOrigin !== undefined ? { requestOrigin: scope.requestOrigin } : {}),
 			...(oauthAccess ? { oauthAccess } : {}),
 			...(oauthIdentity ? { oauthIdentity } : {}),
 		};
@@ -464,7 +468,12 @@ export class KeyCascade implements KeysApi {
 		provider: string,
 		sessionId?: string,
 		options?: AuthApiKeyOptions,
-		onCredentialId?: (id: number, identity?: OAuthRequestIdentity, oauthAccess?: string) => void,
+		onCredentialId?: (
+			id: number,
+			identity?: OAuthRequestIdentity,
+			oauthAccess?: string,
+			scope?: CredentialRequestScope,
+		) => void,
 	): Promise<string | undefined> {
 		const restricted = this.#deps.affinity.isRestricted(provider, sessionId);
 		// Runtime override takes highest priority
@@ -530,7 +539,8 @@ export class KeyCascade implements KeysApi {
 				? this.#deps.pool.entries(provider)[loginApiKeySelection.index]?.id
 				: undefined;
 			const apiKey = await this.#deps.overrides.resolve(loginApiKeySelection.credential.key);
-			if (apiKey !== undefined && credentialId !== undefined) onCredentialId?.(credentialId);
+			if (apiKey !== undefined && credentialId !== undefined)
+				onCredentialId?.(credentialId, undefined, undefined, loginApiKeySelection.credential);
 			return apiKey;
 		}
 
@@ -556,7 +566,8 @@ export class KeyCascade implements KeysApi {
 			}
 			const credentialId = onCredentialId ? this.#deps.pool.entries(provider)[apiKeySelection.index]?.id : undefined;
 			const apiKey = await this.#deps.overrides.resolve(apiKeySelection.credential.key);
-			if (apiKey !== undefined && credentialId !== undefined) onCredentialId?.(credentialId);
+			if (apiKey !== undefined && credentialId !== undefined)
+				onCredentialId?.(credentialId, undefined, undefined, apiKeySelection.credential);
 			return apiKey;
 		}
 		if (oauthRefreshFailure) throw oauthRefreshFailure;

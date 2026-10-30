@@ -20,7 +20,9 @@ import {
 } from "@oh-my-pi/pi-utils";
 import type { AuthCredentialStore, CredentialRefreshLeaseFence, CredentialRefreshLeaseHolder } from "./store";
 import type {
+	ApiKeyCredential,
 	AuthCredential,
+	CredentialUpsertOptions,
 	DisabledCredentialSummary,
 	OAuthCredential,
 	StoredAuthCredential,
@@ -35,6 +37,8 @@ import type {
 	UsageHistoryEntry,
 	UsageHistoryQuery,
 } from "../usage";
+
+const REPLACED_CONNECTION_CAUSE = "replaced by explicit connection";
 
 // 5 min stale tolerance. Anthropic / OpenAI rate-limit /usage hard at the IP
 // level so we can't fetch all N credentials every cycle; with a long cache
@@ -139,7 +143,12 @@ function normalizeStoredIdentityKey(identityKey: string | null | undefined): str
 
 export function serializeCredential(provider: string, credential: AuthCredential): SerializedCredentialRecord | null {
 	if (credential.type === "api_key") {
-		const data = credential.source === "login" ? { key: credential.key, source: "login" } : { key: credential.key };
+		const data = {
+			key: credential.key,
+			...(credential.source === "login" ? { source: "login" } : {}),
+			...(credential.tlsTrust !== undefined ? { tlsTrust: credential.tlsTrust } : {}),
+			...(credential.requestOrigin !== undefined ? { requestOrigin: credential.requestOrigin } : {}),
+		};
 		return {
 			credentialType: "api_key",
 			data: JSON.stringify(data),
@@ -171,7 +180,17 @@ function deserializeCredential(row: AuthRow): AuthCredential | null {
 		const data = parsed as Record<string, unknown>;
 		if (typeof data.key === "string") {
 			const source = data.source === "login" ? "login" : undefined;
-			return source ? { type: "api_key", key: data.key, source } : { type: "api_key", key: data.key };
+			// Preserve explicit trust even when corrupt: request-time validation must fail closed,
+			// never silently turn a pinned credential into one using ambient roots.
+			return {
+				type: "api_key",
+				key: data.key,
+				...(source ? { source } : {}),
+				...(data.tlsTrust !== undefined ? { tlsTrust: data.tlsTrust as ApiKeyCredential["tlsTrust"] } : {}),
+				...(data.requestOrigin !== undefined
+					? { requestOrigin: data.requestOrigin as ApiKeyCredential["requestOrigin"] }
+					: {}),
+			};
 		}
 	}
 	if (row.credential_type === "oauth") {
@@ -407,6 +426,7 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	#listDisabledByProviderStmt: Statement;
 	#insertStmt: Statement;
 	#updateStmt: Statement;
+	#reactivateStmt: Statement;
 	#deleteStmt: Statement;
 	#deleteIfMatchesStmt: Statement;
 	#updateIfMatchesStmt: Statement;
@@ -473,6 +493,9 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		);
 		this.#updateStmt = this.#db.prepare(
 			`UPDATE auth_credentials SET credential_type = ?, data = ?, identity_key = ?, updated_at = ${SQLITE_NOW_EPOCH} WHERE id = ?`,
+		);
+		this.#reactivateStmt = this.#db.prepare(
+			`UPDATE auth_credentials SET credential_type = ?, data = ?, identity_key = ?, disabled_cause = NULL, updated_at = ${SQLITE_NOW_EPOCH} WHERE id = ?`,
 		);
 		this.#updateIfMatchesStmt = this.#db.prepare(
 			`UPDATE auth_credentials SET credential_type = ?, data = ?, identity_key = ?, updated_at = ${SQLITE_NOW_EPOCH} WHERE id = ? AND data = ? AND disabled_cause IS NULL`,
@@ -1394,7 +1417,13 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		return result;
 	}
 
-	async upsertAuthCredential(provider: string, credential: AuthCredential): Promise<StoredAuthCredential[]> {
+	async upsertAuthCredential(
+		provider: string,
+		credential: AuthCredential,
+		options?: CredentialUpsertOptions,
+	): Promise<StoredAuthCredential[]> {
+		if (options?.replaceApiKeys && credential.type !== "api_key")
+			throw new Error("Explicit connection replacement requires an API-key credential.");
 		const upsert = this.#db.transaction((providerName: string, item: AuthCredential) => {
 			const serialized = serializeCredential(providerName, item);
 			if (!serialized) return this.listAuthCredentials(providerName);
@@ -1421,7 +1450,27 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 					this.#updateStmt.run(serialized.credentialType, serialized.data, serialized.identityKey, row.id);
 					continue;
 				}
-				this.#deleteStmt.run("replaced by newer credential", row.id);
+				this.#deleteStmt.run(
+					options?.replaceApiKeys ? REPLACED_CONNECTION_CAUSE : "replaced by newer credential",
+					row.id,
+				);
+			}
+
+			if (targetId === null && options?.replaceApiKeys) {
+				// A deliberately re-entered, revalidated key can reactivate its original row.
+				const disabled = (this.#listDisabledByProviderStmt.all(providerName) as AuthRow[]).find(row => {
+					const previous = deserializeCredential(row);
+					return previous?.type === "api_key" && item.type === "api_key" && previous.key === item.key;
+				});
+				if (disabled) {
+					targetId = disabled.id;
+					this.#reactivateStmt.run(
+						serialized.credentialType,
+						serialized.data,
+						serialized.identityKey,
+						disabled.id,
+					);
+				}
 			}
 
 			if (targetId === null) {
@@ -1432,6 +1481,14 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 					serialized.identityKey,
 				) as { id?: number } | undefined;
 				targetId = row?.id ?? null;
+			}
+
+			if (options?.replaceApiKeys) {
+				for (const row of existing) {
+					if (row.id !== targetId && row.credential?.type === "api_key") {
+						this.#deleteStmt.run(REPLACED_CONNECTION_CAUSE, row.id);
+					}
+				}
 			}
 
 			const activeRows = this.#listActiveByProviderStmt.all(providerName) as AuthRow[];
@@ -1472,6 +1529,7 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 
 			const disabledRows = this.#listDisabledByProviderStmt.all(provider) as AuthRow[];
 			for (const row of disabledRows) {
+				if (row.disabled_cause === REPLACED_CONNECTION_CAUSE) continue;
 				if (hasActiveApiKey && row.credential_type === "api_key") {
 					this.#hardDeleteStmt.run(row.id);
 					continue;
@@ -2152,6 +2210,7 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		this.#listDisabledByProviderStmt.finalize();
 		this.#insertStmt.finalize();
 		this.#updateStmt.finalize();
+		this.#reactivateStmt.finalize();
 		this.#deleteStmt.finalize();
 		this.#deleteIfMatchesStmt.finalize();
 		this.#deleteByProviderStmt.finalize();

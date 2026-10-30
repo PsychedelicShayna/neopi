@@ -32,7 +32,7 @@ import {
 	runnerApiKind,
 } from "@oh-my-pi/pi-catalog/types";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
-import { isRecord } from "@oh-my-pi/pi-utils";
+import { isRecord, wrapFetchForCredentialScope } from "@oh-my-pi/pi-utils";
 import type { ProviderDiscovery } from "./models-config-schema";
 
 // Default cap on `max_tokens` for auto-discovered models that do not advertise
@@ -1123,16 +1123,16 @@ export async function discoverOpenAIModelsList(
 		providerConfig.discovery.type === "lm-studio"
 			? discoveryProbeTimeoutMs(baseUrl, 250, providerConfig.discovery.timeoutMs)
 			: (providerConfig.discovery.timeoutMs ?? REMOTE_DISCOVERY_TIMEOUT_MS);
-	const attempt = async (h: Record<string, string>) => {
+	const attempt = async (h: Record<string, string>, fetcher: FetchImpl = ctx.fetch) => {
 		const nativeMetadataPromise =
 			providerConfig.discovery.type === "lm-studio"
 				? withTimeoutSignal(timeoutMs, signal =>
-						fetchLmStudioNativeModelMetadata(baseUrl, ctx.fetch, { headers: h, signal }),
+						fetchLmStudioNativeModelMetadata(baseUrl, fetcher, { headers: h, signal }),
 					)
 				: Promise.resolve(null);
 		const [payload, nativeMetadata] = await Promise.all([
 			withTimeoutSignal(timeoutMs, async signal => {
-				const res = await ctx.fetch(modelsUrl, {
+				const res = await fetcher(modelsUrl, {
 					headers: h,
 					signal,
 				});
@@ -1168,7 +1168,12 @@ export async function discoverOpenAIModelsList(
 	};
 	const apiKey = await ctx.getBearerApiKeyResolver(providerConfig.provider);
 	const [payload, nativeMetadata] = apiKey
-		? await withAuth(apiKey, key => attempt({ ...baseHeaders, Authorization: `Bearer ${key}` }))
+		? await withAuth(apiKey, (key, resolved) =>
+				attempt(
+					{ ...baseHeaders, Authorization: `Bearer ${key}` },
+					wrapFetchForCredentialScope(ctx.fetch, resolved),
+				),
+			)
 		: await attempt(baseHeaders);
 	const models = payload.data ?? [];
 	const references = getBundledModelReferenceIndex();
@@ -1330,10 +1335,10 @@ export async function discoverLiteLLMModels(
 	const resolveReference = (id: string) => resolveModelReference(id, references) as ModelSpec<Api> | undefined;
 	const baseHeaders: Record<string, string> = { ...providerConfig.headers };
 	const timeoutMs = providerConfig.discovery.timeoutMs ?? 10_000;
-	const attempt = async (h: Record<string, string>) => {
+	const attempt = async (h: Record<string, string>, fetcher: FetchImpl = ctx.fetch) => {
 		let authError: DiscoveryHttpError | undefined;
 		const authAwareFetch: FetchImpl = async (input, init) => {
-			const response = await ctx.fetch(input, init);
+			const response = await fetcher(input, init);
 			if (response.status === 401) {
 				authError = new DiscoveryHttpError(response.status, String(input));
 			}
@@ -1360,7 +1365,12 @@ export async function discoverLiteLLMModels(
 	let richModels: ModelSpec<Api>[] | null;
 	try {
 		richModels = apiKey
-			? await withAuth(apiKey, key => attempt({ ...baseHeaders, Authorization: `Bearer ${key}` }))
+			? await withAuth(apiKey, (key, resolved) =>
+					attempt(
+						{ ...baseHeaders, Authorization: `Bearer ${key}` },
+						wrapFetchForCredentialScope(ctx.fetch, resolved),
+					),
+				)
 			: await attempt(baseHeaders);
 	} catch {
 		// The rich-metadata probes failed (auth, timeout, or network). The cheap
@@ -1400,9 +1410,9 @@ export async function discoverProxyModels(
 
 	const baseHeaders: Record<string, string> = { ...providerConfig.headers };
 	const timeoutMs = providerConfig.discovery.timeoutMs ?? 10_000;
-	const attempt = async (h: Record<string, string>) =>
+	const attempt = async (h: Record<string, string>, fetcher: FetchImpl = ctx.fetch) =>
 		withTimeoutSignal(timeoutMs, async signal => {
-			const res = await ctx.fetch(modelsUrl, {
+			const res = await fetcher(modelsUrl, {
 				headers: h,
 				signal,
 			});
@@ -1424,7 +1434,12 @@ export async function discoverProxyModels(
 		});
 	const apiKey = await ctx.getBearerApiKeyResolver(providerConfig.provider);
 	const payload = apiKey
-		? await withAuth(apiKey, key => attempt({ ...baseHeaders, Authorization: `Bearer ${key}` }))
+		? await withAuth(apiKey, (key, resolved) =>
+				attempt(
+					{ ...baseHeaders, Authorization: `Bearer ${key}` },
+					wrapFetchForCredentialScope(ctx.fetch, resolved),
+				),
+			)
 		: await attempt(baseHeaders);
 	const items = payload.data ?? [];
 	const discovered: Model<Api>[] = [];
