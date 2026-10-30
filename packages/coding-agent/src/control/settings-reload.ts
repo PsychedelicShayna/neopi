@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { getProjectAgentDir } from "@oh-my-pi/pi-utils";
 import { ControlClient } from "./client";
 import { readControlEntries } from "./registry";
 
@@ -10,13 +11,17 @@ export interface SettingsReloadResult {
 	unsupported: number;
 }
 
-/** Resolve aliases without requiring the project directory to still exist. */
+/** Resolve the native settings directory using the loader's cwd-local scope rule. */
 export async function settingsProjectPath(projectDir: string): Promise<string> {
-	const absolute = path.resolve(projectDir);
+	const absolute = path.resolve(getProjectAgentDir(projectDir));
 	try {
 		return await fs.realpath(absolute);
 	} catch {
-		return absolute;
+		try {
+			return path.join(await fs.realpath(path.dirname(absolute)), path.basename(absolute));
+		} catch {
+			return absolute;
+		}
 	}
 }
 
@@ -37,7 +42,7 @@ export async function broadcastSettingsReload(
 			const client = new ControlClient({ metadata: meta, label: "settings-apply", timeoutMs: 750 });
 			try {
 				await client.connect();
-				const response = await client.request({ type: "reload_settings", scope, projectDir: project });
+				const response = await client.request({ type: "reload_settings", scope, projectDir });
 				if (
 					!response.success &&
 					(response.code === "unknown_command" ||

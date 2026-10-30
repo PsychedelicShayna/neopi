@@ -29,11 +29,13 @@ On Linux and macOS, configured `XDG_DATA_HOME`, `XDG_STATE_HOME`, and `XDG_CACHE
 
 Native project settings are intentionally scoped to the process working directory's `.omp/` folder — settings discovery does **not** walk ancestor directories looking for the nearest `.omp/`. Other discovery providers (Claude, Codex, Gemini, Cursor, OpenCode) can also contribute project-level settings from their own files; those are read-only from `omp` settings commands and can be turned off by provider id (see [Provider and source disabling](#provider-and-source-disabling)).
 
+Project Apply uses that same cwd-local rule: it compares resolved `.omp` settings directories, not raw cwd strings. Sessions started in a subfolder do not load their parent's native project settings and therefore are not targeted by Apply for that parent. A sibling project is separate too; aliases resolving to the same settings directory are equivalent.
+
 ### Live synchronization
 
 Long-lived interactive and RPC sessions reload global and project settings when their files change. Directory watches survive atomic file replacement; a one-second metadata check catches dropped notifications, retries failed watches, and re-arms watches when a directory is replaced. Invalid edits keep that layer's last good values while other valid layers continue updating.
 
-Control clients can request an immediate durable refresh with `reload_settings`, using `scope: "global"` or `scope: "project"` with `projectDir`. Project requests apply only when the receiver's current directory matches that canonical project path. `broadcastSettingsReload(scope, projectDir?)` notifies other published sessions concurrently and returns `{ notified, failed, unsupported }`; unresponsive targets have short connection/request timeouts. Old binaries that reject this command count as unsupported and need restarting on an updated build. A session-only apply never broadcasts. Each receiver reads its own profile from disk; global Apply does not copy settings between profiles.
+Control clients can request an immediate durable refresh with `reload_settings`, using `scope: "global"` or `scope: "project"` with `projectDir`. Project requests apply only when the receiver loads the same resolved native project settings directory. `broadcastSettingsReload(scope, projectDir?)` notifies other published sessions concurrently and returns `{ notified, failed, unsupported }`; unresponsive targets have short connection/request timeouts. Old binaries that reject this command count as unsupported and need restarting on an updated build. A session-only apply never broadcasts. Each receiver reads its own profile from disk; global Apply does not copy settings between profiles.
 
 Reloading preserves higher-precedence project, CLI, and session/runtime overrides. A global change hidden by one of those overrides is not a missed notification.
 
