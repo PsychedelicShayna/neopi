@@ -413,7 +413,9 @@ describe("single-instance menus", () => {
 		const themes = Promise.resolve(["dark"]);
 		spyOn(themeModule, "getAvailableThemes").mockReturnValue(themes);
 		const broadcast = spyOn(settingsReload, "broadcastSettingsReload").mockResolvedValue({
-			notified: 2, unsupported: 1, failed: 1,
+			notified: 2,
+			unsupported: 1,
+			failed: 1,
 		});
 		let callbacks: settingsSelector.SettingsCallbacks | undefined;
 		spyOn(settingsSelector, "SettingsSelectorComponent").mockImplementation(function (...args: unknown[]) {

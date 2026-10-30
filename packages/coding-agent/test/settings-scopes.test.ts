@@ -12,7 +12,9 @@ beforeEach(async () => {
 	root = `/mnt/alias/m2/agents/scratch/scoped-settings/test-${crypto.randomUUID()}`;
 	await fs.mkdir(root, { recursive: true });
 });
-afterEach(async () => { await fs.rm(root, { recursive: true, force: true }); });
+afterEach(async () => {
+	await fs.rm(root, { recursive: true, force: true });
+});
 
 async function sessionSettings(cwd = path.join(root, "project")): Promise<Settings> {
 	await fs.mkdir(cwd, { recursive: true });
@@ -32,6 +34,14 @@ describe("settings scopes", () => {
 		expect(cfgSettingsDefaultScope.get(settings)).toBe("project");
 		await settings.clearScope("project");
 		expect(cfgSettingsDefaultScope.get(settings)).toBe("global");
+	});
+
+	it("keeps session overrides while reloading another working directory", async () => {
+		const settings = Settings.isolated();
+		settings.writeScopeValue(cfgAutoResume, true, "session");
+		await settings.reloadForCwd(path.join(root, "elsewhere"));
+		expect(cfgAutoResume.get(settings)).toBe(true);
+		expect(cfgAutoResume.provenance(settings)).toBe("session");
 	});
 
 	it("persists beside the session and resumes from a different cwd", async () => {
@@ -54,12 +64,20 @@ describe("settings scopes", () => {
 		host.set("settings.defaultScope", "global");
 		expect(cfgSettingsDefaultScope.get(settings)).toBe("session");
 		expect(settings.getScopeDetails(cfgSettingsDefaultScope, "global")).toEqual({
-			global: "global", project: "project", session: "session", effective: "session", winner: "session", shadowed: true,
+			global: "global",
+			project: "project",
+			session: "session",
+			effective: "session",
+			winner: "session",
+			shadowed: true,
 		});
 		expect(host.details?.("settings.defaultScope").description).toContain("Shadowed by session");
-		host.cycleScope?.(); expect(host.scope).toBe("project");
-		host.cycleScope?.(); expect(host.scope).toBe("session");
-		host.cycleScope?.(); expect(host.scope).toBe("global");
+		host.cycleScope?.();
+		expect(host.scope).toBe("project");
+		host.cycleScope?.();
+		expect(host.scope).toBe("session");
+		host.cycleScope?.();
+		expect(host.scope).toBe("global");
 	});
 
 	it("model role writes to lower scopes do not override a session selection", () => {
@@ -79,24 +97,52 @@ describe("session settings quit prompt", () => {
 		settings.writeScopeValue(cfgAutoResume, true, "session");
 		let choices: readonly string[] = [];
 		let ensured = false;
-		expect(await settleSessionSettingsOnQuit(settings, async options => { choices = options; return undefined; },
-			async () => { ensured = true; })).toBe(true);
+		expect(
+			await settleSessionSettingsOnQuit(
+				settings,
+				async options => {
+					choices = options;
+					return undefined;
+				},
+				async () => {
+					ensured = true;
+				},
+			),
+		).toBe(true);
 		expect(choices).toEqual(SESSION_SETTINGS_QUIT_CHOICES);
 		expect(ensured).toBe(true);
 		expect(cfgAutoResume.get(await sessionSettings())).toBe(true);
 		settings.writeScopeValue(cfgAutoResume, false, "session");
-		expect(await settleSessionSettingsOnQuit(settings, async () => SESSION_SETTINGS_QUIT_CHOICES[3], async () => {})).toBe(false);
+		expect(
+			await settleSessionSettingsOnQuit(
+				settings,
+				async () => SESSION_SETTINGS_QUIT_CHOICES[3],
+				async () => {},
+			),
+		).toBe(false);
 		expect(settings.hasUnsavedSessionSettings).toBe(true);
 	});
 
 	it("project saves to the current project and discard removes session overrides", async () => {
 		const settings = await sessionSettings();
 		settings.writeScopeValue(cfgAutoResume, true, "session");
-		expect(await settleSessionSettingsOnQuit(settings, async () => SESSION_SETTINGS_QUIT_CHOICES[1], async () => {})).toBe(true);
+		expect(
+			await settleSessionSettingsOnQuit(
+				settings,
+				async () => SESSION_SETTINGS_QUIT_CHOICES[1],
+				async () => {},
+			),
+		).toBe(true);
 		expect(settings.readScopeValue(cfgAutoResume, "project")).toBe(true);
 		expect(settings.readScopeValue(cfgAutoResume, "session")).toBeUndefined();
 		settings.writeScopeValue(cfgAutoResume, false, "session");
-		expect(await settleSessionSettingsOnQuit(settings, async () => SESSION_SETTINGS_QUIT_CHOICES[2], async () => {})).toBe(true);
+		expect(
+			await settleSessionSettingsOnQuit(
+				settings,
+				async () => SESSION_SETTINGS_QUIT_CHOICES[2],
+				async () => {},
+			),
+		).toBe(true);
 		expect(settings.readScopeValue(cfgAutoResume, "session")).toBeUndefined();
 	});
 });

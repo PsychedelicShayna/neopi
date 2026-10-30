@@ -2005,6 +2005,7 @@ export class Settings {
 				globalToml: this.#globalToml,
 				projectToml: project?.toml ?? this.#projectToml,
 				configOverlay: this.#configOverlay,
+				session: this.#session,
 				overrides:
 					this.#savedRuntimeModelRoleOverrides.size === 0 ? this.#overrides : this.#buildOriginalOverrides(),
 			};
