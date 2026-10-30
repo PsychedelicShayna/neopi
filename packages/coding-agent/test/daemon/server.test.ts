@@ -13,6 +13,8 @@ import { SessionDaemon } from "../../src/daemon/server";
 const FAKE_RPC_UI = `
 const out = f => process.stdout.write(JSON.stringify(f) + "\\n");
 const journal = [];
+const answers = [];
+const stateIds = [];
 let live = null;
 out({ type: "ready", protocolVersion: 1, supportedProtocolVersions: [1, 2], capabilities: [] });
 let buf = "";
@@ -24,12 +26,20 @@ process.stdin.on("data", async chunk => {
 		if (!line.trim()) continue;
 		const cmd = JSON.parse(line);
 		const ok = data => out({ type: "response", id: cmd.id, command: cmd.type, success: true, data });
+		if (cmd.type === "extension_ui_response") { answers.push(cmd); continue; }
+		if (cmd.type === "ask") {
+			ok();
+			out({ type: "extension_ui_request", id: "q1", method: "confirm", title: "proceed?" });
+			continue;
+		}
+		if (cmd.type === "dump") { ok({ answers, stateIds }); continue; }
+		if (cmd.type === "get_state") stateIds.push(cmd.id);
 		if (cmd.type === "snapshot_session_journal") {
 			out({ type: "journal_state", reason: "snapshot", entries: journal.slice() });
 			if (live !== null) out({ type: "message_start", snapshot: true, message: { text: live } });
 			ok({ entries: journal.length });
 		} else if (cmd.type === "get_state") {
-			ok({ model: { provider: "mock", id: "m1" }, sessionName: "fake " + process.pid, isStreaming: live !== null });
+			ok({ model: { provider: "mock", id: "m1" }, sessionName: "fake " + process.pid, isStreaming: live !== null, marker: cmd.marker });
 		} else if (cmd.type === "negotiate_protocol") {
 			ok({ protocolVersion: 2 });
 		} else if (cmd.type === "prompt") {
@@ -172,5 +182,76 @@ describe("SessionDaemon", () => {
 		const second = new SessionDaemon({ dir: tmp });
 		expect(await second.start()).toBe(false);
 		expect(await (await connect(d)).list()).toEqual([]);
+	});
+
+	it("first answer wins through the socket; a second answer gets already_answered and others get the cancel", async () => {
+		const d = await start();
+		const a = await connect(d);
+		const { id } = await a.create(tmp);
+		const aFrames = collect(a);
+		await a.attach(id);
+		const b = await connect(d);
+		const bFrames = collect(b);
+		await b.attach(id);
+
+		await a.request({ type: "ask" });
+		const isAsk = (f: Record<string, unknown>) => f.type === "extension_ui_request" && f.id === "q1";
+		await until(() => aFrames.some(isAsk) && bFrames.some(isAsk));
+
+		a.send({ type: "extension_ui_response", id: "q1", confirmed: true });
+		const isCancel = (f: Record<string, unknown>) =>
+			f.type === "extension_ui_request" && f.method === "cancel" && f.targetId === "q1";
+		await until(() => bFrames.some(isCancel));
+		expect(aFrames.some(isCancel)).toBe(false);
+
+		b.send({ type: "extension_ui_response", id: "q1", confirmed: false });
+		await until(() => bFrames.some(f => f.type === "response" && f.code === "already_answered"));
+
+		const dump = (await a.request({ type: "dump" })) as { answers: { id: string; confirmed: boolean }[] };
+		expect(dump.answers).toHaveLength(1);
+		expect(dump.answers[0]!.confirmed).toBe(true);
+		expect(dump.answers[0]!.id).toBe("q1");
+	});
+
+	it("routes colliding client request ids back to the connection that asked", async () => {
+		const d = await start();
+		const a = await connect(d);
+		const { id } = await a.create(tmp);
+		const aFrames = collect(a);
+		await a.attach(id);
+		const b = await connect(d);
+		const bFrames = collect(b);
+		await b.attach(id);
+
+		a.send({ type: "get_state", id: "1", marker: "from-a" });
+		b.send({ type: "get_state", id: "1", marker: "from-b" });
+		const stateResponses = (frames: Record<string, unknown>[]) =>
+			frames.filter(f => f.type === "response" && f.command === "get_state");
+		await until(() => stateResponses(aFrames).length >= 1 && stateResponses(bFrames).length >= 1);
+		await Bun.sleep(200);
+		const markers = (frames: Record<string, unknown>[]) =>
+			stateResponses(frames).map(f => (f.data as { marker: string }).marker);
+		expect(stateResponses(aFrames).map(f => f.id)).toEqual(["1"]);
+		expect(stateResponses(bFrames).map(f => f.id)).toEqual(["1"]);
+		expect(markers(aFrames)).toEqual(["from-a"]);
+		expect(markers(bFrames)).toEqual(["from-b"]);
+
+		const dump = (await a.request({ type: "dump" })) as { stateIds: string[] };
+		const seen = dump.stateIds.slice(-2);
+		expect(new Set(seen).size).toBe(2);
+		expect(seen.includes("1")).toBe(false);
+	});
+
+	it("shows a late attacher an interaction that is still open", async () => {
+		const d = await start();
+		const a = await connect(d);
+		const { id } = await a.create(tmp);
+		collect(a);
+		await a.attach(id);
+		await a.request({ type: "ask" });
+		const c = await connect(d);
+		const cFrames = collect(c);
+		await c.attach(id);
+		await until(() => cFrames.some(f => f.type === "extension_ui_request" && f.id === "q1"));
 	});
 });
