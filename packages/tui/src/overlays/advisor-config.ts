@@ -100,8 +100,8 @@ export interface AdvisorConfig {
 	scope?: AdvisorSessionScope;
 }
 
-/** Which level a `WATCHDOG.yml` lives at: the project root or the user agent dir. */
-export type AdvisorConfigScope = "project" | "user";
+/** The exact storage layer of an advisor roster. */
+export type AdvisorConfigScope = "project" | "project-omp" | "user" | "session";
 
 /** Editable raw contents of one `WATCHDOG.yml`, without cross-level merging or `@import` expansion, for exact round trips. */
 export interface WatchdogConfigDoc {
@@ -164,6 +164,13 @@ export interface AdvisorConfigCallbacks {
 		provider: string,
 		sessionId: string | undefined,
 	) => ((report: UsageReport, limit: UsageLimit) => boolean) | undefined;
+	/** Copy the complete configured prompt using the host clipboard helper. */
+	copyPrompt?: (prompt: string) => void | Promise<void>;
+	/** Persist an independent copy into another exact source file. */
+	copyAdvisor?: (advisor: AdvisorConfig, targetPath: string) => Promise<void>;
+	/** Sources available to copy and generation pickers, including absent scope files. */
+	getSources?: () => Promise<readonly { path: string; scope: AdvisorConfigScope; doc: WatchdogConfigDoc }[]>;
+	generateAdvisor?: (bases: readonly AdvisorConfig[], comment: string, signal: AbortSignal) => Promise<AdvisorConfig>;
 }
 
 export interface AdvisorConfigDeps {
@@ -181,7 +188,7 @@ export interface AdvisorConfigDeps {
 	/** Exact file selected by the scope-first parent; disables the old two-scope switch. */
 	filePath?: string;
 	/** Resolved files edited by each scope, including WATCHDOG.yaml when present. */
-	configFiles?: Record<AdvisorConfigScope, string>;
+	configFiles?: Partial<Record<AdvisorConfigScope, string>>;
 }
 
 /**
@@ -196,6 +203,18 @@ export function slugifyAdvisorName(name: string): string {
 		.replace(/[^a-z0-9]+/g, "-")
 		.replace(/^-+|-+$/g, "");
 	return slug || "advisor";
+}
+
+/** Independent copy: never retain discovery metadata or the source's persistent ID. */
+export function cloneAdvisorConfig(advisor: AdvisorConfig, existing: readonly AdvisorConfig[]): AdvisorConfig {
+	const copy = structuredClone(advisor);
+	copy.id = crypto.randomUUID();
+	delete copy.sourceScope;
+	const base = `${copy.name} (copy)`;
+	const slugs = new Set(existing.map(entry => slugifyAdvisorName(entry.name)));
+	copy.name = base;
+	for (let suffix = 2; slugs.has(slugifyAdvisorName(copy.name)); suffix++) copy.name = `${base} ${suffix}`;
+	return copy;
 }
 
 const PREVIEW_WIDTH = 60;
@@ -344,7 +363,11 @@ type Screen =
 	| "review-interval"
 	| "sync-backlog"
 	| "instructions"
-	| "systemPrompt";
+	| "systemPrompt"
+	| "copy-target"
+	| "generate-bases"
+	| "generate-comment"
+	| "generating";
 
 interface AdvisorNavigationContext {
 	screen: Screen;
@@ -392,6 +415,9 @@ function screenHints(screen: Screen): (NativeHint | undefined)[] {
 				actionHint("tui.select.cancel", "back"),
 			];
 		case "delete-confirm":
+		case "copy-target":
+		case "generate-bases":
+		case "generating":
 			return [actionHint("tui.select.confirm", "choose"), actionHint("tui.select.cancel", "cancel")];
 		case "name":
 			return [actionHint("tui.input.submit", "save"), actionHint("tui.select.cancel", "cancel")];
@@ -414,6 +440,7 @@ function screenHints(screen: Screen): (NativeHint | undefined)[] {
 				actionHint("tui.select.cancel", "apply"),
 			];
 		case "instructions":
+		case "generate-comment":
 		case "systemPrompt":
 			return [];
 	}
@@ -466,6 +493,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 	#pendingOperations = 0;
 	#scopeLoadRevision = 0;
 	#previewFocused = false;
+	#generationAbort: AbortController | undefined;
 	#previewRowsLast = 1;
 	#previewWidthLast = 1;
 	#previewLayoutDirty = true;
@@ -1601,6 +1629,8 @@ export class AdvisorConfigOverlayComponent implements Component {
 			});
 		}
 		items.push({ value: "add", label: "+ Add advisor" });
+		if (this.#cb.generateAdvisor && this.#cb.getSources)
+			items.push({ value: "generate", label: "+ Generate from existing advisors…" });
 		items.push({
 			value: "shared",
 			label: "Shared instructions",
@@ -1671,6 +1701,10 @@ export class AdvisorConfigOverlayComponent implements Component {
 			this.#doc.advisors.push({ id: crypto.randomUUID(), name: `Advisor ${this.#doc.advisors.length + 1}` });
 			this.#dirty = true;
 			this.#showDetail(this.#doc.advisors.length - 1);
+			return;
+		}
+		if (value === "generate") {
+			await this.#showGenerationBases();
 			return;
 		}
 		if (value === "shared") {
@@ -1829,6 +1863,11 @@ export class AdvisorConfigOverlayComponent implements Component {
 				description:
 					advisor.systemPrompt === undefined ? "(bundled default)" : previewLineOrNone(advisor.systemPrompt),
 			},
+			{ value: "duplicate", label: "Duplicate advisor", description: "New name and identity in this file" },
+			...(this.#cb.copyAdvisor && this.#cb.getSources
+				? [{ value: "copy", label: "Copy to another scope…" }]
+				: []),
+			...(this.#cb.copyPrompt ? [{ value: "copyPrompt", label: "Copy full prompt" }] : []),
 			{ value: "back", label: "Back" },
 		);
 		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme(), { search: "always" });
@@ -1859,14 +1898,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 	}
 
 	#cloneAdvisor(index: number): void {
-		const advisor = structuredClone(this.#doc.advisors[index]);
-		advisor.id = crypto.randomUUID();
-		const base = `${advisor.name} (copy)`;
-		const existingSlugs = new Set(this.#doc.advisors.map(entry => slugifyAdvisorName(entry.name)));
-		advisor.name = base;
-		for (let suffix = 2; existingSlugs.has(slugifyAdvisorName(advisor.name)); suffix++) {
-			advisor.name = `${base} ${suffix}`;
-		}
+		const advisor = cloneAdvisorConfig(this.#doc.advisors[index], this.#doc.advisors);
 		this.#previousNavigationSnapshot = this.navigationSnapshot();
 		this.#doc.advisors.splice(index + 1, 0, advisor);
 		this.#dirty = true;
@@ -1907,6 +1939,25 @@ export class AdvisorConfigOverlayComponent implements Component {
 		// Editors opened straight from the prefs page edit this advisor too.
 		this.#detailIndex = index;
 		switch (field) {
+			case "duplicate":
+				this.#cloneAdvisor(index);
+				return;
+			case "copy":
+				void this.#showCopyTargets(index).catch(error => this.#cb.notify(String(error)));
+				return;
+			case "copyPrompt": {
+				const advisor = this.#doc.advisors[index];
+				const prompt = [
+					advisor.systemPrompt ?? this.#deps.getDefaultSystemPrompt(advisor, this.#doc),
+					this.#doc.instructions,
+					advisor.instructions,
+				].filter(Boolean).join("\n\n");
+				void Promise.resolve(this.#cb.copyPrompt?.(prompt)).then(
+					() => this.#cb.notify(`Copied ${advisor.name}'s prompt`),
+					error => this.#cb.notify(`Could not copy prompt: ${String(error)}`),
+				);
+				return;
+			}
 			case "toggleEnabled": {
 				const a = this.#doc.advisors[index];
 				a.enabled = a.enabled === false ? undefined : false;
@@ -1953,6 +2004,92 @@ export class AdvisorConfigOverlayComponent implements Component {
 			default:
 				this.#showList();
 		}
+	}
+
+	async #showCopyTargets(index: number): Promise<void> {
+		const sources = await this.#cb.getSources?.();
+		if (!sources) return;
+		const items: SelectItem[] = sources.filter(source => source.path !== this.#deps.filePath).map(source => ({
+			value: source.path,
+			label: source.scope,
+			description: shortenPath(source.path),
+		}));
+		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme(), { search: "always" });
+		list.onSelect = item => {
+			const advisor = this.#doc.advisors[index];
+			void this.#cb.copyAdvisor?.(advisor, item.value).then(
+				() => { this.#pendingApply = true; this.#cb.notify(`Copied ${advisor.name} to ${shortenPath(item.value)}`); this.#showDetail(index); },
+				error => this.#cb.notify(`Could not copy advisor: ${String(error)}`),
+			);
+		};
+		list.onCancel = () => this.#showDetail(index);
+		this.#setScreen("copy-target", list, "Enter copy · Esc back");
+	}
+
+	async #showGenerationBases(): Promise<void> {
+		const sources = await this.#cb.getSources?.();
+		if (!sources) return;
+		const bases = sources.flatMap(source => source.doc.advisors.map(config => ({ path: source.path, config })));
+		const selected = new Set<number>();
+		const show = (cursor = 0): void => {
+			const items: SelectItem[] = bases.map((base, index) => ({
+				value: String(index),
+				label: `${selected.has(index) ? "[x]" : "[ ]"} ${base.config.name}`,
+				description: shortenPath(base.path),
+			}));
+			items.push({ value: "generate", label: "Generate from selected advisors…" });
+			const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme(), { search: "always" });
+			list.setSelectedIndex(cursor);
+			list.onSelect = item => {
+				if (item.value === "generate") {
+					if (!selected.size) { this.#cb.notify("Choose at least one advisor"); return; }
+					this.#showGenerationComment([...selected].map(index => bases[index].config));
+					return;
+				}
+				const index = Number(item.value);
+				if (selected.has(index)) selected.delete(index); else selected.add(index);
+				show(index);
+			};
+			list.onCancel = () => this.#showList("generate");
+			this.#setScreen("generate-bases", list, "Space/Enter select bases · Generate from selected · Esc back");
+		};
+		show();
+	}
+
+	#showGenerationComment(bases: readonly AdvisorConfig[]): void {
+		const editor = new HookEditorComponent(
+			this.#tui, "Describe the new advisor", "",
+			comment => this.#generateAdvisor(bases, comment),
+			() => this.#showList("generate"),
+			{ externalEditor: this.#deps.externalEditor, menuHistory: true },
+		);
+		this.#setScreen("generate-comment", editor, "");
+	}
+
+	#generateAdvisor(bases: readonly AdvisorConfig[], comment: string): void {
+		this.#generationAbort?.abort();
+		const abort = new AbortController();
+		this.#generationAbort = abort;
+		const cancel = new SelectList([{ value: "cancel", label: "Generating advisor… Esc cancels" }], 1, getSelectListTheme());
+		cancel.onCancel = cancel.onSelect = () => { abort.abort(); this.#showList("generate"); };
+		this.#setScreen("generating", cancel, "Esc cancel");
+		void this.#cb.generateAdvisor?.(bases, comment, abort.signal).then(
+			advisor => {
+				if (abort.signal.aborted) return;
+				advisor.id = crypto.randomUUID();
+				const baseName = advisor.name;
+				for (let suffix = 2; this.#doc.advisors.some(entry => slugifyAdvisorName(entry.name) === slugifyAdvisorName(advisor.name)); suffix++)
+					advisor.name = `${baseName} ${suffix}`;
+				this.#doc.advisors.push(advisor);
+				this.#dirty = true;
+				this.#showDetail(this.#doc.advisors.length - 1);
+			},
+			error => {
+				if (abort.signal.aborted) return;
+				this.#cb.notify(`Could not generate advisor: ${String(error)}`);
+				this.#showList("generate");
+			},
+		);
 	}
 
 	#showNameEditor(index: number): void {
@@ -2266,6 +2403,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 	}
 
 	dispose(): void {
+		this.#generationAbort?.abort();
 		this.#scopeLoadRevision++;
 		this.#active.dispose?.();
 	}
@@ -2306,7 +2444,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 	restoreNavigation(snapshot: unknown): void {
 		if (!snapshot || typeof snapshot !== "object") return;
 		const state = snapshot as AdvisorNavigationSnapshot;
-		if (!state.context || !state.doc || !state.docOwner || (state.scope !== "project" && state.scope !== "user"))
+		if (!state.context || !state.doc || !state.docOwner || !["project", "project-omp", "user", "session"].includes(state.scope))
 			return;
 		this.#restoringNavigation = true;
 		this.#scopeLoadRevision++;
@@ -2367,6 +2505,14 @@ export class AdvisorConfigOverlayComponent implements Component {
 					break;
 				case "systemPrompt":
 					this.#showSystemPromptEditor(state.context.index);
+					break;
+				case "copy-target":
+					this.#showDetail(state.context.index);
+					break;
+				case "generate-bases":
+				case "generate-comment":
+				case "generating":
+					this.#showList("generate");
 					break;
 			}
 			if (this.#active instanceof Input && state.content && typeof state.content === "object") {
