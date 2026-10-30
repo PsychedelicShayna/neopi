@@ -93,6 +93,7 @@ export const MODEL_ROLES: Record<ModelRole, ModelRoleInfo> = {
 	issues: { tag: "ISSUES", name: "Issue filing", color: "muted", section: "chat", accepts: acceptsChat },
 	// NeoDeck classifies inbox items and chooses where they go.
 	"deck-inbox": { tag: "INBOX", name: "Deck inbox", color: "muted", section: "chat", accepts: acceptsChat },
+	widget: { tag: "WIDGET", name: "Job widgets", color: "dim", section: "chat", accepts: acceptsChat },
 	image: {
 		tag: "IMAGE",
 		name: "Image generation",
@@ -141,6 +142,7 @@ const ROLE_DESCRIPTIONS: Record<ModelRole, string> = {
 	prose: "Default model for prose chains.",
 	issues: "Drafts and files issues through /issue.",
 	"deck-inbox": "Classifies NeoDeck inbox items and chooses their destination.",
+	widget: "Creates live progress widgets for background jobs.",
 	image: "Generates and edits images.",
 	web: "Searches the web.",
 	speech: "Reads text aloud.",

@@ -32,6 +32,8 @@ import {
 	isFeedModelBadgeEnabled,
 	pluralize,
 	previewLine,
+	clipCollapsed,
+	flattenLine,
 	previewWindowRows,
 	replaceTabs,
 	shortenEmbeddedPaths,
@@ -47,13 +49,13 @@ import { formatOutputInline, renderJsonTreeLines } from "./json-tree";
 import { repairDoubleEncodedJsonString } from "./task-repair-args";
 import { getSubprocessToolRenderer } from "./subprocess";
 import { assembleYieldResult, type YieldSectionShapes } from "./task-yield-assembly";
-import type { TspAgentProps, TspTone } from "@oh-my-pi/pi-wire";
-import { compact, kv, md, node, span, text } from "../native/describe";
+import type { TspAgentProps, TspProps, TspTone } from "@oh-my-pi/pi-wire";
+import { compact, kv, md, node, propNode, span, text } from "../native/describe";
 import type { NativeNode } from "../native/node";
 import { OwnerMemo, sameItems } from "../native/memo";
 import { plainText } from "../native/spans";
 import { errorText, noteText, resultText } from "./native-view";
-import { describeJsonTree } from "./json-tree";
+import { describeJsonValue } from "./json-tree";
 import { taskSummary } from "../overlays/agent-hub-renderer";
 import type { NativeToolView, ToolRenderResult } from "./renderer";
 
@@ -352,7 +354,7 @@ function renderOutputSection(
 		lines.push(
 			`${continuePrefix}  ${theme.fg("warning", theme.status.warning)} ${theme.fg(
 				"dim",
-				truncateToWidth(sanitizeText(warning), 80),
+				clipCollapsed(sanitizeText(warning), 80, expanded),
 			)}`,
 		);
 
@@ -396,7 +398,7 @@ function renderOutputSection(
 		const outputLines = trimmedOutput.split("\n");
 		const previewCount = expanded ? maxExpanded : maxCollapsed;
 		for (const line of outputLines.slice(0, previewCount)) {
-			lines.push(`${continuePrefix}  ${theme.fg("dim", truncateToWidth(replaceTabs(line), 70))}`);
+			lines.push(`${continuePrefix}  ${theme.fg("dim", clipCollapsed(replaceTabs(line), 70, expanded))}`);
 		}
 
 		if (outputLines.length > previewCount) {
@@ -449,7 +451,7 @@ function renderOutputSection(
 	const outputLines = trimmedOutput.split("\n");
 	const previewCount = expanded ? maxExpanded : maxCollapsed;
 	for (const line of outputLines.slice(0, previewCount)) {
-		lines.push(`${continuePrefix}  ${theme.fg("dim", truncateToWidth(replaceTabs(line), 70))}`);
+		lines.push(`${continuePrefix}  ${theme.fg("dim", clipCollapsed(replaceTabs(line), 70, expanded))}`);
 	}
 
 	if (outputLines.length > previewCount) {
@@ -473,13 +475,19 @@ function renderTaskSection(
 	lines.push(`${continuePrefix}${theme.fg("dim", "Task")}`);
 	const taskLines = trimmed.split("\n");
 	for (const line of taskLines.slice(0, maxExpanded)) {
-		lines.push(`${continuePrefix}  ${theme.fg("dim", truncateToWidth(replaceTabs(line), 70))}`);
+		lines.push(`${continuePrefix}  ${theme.fg("dim", replaceTabs(line))}`);
 	}
 	if (taskLines.length > maxExpanded) {
 		lines.push(`${continuePrefix}  ${theme.fg("dim", formatMoreItems(taskLines.length - maxExpanded, "line"))}`);
 	}
 
 	return lines;
+}
+
+function taskPreviewText(task: unknown, taskFile: unknown): string {
+	if (typeof task === "string") return task;
+	if (typeof taskFile !== "string") return "";
+	return flattenLine(replaceTabs(shortenPath(sanitizeText(taskFile))));
 }
 
 /**
@@ -522,7 +530,7 @@ function renderTaskCallLines(args: Partial<TaskParams> | undefined, theme: Theme
 
 	const rawName = typeof args.name === "string" ? args.name.trim() : "";
 	const idLabel = rawName ? formatTaskId(rawName) : "";
-	const brief = taskFirstLine(args.task);
+	const brief = taskFirstLine(taskPreviewText(args.task, args.taskFile));
 	if (idLabel || brief) {
 		let line = `${bullet} ${theme.fg("accent", theme.bold(idLabel || "agent"))}`;
 		if (brief) {
@@ -561,7 +569,7 @@ function renderTaskItemLines(tasks: TaskItem[] | undefined, theme: Theme): strin
 		const rawName = typeof item?.name === "string" ? item.name.trim() : "";
 		const idLabel = rawName ? formatTaskId(rawName) : `#${i + 1}`;
 		let line = `${bullet} ${theme.fg("accent", theme.bold(idLabel))}`;
-		const brief = taskFirstLine(item?.task);
+		const brief = taskFirstLine(taskPreviewText(item?.task, item?.taskFile));
 		if (brief) {
 			line += `: ${theme.fg("muted", previewLine(brief, 64))}`;
 		}
@@ -766,6 +774,15 @@ function renderAgentProgress(
 
 	// Current tool (if running) or most recent completed tool
 	if (progress.status === "running") {
+		if (progress.stage) {
+			lines.push(
+				truncateTaskRow(
+					`${continuePrefix}${theme.fg("muted", replaceTabs(sanitizeText(progress.stage)))}`,
+					maxWidth,
+					"",
+				),
+			);
+		}
 		if (progress.currentTool) {
 			let toolLine = `${continuePrefix}${theme.tree.hook} ${theme.fg("muted", sanitizeText(progress.currentTool))}`;
 			const toolDetail = toolCallDetail(
@@ -1127,7 +1144,7 @@ function renderAgentResult(
 		lines.push(
 			`${continuePrefix}${theme.fg("error", theme.status.aborted)} ${theme.fg(
 				"dim",
-				previewLine(sanitizeText(result.abortReason), 80),
+				clipCollapsed(flattenLine(sanitizeText(result.abortReason)), 80, expanded),
 			)}`,
 		);
 	}
@@ -1219,7 +1236,7 @@ function renderAgentResult(
 		lines.push(
 			`${continuePrefix}${theme.fg("warning", theme.status.warning)} ${theme.fg(
 				"dim",
-				truncateToWidth(sanitizeText(missingCompleteWarning), 80),
+				clipCollapsed(sanitizeText(missingCompleteWarning), 80, expanded),
 			)}`,
 		);
 	}
@@ -1259,7 +1276,7 @@ function renderAgentResult(
 	// Error message
 	if (result.error && (!success || mergeFailed) && (!aborted || result.error !== result.abortReason)) {
 		lines.push(
-			`${continuePrefix}${theme.fg(mergeFailed ? "warning" : "error", previewLine(sanitizeText(result.error), 70))}`,
+			`${continuePrefix}${theme.fg(mergeFailed ? "warning" : "error", clipCollapsed(flattenLine(sanitizeText(result.error)), 70, expanded))}`,
 		);
 	}
 
@@ -1794,7 +1811,7 @@ function describeContext(raw: unknown): NativeNode | undefined {
 	return line ? text([span(line, "muted")], { wrap: "word", lines: 2, role: "omp.tool.context" }) : undefined;
 }
 
-/** The full assignment, markdown, as the first expanded child of an agent. */
+/** The full assignment, markdown: an agent's first expanded child and its row's hover card. */
 function describeAssignment(raw: string | undefined): NativeNode | undefined {
 	const source = raw ? sanitizeText(repairDoubleEncodedJsonString(raw)).trim() : "";
 	return source ? md(source, { role: "omp.task.assignment" }) : undefined;
@@ -1826,6 +1843,8 @@ interface AgentDescribeState {
 	readonly nowMs: number;
 	readonly expanded: boolean;
 	readonly background: boolean;
+	/** The host draws the `json` kind. */
+	readonly json: boolean;
 }
 
 /** Settled and in-flight child snapshots a subagent carries, as nested agent nodes. */
@@ -1855,8 +1874,26 @@ function describeNestedTasks(
 	return out;
 }
 
-function agentNode(p: TspAgentProps, children: readonly (NativeNode | undefined)[], key: string): NativeNode {
-	return node("agent", p, compact(children), key);
+/** Earliest start seen per running subagent (`nowMs - durationMs`), so a snapshot with a stale or zero `durationMs` can't restart its timer. */
+const runStartMs = new Map<string, number>();
+
+function runningAge(progress: { id: string; durationMs: number }, nowMs: number): number {
+	const start = nowMs - Math.max(0, progress.durationMs);
+	const known = runStartMs.get(progress.id);
+	const anchor = known === undefined ? start : Math.min(known, start);
+	runStartMs.set(progress.id, anchor);
+	return Math.max(0, nowMs - anchor);
+}
+
+/** An `agent` node; its row's hover card shows the whole `assignment` the row only summarizes. */
+function agentNode(
+	p: TspAgentProps,
+	assignment: NativeNode | undefined,
+	children: readonly (NativeNode | undefined)[],
+	key: string,
+): NativeNode {
+	const props: TspProps<"agent"> = assignment ? { ...p, hovercard: propNode(assignment) } : p;
+	return node("agent", props, compact(children), key);
 }
 
 function describeProgressAgent(progress: AgentProgress, state: AgentDescribeState, depth: number): NativeNode {
@@ -1875,6 +1912,10 @@ function describeProgressAgent(progress: AgentProgress, state: AgentDescribeStat
 					age: progress.currentToolStartMs ? Math.max(0, nowMs - progress.currentToolStartMs) : undefined,
 				}
 			: null;
+	const summary = taskSummary(progress.description || progress.assignment || progress.task);
+	// The agent's own stage line (from its completion probe) rides beside the task while it runs.
+	const stage = running && progress.stage ? plainText(progress.stage) : "";
+	const assignment = describeAssignment(progress.assignment ?? progress.task);
 	const retry =
 		running && progress.retryState
 			? {
@@ -1889,7 +1930,7 @@ function describeProgressAgent(progress: AgentProgress, state: AgentDescribeStat
 		{
 			name: formatTaskId(progress.id),
 			agent: progress.agent || undefined,
-			task: taskSummary(progress.description || progress.assignment || progress.task) || undefined,
+			task: stage ? (summary ? [span(summary), span(` · ${stage}`, "muted")] : stage) : summary || undefined,
 			status,
 			model: progress.resolvedModelIdentity ?? progress.resolvedModel,
 			thinking: thinkingToken(progress.resolvedThinkingLevel),
@@ -1901,7 +1942,7 @@ function describeProgressAgent(progress: AgentProgress, state: AgentDescribeStat
 				...contextStats(progress.contextTokens, progress.contextWindow),
 				done: running && progress.completionPercent !== undefined ? progress.completionPercent / 100 : undefined,
 				cost: progress.cost > 0 ? progress.cost : undefined,
-				...(running ? { age: progress.durationMs } : { took: progress.durationMs }),
+				...(running ? { age: runningAge(progress, nowMs) } : { took: progress.durationMs }),
 			},
 			retry,
 			badges: agentBadges(state.background, undefined),
@@ -1909,8 +1950,9 @@ function describeProgressAgent(progress: AgentProgress, state: AgentDescribeStat
 			collapsible: true,
 			collapsed: !state.expanded,
 		},
+		assignment,
 		[
-			describeAssignment(progress.assignment ?? progress.task),
+			assignment,
 			progress.resolvedModelRoute ? noteText(progress.resolvedModelRoute, "dim") : undefined,
 			!running && progress.retryFailure
 				? text(
@@ -1944,6 +1986,7 @@ function describeResultAgent(result: SingleResult, state: AgentDescribeState, de
 	else if (warning && success) badges.push({ text: "warning", tone: "warning" });
 	if (result.truncated) badges.push({ text: "truncated", tone: "warning" });
 	const cost = result.usage?.cost.total ?? 0;
+	const assignment = describeAssignment(result.assignment ?? result.task);
 	return agentNode(
 		{
 			name: formatTaskId(result.id),
@@ -1966,15 +2009,17 @@ function describeResultAgent(result: SingleResult, state: AgentDescribeState, de
 			collapsible: true,
 			collapsed: !state.expanded,
 		},
+		assignment,
 		[
-			describeAssignment(result.assignment ?? result.task),
+			assignment,
 			result.resolvedModelRoute ? noteText(result.resolvedModelRoute, "dim") : undefined,
 			aborted && result.abortReason ? errorLine(result.abortReason) : undefined,
 			warning ? errorLine(warning, "warning") : undefined,
 			result.error ? errorLine(result.error) : undefined,
 			result.retryFailure ? errorLine(`auto-retry gave up: ${result.retryFailure.errorMessage}`) : undefined,
+			// The structured result is the agent's answer: its containers open one level, as in the fallback tree.
 			structured !== undefined
-				? describeJsonTree(structured)
+				? describeJsonValue(structured, { native: state.json, open: 1 })
 				: output
 					? md(output, { role: "omp.task.output" })
 					: undefined,
@@ -2020,16 +2065,18 @@ function describeTaskCall(args: TaskParams | undefined): NativeToolView {
 				status: "pending",
 				badges: agentBadges(false, isolated === true),
 			},
+			describeAssignment(typeof brief === "string" ? brief : undefined),
 			[],
 			key,
 		);
 	const flatName = typeof args?.name === "string" ? args.name.trim() : "";
-	if (flatName || taskFirstLine(args?.task)) {
+	const flatBrief = taskPreviewText(args?.task, args?.taskFile);
+	if (flatName || taskFirstLine(flatBrief)) {
 		agents.push(
 			pending(
 				flatName ? formatTaskId(flatName) : "agent",
 				args?.agent,
-				args?.task,
+				flatBrief,
 				args?.isolated,
 				flatName || "agent",
 			),
@@ -2042,7 +2089,7 @@ function describeTaskCall(args: TaskParams | undefined): NativeToolView {
 				pending(
 					name ? formatTaskId(name) : `#${index + 1}`,
 					entry?.agent,
-					entry?.task,
+					taskPreviewText(entry?.task, entry?.taskFile),
 					entry?.isolated,
 					name || `#${index + 1}`,
 				),
@@ -2087,6 +2134,7 @@ function describeTaskResult(
 			nowMs: options.renderContext?.nowMs ?? Date.now(),
 			expanded: options.expanded,
 			background,
+			json: options.json === true,
 		},
 		0,
 	);
@@ -2159,7 +2207,7 @@ export const taskToolRenderer = {
 		options: TaskRenderOptions,
 		args?: TaskParams,
 	): NativeToolView | undefined {
-		return taskResultMemo.get(result, [options.renderContext?.nowMs, options.expanded], () =>
+		return taskResultMemo.get(result, [options.renderContext?.nowMs, options.expanded, options.json], () =>
 			describeTaskResult(result, options, args),
 		);
 	},
@@ -2208,8 +2256,13 @@ export interface TaskItem {
 	name?: string;
 	/** Agent type to run this item (e.g. "scout"). Defaults to the spawn policy's default agent. */
 	agent?: string;
-	/** The work; required by the schema. */
+	/** Historical source session selected by the bundled consult agent. */
+	sourceSession?: string;
+	/** Optional model selector override for the historical source session. */
+	model?: string | string[];
+	/** Inline instructions; exactly one of task or taskFile is required. */
 	task?: string;
+	taskFile?: string;
 	/** Bounded task scope used as the child's sole `auto` thinking classification input. */
 	solutionSpace?: string;
 	/** Per-spawn effort: concrete level in replacement mode, coarse hint only in legacy mode. */
@@ -2237,8 +2290,14 @@ export interface TaskParams {
 	name?: string;
 	/** Agent type to spawn (flat form); omitted values resolve from the session spawn policy. */
 	agent?: string;
+	/** Historical source session selected by the bundled consult agent. */
+	sourceSession?: string;
+	/** Optional model selector override for the historical source session. */
+	model?: string | string[];
 	/** The work (flat form). */
 	task?: string;
+	/** Absolute path or local:// URL to a UTF-8 file (flat form), mutually exclusive with task. */
+	taskFile?: string;
 	/** Bounded task scope (flat form); see {@link TaskItem.solutionSpace}. */
 	solutionSpace?: string;
 	/** Per-spawn effort: concrete level in replacement mode, coarse hint only in legacy mode. */
@@ -2327,6 +2386,9 @@ export interface AgentProgress {
 	status: "pending" | "running" | "completed" | "failed" | "aborted";
 	task: string;
 	assignment?: string;
+	taskFile?: string;
+	/** SHA-256 of the exact task file bytes before decoding and trimming. */
+	taskFileSha256?: string;
 	description?: string;
 	lastIntent?: string;
 	currentTool?: string;
@@ -2384,6 +2446,18 @@ export interface AgentProgress {
 	advisor?: boolean;
 	/** The agent's latest self-estimate of task completion (0–100), from the periodic `task.completionProbe` side request. */
 	completionPercent?: number;
+	/**
+	 * The agent's current step in its own words (one line, ≤ 80 chars), from the
+	 * same probe reply as {@link completionPercent}. Running rows prefer it over
+	 * `lastIntent`; the job widget uses it as its stage line.
+	 */
+	stage?: string;
+	/**
+	 * What the agent says shows its progress live (one line, ≤ 200 chars), e.g.
+	 * "BENCH lines in bg_2 pipe:1, tok_s higher is better, target 70% of roofline";
+	 * from the probe reply. Feeds the job widget author's brief; never rendered.
+	 */
+	watch?: string;
 	/** Data extracted by registered subprocess tool handlers (keyed by tool name) */
 	extractedToolData?: Record<string, unknown[]>;
 	/**
@@ -2428,6 +2502,8 @@ export interface SingleResult {
 	agentSource: AgentSource;
 	task: string;
 	assignment?: string;
+	taskFile?: string;
+	taskFileSha256?: string;
 	description?: string;
 	lastIntent?: string;
 	exitCode: number;

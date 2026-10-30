@@ -6,7 +6,16 @@
  */
 import type { AgentMessage, AgentToolResult, ThinkingLevel, ToolLoadMode, ToolTier } from "@oh-my-pi/pi-agent-core";
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
-import type { AssistantMessageEvent, Effort, ImageContent, Model, ToolExample } from "@oh-my-pi/pi-ai";
+import type {
+	AssistantMessage,
+	AssistantMessageEvent,
+	Effort,
+	ImageContent,
+	Model,
+	TextContent,
+	ThinkingContent,
+	ToolExample,
+} from "@oh-my-pi/pi-ai";
 import type { OAuthProviderInfo } from "@oh-my-pi/pi-ai/oauth";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { BashResult } from "../../exec/bash-executor";
@@ -58,7 +67,10 @@ import type { UsageStatistics } from "../../session/session-entries";
 // RPC Commands (stdin)
 // ============================================================================
 
-/** `set_event_filter` projection: `"full"` keeps both accumulated snapshots in `message_update`, `"delta"` sends only the increment. */
+/**
+ * `set_event_filter` projection: `"full"` keeps both accumulated snapshots in `message_update`, `"delta"` replaces them
+ * with the block a start event opens or an end event closes (see {@link RpcDeltaAssistantMessageEvent}).
+ */
 export type RpcMessageUpdates = "full" | "delta";
 
 export type RpcCommand =
@@ -113,8 +125,13 @@ export type RpcCommand =
 	| { id?: string; type: "set_subagent_fast"; subagentId: string; enabled: boolean }
 	// Live voice (GPT live bound to this session)
 	| { id?: string; type: "live_start"; voice?: string }
+	| { id?: string; type: "live_connect"; sdpOffer: string; voice?: string }
 	| { id?: string; type: "live_stop" }
 	| { id?: string; type: "live_mute"; muted?: boolean }
+
+	// Draft-only speech-to-text
+	| { id?: string; type: "dictation_start"; captureId: string }
+	| { id?: string; type: "dictation_stop" }
 
 	// Model
 	| { id?: string; type: "set_model"; provider: string; modelId: string }
@@ -168,6 +185,8 @@ export type RpcCommand =
 	| { id?: string; type: "switch_session"; sessionPath: string; provider?: string; modelId?: string }
 	| { id?: string; type: "branch"; entryId: string }
 	| { id?: string; type: "fork"; entryId?: string }
+	| { id?: string; type: "abort_branch_summary" }
+	| { id?: string; type: "set_label"; entryId: string; label?: string }
 	| { id?: string; type: "get_branch_messages" }
 	| { id?: string; type: "get_last_assistant_text" }
 	| { id?: string; type: "set_session_name"; name: string }
@@ -365,6 +384,8 @@ export interface RpcPromptError {
 	httpStatus?: number;
 	/** The failure is classified transient: resubmitting later may succeed. OMP's own retries are already exhausted. */
 	retryable: boolean;
+	/** `cost_cap`: the session reached `session.maxCost` (`--max-cost`) and omp did not send the next request. */
+	code?: "cost_cap";
 }
 
 /** `prompt` success-response data. */
@@ -450,6 +471,30 @@ export interface RpcLiveEndFrame {
 }
 
 export type RpcLiveFrame = RpcLivePhaseFrame | RpcLiveLevelsFrame | RpcLiveTranscriptFrame | RpcLiveEndFrame;
+
+/** Draft-only dictation frames bypass the session event filter. */
+export interface RpcDictationStateFrame {
+	type: "dictation_state";
+	captureId: string;
+	state: "starting" | "recording" | "transcribing";
+}
+
+/** Full accumulated preview, replacing the previous preview for this capture. */
+export interface RpcDictationTranscriptFrame {
+	type: "dictation_transcript";
+	captureId: string;
+	text: string;
+}
+
+/** Exactly one terminal frame per capture, including any failure. */
+export interface RpcDictationEndFrame {
+	type: "dictation_end";
+	captureId: string;
+	text: string;
+	error?: string;
+}
+
+export type RpcDictationFrame = RpcDictationStateFrame | RpcDictationTranscriptFrame | RpcDictationEndFrame;
 
 /** `open_session` result: `resumed` is false when a fresh session was started in the directory. */
 export interface RpcOpenSessionResult {
@@ -819,6 +864,8 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "switch_session"; success: true; data: { cancelled: boolean } }
 	| { id?: string; type: "response"; command: "branch"; success: true; data: { text: string; cancelled: boolean } }
 	| { id?: string; type: "response"; command: "fork"; success: true; data: { cancelled: boolean } }
+	| { id?: string; type: "response"; command: "abort_branch_summary"; success: true }
+	| { id?: string; type: "response"; command: "set_label"; success: true }
 	| {
 			id?: string;
 			type: "response";
@@ -836,8 +883,18 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "set_session_name"; success: true }
 	// Live voice
 	| { id?: string; type: "response"; command: "live_start"; success: true; data: { voice: string } }
+	| {
+			id?: string;
+			type: "response";
+			command: "live_connect";
+			success: true;
+			data: { voice: string; sdpAnswer: string };
+	  }
 	| { id?: string; type: "response"; command: "live_stop"; success: true }
 	| { id?: string; type: "response"; command: "live_mute"; success: true; data: { muted: boolean } }
+	// Draft-only speech-to-text
+	| { id?: string; type: "response"; command: "dictation_start"; success: true }
+	| { id?: string; type: "response"; command: "dictation_stop"; success: true; data: { text: string } }
 	| { id?: string; type: "response"; command: "handoff"; success: true; data: RpcHandoffResult | null }
 
 	// Messages
@@ -868,14 +925,14 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "predict_word_feedback"; success: true }
 
 	// Side questions (/btw)
-	| { id?: string; type: "response"; command: "btw"; success: true; data: { record: BtwHistoryRecord } }
+	| { id?: string; type: "response"; command: "btw"; success: true; data: { record: RpcBtwHistoryRecord } }
 	| { id?: string; type: "response"; command: "btw_cancel"; success: true; data: { cancelled: boolean } }
 	| {
 			id?: string;
 			type: "response";
 			command: "get_btw_history";
 			success: true;
-			data: { records: readonly BtwHistoryRecord[] };
+			data: { records: readonly RpcBtwHistoryRecord[] };
 	  }
 
 	// Error response (any command can fail); `code` is an optional machine-readable reason.
@@ -884,6 +941,12 @@ export type RpcResponse =
 // ============================================================================
 // Side question (/btw) frames (stdout)
 // ============================================================================
+
+/**
+ * A BTW topic as sent to RPC hosts. The TUI-only `title` heading is never on the wire,
+ * which keeps the released record shape: hosts show the topic's opening question.
+ */
+export type RpcBtwHistoryRecord = Omit<BtwHistoryRecord, "title">;
 
 /** Text appended to the running side question's latest answer. */
 export interface RpcBtwDeltaFrame {
@@ -895,7 +958,7 @@ export interface RpcBtwDeltaFrame {
 /** Full record snapshot on every lifecycle change: started, complete, cancelled, error. */
 export interface RpcBtwRecordFrame {
 	type: "btw_record";
-	record: BtwHistoryRecord;
+	record: RpcBtwHistoryRecord;
 }
 
 // ============================================================================
@@ -934,14 +997,33 @@ export type RpcMessageSnapshotFrame = Extract<RpcMessageEventFrame, { type: "mes
 	SessionJournalIdentity & { snapshot: true };
 
 type WithoutPartial<T> = T extends unknown ? Omit<T, "partial"> : never;
+type DeltaOf<Type extends AssistantMessageEvent["type"]> = WithoutPartial<
+	Extract<AssistantMessageEvent, { type: Type }>
+>;
 
-/** Raw-protocol opt-in projection; terminal subtype fields are preserved. */
+/**
+ * `assistantMessageEvent` of a delta `message_update`: `*_delta` carries only the increment; a `*_start` carries the
+ * shell of the block it opened (`partial.content[contentIndex]` with its text, thinking, or tool arguments emptied, so
+ * the deltas that follow apply cleanly); `text_end`/`thinking_end` carry the rest of the block (everything but the text
+ * their `content` already holds); `image_end` and `toolcall_end` carry the whole block as `content` / `toolCall`. A
+ * re-`start` carries the whole message it restarts from; that snapshot may already be ahead of the stream, so each
+ * block's `*_end` is authoritative. `block` is absent only if the provider's `contentIndex` points at no block.
+ */
+export type RpcDeltaAssistantMessageEvent =
+	| DeltaOf<"text_delta" | "thinking_delta" | "toolcall_delta" | "image_end" | "toolcall_end">
+	| (DeltaOf<"text_start" | "thinking_start" | "toolcall_start"> & { block?: AssistantMessage["content"][number] })
+	| (DeltaOf<"text_end"> & { block?: Omit<TextContent, "text"> })
+	| (DeltaOf<"thinking_end"> & { block?: Omit<ThinkingContent, "thinking"> })
+	| (DeltaOf<"start"> & { message: AssistantMessage })
+	| Extract<AssistantMessageEvent, { type: "done" | "error" }>;
+
+/** Opt-in projection (`messageUpdates: "delta"`): enough to rebuild the message client-side; terminal subtypes pass through. */
 export type RpcDeltaMessageUpdateFrame = Omit<
 	Extract<RpcMessageEventFrame, { type: "message_update" }>,
 	"message" | "assistantMessageEvent"
 > & {
 	message: Pick<AgentMessage, "role">;
-	assistantMessageEvent: WithoutPartial<AssistantMessageEvent>;
+	assistantMessageEvent: RpcDeltaAssistantMessageEvent;
 };
 
 /** Links live output to its canonical journal entry only after successful persistence. */

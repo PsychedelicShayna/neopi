@@ -36,8 +36,12 @@ import {
 	cfgLiveSubmitSilenceMs,
 	cfgLiveVoice,
 } from "../../live/settings";
+import type { ExtensionLiveSession, ExtensionLiveStartOptions } from "../../extensibility/extensions/types";
+import { resolveLiveVoice } from "../../live/settings";
 
 type LiveSessionFactory = (options: LiveSessionControllerOptions) => LiveSessionController;
+/** A started session, or the connect failure `#finish` has already shown and cleaned up. */
+type LiveStartOutcome = { session: LiveSessionController } | { error: Error };
 
 /** Where Enter sends composer text during a live call. */
 export type LiveInputDestination = "primary" | "voice" | "both";
@@ -56,6 +60,13 @@ const LIVE_MESSAGE_USAGE: AssistantMessage["usage"] = {
 };
 function errorFrom(cause: unknown): Error {
 	return cause instanceof Error ? cause : new Error(String(cause));
+}
+
+/** Runs extension observers without turning their failures into session failures. */
+function notifyRemote(callback: () => void): void {
+	try { callback(); } catch (cause) {
+		logger.warn("Live session observer threw", { error: errorFrom(cause).message });
+	}
 }
 
 /** Operator speech for one realtime user turn, as it is being typed into the composer. */
@@ -127,8 +138,37 @@ export class LiveCommandController {
 			await this.stop();
 			return;
 		}
-		if (this.#settling) await this.#settling;
-		await this.#start();
+		while (this.#settling) await this.#settling;
+		// Another start may have claimed the slot while the previous session finished closing.
+		if (this.#session) return;
+		// A connect failure was already shown; anything else (factory, mounting) propagates.
+		await this.#start(resolveLiveVoice(this.#ctx.settings));
+	}
+
+	/**
+	 * Start a live session whose audio runs on a caller-owned WebRTC peer. The visualizer shows
+	 * it as it shows `/live`, and `/live` or the stop key ends it.
+	 */
+	async startRemote(options: ExtensionLiveStartOptions): Promise<ExtensionLiveSession> {
+		// Untyped callers: without an offer the controller would open the host microphone instead.
+		if (typeof options.sdpOffer !== "string" || !options.sdpOffer.trim()) {
+			throw new Error("startLive requires a non-empty sdpOffer");
+		}
+		while (this.#settling) await this.#settling;
+		const voice = resolveLiveVoice(this.#ctx.settings, options.voice);
+		const outcome = await this.#start(voice, options);
+		if ("error" in outcome) throw outcome.error;
+		const { session } = outcome;
+		const stop = async (): Promise<void> => {
+			if (this.#session === session) await this.stop();
+			else await session.stop();
+		};
+		const sdpAnswer = session.sdpAnswer;
+		if (sdpAnswer === undefined) {
+			await stop();
+			throw new Error("The live session stopped before its SDP answer was available");
+		}
+		return { sdpAnswer, voice, stop };
 	}
 
 	/** Mute or unmute the microphone of the active live session. No-op when live mode is off. */
@@ -137,12 +177,12 @@ export class LiveCommandController {
 	}
 
 	/** Start through RPC without toggling an already active TUI call off. */
-	async start(options: RpcLiveStartOptions = {}): Promise<{ voice: string }> {
+	async start(options: RpcLiveStartOptions = {}): Promise<{ voice: string; sdpAnswer?: string }> {
 		if (this.active) throw new Error("A live session is already active");
 		const voice = options.voice?.trim() || cfgLiveVoice.get(this.#ctx.settings);
-		const error = await this.#start(voice);
-		if (error) throw error;
-		return { voice };
+		const outcome = await this.#start(voice, options.sdpOffer ? { sdpOffer: options.sdpOffer } : undefined);
+		if ("error" in outcome) throw outcome.error;
+		return { voice, sdpAnswer: outcome.session.sdpAnswer };
 	}
 
 	/** Set or toggle the same microphone controlled by the TUI mute action. */
@@ -255,7 +295,8 @@ export class LiveCommandController {
 		}
 	}
 
-	async #start(voice: string = cfgLiveVoice.get(this.#ctx.settings)): Promise<Error | undefined> {
+	async #start(voice: string = cfgLiveVoice.get(this.#ctx.settings), remote?: ExtensionLiveStartOptions): Promise<LiveStartOutcome> {
+		if (this.#session) throw new Error("A live session is already active");
 		this.#model = cfgLiveModel.get(this.#ctx.settings);
 		this.#assistantTranscriptTurn = 0;
 		this.#assistantTranscriptStartedAt = 0;
@@ -332,13 +373,16 @@ export class LiveCommandController {
 			voice,
 			model: this.#model,
 			blockDelegateKeyword: cfgLiveBlockDelegateKeyword.get(this.#ctx.settings),
+			sdpOffer: remote?.sdpOffer,
 			callbacks: {
 				onPhase: phase => {
+					notifyRemote(() => remote?.onPhase?.(phase));
 					if (this.#session !== session) return;
 					this.#showPhase(phase);
 				},
 				onLevels: () => {},
 				onTranscript: transcript => {
+					if (transcript) notifyRemote(() => remote?.onTranscript?.(transcript));
 					if (this.#session !== session || !transcript || transcript.role === "user") return;
 					this.#presentAssistantTranscript(transcript);
 				},
@@ -382,10 +426,19 @@ export class LiveCommandController {
 					session.refreshTurnGate(false);
 					this.#ctx.ui.requestRender();
 				},
-				onTerminal: error => this.#finish(session, error),
+				onTerminal: error => {
+					this.#finish(session, error);
+					notifyRemote(() => remote?.onEnd?.(error));
+				},
 			},
 		};
-		const session = this.#createSession ? this.#createSession(options) : new LiveSessionController(options);
+		let session: LiveSessionController;
+		try {
+			session = this.#createSession ? this.#createSession(options) : new LiveSessionController(options);
+		} catch (cause) {
+			this.#release();
+			throw cause;
+		}
 		const ingest = new LiveIngest({
 			session: this.#ctx.session,
 			registry: AgentRegistry.global(),
@@ -417,19 +470,21 @@ export class LiveCommandController {
 
 		try {
 			await settingsSource.refresh();
-			if (this.#session !== session) return new Error("Live session stopped during startup");
+			if (this.#session !== session) return { error: new Error("Live session stopped during startup") };
 			await this.#maybeNoticeProtocolLines(session);
-			if (this.#session !== session) return new Error("Live session stopped during startup");
+			if (this.#session !== session) return { error: new Error("Live session stopped during startup") };
 			await session.start();
 			if (this.#session === session) ingest.attach();
-			else return new Error("Live session stopped during startup");
+			else return { error: new Error("Live session stopped during startup") };
 		} catch (cause) {
+			const error = errorFrom(cause);
 			if (this.#session === session) {
 				await session.stop();
-				this.#finish(session, errorFrom(cause));
+				this.#finish(session, error);
 			}
-			return errorFrom(cause);
+			return { error };
 		}
+		return { session };
 	}
 
 	async #maybeNoticeProtocolLines(session: LiveSessionController): Promise<void> {

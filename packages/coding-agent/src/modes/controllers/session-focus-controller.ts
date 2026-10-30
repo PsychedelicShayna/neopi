@@ -18,7 +18,7 @@ import type { InteractiveModeContext } from "../types";
  */
 export function pickRecentFocusableAgentId(refs: readonly AgentRef[], currentId?: string): string | undefined {
 	const ordered = refs
-		.filter(ref => ref.id !== MAIN_AGENT_ID && ref.kind === "sub" && ref.status !== "aborted")
+		.filter(ref => ref.id !== MAIN_AGENT_ID && ref.kind === "sub" && !ref.history?.readOnly && ref.status !== "aborted")
 		.filter(ref => ref.status === "running" || ref.status === "idle" || ref.status === "parked")
 		.toSorted(
 			(a, b) =>
@@ -69,6 +69,10 @@ export class SessionFocusController {
 	async focusAgent(id: string): Promise<void> {
 		if (this.ctx.collabGuest) throw new Error("Viewing agents is unavailable in a collab session.");
 		if (id === MAIN_AGENT_ID || this.registry.get(id)?.kind === "main") return this.unfocus();
+		const ref = this.registry.get(id);
+		if (ref && (ref.kind !== "sub" || ref.history?.readOnly || ref.status === "aborted")) {
+			throw new Error(`Agent ${id} is a read-only transcript; explicitly revive a killed agent in the Agent Hub first.`);
+		}
 		// Several top-level roots can share the registry; this view may only
 		// attach to agents of the root it belongs to.
 		if (!this.registry.isInRootTree(id, this.registry.rootForSession(this.ctx.session))) {
@@ -152,6 +156,7 @@ export class SessionFocusController {
 	}
 
 	dispose(): void {
+		this.ctx.syncIdleMaintenanceView(null);
 		// A pending revive — or a running attachment — must not land during
 		// teardown: invalidate both generations the way leave-main does.
 		this.#focusRequestSeq++;
@@ -181,6 +186,7 @@ export class SessionFocusController {
 	/** Retarget core, both directions: swap subscription, transcript, and status line onto `target`. */
 	async #attach(target: AgentSession): Promise<boolean> {
 		const generation = ++this.#attachGeneration;
+		this.ctx.syncIdleMaintenanceView(target);
 		try {
 			this.ctx.unsubscribe?.();
 			this.ctx.clearTransientSessionUi();
@@ -225,7 +231,10 @@ export class SessionFocusController {
 			this.ctx.statusLine.setSession(target, this.#focusedAgentId);
 			// Reset run bookkeeping before replay populates pending tool handles.
 			if (target.isStreaming) await this.ctx.eventController.handleEvent({ type: "agent_start" });
-			else setRunStatus({ state: "idle" });
+			else {
+				setRunStatus({ state: "idle" });
+				this.ctx.eventController.markViewIdle();
+			}
 			if (generation !== this.#attachGeneration) return false;
 			await this.ctx.renderInitialMessages({ clearTerminalHistory: true });
 			if (generation !== this.#attachGeneration) return false;

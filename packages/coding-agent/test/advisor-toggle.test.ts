@@ -28,7 +28,12 @@ function restoreEnv(key: string, value: string | undefined): void {
 import * as advisorModule from "../src/advisor";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
-import { cfgAdvisorEnabled, cfgAdvisorMaxNotesPerUpdate } from "@oh-my-pi/pi-coding-agent/advisor/settings";
+import {
+	cfgAdvisorContinueSeverity,
+	cfgAdvisorEnabled,
+	cfgAdvisorImmuneTurns,
+	cfgAdvisorMaxNotesPerUpdate,
+} from "@oh-my-pi/pi-coding-agent/advisor/settings";
 import { cfgCompactionKeepRecentTokens } from "@oh-my-pi/pi-coding-agent/session/context-settings";
 
 describe("AgentSession advisor toggle", () => {
@@ -136,6 +141,11 @@ describe("AgentSession advisor toggle", () => {
 		if (!advisor) throw new Error("Expected advisor agent to exist");
 		return advisor;
 	}
+
+	it("defaults continuation to concern and the post-interrupt cooldown to three turns", () => {
+		expect(cfgAdvisorContinueSeverity.get(session.settings)).toBe("concern");
+		expect(cfgAdvisorImmuneTurns.get(session.settings)).toBe(3);
+	});
 
 	it("adds a named launcher advisor without changing the legacy advisor identity", () => {
 		const legacy = enableAdvisor();
@@ -695,6 +705,17 @@ describe("AgentSession advisor toggle", () => {
 		const visible = session.getAdvisorAgent();
 		if (!visible) throw new Error("Expected Alpha advisor");
 
+		// Omitted and explicit true have identical visibility semantics.
+		session.applyAdvisorConfigs([{ name: "Alpha", includeThinking: true }, { name: "Beta" }], undefined);
+		expect(session.getAdvisorAgent()).toBe(visible);
+		// Changing another advisor's scope/visibility must not rebuild Alpha.
+		session.applyAdvisorConfigs(
+			[{ name: "Alpha" }, { name: "Beta", scope: "subagent", includeThinking: false }],
+			undefined,
+		);
+		expect(session.getAdvisorAgent()).toBe(visible);
+		expect(session.getAdvisorStats().advisors.map(advisor => advisor.name)).toEqual(["Alpha"]);
+
 		session.applyAdvisorConfigs([{ name: "Alpha", includeThinking: false }, { name: "Beta" }], undefined);
 		const hidden = session.getAdvisorAgent();
 		expect(hidden).not.toBe(visible);
@@ -745,7 +766,7 @@ describe("AgentSession advisor toggle", () => {
 		});
 
 		expect(session.getAdvisorCost()).toBeCloseTo(0.5, 8);
-		expect(await session.dropImages()).toEqual({ removed: 1 });
+		expect(await session.dropImages()).toMatchObject({ removed: 1 });
 		expect(advisor.state.messages).toHaveLength(0);
 		expect(session.getAdvisorCost()).toBeCloseTo(0.5, 8);
 		expect(session.getAdvisorStats().cost).toBeCloseTo(0.5, 8);
@@ -1284,7 +1305,9 @@ describe("AgentSession advisor toggle", () => {
 
 			expect(markUsageLimitReached).toHaveBeenCalledTimes(1);
 			expect(markUsageLimitReached.mock.calls[0]?.[0]).toBe(model.provider);
-			expect(quotaSession.getAdvisorStatusOverview().advisors[0]?.yielded).toBe(true);
+			const quotaStatus = quotaSession.getAdvisorStatusOverview().advisors[0];
+			expect(quotaStatus).toMatchObject({ yielded: true });
+			expect(quotaStatus?.backlog).toBeGreaterThan(0);
 			// A quota-paused runtime cannot accept work either — the streaming
 			// mask must not reopen its eye mid-turn.
 			quotaSession.agent.state.isStreaming = true;
@@ -1370,7 +1393,7 @@ describe("AgentSession advisor toggle", () => {
 					note: `${prefix} note ${i}`,
 					severity: "concern",
 				});
-				expect(JSON.stringify(result.content)).toContain("Delivered.");
+				expect(JSON.stringify(result.content)).toContain("Queued for the end of the turn");
 			}
 			const rejected = await tool.execute(`${prefix}-${budget + 1}`, {
 				note: `${prefix} note ${budget + 1}`,
@@ -1393,5 +1416,41 @@ describe("AgentSession advisor toggle", () => {
 		// Settings (2) overrides the default (4) when shared and per-advisor are undefined.
 		expect(session.applyAdvisorConfigs([{ name: "SettingsOnly" }], undefined, undefined)).toBe(1);
 		await exerciseBudget("settings", 2);
+	});
+
+	it("filters WATCHDOG.yml advisors by scope (main vs subagent vs all)", () => {
+		session.settings.setModelRole("advisor", `${model.provider}/${model.id}`);
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		const roster = [
+			{ name: "Main Guard", scope: "main" as const },
+			{ name: "Subagent Verifier", scope: "subagent" as const, includeThinking: false },
+			{ name: "Universal Guard", scope: "all" as const },
+		];
+
+		// Top-level main session builds main + all (2 advisors)
+		expect(session.applyAdvisorConfigs(roster, undefined)).toBe(2);
+		expect(session.getAdvisorStats().advisors.map(a => a.name)).toEqual(["Main Guard", "Universal Guard"]);
+
+		// Subagent session builds subagent + all (2 advisors)
+		const subAgent = new Agent({
+			initialState: {
+				model,
+				systemPrompt: ["Subagent"],
+				tools: [],
+				messages: [],
+			},
+		});
+		const subSettings = Settings.isolated({ "compaction.enabled": false, "advisor.enabled": true });
+		subSettings.setModelRole("advisor", `${model.provider}/${model.id}`);
+		const subSession = new AgentSession({
+			agent: subAgent,
+			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
+			settings: subSettings,
+			modelRegistry,
+			advisorTools: [],
+			agentKind: "sub",
+			advisorConfigs: roster,
+		});
+		expect(subSession.getAdvisorStats().advisors.map(a => a.name)).toEqual(["Subagent Verifier", "Universal Guard"]);
 	});
 });

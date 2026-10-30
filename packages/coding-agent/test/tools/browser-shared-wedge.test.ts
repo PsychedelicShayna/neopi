@@ -85,7 +85,7 @@ async function ownedTargets(scope: SharedTargetScope): Promise<string[]> {
 interface WedgeOptions {
 	/** Whether the handle carries the shared-daemon scope (`false` = private launch). */
 	shared?: boolean;
-	close?: "hang" | "fail" | "gate" | "listed";
+	close?: "hang" | "fail" | "gate" | "listed" | "enumeration-fail";
 	/** Held by a `gate` close until the test releases it. */
 	gate?: Promise<void>;
 	/** Fires when a `gate` close starts, so the test can interleave a release. */
@@ -99,9 +99,13 @@ function makeWedgeHandle(scope: SharedTargetScope, options: WedgeOptions = {}): 
 	const { shared = true, close = "hang", gate, entered } = options;
 	const session = {
 		send: async (method: string) => {
-			if (close === "listed") {
+			if (close === "listed" || close === "enumeration-fail") {
+				if (method === "Target.setDiscoverTargets") return {};
 				if (method === "Target.closeTarget") return { success: true };
-				if (method === "Target.getTargets") return { targetInfos: [{ targetId: TARGET_ID }] };
+				if (method === "Target.getTargets") {
+					if (close === "enumeration-fail") throw new Error("CDP target enumeration failed");
+					return { targetInfos: [{ targetId: TARGET_ID }] };
+				}
 				throw new Error(`Unexpected CDP method ${method}`);
 			}
 			if (close === "fail") throw new Error("CDP target session unavailable");
@@ -112,6 +116,8 @@ function makeWedgeHandle(scope: SharedTargetScope, options: WedgeOptions = {}): 
 			}
 			return await new Promise<never>(() => {});
 		},
+		on: (): void => undefined,
+		off: (): void => undefined,
 		detach: async (): Promise<void> => undefined,
 	};
 	const handle: Record<string, unknown> = {
@@ -143,6 +149,7 @@ function makeWedgeTab(scope: SharedTargetScope, options: WedgeOptions = {}): Tab
 		info: {},
 		pending: new Map(),
 		kindTag: "headless",
+		ownsPage: true,
 		ownerSessionId: "session-wedge",
 		persist: false,
 		lastActivityAt: Date.now(),
@@ -248,14 +255,16 @@ describe("browser cleanup — timed-out target close in a shared browser", () =>
 		expect(healthCheck.mock.calls[0]?.[0]).toEqual(scope);
 	});
 
-	it("rejects release when an accepted target close stays listed until its deadline", async () => {
+	it("rejects release when an accepted target close stays listed after the confirmation wait", async () => {
 		const scope = trackedScope();
 		const healthCheck = spyOn(sharedDaemon, "stopSharedBrowserIfUnreachable").mockResolvedValue(false);
 		await recordSharedTarget(scope, TARGET_ID);
 		const tab = makeWedgeTab(scope, { close: "listed" });
 		getTabsMapForTest().set("logos-b2b", tab);
 
-		await expect(releaseTab("logos-b2b", { timeoutMs: 60 })).rejects.toThrow("Timed out after 60ms");
+		await expect(releaseTab("logos-b2b", { timeoutMs: 60 })).rejects.toThrow(
+			`Could not confirm headless browser tab "logos-b2b" closed; target ${JSON.stringify(TARGET_ID)} may still be open`,
+		);
 
 		expect(getTabsMapForTest().has("logos-b2b")).toBe(false);
 		expect(await ownedTargets(scope)).toEqual([TARGET_ID]);
@@ -274,7 +283,7 @@ describe("browser cleanup — timed-out target close in a shared browser", () =>
 		await recordSharedTarget(scope, TARGET_ID);
 		getTabsMapForTest().set("logos-b2b", makeWedgeTab(scope, { close: "fail" }));
 
-		await expect(releaseTab("logos-b2b", { timeoutMs: 60 })).resolves.toBe(true);
+		await expect(releaseTab("logos-b2b", { timeoutMs: 60 })).rejects.toThrow("Could not confirm");
 
 		expect(healthCheck).toHaveBeenCalledTimes(1);
 		expect(await ownedTargets(scope)).toEqual([]);
@@ -406,9 +415,24 @@ describe("browser cleanup — timed-out target close in a shared browser", () =>
 		await recordSharedTarget(scope, TARGET_ID);
 		getTabsMapForTest().set("logos-b2b", makeWedgeTab(scope, { close: "fail" }));
 
-		await expect(releaseTab("logos-b2b", { timeoutMs: 60 })).resolves.toBe(true);
+		await expect(releaseTab("logos-b2b", { timeoutMs: 60 })).rejects.toThrow("Could not confirm");
 
 		expect(await ownedTargets(scope)).toEqual([TARGET_ID]);
+		expect(healthCheck).toHaveBeenCalledTimes(1);
+	});
+
+	it("retains ownership and reports failed fallback enumeration after an accepted close", async () => {
+		const scope = trackedScope();
+		const healthCheck = spyOn(sharedDaemon, "stopSharedBrowserIfUnreachable").mockResolvedValue(false);
+		await recordSharedTarget(scope, TARGET_ID);
+		const tab = makeWedgeTab(scope, { close: "enumeration-fail" });
+		getTabsMapForTest().set("logos-b2b", tab);
+
+		await expect(releaseTab("logos-b2b", { timeoutMs: 60 })).rejects.toThrow("Could not confirm");
+
+		expect(getTabsMapForTest().has("logos-b2b")).toBe(false);
+		expect(await ownedTargets(scope)).toEqual([TARGET_ID]);
+		expect(tab.browser.refCount).toBe(1);
 		expect(healthCheck).toHaveBeenCalledTimes(1);
 	});
 });

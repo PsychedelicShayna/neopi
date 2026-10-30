@@ -159,3 +159,29 @@ export const cfgExtensionHandlersToolCallTimeoutMs = register({
 		description: `Positive finite active-work timeout for extension tool_call handlers; invalid values use 30000ms, and time awaiting ${PRODUCT_NAME}-owned dialogs does not count`,
 	},
 });
+
+export const cfgExtensionHandlersModeControl = register({
+	id: "extensionHandlers.modeControl",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "tools",
+		group: "Extensions",
+		label: "Extension Mode Control",
+		description:
+			"Let extensions enter and exit plan, vibe, goal, and loop modes via ctx.sessionModes.set(); reading mode state stays available",
+	},
+});
+
+export const cfgExtensionAssistantTextRenderers = register({
+	id: "extensionRenderers.assistantText",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "tools",
+		group: "Extensions",
+		label: "Extension Reply Renderers",
+		description:
+			"Let extensions change how assistant replies are drawn, redraw a reply in place, and receive clicks on their own links; the session, exports and model context keep the reply as written",
+	},
+});

@@ -59,36 +59,50 @@ export function formatAdvisorBatchContent(notes: readonly AdvisorNote[], opts?: 
 }
 
 /**
- * Whether advice uses the steering channel at the next tool boundary.
- * Concerns wait for running tools; blockers interrupt them immediately.
- * Nits wait for the terminal primary turn.
+ * Whether advice at this severity should interrupt the running agent (delivered
+ * via the steering channel, aborting in-flight tools) rather than ride the
+ * non-interrupting aside queue that lands at the next step boundary. `concern`
+ * and `blocker` interrupt; a plain `nit` queues.
  */
-export function isSteeringSeverity(severity: AdvisorSeverity | undefined): boolean {
+export function isInterruptingSeverity(severity: AdvisorSeverity | undefined): boolean {
 	return severity === "concern" || severity === "blocker";
 }
 
+/** Whether `severity` is at least `minimum` (an omitted severity is a plain `nit`). */
+export function meetsAdvisorSeverity(severity: AdvisorSeverity | undefined, minimum: AdvisorSeverity): boolean {
+	return advisorSeverityRank(severity) >= advisorSeverityRank(minimum);
+}
+
 /** How an advisor note is routed to the primary. */
-export type AdvisorDeliveryChannel = "steer" | "preserve";
+export type AdvisorDeliveryChannel = "aside" | "steer" | "preserve";
+/** Half-open turn-count fence for the post-interrupt cooldown. */
+export function isAdvisorInterruptImmuneTurnActive(opts: {
+	completedTurns: number;
+	immuneTurnStart: number | undefined;
+	immuneTurns: number;
+}): boolean {
+	if (opts.immuneTurnStart === undefined || opts.immuneTurns <= 0) return false;
+	return opts.completedTurns < opts.immuneTurnStart + opts.immuneTurns;
+}
 
 /**
  * Decide how one advisor note reaches the primary agent.
  *
  * - A `preserveOnly` caller records every note that arrives while the primary
  *   is idle as a visible card and never starts a new primary turn.
- * - A `nit` is published as a visible card when AdviseTool releases it at turn end.
- * - A `concern`/`blocker` is steered into the agent: concerns queue at the next
- *   tool boundary without cancellation; blockers interrupt immediately. When
- *   idle, either can trigger a turn subject to the preservation guards below.
- * - If the primary tail is already a terminal text answer and there is no queued
- *   work, late non-blocker advice (a `nit` or `concern`) is preserved as a visible
- *   card instead of waking the primary to restate completion. A `blocker` is the
- *   exception: it means the agent handed off broken or unexercised work, so it
- *   still steers a triggered turn to force the primary to acknowledge and continue
- *   before the turn is considered done (#5628) — deferring it to the next user
- *   turn is the bug.
- *   `allowTerminalConcernSteering` opts out of ONLY this preservation branch
- *   (a final-review continuation policy); stop/abort suppression and `preserveOnly`
- *   still run first and are never bypassed.
+ * - A non-interrupting `nit` rides the non-interrupting aside queue while
+ *   streaming, or is preserved as a visible card when idle after a terminal answer.
+ * - An interrupting `concern`/`blocker` is normally steered into the agent: into
+ *   the live turn while one is streaming, or (when idle) a triggered turn so the
+ *   advice is acted on immediately.
+ * - If the primary is idle on a terminal text answer with no queued work, a note
+ *   below `continueSeverity` (`advisor.continueSeverity`) is preserved as a
+ *   visible card instead of waking the primary to restate completion (#4840).
+ *   A note at or above it — any severity, a `nit` included — triggers a
+ *   continuation so the primary acknowledges it before the run is considered
+ *   done (#5628), subject to the stop/abort and cooldown gates below; a gated
+ *   note is preserved rather than parked as an aside the idle primary would
+ *   never see.
  * - After a deliberate user interrupt (`autoResumeSuppressed`) the advisor must
  *   not auto-resume the stopped run. While the agent is idle — or still tearing
  *   the interrupted turn down (`aborting`) — the note is preserved as a visible
@@ -97,30 +111,29 @@ export type AdvisorDeliveryChannel = "steer" | "preserve";
  *   auto-resume anything, so it is delivered live. Parking it during an active
  *   run instead strands it (it never reaches the running agent) and the withheld
  *   notes dump as one burst at the next user prompt — the bug this guards.
+ * - During the post-interrupt immune-turn window, further non-blocker notes are
+ *   downgraded to asides (preserved when idle on a terminal answer). A `blocker`
+ *   is exempt: it means the agent handed off broken or unexercised work, so it
+ *   still steers a triggered turn even right after a prior interrupt (#5628).
  */
 export function resolveAdvisorDeliveryChannel(opts: {
 	severity: AdvisorSeverity | undefined;
+	/** Lowest severity that may wake a primary idle on a terminal answer. */
+	continueSeverity: AdvisorSeverity;
 	autoResumeSuppressed: boolean;
 	streaming: boolean;
 	aborting: boolean;
 	terminalAnswerNoQueuedWork?: boolean;
-	/** Opt out of terminal-answer preservation for a late `concern` (default
-	 *  false). Bypasses ONLY that branch — never stop/abort suppression or
-	 *  `preserveOnly`. */
-	allowTerminalConcernSteering?: boolean;
+	interruptImmuneTurnActive?: boolean;
 	preserveOnly?: boolean;
 }): AdvisorDeliveryChannel {
 	if (opts.preserveOnly && !opts.streaming) return "preserve";
-	if (!isSteeringSeverity(opts.severity)) return "preserve";
+	const terminalIdle = opts.terminalAnswerNoQueuedWork === true && !opts.streaming && !opts.aborting;
+	if (terminalIdle) {
+		if (!meetsAdvisorSeverity(opts.severity, opts.continueSeverity)) return "preserve";
+	} else if (!isInterruptingSeverity(opts.severity)) return "aside";
 	if (opts.autoResumeSuppressed && (opts.aborting || !opts.streaming)) return "preserve";
-	if (
-		opts.terminalAnswerNoQueuedWork &&
-		opts.severity !== "blocker" &&
-		!opts.allowTerminalConcernSteering &&
-		!opts.streaming &&
-		!opts.aborting
-	)
-		return "preserve";
+	if (opts.interruptImmuneTurnActive && opts.severity !== "blocker") return terminalIdle ? "preserve" : "aside";
 	return "steer";
 }
 
@@ -238,7 +251,7 @@ export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails>
 
 	/**
 	 * Start one advisor update: resets the guard's per-update budget and marks
-	 * whether the update reviews an in-progress primary turn. Nits
+	 * whether the update reviews an in-progress primary turn. Non-blockers
 	 * emitted while in progress are withheld so partial work does not interrupt
 	 * the primary before it can finish its planned steps. Transitioning to a
 	 * completed update flushes the withheld backlog, oldest first — each note
@@ -253,17 +266,12 @@ export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails>
 		if (wasInProgress && !inProgress) this.#flushDeferred();
 	}
 
-	/** Hold nits during a primary run without resetting the advisor update budget. */
-	setPrimaryTurnActive(): void {
-		this.#inProgressUpdate = true;
-	}
-
 	/**
-	 * Mark the primary no longer active and flush the withheld backlog
+	 * Mark the primary no longer mid-turn and flush the withheld backlog
 	 * WITHOUT starting a new advisor update or resetting the guard's budget.
-	 * Called only after the primary run rules out further continuations, so
-	 * nits cannot enter model context during an advisor-triggered continuation.
-	 * Flushed notes stay charged to their originating update as routed deliveries.
+	 * Called at the primary's terminal boundary (final yield), where no advisor
+	 * review follows but reserved notes must still reach the primary. Flushed
+	 * notes stay charged to their originating update as routed deliveries.
 	 */
 	flushDeferredNotes(): void {
 		this.#inProgressUpdate = false;
@@ -288,7 +296,7 @@ export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails>
 	): Promise<AgentToolResult<AdviseDetails>> {
 		const rank = advisorSeverityRank(args.severity);
 		const key = advisorNoteDedupeKey(args.note);
-		if (this.#inProgressUpdate && !isSteeringSeverity(args.severity)) {
+		if (this.#inProgressUpdate && args.severity !== "blocker") {
 			// Withheld, not delivered: reserve for the deterministic flush at the
 			// completed-update transition / terminal boundary.
 			const pending = this.#deferredNotes.find(item => item.key === key);

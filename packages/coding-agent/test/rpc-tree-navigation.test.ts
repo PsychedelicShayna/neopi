@@ -224,6 +224,63 @@ describe("native RPC tree navigation", () => {
 		expect(f.session.isSessionTransitioning).toBe(false);
 	});
 
+	test("host navigation effects run only after valid native admission and cannot admit competing work", async () => {
+		const f = await fixture();
+		const target = f.user("root");
+		const leaf = f.manager.appendMessage(assistantMsg("leaf"));
+		const admitted = vi.fn(async () => {
+			expect(f.session.isSessionTransitioning).toBe(true);
+			expect(f.manager.getLeafId()).toBe(leaf);
+			expect(() => f.session.executeBash("must-not-run")).toThrow("A remote tree navigation is in progress");
+		});
+		await expect(
+			navigateRpcTree(f.session, { targetId: "missing", ...f.expected() }, admitted),
+		).rejects.toMatchObject({ code: "invalid_target" });
+		await expect(
+			navigateRpcTree(f.session, { targetId: target, ...f.expected(), expectedSessionId: "stale" }, admitted),
+		).rejects.toMatchObject({ code: "session_changed" });
+		expect(await navigateRpcTree(f.session, { targetId: leaf, ...f.expected() }, admitted)).toMatchObject({
+			outcome: "unchanged",
+		});
+		expect(admitted).not.toHaveBeenCalled();
+		expect(await navigateRpcTree(f.session, { targetId: target, ...f.expected() }, admitted)).toMatchObject({
+			outcome: "navigated",
+			editorText: "root",
+		});
+		expect(admitted).toHaveBeenCalledTimes(1);
+	});
+
+	test("abort during admitted host lifecycle effects cancels before summary hooks run", async () => {
+		const hook = vi.fn(async () => ({ summary: { summary: "unused" } }));
+		const f = await fixture({ extension: treeHook(hook) });
+		const target = f.user("root");
+		const leaf = f.manager.appendMessage(assistantMsg("leaf"));
+		const reached = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const navigation = navigateRpcTree(
+			f.session,
+			{ targetId: target, summarize: true, ...f.expected() },
+			async () => {
+				reached.resolve();
+				await release.promise;
+			},
+		);
+		try {
+			await reached.promise;
+			f.session.abortBranchSummary();
+		} finally {
+			release.resolve();
+		}
+		expect(await navigation).toMatchObject({
+			outcome: "cancelled",
+			cancelled: true,
+			aborted: true,
+			leafId: leaf,
+		});
+		expect(hook).not.toHaveBeenCalled();
+		expect(f.session.isSessionTransitioning).toBe(false);
+	});
+
 	test("rechecks the leaf under admission after an awaited native hook", async () => {
 		const reached = Promise.withResolvers<void>();
 		const release = Promise.withResolvers<void>();
@@ -369,31 +426,56 @@ describe("native RPC tree navigation", () => {
 		});
 		const oldLeaf = f.manager.appendMessage(assistantMsg("old continuation"));
 		const continuing = vi.spyOn(f.agent, "continue").mockResolvedValue(undefined);
-		const probe = await navigateRpcTree(f.session, { targetId: oldAnswer, allowAskReopen: true, ...f.expected() });
+		const admitted = vi.fn(async () => {});
+		const probe = await navigateRpcTree(
+			f.session,
+			{ targetId: oldAnswer, allowAskReopen: true, ...f.expected() },
+			admitted,
+		);
 		expect(probe).toMatchObject({
 			outcome: "ask_reopen",
 			leafId: oldLeaf,
 			reopenAsk: { toolCallId: "ask-1", questions },
 		});
 		expect(probe.resumeToken).toBeUndefined();
+		expect(admitted).not.toHaveBeenCalled();
 		const committed = await navigateRpcTree(f.session, {
 			targetId: oldAnswer,
 			allowAskReopen: true,
 			...f.expected(),
 			reanswerAskResult: {
 				content: [{ type: "text", text: "production" }],
-				details: { question: "Where?", selectedOptions: ["production"] },
+				details: {
+					question: "Where?",
+					selectedOptions: ["production"],
+					note: "Wait for the deployment window",
+					noteOption: "production",
+					optionNotes: [{ option: "production", note: "Use the approved rollout" }],
+				},
 			},
 		});
 		expect(committed).toMatchObject({ outcome: "navigated", askReanswerCommitted: true });
 		expect(committed.resumeToken).toBeString();
+		expect(f.session.hasPendingTreeResume()).toBe(true);
 		expect(f.manager.getEntry(committed.leafId!)?.parentId).toBe(call);
+		expect(f.manager.getEntry(committed.leafId!)).toMatchObject({
+			type: "message",
+			message: {
+				role: "toolResult",
+				details: {
+					note: "Wait for the deployment window",
+					noteOption: "production",
+					optionNotes: [{ option: "production", note: "Use the approved rollout" }],
+				},
+			},
+		});
 		expect(f.manager.getEntry(oldAnswer)?.parentId).toBe(call);
 		expect(f.manager.getEntry(oldLeaf)).toBeDefined();
 		expect(continuing).not.toHaveBeenCalled();
 		const ack = { resumeToken: committed.resumeToken!, ...f.expected() };
 		expect(() => resumeRpcTree(f.session, { ...ack, expectedSessionFile: "/identical/copy.jsonl" })).toThrow();
 		expect(resumeRpcTree(f.session, ack)).toEqual({ resumed: true });
+		expect(f.session.hasPendingTreeResume()).toBe(false);
 		await f.session.waitForIdle();
 		expect(continuing).toHaveBeenCalledTimes(1);
 		expect(() => resumeRpcTree(f.session, ack)).toThrow();

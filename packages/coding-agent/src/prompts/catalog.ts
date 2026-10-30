@@ -99,7 +99,6 @@ import asset89 from "../discovery/builtin-rules/rs-box-leak.md" with { type: "te
 import asset90 from "../discovery/builtin-rules/rs-future-prelude.md" with { type: "text" };
 import asset91 from "../discovery/builtin-rules/rs-lazylock.md" with { type: "text" };
 import asset92 from "../discovery/builtin-rules/rs-match-ergonomics.md" with { type: "text" };
-import asset93 from "../discovery/builtin-rules/rs-parking-lot.md" with { type: "text" };
 import asset94 from "../discovery/builtin-rules/rs-result-type.md" with { type: "text" };
 import asset95 from "../discovery/builtin-rules/ts-bare-catch.md" with { type: "text" };
 import asset96 from "../discovery/builtin-rules/ts-import-type.md" with { type: "text" };
@@ -2276,19 +2275,6 @@ export const promptAssets: readonly PromptAsset[] = [
 		fixture: {},
 		consumerHints: [
 			"packages/coding-agent/src/discovery/builtin-rules/rs-match-ergonomics.md",
-			"packages/coding-agent/src/discovery/builtin-rules/index.ts",
-		],
-	},
-	{
-		id: "discovery/builtin-rules/rs-parking-lot.md",
-		relPath: "discovery/builtin-rules/rs-parking-lot.md",
-		bundled: asset93,
-		scope: "feature:discovery/builtin-rules/rs-parking-lot",
-		group: "feature",
-		keys: [],
-		fixture: {},
-		consumerHints: [
-			"packages/coding-agent/src/discovery/builtin-rules/rs-parking-lot.md",
 			"packages/coding-agent/src/discovery/builtin-rules/index.ts",
 		],
 	},

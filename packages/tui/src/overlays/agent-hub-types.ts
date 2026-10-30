@@ -66,6 +66,19 @@ export interface AgentRecordLike {
 	};
 	lifecycle?: { responseAt?: number; acceptedAt?: number; terminalAt?: number };
 }
+
+/** These participants have no agent session that hub actions may mutate. */
+export function isAgentTranscriptReadOnly(ref: Pick<AgentRecordLike, "kind" | "history">): boolean {
+	return ref.kind === "advisor" || ref.kind === "mailbox" || ref.kind === "operator" || ref.history?.readOnly === true;
+}
+
+/** Explicit revival is distinct from opening or messaging a killed transcript. */
+export function canReviveAgent(ref: AgentRecordLike): boolean {
+	return (
+		!isAgentTranscriptReadOnly(ref) &&
+		(ref.status === "parked" || (ref.status === "aborted" && ref.sessionFile !== null))
+	);
+}
 /** Registry operations needed to display a live roster. */
 export interface AgentHubRegistry<TRecord extends AgentRecordLike = AgentRecordLike> {
 	list(): TRecord[];

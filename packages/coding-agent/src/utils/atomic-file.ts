@@ -16,12 +16,17 @@ export async function replaceFileAtomically(tempPath: string, targetPath: string
 	}
 }
 
-/** Write a complete sibling file before publishing it, without exposing truncated contents. */
+/**
+ * Write a complete private sibling before publishing it, without exposing
+ * truncated contents. Defaults to owner-only permissions; `mode` is restored
+ * explicitly after staging so the umask cannot narrow the requested mode.
+ */
 export async function writeFileAtomically(
 	filePath: string,
 	content: string,
-	options: { noReplace?: boolean } = {},
+	options: { noReplace?: boolean; mode?: number } = {},
 ): Promise<void> {
+	const mode = options.mode ?? 0o600;
 	const targetPath = options.noReplace
 		? filePath
 		: await fs.promises.realpath(filePath).catch(error => {
@@ -33,11 +38,11 @@ export async function writeFileAtomically(
 	try {
 		let handle: fs.promises.FileHandle;
 		try {
-			handle = await fs.promises.open(tempPath, "wx", 0o600);
+			handle = await fs.promises.open(tempPath, "wx", mode);
 		} catch (error) {
 			if (!isEnoent(error)) throw error;
 			await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
-			handle = await fs.promises.open(tempPath, "wx", 0o600);
+			handle = await fs.promises.open(tempPath, "wx", mode);
 		}
 		removeTemp = true;
 		try {
@@ -46,6 +51,7 @@ export async function writeFileAtomically(
 		} finally {
 			await handle.close();
 		}
+		await fs.promises.chmod(tempPath, mode);
 		if (options.noReplace) {
 			// A hard link publishes the completed file without clobbering a target
 			// created by another process while this file was staged.
@@ -100,6 +106,36 @@ async function replaceAfterWindowsRenameFailure(
 				error: toError(error).message,
 			});
 		}
+	}
+}
+
+
+/**
+ * Synchronous sibling of {@link writeFileAtomically} for callers that cannot
+ * await, such as the boot-time config migration.
+ */
+export function writeFileAtomicallySync(filePath: string, content: string, mode: number = 0o600): void {
+	const tempPath = `${filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+	let fd: number | undefined;
+	try {
+		fd = fs.openSync(tempPath, "wx", mode);
+		fs.writeFileSync(fd, content, "utf8");
+		fs.fsyncSync(fd);
+		fs.closeSync(fd);
+		fd = undefined;
+		// The umask narrows the mode passed to open(); restore it explicitly.
+		fs.chmodSync(tempPath, mode);
+		fs.renameSync(tempPath, filePath);
+	} catch (error) {
+		if (fd !== undefined) {
+			try {
+				fs.closeSync(fd);
+			} catch {
+				// The descriptor is already gone.
+			}
+		}
+		fs.rmSync(tempPath, { force: true });
+		throw error;
 	}
 }
 

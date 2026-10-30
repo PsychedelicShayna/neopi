@@ -69,6 +69,51 @@ describe("prewalk startup degradation", () => {
 		expect(options.prewalk?.target.id).toBe(model.id);
 	});
 
+	test("arms the configured prewalk.execution target instead of @smol", async () => {
+		const smol = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const into = getBundledModel("openai", "gpt-4o");
+		if (!smol || !into) throw new Error("expected claude-sonnet-4-5 and gpt-4o to be bundled");
+		const settings = Settings.isolated();
+		cfgPrewalkEnabled.set(settings, true);
+		cfgPrewalkExecution.set(settings, `${into.provider}/${into.id}`);
+		settings.setModelRole("smol", `${smol.provider}/${smol.id}`);
+		authStorage.keys.setRuntime(smol.provider, "test-key");
+		authStorage.keys.setRuntime(into.provider, "test-key");
+
+		const options = await buildSessionOptions(parseArgs([]), [], SessionManager.inMemory(), modelRegistry, settings);
+
+		expect(options.prewalk?.target.provider).toBe(into.provider);
+		expect(options.prewalk?.target.id).toBe(into.id);
+	});
+
+	test("configured execution @default follows --model while an explicit target keeps the original role", async () => {
+		const configured = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const active = getBundledModel("anthropic", "claude-opus-4-6");
+		if (!configured || !active) throw new Error("expected bundled models");
+		authStorage.keys.setRuntime("anthropic", "test-key");
+		for (const explicit of [false, true]) {
+			const settings = Settings.isolated({
+				"prewalk.enabled": true,
+				"prewalk.execution": "@default",
+			});
+			settings.setModelRole("default", `${configured.provider}/${configured.id}:low`);
+			const options = await buildSessionOptions(
+				parseArgs([
+					"--model",
+					`${active.provider}/${active.id}:high`,
+					...(explicit ? ["--prewalk-into", "@default"] : []),
+				]),
+				[],
+				SessionManager.inMemory(),
+				modelRegistry,
+				settings,
+			);
+			expect(options.model?.id).toBe(active.id);
+			expect(options.prewalk?.target.id).toBe(explicit ? configured.id : active.id);
+			expect(options.prewalk?.thinkingLevel).toBe(explicit ? Effort.Low : Effort.High);
+		}
+	});
+
 	test("skips a disabled provider and arms the next enabled prewalk candidate", async () => {
 		const disabled = getBundledModel("anthropic", "claude-sonnet-4-5");
 		const enabled = getBundledModel("openai", "gpt-4o");
@@ -145,6 +190,7 @@ describe("prewalk startup degradation", () => {
 		const notices: string[] = [];
 		const { session } = await createAgentSession({
 			...options,
+			agentId: `Prewalk-${Snowflake.next()}`,
 			cwd: tempDir,
 			agentDir: tempDir,
 			model: execution,

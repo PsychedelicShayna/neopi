@@ -137,6 +137,8 @@ export interface VerdictInput {
 
 /** Render a judge's structured answer as operator-facing verdict text. */
 export function renderVerdict(template: string, input: VerdictInput): string {
+	// Mixtures do not ask image-localization questions, so a box is a malformed verdict.
+	if (input.answer.type === "box") throw new Error("mixture verdict unexpectedly returned a bounding box");
 	const answer =
 		input.answer.type === "choice"
 			? { choice: input.answer.choice }

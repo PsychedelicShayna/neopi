@@ -113,6 +113,14 @@ function parseMaxTimeSeconds(value: string): number {
 	);
 }
 
+function parseCostUsd(flag: string, value: string): number {
+	const usd = Number(value.trim());
+	if (Number.isFinite(usd) && usd > 0) return usd;
+	throw new CliUsageError(
+		`Invalid ${flag} value: ${JSON.stringify(value)}. Expected a positive USD amount, e.g. 0.50.`,
+	);
+}
+
 /**
  * Setters for flags with string values. Most built-ins consume the next argv
  * token even when it starts with `-`; flags listed in
@@ -168,6 +176,12 @@ export const STRING_SETTERS: Record<string, StringSetter> = {
 	},
 	"--max-time": (result, value) => {
 		result.maxTime = parseMaxTimeSeconds(value);
+	},
+	"--warn-cost": (result, value) => {
+		result.warnCost = parseCostUsd("--warn-cost", value);
+	},
+	"--max-cost": (result, value) => {
+		result.maxCost = parseCostUsd("--max-cost", value);
 	},
 	"--service-tier": (result, value) => {
 		if (!isServiceTierOpenAISettingValue(value)) {
@@ -255,13 +269,15 @@ export const STRING_SETTERS: Record<string, StringSetter> = {
 			.filter(Boolean);
 	},
 	"--approval-mode": (result, value) => {
-		if (value !== "always-ask" && value !== "write" && value !== "yolo") {
+		// The values mirror `ApprovalMode` in ../tools/approval, which this module
+		// may only import as a type: that module reaches pi-utils at runtime.
+		if (value === "always-ask" || value === "always-ask-cached" || value === "write" || value === "yolo") {
+			result.approvalMode = value;
+		} else {
 			result.invalidFlagValues.push(
-				`Invalid --approval-mode value: ${JSON.stringify(value)}. Expected one of: always-ask, write, yolo.`,
+				`Invalid --approval-mode value: ${JSON.stringify(value)}. Expected one of: always-ask, always-ask-cached, write, yolo.`,
 			);
-			return;
 		}
-		result.approvalMode = value;
 	},
 };
 
@@ -337,6 +353,7 @@ export const VALUELESS_FLAGS: ReadonlySet<string> = new Set([
 	"--no-exit-with-parent",
 	"--hide-thinking",
 	"--advisor",
+	"--wait-async",
 	"--external-thinking",
 	"--prewalk",
 	"--no-prewalk",
@@ -347,6 +364,7 @@ export const VALUELESS_FLAGS: ReadonlySet<string> = new Set([
 	"--no-skills",
 	"--no-mcp",
 	"--no-rules",
+	"--no-context-files",
 	"--no-title",
 	"--no-ui",
 	"--no-control-socket",
@@ -419,11 +437,11 @@ const ONE_SHOT_LAUNCH_FLAGS: Readonly<Record<string, true>> = {
 
 /**
  * Rewrite the launch argv for a relaunch of this session (`/restart`, and
- * `/fork pane|window` with `resumeSessionId` undefined).
+ * `/fork pane|window` with `resumeSessionSource` undefined).
  *
  * Keeps every configuration flag as launched, but drops:
  * - one-shot selectors ({@link ONE_SHOT_LAUNCH_FLAGS}, including inline
- *   `--resume=<id>` forms) — the relaunch resumes `resumeSessionId` instead;
+ *   `--resume=<source>` forms) - the relaunch resumes `resumeSessionSource` instead;
  * - flags in `drop`, which the caller re-supplies with current values;
  * - positionals (prompt messages, `@file` args, subcommand tokens) — their
  *   effect is already in the resumed transcript, so replaying them would
@@ -431,12 +449,12 @@ const ONE_SHOT_LAUNCH_FLAGS: Readonly<Record<string, true>> = {
  *
  * Value consumption mirrors {@link flagConsumesValue}, so a dropped flag takes
  * its value token with it and an unknown extension flag keeps its value.
- * `resumeSessionId` is omitted for a session that never materialized on disk;
- * the relaunch then starts fresh with the same configuration.
+ * `resumeSessionSource` is a session ID or file path, omitted for a session that
+ * never materialized on disk; the relaunch then starts fresh with the same configuration.
  */
 export function restartArgv(
 	argv: string[],
-	resumeSessionId: string | undefined,
+	resumeSessionSource: string | undefined,
 	drop?: Readonly<Record<string, true>>,
 ): string[] {
 	const kept: string[] = [];
@@ -453,6 +471,6 @@ export function restartArgv(
 		kept.push(arg);
 		if (consumesNext) kept.push(argv[++i]);
 	}
-	if (resumeSessionId !== undefined) kept.push("--resume", resumeSessionId);
+	if (resumeSessionSource !== undefined) kept.push("--resume", resumeSessionSource);
 	return kept;
 }

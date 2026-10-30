@@ -37,10 +37,10 @@ import {
 	type LiveClientMessage,
 	type LiveServerEvent,
 } from "./protocol";
+import { OUTPUT_ACTIVE_LEVEL, OutputActivity } from "./output-activity";
 import { CodexLiveTransport } from "./transport";
 import { DEFAULT_LIVE_VOICE } from "./voices";
 
-const OUTPUT_ACTIVE_LEVEL = 0.015;
 const MIN_BARGE_IN_LEVEL = 0.04;
 const OUTPUT_ECHO_RATIO = 0.65;
 const OUTPUT_SILENCE_MS = 250;
@@ -134,6 +134,7 @@ export interface LiveSessionCallbacks {
 
 /** Structural transport surface the controller needs (test seam). */
 export type LiveTransportLike = Pick<CodexLiveTransport, "connect" | "send" | "close" | "setMuted" | "pushAudio"> & {
+	readonly sdpAnswer?: string;
 	playbackQueueStats?(): { queuedMs: number; droppedMs: number };
 	setOutputSuppressed?(suppressed: boolean): void;
 };
@@ -186,6 +187,8 @@ export interface LiveSessionControllerOptions {
 		sampleRate: number,
 		callback: (error: Error | null, samples: Float32Array) => void,
 	): LiveRecorderLike;
+	/** Caller-owned WebRTC audio; no host microphone or speaker is opened. */
+	sdpOffer?: string;
 }
 
 function errorFrom(cause: unknown): Error {
@@ -286,6 +289,7 @@ export class LiveSessionController {
 	#lastKeywordSubmission: string | undefined;
 	readonly #captureComposerExcludingTurns: ((turns: readonly number[]) => LiveComposerSubmission) | undefined;
 	#suppressedResponse = false;
+	readonly #sdpOffer: string | undefined;
 
 	readonly #createTransport: (options: ConstructorParameters<typeof CodexLiveTransport>[0]) => LiveTransportLike;
 	readonly #createRecorder: (
@@ -399,6 +403,11 @@ export class LiveSessionController {
 	#userTranscriptTurn = 0;
 	#assistantTranscriptTurn = 0;
 	#lastTranscript: LiveTranscript | undefined;
+	readonly #outputActivity = new OutputActivity(() =>
+		this.#guardEvent(() => {
+			if (!this.#activeDelegationId) this.#refreshAudioPhase();
+		}),
+	);
 
 	constructor(options: LiveSessionControllerOptions) {
 		this.#session = options.session;
@@ -430,6 +439,7 @@ export class LiveSessionController {
 				: DEFAULT_THINKING_FLUSH_MS;
 		this.#createTransport = options.createTransport ?? (transportOptions => new CodexLiveTransport(transportOptions));
 		this.#createRecorder = options.createRecorder ?? sharedAudioCapture;
+		this.#sdpOffer = options.sdpOffer;
 	}
 
 	/** Current realtime call phase. */
@@ -452,7 +462,16 @@ export class LiveSessionController {
 		return this.#heldContext.length;
 	}
 
-	/** Connects the realtime surface and starts microphone streaming. */
+
+	/**
+	 * SDP answer for the caller's peer in an `sdpOffer` session. It exists as soon as the offer is
+	 * signaled, before the control socket connects, so apply it only after `start()` resolves.
+	 */
+	get sdpAnswer(): string | undefined {
+		return this.#transport?.sdpAnswer;
+	}
+
+	/** Connects the realtime surface and starts microphone streaming (or, with `sdpOffer`, only signaling). */
 	async start(): Promise<void> {
 		if (this.#stopped) {
 			throw (
@@ -494,6 +513,7 @@ export class LiveSessionController {
 				instructions,
 				voice: this.#voice,
 				model: this.#model,
+				sdpOffer: this.#sdpOffer,
 				callbacks: {
 					onEvent: event => this.#guardEvent(() => this.#handleLiveEvent(event)),
 					onOutputLevel: level => this.#guardEvent(() => this.#handleOutputLevel(level)),
@@ -527,6 +547,10 @@ export class LiveSessionController {
 			if (this.#stopped) {
 				throw this.#failure ?? new Error("The live session stopped before recording began.");
 			}
+			if (this.#sdpOffer !== undefined) {
+				this.#refreshAudioPhase();
+				return;
+			}
 			const recorder = this.#createRecorder(16_000, (error, samples) => {
 				if (error) {
 					this.#reportFailure(error);
@@ -556,7 +580,8 @@ export class LiveSessionController {
 	toggleMute(): void {
 		if (this.#stopped) return;
 		this.#muted = !this.#muted;
-		if (this.#muted) {
+		// Remote audio reports no levels, so a mute must not emit a `(0, 0)` pair either.
+		if (this.#muted && this.#sdpOffer === undefined) {
 			this.#inputLevel = 0;
 			this.#emitLevels();
 		}
@@ -613,6 +638,7 @@ export class LiveSessionController {
 		this.#voiceNotes.clear();
 		for (const { sent } of this.#pendingOperatorText) sent(false);
 		this.#pendingOperatorText = [];
+		this.#outputActivity.dispose();
 		this.#unsubscribeSession?.();
 		this.#unsubscribeSession = undefined;
 		// Flush a mid-utterance user transcript (VAD-split or aborted turn) so the
@@ -680,7 +706,8 @@ export class LiveSessionController {
 		}
 		switch (event.type) {
 			case "session.started":
-				this.#emitPhase("listening");
+				// Mute wins over server-driven phases: a remote peer treats any other phase as unmuted.
+				this.#refreshAudioPhase();
 				break;
 			case "session.updated":
 			case "output_audio.delta":
@@ -804,7 +831,7 @@ export class LiveSessionController {
 			dispatchEnabled: false,
 			dispatching: false,
 		};
-		this.#emitPhase("working");
+		this.#refreshAudioPhase();
 		if (
 			this.#pendingDelegation.delivery === "interrupt" &&
 			(this.#session.isStreaming || this.#session.isBashRunning || this.#session.isEvalRunning)
@@ -1659,6 +1686,7 @@ export class LiveSessionController {
 		this.#outputSilenceDeadline = Date.now() + OUTPUT_SILENCE_MS;
 		this.#outputSilenceTimer ??= setTimeout(() => this.#expireOutputLevel(), OUTPUT_SILENCE_MS);
 		this.#outputLevel = clampLevel(level);
+		this.#outputActivity.observe(this.#outputLevel);
 		this.#emitLevels();
 		if (this.#outputLevel > OUTPUT_ACTIVE_LEVEL) {
 			// Pin playback before a subsequent composer update can re-arm input holding.
@@ -2073,9 +2101,9 @@ export class LiveSessionController {
 		if (this.#stopped) return;
 		if (this.#muted) {
 			this.#emitPhase("muted");
-		} else if (this.#activeDelegationId) {
+		} else if (this.#activeDelegationId || this.#pendingDelegation) {
 			this.#emitPhase("working");
-		} else if (this.#outputLevel > OUTPUT_ACTIVE_LEVEL) {
+		} else if (this.#outputActivity.active) {
 			this.#emitPhase("speaking");
 		} else {
 			this.#emitPhase("listening");

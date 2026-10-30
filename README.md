@@ -162,7 +162,7 @@ Run `npi update` for the fork-aware interactive update path. Maintainers integra
 
 NeoPi is licensed under the [MIT License](LICENSE).
 
-Third-party and vendored code remains under its respective license. See [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt) and component-local notices.
+Third-party and vendored code remains under its respective license. Each shipped component carries its own `THIRD-PARTY-NOTICES.txt`: the CLI (`packages/coding-agent`), the native addon (`packages/natives`), and robomp (`python/robomp`). `npi --license` prints the CLI and addon notices.
 
 Copyright notices carried by this repository:
 

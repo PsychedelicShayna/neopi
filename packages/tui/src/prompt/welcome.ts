@@ -270,36 +270,7 @@ export class WelcomeComponent implements Component {
 			this.#native = { tip, node: described };
 			return described;
 		}
-		const lockupRow = keyed(
-			row(
-				[
-					node(
-						"image",
-						{
-							builtin: "omp",
-							alt: PRODUCT_NAME,
-							w: 128,
-							role: "omp.welcome.logo",
-						},
-						undefined,
-						"logo",
-					),
-					keyed(
-						col(
-							[
-								art([span(PRODUCT_NAME, "strong")], "omp.welcome.wordmark"),
-								art([span(`v${this.version}`, "dim mono")], "omp.welcome.version"),
-							],
-							{ role: "omp.welcome.mark" },
-						),
-						"mark",
-					),
-				],
-				{ align: "center", gap: "md", role: "omp.welcome.lockup" },
-			),
-			"lockup",
-		);
-		const body: NativeChild[] = [lockupRow];
+		const body: NativeChild[] = [lockupNode(this.version)];
 		this.#appendNativeTip(body, tip);
 		// No head row or chevron: the card is the hero; the version sits under the wordmark.
 		const described = card({ role: "omp.welcome" }, body);
@@ -450,6 +421,36 @@ export class WelcomeComponent implements Component {
 	}
 }
 
+/**
+ * omp's native lockup (`omp.welcome.lockup`, keyed `lockup`): the terminal's
+ * builtin `omp` mark, which it draws on, beside the `omp` wordmark with
+ * `v<version>` under it. The welcome card and the setup splash show it.
+ */
+export function lockupNode(version: string): NativeNode {
+	// Brand lines are short and fixed; never wrap or truncate them.
+	const art = (spans: readonly TspSpan[], role: string): NativeNode =>
+		keyed(text(spans, { wrap: "none", role }), role);
+	return keyed(
+		row(
+			[
+				node("image", { builtin: "omp", alt: PRODUCT_NAME, w: 128, role: "omp.welcome.logo" }, undefined, "logo"),
+				keyed(
+					col(
+						[
+							art([span(PRODUCT_NAME, "strong")], "omp.welcome.wordmark"),
+							art([span(`v${version}`, "dim mono")], "omp.welcome.version"),
+						],
+						{ role: "omp.welcome.mark" },
+					),
+					"mark",
+				),
+			],
+			{ align: "center", gap: "md", role: "omp.welcome.lockup" },
+		),
+		"lockup",
+	);
+}
+
 /** Block-grid brand mark shared by the welcome and setup surfaces. */
 export const PI_LOGO = ["████████████", "   ██  ██   ", "   ██  ██   ", "   ▒▒  ██   ", "       ██   "];
 
@@ -488,18 +489,6 @@ function centerBlock(lines: readonly string[], width: number): string[] {
 	const widest = lines.reduce((max, line) => Math.max(max, visibleWidth(line)), 0);
 	const indent = padding(Math.max(0, Math.floor((width - widest) / 2)));
 	return lines.map(line => indent + line);
-}
-
-/** The block-grid brand mark as accent lines; `shimmer` declares the terminal-clocked shine sweep. */
-export function logoNode(lines: readonly string[], shimmer: boolean): NativeNode {
-	return col(
-		lines.map(line =>
-			text([span(line, "accent", shimmer ? { fx: "shimmer" } : undefined)], {
-				wrap: "none",
-			}),
-		),
-		{ align: "center", role: "omp.setup.logo" },
-	);
 }
 
 /** Multi-stop palette for the diagonal gradient. */

@@ -15,6 +15,7 @@ describe("Windows release binary target", () => {
 			.nothrow();
 		expect(result.exitCode).toBe(0);
 		const output = result.text();
+		expect(output).toContain("DRY RUN bun --cwd=packages/collab-web run gen:export-viewer --check");
 
 		expect(output).toContain(
 			"DRY RUN Bun.build target=bun-windows-x64-baseline outfile=packages/coding-agent/binaries/npi-windows-x64.exe",
