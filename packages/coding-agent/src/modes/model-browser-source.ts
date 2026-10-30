@@ -49,7 +49,7 @@ export function createModelBrowserSource(
 			const details = settings.getModelRoleScopeDetails(role, editingScope);
 			return details.shadowed
 				? `${editingScope} · shadowed by ${details.winner}: ${String(details.effective ?? "inherit")}`
-				: `${editingScope} · effective ${details.winner}`;
+				: `${editingScope} · effective ${details.winner}: ${String(details.effective ?? "inherit")}`;
 		} : undefined,
 		get revision() {
 			return settings.revision;
