@@ -272,22 +272,25 @@ describe("ModelHub", () => {
 		}
 	});
 
-	test.each(["session", "project", "global"] as const)("Models %s edits its own assignment and shows higher-scope shadowing", scope => {
-		const settings = Settings.isolated({});
-		settings.writeScopeValue(cfgModelRoles, { default: "test/global" }, "global");
-		settings.writeScopeValue(cfgModelRoles, { default: "test/project" }, "project");
-		settings.writeScopeValue(cfgModelRoles, { default: "test/session" }, "session");
-		const models = ["global", "project", "session"].map(id => makeModel("test", id));
-		const source = createModelBrowserSource(settings, undefined, scope);
-		expect(source.getModelRole("default")).toBe(`test/${scope}`);
-		expect(settings.getModelRole("default")).toBe("test/session");
-		const { hub, onUnassign } = createHub({ models, settings, scoped: true, scope });
-		for (const key of [UP, "\n"]) hub.handleInput(key);
-		const rendered = normalize(hub.render(220));
-		if (scope !== "session") expect(rendered).toContain("shadowed by session: test/session");
-		hub.handleInput("x");
-		expect(onUnassign).toHaveBeenCalledWith("default", scope);
-	});
+	test.each(["session", "project", "global"] as const)(
+		"Models %s edits its own assignment and shows higher-scope shadowing",
+		scope => {
+			const settings = Settings.isolated({});
+			settings.writeScopeValue(cfgModelRoles, { default: "test/global" }, "global");
+			settings.writeScopeValue(cfgModelRoles, { default: "test/project" }, "project");
+			settings.writeScopeValue(cfgModelRoles, { default: "test/session" }, "session");
+			const models = ["global", "project", "session"].map(id => makeModel("test", id));
+			const source = createModelBrowserSource(settings, undefined, scope);
+			expect(source.getModelRole("default")).toBe(`test/${scope}`);
+			expect(settings.getModelRole("default")).toBe("test/session");
+			const { hub, onUnassign } = createHub({ models, settings, scoped: true, scope });
+			for (const key of [UP, "\n"]) hub.handleInput(key);
+			const rendered = normalize(hub.render(220));
+			if (scope !== "session") expect(rendered).toContain("shadowed by session: test/session");
+			hub.handleInput("x");
+			expect(onUnassign).toHaveBeenCalledWith("default", scope);
+		},
+	);
 
 	test("role token budgets are editable in Models without changing stored keys", () => {
 		const settings = Settings.isolated();
@@ -995,7 +998,12 @@ describe("ModelHub", () => {
 			// Roles owns its own search rather than switching to the model catalog.
 			hub.handleInput("/");
 			hub.handleInput("t");
-			expect(hub.navigationSnapshot()).toMatchObject({ entry: "roles", rolesQuery: "", rolesValue: "t", focus: "list" });
+			expect(hub.navigationSnapshot()).toMatchObject({
+				entry: "roles",
+				rolesQuery: "",
+				rolesValue: "t",
+				focus: "list",
+			});
 			expect(footerLine(hub.render(220))).toContain("Search · Enter confirm · Esc clear");
 			hub.handleInput(ESC);
 			expect(hub.navigationSnapshot().filterFocused).toBe(false);
@@ -2698,8 +2706,10 @@ describe("ModelHub", () => {
 			query => {
 				const { hub, onAssign } = createHub({
 					models: [
-						makeModel("test", "live"), makeModel("test", "voice"),
-						makeModel("test", "lively"), makeModel("test", "voicemail"),
+						makeModel("test", "live"),
+						makeModel("test", "voice"),
+						makeModel("test", "lively"),
+						makeModel("test", "voicemail"),
 					],
 					scoped: true,
 				});

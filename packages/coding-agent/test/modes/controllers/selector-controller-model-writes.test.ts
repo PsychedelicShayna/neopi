@@ -84,21 +84,24 @@ describe("SelectorController model hub writes", () => {
 		return callbacks;
 	}
 
-	it.each(["global", "project", "session"] as const)("keeps %s default assignments below higher scopes", async scope => {
-		const settings = Settings.isolated();
-		for (const layer of ["global", "project", "session"] as const) {
-			settings.setRoleModelAndEffort("default", "anthropic/claude-opus-4-5", undefined, layer);
-		}
-		const { controller, showError } = start(settings, model("claude-opus-4-5"));
-		const hub = openModelHub(controller, scope);
-		expect(await hub.onAssign(
-			model("claude-sonnet-4-5"), "default", undefined, "anthropic/claude-sonnet-4-5", scope,
-		)).toBe(true);
-		expect(showError).not.toHaveBeenCalled();
-		expect(settings.getModelRoleScopeDetails("default", scope)[scope]).toBe("anthropic/claude-sonnet-4-5");
-		expect(settings.getModelRoleProvenance("default")).toBe("session");
-		expect(session?.model?.id).toBe(scope === "session" ? "claude-sonnet-4-5" : "claude-opus-4-5");
-	});
+	it.each(["global", "project", "session"] as const)(
+		"keeps %s default assignments below higher scopes",
+		async scope => {
+			const settings = Settings.isolated();
+			for (const layer of ["global", "project", "session"] as const) {
+				settings.setRoleModelAndEffort("default", "anthropic/claude-opus-4-5", undefined, layer);
+			}
+			const { controller, showError } = start(settings, model("claude-opus-4-5"));
+			const hub = openModelHub(controller, scope);
+			expect(
+				await hub.onAssign(model("claude-sonnet-4-5"), "default", undefined, "anthropic/claude-sonnet-4-5", scope),
+			).toBe(true);
+			expect(showError).not.toHaveBeenCalled();
+			expect(settings.getModelRoleScopeDetails("default", scope)[scope]).toBe("anthropic/claude-sonnet-4-5");
+			expect(settings.getModelRoleProvenance("default")).toBe("session");
+			expect(session?.model?.id).toBe(scope === "session" ? "claude-sonnet-4-5" : "claude-opus-4-5");
+		},
+	);
 
 	it.each(["global", "project", "session"] as const)("edits and clears only the %s role token budget", scope => {
 		const settings = Settings.isolated();
@@ -113,9 +116,13 @@ describe("SelectorController model hub writes", () => {
 				default: { "compaction.thresholdTokens": layer === scope ? 64000 : 120000 },
 			});
 		}
-		expect(settings.getRoleSetting("default", cfgCompactionThresholdTokens)).toBe(scope === "session" ? 64000 : 120000);
+		expect(settings.getRoleSetting("default", cfgCompactionThresholdTokens)).toBe(
+			scope === "session" ? 64000 : 120000,
+		);
 		expect(hub.onRoleTokenBudgetChange?.("default", undefined)).toBe(true);
-		expect(settings.readScopeValue(cfgRoleSettings, scope)).toEqual({ default: { "compaction.thresholdTokens": null } });
+		expect(settings.readScopeValue(cfgRoleSettings, scope)).toEqual({
+			default: { "compaction.thresholdTokens": null },
+		});
 		expect(showError).not.toHaveBeenCalled();
 	});
 
