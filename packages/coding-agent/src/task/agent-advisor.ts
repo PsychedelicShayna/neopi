@@ -3,7 +3,6 @@ import type { AdvisorConfigScope } from "@oh-my-pi/pi-tui/overlays/advisor-confi
 import { listNamedAdvisors, parseInlineAdvisorConfig } from "../advisor/config";
 import { type AgentAdvisorSelection, resolveAgentAdvisorRolePattern, resolveAgentAdvisorSelection } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
-import { expandAtImports } from "../discovery/at-imports";
 
 export function parseAgentAdvisor(value: unknown): AgentAdvisor | undefined {
 	if (value === undefined || value === null) return undefined;
@@ -44,9 +43,7 @@ export async function resolveSpawnAdvisorConfig(selection: AgentAdvisorSelection
 	const advisors = await listNamedAdvisors(cwd, agentDir, sessionDir);
 	const match = advisors.findLast(advisor => advisor.name === definition.ref && (!definition.scope || advisor.scope === definition.scope));
 	if (!match) throw new Error(`Unknown advisor '${definition.ref}'${definition.scope ? ` in ${definition.scope}` : ""}`);
-	const config = structuredClone(match.config);
-	if (config.instructions?.trim()) config.instructions = (await expandAtImports(config.instructions, match.sourcePath)).trim() || undefined;
-	return [{ ...config, scope: "all" }];
+	return [{ ...structuredClone(match.config), scope: "all" }];
 }
 
 export function agentAdvisorDeliveryOverrides(configs: readonly InlineAgentAdvisor[] | undefined): Record<string, "on-yield" | "next-tool-call"> {

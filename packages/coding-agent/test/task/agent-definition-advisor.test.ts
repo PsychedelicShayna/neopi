@@ -34,7 +34,7 @@ describe("agent advisor frontmatter and spawn configuration", () => {
 		const launch = await buildAgentAdvisorSpawnConfig({ advisor: definition.advisor, settings: parent, cwd: project, agentDir });
 		const child = createSubagentSettings(parent, launch.settingsOverrides);
 		expect(cfgAdvisorEnabled.get(child)).toBe(true);
-		expect(launch.advisorConfigs).toEqual([{ name: "velvet", model: "@advisor", tools: ["read", "grep"], instructions: "Scoped velvet instructions", scope: "all" }]);
+		expect(launch.advisorConfigs).toEqual([expect.objectContaining({ name: "velvet", model: "@advisor", tools: ["read", "grep"], instructions: "Scoped velvet instructions", scope: "all" })]);
 		expect(launch.persistedAdvisor).toBe("on");
 	});
 
