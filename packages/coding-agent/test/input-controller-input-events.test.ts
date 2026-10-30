@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
+import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
-import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ExtensionRuntime, loadExtensionFromFactory } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
@@ -13,7 +15,9 @@ import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/inp
 import { getEditorTheme } from "@oh-my-pi/pi-tui/theme/tui-adapters";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
-import type { PromptOptions } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AgentSession, type PromptOptions } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import type { BlobPutOptions, BlobPutResult } from "@oh-my-pi/pi-coding-agent/session/blob-store";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
@@ -143,6 +147,56 @@ async function createHarness(factory: ExtensionFactory) {
 afterEach(() => vi.restoreAllMocks());
 
 describe("interactive native input ingress", () => {
+	for (const invalidation of ["abort", "new session"] as const) {
+		it(`Enter drops input held by deferred extensions after ${invalidation} before hooks or dispatch`, async () => {
+			const seen: string[] = [];
+			const h = await createHarness(pi => {
+				pi.on("input", event => {
+					seen.push(event.text);
+				});
+			});
+			const authStorage = await AuthStorage.create(":memory:");
+			const mock = createMockModel({ handler: { content: ["done"] } });
+			const session = new AgentSession({
+				agent: new Agent({
+					initialState: { model: mock.model, systemPrompt: ["Test"], tools: [] },
+					streamFn: mock.stream,
+				}),
+				sessionManager: h.ctx.sessionManager,
+				settings: Settings.isolated({ "compaction.enabled": false, "todo.enabled": false }),
+				modelRegistry: new ModelRegistry(authStorage),
+				extensionRunner: h.runner,
+			});
+			h.ctx.session = session;
+			h.ctx.viewSession = session;
+			const prompt = vi.spyOn(session, "prompt").mockResolvedValue(true);
+			const release = Promise.withResolvers<void>();
+			session.setDeferredExtensionLoader(() => release.promise);
+			try {
+				h.editor.setText("cancel me");
+				const pending = h.pressSubmit(ENTER);
+				try {
+					if (invalidation === "abort") await session.abort({ reason: USER_INTERRUPT_LABEL });
+					else expect(await session.newSession()).toBe(true);
+				} finally {
+					release.resolve();
+				}
+				await pending;
+				expect(seen).toEqual([]);
+				expect(prompt).not.toHaveBeenCalled();
+
+				h.editor.setText("fresh prompt");
+				await h.pressSubmit(ENTER);
+				expect(seen).toEqual(["fresh prompt"]);
+				expect(prompt).toHaveBeenCalledWith("fresh prompt", { streamingBehavior: "steer", images: undefined });
+			} finally {
+				release.resolve();
+				await session.dispose();
+				authStorage.close();
+			}
+		});
+	}
+
 	it("Ctrl+Enter chains partial text/image transforms and restores materialized images after rejection", async () => {
 		const seen: InputEvent[] = [];
 		const h = await createHarness(pi => {

@@ -3916,11 +3916,25 @@ export class AgentSession implements SettingsScope {
 		return this.agent.logContext ? logger.withContext(this.agent.logContext, work) : work();
 	}
 
-	async #admitSubmission<T>(work: () => Promise<T>): Promise<T> {
+	/** Capture before awaiting input preparation; abort, replacement, or disposal invalidates it. */
+	captureSubmissionGuard(): () => boolean {
+		const promptGeneration = this.#promptGeneration;
+		const sessionGeneration = this.#sessionGeneration;
+		return () =>
+			!this.#isDisposed &&
+			this.#promptGeneration === promptGeneration &&
+			this.#sessionGeneration === sessionGeneration;
+	}
+
+	async #admitSubmission<T>(work: () => Promise<T>, onInvalidated: () => T): Promise<T> {
 		this.#assertNoRemoteTreeAdmission();
 		this.#admittedSubmissionCount++;
 		try {
-			if (this.hasPendingDeferredExtensions) await this.loadDeferredExtensions();
+			if (this.hasPendingDeferredExtensions) {
+				const isCurrent = this.captureSubmissionGuard();
+				await this.loadDeferredExtensions();
+				if (!isCurrent()) return onInvalidated();
+			}
 			return await this.#inLogContext(work);
 		} finally {
 			if (--this.#admittedSubmissionCount === 0 && this.#admittedSubmissionsSettled) {
@@ -8979,7 +8993,15 @@ export class AgentSession implements SettingsScope {
 	 * {@link PromptDroppedError} instead.
 	 */
 	async prompt(text: string, options?: PromptOptions): Promise<boolean> {
-		return this.withRunOwner(options?.runOwner, () => this.#admitSubmission(() => this.#prompt(text, options)));
+		return this.withRunOwner(options?.runOwner, () =>
+			this.#admitSubmission(
+				() => this.#prompt(text, options),
+				() => {
+					if (options?.throwOnDrop) throw new PromptDroppedError();
+					return true;
+				},
+			),
+		);
 	}
 
 	/**
@@ -9361,7 +9383,10 @@ export class AgentSession implements SettingsScope {
 		},
 	): Promise<boolean> {
 		return this.withRunOwner(options?.runOwner, () =>
-			this.#admitSubmission(() => this.#promptCustomMessage(message, options)),
+			this.#admitSubmission(
+				() => this.#promptCustomMessage(message, options),
+				() => true,
+			),
 		);
 	}
 
@@ -11155,24 +11180,27 @@ export class AgentSession implements SettingsScope {
 		cancellationSignal?: AbortSignal,
 		waitForPreparation?: () => Promise<void>,
 	): Promise<boolean> {
-		return this.#admitSubmission(async () => {
-			const release = this.#maintenance.claimPendingResume();
-			const outcome: PromptDispatchOutcome = { sessionClaimed: false };
-			try {
-				if (waitForPreparation) await waitForPreparation();
-				if (isCancelled?.()) return false;
-				return await this.#dispatchCustomMessage(
-					message,
-					options,
-					outcome,
-					onAccepted,
-					isCancelled,
-					cancellationSignal,
-				);
-			} finally {
-				release?.(outcome.sessionClaimed);
-			}
-		});
+		return this.#admitSubmission(
+			async () => {
+				const release = this.#maintenance.claimPendingResume();
+				const outcome: PromptDispatchOutcome = { sessionClaimed: false };
+				try {
+					if (waitForPreparation) await waitForPreparation();
+					if (isCancelled?.()) return false;
+					return await this.#dispatchCustomMessage(
+						message,
+						options,
+						outcome,
+						onAccepted,
+						isCancelled,
+						cancellationSignal,
+					);
+				} finally {
+					release?.(outcome.sessionClaimed);
+				}
+			},
+			() => false,
+		);
 	}
 
 	async #dispatchCustomMessage<T = unknown>(

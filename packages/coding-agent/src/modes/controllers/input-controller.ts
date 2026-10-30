@@ -417,8 +417,12 @@ export class InputController {
 		this.ctx.editor.setActionKeys("app.interrupt", this.ctx.keybindings.getKeys("app.interrupt"));
 		if (!this.#linkHintListenerInstalled) {
 			this.#linkHintListenerInstalled = true;
-			// First, so a tag letter typed in link-hint mode reaches no other listener or the editor.
-			this.ctx.ui.addInputListener(data => this.#handleLinkHintInput(data));
+			// Reserved speech input (including repeats/releases) outranks even link hints and modals.
+			// A hint tag still reaches no other listener or the editor.
+			this.ctx.ui.addInputListener(data => {
+				if (this.ctx.editor.handleSpeechShortcut?.(data)) return { consume: true };
+				return this.#handleLinkHintInput(data);
+			});
 		}
 		if (!this.#focusedLeftTapListenerInstalled) {
 			this.#focusedLeftTapListenerInstalled = true;
@@ -470,8 +474,6 @@ export class InputController {
 			// These actions target the main transcript/editor rather than the
 			// focused prompt. Keep focused components' own bindings authoritative.
 			this.ctx.ui.addInputListener(data => {
-				// Reserved accessibility input always targets the main composer, even under a modal.
-				if (this.ctx.editor.handleSpeechShortcut?.(data)) return { consume: true };
 				const chordView = this.#takeSidebarChord(data);
 				if (chordView === "cancel") return { consume: true };
 				if (chordView !== undefined) {
@@ -1472,7 +1474,12 @@ export class InputController {
 			const submittedImages = inputImages;
 
 			// A startup-deferred extension's input hook must see the first submission.
-			if (this.ctx.session.hasPendingDeferredExtensions) await this.ctx.session.loadDeferredExtensions();
+			if (this.ctx.session.hasPendingDeferredExtensions) {
+				const session = this.ctx.session;
+				const isCurrent = session.captureSubmissionGuard();
+				await session.loadDeferredExtensions();
+				if (this.ctx.session !== session || !isCurrent() || !isDeferredSubmissionActive()) return;
+			}
 			if (!literalInput && runner?.hasHandlers("input")) {
 				const input = await this.#runInputHandlers(text, inputImages, inputImageLinks);
 				if (!isDeferredSubmissionActive()) return;
