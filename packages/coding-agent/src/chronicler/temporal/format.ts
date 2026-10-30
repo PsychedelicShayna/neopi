@@ -32,6 +32,9 @@ export function formatRecallResult(
 	lines.push(
 		`Chronicle recall (${result.ranker} ranker; view indexed ${view.indexedAt ?? "unknown"})${flags.length ? ` — ${flags.join("; ")}` : ""}`,
 	);
+	if (result.prefilter) {
+		lines.push(`Transcript prefilter: ${result.prefilter.matchingSessions.length} candidate sessions (${result.prefilter.matchingTranscripts} matching transcripts); keywords: ${result.prefilter.keywords}`);
+	}
 
 	if (result.results.length === 0) lines.push("", "No atoms selected.");
 	for (const [index, atom] of result.results.entries()) {

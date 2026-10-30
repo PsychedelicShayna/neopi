@@ -377,6 +377,7 @@ describe("chronicle recall", () => {
 			settings,
 			getAgentDir: () => agentDir,
 			getAgentId: () => "OwnerA",
+			getSessionId: () => ALPHA,
 			asyncJobManager: manager,
 		} as unknown as ToolSession;
 		const tool = new ChronicleRecallTool(session);

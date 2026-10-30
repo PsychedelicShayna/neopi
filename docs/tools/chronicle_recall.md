@@ -28,6 +28,10 @@
 | `to` | `string` | No | Latest time, same forms; prefixes are inclusive (`2026-09` covers all of September). |
 | `project` | `string` | No | Case-insensitive substring of the project (session cwd) path. |
 | `session` | `string` | No | Session id or id prefix. |
+| `scope` | `'current' \| 'all' \| 'session' \| 'sessions'` | No | Current session by default. `all` searches every indexed session; `session`/`sessions` require the corresponding selector. |
+| `sessions` | `string[]` | No | Union of session ids/prefixes; widens beyond current. Empty list selects nothing. |
+| `keywords` | `string` | No | Raw transcript literal prefilter with AND, OR, parentheses and quoted phrases; AND binds first. Searches across sessions unless `scope: "current"` or session selectors restrict it. |
+| `keywordCaseSensitive` | `boolean` | No | Match transcript keywords case-sensitively (default false). |
 | `hint` | `string` | No | An adjacent event remembered from around the same time. |
 | `resolution` | `'year' \| 'month' \| 'week' \| 'day' \| 'hour' \| 'atom'` | No | Stop at this level and return candidate periods (default `atom`). |
 | `node` | `string` | No | Candidate key from an earlier call; the search starts inside that node. |
@@ -44,6 +48,7 @@ Single-shot result. `content[0].text` renders the results; `details` is the full
 
 ## Flow
 1. Settings resolve the view root (`chronicler.index.dir`, default `<agentDir>/chronicle`), beam, result budget, neighborhood window, and ranker. The `model` ranker uses the `chronicler-summary` role and falls back to lexical scoring when no model resolves or a reply cannot be parsed.
+   Default scope is the owning transcript's session (including advisor calls). Explicit session selectors or keywords widen it. Native grep evaluates keywords over raw transcripts before ranking; matched session ids intersect any selected sessions, while dates/project retain their existing event-level filtering. No keyword matches select no atoms. The JSON result's optional `prefilter` reports keywords, selected `matchingSessions`, and the number of raw `matchingTranscripts`.
 2. Best-first descent from the root (or `node`): each expansion ranks the in-scope children's parent-authored descriptions and keeps the best `beam` plus near-ties in a frontier bounded to `beam × 4`. A branch whose best child or atom scores below half its own score (and below 0.6) is recorded as collapsed; the next pop from another branch is recorded as a backtrack.
 3. Terminal buckets rank their enumerated atoms. Atoms scoring at least 0.25 become candidates; 0.6 is confident.
 4. With `hint`, a second descent finds an anchor atom; in-scope atoms within `chronicler.recall.neighborhoodMinutes` of it are ranked against the query and fill up to half the budget as `adjacent` results.
