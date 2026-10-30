@@ -517,6 +517,7 @@ export class SelectorController {
 			for (const [kind, menu] of [...this.#openMenus]) {
 				this.#openMenus.delete(kind);
 				if (isMenuHistoryLeaver(menu.component)) menu.component.leaveMenu();
+				if (menu.component instanceof SettingsSelectorComponent) menu.component.dispose();
 				menu.handle?.hide();
 			}
 			const reopen = target?.state?.reopen;
@@ -660,6 +661,7 @@ export class SelectorController {
 				// enables mouse tracking (click/hover/wheel) for its lifetime and
 				// the transcript stays untouched underneath.
 				const done = () => {
+					selector.dispose();
 					menu.handle?.hide();
 					this.#releaseMenu("settings", menu);
 					this.focusActiveEditorArea();
@@ -685,6 +687,7 @@ export class SelectorController {
 						onApply: async selectedScope => {
 							await this.ctx.settings.flush();
 							if (selectedScope === "session") return "Session scope is local — no broadcast needed";
+							await this.ctx.settings.applySettingsReload();
 							const result = await broadcastSettingsReload(selectedScope, this.ctx.sessionManager.getCwd());
 							return `Applied to ${result.notified} sessions${result.unsupported ? `; ${result.unsupported} need restart/upgrade` : ""}${result.failed ? `; ${result.failed} failed` : ""}`;
 						},
