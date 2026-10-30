@@ -2,6 +2,7 @@
  * Manage configuration settings.
  */
 
+import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import { configHelp as commandHelp } from "../cli/command-help";
 import { type ConfigAction, type ConfigCommandArgs, type ConfigScope, runConfigCommand } from "../cli/config-cli";
@@ -37,6 +38,10 @@ export default class Config extends Command {
 			options: ["global", "project"],
 		}),
 	};
+
+	static examples = [
+		`# NeoProxy accounts use the login command, not a stored password setting\n  ${APP_NAME} login neoproxy --url https://proxy.example.com`,
+	];
 
 	async run(): Promise<void> {
 		const { args, flags } = await this.parse(Config);

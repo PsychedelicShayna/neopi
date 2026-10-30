@@ -91,6 +91,42 @@ cp packages/coding-agent/dist/npi ~/.local/bin/npi        # a dedicated npi path
 
 This repository does not prescribe a remote installer or a global package-manager install. The existing package scope and protocol identifiers remain `@oh-my-pi/*`; configuration remains under `~/.omp` unless `PI_CONFIG_DIR` or the documented profile settings select another location.
 
+## Connect to NeoProxy
+
+NeoProxy keeps provider accounts and routing on the proxy. NeoPi signs in as a
+user and stores a separate inference key:
+
+```sh
+npi login neoproxy --url https://proxy.example.com
+```
+
+Enter your NeoProxy username and password at the prompts. The password is hidden
+and is never saved; the temporary dashboard session is logged out after minting
+the key. Account owners must explicitly select accounts from their own pool.
+The key remains limited by current grants and, for owners, that selected pool.
+Remote servers require validated HTTPS. `http://127.0.0.1:PORT` is supported for
+local use; there is no insecure-TLS switch.
+
+The command saves only the inference key through NeoPi's normal credential store
+and the nonsecret endpoint/discovery settings through its existing provider
+configuration. No hand-written `models.yml` or copied provider credentials are
+needed. `/login` → **NeoProxy** (or `/login neoproxy`) uses the same connection
+flow inside a session, with a masked password field. A graphical/control host
+must explicitly allow secret input before answering that field.
+
+Granted models appear under the NeoProxy provider. For a server model named
+`neoproxy/office-cheap`, the complete NeoPi selector is
+`neoproxy/neoproxy/office-cheap`: the first segment is the provider, and the
+remaining server-issued ID is sent unchanged. Select it with `/model`, or use
+`/models` to assign it to an existing model role. A missing grant is an empty
+catalogue, not a fallback to a direct provider account.
+
+Use `/logout` → **NeoProxy** to remove the locally stored inference key. Revoke
+the corresponding **NeoPi** key in NeoProxy's dashboard to invalidate that key
+at the server. Changing the NeoProxy password also revokes existing inference
+keys; sign in again afterward.
+
+
 ## GitHub releases
 
 The existing **CI** workflow builds and publishes downloadable binaries on every

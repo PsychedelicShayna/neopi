@@ -1,0 +1,5 @@
+// Virtual models are discovered with the user's grant-scoped inference key.
+// There is no bundled/default model: the server owns names and routing.
+provider "neoproxy" {
+	supports-store #false
+}
