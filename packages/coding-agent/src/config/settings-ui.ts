@@ -1,3 +1,4 @@
+import { entryProvenance } from "./entry-provenance";
 import { TERMINAL } from "@oh-my-pi/pi-tui";
 import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 import { SETTING_TABS, type SettingsDisplayEntry, type SettingsHost } from "@oh-my-pi/pi-tui/overlays/settings-defs";
@@ -73,7 +74,7 @@ export function createSettingsHost(scope: Settings = settings): SettingsHost {
 				path: setting.id,
 				type: setting.type,
 				defaultValue: setting.default,
-				ui: note ? { ...ui, description: `${ui.description}${note}` } : ui,
+				ui: { ...ui, provenance: entryProvenance("settings", setting.id), description: `${ui.description}${note}` },
 				enumValues: setting.enumValues,
 				credential: setting.isCredential,
 				condition: ui.condition ? CONDITIONS[ui.condition] : undefined,
@@ -92,6 +93,7 @@ export function createSettingsHost(scope: Settings = settings): SettingsHost {
 			defaultValue: -1,
 			ui: {
 				...ui,
+				provenance: entryProvenance("settings", cfgRoleSettings.id),
 				label: `${role} token budget`,
 				description: `Absolute context budget while role "${role}" is active. Clear to inherit the global token limit.`,
 				options: options.map(option =>

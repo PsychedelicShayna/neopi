@@ -1,3 +1,4 @@
+import { provenanceSuffix } from "../theme/provenance";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Effort } from "@oh-my-pi/pi-ai";
 import {
@@ -1729,7 +1730,7 @@ export class SettingsSelectorComponent implements Component {
 		const changed = this.#isChanged(def, currentValue);
 		const item = {
 			id: def.path,
-			label: def.label,
+			label: def.label + provenanceSuffix(def.provenance),
 			description: def.description,
 			warning: def.warning,
 			changed,

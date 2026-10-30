@@ -1,3 +1,4 @@
+import { uiProvenanceSuffix } from "../theme/provenance";
 import { parseModelString, splitUpstreamRouting } from "./model-selector";
 /**
  * Fullscreen /models hub, shown on the alternate screen like /settings.
@@ -1954,7 +1955,7 @@ export class ModelHubComponent implements Component {
 						: undefined;
 				const assignedHere =
 					!!scopedModel && scopedModel.provider === item.model.provider && scopedModel.id === item.model.id;
-				const roleLabel = (info.tag ?? info.name ?? role).toLowerCase();
+				const roleLabel = (info.tag ?? info.name ?? role).toLowerCase() + uiProvenanceSuffix("roles", role);
 				const label = scopedStorage ? `${scope} ${roleLabel}` : roleLabel;
 				chips.push({
 					label,
@@ -4055,7 +4056,10 @@ export class ModelHubComponent implements Component {
 		for (const rowDef of this.#rolesRows) {
 			if (rowDef.kind !== "role") continue;
 			const info = this.#settings.getRoleInfo(rowDef.role);
-			tagWidth = Math.max(tagWidth, visibleWidth(info.tag ?? info.name ?? rowDef.role));
+			tagWidth = Math.max(
+				tagWidth,
+				visibleWidth((info.tag ?? info.name ?? rowDef.role) + uiProvenanceSuffix("roles", rowDef.role)),
+			);
 		}
 
 		const cycleOrder = this.#cycleOrder();
@@ -4133,7 +4137,8 @@ export class ModelHubComponent implements Component {
 			const role = rowDef.role;
 			const info = this.#settings.getRoleInfo(role);
 			const assignment = this.#roles[role];
-			const tag = (info.tag ?? info.name ?? role).padEnd(tagWidth);
+			const roleTag = (info.tag ?? info.name ?? role) + uiProvenanceSuffix("roles", role);
+			const tag = roleTag + " ".repeat(Math.max(0, tagWidth - visibleWidth(roleTag)));
 
 			let dot: string;
 			let tagStyled: string;
@@ -4894,7 +4899,7 @@ export class ModelHubComponent implements Component {
 		const role = rowDef.role;
 		const info = this.#settings.getRoleInfo(role);
 		const assignment = this.#roles[role];
-		const tag = info.tag ?? info.name ?? role;
+		const tag = (info.tag ?? info.name ?? role) + uiProvenanceSuffix("roles", role);
 		let label: TspSpan[];
 		let detail: TspSpan[];
 		const value: TspSpan[] = [];
@@ -5634,7 +5639,7 @@ export class ModelHubComponent implements Component {
 					break;
 			}
 			const info = this.#settings.getRoleInfo(row.role);
-			const tag = info.tag ?? info.name ?? row.role;
+			const tag = (info.tag ?? info.name ?? row.role) + uiProvenanceSuffix("roles", row.role);
 			const assignment = this.#roles[row.role];
 			const facts: Record<string, string> = {};
 			if (assignment) {
@@ -5652,7 +5657,7 @@ export class ModelHubComponent implements Component {
 			items.push({
 				id,
 				label: tag,
-				...(info.name && info.name !== tag ? { detail: info.name } : {}),
+				...(info.name && info.name !== (info.tag ?? info.name ?? row.role) ? { detail: info.name } : {}),
 				facts,
 				...(assignment && !assignment.autoSelected ? {} : { tone: "muted" as const }),
 				...(cycleIndex >= 0

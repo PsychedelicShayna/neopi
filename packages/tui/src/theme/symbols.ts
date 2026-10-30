@@ -20,6 +20,8 @@ export type SymbolKey =
 	| "status.shadowed"
 	| "status.aborted"
 	| "status.done"
+	| "provenance.fork"
+	| "provenance.newUpstream"
 	// Navigation
 	| "nav.cursor"
 	| "nav.selected"
@@ -407,6 +409,8 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"status.shadowed": "○",
 	"status.aborted": "⏹",
 	"status.done": "•",
+	"provenance.fork": "☾",
+	"provenance.newUpstream": "✦",
 	// Navigation
 	"nav.cursor": "❯",
 	"nav.selected": "➤",
@@ -727,6 +731,8 @@ const NERD_SYMBOLS: SymbolMap = {
 	"status.aborted": "\uf04d",
 	// pick: • | alt: ● ·
 	"status.done": "•",
+	"provenance.fork": "\uf186",
+	"provenance.newUpstream": "\uf005",
 	// Navigation
 	// pick:  | alt:  
 	"nav.cursor": "\uf054",
@@ -1203,6 +1209,8 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"status.shadowed": "[/]",
 	"status.aborted": "[-]",
 	"status.done": "*",
+	"provenance.fork": "[fork]",
+	"provenance.newUpstream": "[new]",
 	// Navigation
 	"nav.cursor": ">",
 	"nav.selected": "->",

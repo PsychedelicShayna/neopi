@@ -1,3 +1,4 @@
+import { uiProvenanceSuffix } from "../theme/provenance";
 import type { UsageReport } from "@oh-my-pi/pi-ai/usage";
 import { bottomBorder, dividerSplit, PanelRows, row, topBorderSplit } from "../chrome/overlay-box";
 import { sanitizeStatusText } from "../chrome/shared";
@@ -913,7 +914,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 				const { id, enabled } = line.row;
 				const templated = this.#templates[id] !== undefined ? " ✎" : "";
 				return style(
-					`[${enabled ? "x" : " "}] ${segmentLabel(id)} · ${sanitizeStatusText(id)}${templated}`,
+					`[${enabled ? "x" : " "}] ${segmentLabel(id)}${uiProvenanceSuffix("statusSegments", parseUsageBarSegmentId(id) ? "usage" : id)} · ${sanitizeStatusText(id)}${templated}`,
 					!enabled,
 				);
 			}

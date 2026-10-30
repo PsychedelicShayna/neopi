@@ -1,5 +1,6 @@
 /** Schema-independent display definitions for the settings overlay. */
 import type { SymbolKey } from "../theme/symbols";
+import type { EntryProvenance } from "../theme/provenance";
 
 export type SettingTab =
 	| "appearance"
@@ -116,6 +117,7 @@ export interface UiBase {
 	/** Section within the tab; must be listed in TAB_GROUPS[tab]. Ungrouped settings render at the top. */
 	group?: string;
 	label: string;
+	provenance?: EntryProvenance;
 	description: string;
 	/**
 	 * Risk note. Marks the settings row with a warning glyph and renders above
@@ -168,6 +170,7 @@ interface BaseSettingDef {
 	defaultValue: unknown;
 	schemaType: string;
 	label: string;
+	provenance?: EntryProvenance;
 	description: string;
 	/** Risk note shown in warning styling; set for settings that can get the user flagged or banned. */
 	warning?: string;
@@ -242,6 +245,7 @@ function entryToSettingDef(entry: SettingsDisplayEntry): SettingDef | null {
 		defaultValue: entry.defaultValue,
 		schemaType,
 		label: ui.label,
+		provenance: ui.provenance,
 		description: ui.description,
 		warning: ui.warning,
 		tab: ui.tab,
