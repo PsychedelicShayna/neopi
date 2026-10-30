@@ -9,6 +9,7 @@
 
 ### Added
 
+- Settings and slash-command suggestions mark fork additions with a crescent and the latest upstream release's additions with a star, while retaining command type icons.
 - Choose advisor delivery timing independently for nits, concerns, and blockers in Settings → Model → Advisor; nits wait for the actual run end by default, while concerns and blockers arrive at safe tool boundaries without cancelling work.
 - Explicitly revive killed subagents from their saved transcripts in the Agent Hub; opening a transcript, focusing an agent, or sending ordinary IRC/chat no longer undoes a kill.
 - Connect to NeoProxy through `npi login neoproxy --url URL` or `/login`, with hidden username/password authentication, an ephemeral dashboard session, current-grant inference keys, explicit owned-pool selection, and automatic live model discovery through the existing provider configuration and model/role pickers ([#600](https://github.com/PsychedelicShayna/neopi/issues/600), implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).

@@ -98,6 +98,20 @@ After explicit conflicts are resolved, inspect automatically merged changes at e
 
 For generated lockfiles, take upstream as the starting point, then regenerate from the merged tree. Review dependency changes before executing installers; audit every newly introduced dependency rather than accepting it because a lockfile changed.
 
+### Regenerate Settings and command provenance
+
+After the integrated tree is committed, regenerate the committed provenance inventory:
+
+```sh
+bun scripts/generate-entry-provenance.ts "$PREVIOUS_UPSTREAM_COMMIT" "$TAG" "$(git rev-parse HEAD)"
+bun test scripts/generate-entry-provenance.test.ts packages/tui/test/entry-provenance.test.ts
+```
+
+`PREVIOUS_UPSTREAM_COMMIT` is the upstream release commit from the preceding sync, not the fork's pre-merge head. The generator parses the setting and builtin slash-command registries at all three revisions without executing historical code. Commit `packages/coding-agent/src/config/entry-provenance.json` with the sync's post-merge changes. It replaces, rather than accumulates, the latest-release marks: entries added between the two upstream revisions receive a star; entries in the integrated fork but absent from the new upstream receive a crescent. The theme's Unicode, Nerd Font and ASCII presets supply the corresponding glyphs. The star means “new in the most recent upstream sync,” not “new to this session.”
+
+Regenerate against the same two upstream revisions after adding or removing fork settings or builtin commands. The generator records the fork revision used for the inventory; pass an immutable commit as above. Its regression test also compares the resulting classifications with the current registries, so stale inventories are detected.
+
+
 ## 5. Commit and verify
 
 Complete the merge with a signed merge commit:

@@ -1,3 +1,4 @@
+import { provenanceSuffix } from "../theme/provenance";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Effort } from "@oh-my-pi/pi-ai";
 import {
@@ -1091,7 +1092,9 @@ export class SettingsSelectorComponent implements Component {
 			page: searching ? this.#preSearchTabId : this.#currentTabId,
 			lead: searchError
 				? `Invalid regex: ${searchError}`
-				: searching ? undefined : (pluginPage?.lead ?? (tab ? TAB_LEADS[tab] : undefined)),
+				: searching
+					? undefined
+					: (pluginPage?.lead ?? (tab ? TAB_LEADS[tab] : undefined)),
 			query: searching ? this.#search.value : pluginPage?.query,
 			cursor: searching ? this.#search.input.getCursor() : pluginPage?.cursor,
 			sections,
@@ -1703,7 +1706,7 @@ export class SettingsSelectorComponent implements Component {
 		const changed = this.#isChanged(def, currentValue);
 		const item = {
 			id: def.path,
-			label: def.label,
+			label: def.label + provenanceSuffix(def.provenance),
 			description: def.description,
 			warning: def.warning,
 			changed,
@@ -2212,7 +2215,6 @@ export class SettingsSelectorComponent implements Component {
 			activeList.handleInput(data);
 			return;
 		}
-
 
 		const action = this.#menuKeys.read(data);
 		if (action === "pending") return;
