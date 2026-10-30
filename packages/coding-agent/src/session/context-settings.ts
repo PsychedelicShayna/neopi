@@ -57,7 +57,6 @@ export const cfgContextFilesExtra = register({
 		editor: "json",
 		description:
 			'Extra instruction filenames loaded beside AGENTS.md. Use a JSON list of names, not paths, e.g. ["AGENTS.local.md"]; [] disables extras. Start a new session to load them.',
-		condition: "contextFilesExtraNotProject",
 	},
 	validate: raw => {
 		if (raw === undefined) return;
