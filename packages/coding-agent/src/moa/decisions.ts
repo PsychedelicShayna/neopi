@@ -51,6 +51,8 @@ export function describeOutcome(
 		if (answer.type !== "noul") throw new Error("termination judgment did not return a probability");
 		return `${answer.noul >= (extra.floor ?? 0.5) ? "yes" : "no"} ${answer.noul.toFixed(2)}`;
 	}
+	// Mixture verdict questions are text-only: choice, score, or probability.
+	if (answer.type === "box") throw new Error("mixture judgment unexpectedly returned a bounding box");
 	if (answer.type === "noul") return `${answer.noul >= 0.5 ? "yes" : "no"} ${answer.noul.toFixed(2)}`;
 	return `${answer.type === "choice" ? answer.choice : String(answer.score)} ${confidence.toFixed(2)}`;
 }

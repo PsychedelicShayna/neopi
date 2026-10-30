@@ -49,6 +49,7 @@ export type RpcGoalSession = Pick<
 	| "isDisposed"
 	| "isSessionTransitioning"
 	| "hasAdmittedSubmission"
+	| "hasPendingTreeResume"
 	| "queuedMessageCount"
 >;
 
@@ -406,6 +407,8 @@ export class RpcGoalController {
 		const session = this.#session;
 		if (!cfgGoalContinuationModes.get(session.settings).includes(RPC_GOAL_CONTINUATION_MODE)) return false;
 		if (this.#hostStopped || this.#suppressContinuation || session.isDisposed) return false;
+		// A committed ask re-answer belongs to the client's explicit resume acknowledgement.
+		if (session.hasPendingTreeResume()) return false;
 		if (session.getPlanModeState()?.enabled) return false;
 		const state = session.getGoalModeState();
 		if (!state?.enabled || state.goal.status !== "active") return false;

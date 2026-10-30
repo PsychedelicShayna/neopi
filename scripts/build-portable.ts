@@ -132,7 +132,7 @@ export async function buildPortable(): Promise<PortableManifest> {
 
 		await run([process.execPath, "--cwd=packages/stats", "run", "gen:stats"]);
 		generatedStats = true;
-		await run([process.execPath, "--cwd=packages/collab-web", "run", "gen:tool-views"]);
+		await run([process.execPath, "--cwd=packages/collab-web", "run", "gen:export-viewer"]);
 		await run([process.execPath, "--cwd=packages/natives", "run", "gen:native"], {
 			env: { ...Bun.env, TARGET_PLATFORM: "linux", TARGET_ARCH: "x64" },
 		});

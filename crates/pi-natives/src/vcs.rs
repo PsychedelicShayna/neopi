@@ -827,6 +827,16 @@ impl VcsGitRepo {
 		})
 	}
 
+	/// Porcelain status for synchronous module initialization.
+	#[napi]
+	pub fn status_porcelain_sync(&self, env: Env, options: VcsStatusOptions) -> Result<String> {
+		let options = core::StatusOptions::try_from(options)?;
+		self
+			.inner
+			.status_porcelain(&options)
+			.map_err(|err| rich_error(env, err))
+	}
+
 	/// Status counts.
 	#[napi]
 	pub fn status_summary(&self, signal: Option<Unknown>) -> Promise<VcsStatusSummary> {

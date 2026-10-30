@@ -8,7 +8,7 @@
  * are stubbed. One host/relay boots once and is reused; guest frames ride the
  * in-memory transport, so the suite stays fast and time-independent.
  */
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import { importRoomKey } from "@oh-my-pi/pi-coding-agent/collab/crypto";
 import { CollabHost } from "@oh-my-pi/pi-coding-agent/collab/host";
 import { COLLAB_PROTO, type CollabFrame, parseCollabLink } from "@oh-my-pi/pi-coding-agent/collab/protocol";
@@ -16,6 +16,7 @@ import { CollabSocket } from "@oh-my-pi/pi-coding-agent/collab/relay-client";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { installInMemoryRelay, uninstallInMemoryRelay } from "./helpers/in-memory-relay";
@@ -401,6 +402,73 @@ describe("collab read-only links", () => {
 			registry.unregister(id, ref);
 		}
 	});
+
+	it("requires explicit remote revival before a killed transcript can receive chat", async () => {
+		const guest = await joinAsGuest(host.link, "writer-revive");
+		guestCleanups.push(() => guest.socket.close());
+		expect((await guest.nextFrame()).t).toBe("welcome");
+		const registry = AgentRegistry.global();
+		const id = `remote-revive-${crypto.randomUUID()}`;
+		const ref = registry.register({
+			id,
+			displayName: id,
+			kind: "sub",
+			status: "aborted",
+			session: null,
+			sessionFile: "/missing/remote-revive.jsonl",
+		});
+		const revived = Promise.withResolvers<void>();
+		const ensureLive = vi.spyOn(AgentLifecycleManager.global(), "ensureLive").mockImplementation(async () => {
+			revived.resolve();
+			return {} as AgentSession;
+		});
+		try {
+			guest.socket.send({ t: "agent-cmd", cmd: "chat", agentId: id, text: "do not undo kill" });
+			const error = await guest.nextFrame();
+			expect(error.t).toBe("error");
+			if (error.t !== "error") throw new Error("Expected read-only chat error");
+			expect(error.message).toContain("explicitly revive");
+			expect(ensureLive).not.toHaveBeenCalled();
+			expect(registry.get(id)).toBe(ref);
+			guest.socket.send({ t: "agent-cmd", cmd: "revive", agentId: id });
+			await revived.promise;
+			expect(ensureLive).toHaveBeenCalledWith(id);
+		} finally {
+			ensureLive.mockRestore();
+			registry.unregister(id, ref);
+		}
+	});
+
+	for (const kind of ["advisor", "mailbox", "operator"] as const) {
+		it(`rejects remote chat, kill and revive against a ${kind} even by guessed id`, async () => {
+			const guest = await joinAsGuest(host.link, `writer-${kind}`);
+			guestCleanups.push(() => guest.socket.close());
+			expect((await guest.nextFrame()).t).toBe("welcome");
+			const registry = AgentRegistry.global();
+			const id = `remote-readonly-${crypto.randomUUID()}`;
+			const ref = registry.register({
+				id,
+				displayName: id,
+				kind,
+				status: "parked",
+				session: null,
+				sessionFile: "/missing/readonly.jsonl",
+			});
+			try {
+				for (const cmd of ["chat", "kill", "revive"] as const) {
+					guest.socket.send({ t: "agent-cmd", cmd, agentId: id, text: "not a session" });
+					const error = await guest.nextFrame();
+					expect(error.t).toBe("error");
+					if (error.t !== "error") throw new Error("Expected participant read-only error");
+					expect(error.message).toContain("read-only");
+					expect(registry.get(id)).toBe(ref);
+					expect(ref.status).toBe("parked");
+				}
+			} finally {
+				registry.unregister(id, ref);
+			}
+		});
+	}
 
 	it("routes host UI requests to write guests and resolves their response", async () => {
 		const guest = await joinAsGuest(host.link, "writer-ui");

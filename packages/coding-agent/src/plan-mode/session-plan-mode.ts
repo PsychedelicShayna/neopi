@@ -39,6 +39,7 @@ export function planModeEntryState(previous: PlanModeState | undefined, planFile
 export interface PlanToolPresentation {
 	enabled: string[];
 	mounted: string[];
+	registered: string[];
 }
 
 /**
@@ -51,17 +52,20 @@ export interface PlanToolPresentation {
  * because plan mode's read-only guarantee relies on the built-in write guard.
  */
 export function planModeToolSet(
-	session: Pick<AgentSession, "getEnabledToolNames" | "getMountedXdevToolNames" | "hasBuiltInTool">,
-): { previous: PlanToolPresentation; planTools: string[] } {
+	session: Pick<AgentSession, "getEnabledToolNames" | "getMountedXdevToolNames" | "getAllToolNames" | "hasBuiltInTool">,
+): { previous: PlanToolPresentation; planTools: string[]; shadowedWrite: boolean } {
 	const enabled = session.getEnabledToolNames();
 	const mounted = session.getMountedXdevToolNames();
-	const augmentations = session.hasBuiltInTool("write") ? ["write"] : [];
+	const shadowedWrite = !session.hasBuiltInTool("write");
+	const augmentations = shadowedWrite ? [] : ["write"];
 	return {
 		previous: {
 			enabled: enabled.filter(name => !isMCPToolName(name)),
 			mounted: mounted.filter(name => !isMCPToolName(name)),
+			registered: session.getAllToolNames(),
 		},
-		planTools: [...new Set([...enabled, ...augmentations])],
+		planTools: [...new Set([...enabled.filter(name => name !== "write" || !shadowedWrite), ...augmentations])],
+		shadowedWrite,
 	};
 }
 

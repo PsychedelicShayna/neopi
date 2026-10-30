@@ -261,7 +261,7 @@ import {
 	piReadDisplayPath,
 	piReadPathHasRange,
 	piTimeout,
-	shellTimeoutSeconds,
+	shellDeadlineSeconds,
 } from "./cursor/exec-modern";
 import { handleInteractionQuery, protoUnknownFields } from "./cursor/interaction-query";
 
@@ -345,6 +345,18 @@ function isCursorModelNotFound(error: unknown): boolean {
 	return (
 		(error instanceof AIError.ProviderHttpError && error.code === "BAD_MODEL_NAME") ||
 		(error instanceof Error && CURSOR_MODEL_NOT_FOUND_PATTERN.test(error.message))
+	);
+}
+
+/**
+ * Failures that, before any token, mean the wire conversation is poisoned
+ * rather than the account: a bare gRPC `resource_exhausted` (#8345), or the
+ * structured PROVIDER_ERROR every resume of a turn cut mid-stream draws (#15830).
+ */
+function isCursorConversationRejected(error: unknown, message: string): boolean {
+	return (
+		(error instanceof AIError.ProviderHttpError && error.code === "PROVIDER_ERROR") ||
+		RESOURCE_EXHAUSTED_PATTERN.test(message)
 	);
 }
 
@@ -1184,6 +1196,9 @@ function streamCursorWithWireMode(
 		// no later request can address; its cache entries are released at the end.
 		const ephemeralConversation =
 			!retryContext && options?.conversationId === undefined && options?.sessionId === undefined;
+		// Whether an earlier request already opened this conversation. A session
+		// id minted per call (e.g. by `streamSimple`) never has one.
+		let knownConversation = retryContext !== undefined;
 		// The turn's server records stand for the opening user message and tool
 		// results as the server saw them; they are captured only while what the
 		// host keeps still matches. Hashed now, before anything awaits, since a
@@ -1232,6 +1247,7 @@ function streamCursorWithWireMode(
 			// the last user message.
 			const rotatedFresh = retryContext ? false : freshRotatedConversationIds.has(conversationId);
 			const cachedConversation = cursorConversations.get(conversationId);
+			if (cachedConversation) knownConversation = true;
 			activeBlobStore = retryContext?.blobStore ?? cachedConversation?.blobs ?? new Map<string, Uint8Array>();
 			const blobStore = activeBlobStore;
 			const conversationEntry: CursorConversationEntry = { state: cachedConversation?.state, blobs: blobStore };
@@ -1814,22 +1830,24 @@ function streamCursorWithWireMode(
 				flushOpenToolCalls(output, stream, openBlockState);
 			}
 			const result = await AIError.finalize(error, { api: model.api, signal: options?.signal });
-			// #8345: a server-side per-conversation rejection surfaces as a bare
-			// resource_exhausted with zero tokens — the conversation is poisoned,
-			// not the account. Rotate the wire id and rebuild from `context` on
-			// the next attempt (the caller's retry loop). Do not migrate cached
-			// side-state: pendingToolCalls from a mid-turn checkpoint re-poison
-			// the new id. One rotation per failure streak; a new rotation is
-			// allowed only after the current rotated id completed a turn.
+			// #8345/#15830: a server-side per-conversation rejection (a bare
+			// resource_exhausted, or PROVIDER_ERROR after a mid-turn cut) with zero
+			// tokens means the conversation is poisoned, not the account. Rotate
+			// the wire id and rebuild from `context` on the next attempt (the
+			// caller's retry loop). Do not migrate cached side-state:
+			// pendingToolCalls from a mid-turn checkpoint re-poison the new id.
+			// One rotation per failure streak; a new rotation is allowed only
+			// after the current rotated id completed a turn.
 			const currentRotated =
 				baseConversationId === undefined ? undefined : rotatedConversationIds.get(baseConversationId);
 			const canRotate = currentRotated === undefined || successfulRotatedConversationIds.has(currentRotated);
+			let rotatedRejection = false;
 			if (
 				conversationId !== undefined &&
 				baseConversationId !== undefined &&
 				usageState !== undefined &&
 				!usageState.sawTokenDelta &&
-				RESOURCE_EXHAUSTED_PATTERN.test(result.message) &&
+				isCursorConversationRejected(error, result.message) &&
 				canRotate
 			) {
 				const rotated = crypto.randomUUID();
@@ -1843,10 +1861,18 @@ function streamCursorWithWireMode(
 					from: conversationId,
 					to: rotated,
 				});
+				// Only a conversation an earlier request opened can be poisoned. A
+				// first request's rejection is real, and a caller retrying without a
+				// stable id would never reach the rotated one; keep Cursor's verdict.
+				rotatedRejection = knownConversation;
 			}
 			output.stopReason = result.stopReason;
 			output.errorStatus = result.status;
-			output.errorId = result.id;
+			// The rejection is non-retriable on the poisoned id, but the fresh id
+			// is a different request. Mark this one attempt transient so the
+			// caller's retry loop actually rebuilds on the rotated id; if that id
+			// rejects too, `canRotate` is false and the original status surfaces.
+			output.errorId = rotatedRejection ? AIError.create(AIError.Flag.Transient) : result.id;
 			if (error instanceof ConnectEndStreamError) {
 				output.errorClassificationMessage = result.message;
 				output.errorMessage = error.diagnosticMessage;
@@ -2668,7 +2694,7 @@ async function handleExecServerMessage(
 			synthesizeCursorExecToolCall(output, stream, state, args.toolCallId, "bash", {
 				command: args.command,
 				cwd: args.workingDirectory || undefined,
-				timeout: shellTimeoutSeconds(args.timeout),
+				timeout: shellDeadlineSeconds(args),
 			});
 			const { execResult } = await resolveExecHandler(
 				args,
@@ -2689,7 +2715,7 @@ async function handleExecServerMessage(
 			synthesizeCursorExecToolCall(output, stream, state, args.toolCallId, "bash", {
 				command: args.command,
 				cwd: args.workingDirectory || undefined,
-				timeout: shellTimeoutSeconds(args.timeout),
+				timeout: shellDeadlineSeconds(args),
 			});
 			await handleShellStreamArgs(args, execMsg, runTransport, execHandlers, onToolResult);
 			return;
@@ -3167,7 +3193,7 @@ async function handleExecServerMessage(
 			synthesizeCursorExecToolCall(output, stream, state, args.toolCallId, "bash", {
 				command: args.command,
 				cwd: args.workingDirectory || undefined,
-				timeout: shellTimeoutSeconds(args.timeout),
+				timeout: shellDeadlineSeconds(args),
 			});
 			const { execResult } = await resolveExecHandler(
 				normalizedArgs,
@@ -5076,6 +5102,13 @@ function endCurrentThinkingBlock(
  * call handed to an external executor is only a handoff while the marker is
  * absent, and the consumer that runs it needs a runnable block.
  *
+ * A frame whose `toolCallId` already has a block in `output` is the server
+ * re-dispatching that call (a new `execId`, e.g. a `read` re-sent once a
+ * parallel shell created the file). It adds no block: a second block with the
+ * same id makes every rebuilt history replay the call twice, which Cursor
+ * rejects (issue #15749). The re-run's result supersedes the first one in the
+ * host's result buffer.
+ *
  * Exported for tests to exercise ordering with adjacent text/thinking blocks.
  */
 export function synthesizeCursorExecToolCall(
@@ -5087,6 +5120,7 @@ export function synthesizeCursorExecToolCall(
 	args: Record<string, unknown>,
 	{ executed = true }: { executed?: boolean } = {},
 ): void {
+	if (output.content.some(block => block.type === "toolCall" && block.id === toolCallId)) return;
 	endCurrentTextBlock(output, stream, state);
 	endCurrentThinkingBlock(output, stream, state);
 	// Exec-frame translators often write `optional: value || undefined`. A
@@ -5744,7 +5778,8 @@ function resolveCursorRecordReplays(
  * Cursor AgentService reconstructs the model prompt from `requestContext.rules`,
  * not from the client-supplied `rootPromptMessagesJson` system blobs. Map each
  * NeoPi system-prompt entry to a global CursorRule so always-apply rules survive
- * that reconstruction.
+ * that reconstruction. The server only does this while the root carries no
+ * history; later turns rely on {@link buildCursorRulesEntryJson}.
  */
 export function buildCursorRequestContextRules(systemPrompt: readonly string[] | undefined): CursorRule[] {
 	return normalizeSystemPrompts(systemPrompt).map((content, index) =>
@@ -5919,12 +5954,20 @@ interface CursorAssistantStep {
  * the text and reasoning that followed each result; a round ends at a call
  * followed by anything other than another call. Consecutive calls stay in one
  * round — they were issued together. Hidden reasoning still marks a boundary.
+ * A call id repeated within the message — a re-dispatched exec frame recorded
+ * before issue #15749 was fixed — is issued once; Cursor rejects a history that
+ * repeats it.
  */
 function buildCursorAssistantSteps(msg: AssistantMessage, targetModelId: string | undefined): CursorAssistantStep[] {
 	const steps: CursorAssistantStep[] = [];
 	let step: CursorAssistantStep = { content: [], callIds: [] };
 	const replayThinking = canReplayCursorThinking(msg, targetModelId);
+	const issuedCallIds = new Set<string>();
 	for (const item of msg.content) {
+		if (item.type === "toolCall") {
+			if (issuedCallIds.has(item.id)) continue;
+			issuedCallIds.add(item.id);
+		}
 		if (item.type !== "toolCall" && step.callIds.length > 0) {
 			steps.push(step);
 			step = { content: [], callIds: [] };
@@ -6041,6 +6084,19 @@ export function buildCursorSystemPromptJsons(systemPrompt: readonly string[] | u
 	return systemPrompts.map(content => JSON.stringify({ role: "system", content }));
 }
 
+/**
+ * The `<rules>` user entry Cursor's server builds from `requestContext.rules` on a
+ * history-less root. On a history-bearing root the server replaces the system
+ * entries with its own prompt and keeps the client's history verbatim without
+ * rebuilding this entry, so the client carries it (as the native CLI does) right
+ * after the system entries. Undefined when there is no system prompt (#17059).
+ */
+function buildCursorRulesEntryJson(systemPrompt: readonly string[] | undefined): string | undefined {
+	const systemPrompts = normalizeSystemPrompts(systemPrompt);
+	if (systemPrompts.length === 0) return undefined;
+	return JSON.stringify({ role: "user", content: `<rules>\n${systemPrompts.join("\n\n")}\n</rules>` });
+}
+
 /** Tool results before the history end by call id, and the ids of calls the history issued. */
 interface CursorToolHistory {
 	toolResults: Map<string, ToolResultMessage>;
@@ -6147,7 +6203,14 @@ function buildRootPromptMessagesJson(
 				});
 				continue;
 			}
-			pushToolResult(msg);
+			// A re-dispatched call recorded two results in the same batch; the
+			// re-run's answer is the one the model saw.
+			let result = msg;
+			for (let j = i + 1; j < historyEnd && messages[j].role === "toolResult"; j++) {
+				const later = messages[j];
+				if (later.role === "toolResult" && later.toolCallId === msg.toolCallId) result = later;
+			}
+			pushToolResult(result);
 		}
 	}
 
@@ -6299,6 +6362,8 @@ function buildConversationTurns(
 		while (i < messages.length && messages[i].role !== "user" && messages[i].role !== "developer") {
 			const stepMsg = messages[i];
 			if (stepMsg.role === "assistant") {
+				// Mirrors `buildCursorAssistantSteps`: a repeated call id is issued once.
+				const issuedCallIds = new Set<string>();
 				for (const item of stepMsg.content) {
 					let step: ConversationStep;
 					if (item.type === "text") {
@@ -6322,6 +6387,8 @@ function buildConversationTurns(
 							},
 						});
 					} else if (item.type === "toolCall") {
+						if (issuedCallIds.has(item.id)) continue;
+						issuedCallIds.add(item.id);
 						step = createCursorToolCallStep(item, toolResults.get(item.id));
 					} else {
 						continue;
@@ -6781,6 +6848,18 @@ function buildCursorConversationState(
 		replays,
 		toolHistory,
 	);
+	// The server builds its `<rules>` entry from `requestContext.rules` only for a
+	// history-less root; with history it would drop the system prompt entirely.
+	if (rootPromptMessagesJson.length > systemPromptIds.length) {
+		const rulesEntry = buildCursorRulesEntryJson(context.systemPrompt);
+		if (rulesEntry) {
+			rootPromptMessagesJson.splice(
+				systemPromptIds.length,
+				0,
+				storeCursorBlob(blobStore, new TextEncoder().encode(rulesEntry)),
+			);
+		}
+	}
 
 	// Preserve cached non-history state fields (todos, file states, summaries, etc.)
 	// when the system prompt is unchanged; otherwise start fresh.

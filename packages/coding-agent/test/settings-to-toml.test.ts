@@ -300,4 +300,25 @@ describe("on-demand full YAML conversion", () => {
 		expect(await Bun.file(target).text()).toBe("first");
 		expect((await fs.readdir(root)).sort()).toEqual(["agent", "atomic.toml", "project"]);
 	});
+	it("preserves a settings symlink while atomically publishing a requested mode", async () => {
+		const target = path.join(root, "secret.toml");
+		const link = path.join(root, "linked.toml");
+		await Bun.write(target, "old");
+		await fs.symlink(target, link);
+		await writeFileAtomically(link, "new", { mode: 0o640 });
+		expect(await fs.readlink(link)).toBe(target);
+		expect(await Bun.file(target).text()).toBe("new");
+		expect((await fs.stat(target)).mode & 0o777).toBe(0o640);
+	});
+	it("publishes private files in a missing parent without replacing an existing symlink", async () => {
+		const target = path.join(root, "nested", "secret.toml");
+		await writeFileAtomically(target, "secret", { noReplace: true });
+		expect((await fs.stat(target)).mode & 0o777).toBe(0o600);
+		const link = path.join(root, "existing-link.toml");
+		await fs.symlink(target, link);
+		await expect(writeFileAtomically(link, "replacement", { noReplace: true })).rejects.toThrow();
+		expect(await fs.readlink(link)).toBe(target);
+		expect(await Bun.file(target).text()).toBe("secret");
+		expect((await fs.readdir(root)).sort()).toEqual(["agent", "existing-link.toml", "nested", "project"]);
+	});
 });

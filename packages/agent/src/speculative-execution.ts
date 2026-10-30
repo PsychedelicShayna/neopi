@@ -239,6 +239,12 @@ export class SpeculativeOperationCoordinator {
 	#closed = false;
 	#admissionsFinalized = false;
 	#running = 0;
+	/** Observer of existing speculative execution draining; no separate work ledger. */
+	onIdle?: () => void;
+
+	get isRunning(): boolean {
+		return this.#running > 0;
+	}
 
 	constructor(
 		readonly config: SpeculativeToolExecutionConfig,
@@ -956,6 +962,7 @@ export class SpeculativeOperationCoordinator {
 			} finally {
 				this.#running--;
 				this.#drain();
+				if (this.#running === 0) this.onIdle?.();
 			}
 		})();
 	}

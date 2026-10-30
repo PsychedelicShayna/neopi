@@ -63,6 +63,11 @@ app.history.search: []
 | `app.sidebar.toggle`         | `Alt+T`                                                               | [Side panel view chord](#side-panel-views): then `t` Todo, `a` Agents, `i` IRC                                                                                                        |
 | `app.tree.previousBranch`    | Unbound                                                               | Jump to the previous visible branch in `/tree` ([details](./tree.md))                                                                                                                |
 | `app.tree.nextBranch`        | Unbound                                                               | Jump to the next visible branch in `/tree` ([details](./tree.md))                                                                                                                    |
+| `app.links.hint` | Unbound | Tag visible extension links for activation; assign a binding in keybindings. NeoPi retains `Alt+O` for menu history forward. |
+| `app.approval.approve` | `Ctrl+Enter`, `Ctrl+Q` | Approve a pending tool call; Esc denies. |
+| `app.local.open` | `Alt+G` | Pick a session local file for the external editor. |
+| `app.session.pin` | `Alt+K` | Pin the selected resume-picker session. |
+| `app.session.unpin` | `Alt+Shift+K` | Unpin the selected resume-picker session. |
 
 `Ctrl+G` opens `$VISUAL` / `$EDITOR` with the currently painted terminal viewport above `<!-- omp:message starts here -->`. The visible conversation and status are reference only: saving sends just the text below that marker back to the composer. Keep the marker intact; removing it leaves the original draft unchanged.
 
@@ -141,6 +146,13 @@ From hidden, a chord opens the panel on that view; with another view showing, it
 Wide terminals dock the panel beside the chat; below `sidebar.splitAt` the chord opens it fullscreen instead. While docked, the Todo view replaces the todo list above the editor and the Agents view replaces the pinned subagents list; each comes back when the panel closes or switches view. Other activity rows, such as waiting on subagents, stay where they are.
 
 In the Agents view, hovering highlights a row. Clicking a subagent shows its transcript in the main area, the same as selecting it in the Agent Hub; clicking it again, or empty panel space, returns to the main session. Advisors and aborted agents are read-only transcripts, so clicking one opens the Agent Hub. Clicking the IRC view opens the full IRC viewer.
+### Click to dictate in Tern
+
+With `stt.enabled` on, the native composer shows a microphone beside Send. Click it to start recording without holding a key. While the speech model loads, the button shows **Starting…**; click it again to cancel. Once it changes to **Recording · Stop**, click it to stop, then wait for **Transcribing…** to finish.
+
+Dictation started with this button stays in the draft, regardless of `stt.submitTrigger`. Review or edit the text, then press Enter or click Send. While dictation is recording or transcribing into the draft, Enter and Send do nothing.
+
+For live English transcription, select **Nemotron 0.6B (live streaming, English)** in `omp setup speech`, or set `modelRoles.dictation` to `local/nemotron-streaming-en-0.6b`. Words appear in the draft while you speak. The first recording waits for the model to load before opening the microphone; start speaking when the button says **Recording · Stop**. Later recordings reuse the loaded model. See [local speech models](local-models.md#speech-to-text) for download and language details.
 ## Recover a cleared prompt
 
 Press `Ctrl+C` to clear an unsent composer draft, then `Up` to recall it. Older drafts and submitted prompts share the existing Up/Down navigation. Recalled drafts remain editable and are never sent until you submit them.
@@ -169,50 +181,51 @@ The prompt starts in Insert mode. `Escape` switches to Normal mode; the prompt b
 
 The status line also shows the mode, pending command, and multi-line Visual selection size. **Vim Mode Indicator** (`tui.vimModeDisplay`) selects `text` (default), `icon`, or `none` (hides the whole Vim status segment).
 
-| Mode        | Enter with              | Leave with                                              |
-| ----------- | ----------------------- | ------------------------------------------------------- |
-| Insert      | `i` `a` `I` `A` `o` `O` | `Escape`                                                |
-| Normal      | `Escape` from Insert    | any Insert-mode key                                     |
-| Visual      | `v`                     | `Escape`, or an operator (`y` `d` `c`)                  |
-| Visual line | `V`                     | `Escape`, or an operator (`y` `d` `c`)                  |
+| Mode        | Enter with              | Leave with                             |
+| ----------- | ----------------------- | -------------------------------------- |
+| Insert      | `i` `a` `I` `A` `o` `O` | `Escape`                               |
+| Normal      | `Escape` from Insert    | any Insert-mode key                    |
+| Visual      | `v`                     | `Escape`, or an operator (`y` `d` `c`) |
+| Visual line | `V`                     | `Escape`, or an operator (`y` `d` `c`) |
 
 ### Normal mode
 
-| Keys                          | Meaning                                                        |
-| ----------------------------- | -------------------------------------------------------------- |
-| `h` `j` `k` `l`               | Move by character and line (arrow keys work too)               |
-| `0` `^` `$`                   | Line start / first non-blank / line end                        |
-| `w` `b` `e`                   | Next word, previous word, end of word                          |
-| `f` `F` `t` `T` + char        | Find / till that character on the line (`;` repeats, `,` reverses) |
-| `gg` `G`                      | First line, last line (`5gg` and `5G` jump to line 5)          |
-| `1`–`9` prefix                | Repeat a motion or operator, e.g. `3w`, `5j`, `2dd`            |
-| `i` `a` `I` `A`               | Insert before / after cursor, at line start / line end         |
-| `o` `O`                       | Open a line below / above and insert                           |
-| `x` `D` `C`                   | Delete character, delete to line end (`2D` takes `count` lines), change to line end (`2C` likewise) |
-| `r` + char                    | Replace the character under the cursor (`3rx` replaces three)  |
-| `R`                           | Replace mode: typed characters overwrite until Escape          |
-| `%`                           | Jump to the matching `()` `[]` `{}` `"` `'` on or after the cursor. Quotes stay on the line; brackets can cross lines. With a count, `50%` goes to that percentage of the buffer. |
-| `{` `}`                       | Previous / next paragraph (blank-line boundary)                |
-| `J`                           | Join lines, dropping the indent of the following line (an empty line joins without a space) |
-| `>>` `<<`                     | Indent / outdent by two spaces (`3>>` shifts three lines; `>}` shifts a motion). Empty lines are left alone. |
-| `d` `y` `c` + motion          | Operate over a motion, e.g. `dw`, `d$`, `yb`, `cw`             |
-| `dd` `yy` `cc`                | Linewise delete / yank / change                                |
-| `d` `y` `c` + text object     | Operate over a text object, e.g. `diw`, `ca(`, `ci"`, `dap`    |
-| `p` `P`                       | Put the last yank or delete after / before the cursor          |
-| `u`                           | Undo                                                            |
+| Keys                      | Meaning                                                                                                                                                                           |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `h` `j` `k` `l`           | Move by character and line (arrow keys work too)                                                                                                                                  |
+| `0` `^` `$`               | Line start / first non-blank / line end                                                                                                                                           |
+| `w` `b` `e`               | Next word, previous word, end of word                                                                                                                                             |
+| `f` `F` `t` `T` + char    | Find / till that character on the line (`;` repeats, `,` reverses)                                                                                                                |
+| `gg` `G`                  | First line, last line (`5gg` and `5G` jump to line 5)                                                                                                                             |
+| `1`–`9` prefix            | Repeat a motion or operator, e.g. `3w`, `5j`, `2dd`                                                                                                                               |
+| `i` `a` `I` `A`           | Insert before / after cursor, at line start / line end                                                                                                                            |
+| `o` `O`                   | Open a line below / above and insert                                                                                                                                              |
+| `x` `D` `C`               | Delete character, delete to line end (`2D` takes `count` lines), change to line end (`2C` likewise)                                                                               |
+| `r` + char                | Replace the character under the cursor (`3rx` replaces three)                                                                                                                     |
+| `R`                       | Replace mode: typed characters overwrite until Escape                                                                                                                             |
+| `%`                       | Jump to the matching `()` `[]` `{}` `"` `'` on or after the cursor. Quotes stay on the line; brackets can cross lines. With a count, `50%` goes to that percentage of the buffer. |
+| `{` `}`                   | Previous / next paragraph (blank-line boundary)                                                                                                                                   |
+| `J`                       | Join lines, dropping the indent of the following line (an empty line joins without a space)                                                                                       |
+| `>>` `<<`                 | Indent / outdent by two spaces (`3>>` shifts three lines; `>}` shifts a motion). Empty lines are left alone.                                                                      |
+| `d` `y` `c` + motion      | Operate over a motion, e.g. `dw`, `d$`, `yb`, `cw`                                                                                                                                |
+| `dd` `yy` `cc`            | Linewise delete / yank / change                                                                                                                                                   |
+| `d` `y` `c` + text object | Operate over a text object, e.g. `diw`, `ca(`, `ci"`, `dap`                                                                                                                       |
+| `p` `P`                   | Put the last yank or delete after / before the cursor                                                                                                                             |
+| `u`                       | Undo (a whole Insert session, or a whole `.`, undoes in one step)                                                                                                                 |
+| `.`                       | Repeat the last change, including text typed in the Insert session it opened; a count replaces the original one (`3.`)                                                            |
 
 ### Text objects
 
 A text object follows an operator (`diw`) or extends a Visual selection (`viw`). `i` takes the inside, `a` takes the surroundings; counts apply, e.g. `d2aw`.
 
-| Object            | Covers                                                                     |
-| ----------------- | -------------------------------------------------------------------------- |
-| `iw` `aw`         | Word; `aw` also takes the adjoining whitespace                             |
-| `iW` `aW`         | Whitespace-delimited WORD                                                  |
-| `i"` `i'` `` i` `` | Inside the quotes on the current line (`a"` takes the quotes too)          |
-| `i(` `i[` `i{` `i<` | Inside the innermost matching pair, nesting-aware and across lines         |
-| `a(` `a[` `a{` `a<` | The same pair including its delimiters (`b` and `B` alias `(` and `{`)     |
-| `ip` `ap`         | Paragraph — the run of non-blank (or blank) lines, linewise                |
+| Object              | Covers                                                                 |
+| ------------------- | ---------------------------------------------------------------------- |
+| `iw` `aw`           | Word; `aw` also takes the adjoining whitespace                         |
+| `iW` `aW`           | Whitespace-delimited WORD                                              |
+| `i"` `i'` `` i` ``  | Inside the quotes on the current line (`a"` takes the quotes too)      |
+| `i(` `i[` `i{` `i<` | Inside the innermost matching pair, nesting-aware and across lines     |
+| `a(` `a[` `a{` `a<` | The same pair including its delimiters (`b` and `B` alias `(` and `{`) |
+| `ip` `ap`           | Paragraph — the run of non-blank (or blank) lines, linewise            |
 
 ### Visual mode
 

@@ -52,7 +52,7 @@ existing subsystems; the launcher does not implement another routing engine.
 Task agents normalize into `AgentDefinition` (`src/task/types.ts`):
 
 - required `name`, `description`, and `systemPrompt`
-- optional `tools`, `spawns`, prioritized `model` list, `thinkingLevel`, `output`, `blocking`, `autoloadSkills`, `readSummarize`, `prewalk`, `advisor`
+- optional `tools`, `spawns`, prioritized `model` list, `thinkingLevel`, `output`, `blocking`, `structured`, `autoloadSkills`, `readSummarize`, `prewalk`, `advisor`
 - `source`: `"bundled" | "user" | "project"` (extension agents are tagged with their extension root's project/user level)
 - optional `filePath`
 
@@ -60,7 +60,7 @@ Parsing comes from frontmatter via `parseAgentFields()` (`src/discovery/helpers.
 
 - missing/non-string `name` or `description` => invalid (`null`), caller treats as parse failure
 - `main` and `sub` are reserved names (checked after trimming and lowercasing); definitions using them are invalid
-- `tools` accepts CSV or array; legacy tool aliases are normalized and `yield` is auto-added. An explicit `tools: []` therefore grants `yield`, not the default toolset.
+- `tools` accepts CSV or array; legacy tool aliases are normalized and mixed arrays retain their string entries. Omitted or YAML-null `tools` selects the default built-in toolset. Any other declaration with no tool names (including `tools: []`, empty CSV, or malformed scalar/array values) selects no built-ins. Structured children still receive the required `yield` tool; MCP, extension, and custom tools remain additive.
 - `spawns` accepts `*`, CSV, or array
 - backward-compat behavior: if `spawns` missing but `tools` includes `task`, `spawns` becomes `*`
 - `output` is passed through as opaque schema data
@@ -68,6 +68,7 @@ Parsing comes from frontmatter via `parseAgentFields()` (`src/discovery/helpers.
 - `model` accepts one selector, CSV, or an array. Entries are tried in order after role aliases are expanded.
 - `thinking-level` / `thinking` selects the agent's configured selector (`auto` or a concrete level). With `task.enableEffort=true` (default `false`), the task item's `effort` overrides it. In the default `effort.mode: replacement`, that field accepts exact `minimal|low|medium|high|xhigh|max`: an explicit supported concrete level bypasses implicit model effort rules. Omit it for the configured agent/role/Auto selection, or request `agent: "@smol:auto"` for explicit constrained Auto. In opt-in `effort.mode: legacy`, the field instead accepts `lo|med|hi`, mapping to the selected model's lowest/middle/highest supported effort and clamping to `task.maxEffort` (default `max`); the ceiling follows retry-fallback switches. Models without a controllable effort surface retain their normal selector for implicit choices. See [Thinking and effort policy](./settings.md#thinking-and-effort-policy).
 - `blocking: true` makes the parent wait for that agent even when async task execution is enabled
+- `structured: true` keeps structured results for that agent while `task.structured` (default `false`) is off: its task spawns get the `yield` tool and resolve their output schema exactly as with `task.structured: true` (see [structured-output precedence](#model-and-structured-output-precedence)). With `task.structured` on, the field changes nothing; `false` or absent follows the setting. The caller-side `outputSchema`/`schemaMode` task parameters stay hidden while the setting is off. The decision is made from the resolved agent in `resolveEffectiveSubagentPolicy()`, so plan-mode spawns keep it, and cold revival restores `yield` from the child's persisted tool list.
 - `autoloadSkills` names skills from the parent session to inject before the first child prompt; unknown names are ignored
 - `prewalk: true` enables the configured [planning and execution crews](./prewalk.md#configure-the-crews) at the first edit/write. An empty planner preserves normal task model routing; execution defaults to `@smol`. A string such as `prewalk: "@smol"` or `prewalk: "openai/gpt-5-mini"` overrides the execution primary selector. `task.agentPrewalk` entries take precedence over frontmatter. Ordered crew fallbacks skip unavailable or unauthenticated candidates. If a configured crew is unavailable, the spawn keeps normal task routing without prewalk. A target is skipped only when both model identity and effective thinking match; effort-only handoffs still arm.
 - `advisor: true` pairs spawned sessions of the agent with an advisor running the model resolved for the `advisor` role; a string value (e.g. `advisor: "deepseek/deepseek-v4-flash"` or `advisor: "@smol:high"`) sets an explicit advisor model pattern (optional `:level` suffix), applied as the spawned session's `modelRoles.advisor`. The `task.agentAdvisor` settings record (agent name → `"on"` / `"off"` / pattern, configured per agent from the `/agents` hub via its advisor strip) overrides the frontmatter. Resolution happens in `runSubprocess` (`src/task/executor.ts`); subagents default to no advisor, and the effective opt-in is persisted in `session_init` so cold revival restores it.
@@ -94,7 +95,7 @@ Set the role mapping in `~/.omp/agent/config.yml`:
 
 ```yaml
 modelRoles:
-  review: openai/gpt-5.4:high
+   review: openai/gpt-5.4:high
 ```
 
 `@review` resolves through `modelRoles.review`. Each `modelRoles.<role>` value stores a concrete model selector and may append a thinking suffix such as `:high` (`src/config/model-resolver.ts`). Changing that mapping affects subsequent task resolutions without editing agent definitions. Task/eval preflight reloads the current global, project, and explicit overlay settings before rediscovering agents, so agent files and their role aliases added during a live session resolve from one refreshed configuration state.
@@ -105,14 +106,14 @@ With the default batched task schema, supply shared `context` and per-item `task
 
 ```json
 {
-  "context": "Review the current change in this repository.",
-  "tasks": [
-    {
-      "agent": "reviewer",
-      "task": "Report concrete correctness findings.",
-      "solutionSpace": "Review cause and failure modes are open; no known defect."
-    }
-  ]
+	"context": "Review the current change in this repository.",
+	"tasks": [
+		{
+			"agent": "reviewer",
+			"task": "Report concrete correctness findings.",
+			"solutionSpace": "Review cause and failure modes are open; no known defect."
+		}
+	]
 }
 ```
 
@@ -189,12 +190,12 @@ Route these tiers through roles by keeping aliases in `task.agentModelOverrides`
 
 ```yaml
 task:
-  agentModelOverrides:
-    sonic: "@fast_worker"
-    task: "@good_worker"
+   agentModelOverrides:
+      sonic: "@fast_worker"
+      task: "@good_worker"
 modelRoles:
-  fast_worker: openai/gpt-5-mini
-  good_worker: openai/gpt-5.4:high
+   fast_worker: openai/gpt-5-mini
+   good_worker: openai/gpt-5.4:high
 ```
 
 The `vibe_spawn` `cli` remains `fast` or `good`; update `modelRoles` to change the worker model.
@@ -228,7 +229,7 @@ Because bundled parsing uses `level: "fatal"`, unrecoverable YAML errors or inva
    - explicit CLI `--extension` / SDK `additionalExtensionPaths` directory roots
    - the session's effective `extensions:` array, in its configured order
    - installed npm/link plugins
-   Project and user `extensions:` arrays are not concatenated: settings use array-replacement precedence. Session overlays/runtime overrides and the configured array's project/user provenance are preserved. In `explicit-only` mode (`--no-extensions` or SDK `disableExtensionDiscovery`), only explicit roots contribute this package surface; file entrypoints have no `agents/` subdirectory to scan.
+     Project and user `extensions:` arrays are not concatenated: settings use array-replacement precedence. Session overlays/runtime overrides and the configured array's project/user provenance are preserved. In `explicit-only` mode (`--no-extensions` or SDK `disableExtensionDiscovery`), only explicit roots contribute this package surface; file entrypoints have no `agents/` subdirectory to scan.
 4. Claude marketplace plugin roots (`listClaudePluginRoots(home, cwd)`) with `agents/` subdirs — only when `isProviderEnabled("claude-plugins")`; project-scope plugins sort before user-scope. User-scope roots additionally require the `claude-plugins` or `claude` user source to be enabled (`isUserSourceEnabled`: normally via `enabledProviders`, e.g. `["claude-plugins"]`; `claude` is also enabled implicitly when `CLAUDE_CONFIG_DIR` is set), except roots whose origin is not the foreign `~/.claude/plugins` tree (omp's own installs with `origin: "omp"` and `--plugin-dir` roots) — mirroring the skills path's exemption.
 5. Bundled agents (`loadBundledAgents()`)
 
@@ -356,6 +357,8 @@ Runtime output schema precedence is:
 3. parent session `outputSchema`
 
 The task item's optional `schemaMode` overrides the parent session mode; the default is `permissive`.
+
+These schemas apply only to structured runs. With `task.structured` off (the default), task spawns get no output schema and no `yield` tool and return their final assistant message, except for agents whose definition sets `structured: true`; those resolve the agent `output`, then the parent session schema, because the task item's `outputSchema` is not exposed. Eval `agent()` and workpool spawns are always structured.
 
 Explicit caller schemas are validated during preflight in both modes. Agent/session schemas are preflight-validated when the effective mode is `strict`. Invalid schemas fail before child execution.
 

@@ -1,3 +1,4 @@
+import type { Model } from "@oh-my-pi/pi-ai";
 import type { ModelRegistry } from "../config/model-registry";
 import {
 	disabledProviderIds,
@@ -45,11 +46,18 @@ export function resolvePrewalkCrewSelection(
 	registry: ModelRegistry,
 	phase: PrewalkPhase,
 	override?: string,
+	availableModels?: Model[],
 ): Prewalk | undefined {
 	const disabled = disabledProviderIds(settings);
 	const preferences = getModelMatchPreferences(settings);
 	for (const pattern of getPrewalkPatterns(settings, phase, override)) {
-		const resolved = resolveCliModel({ cliModel: pattern, modelRegistry: registry, settings, preferences });
+		const resolved = resolveCliModel({
+			cliModel: pattern,
+			modelRegistry: registry,
+			availableModels: availableModels?.length ? availableModels : undefined,
+			settings,
+			preferences,
+		});
 		if (resolved.model && !disabled.has(resolved.model.provider) && registry.hasConfiguredAuth(resolved.model)) {
 			return { target: resolved.model, thinkingLevel: resolved.thinkingLevel };
 		}

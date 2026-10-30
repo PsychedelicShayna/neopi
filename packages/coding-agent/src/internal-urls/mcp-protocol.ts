@@ -1,4 +1,4 @@
-import { untilAborted } from "@oh-my-pi/pi-utils";
+import { untilAborted, withTimeout } from "@oh-my-pi/pi-utils";
 import { MCPManager } from "../mcp/manager";
 import type { MCPResourceReadResult } from "../mcp/types";
 import { render as renderPrompt } from "@oh-my-pi/pi-utils/prompt";
@@ -9,6 +9,11 @@ import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext, Sc
 export interface McpResourceReadOptions {
 	/** Match advertised resource URIs only, never URI templates. */
 	exact?: boolean;
+	/**
+	 * Cap, in ms, on waiting for still-connecting servers and their catalogs when no connected server
+	 * advertises the URI. Omitted: wait until that work settles, however long its reconnects take.
+	 */
+	waitMs?: number;
 	signal?: AbortSignal;
 }
 
@@ -117,10 +122,19 @@ function formatAvailableResources(mcpManager: MCPManager): string {
 	return available || "  (none)";
 }
 
+/** Load connected catalogs before waiting on unrelated servers; check again after pending connects settle. */
+async function settleCatalogs(mcpManager: MCPManager, uri: string, exact: boolean): Promise<void> {
+	await Promise.allSettled(mcpManager.getConnectedServers().map(name => mcpManager.ensureServerResources(name)));
+	if (resolveTargetServer(mcpManager, uri, exact)) return;
+	await mcpManager.waitForPendingConnections();
+	await Promise.allSettled(mcpManager.getConnectedServers().map(name => mcpManager.ensureServerResources(name)));
+}
+
 /**
  * Read the MCP resource `url` names (see {@link extractResourceUri}) from the connected server that
- * advertises it. Undefined when no server does, after pending connects and catalog loads settle;
- * those waits are bounded by the MCP connect/request timeouts and end early on an aborted `signal`
+ * advertises it. Undefined when no server does after pending connects and catalog loads settle.
+ * That wait includes timeout-triggered reconnect ladders and never ends for a server with
+ * `timeout: 0`, so speculative callers pass `waitMs`; an aborted `signal` also ends it early
  * (the work itself stays in flight for the manager).
  */
 export async function readMcpResource(
@@ -128,20 +142,18 @@ export async function readMcpResource(
 	url: InternalUrl,
 	options?: McpResourceReadOptions,
 ): Promise<InternalResource | undefined> {
-	const exact = options?.exact === true;
-	const signal = options?.signal;
+	const { exact = false, waitMs, signal } = options ?? {};
 	const uri = extractResourceUri(url);
 	let targetServer = resolveTargetServer(mcpManager, uri, exact);
 	if (!targetServer) {
-		// A configured server may still be handshaking when discovery returned
-		// (the `connectServers` startup race deliberately leaves slow servers in
-		// flight). This one-shot read must observe the final attached state
-		// rather than the mid-handshake snapshot, so wait for pending connects
-		// before loading catalogs and retrying.
-		await untilAborted(signal, mcpManager.waitForPendingConnections());
+		// A server may already be connected but have an unloaded catalog, while another is still
+		// handshaking after the startup race. Check connected catalogs first so unrelated pending
+		// work cannot delay an advertised resource; then wait for late servers and retry.
+		const settling = settleCatalogs(mcpManager, uri, exact);
+		// `settleCatalogs` never rejects, so the only rejection to swallow is the spent budget.
 		await untilAborted(
 			signal,
-			Promise.allSettled(mcpManager.getConnectedServers().map(name => mcpManager.ensureServerResources(name))),
+			waitMs === undefined ? settling : withTimeout(settling, waitMs, "MCP wait budget spent").catch(() => {}),
 		);
 		targetServer = resolveTargetServer(mcpManager, uri, exact);
 	}
@@ -179,6 +191,14 @@ export async function readMcpResource(
 	};
 }
 
+/** No connected MCP server advertises the requested resource URI. */
+export class McpResourceNotFoundError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "McpResourceNotFoundError";
+	}
+}
+
 /**
  * Protocol handler for MCP resources.
  *
@@ -207,7 +227,7 @@ export class McpProtocolHandler implements ProtocolHandler {
 		}
 		const resource = await readMcpResource(mcpManager, url, { signal: context?.signal });
 		if (resource) return resource;
-		throw new Error(
+		throw new McpResourceNotFoundError(
 			`No MCP server has resource "${extractResourceUri(url)}".\n\nAvailable resources:\n${formatAvailableResources(mcpManager)}`,
 		);
 	}

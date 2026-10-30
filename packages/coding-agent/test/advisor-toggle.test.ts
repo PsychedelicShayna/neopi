@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { type } from "@oh-my-pi/omptype";
 import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
 import * as compactionModule from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
@@ -15,6 +16,7 @@ import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { __resetDirsFromEnvForTests, getProjectAgentDir, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 
@@ -28,7 +30,16 @@ function restoreEnv(key: string, value: string | undefined): void {
 import * as advisorModule from "../src/advisor";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
-import { cfgAdvisorEnabled, cfgAdvisorMaxNotesPerUpdate } from "@oh-my-pi/pi-coding-agent/advisor/settings";
+import {
+	cfgAdvisorContinueSeverity,
+	advisorDeliveryTiming,
+	cfgAdvisorDeliveryBlocker,
+	cfgAdvisorDeliveryConcern,
+	cfgAdvisorDeliveryNit,
+	cfgAdvisorEnabled,
+	cfgAdvisorImmuneTurns,
+	cfgAdvisorMaxNotesPerUpdate,
+} from "@oh-my-pi/pi-coding-agent/advisor/settings";
 import { cfgCompactionKeepRecentTokens } from "@oh-my-pi/pi-coding-agent/session/context-settings";
 
 describe("AgentSession advisor toggle", () => {
@@ -80,6 +91,7 @@ describe("AgentSession advisor toggle", () => {
 				tools: [],
 				messages: [],
 			},
+			convertToLlm,
 		});
 		const settings = Settings.isolated({ "compaction.enabled": false });
 		session = new AgentSession({
@@ -95,6 +107,7 @@ describe("AgentSession advisor toggle", () => {
 		try {
 			await session?.dispose();
 		} finally {
+			vi.restoreAllMocks();
 			restoreEnv("PI_CODING_AGENT_DIR", originalAgentDir);
 			restoreEnv("PI_PROFILE", originalPiProfile);
 			restoreEnv("OMP_PROFILE", originalOmpProfile);
@@ -136,6 +149,232 @@ describe("AgentSession advisor toggle", () => {
 		if (!advisor) throw new Error("Expected advisor agent to exist");
 		return advisor;
 	}
+
+	it("defaults continuation to concern and the post-interrupt cooldown to three turns", () => {
+		expect(cfgAdvisorContinueSeverity.get(session.settings)).toBe("concern");
+		expect(cfgAdvisorImmuneTurns.get(session.settings)).toBe(3);
+	});
+
+	it("registers severity timing controls and rejects unsupported interrupt configuration", () => {
+		expect(advisorDeliveryTiming(session.settings)).toBe("on-yield");
+		expect(advisorDeliveryTiming(session.settings, "concern")).toBe("next-tool-call");
+		expect(advisorDeliveryTiming(session.settings, "blocker")).toBe("next-tool-call");
+		for (const setting of [cfgAdvisorDeliveryNit, cfgAdvisorDeliveryConcern, cfgAdvisorDeliveryBlocker]) {
+			expect(setting.enumValues).toEqual(["on-yield", "next-tool-call"]);
+			expect(setting.ui?.group).toBe("Advisor");
+			expect(() => Settings.isolated({ [setting.id]: "interrupt" })).toThrow("interrupt is unsupported");
+			expect(() => Settings.isolated({ [setting.id]: "automatic" })).toThrow("must be on-yield or next-tool-call");
+			expect(() => setting.parse("interrupt")).toThrow("interrupt is unsupported");
+		}
+	});
+
+	function adviseToolFor(advisor: Agent): advisorModule.AdviseTool {
+		const tool = advisor.state.tools.find(candidate => candidate.name === "advise");
+		if (!(tool instanceof advisorModule.AdviseTool)) throw new Error("Expected advisor advise tool");
+		return tool;
+	}
+
+	for (const severity of [undefined, "nit", "concern", "blocker"] as const) {
+		it.each(["on-yield", "next-tool-call"] as const)(
+			`delivers ${severity ?? "omitted severity"} at %s without cancelling an active tool`,
+			async timing => {
+				const setting = severity === "blocker" ? cfgAdvisorDeliveryBlocker
+					: severity === "concern" ? cfgAdvisorDeliveryConcern : cfgAdvisorDeliveryNit;
+				setting.set(session.settings, timing);
+				const advisor = enableAdvisor();
+				vi.spyOn(advisor, "prompt").mockResolvedValue(undefined);
+				const advise = adviseToolFor(advisor);
+				session.prepareForHeadlessAdvisorDrain();
+				const started = Promise.withResolvers<void>();
+				const release = Promise.withResolvers<void>();
+				const queued = Promise.withResolvers<void>();
+				let toolAborted = false;
+				const originalSteer = session.agent.steer.bind(session.agent);
+				const steer = vi.spyOn(session.agent, "steer").mockImplementation((message, options) => {
+					originalSteer(message, options);
+					queued.resolve();
+				});
+				session.agent.setTools([{
+					name: "probe",
+					label: "Probe",
+					description: "Wait for the test to release this tool.",
+					parameters: type({}),
+					interruptible: true,
+					execute: async (_id, _args, signal) => {
+						signal?.addEventListener("abort", () => { toolAborted = true; }, { once: true });
+						started.resolve();
+						await release.promise;
+						toolAborted ||= signal?.aborted === true;
+						return { content: [{ type: "text", text: "completed probe" }], details: {} };
+					},
+				}]);
+				const mock = createMockModel({ responses: [
+					{ content: [{ type: "toolCall", id: "probe-1", name: "probe", arguments: {} }] },
+					{ content: ["done"] },
+				] });
+				session.agent.streamFn = mock.stream;
+				const running = session.prompt("Exercise delivery timing");
+				try {
+					await started.promise;
+					const result = await advise.execute("advice", { note: "The probe needs a regression.", severity });
+					if (timing === "next-tool-call") {
+						await queued.promise;
+						expect(steer.mock.calls[0]?.[1]?.interruptMode).toBe("wait");
+						expect(JSON.stringify(result.content)).toContain("Delivered.");
+					} else {
+						expect(steer).not.toHaveBeenCalled();
+						expect(JSON.stringify(result.content)).toContain("Queued for the configured delivery point");
+					}
+					expect(toolAborted).toBe(false);
+				} finally {
+					release.resolve();
+					await running;
+					await session.waitForIdle();
+				}
+				expect(toolAborted).toBe(false);
+				expect(mock.calls).toHaveLength(2);
+				const secondContext = JSON.stringify(mock.calls[1].context.messages);
+				expect(secondContext.includes("The probe needs a regression.")).toBe(timing === "next-tool-call");
+				expect(session.messages.filter(message =>
+					message.role === "custom" && String(message.content).includes("The probe needs a regression."),
+				)).toHaveLength(1);
+			},
+		);
+	}
+
+	it("holds on-yield notes past a false completed step when queued work extends the run", async () => {
+		const advisor = enableAdvisor();
+		vi.spyOn(advisor, "prompt").mockResolvedValue(undefined);
+		const advise = adviseToolFor(advisor);
+		cfgAdvisorContinueSeverity.set(session.settings, "blocker");
+		let candidateYields = 0;
+		session.agent.setOnBeforeYield(async () => {
+			if (++candidateYields !== 1) return;
+			// The session's onPrimaryTurnEnd already observed willContinue=false.
+			await advise.execute("held", { note: "Held until the whole run ends." });
+			session.agent.followUp({ role: "user", content: "Continue through the queued step.", timestamp: Date.now() });
+		});
+		const mock = createMockModel({ responses: [{ content: ["candidate final"] }, { content: ["actual final"] }] });
+		session.agent.streamFn = mock.stream;
+		await session.prompt("Finish the work");
+		await session.waitForIdle();
+		expect(mock.calls).toHaveLength(2);
+		expect(JSON.stringify(mock.calls[1].context.messages)).toContain("Continue through the queued step.");
+		expect(JSON.stringify(mock.calls[1].context.messages)).not.toContain("Held until the whole run ends.");
+		expect(session.messages.filter(message =>
+			message.role === "custom" && String(message.content).includes("Held until the whole run ends."),
+		)).toHaveLength(1);
+	});
+
+	it("holds on-yield notes through a successor run queued after the final poll", async () => {
+		const advisor = enableAdvisor();
+		vi.spyOn(advisor, "prompt").mockResolvedValue(undefined);
+		const advise = adviseToolFor(advisor);
+		cfgAdvisorContinueSeverity.set(session.settings, "blocker");
+		const note = "Hold this note through the late-queued successor.";
+		const cards = () => session.messages.filter(message =>
+			message.role === "custom" && String(message.content).includes(note),
+		);
+		let candidateYields = 0;
+		session.agent.setOnBeforeYield(async () => {
+			if (++candidateYields !== 1) return;
+			await advise.execute("held-late-continuation", { note });
+		});
+		let agentEnds = 0;
+		const unsubscribe = session.agent.subscribe(event => {
+			if (event.type !== "agent_end" || ++agentEnds !== 1) return;
+			// Core has already made its final queue poll. The session must drain
+			// this steer in a new run while the owning prompt unwinds.
+			session.agent.steer({
+				role: "user",
+				content: "Continue from the late agent_end steer.",
+				timestamp: Date.now(),
+			});
+		});
+		const cardsAtProvider: number[] = [];
+		const mock = createMockModel({ handler: () => {
+			cardsAtProvider.push(cards().length);
+			return { content: ["done"] };
+		} });
+		session.agent.streamFn = mock.stream;
+		try {
+			await session.prompt("Finish before the late steer arrives");
+			await session.waitForIdle();
+		} finally {
+			unsubscribe();
+		}
+		expect(agentEnds).toBe(2);
+		expect(mock.calls).toHaveLength(2);
+		expect(JSON.stringify(mock.calls[1].context.messages)).toContain("Continue from the late agent_end steer.");
+		expect(JSON.stringify(mock.calls[1].context.messages)).not.toContain(note);
+		expect(cardsAtProvider).toEqual([0, 0]);
+		expect(cards()).toHaveLength(1);
+	});
+
+	it("releases live timing edits without rebuilding reviewers or duplicating admitted notes", async () => {
+		cfgAdvisorDeliveryConcern.set(session.settings, "on-yield");
+		const advisor = enableAdvisor();
+		vi.spyOn(advisor, "prompt").mockResolvedValue(undefined);
+		const advise = adviseToolFor(advisor);
+		session.prepareForHeadlessAdvisorDrain();
+		const queued = Promise.withResolvers<void>();
+		const originalSteer = session.agent.steer.bind(session.agent);
+		const steer = vi.spyOn(session.agent, "steer").mockImplementation((message, options) => {
+			originalSteer(message, options);
+			queued.resolve();
+		});
+		const mock = createMockModel({ responses: [{ content: ["first"] }, { content: ["second"] }] });
+		let providerCalls = 0;
+		session.agent.streamFn = async (requestModel, context, options) => {
+			if (++providerCalls === 1) {
+				await advise.execute("held", { note: "Release this admitted concern on the next safe boundary.", severity: "concern" });
+				expect(steer).not.toHaveBeenCalled();
+				cfgAdvisorDeliveryConcern.set(session.settings, "next-tool-call");
+				await queued.promise;
+				expect(session.getAdvisorAgent()).toBe(advisor);
+				cfgAdvisorDeliveryConcern.set(session.settings, "on-yield");
+				cfgAdvisorDeliveryConcern.set(session.settings, "next-tool-call");
+				await advise.execute("repeat", { note: "Release this admitted concern on the next safe boundary.", severity: "concern" });
+			}
+			return mock.stream(requestModel, context, options);
+		};
+		await session.prompt("Exercise live configuration");
+		await session.waitForIdle();
+		expect(steer).toHaveBeenCalledTimes(1);
+		expect(mock.calls).toHaveLength(2);
+	});
+
+	it("batches late review emissions after yield into one continuation without reviewing that continuation", async () => {
+		const advisor = enableAdvisor();
+		const advise = adviseToolFor(advisor);
+		const reviewStarted = Promise.withResolvers<void>();
+		const releaseReview = Promise.withResolvers<void>();
+		const continuationStarted = Promise.withResolvers<void>();
+		const review = vi.spyOn(advisor, "prompt").mockImplementation(async () => {
+			reviewStarted.resolve();
+			await releaseReview.promise;
+			await advise.execute("late-1", { note: "The first late regression is missing.", severity: "blocker" });
+			await advise.execute("late-2", { note: "The second late regression is missing.", severity: "blocker" });
+		});
+		let primaryCalls = 0;
+		const mock = createMockModel({ handler: () => {
+			if (++primaryCalls === 2) continuationStarted.resolve();
+			return { content: ["done"] };
+		} });
+		session.agent.streamFn = mock.stream;
+		await session.prompt("Finish before the asynchronous review");
+		await reviewStarted.promise;
+		releaseReview.resolve();
+		await continuationStarted.promise;
+		await session.waitForIdle();
+		expect(review).toHaveBeenCalledTimes(1);
+		expect(mock.calls).toHaveLength(2);
+		const cards = session.messages.filter(message => message.role === "custom" &&
+			String(message.content).includes("late regression"));
+		expect(cards).toHaveLength(1);
+		expect(JSON.stringify(cards[0])).toContain("first late regression");
+		expect(JSON.stringify(cards[0])).toContain("second late regression");
+	});
 
 	it("adds a named launcher advisor without changing the legacy advisor identity", () => {
 		const legacy = enableAdvisor();
@@ -695,6 +934,17 @@ describe("AgentSession advisor toggle", () => {
 		const visible = session.getAdvisorAgent();
 		if (!visible) throw new Error("Expected Alpha advisor");
 
+		// Omitted and explicit true have identical visibility semantics.
+		session.applyAdvisorConfigs([{ name: "Alpha", includeThinking: true }, { name: "Beta" }], undefined);
+		expect(session.getAdvisorAgent()).toBe(visible);
+		// Changing another advisor's scope/visibility must not rebuild Alpha.
+		session.applyAdvisorConfigs(
+			[{ name: "Alpha" }, { name: "Beta", scope: "subagent", includeThinking: false }],
+			undefined,
+		);
+		expect(session.getAdvisorAgent()).toBe(visible);
+		expect(session.getAdvisorStats().advisors.map(advisor => advisor.name)).toEqual(["Alpha"]);
+
 		session.applyAdvisorConfigs([{ name: "Alpha", includeThinking: false }, { name: "Beta" }], undefined);
 		const hidden = session.getAdvisorAgent();
 		expect(hidden).not.toBe(visible);
@@ -745,7 +995,7 @@ describe("AgentSession advisor toggle", () => {
 		});
 
 		expect(session.getAdvisorCost()).toBeCloseTo(0.5, 8);
-		expect(await session.dropImages()).toEqual({ removed: 1 });
+		expect(await session.dropImages()).toMatchObject({ removed: 1 });
 		expect(advisor.state.messages).toHaveLength(0);
 		expect(session.getAdvisorCost()).toBeCloseTo(0.5, 8);
 		expect(session.getAdvisorStats().cost).toBeCloseTo(0.5, 8);
@@ -1284,7 +1534,9 @@ describe("AgentSession advisor toggle", () => {
 
 			expect(markUsageLimitReached).toHaveBeenCalledTimes(1);
 			expect(markUsageLimitReached.mock.calls[0]?.[0]).toBe(model.provider);
-			expect(quotaSession.getAdvisorStatusOverview().advisors[0]?.yielded).toBe(true);
+			const quotaStatus = quotaSession.getAdvisorStatusOverview().advisors[0];
+			expect(quotaStatus).toMatchObject({ yielded: true });
+			expect(quotaStatus?.backlog).toBeGreaterThan(0);
 			// A quota-paused runtime cannot accept work either — the streaming
 			// mask must not reopen its eye mid-turn.
 			quotaSession.agent.state.isStreaming = true;
@@ -1298,20 +1550,21 @@ describe("AgentSession advisor toggle", () => {
 
 			const adviseTool = advisorAgent.state.tools.find(tool => tool.name === "advise");
 			if (!(adviseTool instanceof advisorModule.AdviseTool)) throw new Error("Expected advisor advise tool");
-			adviseTool.beginUpdate(true);
-			const deferred = await adviseTool.execute("deferred-before-quota", {
-				note: "The final result still needs a regression test.",
-				severity: "nit",
-			});
-			if (deferred.content.length === 0) throw new Error("Expected the advise tool to acknowledge the call");
-			// Behavior, not wording: a note deferred behind an in-progress turn
-			// holds only a reservation — it must stay out of the primary
-			// transcript until the terminal-boundary flush below releases it.
-			expect(
-				quotaSession.messages.some(message =>
-					JSON.stringify(message).includes("The final result still needs a regression test."),
-				),
-			).toBe(false);
+			let injected = false;
+			primaryAgent.streamFn = (requestModel, context, options) => {
+				if (!injected) {
+					injected = true;
+					adviseTool.beginUpdate();
+					void adviseTool.execute("deferred-before-quota", {
+						note: "The final result still needs a regression test.",
+						severity: "nit",
+					});
+					expect(quotaSession.messages.some(message =>
+						JSON.stringify(message).includes("The final result still needs a regression test."),
+					)).toBe(false);
+				}
+				return mock.stream(requestModel, context, options);
+			};
 
 			// The quota latch prevents another advisor dispatch. The tool boundary
 			// must keep the note out of the continuing model request; terminal
@@ -1364,7 +1617,8 @@ describe("AgentSession advisor toggle", () => {
 			const tool = advisor.state.tools?.find(candidate => candidate.name === "advise");
 			if (!(tool instanceof advisorModule.AdviseTool)) throw new Error("Expected advise tool");
 
-			tool.beginUpdate(true);
+			session.prepareForHeadlessAdvisorDrain();
+			tool.beginUpdate();
 			for (let i = 1; i <= budget; i++) {
 				const result = await tool.execute(`${prefix}-${i}`, {
 					note: `${prefix} note ${i}`,
@@ -1393,5 +1647,41 @@ describe("AgentSession advisor toggle", () => {
 		// Settings (2) overrides the default (4) when shared and per-advisor are undefined.
 		expect(session.applyAdvisorConfigs([{ name: "SettingsOnly" }], undefined, undefined)).toBe(1);
 		await exerciseBudget("settings", 2);
+	});
+
+	it("filters WATCHDOG.yml advisors by scope (main vs subagent vs all)", () => {
+		session.settings.setModelRole("advisor", `${model.provider}/${model.id}`);
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		const roster = [
+			{ name: "Main Guard", scope: "main" as const },
+			{ name: "Subagent Verifier", scope: "subagent" as const, includeThinking: false },
+			{ name: "Universal Guard", scope: "all" as const },
+		];
+
+		// Top-level main session builds main + all (2 advisors)
+		expect(session.applyAdvisorConfigs(roster, undefined)).toBe(2);
+		expect(session.getAdvisorStats().advisors.map(a => a.name)).toEqual(["Main Guard", "Universal Guard"]);
+
+		// Subagent session builds subagent + all (2 advisors)
+		const subAgent = new Agent({
+			initialState: {
+				model,
+				systemPrompt: ["Subagent"],
+				tools: [],
+				messages: [],
+			},
+		});
+		const subSettings = Settings.isolated({ "compaction.enabled": false, "advisor.enabled": true });
+		subSettings.setModelRole("advisor", `${model.provider}/${model.id}`);
+		const subSession = new AgentSession({
+			agent: subAgent,
+			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
+			settings: subSettings,
+			modelRegistry,
+			advisorTools: [],
+			agentKind: "sub",
+			advisorConfigs: roster,
+		});
+		expect(subSession.getAdvisorStats().advisors.map(a => a.name)).toEqual(["Subagent Verifier", "Universal Guard"]);
 	});
 });

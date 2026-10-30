@@ -31,7 +31,8 @@ export async function loadPinnedSessionIds(agentDir: string = getAgentDir()): Pr
 }
 
 /**
- * Toggle one session's pin and persist the set; returns the new pinned state.
+ * Set one session's pin from its current state and persist the set; returns
+ * the new pinned state.
  *
  * The read-modify-write runs under the shared cross-process file lock and
  * commits via write-temp-then-atomic-replace, mirroring the MCP config
@@ -41,12 +42,17 @@ export async function loadPinnedSessionIds(agentDir: string = getAgentDir()): Pr
  * an empty set. The replace preserves the destination across Windows
  * EPERM/EEXIST rename failures (`replaceFileAtomically`).
  */
-export async function toggleSessionPin(sessionId: string, agentDir: string = getAgentDir()): Promise<boolean> {
+async function updateSessionPin(
+	sessionId: string,
+	next: (pinned: boolean) => boolean,
+	agentDir: string,
+): Promise<boolean> {
 	const filePath = pinsPath(agentDir);
 	await fs.mkdir(agentDir, { recursive: true });
 	return withFileLock(filePath, async () => {
 		const pinned = await loadPinnedSessionIds(agentDir);
-		if (!pinned.delete(sessionId)) pinned.add(sessionId);
+		if (next(pinned.has(sessionId))) pinned.add(sessionId);
+		else pinned.delete(sessionId);
 		const tmpPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
 		try {
 			await fs.writeFile(tmpPath, JSON.stringify([...pinned], null, "\t"), { encoding: "utf-8", mode: 0o600 });
@@ -57,6 +63,20 @@ export async function toggleSessionPin(sessionId: string, agentDir: string = get
 		}
 		return pinned.has(sessionId);
 	});
+}
+
+/** Toggle one session's pin; returns the new pinned state. */
+export function toggleSessionPin(sessionId: string, agentDir: string = getAgentDir()): Promise<boolean> {
+	return updateSessionPin(sessionId, pinned => !pinned, agentDir);
+}
+
+/** Pin or unpin one session; a no-op when it is already in that state. */
+export async function setSessionPinned(
+	sessionId: string,
+	pinned: boolean,
+	agentDir: string = getAgentDir(),
+): Promise<void> {
+	await updateSessionPin(sessionId, () => pinned, agentDir);
 }
 
 /**

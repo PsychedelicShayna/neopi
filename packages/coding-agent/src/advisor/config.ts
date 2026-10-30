@@ -13,6 +13,7 @@ import { collectConfigCandidates } from "./watchdog";
 import { materializeYamlAlias, parseYamlMappingDocument, yamlDocumentRoot } from "../config/yaml-document";
 
 import {
+	ADVISOR_SESSION_SCOPES,
 	ADVISOR_SYNC_BACKLOG_MODES,
 	type AdvisorConfig,
 	type AdvisorConfigScope,
@@ -23,10 +24,11 @@ import {
 
 export {
 	ADVISOR_REVIEW_MODES,
+	ADVISOR_SESSION_SCOPES,
 	ADVISOR_SYNC_BACKLOG_MODES,
 	slugifyAdvisorName,
 } from "@oh-my-pi/pi-tui/overlays/advisor-config";
-export type { AdvisorReviewMode, AdvisorSyncBacklog } from "@oh-my-pi/pi-tui/overlays/advisor-config";
+export type { AdvisorReviewMode, AdvisorSessionScope, AdvisorSyncBacklog } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 
 const WATCHDOG_ADVISOR_KEYS = [
 	"id",
@@ -40,6 +42,7 @@ const WATCHDOG_ADVISOR_KEYS = [
 	"systemPrompt",
 	"enabled",
 	"includeThinking",
+	"scope",
 	"maxNotesPerUpdate",
 ] as const;
 
@@ -61,13 +64,14 @@ interface WatchdogBaseline {
 /** Load snapshots stay out of the public editor shape while saves compute path-level changes. */
 const watchdogBaselines = new WeakMap<WatchdogConfigDoc, WatchdogBaseline>();
 const watchdogRepairDocs = new WeakSet<WatchdogConfigDoc>();
-
 /**
  * Runtime health of a single advisor, surfaced in stats and the status line.
  * - `running` — actively processing primary turns
  * - `paused` — user-toggled off via per-advisor switch (runtime disposed)
- * - `quota_exhausted` — provider returned a quota/rate-limit error; the
- *   runtime auto-retries after a cooldown so it can resume without user action
+ * - `quota_exhausted` — provider returned a quota/usage-limit error that host
+ *   recovery could not absorb; the runtime stays paused, batch retained, until
+ *   it is reset or rebuilt (compaction, image drop, shake, session switch,
+ *   `/advisor` rebuild, config reload, restart). No timer resumes it.
  * - `error` — repeated transient failures; backlog dropped to prevent stall
  * - `no_model` — no model resolved for this advisor's role/explicit model
  */
@@ -106,7 +110,7 @@ export function advisorRosterForRuntime(discovered: DiscoveredAdvisors): Advisor
 
 const reviewIntervalSchema = type("1 <= number.integer <= 9007199254740991");
 const syncBacklogSchema = type.enumerated(...ADVISOR_SYNC_BACKLOG_MODES);
-/** Unquoted `syncBacklog: 3` parses as a number; accept the numeric thresholds alongside the string enum. */
+const sessionScopeSchema = type.enumerated(...ADVISOR_SESSION_SCOPES);
 const syncBacklogEntrySchema = type.enumerated(...ADVISOR_SYNC_BACKLOG_MODES, 1, 3, 5);
 const SYNC_BACKLOG_NUMERIC_THRESHOLDS = { 1: "1", 3: "3", 5: "5" } as const;
 
@@ -134,6 +138,7 @@ const advisorEntrySchema = type({
 	"enabled?": "boolean",
 	"includeThinking?": "boolean",
 	"maxNotesPerUpdate?": "number",
+	"scope?": sessionScopeSchema,
 });
 
 type AdvisorYamlEntry = typeof advisorEntrySchema.infer;
@@ -150,6 +155,7 @@ function editableAdvisorConfig(entry: AdvisorYamlEntry): AdvisorConfig {
 	if (entry.systemPrompt !== undefined) advisor.systemPrompt = entry.systemPrompt;
 	if (entry.enabled !== undefined) advisor.enabled = entry.enabled;
 	if (entry.includeThinking !== undefined) advisor.includeThinking = entry.includeThinking;
+	if (entry.scope !== undefined) advisor.scope = entry.scope;
 	if (
 		typeof entry.maxNotesPerUpdate === "number" &&
 		Number.isFinite(entry.maxNotesPerUpdate) &&
@@ -370,6 +376,7 @@ export async function discoverAdvisorConfigs(cwd: string, agentDir?: string): Pr
 						: undefined,
 				enabled: entry.enabled,
 				includeThinking: entry.includeThinking,
+				scope: entry.scope,
 				instructions: entryInstructions,
 			});
 		}
@@ -598,6 +605,10 @@ export function serializeWatchdogConfig(doc: WatchdogConfigDoc): string {
 			if (advisor.reviewInterval !== undefined) {
 				lines.push(`    reviewInterval: ${advisor.reviewInterval}`);
 			}
+			if (advisor.scope !== undefined) {
+				sessionScopeSchema.assert(advisor.scope);
+				lines.push(`    scope: ${YAML.stringify(advisor.scope)}`);
+			}
 		}
 	}
 	return lines.length === 0 ? "" : `${lines.join("\n")}\n`;
@@ -616,6 +627,7 @@ function watchdogAdvisorValues(advisor: AdvisorConfig): Record<(typeof WATCHDOG_
 		reviewMode: advisor.reviewMode,
 		reviewInterval: advisor.reviewInterval,
 		syncBacklog: advisor.syncBacklog,
+		scope: advisor.scope,
 		maxNotesPerUpdate:
 			typeof advisor.maxNotesPerUpdate === "number" &&
 			Number.isFinite(advisor.maxNotesPerUpdate) &&

@@ -156,7 +156,13 @@ describe("model:// session lookup", () => {
 		const router = new InternalUrlRouter();
 		expect(router.spec("model")?.selectors).toBe("none");
 		const docs = router
-			.describe({ skillUriAccess: false, ruleCount: 0, securityEnabled: false, settingsApproval: false })
+			.describe({
+				skillUriAccess: false,
+				ruleCount: 0,
+				securityEnabled: false,
+				settingsApproval: false,
+				outReplies: false,
+			})
 			.join("\n");
 		expect(docs).toContain("model://");
 		expect(docs).not.toContain("lookup-provider/lookup-model");

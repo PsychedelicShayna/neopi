@@ -29,7 +29,7 @@ import planModeSubagentPrompt from "../prompts/system/plan-mode-subagent.md" wit
 import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.md" with { type: "text" };
 import isolationRecoveryHintTemplate from "../prompts/tools/isolation-recovery-hint.md" with { type: "text" };
 import salvagedChildHintTemplate from "../prompts/tools/salvaged-child-hint.md" with { type: "text" };
-import { MAIN_AGENT_ID } from "../registry/agent-registry";
+import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import { type ConfiguredThinkingLevel, type TaskEffort, parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { ToolSession } from "../tools";
 import { isIrcEnabled } from "../irc/messaging";
@@ -43,7 +43,7 @@ import {
 	validateNamedAgentEffort,
 } from "./agent-selector";
 import { type DiscoveryResult, discoverAgents, getAgent } from "./discovery";
-import { type ExecutorOptions, runSubprocess } from "./executor";
+import { type ExecutorOptions, runSubprocess, type SubagentToolResult } from "./executor";
 import { assertExternalHarnessCapabilities } from "./external-harness";
 import {
 	applyEligibleNestedPatches,
@@ -55,9 +55,11 @@ import {
 	renderIsolationSummary,
 	runIsolatedSubprocess,
 } from "./isolation-runner";
-import { generateTaskName } from "./name-generator";
+import { generateTaskName, sanitizeAgentId } from "./name-generator";
 import { AgentOutputManager } from "./output-manager";
 import { DEFAULT_SPAWN_AGENT, resolveSpawnPolicy } from "./spawn-policy";
+import { isBundledSeance, prepareSeance, type PreparedSeanceSession } from "./seance";
+import { SEANCE_AGENT_NAME } from "./seance-policy";
 import { type AgentDefinition, canSpawnAtDepth } from "./types";
 import type {
 	AgentProgress,
@@ -119,6 +121,8 @@ export interface StructuredSubagentRequest {
 	assignment: string;
 	context?: string;
 	agent?: string;
+	/** Saved source session selected for the bundled seance agent. */
+	sourceSession?: string;
 	model?: string | string[];
 	/** Operator launcher restrictions, independent of eval-defined custom tools. */
 	tools?: string[];
@@ -130,7 +134,8 @@ export interface StructuredSubagentRequest {
 	schemaMode?: StructuredSubagentSchemaMode;
 	/**
 	 * `false` = no output schema (caller, agent, or session) and no `yield` tool:
-	 * the child's final assistant message is its result. Default `true`.
+	 * the child's final assistant message is its result. An agent declaring
+	 * `structured: true` keeps both, resolved as if this were `true`. Default `true`.
 	 */
 	structured?: boolean;
 	/** Per-spawn thinking effort mapped onto the resolved model's supported range; overrides the agent's default selector. */
@@ -170,6 +175,8 @@ export interface StructuredSubagentRequest {
 	workPoolYieldItems?: WorkPoolYieldItem[];
 	signal?: AbortSignal;
 	onProgress?: (progress: AgentProgress) => void;
+	/** See {@link ExecutorOptions.onToolResult}. */
+	onToolResult?: (result: SubagentToolResult) => void;
 }
 
 /** A normalized preflight result, reusable by tests and adapters. */
@@ -179,6 +186,8 @@ export interface EffectiveSubagentPolicy {
 	agent: AgentDefinition;
 	effectiveAgent: AgentDefinition;
 	modelOverride?: string[];
+	/** Prepared read-only source fork for the bundled seance agent. */
+	preparedSession?: PreparedSeanceSession;
 	/** Explicit pre-expansion model role alias selected for this run. */
 	modelRole?: string;
 	/** Raw caller selector before role expansion, distinct from saved agent defaults. */
@@ -196,6 +205,8 @@ export interface EffectiveSubagentPolicy {
 	/** Exact-name `task.agentAccountPools` entry: the only OAuth accounts the child may use, per listed provider. */
 	oauthAccountPools?: OAuthAccountPools;
 	parentActiveModelPattern?: string;
+	/** Whether the child gets the `yield` tool; see {@link StructuredSubagentRequest.structured}. */
+	structured: boolean;
 	schema: StructuredSubagentSchemaResolution;
 	planMode: boolean;
 	isIsolated: boolean;
@@ -235,7 +246,7 @@ export class StructuredSubagentError extends Error {
 
 const PLAN_MODE_TOOLS = ["read", "grep", "glob", "web_search"] as const;
 
-function renderSubagentPrompt(assignment: string, routing?: RoutingPolicyFields, cwd?: string): string {
+export function renderSubagentUserPrompt(assignment: string, cwd?: string, routing?: RoutingPolicyFields): string {
 	return renderPromptAsset(
 		"system/subagent-user-prompt.md",
 		subagentUserPromptTemplate,
@@ -249,15 +260,13 @@ function trimToUndefined(value: string | undefined): string | undefined {
 	return trimmed || undefined;
 }
 
-function sanitizeAgentId(value: string | undefined): string | undefined {
-	const trimmed = trimToUndefined(value);
-	const sanitized = trimmed?.replace(/[^A-Za-z0-9_-]+/g, "").slice(0, 48);
-	return sanitized || undefined;
-}
-
-function resolveSchema(request: StructuredSubagentRequest, agent: AgentDefinition): StructuredSubagentSchemaResolution {
+function resolveSchema(
+	request: StructuredSubagentRequest,
+	agent: AgentDefinition,
+	structured: boolean,
+): StructuredSubagentSchemaResolution {
 	const mode = request.schemaMode ?? request.session.outputSchemaMode ?? "permissive";
-	if (request.structured === false) {
+	if (!structured) {
 		return { schema: undefined, source: "none", mode, outputSchemaOverridesAgent: false };
 	}
 	if (Object.hasOwn(request, "outputSchema")) {
@@ -389,8 +398,9 @@ export async function resolveEffectiveSubagentPolicy(
 		});
 	}
 	const selectorShaped = isAgentModelSelector(selector);
+	let agentName = selector;
 	const planMode = request.session.getPlanModeState?.()?.enabled === true;
-	assertPlanControlsAllowed(request, planMode);
+	if (agentName !== SEANCE_AGENT_NAME) assertPlanControlsAllowed(request, planMode);
 	// Model-selector spawns run the generic task hull, so the spawn policy
 	// gates that vessel rather than the selector string. Registered names win
 	// below; the pathological registered-but-selector-shaped name is re-gated
@@ -399,7 +409,6 @@ export async function resolveEffectiveSubagentPolicy(
 
 	const discovery = await discoverAgentsShared(request.session.cwd, request.session.effectiveExtensionRoots?.());
 	const agents = [...discovery.agents, ...(request.session.getSessionAgents?.() ?? [])];
-	let agentName = selector;
 	let agent = getAgent(agents, selector);
 	/** Model selector routed into the request-model channel for the generic task agent. */
 	let selectorModel: string | undefined;
@@ -448,6 +457,28 @@ export async function resolveEffectiveSubagentPolicy(
 			`Agent "${agentName}" is disabled in settings. Enable it via /agents, or use a different agent type.${enabled.length > 0 ? ` Available: ${enabled.join(", ")}` : ""}`,
 		);
 	}
+	if (agentName === SEANCE_AGENT_NAME && !isBundledSeance(agent)) assertPlanControlsAllowed(request, planMode);
+	let preparedSeance: { modelPatterns: string[]; session: PreparedSeanceSession } | undefined;
+	if (isBundledSeance(agent)) {
+		try {
+			preparedSeance = await prepareSeance({
+				session: request.session,
+				invocationKind: request.invocationKind,
+				agent,
+				sourceSession: request.sourceSession,
+				model: request.model,
+				planMode,
+				isolationRequested: request.isolation?.requested === true,
+				hasCustomTools: (request.customTools?.length ?? 0) > 0,
+			});
+		} catch (error) {
+			throw new StructuredSubagentError(
+				"preflight",
+				error instanceof Error ? error.message : "The bundled seance agent rejected this invocation.",
+				{ cause: error },
+			);
+		}
+	}
 
 const selectedAgent = {
 		...agent,
@@ -465,7 +496,8 @@ const selectedAgent = {
 			cause: error,
 		});
 	}
-	const schema = resolveSchema(request, effectiveAgent);
+	const structured = request.structured !== false || effectiveAgent.structured === true;
+	const schema = resolveSchema(request, effectiveAgent, structured);
 	if (schema.source !== "none") {
 		const { validator, error } = buildOutputValidator(schema.schema);
 		if (error || !validator) {
@@ -490,16 +522,15 @@ const selectedAgent = {
 		: undefined;
 	const agentAccountPools = validateAgentAccountPools(cfgTaskAgentAccountPools.get(request.session.settings));
 	const oauthAccountPools = Object.hasOwn(agentAccountPools, agentName) ? agentAccountPools[agentName] : undefined;
-	const parentActiveModelPattern = request.session.getActiveModelString?.();
+	const hasPreparedSeance = preparedSeance !== undefined;
+	const parentActiveModelPattern = hasPreparedSeance ? undefined : request.session.getActiveModelString?.();
 	const modelResolution = {
-		// A model-selector `agent` value is the most explicit crew choice and
-		// outranks a separately supplied request model.
-		requestModel: selectorModel ?? request.model ?? routing?.model,
-		settingsOverride: agentModelOverrides[agentName],
-		agentModel: effectiveAgent.model,
+		requestModel: preparedSeance?.modelPatterns ?? selectorModel ?? request.model ?? routing?.model,
+		settingsOverride: hasPreparedSeance ? undefined : agentModelOverrides[agentName],
+		agentModel: hasPreparedSeance ? undefined : effectiveAgent.model,
 		settings: request.session.settings,
 		activeModelPattern: parentActiveModelPattern,
-		fallbackModelPattern: request.session.getModelString?.(),
+		fallbackModelPattern: hasPreparedSeance ? undefined : request.session.getModelString?.(),
 	};
 	// Role identity and patterns come from one call so they cannot be derived
 	// from different sources: the expansion below discards the alias, and the
@@ -540,11 +571,13 @@ const selectedAgent = {
 		routing,
 		callerModelSelector: selectorModel ?? request.model ?? routing?.model,
 		callerThinkingLevel,
+		preparedSession: preparedSeance?.session,
 		modelRole,
 		serviceTierOverride,
 		compactionThresholdOverride,
 		oauthAccountPools,
 		parentActiveModelPattern,
+		structured,
 		schema,
 		planMode,
 		isIsolated,
@@ -553,9 +586,11 @@ const selectedAgent = {
 			request.isolation?.apply ??
 			(request.invocationKind === "task" ? cfgTaskIsolationApply.get(request.session.settings) : true),
 		enableLsp:
+			preparedSeance === undefined &&
 			!planMode &&
 			(request.enableLsp ?? ((request.session.enableLsp ?? true) && cfgTaskEnableLsp.get(request.session.settings))),
 		enableIrc:
+			preparedSeance === undefined &&
 			!planMode &&
 			(request.enableIrc ??
 				(request.session.enableIrc !== false &&
@@ -573,6 +608,7 @@ async function applySpawnHook(
 	request: StructuredSubagentRequest,
 	policy: EffectiveSubagentPolicy,
 ): Promise<EffectiveSubagentPolicy> {
+	if (policy.preparedSession !== undefined) return policy;
 	const emit = request.session.emitBeforeSubagentSpawn;
 	if (!emit) return policy;
 	const spawnKey =
@@ -635,6 +671,19 @@ async function leaseArtifacts(
 	return { sessionFile: null, artifactsDir, temporary: true, unregister: registerArtifactsDir(artifactsDir) };
 }
 
+/**
+ * Agents are rediscovered on every spawn, but the session's skill list is
+ * fixed at startup. Rediscover skills once when an agent autoloads a skill the
+ * session has not seen, so a skill added after startup is not silently dropped.
+ */
+async function refreshSkillsForAutoload(session: ToolSession, agent: AgentDefinition): Promise<void> {
+	const names = agent.autoloadSkills;
+	if (!names?.length || !session.refreshSkills) return;
+	const known = new Set((session.skills ?? []).map(skill => skill.name));
+	if (names.every(name => known.has(name))) return;
+	await session.refreshSkills();
+}
+
 function resolveAutoloadSkills(session: ToolSession, agent: AgentDefinition) {
 	const skills = [...(session.skills ?? [])];
 	const autoloadSkills = agent.autoloadSkills?.length
@@ -650,18 +699,21 @@ function buildExecutorOptions(
 	id: string,
 ): ExecutorOptions {
 	const { session } = request;
+	const preparedSession = policy.preparedSession;
 	const { skills, autoloadSkills } = resolveAutoloadSkills(session, policy.agent);
 	const localProtocolOptions = sessionLocalProtocolOptions(session);
-	const restrictToolNames = request.tools !== undefined || policy.planMode || session.restrictToolNames === true;
+	const restrictToolNames = request.tools !== undefined || preparedSession !== undefined || policy.planMode || session.restrictToolNames === true;
 	const enableMCP = !restrictToolNames && (session.enableMCP ?? true);
 	return {
 		cwd: session.cwd,
+		costGate: session.costGate,
 		additionalDirectories: session.additionalDirectories,
 		getApiKey: session.getApiKey,
 		credentialSourceSessionId: session.getCredentialSourceSessionId?.(),
 		agent: policy.effectiveAgent,
-		task: renderSubagentPrompt(request.assignment, policy.routing, session.cwd),
+		task: renderSubagentUserPrompt(request.assignment, session.cwd, policy.routing),
 		assignment: request.assignment.trim(),
+		preparedSession,
 		context: request.context?.trim() || undefined,
 		planReference: undefined,
 		// Task `name` is the spawn handle (id allocation). Eval `label` is a
@@ -686,7 +738,7 @@ function buildExecutorOptions(
 		thinkingLevel: policy.effectiveAgent.thinkingLevel,
 		effort: request.effort,
 		solutionSpace: request.solutionSpace?.trim() || undefined,
-		structured: request.structured !== false,
+		structured: policy.structured,
 		...(policy.schema.source === "none"
 			? {}
 			: {
@@ -707,6 +759,7 @@ function buildExecutorOptions(
 		eventBus: session.eventBus,
 		subagentEventBus: session.subagentEventBus,
 		onProgress: request.onProgress,
+		onToolResult: request.onToolResult,
 		authStorage: session.authStorage,
 		modelRegistry: session.modelRegistry,
 		settings: session.settings,
@@ -718,8 +771,10 @@ function buildExecutorOptions(
 		workPoolYieldItems: request.workPoolYieldItems,
 		contextFiles: session.childContextFiles,
 		contextAncestorRoot: session.contextAncestorRoot,
+		noContextFiles: session.noContextFiles,
 		skills,
-		autoloadSkills,
+		// Autoload runs after session start, outside the seance isolation options.
+		autoloadSkills: preparedSession ? undefined : autoloadSkills,
 		workspaceTree: session.workspaceTree,
 		promptTemplates: session.promptTemplates,
 		rules: session.rules,
@@ -731,9 +786,16 @@ function buildExecutorOptions(
 		preloadedPreparedExtensions: session.preparedExtensions,
 		preloadedCustomToolPaths: restrictToolNames ? [] : session.customToolPaths,
 		localProtocolOptions,
-		parentArtifactManager: session.getArtifactManager?.() ?? undefined,
+		parentArtifactManager: preparedSession ? undefined : (session.getArtifactManager?.() ?? undefined),
 		parentHindsightSessionState: session.getHindsightSessionState?.(),
 		parentMnemopiSessionState: session.getMnemopiSessionState?.(),
+		onRelease:
+			preparedSession !== undefined && lease.temporary
+				? async () => {
+						await fs.rm(lease.artifactsDir, { recursive: true, force: true });
+						lease.unregister?.();
+					}
+				: undefined,
 		parentTelemetry: session.getTelemetry?.(),
 		parentAgentId: session.getAgentId?.() ?? MAIN_AGENT_ID,
 		parentPromptCacheKey: session.getPromptCacheKey?.(),
@@ -745,7 +807,7 @@ async function loadPlanReference(
 	request: StructuredSubagentRequest,
 	policy: EffectiveSubagentPolicy,
 ): Promise<{ path: string; content: string } | undefined> {
-	if (policy.planMode) return undefined;
+	if (policy.planMode || policy.preparedSession !== undefined) return undefined;
 	return loadOverallPlanReference(
 		request.session.getPlanReferencePath?.() ?? "local://PLAN.md",
 		sessionLocalProtocolOptions(request.session),
@@ -765,7 +827,7 @@ function buildFailureResult(
 			id,
 			agent: policy.agent.name,
 			agentSource: policy.agent.source,
-			task: renderSubagentPrompt(request.assignment, undefined, request.session.cwd),
+			task: renderSubagentUserPrompt(request.assignment, request.session.cwd),
 			assignment: request.assignment.trim(),
 			description: request.invocationKind === "eval" ? trimToUndefined(request.identity?.label) : undefined,
 			exitCode: 1,
@@ -929,6 +991,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 			...request.identity,
 			label: request.identity?.label ?? (request.invocationKind === "eval" ? "EvalAgent" : undefined),
 		});
+		if (policy.preparedSession === undefined) await refreshSkillsForAutoload(request.session, policy.agent);
 		const baseOptions = buildExecutorOptions(request, policy, lease, id);
 		baseOptions.onCleanupDeferred = completion => {
 			deferredCleanup = completion;
@@ -947,23 +1010,37 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 				);
 			}
 		}
+		// An inline (`detached: false`) spawn keeps its parent's tool call open
+		// until the child finishes: no message to the parent lands before then.
+		const releaseHold =
+			request.detached === false
+				? (request.session.agentRegistry ?? AgentRegistry.global()).awaits.hold(
+						baseOptions.parentAgentId ?? MAIN_AGENT_ID,
+						[id],
+						{ interruptible: false },
+					)
+				: undefined;
 		let result: SingleResult;
-		if (!isolationContext) {
-			result = await runSubprocess(baseOptions);
-			onSubprocessResult?.(result);
-		} else {
-			result = await runIsolatedSubprocess({
-				baseOptions,
-				context: isolationContext,
-				preferredBackend: parseIsolationBackend(cfgIsolationBackend.get(request.session.settings)),
-				agentId: id,
-				mergeMode: policy.mergeMode,
-				artifactsDir: lease.artifactsDir,
-				description: trimToUndefined(request.identity?.label),
-				buildCommitMessage: makeIsolationCommitMessage(request.session),
-				buildFailureResult: buildFailureResult(request, policy, id, Date.now()),
-				onSubprocessResult,
-			});
+		try {
+			if (!isolationContext) {
+				result = await runSubprocess(baseOptions);
+				onSubprocessResult?.(result);
+			} else {
+				result = await runIsolatedSubprocess({
+					baseOptions,
+					context: isolationContext,
+					preferredBackend: parseIsolationBackend(cfgIsolationBackend.get(request.session.settings)),
+					agentId: id,
+					mergeMode: policy.mergeMode,
+					artifactsDir: lease.artifactsDir,
+					description: trimToUndefined(request.identity?.label),
+					buildCommitMessage: makeIsolationCommitMessage(request.session),
+					buildFailureResult: buildFailureResult(request, policy, id, Date.now()),
+					onSubprocessResult,
+				});
+			}
+		} finally {
+			releaseHold?.();
 		}
 		settled = result;
 		attachStructuredOutputMetadata(result, policy.schema);
@@ -1042,7 +1119,8 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 		const shouldRetainArtifacts =
 			request.detached === true ||
 			retainSalvagedArtifact ||
-			(request.retainArtifacts && (completedSuccessfully || hasValidStructuredOutput)) ||
+			((request.retainArtifacts || policy.preparedSession !== undefined) &&
+				(completedSuccessfully || hasValidStructuredOutput)) ||
 			(policy.isIsolated && (!policy.applyChanges || changesApplied === false || requiresRecoveryArtifacts));
 		const shouldCleanup = lease.temporary && !shouldRetainArtifacts;
 		const cleanupArtifacts = async (): Promise<void> => {

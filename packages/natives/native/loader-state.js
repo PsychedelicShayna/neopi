@@ -559,13 +559,11 @@ export function extractEmbeddedAddons({ files, targetDir }) {
 	return writtenPaths;
 }
 
-function maybeExtractEmbeddedAddon(ctx, errors) {
+function maybeExtractEmbeddedAddon(ctx, errors, file = selectEmbeddedAddonFile(ctx.selectedVariant)) {
 	if (!ctx.isCompiledBinary || !embeddedAddon) return null;
 	if (embeddedAddon.platformTag !== ctx.platformTag || embeddedAddon.version !== ctx.packageVersion) return null;
-
-	const selectedEmbeddedFile = selectEmbeddedAddonFile(ctx.selectedVariant);
-	if (!selectedEmbeddedFile) return null;
-	const targetPath = embeddedAddonTargetPath(ctx.versionedDir, selectedEmbeddedFile);
+	if (!file) return null;
+	const targetPath = embeddedAddonTargetPath(ctx.versionedDir, file);
 
 	startupMarker("native:extractEmbeddedAddon:start");
 	try {
@@ -577,13 +575,13 @@ function maybeExtractEmbeddedAddon(ctx, errors) {
 	}
 
 	try {
-		extractEmbeddedAddons({ files: embeddedAddon.files, targetDir: ctx.versionedDir });
-		if (isEmbeddedAddonFileCurrent(targetPath, selectedEmbeddedFile)) return targetPath;
-		errors.push(`embedded addon extraction: missing ${selectedEmbeddedFile.filename}`);
+		extractEmbeddedAddons({ files: [file], targetDir: ctx.versionedDir });
+		if (isEmbeddedAddonFileCurrent(targetPath, file)) return targetPath;
+		errors.push(`embedded addon extraction: missing ${file.filename}`);
 		return null;
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
-		errors.push(`embedded addon extraction (${selectedEmbeddedFile.filename}): ${message}`);
+		errors.push(`embedded addon extraction (${file.filename}): ${message}`);
 		return null;
 	}
 }
@@ -931,12 +929,22 @@ export function loadNative() {
 	/** Paths this process extracted from its own embedded archive. */
 	const extracted = new Set(prepended);
 	let reextracted = false;
+	const fallbackEmbeddedFile =
+		ctx.selectedVariant === "modern" && embeddedAddon
+			? embeddedAddon.files.find(file => file.variant === "baseline")
+			: null;
+	const fallbackEmbeddedPath = fallbackEmbeddedFile && path.join(ctx.versionedDir, fallbackEmbeddedFile.filename);
 
 	for (let index = 0; index < runtimeCandidates.length; index++) {
-		const candidate = runtimeCandidates[index];
-		// A compiled binary falls back only to files holding exactly its embedded bytes: another
-		// build of this release carries the same version sentinel. Checked lazily, so the hash runs
-		// only once the binary's own addon has failed.
+		let candidate = runtimeCandidates[index];
+		if (fallbackEmbeddedFile && candidate === fallbackEmbeddedPath) {
+			const fallback = maybeExtractEmbeddedAddon(ctx, errors, fallbackEmbeddedFile);
+			if (fallback) {
+				extracted.add(fallback);
+				candidate = fallback;
+			}
+		}
+		// Reused canonical paths must contain this binary's exact embedded bytes.
 		if (!extracted.has(candidate) && !embeddedBytesMatch(ctx, candidate, errors)) continue;
 		try {
 			startupMarker(`native:require:${path.basename(candidate)}`);

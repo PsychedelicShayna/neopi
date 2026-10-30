@@ -4,6 +4,7 @@ import * as AIError from "@oh-my-pi/pi-ai/error";
 import { raceWithSignal } from "@oh-my-pi/pi-ai/utils/abort";
 import { MIXTURE_TRACE_MESSAGE_TYPE } from "@oh-my-pi/pi-tui/overlays/mixture-types";
 import { logger } from "@oh-my-pi/pi-utils";
+import { isEvalStateContext } from "../eval/state";
 import {
 	collectNativeReplayRegexSecretValues,
 	obfuscateNativeReplay,
@@ -87,14 +88,19 @@ export interface AdvisorRuntimeHost {
 	 *  recovery (credential switch, fallback chain) declined. Cleared only by
 	 *  an explicit reset (`/new`, config rebuild, session restart). */
 	notifyQuotaExhausted?(): void;
-	/** Per-advisor roster preference; omitted keeps primary thinking visible. */
-	includeThinking?: boolean;
 	/** Stable identity for the live advisor model. Used to restore full transcript rendering after a model switch. */
 	getModelIdentity?(): string;
 	/** Called once the runtime finishes draining its review backlog (or
 	 *  hard-stops), so the host can repaint UI that reflects whether the
 	 *  advisor is still going to comment on the current yield. */
 	notifyIdle?(): void;
+	/**
+	 * Whether readable primary assistant thinking blocks are included in
+	 * advisor deltas as escaped `<primary-thinking>` blocks. Defaults to `true`. Setting `false`
+	 * runs the advisor in evidence-only mode (actions, tool I/O, and outputs
+	 * without the primary model's chain-of-thought).
+	 */
+	includeThinking?: boolean;
 }
 
 /**
@@ -257,13 +263,6 @@ interface CatchupWaiter {
 	timer?: NodeJS.Timeout;
 }
 
-/**
- * Synthetic message `AgentSession.#withEvalStateContext` appends at the tail of
- * every display-context rebuild; its slot moves each time, so
- * {@link AdvisorRuntime.rebaseDeliveredPrefix} does not align on it.
- */
-const EVAL_STATE_CONTEXT_TYPE = "eval-state-context";
-
 interface DeliveredMessage {
 	message: AgentMessage;
 	fingerprint: bigint | undefined;
@@ -351,9 +350,9 @@ export class AdvisorRuntime {
 	 *  being retried/requeued into the post-reset conversation. */
 	#epoch = 0;
 	disposed = false;
-	/** Quota/rate-limit pause state. When `true`, the advisor stops processing
-	 *  turns and drops new deltas until an explicit {@link reset} clears it
-	 *  (triggered by `/new`, config rebuild, or session restart). There is no
+	/** Quota/usage-limit pause state. When `true`, the advisor stops processing
+	 *  turns and drops new deltas until a {@link reset} clears it (compaction,
+	 *  image drop, shake, session switch, rebuild, or restart). There is no
 	 *  timer-based auto-resume: provider quota windows (5h/7d) are far longer
 	 *  than any reasonable timer, and premature retries waste calls and
 	 *  re-trigger the same error. */
@@ -590,7 +589,6 @@ export class AdvisorRuntime {
 	}
 
 	#clearAdvisorContextAtCurrentCursor(): void {
-		this.#consecutiveFailures = 0;
 		this.#clearSeenContext();
 		try {
 			this.agent.reset();
@@ -613,6 +611,7 @@ export class AdvisorRuntime {
 		this.#deliveredPrefix = [];
 		this.#pending = [];
 		this.#held = [];
+		this.#consecutiveFailures = 0;
 		this.#clearAdvisorContextAtCurrentCursor();
 		if (clearBacklog) {
 			this.#backlog = 0;
@@ -741,7 +740,7 @@ export class AdvisorRuntime {
 		const rebased: DeliveredMessage[] = [];
 		for (const delivered of this.#deliveredPrefix) {
 			const message = delivered.message;
-			if (message.role === "custom" && message.customType === EVAL_STATE_CONTEXT_TYPE) continue;
+			if (isEvalStateContext(message)) continue;
 			const current = all[rebased.length];
 			if (current === undefined) return;
 			const fingerprint = fingerprintMessage(current);
@@ -1200,6 +1199,8 @@ export class AdvisorRuntime {
 						pending: this.#pending.length,
 						backlog: this.#backlog,
 					});
+					// A maintenance re-prime is not a recovery: the batch keeps its strikes, or a batch that
+					// keeps failing and keeps triggering maintenance is retried without end instead of dropped.
 					this.#clearAdvisorContextAtCurrentCursor();
 					const preparedMessages = this.#prepareBatch(rawMessages);
 					return {
@@ -1619,6 +1620,7 @@ export class AdvisorRuntime {
 						this.#noteDroppedBacklog(err);
 						success = true;
 					} else if (contextOverflow) {
+						this.#consecutiveFailures = 0;
 						this.#clearAdvisorContextAtCurrentCursor();
 						if (contextWasFresh) {
 							// The bounded update cannot fit even with no advisor history. Drop
@@ -1766,7 +1768,7 @@ function obfuscateAssistantMessage(
 			const args = obfuscateToolArguments(obfuscator, block.arguments, sharedRegexSecretValues);
 			if (args === block.arguments) return block;
 			changed = true;
-			return { ...block, arguments: args };
+			return { ...block, arguments: args, thoughtSignature: undefined };
 		}
 		return block;
 	});

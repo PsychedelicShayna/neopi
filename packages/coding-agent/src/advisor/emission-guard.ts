@@ -227,7 +227,8 @@ export class AdvisorEmissionGuard {
 		// otherwise it becomes a permanent, unevictable entry.
 		this.#recordRank(key, rank);
 		const slot = this.#slots.find(s => s.key === key);
-		if (slot && slot.rank < rank) slot.rank = rank;
+		if (slot?.pending && rank >= 3) this.#slots.splice(this.#slots.indexOf(slot), 1);
+		else if (slot && slot.rank < rank) slot.rank = rank;
 	}
 
 	/**
@@ -298,6 +299,7 @@ export class AdvisorEmissionGuard {
 			// routed nit re-raised as a concern): upgrade the slot's rank instead
 			// of charging a second slot for the same text.
 			ownSlot.rank = rank;
+			ownSlot.pending = ownSlot.pending && opts.pending;
 		} else if (this.#slots.length < this.#budgetPerUpdate) {
 			this.#slots.push({ key, rank, pending: opts.pending });
 		} else {
