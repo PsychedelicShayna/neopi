@@ -5,6 +5,9 @@ import { compileMenuRegex } from "../menu-search";
 import { getMenuWindow, type MenuWindow } from "./menu-selection";
 import { Input } from "./input";
 import { replaceTabs, truncateToWidth, visibleWidth } from "../utils";
+import { Editor } from "./editor";
+import { getEditorTheme } from "../theme/tui-adapters";
+import type { VimMode } from "../vim";
 
 /**
  * A normal-navigation intent resolved from one key. Hosts apply motions with
@@ -123,21 +126,34 @@ export interface MenuSearchTheme {
 	muted(text: string): string;
 }
 
+let menuSearchVimMode = false;
+
+/** Follow the host's editor preference, including changes while a menu is open. */
+export function setMenuSearchVimMode(enabled: boolean): void {
+	menuSearchVimMode = enabled;
+}
+
+export function getMenuSearchVimMode(): boolean {
+	return menuSearchVimMode;
+}
+
 /**
- * A menu's draft search field. Hosts refilter when `query` changes, repaint
- * on "edited", and delegate only "pass" to navigation. The draft reaches
- * the matcher only after Enter; losing focus discards unconfirmed edits.
- * Hosts may retain the text when Escape returns to the list instead of clearing it.
+ * Transactional search composer shared by menus. `query` is the last valid
+ * live preview; `confirmedQuery` changes only on Enter. Blur or Normal-mode
+ * Escape restores the confirmed pattern. The main Editor owns Vim editing.
  */
 export class MenuSearchField {
 	readonly #input = new Input();
 	#query = "";
+	#preview = "";
+	#editor: Editor | undefined;
 	readonly #cancel: "clear" | "retain";
 
 	constructor(value = "", focused = false, cancel: "clear" | "retain" = "clear") {
 		this.#input.prompt = "";
 		this.#input.setValue(value);
 		this.#query = value;
+		this.#preview = compileMenuRegex(value)?.error ? "" : value;
 		this.#input.focused = focused;
 		this.#cancel = cancel;
 	}
@@ -152,7 +168,11 @@ export class MenuSearchField {
 	}
 
 	set focused(value: boolean) {
-		if (!value && this.#input.focused && this.value !== this.#query) this.#input.setValue(this.#query);
+		if (!value && this.#input.focused) {
+			if (this.value !== this.#query) this.#input.setValue(this.#query);
+			this.#preview = this.#query;
+		}
+		if (value && !this.#input.focused) this.#editor = undefined;
 		this.#input.focused = value;
 	}
 
@@ -160,9 +180,18 @@ export class MenuSearchField {
 		return this.#input.getValue();
 	}
 
-	/** Confirmed pattern used for filtering, never the in-progress draft. */
+	/** Last valid draft, so an invalid regex never replaces the visible results. */
 	get query(): string {
+		if (!compileMenuRegex(this.value)?.error) this.#preview = this.value;
+		return this.#preview;
+	}
+
+	get confirmedQuery(): string {
 		return this.#query;
+	}
+
+	get vimMode(): VimMode {
+		return this.#editor?.vimMode ?? "insert";
 	}
 
 	get cursor(): number {
@@ -172,6 +201,8 @@ export class MenuSearchField {
 	setValue(value: string): void {
 		this.#input.setValue(value);
 		this.#query = value;
+		if (!compileMenuRegex(value)?.error) this.#preview = value;
+		this.#editor = undefined;
 	}
 
 	handleInput(data: string): "edited" | "exited" | "pass" {
@@ -182,23 +213,41 @@ export class MenuSearchField {
 			this.setValue("");
 			return "exited";
 		}
-		const text = extractPrintableText(data);
-		if (text !== undefined) {
-			this.#input.insertText(text);
-			return "edited";
-		}
-		const kb = getKeybindings();
-		if (matchesKey(data, "escape") || kb.matches(data, "tui.select.cancel")) {
-			this.setValue(this.#cancel === "retain" ? this.value : "");
+		// Remember the last valid preview even when no paint occurred between keys.
+		void this.query;
+		if (matchesKey(data, "ctrl+c")) {
+			this.setValue("");
 			this.focused = false;
 			return "exited";
 		}
-		if (matchesKey(data, "enter") || kb.matches(data, "tui.select.confirm") || data === "\n") {
+		const text = extractPrintableText(data);
+		const kb = getKeybindings();
+		if (
+			text === undefined &&
+			(matchesKey(data, "enter") || kb.matches(data, "tui.select.confirm") || data === "\n")
+		) {
+			if (compileMenuRegex(this.value)?.error) return "edited";
 			this.#query = this.value;
 			this.focused = false;
 			return "exited";
 		}
-		this.#input.handleInput(data);
+		const editor = (this.#editor ??= new Editor(getEditorTheme()));
+		editor.setVimMode(menuSearchVimMode);
+		// Input is the native picker transport; native edits/caret changes are
+		// imported before the shared Editor interprets the next key.
+		if (editor.getText() !== this.value || editor.getCursor().col !== this.cursor)
+			editor.setState({ text: this.value, cursor: { line: 0, col: this.cursor }, scrollTop: 0 });
+		if (matchesKey(data, "escape") && (!menuSearchVimMode || editor.vimMode === "normal")) {
+			this.focused = false;
+			return "exited";
+		}
+		if (text !== undefined && editor.vimMode === "insert") editor.insertText(text);
+		else editor.handleInput(data);
+		// Search is single-line even for paste or Vim's open-line commands.
+		const value = editor.getText().replace(/[\r\n]/g, "");
+		this.#input.setValue(value);
+		this.#input.setCursor(editor.getCursor().col);
+		void this.query;
 		return "edited";
 	}
 
@@ -210,8 +259,8 @@ export class MenuSearchField {
 		const hint = error
 			? ` · Invalid regex: ${error}`
 			: this.focused
-				? ` · Enter confirm · Esc ${this.#cancel === "retain" ? "back" : "clear"}`
-				: ` · j/k · Ctrl-d/u half · gg/G · / search${this.#cancel === "clear" ? " · Esc clear" : ""}`;
+				? ` · ${menuSearchVimMode ? `${this.vimMode === "insert" ? "I" : "N"} · ` : ""}Enter confirm · Esc ${menuSearchVimMode && this.vimMode === "insert" ? "normal" : "cancel"} · Ctrl-c clear`
+				: " · / search · ? help";
 		const fieldWidth = Math.max(0, columns - visibleWidth(prefix) - visibleWidth(hint));
 		const value = this.focused
 			? (this.#input.render(fieldWidth)[0] ?? "")
@@ -220,7 +269,7 @@ export class MenuSearchField {
 	}
 
 	navigationSnapshot(): MenuSearchState {
-		return { value: this.value, query: this.query, focused: this.focused, cursor: this.cursor };
+		return { value: this.value, query: this.confirmedQuery, focused: this.focused, cursor: this.cursor };
 	}
 
 	restoreNavigation(snapshot: unknown): void {

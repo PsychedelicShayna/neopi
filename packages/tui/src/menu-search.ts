@@ -7,7 +7,7 @@ export interface MenuRegex {
 let cachedQuery: string | undefined;
 let cachedRegex: MenuRegex | undefined;
 
-/** Ordinary patterns stay fuzzy; `/pattern/`, `/pattern`, and `re:` use Vim regex. */
+/** Plain patterns stay fuzzy; globs use wildcards and slash/re: patterns use Vim regex. */
 export function compileMenuRegex(query: string): MenuRegex | undefined {
 	if (query === cachedQuery) return cachedRegex;
 	cachedQuery = query;
@@ -23,6 +23,12 @@ export function compileMenuRegex(query: string): MenuRegex | undefined {
 		pattern = query.slice(1, end);
 	} else if (query.startsWith("re:")) {
 		pattern = query.slice(3);
+	} else if (query.includes("*") || query.includes("?")) {
+		const source = Array.from(query, character =>
+			character === "*" ? ".*" : character === "?" ? "." : literal(character),
+		).join("");
+		cachedRegex = { regex: new RegExp(source, "iu") };
+		return cachedRegex;
 	}
 	if (pattern === undefined) return undefined;
 	try {
@@ -41,20 +47,51 @@ interface VimToken {
 }
 
 const CLASSES: Readonly<Record<string, string>> = {
-	d: "[0-9]", D: "[^0-9]", x: "[0-9A-Fa-f]", X: "[^0-9A-Fa-f]",
-	o: "[0-7]", O: "[^0-7]", w: "[0-9A-Za-z_]", W: "[^0-9A-Za-z_]",
-	h: "[A-Za-z_]", H: "[^A-Za-z_]", a: "[A-Za-z]", A: "[^A-Za-z]",
-	l: "(?-i:[a-z])", L: "(?-i:[^a-z])", u: "(?-i:[A-Z])", U: "(?-i:[^A-Z])",
-	s: "[ \\t]", S: "[^ \\t]", p: "[ -~]", P: "[^ -~]",
+	d: "[0-9]",
+	D: "[^0-9]",
+	x: "[0-9A-Fa-f]",
+	X: "[^0-9A-Fa-f]",
+	o: "[0-7]",
+	O: "[^0-7]",
+	w: "[0-9A-Za-z_]",
+	W: "[^0-9A-Za-z_]",
+	h: "[A-Za-z_]",
+	H: "[^A-Za-z_]",
+	a: "[A-Za-z]",
+	A: "[^A-Za-z]",
+	l: "(?-i:[a-z])",
+	L: "(?-i:[^a-z])",
+	u: "(?-i:[A-Z])",
+	U: "(?-i:[^A-Z])",
+	s: "[ \\t]",
+	S: "[^ \\t]",
+	p: "[ -~]",
+	P: "[^ -~]",
 };
 const CHARACTER_ESCAPES: Readonly<Record<string, string>> = {
-	n: "\\n", r: "\\r", t: "\\t", e: "\\x1b", b: "\\x08",
+	n: "\\n",
+	r: "\\r",
+	t: "\\t",
+	e: "\\x1b",
+	b: "\\x08",
 };
 const POSIX_CLASSES: Readonly<Record<string, string>> = {
-	alnum: "A-Za-z0-9", alpha: "A-Za-z", blank: " \\t", cntrl: "\\x00-\\x1f\\x7f",
-	digit: "0-9", graph: "!-~", lower: "a-z", print: " -~", punct: "!-/:-@\\[-`{-~",
-	space: "\\x09-\\x0d ", upper: "A-Z", xdigit: "0-9A-Fa-f",
-	return: "\\r", tab: "\\t", escape: "\\x1b", backspace: "\\x08",
+	alnum: "A-Za-z0-9",
+	alpha: "A-Za-z",
+	blank: " \\t",
+	cntrl: "\\x00-\\x1f\\x7f",
+	digit: "0-9",
+	graph: "!-~",
+	lower: "a-z",
+	print: " -~",
+	punct: "!-/:-@\\[-`{-~",
+	space: "\\x09-\\x0d ",
+	upper: "A-Z",
+	xdigit: "0-9A-Fa-f",
+	return: "\\r",
+	tab: "\\t",
+	escape: "\\x1b",
+	backspace: "\\x08",
 };
 
 function literal(character: string): string {
@@ -124,7 +161,14 @@ function translateVimRegex(pattern: string): RegExp {
 				continue;
 			}
 			if (character === "v" || character === "V" || character === "m" || character === "M") {
-				mode = character === "v" ? "veryMagic" : character === "V" ? "veryNomagic" : character === "m" ? "magic" : "nomagic";
+				mode =
+					character === "v"
+						? "veryMagic"
+						: character === "V"
+							? "veryNomagic"
+							: character === "m"
+								? "magic"
+								: "nomagic";
 				continue;
 			}
 			if (character === "z" && (pattern[index + 1] === "s" || pattern[index + 1] === "e")) {
@@ -139,9 +183,14 @@ function translateVimRegex(pattern: string): RegExp {
 			}
 			if (/[A-Za-z_]/.test(character)) throw new Error(`Unsupported Vim atom: \\${character}`);
 		}
-		const normallyMagic = mode === "veryMagic" ? /[^\w\s]/.test(character)
-			: mode === "magic" ? ".*[]^$".includes(character)
-				: mode === "nomagic" ? "^$".includes(character) : false;
+		const normallyMagic =
+			mode === "veryMagic"
+				? /[^\w\s]/.test(character)
+				: mode === "magic"
+					? ".*[]^$".includes(character)
+					: mode === "nomagic"
+						? "^$".includes(character)
+						: false;
 		const magic = escaped ? !normallyMagic : normallyMagic;
 		if (magic && character === "%") {
 			if (pattern[index + 1] !== "(") throw new Error("Unsupported Vim atom: %");
@@ -172,7 +221,11 @@ function translateVimRegex(pattern: string): RegExp {
 		} else if (magic && "*+?=".includes(character)) {
 			tokens.push({ kind: "quantifier", source: character === "=" ? "?" : character });
 		} else if (magic && (character === "^" || character === "$")) {
-			tokens.push({ kind: character === "^" ? "start" : "end", source: character, contextual: mode !== "veryMagic" });
+			tokens.push({
+				kind: character === "^" ? "start" : "end",
+				source: character,
+				contextual: mode !== "veryMagic",
+			});
 		} else {
 			tokens.push({ kind: "atom", source: magic && character === "." ? "." : literal(character) });
 		}
@@ -205,9 +258,11 @@ function emitTokens(tokens: readonly VimToken[]): string {
 		} else {
 			const previous = tokens[index - 1]?.kind;
 			const next = tokens[index + 1]?.kind;
-			const literalAnchor = token.contextual && (token.kind === "start"
-				? index > 0 && previous !== "open" && previous !== "alternate"
-				: index < tokens.length - 1 && next !== "close" && next !== "alternate");
+			const literalAnchor =
+				token.contextual &&
+				(token.kind === "start"
+					? index > 0 && previous !== "open" && previous !== "alternate"
+					: index < tokens.length - 1 && next !== "close" && next !== "alternate");
 			lastAtom = source.length;
 			source += literalAnchor ? `\\${token.source}` : token.source;
 			if (!literalAnchor && (token.kind === "start" || token.kind === "end")) lastAtom = -1;

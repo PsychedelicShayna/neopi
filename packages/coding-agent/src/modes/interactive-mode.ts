@@ -43,6 +43,7 @@ import {
 	wrapTextWithAnsi,
 } from "@oh-my-pi/pi-tui";
 import type { TerminalAppearanceRequestToken } from "@oh-my-pi/pi-tui/terminal";
+import { setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { runWithoutDetachedDraft } from "@oh-my-pi/pi-tui/draft-scope";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
 import { col, compact, kbd, keyed, node, row, span, text } from "@oh-my-pi/pi-tui/native/describe";
@@ -6543,6 +6544,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** Apply the `tui.vimMode` setting to an editor and route Visual-mode yanks to the clipboard. */
 	#applyVimMode(editor: CustomEditor): void {
 		editor.setVimMode(cfgTuiVimMode.get(settings));
+		setMenuSearchVimMode(cfgTuiVimMode.get(settings));
 		editor.onYank = text => {
 			void this.#copyYankToClipboard(text);
 		};
@@ -9678,7 +9680,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		void this.#selectorController.showGitTui(revision);
 	}
 
-	showModelSelector(options?: { temporaryOnly?: boolean; sessionOnly?: boolean; selectOnly?: SelectOnlyModelSelectorOptions }): void {
+	showModelSelector(options?: {
+		temporaryOnly?: boolean;
+		sessionOnly?: boolean;
+		selectOnly?: SelectOnlyModelSelectorOptions;
+	}): void {
 		this.#selectorController.showModelSelector(options);
 	}
 

@@ -1100,7 +1100,9 @@ export class SettingsSelectorComponent implements Component {
 			page: searching ? this.#preSearchTabId : this.#currentTabId,
 			lead: searchError
 				? `Invalid regex: ${searchError}`
-				: searching ? undefined : (pluginPage?.lead ?? (tab ? TAB_LEADS[tab] : undefined)),
+				: searching
+					? undefined
+					: (pluginPage?.lead ?? (tab ? TAB_LEADS[tab] : undefined)),
 			query: searching || this.#search.focused ? this.#search.value : pluginPage?.query,
 			cursor: searching || this.#search.focused ? this.#search.input.getCursor() : pluginPage?.cursor,
 			sections,
@@ -2230,7 +2232,6 @@ export class SettingsSelectorComponent implements Component {
 			return;
 		}
 
-
 		const action = this.#menuKeys.read(data);
 		if (action === "pending") return;
 		if (action?.kind === "context") {
@@ -2268,7 +2269,7 @@ export class SettingsSelectorComponent implements Component {
 				this.#endSearch(false);
 				return;
 			}
-			if (this.#search.query !== this.#searchQuery || hadPattern !== (this.#search.value.length > 0))
+			if (this.#search.query !== this.#searchQuery || hadPattern !== this.#search.value.length > 0)
 				this.#setSearchQuery(this.#search.query);
 			return;
 		}
@@ -2331,6 +2332,7 @@ export class SettingsSelectorComponent implements Component {
 
 	leaveMenu(): void {
 		this.#search.focused = false;
+		if (this.#searchList && this.#search.query !== this.#searchQuery) this.#setSearchQuery(this.#search.query);
 		(this.#searchList ?? this.#currentList)?.leaveMenu();
 		if (isMenuHistoryLeaver(this.#pluginComponent)) this.#pluginComponent.leaveMenu();
 	}

@@ -1266,7 +1266,7 @@ export class ModelBrowser implements Component {
 
 	navigationSnapshot(): ModelBrowserNavigation {
 		return {
-			query: this.query,
+			query: this.#search.confirmedQuery,
 			value: this.value,
 			cursor: this.cursor,
 			filterFocused: this.#search.focused,
@@ -1340,7 +1340,9 @@ export class ModelBrowser implements Component {
 			const pattern = compileMenuRegex(query);
 			if (pattern) {
 				return this.#insertSeparator(
-					items.filter(item => !this.#isDisabled(item) && !!pattern.regex && modelMatchesRegex(item, pattern.regex)),
+					items.filter(
+						item => !this.#isDisabled(item) && !!pattern.regex && modelMatchesRegex(item, pattern.regex),
+					),
 				);
 			}
 			const base = items.filter(item => !this.#isDisabled(item));
@@ -1918,13 +1920,12 @@ export class ModelBrowser implements Component {
 		const selected = this.getSelected()?.selector ?? null;
 		const filter = this.query.trim();
 		const error = compileMenuRegex(this.query)?.error;
-		const empty =
-			error
-				? `Invalid regex: ${error}`
-				: items.length > 0
-					? ""
-					: plainText(this.#emptyText?.() ?? "").trim() ||
-						(filter ? "No matching models" : "No models available in this scope");
+		const empty = error
+			? `Invalid regex: ${error}`
+			: items.length > 0
+				? ""
+				: plainText(this.#emptyText?.() ?? "").trim() ||
+					(filter ? "No matching models" : "No models available in this scope");
 		const prev = this.#nativeListNode;
 		if (
 			prev?.children === cached.children &&
