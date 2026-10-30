@@ -8,6 +8,7 @@
  * piped stdin never sees lines the first one already consumed.
  */
 import * as readline from "node:readline";
+import { Writable } from "node:stream";
 import {
 	type AuthStorage,
 	type OAuthLoginIdentity,
@@ -16,6 +17,48 @@ import {
 	PASTE_CODE_LOGIN_PROVIDERS,
 } from "@oh-my-pi/pi-ai";
 import { openPath } from "../utils/open";
+
+class LoginOutput extends Writable {
+	hidden = false;
+	readonly isTTY = process.stdout.isTTY;
+	get columns(): number {
+		return process.stdout.columns ?? 80;
+	}
+	override _write(chunk: Buffer, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
+		if (this.hidden) callback();
+		else process.stdout.write(chunk, callback);
+	}
+}
+
+const secretOutputs = new WeakMap<readline.Interface, LoginOutput>();
+
+/** One readline for the whole flow, with no password echo or input history. */
+export function createLoginReadline(): readline.Interface {
+	const output = new LoginOutput();
+	const rl = readline.createInterface({
+		input: process.stdin,
+		output,
+		terminal: !!process.stdin.isTTY && !!process.stdout.isTTY,
+		historySize: 0,
+	});
+	secretOutputs.set(rl, output);
+	return rl;
+}
+
+async function promptSecret(rl: readline.Interface, question: string): Promise<string> {
+	const output = secretOutputs.get(rl);
+	if (!output || !process.stdin.isTTY || !process.stdout.isTTY) {
+		throw new Error("Secret login input requires an interactive terminal that can hide input.");
+	}
+	process.stdout.write(`${question} `);
+	output.hidden = true;
+	try {
+		return await promptLine(rl, "");
+	} finally {
+		output.hidden = false;
+		process.stdout.write("\n");
+	}
+}
 
 /**
  * Interactive `readline` prompt that cleanly tears down on Ctrl-C / Escape so
@@ -181,7 +224,8 @@ export async function runTerminalOAuthLogin(
 			process.stdout.write(`${message}\n`);
 		},
 		onPrompt(p) {
-			return ask(`${p.message}${p.placeholder ? ` (${p.placeholder})` : ""}:`);
+			const message = `${p.message}${p.placeholder ? ` (${p.placeholder})` : ""}:`;
+			return p.secret ? promptSecret(rl, message) : ask(message);
 		},
 		...(usesManualInput
 			? {

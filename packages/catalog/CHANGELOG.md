@@ -4,6 +4,8 @@
 
 ### Added
 
+- Declared NeoProxy's non-storing wire policy in KDL; virtual model names and routing remain server-owned rather than inventing a bundled/default model ([#600](https://github.com/PsychedelicShayna/neopi/issues/600), implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).
+
 - Added KDL selection of model-family behavioral presets, initially scoped to Opus 5 ([#23](https://github.com/PsychedelicShayna/neopi/issues/23)).
 - Exposed native thinking choices, including `off` only when model metadata supports disabling reasoning ([#498](https://github.com/PsychedelicShayna/neopi/issues/498)).
 - Added Grok STT models to the xAI and xAI OAuth catalogs.

@@ -509,11 +509,12 @@ describe("WATCHDOG.yml file round-trip", () => {
 		const file = path.join(tmp, "WATCHDOG.yml");
 		const original = "instructions: Existing\n";
 		await Bun.write(file, original);
+		const target = await fsp.realpath(file);
 		const staged = Promise.withResolvers<void>();
 		const publish = Promise.withResolvers<void>();
 		const rename = fs.promises.rename.bind(fs.promises);
 		vi.spyOn(fs.promises, "rename").mockImplementation(async (from, to) => {
-			if (to === file) {
+			if (to === target) {
 				staged.resolve();
 				await publish.promise;
 			}
@@ -522,7 +523,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 
 		const save = saveWatchdogConfigFile(file, { instructions: "Replacement", advisors: [] });
 		try {
-			const ready = await Promise.race([staged.promise.then(() => true), Bun.sleep(500).then(() => false)]);
+			const ready = await Promise.race([staged.promise.then(() => true), save.then(() => false)]);
 			expect(ready).toBe(true);
 			expect(await Bun.file(file).text()).toBe(original);
 		} finally {

@@ -241,6 +241,9 @@ describe("advisor auto thinking level", () => {
 					},
 				],
 			});
+			const fallback = modelRegistry.find(provider, "fallback");
+			expect(fallback?.reasoning).toBe(true);
+			expect(fallback?.thinking?.unverified).toBe(unverified ? true : undefined);
 			const primary = createMockModel({ handler: { content: ["primary complete"] } });
 			const advisorMock = createMockModel();
 			const wire: Array<{ id: string; reasoning: Effort | undefined }> = [];

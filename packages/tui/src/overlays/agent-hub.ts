@@ -434,7 +434,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	#treeLastSiblingById = new Map<string, boolean>();
 	#treeMaxDepth = 0;
 	/** Fuzzy agent filter (`/`), applied to id and display name. */
-	readonly #agentFilter = new MenuSearchField();
+	readonly #agentFilter = new MenuSearchField("", false, "retain");
 	/** Current observer index and summary data, rebuilt on source changes rather than every paint. */
 	#observedById = new Map<string, ObservableSession>();
 	#aggregate: AggregateMetrics = {

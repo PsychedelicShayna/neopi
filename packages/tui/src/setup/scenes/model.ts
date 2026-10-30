@@ -186,6 +186,7 @@ class ModelSceneController implements SetupSceneController {
 			view,
 			preview,
 			query,
+			browser.value,
 			browser.cursor,
 			browser.pickerSelected,
 			this.#current,

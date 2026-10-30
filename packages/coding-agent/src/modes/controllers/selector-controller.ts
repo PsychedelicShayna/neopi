@@ -640,7 +640,8 @@ export class SelectorController {
 				await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
 				const code = await openEditorOnPath(command, filePath, env);
 				await reload?.();
-				if (code !== 0) this.ctx.showWarning(`External editor exited with code ${code}. Saved changes were reloaded.`);
+				if (code !== 0)
+					this.ctx.showWarning(`External editor exited with code ${code}. Saved changes were reloaded.`);
 			},
 			env,
 		);

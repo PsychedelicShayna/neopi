@@ -107,6 +107,7 @@ import advisorSystemPrompt from "../prompts/advisor/system.md" with { type: "tex
 import type { SecretObfuscator } from "../secrets/obfuscator";
 import {
 	AUTO_THINKING,
+	automaticThinkingLevel,
 	concreteThinkingLevel,
 	resolveThinkingLevelForModel,
 	shouldDisableReasoning,
@@ -1296,7 +1297,7 @@ export class SessionAdvisors {
 			if (decision?.disclosure && emitWarnings)
 				this.#host.emitNotice("warning", decision.disclosure, "effort-policy");
 			const requestedLevel = autoThinking
-				? (decision?.candidates[0] ?? ThinkingLevel.Low)
+				? automaticThinkingLevel(model, decision?.candidates[0] ?? ThinkingLevel.Low)
 				: (decision?.level ?? thinkingLevel ?? ThinkingLevel.Medium);
 			const resolvedLevel = resolveThinkingLevelForModel(model, requestedLevel);
 			const advisorThinkingLevel: ThinkingLevel = resolvedLevel ?? ThinkingLevel.Inherit;
@@ -1698,7 +1699,11 @@ export class SessionAdvisors {
 						currentAdvisorInput = Array.isArray(input)
 							? formatSessionHistoryMarkdown(input, { watchedRoles: true })
 							: input;
-						if (advisorRef.autoThinking && getSupportedEfforts(advisorAgent.state.model).length > 0) {
+						if (
+							advisorRef.autoThinking &&
+							!advisorAgent.state.model.thinking?.unverified &&
+							getSupportedEfforts(advisorAgent.state.model).length > 0
+						) {
 							const model = advisorAgent.state.model;
 							const decision =
 								cfgEffortPolicyMode.get(this.#host.settings) === "replacement"
@@ -2284,7 +2289,11 @@ export class SessionAdvisors {
 				return;
 			}
 		}
-		this.#setAdvisorModel(advisor, primaryModel, thinkingToApply);
+		this.#setAdvisorModel(
+			advisor,
+			primaryModel,
+			autoThinking ? automaticThinkingLevel(primaryModel, thinkingToApply) : thinkingToApply,
+		);
 		advisor.autoThinking = autoThinking;
 		advisor.autoSelection = autoSelection;
 		this.#host.settings.getStorage()?.recordModelUsage(formatModelStringWithRouting(primaryModel));
@@ -2473,7 +2482,11 @@ export class SessionAdvisors {
 						continue;
 					}
 				}
-				const nextThinkingLevel = this.#setAdvisorModel(advisor, candidate, nextRequested);
+				const nextThinkingLevel = this.#setAdvisorModel(
+					advisor,
+					candidate,
+					autoThinking ? automaticThinkingLevel(candidate, nextRequested) : nextRequested,
+				);
 				advisor.autoThinking = autoThinking;
 				advisor.autoSelection = autoSelection;
 				if (advisor.retryFallback) {

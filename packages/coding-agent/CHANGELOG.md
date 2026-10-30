@@ -11,6 +11,8 @@
 
 - Choose advisor delivery timing independently for nits, concerns, and blockers in Settings → Model → Advisor; nits wait for the actual run end by default, while concerns and blockers arrive at safe tool boundaries without cancelling work.
 - Explicitly revive killed subagents from their saved transcripts in the Agent Hub; opening a transcript, focusing an agent, or sending ordinary IRC/chat no longer undoes a kill.
+- Connect to NeoProxy through `npi login neoproxy --url URL` or `/login`, with hidden username/password authentication, an ephemeral dashboard session, current-grant inference keys, explicit owned-pool selection, and automatic live model discovery through the existing provider configuration and model/role pickers ([#600](https://github.com/PsychedelicShayna/neopi/issues/600), implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).
+
 - RPC clients can edit role fallbacks and descriptions, delete custom role definitions, and explicitly save project assignments without changing the global storage preference ([#595](https://github.com/PsychedelicShayna/neopi/issues/595)).
 - RPC clients can inspect native login-method and device-code metadata, read model descriptions, and activate a stored OAuth account for one session without exposing credentials ([#595](https://github.com/PsychedelicShayna/neopi/issues/595), implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).
 - RPC clients can detect connection-owned host-tool registration through the `connection_owned_host_tools` capability before registering tools ([#593](https://github.com/PsychedelicShayna/neopi/issues/593)).

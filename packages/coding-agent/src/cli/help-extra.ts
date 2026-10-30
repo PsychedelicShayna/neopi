@@ -3,7 +3,13 @@ import chalk from "@oh-my-pi/pi-utils/chalk";
 import { APP_NAME, CONFIG_DIR_NAME } from "@oh-my-pi/pi-utils/dirs";
 
 export function getExtraHelpText(): string {
-	return `${chalk.bold("Environment Variables:")}
+	return `${chalk.bold("NeoProxy connection:")}
+  ${APP_NAME} login neoproxy --url https://proxy.example.com
+  Prompts for your username and a hidden password; stores only an inference key.
+  Discovers granted models automatically. Use /login in-session, then /model or /models.
+  Remote servers require validated HTTPS; loopback HTTP is supported for local use.
+
+${chalk.bold("Environment Variables:")}
   ${chalk.dim("# Core Providers")}
   ANTHROPIC_API_KEY          - Anthropic Claude models
   ANTHROPIC_OAUTH_TOKEN      - Anthropic OAuth (takes precedence over API key)

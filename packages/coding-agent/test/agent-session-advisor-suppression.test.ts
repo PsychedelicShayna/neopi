@@ -519,12 +519,9 @@ describe("AgentSession advisor auto-resume suppression", () => {
 				}));
 				if (severity !== "nit") expect(nextContext).toContain(note);
 				else expect(nextContext).not.toContain(note);
-				expect(
-					agent.state.messages
-						.filter(isAdvisorCard)
-						.map(card => card.content)
-						.join("\n"),
-				).toContain(note);
+				const advisorCards = agent.state.messages.filter(isAdvisorCard);
+				expect(advisorCards).toHaveLength(1);
+				expect(advisorCards[0].content).toContain(note);
 				expect(visibleEvents).toEqual(["advice-card", "terminal-end"]);
 				expect(persistedAtEnd).toEqual([true]);
 				if (continuation) {
@@ -645,7 +642,7 @@ describe("AgentSession advisor auto-resume suppression", () => {
 				await releaseHook.promise;
 			},
 		};
-		const { session, sessionManager } = await createCompletedAdvisorSession({
+		const { session, sessionManager, mock } = await createCompletedAdvisorSession({
 			severity: "concern",
 			continueSeverity: "blocker",
 			extensionRunner,
@@ -654,11 +651,18 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		await session.prompt("answer with exactly one line");
 		await hookStarted.promise;
 		try {
+			// This concern is explicitly below the continuation threshold. The
+			// primary is idle even though delivery still owns an unsettled hook.
+			expect(session.isStreaming).toBe(false);
+			expect(mock.calls).toHaveLength(1);
+			expect(await session.waitForAdvisorCatchup(0)).toBe(false);
+			expect(session.agent.state.messages.filter(isAdvisorCard)).toHaveLength(1);
 			expect(await session.resetSessionContext()).toBeDefined();
 			const boundary = sessionManager.getEntries().findLastIndex(entry => entry.type === "reset_boundary");
 			expect(boundary).toBeGreaterThanOrEqual(0);
 			releaseHook.resolve();
 			await session.waitForIdle();
+			expect(await session.waitForAdvisorCatchup(1000)).toBe(true);
 			expect(
 				sessionManager
 					.getEntries()
@@ -666,6 +670,7 @@ describe("AgentSession advisor auto-resume suppression", () => {
 					.filter(entry => entry.type === "custom_message" && entry.customType === "advisor"),
 			).toEqual([]);
 			expect(session.agent.state.messages.filter(isAdvisorCard)).toEqual([]);
+			expect(mock.calls).toHaveLength(1);
 		} finally {
 			releaseHook.resolve();
 		}

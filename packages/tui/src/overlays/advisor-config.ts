@@ -834,6 +834,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 				catalogue,
 				preview,
 				active.query,
+				active.value,
 				active.cursor,
 				active.pickerSelected,
 				active.filterFocused,

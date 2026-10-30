@@ -116,7 +116,7 @@ export const grievancesHelp = {
 } satisfies CommandMetadata;
 
 export const loginHelp = {
-	description: "Log in to a model provider (terminal counterpart of /login)",
+	description: "Log in to a model provider, including NeoProxy username/password accounts (also /login)",
 } satisfies CommandMetadata;
 
 export const imagesHelp = {
