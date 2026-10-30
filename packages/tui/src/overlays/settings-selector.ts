@@ -801,6 +801,8 @@ export interface SettingsCallbacks {
 	onCancel: () => void;
 	/** Edit the persisted settings file, then re-read it before resolving. */
 	onOpenConfigFile?: () => Promise<void>;
+	/** Persist and apply the selected scope to other sessions through the host's reload mechanism. */
+	onApply?: (scope: "global" | "project" | "session") => Promise<string>;
 }
 
 /**
@@ -836,6 +838,8 @@ export class SettingsSelectorComponent implements Component {
 	#textInputActive = false;
 	#restoringNavigation = false;
 	#externalEditPending = false;
+	#applyPending = false;
+	#applyFeedback = "";
 	readonly #menuKeys = new MenuKeyReader();
 	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
 	#hasSectionJump = false;
@@ -921,7 +925,7 @@ export class SettingsSelectorComponent implements Component {
 			return `${editorKeys("tui.select.up", "tui.select.down")} to jump sections · ${tab}/${confirm} to settings · ${switchTabs} · ${cancel} to close`;
 		}
 		const nav = this.#hasSectionJump ? `${tab} to jump sections · ${switchTabs}` : `${tab} to switch tabs`;
-		return `${confirm}/${formatKeyHint("space")} to change · ${nav} · Ctrl+S scope · / search · ${cancel} to close${this.#callbacks.onOpenConfigFile ? " · Ctrl+G config file" : ""}`;
+		return `${confirm}/${formatKeyHint("space")} to change · ${nav} · Ctrl+S scope${this.#callbacks.onApply ? " · Ctrl+A Apply" : ""} · / search · ${cancel} to close${this.#callbacks.onOpenConfigFile ? " · Ctrl+G config file" : ""}${this.#applyFeedback ? ` · ${this.#applyFeedback}` : ""}`;
 	}
 
 	#scopeTitle(styled = false): string {
@@ -1106,9 +1110,12 @@ export class SettingsSelectorComponent implements Component {
 			title: this.#scopeTitle(),
 			pages,
 			page: searching ? this.#preSearchTabId : this.#currentTabId,
-			lead: searchError
-				? `Invalid regex: ${searchError}`
-				: searching ? undefined : (pluginPage?.lead ?? (tab ? TAB_LEADS[tab] : undefined)),
+			lead: [
+				searchError ? `Invalid regex: ${searchError}`
+					: searching ? undefined : (pluginPage?.lead ?? (tab ? TAB_LEADS[tab] : undefined)),
+				`Ctrl+S cycle scope${this.#callbacks.onApply ? " · Ctrl+A Apply" : ""}`,
+				this.#applyFeedback,
+			].filter(Boolean).join(" · "),
 			query: searching || this.#search.focused ? this.#search.value : pluginPage?.query,
 			cursor: searching || this.#search.focused ? this.#search.input.getCursor() : pluginPage?.cursor,
 			sections,
@@ -1854,7 +1861,7 @@ export class SettingsSelectorComponent implements Component {
 		const activeThemeBeforePreview = getCurrentThemeName() ?? currentValue;
 		if (def.path === "theme.dark" || def.path === "theme.light") {
 			onPreview = value => {
-				return this.#callbacks.onThemePreview?.(value);
+				if (!this.#context.settings.details?.(def.path).shadowed) return this.#callbacks.onThemePreview?.(value);
 			};
 			onPreviewCancel = () => {
 				this.#callbacks.onThemePreview?.(activeThemeBeforePreview);
@@ -2188,6 +2195,24 @@ export class SettingsSelectorComponent implements Component {
 	}
 
 	handleInput(data: string): void {
+		if (matchesKey(data, "ctrl+a") && !this.#textInputActive && !this.#search.focused &&
+			!this.#displayList?.openSubmenu && this.#callbacks.onApply) {
+			if (!this.#applyPending) {
+				this.#applyPending = true;
+				this.#applyFeedback = "Applying…";
+				void this.#callbacks.onApply(this.#context.settings.scope ?? "global")
+					.then(message => { this.#applyFeedback = message; })
+					.catch((error: unknown) => {
+						this.#applyFeedback = `Apply failed: ${error instanceof Error ? error.message : String(error)}`;
+					})
+					.finally(() => {
+						this.#applyPending = false;
+						this.#context.requestRender?.();
+					});
+				this.#context.requestRender?.();
+			}
+			return;
+		}
 		if (matchesKey(data, "ctrl+s") && !this.#textInputActive) {
 			this.#context.settings.cycleScope?.();
 			this.#refreshItems();

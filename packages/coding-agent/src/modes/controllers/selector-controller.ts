@@ -67,10 +67,11 @@ import { getRoleInfo, setRoleDescription } from "../../config/model-roles";
 import { settings, type SettingsScope } from "../../config/settings";
 import { cfgModelFactsEnabled, cfgModelFactsSources, cfgModelFactsOverrides } from "../../config/model-facts";
 import { ModelFactEditorComponent } from "../components/model-fact-editor";
-import type { AnySetting } from "../../config/registry";
+import { type AnySetting, lookup } from "../../config/registry";
 import type { StatusLineSettings } from "@oh-my-pi/pi-tui/status-line/types";
 import { createSettingsHost } from "../../config/settings-ui";
 import { cfgSettingsDefaultScope } from "../settings";
+import { broadcastSettingsReload } from "../../control/settings-reload";
 import { createPluginSettingsHost } from "../../extensibility/plugins/settings-host";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
 import {
@@ -678,7 +679,13 @@ export class SelectorController {
 						composerPreviewStatus: this.ctx.statusLine,
 					},
 					{
-						onChange: (id, value) => this.handleSettingChange(id, value),
+						onChange: (id, value) => this.handleSettingChange(id, lookup(id)?.get(this.ctx.settings) ?? value),
+						onApply: async selectedScope => {
+							await this.ctx.settings.flush();
+							if (selectedScope === "session") return "Session scope is local — no broadcast needed";
+							const result = await broadcastSettingsReload(selectedScope, this.ctx.sessionManager.getCwd());
+							return `Applied to ${result.notified} sessions${result.failed ? `; ${result.failed} failed` : ""}`;
+						},
 						onOpenConfigFile: () =>
 							this.#openConfigFile({ kind: "settings" }, () => this.ctx.settings.reloadFromDisk()),
 						onThemePreview: async themeName => {
