@@ -124,6 +124,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Named child advisors expand instruction-file imports relative to their selected definition without rewriting editor drafts.
 - Private child advisor rosters no longer inherit fleet-wide instructions, note budgets, or configuration warnings.
 - The rich `/agents` definition editor opens without obsolete create-flow rendering errors.
 - Live effort alerts accept the operator catalog's relative 0–1 fractional ratings without disabling recommendation lookup.
