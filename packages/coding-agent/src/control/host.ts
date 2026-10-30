@@ -957,7 +957,7 @@ export class ControlHost {
 					}
 					if (
 						(await settingsProjectPath(frame.projectDir)) !==
-						(await settingsProjectPath(this.#options.session.sessionManager.getCwd()))
+						(await settingsProjectPath(this.#options.session.settings.getCwd()))
 					) {
 						this.#reply(connection, frame, { success: true, data: { applied: false } });
 						return;
