@@ -97,7 +97,7 @@ export function parseModelCatalog(text: string): ModelCatalog {
 				const rating = slot[metric];
 				if (
 					rating !== null &&
-					(typeof rating !== "number" || !Number.isInteger(rating) || rating < 0 || rating > 5)
+					(typeof rating !== "number" || !Number.isFinite(rating) || rating < 0 || rating > 1)
 				) {
 					throw new Error(`Malformed model catalog rating ${slug} at ${effort}`);
 				}

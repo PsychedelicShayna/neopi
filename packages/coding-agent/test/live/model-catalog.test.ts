@@ -23,7 +23,7 @@ const fixture = (recommendation: string | null = "never") =>
 		metrics: Object.fromEntries(
 			["economy", "performance", "stability", "speed"].map(metric => [
 				metric,
-				{ scale: "0-5", meaning: "Operator rating" },
+				{ scale: "Relative float in [0, 1]", meaning: "Operator rating" },
 			]),
 		),
 		models: {
@@ -55,6 +55,53 @@ describe("live model catalog", () => {
 		).toThrow();
 		expect(() => parseModelCatalog(fixture().replace('\"max\":{', '\"ultra\":{'))).toThrow();
 		expect(() => parseModelCatalog(fixture().replace('"recommendation":"never",', ""))).toThrow();
+	});
+
+	test("accepts fractional ratings and boundaries for every metric without rounding", () => {
+		for (const metric of ["economy", "performance", "stability", "speed"]) {
+			for (const rating of [0, 0.37, 1, null]) {
+				const parsed = parseModelCatalog(fixture().replaceAll(`"${metric}":null`, `"${metric}":${rating}`));
+				expect(parsed.models[slug]?.efforts.max).toMatchObject({ [metric]: rating });
+			}
+		}
+	});
+
+	test("rejects legacy scores, out-of-range values and non-numbers for every metric", () => {
+		for (const metric of ["economy", "performance", "stability", "speed"]) {
+			for (const rating of ["-0.01", "1.01", "3", "5", "1e999", "-1e999", "true", '"0.37"']) {
+				expect(() =>
+					parseModelCatalog(fixture().replaceAll(`"${metric}":null`, `"${metric}":${rating}`)),
+				).toThrow("Malformed model catalog rating");
+			}
+		}
+	});
+
+	test("fractional catalog ratings keep recommendation lookup available", async () => {
+		const loader = new LiveModelCatalogLoader({
+			io: {
+				stat: async () => ({ mtimeMs: 1, size: 42 }),
+				readFile: async () => fixture().replaceAll('"performance":null', '"performance":0.37'),
+			},
+		});
+		await loader.setPath("/catalog.json");
+		expect(loader.lookup(slug, "max")).toEqual({ status: "present", recommendation: "never" });
+		loader.dispose();
+	});
+
+	test("an invalid initial catalog only warns and leaves lookup unavailable", async () => {
+		const warnings: string[] = [];
+		const loader = new LiveModelCatalogLoader({
+			io: {
+				stat: async () => ({ mtimeMs: 1, size: 42 }),
+				readFile: async () => fixture().replaceAll('"performance":null', '"performance":5'),
+			},
+			onWarning: warning => warnings.push(warning),
+		});
+		await loader.setPath("/catalog.json");
+		expect(loader.lookup(slug, "max")).toEqual({ status: "unavailable" });
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain("Malformed model catalog rating");
+		loader.dispose();
 	});
 
 	test("expands only a leading home component and exposes the Providers/Services setting", () => {
