@@ -55,6 +55,21 @@ export function createDefinitionGenerator<T extends object>(options: DefinitionG
 		if (conversation) clearTimeout(conversation.timer);
 		conversations.delete(id);
 	};
+	const scheduleExpiry = (id: string, delay: number): NodeJS.Timeout => {
+		const timer = setTimeout(() => forget(id), delay);
+		timer.unref();
+		return timer;
+	};
+	const stopListening = cfgDefinitionGenerationConversationTtlMs.listen(options.settings, ttl => {
+		for (const [id, conversation] of conversations) {
+			const remaining = ttl - (Date.now() - conversation.updatedAt);
+			if (ttl === 0 || remaining <= 0) forget(id);
+			else {
+				clearTimeout(conversation.timer);
+				conversation.timer = scheduleExpiry(id, remaining);
+			}
+		}
+	});
 	return {
 		async generate(request) {
 			if (disposed) throw new Error("Definition generator has been disposed.");
@@ -148,8 +163,7 @@ export function createDefinitionGenerator<T extends object>(options: DefinitionG
 			const currentTtl = cfgDefinitionGenerationConversationTtlMs.get(options.settings);
 			if (currentTtl > 0) {
 				forget(conversationId);
-				const timer = setTimeout(() => forget(conversationId), currentTtl);
-				timer.unref();
+				const timer = scheduleExpiry(conversationId, currentTtl);
 				conversations.set(conversationId, {
 					messages: [...messages, structuredClone(response), {
 						role: "toolResult",
@@ -169,6 +183,7 @@ export function createDefinitionGenerator<T extends object>(options: DefinitionG
 		},
 		dispose() {
 			disposed = true;
+			stopListening();
 			for (const id of conversations.keys()) forget(id);
 		},
 	};
