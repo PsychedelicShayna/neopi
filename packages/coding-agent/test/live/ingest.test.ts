@@ -25,7 +25,10 @@ const catalog = (recommendation: "never" | "avoid" | "ok" | null = "never") =>
 		schemaVersion: 1,
 		effortLevels: ["minimal", "low", "medium", "high", "xhigh", "max"],
 		metrics: Object.fromEntries(
-			["economy", "performance", "stability", "speed"].map(key => [key, { scale: "0-5", meaning: "operator" }]),
+			["economy", "performance", "stability", "speed"].map(key => [
+				key,
+				{ scale: "Relative float in [0, 1]", meaning: "operator" },
+			]),
 		),
 		models: {
 			"openai-codex/gpt-6-astra": {

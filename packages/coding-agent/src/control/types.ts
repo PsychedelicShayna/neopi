@@ -292,6 +292,7 @@ export type ControlOnlyCommand =
 			layer?: "user" | "project";
 	  })
 	| (ControlBase & { type: "settings_unset"; path: string; member?: string; scope?: "persist" | "runtime" })
+	| (ControlBase & { type: "reload_settings"; scope: "global" | "project"; projectDir?: string })
 	| (ControlBase & { type: "keybindings_get"; actionId?: string })
 	| (ControlBase & { type: "keybindings_set"; actionId: string; keys: string[] })
 	| (ControlBase & { type: "keybindings_reload" })
