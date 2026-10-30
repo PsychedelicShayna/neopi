@@ -841,7 +841,7 @@ export class CredentialSelector {
 						refreshTarget,
 						credentialId,
 						options?.signal,
-						force ? options?.refreshReason : undefined,
+						force ? options?.refreshReason : "expiry",
 						rejectedAccess,
 					);
 					const beforeRefresh = candidate.selection.credential;
@@ -1141,6 +1141,7 @@ export class CredentialSelector {
 					selection.credential,
 					credentialId,
 					options?.signal,
+					"expiry",
 				);
 				const apiKey = customProvider.getApiKey
 					? customProvider.getApiKey(refreshedCredentials)
@@ -1157,6 +1158,7 @@ export class CredentialSelector {
 					selection.credential,
 					credentialId,
 					options?.signal,
+					"expiry",
 				);
 				const oauthCreds: Record<string, OAuthCredentials> = {
 					[provider]: refreshedCredentials,

@@ -104,16 +104,12 @@ describe("auth broker OAuth refresh backoff", () => {
 		});
 		clientStorage = new AuthStorage(remote);
 		await clientStorage.credentials.reload();
-		const authError = Object.assign(new Error("401 invalid_api_key"), { status: 401 });
-		const firstBearers: string[] = [];
-		await expect(
-			withAuth(clientStorage.keys.resolver(PROVIDER, { sessionId: "late-recovery" }), async key => {
-				firstBearers.push(key);
-				throw authError;
-			}),
-		).rejects.toBe(authError);
-		expect(firstBearers).toEqual(["access-1"]);
+		// Legacy callers that cannot name a rejected token can reuse the recent
+		// mint, but receiving it must not establish a new client-side cooldown.
+		const recovered = await clientStorage.oauth.refresh(credentialId, undefined, { reason: "auth-recovery" });
+		expect(recovered.credential).toMatchObject({ access: "access-1" });
 		expect(refreshCalls).toBe(1);
+		const authError = Object.assign(new Error("401 invalid_api_key"), { status: 401 });
 
 		// The 60 s credential block has elapsed and the broker's original mint is
 		// older than five minutes. A cached response received at t=4:59 must not
