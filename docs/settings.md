@@ -981,12 +981,13 @@ roleSettings:
     compaction.thresholdTokens: 120000
 ```
 
-In `/settings` → Context → Compaction, both **Compaction Token Limit** and each role's
-**token budget** offer presets and **Custom...** for typed integer counts such as
-`120000`. Choose **Inherit** or clear a role's custom field to use the global default.
-Roles without a budget keep the global threshold. Session-only overrides take priority
-over a role budget. A fixed token budget still respects the active model's actual
-context window and reserve.
+In `/settings` → Context → Compaction, **Compaction Token Limit** edits the ordinary
+context limit. Per-role budgets live in `/models` → Roles: select a role and press
+`b` or choose **Token budget**, then enter a positive integer such as `120000`.
+Clear the field to inherit the ordinary context limit. `/models session`,
+`/models project`, and `/models global` choose the authoring scope without moving
+existing values. Session-only overrides take priority over a role budget. A fixed
+token budget still respects the active model's actual context window and reserve.
 
 The trigger is exactly what you configure. On a small or provider-capped window, compaction instead keeps less recent history: the kept tail is capped at `0.8 × trigger − reserveFloor` (half of `0.8 × trigger` when the floor alone fills it) so the compacted context lands under the trigger's recovery band, where `reserveFloor` is the smaller of the effective budget reserve and `compaction.reserveTokens` (or `16384` when unset). For example, a 100k window with `thresholdPercent: 40` compacts at 40,000 tokens and keeps at most 15,616 tokens of recent history instead of the configured 20,000.
 `compaction` has additional tuning keys (idle compaction, supersede/drop heuristics) visible in `omp config list`. See [Compaction](./compaction.md) for the full strategy reference.
