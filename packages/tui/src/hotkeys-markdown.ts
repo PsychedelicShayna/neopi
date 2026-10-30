@@ -1,3 +1,4 @@
+import { uiProvenanceSuffix } from "./theme/provenance";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { type AppKeybinding, formatKeyHint, type KeybindingsManager, keyHintPlatform } from "./app-keybindings";
 import { Markdown } from "./components/markdown";
@@ -177,7 +178,21 @@ function hotkeyGroups(bindings: HotkeysMarkdownBindings): HotkeyGroup[] {
 			],
 		},
 	];
-	return groups;
+	return groups.map(group => ({
+		...group,
+		rows: group.rows.map(row => ({
+			...row,
+			action:
+				row.action +
+				[
+					...new Set(
+						row.keys.flatMap(part =>
+							"action" in part && part.action ? [uiProvenanceSuffix("keybindings", part.action)] : [],
+						),
+					),
+				].join(""),
+		})),
+	}));
 }
 
 /** Build the platform-aware Markdown reference for effective application hotkeys. */

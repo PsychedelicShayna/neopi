@@ -1,3 +1,4 @@
+import { uiProvenanceSuffix } from "../theme/provenance";
 import { parseModelString, splitUpstreamRouting } from "./model-selector";
 /**
  * Fullscreen /models hub, shown on the alternate screen like /settings.
@@ -4047,7 +4048,10 @@ export class ModelHubComponent implements Component {
 		for (const rowDef of this.#rolesRows) {
 			if (rowDef.kind !== "role") continue;
 			const info = this.#settings.getRoleInfo(rowDef.role);
-			tagWidth = Math.max(tagWidth, visibleWidth(info.tag ?? info.name ?? rowDef.role));
+			tagWidth = Math.max(
+				tagWidth,
+				visibleWidth((info.tag ?? info.name ?? rowDef.role) + uiProvenanceSuffix("roles", rowDef.role)),
+			);
 		}
 
 		const cycleOrder = this.#cycleOrder();
@@ -4125,7 +4129,8 @@ export class ModelHubComponent implements Component {
 			const role = rowDef.role;
 			const info = this.#settings.getRoleInfo(role);
 			const assignment = this.#roles[role];
-			const tag = (info.tag ?? info.name ?? role).padEnd(tagWidth);
+			const roleTag = (info.tag ?? info.name ?? role) + uiProvenanceSuffix("roles", role);
+			const tag = roleTag + " ".repeat(Math.max(0, tagWidth - visibleWidth(roleTag)));
 
 			let dot: string;
 			let tagStyled: string;
@@ -4880,7 +4885,7 @@ export class ModelHubComponent implements Component {
 		const role = rowDef.role;
 		const info = this.#settings.getRoleInfo(role);
 		const assignment = this.#roles[role];
-		const tag = info.tag ?? info.name ?? role;
+		const tag = (info.tag ?? info.name ?? role) + uiProvenanceSuffix("roles", role);
 		let label: TspSpan[];
 		let detail: TspSpan[];
 		const value: TspSpan[] = [];
@@ -5011,7 +5016,9 @@ export class ModelHubComponent implements Component {
 		const queryError = compileMenuRegex(
 			entry.kind === "effort" && this.#assigning === null
 				? this.#effortSearch.value
-				: rolesView ? this.#rolesSearch.value : this.#browser.query,
+				: rolesView
+					? this.#rolesSearch.value
+					: this.#browser.query,
 		)?.error;
 		const props: TspPickerProps = {
 			title: this.#sessionOnly ? "Session model" : "Models",
@@ -5062,18 +5069,19 @@ export class ModelHubComponent implements Component {
 					order: indices.map(index => `effort:${index}`),
 					selected: this.#effortIndex < 0 ? null : `effort:${this.#effortIndex}`,
 					total: rules.length,
-					actions: this.#strip || this.#filterEditing
-						? props.actions
-						: compact([
-								this.#effortIndex >= 0
-									? pickerAction("effort:edit", "Edit / add", "enter", { primary: true })
-									: undefined,
-								this.#effortIndex >= 0 && this.#effortIndex < rules.length
-									? pickerAction("effort:remove", "Remove", "x")
-									: undefined,
-								this.#effortSearch.value ? pickerAction("clear", "Clear search") : undefined,
-								this.#pickerCancelAction(),
-							]),
+					actions:
+						this.#strip || this.#filterEditing
+							? props.actions
+							: compact([
+									this.#effortIndex >= 0
+										? pickerAction("effort:edit", "Edit / add", "enter", { primary: true })
+										: undefined,
+									this.#effortIndex >= 0 && this.#effortIndex < rules.length
+										? pickerAction("effort:remove", "Remove", "x")
+										: undefined,
+									this.#effortSearch.value ? pickerAction("clear", "Clear search") : undefined,
+									this.#pickerCancelAction(),
+								]),
 				},
 				[],
 			);
@@ -5617,7 +5625,7 @@ export class ModelHubComponent implements Component {
 					break;
 			}
 			const info = this.#settings.getRoleInfo(row.role);
-			const tag = info.tag ?? info.name ?? row.role;
+			const tag = (info.tag ?? info.name ?? row.role) + uiProvenanceSuffix("roles", row.role);
 			const assignment = this.#roles[row.role];
 			const facts: Record<string, string> = {};
 			if (assignment) {
@@ -5635,7 +5643,7 @@ export class ModelHubComponent implements Component {
 			items.push({
 				id,
 				label: tag,
-				...(info.name && info.name !== tag ? { detail: info.name } : {}),
+				...(info.name && info.name !== (info.tag ?? info.name ?? row.role) ? { detail: info.name } : {}),
 				facts,
 				...(assignment && !assignment.autoSelected ? {} : { tone: "muted" as const }),
 				...(cycleIndex >= 0
@@ -5803,8 +5811,7 @@ export class ModelHubComponent implements Component {
 		if (this.#filterEditing) {
 			if (
 				event.kind === "activate" ||
-				(event.kind === "action" &&
-					["searchConfirm", "assign", "roles:pick", "effort:edit"].includes(event.act))
+				(event.kind === "action" && ["searchConfirm", "assign", "roles:pick", "effort:edit"].includes(event.act))
 			) {
 				this.#handleInput("\r");
 			}

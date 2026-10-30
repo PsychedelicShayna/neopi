@@ -239,19 +239,97 @@ export function classifyInventories(
 	return { fork: difference(fork, upstream), newUpstream: difference(upstream, previous) };
 }
 
+export interface UiRegistryInventory {
+	keybindings: string[];
+	statusSegments: string[];
+	roles: string[];
+	composerShapes: string[];
+}
+
+export async function readUiRegistryInventory(read: ReadRegistrySource): Promise<UiRegistryInventory> {
+	const declaration = async (file: string, name: string): Promise<ts.Expression> => {
+		const parsed = ts.createSourceFile(file, await read(file), ts.ScriptTarget.Latest, true);
+		for (const statement of parsed.statements)
+			if (ts.isVariableStatement(statement)) {
+				for (const variable of statement.declarationList.declarations) {
+					if (variable.name.getText() !== name || !variable.initializer) continue;
+					let value = variable.initializer;
+					while (ts.isAsExpression(value) || ts.isSatisfiesExpression(value)) value = value.expression;
+					return value;
+				}
+			}
+		throw new Error(`Missing UI registry ${file}:${name}`);
+	};
+	const keys = (value: ts.Expression): string[] => {
+		if (!ts.isObjectLiteralExpression(value)) throw new Error("Expected object registry");
+		return value.properties.flatMap(property => {
+			if (ts.isSpreadAssignment(property)) return [];
+			const name = property.name;
+			if (!name || (!ts.isIdentifier(name) && !ts.isStringLiteralLike(name)))
+				throw new Error("Unsupported registry key");
+			return [name.text];
+		});
+	};
+	const segmentList = await declaration("packages/tui/src/status-line/schema.ts", "STATUS_LINE_SEGMENT_IDS");
+	if (!ts.isArrayLiteralExpression(segmentList)) throw new Error("Expected segment registry array");
+	const statusSegments = segmentList.elements.map(item => {
+		if (!ts.isStringLiteralLike(item)) throw new Error("Unsupported segment identifier");
+		return item.text;
+	});
+	const shapes = await declaration("packages/tui/src/overlays/composer-shape-registry.ts", "BUILTIN_COMPOSER_SHAPES");
+	if (!ts.isArrayLiteralExpression(shapes)) throw new Error("Expected composer shape registry array");
+	const composerShapes = shapes.elements.map(shape => {
+		if (!ts.isObjectLiteralExpression(shape)) throw new Error("Unsupported composer shape");
+		const id = literalProperty(shape, "value");
+		if (!id) throw new Error("Missing composer shape identifier");
+		return id;
+	});
+	return {
+		keybindings: [
+			...new Set([
+				...keys(await declaration("packages/tui/src/keybindings.ts", "TUI_KEYBINDINGS")),
+				...keys(await declaration("packages/tui/src/app-keybindings.ts", "KEYBINDINGS")),
+			]),
+		].sort(),
+		statusSegments: statusSegments.sort(),
+		roles: keys(await declaration(`${ROOT}config/model-roles.ts`, "MODEL_ROLES")).sort(),
+		composerShapes: composerShapes.sort(),
+	};
+}
+
+function revisionReader(cwd: string, revision: string): ReadRegistrySource {
+	const repo = vcs.requireGit(cwd);
+	return async file => {
+		if (revision === "WORKTREE") return Bun.file(path.join(cwd, file)).text();
+		const blob = await repo.showBlob(`${revision}:${file}`);
+		if (blob.truncated) throw new Error(`Truncated registry ${revision}:${file}`);
+		return blob.data.toString();
+	};
+}
+
+export async function generateUiProvenance(
+	options: { previousUpstream: string; upstream: string; forkRevision: string },
+	cwd = path.resolve(import.meta.dir, ".."),
+): Promise<{ fork: UiRegistryInventory; newUpstream: UiRegistryInventory }> {
+	const [previous, upstream, fork] = await Promise.all([
+		readUiRegistryInventory(revisionReader(cwd, options.previousUpstream)),
+		readUiRegistryInventory(revisionReader(cwd, options.upstream)),
+		readUiRegistryInventory(revisionReader(cwd, options.forkRevision)),
+	]);
+	const difference = (left: UiRegistryInventory, right: UiRegistryInventory): UiRegistryInventory => ({
+		keybindings: left.keybindings.filter(id => !right.keybindings.includes(id)),
+		statusSegments: left.statusSegments.filter(id => !right.statusSegments.includes(id)),
+		roles: left.roles.filter(id => !right.roles.includes(id)),
+		composerShapes: left.composerShapes.filter(id => !right.composerShapes.includes(id)),
+	});
+	return { fork: difference(fork, upstream), newUpstream: difference(upstream, previous) };
+}
+
 export async function generateProvenance(
 	options: { previousUpstream: string; upstream: string; forkRevision: string },
 	cwd = path.resolve(import.meta.dir, ".."),
 ): Promise<ProvenanceData> {
-	const repo = vcs.requireGit(cwd);
-	const readRevision =
-		(revision: string): ReadRegistrySource =>
-		async file => {
-			if (revision === "WORKTREE") return Bun.file(path.join(cwd, file)).text();
-			const blob = await repo.showBlob(`${revision}:${file}`);
-			if (blob.truncated) throw new Error(`Truncated registry ${revision}:${file}`);
-			return blob.data.toString();
-		};
+	const readRevision = (revision: string): ReadRegistrySource => revisionReader(cwd, revision);
 	const [previous, upstream, fork] = await Promise.all([
 		readRegistryInventory(readRevision(options.previousUpstream)),
 		readRegistryInventory(readRevision(options.upstream)),
@@ -271,6 +349,12 @@ if (import.meta.main) {
 		path.resolve(import.meta.dir, "../packages/coding-agent/src/config/entry-provenance.json"),
 		`${JSON.stringify(data, null, 2)}\n`,
 	);
+	const ui = await generateUiProvenance({ previousUpstream, upstream, forkRevision });
+	await Bun.write(
+		path.resolve(import.meta.dir, "../packages/tui/src/theme/ui-entry-provenance.json"),
+		`${JSON.stringify(ui, null, 2)}\n`,
+	);
+	console.log(`UI provenance: ${JSON.stringify(ui)}`);
 	console.log(
 		`Fork: ${data.fork.settings.length} settings, ${data.fork.commands.length} commands; upstream: ${data.newUpstream.settings.length} settings, ${data.newUpstream.commands.length} commands`,
 	);

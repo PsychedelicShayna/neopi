@@ -4,7 +4,7 @@
 
 ### Added
 
-- Settings and command suggestions can show themed fork and latest-upstream provenance marks without changing command completion values.
+- Settings, command suggestions, hotkey help, role pickers and status-line widget lists can show themed fork and latest-upstream provenance marks without changing entry identifiers.
 - `/advisor configure` lists every loaded file with an advisor preview, whole-file toggles, exact-file editing, and bulk enabled-state actions ([#323](https://github.com/PsychedelicShayna/neopi/issues/323)).
 - New and cloned advisors receive separate hidden identities so role activation sets remain attached after renames ([#89](https://github.com/PsychedelicShayna/neopi/issues/89)).
 - Model effort-rule editors now let you include or exclude native `off` reasoning levels ([#498](https://github.com/PsychedelicShayna/neopi/issues/498)).
