@@ -113,6 +113,14 @@ export class RpcSessionEventForwarder {
 	#bindingGeneration = 0;
 	readonly #pendingEntryMessages = new Map<string, string>();
 	readonly #output: (frame: RpcProjectedSessionEventFrame) => void;
+	/** Started calls and their latest display update; a late viewer missed these live frames. */
+	readonly #activeTools = new Map<
+		string,
+		{
+			start: Extract<AgentSessionEvent, { type: "tool_execution_start" }>;
+			update?: Extract<AgentSessionEvent, { type: "tool_execution_update" }>;
+		}
+	>();
 
 	constructor(output: (frame: RpcProjectedSessionEventFrame) => void) {
 		this.#output = output;
@@ -146,22 +154,34 @@ export class RpcSessionEventForwarder {
 		const messageEntryIds = getDurableMessageEntryIdentities(manager);
 		this.#emit({ type: "journal_state", reason: "snapshot", ...identity, messageEntryIds });
 		const current = manager.getJournalIdentity();
-		if (streamMessage?.role !== "assistant" || session.isSessionTransitioning ||
-			generation !== this.#bindingGeneration || revision !== this.#messageRevision ||
-			current.sessionId !== identity.sessionId || current.sessionFile !== identity.sessionFile ||
-			current.leafId !== identity.leafId) return current;
-		let messageId = this.#assistantMessageId;
-		if (messageId === undefined) {
-			messageId = observeLiveMessageId(manager, streamMessage);
-			this.#assistantMessageId = messageId;
-			this.#openMessageIds.push(messageId);
+		if (
+			session.isSessionTransitioning ||
+			generation !== this.#bindingGeneration ||
+			revision !== this.#messageRevision ||
+			current.sessionId !== identity.sessionId ||
+			current.sessionFile !== identity.sessionFile ||
+			current.leafId !== identity.leafId
+		)
+			return current;
+		if (streamMessage?.role === "assistant") {
+			let messageId = this.#assistantMessageId;
+			if (messageId === undefined) {
+				messageId = observeLiveMessageId(manager, streamMessage);
+				this.#assistantMessageId = messageId;
+				this.#openMessageIds.push(messageId);
+			}
+			const obfuscator = session.obfuscator;
+			const content = obfuscator
+				? deobfuscateAssistantContent(obfuscator, streamMessage.content)
+				: streamMessage.content;
+			const message = content === streamMessage.content ? streamMessage : { ...streamMessage, content };
+			this.#emit({ type: "message_start", snapshot: true, ...identity, messageId, message });
 		}
-		const obfuscator = session.obfuscator;
-		const content = obfuscator
-			? deobfuscateAssistantContent(obfuscator, streamMessage.content)
-			: streamMessage.content;
-		const message = content === streamMessage.content ? streamMessage : { ...streamMessage, content };
-		this.#emit({ type: "message_start", snapshot: true, ...identity, messageId, message });
+		// Tools keep running after the assistant's tool-call message ended; no streamMessage is required.
+		for (const tool of this.#activeTools.values()) {
+			this.#emit({ ...tool.start, snapshot: true });
+			if (tool.update) this.#emit({ ...tool.update, snapshot: true });
+		}
 		return manager.getJournalIdentity();
 	}
 
@@ -180,6 +200,7 @@ export class RpcSessionEventForwarder {
 		this.#assistantMessageId = undefined;
 		this.#pendingEntryMessages.clear();
 		this.#endedMessages = new WeakMap();
+		this.#activeTools.clear();
 	}
 
 	#journalEvent(event: SessionJournalEvent): void {
@@ -207,11 +228,33 @@ export class RpcSessionEventForwarder {
 	}
 
 	forward(event: AgentSessionEvent): void {
-		if (event.type === "message_start" || event.type === "message_update" ||
-			event.type === "message_end" || event.type === "agent_end") this.#messageRevision++;
+		switch (event.type) {
+			case "tool_execution_start":
+				this.#activeTools.set(event.toolCallId, { start: event });
+				break;
+			case "tool_execution_update": {
+				const tool = this.#activeTools.get(event.toolCallId);
+				if (tool) tool.update = event;
+				break;
+			}
+			case "tool_execution_end":
+				this.#activeTools.delete(event.toolCallId);
+				break;
+		}
+		if (
+			event.type === "message_start" ||
+			event.type === "message_update" ||
+			event.type === "message_end" ||
+			event.type === "agent_end"
+		)
+			this.#messageRevision++;
 		// A subscription snapshot or update may beat the session's delayed start notification.
-		if (event.type === "message_start" && event.message.role === "assistant" &&
-			this.#assistantMessageId !== undefined) return;
+		if (
+			event.type === "message_start" &&
+			event.message.role === "assistant" &&
+			this.#assistantMessageId !== undefined
+		)
+			return;
 		const generation = this.#bindingGeneration;
 		const frame = this.#stamp(event);
 		if (event.type === "message_end" && frame.type === "message_end" && this.#manager) {
@@ -248,7 +291,8 @@ export class RpcSessionEventForwarder {
 				return { ...event, messageId };
 			}
 			case "message_end": {
-				const messageId = this.#openMessageIds.pop() ?? this.#assistantMessageId ?? this.#mintMessageId(event.message);
+				const messageId =
+					this.#openMessageIds.pop() ?? this.#assistantMessageId ?? this.#mintMessageId(event.message);
 				if (event.message.role === "assistant") this.#assistantMessageId = undefined;
 				if (this.#manager) liveMessageId(this.#manager, event.message, messageId);
 				return { ...event, messageId };

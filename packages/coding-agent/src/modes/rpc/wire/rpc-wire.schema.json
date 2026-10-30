@@ -6704,6 +6704,9 @@
 				"args": {},
 				"intent": {
 					"type": "string"
+				},
+				"snapshot": {
+					"type": "boolean"
 				}
 			},
 			"required": [
@@ -6725,7 +6728,10 @@
 					"type": "string"
 				},
 				"args": {},
-				"partialResult": {}
+				"partialResult": {},
+				"snapshot": {
+					"type": "boolean"
+				}
 			},
 			"required": [
 				"type",

@@ -91,6 +91,79 @@ function committed(events: readonly SessionJournalEvent[]): string[] {
 }
 
 describe("native journal notifications", () => {
+	test("snapshot replays running tools and their latest partial output without an assistant in flight", async () => {
+		const manager = SessionManager.inMemory();
+		const live = transport(manager);
+		const start = {
+			type: "tool_execution_start" as const,
+			toolCallId: "tool-1",
+			toolName: "bash",
+			args: { command: "work" },
+		};
+		live.forwarder.forward(start);
+		live.forwarder.forward({
+			type: "tool_execution_update",
+			toolCallId: "tool-1",
+			toolName: "bash",
+			args: start.args,
+			partialResult: { content: [{ type: "text", text: "old output" }], details: {} },
+		});
+		const update = {
+			type: "tool_execution_update" as const,
+			toolCallId: "tool-1",
+			toolName: "bash",
+			args: start.args,
+			partialResult: { content: [{ type: "text" as const, text: "latest output" }], details: {} },
+		};
+		live.forwarder.forward(update);
+		live.frames.length = 0;
+		live.forwarder.snapshotJournal(live.source);
+		expect(live.frames).toMatchObject([
+			{ type: "journal_state", reason: "snapshot" },
+			{ ...start, snapshot: true },
+			{ ...update, snapshot: true },
+		]);
+
+		live.forwarder.forward({
+			type: "tool_execution_end",
+			toolCallId: "tool-1",
+			toolName: "bash",
+			result: { content: [{ type: "text", text: "done" }], details: {} },
+			isError: false,
+		});
+		live.frames.length = 0;
+		live.forwarder.snapshotJournal(live.source);
+		expect(live.frames.map(frame => frame.type)).toEqual(["journal_state"]);
+
+		live.forwarder.forward(start);
+		await manager.newSession();
+		live.frames.length = 0;
+		live.forwarder.snapshotJournal(live.source);
+		expect(live.frames.map(frame => frame.type)).toEqual(["journal_state"]);
+		live.forwarder.dispose();
+		await manager.close();
+	});
+
+	test("tool snapshot tracking survives an event filter without bypassing the filter", async () => {
+		const manager = SessionManager.inMemory();
+		const live = transport(manager);
+		live.forwarder.setFilter(["journal_state"]);
+		live.forwarder.forward({ type: "tool_execution_start", toolCallId: "filtered-tool", toolName: "read", args: {} });
+		live.frames.length = 0;
+		live.forwarder.snapshotJournal(live.source);
+		expect(live.frames.map(frame => frame.type)).toEqual(["journal_state"]);
+		live.forwarder.setFilter(null);
+		live.frames.length = 0;
+		live.forwarder.snapshotJournal(live.source);
+		expect(live.frames.at(-1)).toMatchObject({
+			type: "tool_execution_start",
+			toolCallId: "filtered-tool",
+			snapshot: true,
+		});
+		live.forwarder.dispose();
+		await manager.close();
+	});
+
 	test("append subscribers coexist, unsubscribe independently and cannot break other observers", async () => {
 		const manager = SessionManager.inMemory();
 		const first: string[] = [];

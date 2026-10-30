@@ -72,6 +72,29 @@ describe("SessionRelay", () => {
 		]);
 	});
 
+	it("running-tool snapshot frames reach only the attaching viewer", () => {
+		const h = harness();
+		const a = h.viewer("A");
+		h.attach(a.v);
+		const start = { type: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: { command: "work" } };
+		h.relay.fromChild(start);
+		const before = a.frames.length;
+		const b = h.viewer("B");
+		h.relay.attach(b.v);
+		const request = h.toChild.findLast(frame => frame.type === "snapshot_session_journal")!;
+		h.relay.fromChild({ type: "journal_state", reason: "snapshot", leafId: "L" });
+		h.relay.fromChild({ ...start, snapshot: true });
+		const partial = { type: "tool_execution_update", toolCallId: "t1", partialResult: "partial", snapshot: true };
+		h.relay.fromChild(partial);
+		h.relay.fromChild({ type: "response", id: request.id, success: true, data: { leafId: "L" } });
+		expect(a.frames).toHaveLength(before);
+		expect(b.frames.filter(frame => frame.snapshot === true)).toEqual([{ ...start, snapshot: true }, partial]);
+		const end = { type: "tool_execution_end", toolCallId: "t1", result: "done" };
+		h.relay.fromChild(end);
+		expect(a.frames.at(-1)).toEqual(end);
+		expect(b.frames.at(-1)).toEqual(end);
+	});
+
 	it("routes concurrent requests with colliding client ids to their askers only", () => {
 		const h = harness();
 		const a = h.viewer("A");

@@ -5046,6 +5046,8 @@ pub struct ToolExecutionStartEvent {
 	pub args: Option<Value>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub intent: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub snapshot: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -5058,6 +5060,8 @@ pub struct ToolExecutionUpdateEvent {
 	pub args: Option<Value>,
 	#[serde(rename = "partialResult", default, skip_serializing_if = "Option::is_none")]
 	pub partial_result: Option<Value>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub snapshot: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

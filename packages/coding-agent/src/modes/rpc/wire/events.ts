@@ -6,7 +6,10 @@
 import { absentAs, doc, type WireDefs } from "./dsl";
 
 const JSON_OBJECT = "Record<string, unknown>";
-const MESSAGE_ID = doc("string", "Opaque live identity shared by one message's snapshot, updates and end across the native owner's transport observers; unique across native owner incarnations, including reopening the same journal after restart. Not a journal entry ID; do not parse its format.");
+const MESSAGE_ID = doc(
+	"string",
+	"Opaque live identity shared by one message's snapshot, updates and end across the native owner's transport observers; unique across native owner incarnations, including reopening the same journal after restart. Not a journal entry ID; do not parse its format.",
+);
 const JOURNAL_IDENTITY = { sessionId: "string", sessionFile: "string | null", leafId: "string | null" };
 const MIXTURE_TRACE_HEADER = {
 	v: "number.integer",
@@ -26,14 +29,24 @@ export const eventDefs = {
 
 	MessageEntryIdentity: { messageId: MESSAGE_ID, entryId: "string" },
 	JournalStateEvent: {
-		type: "'journal_state'", ...JOURNAL_IDENTITY, reason: "'snapshot' | 'identity' | 'leaf'",
-		"messageEntryIds?": doc("MessageEntryIdentity[]", "Snapshot-only durable associations among the last 256 live messages assigned entry IDs by this native owner. Retained across observer reconnects, cleared on session identity change or process restart; absence is not evidence a message was not persisted."),
+		type: "'journal_state'",
+		...JOURNAL_IDENTITY,
+		reason: "'snapshot' | 'identity' | 'leaf'",
+		"messageEntryIds?": doc(
+			"MessageEntryIdentity[]",
+			"Snapshot-only durable associations among the last 256 live messages assigned entry IDs by this native owner. Retained across observer reconnects, cleared on session identity change or process restart; absence is not evidence a message was not persisted.",
+		),
 	},
 	JournalEntryEvent: {
-		type: "'journal_entry'", ...JOURNAL_IDENTITY, entry: JSON_OBJECT,
+		type: "'journal_entry'",
+		...JOURNAL_IDENTITY,
+		entry: JSON_OBJECT,
 	},
 	MessagePersistedEvent: {
-		type: "'message_persisted'", ...JOURNAL_IDENTITY, messageId: MESSAGE_ID, entryId: "string",
+		type: "'message_persisted'",
+		...JOURNAL_IDENTITY,
+		messageId: MESSAGE_ID,
+		entryId: "string",
 	},
 	AdvisorMessageEvent: { type: "'advisor_message'", advisor: "string", slug: "string", message: "AgentMessage" },
 	RunOwnersJoinedEvent: { type: "'run_owners_joined'", owners: "string[]", agentStarts: "number.integer" },
@@ -121,7 +134,10 @@ export const eventDefs = {
 		type: "'agent_start'",
 		"runOwners?": "string[]",
 		"agentStarts?": "number.integer",
-		"resumedToolCallIds?": doc("string[]", "Calls of an unpaired assistant tail a continued run executes before its first model request."),
+		"resumedToolCallIds?": doc(
+			"string[]",
+			"Calls of an unpaired assistant tail a continued run executes before its first model request.",
+		),
 	},
 	AgentEndEvent: {
 		type: "'agent_end'",
@@ -183,6 +199,7 @@ export const eventDefs = {
 		toolName: "string",
 		"args?": "unknown",
 		"intent?": "string",
+		"snapshot?": "boolean",
 	},
 	ToolExecutionUpdateEvent: {
 		type: "'tool_execution_update'",
@@ -190,6 +207,7 @@ export const eventDefs = {
 		toolName: "string",
 		"args?": "unknown",
 		"partialResult?": "unknown",
+		"snapshot?": "boolean",
 	},
 	ToolStreamUpdateEvent: {
 		type: "'tool_stream_update'",

@@ -1036,11 +1036,17 @@ export type RpcMessagePersistedFrame = SessionJournalIdentity & {
 export type RpcJournalStateFrame = Extract<SessionJournalEvent, { type: "journal_state" }> & {
 	messageEntryIds?: MessageEntryIdentity[];
 };
+/** In-flight tool display state replayed by an ordered journal snapshot, not a new execution. */
+export type RpcToolSnapshotFrame = Extract<
+	AgentSessionEvent,
+	{ type: "tool_execution_start" | "tool_execution_update" }
+> & { snapshot: true };
 export type RpcJournalEventFrame =
 	| Exclude<SessionJournalEvent, { type: "journal_state" }>
 	| RpcJournalStateFrame
 	| RpcMessagePersistedFrame
-	| RpcMessageSnapshotFrame;
+	| RpcMessageSnapshotFrame
+	| RpcToolSnapshotFrame;
 
 /** Session event as written to stdout by default: message lifecycle events carry a `messageId`. */
 export type RpcAgentSessionEventFrame =

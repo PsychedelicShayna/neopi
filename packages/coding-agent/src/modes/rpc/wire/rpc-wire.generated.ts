@@ -1490,6 +1490,7 @@ export interface ToolExecutionStartEvent {
 	toolName: string;
 	args?: unknown;
 	intent?: string;
+	snapshot?: boolean;
 }
 
 export interface ToolExecutionUpdateEvent {
@@ -1498,6 +1499,7 @@ export interface ToolExecutionUpdateEvent {
 	toolName: string;
 	args?: unknown;
 	partialResult?: unknown;
+	snapshot?: boolean;
 }
 
 export interface ToolStreamUpdateEvent {

@@ -1786,6 +1786,7 @@ class ToolExecutionStartEvent:
     tool_name: str
     args: JsonValue | None = None
     intent: str | None = None
+    snapshot: bool | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -1795,6 +1796,7 @@ class ToolExecutionUpdateEvent:
     tool_name: str
     args: JsonValue | None = None
     partial_result: JsonValue | None = None
+    snapshot: bool | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -4104,6 +4106,7 @@ def parse_tool_execution_start_event(value: object, path: str = "ToolExecutionSt
         tool_name=required(payload, "toolName", decode_str, path),
         args=optional(payload, "args", decode_json, path),
         intent=optional(payload, "intent", decode_str, path),
+        snapshot=optional(payload, "snapshot", decode_bool, path),
     )
 
 
@@ -4115,6 +4118,7 @@ def parse_tool_execution_update_event(value: object, path: str = "ToolExecutionU
         tool_name=required(payload, "toolName", decode_str, path),
         args=optional(payload, "args", decode_json, path),
         partial_result=optional(payload, "partialResult", decode_json, path),
+        snapshot=optional(payload, "snapshot", decode_bool, path),
     )
 
 

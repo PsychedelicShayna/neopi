@@ -10,6 +10,7 @@
 ### Added
 
 - Added an opt-in session daemon: with `daemon.enabled` on, plain `npi` opens a session hub listing sessions that keep running in the background; `npi hub` and `npi new` work regardless, several terminals can attach to one session, and `npi --standalone` runs a session without the daemon.
+- Carry in-flight tool arguments and latest partial output in rpc-ui attach snapshots, without replaying snapshot frames to existing daemon viewers. Apply remote history/state at the ordered response cut, and reject pending viewer requests when their connection closes (implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).
 - Settings, slash-command suggestions, hotkey help, model roles and status-line widgets mark fork additions with a crescent and the latest upstream release's additions with a star, while retaining command type icons.
 - Choose advisor delivery timing independently for nits, concerns, and blockers in Settings → Model → Advisor; nits wait for the actual run end by default, while concerns and blockers arrive at safe tool boundaries without cancelling work.
 - Explicitly revive killed subagents from their saved transcripts in the Agent Hub; opening a transcript, focusing an agent, or sending ordinary IRC/chat no longer undoes a kill.

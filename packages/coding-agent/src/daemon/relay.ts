@@ -221,7 +221,11 @@ export class SessionRelay {
 			if (!snapshot.gone) snapshot.viewer.send(frame);
 			return;
 		}
-		if (snapshot?.cut && type === "message_start" && frame.snapshot === true) {
+		if (
+			snapshot?.cut &&
+			frame.snapshot === true &&
+			(type === "message_start" || type === "tool_execution_start" || type === "tool_execution_update")
+		) {
 			if (!snapshot.gone) snapshot.viewer.send(frame);
 			return;
 		}

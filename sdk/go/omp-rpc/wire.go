@@ -6866,6 +6866,7 @@ type ToolExecutionStartEvent struct {
 	ToolName   string          `json:"toolName"`
 	Args       json.RawMessage `json:"args,omitempty"`
 	Intent     *string         `json:"intent,omitempty"`
+	Snapshot   *bool           `json:"snapshot,omitempty"`
 }
 
 func (v *ToolExecutionStartEvent) UnmarshalJSON(data []byte) error {
@@ -6880,6 +6881,7 @@ func (v *ToolExecutionStartEvent) decodeFrom(raw map[string]json.RawMessage) err
 	d.required("toolName", &out.ToolName)
 	d.optional("args", &out.Args)
 	d.optional("intent", &out.Intent)
+	d.optional("snapshot", &out.Snapshot)
 	if d.err != nil {
 		return d.err
 	}
@@ -6897,6 +6899,7 @@ type ToolExecutionUpdateEvent struct {
 	ToolName      string          `json:"toolName"`
 	Args          json.RawMessage `json:"args,omitempty"`
 	PartialResult json.RawMessage `json:"partialResult,omitempty"`
+	Snapshot      *bool           `json:"snapshot,omitempty"`
 }
 
 func (v *ToolExecutionUpdateEvent) UnmarshalJSON(data []byte) error {
@@ -6911,6 +6914,7 @@ func (v *ToolExecutionUpdateEvent) decodeFrom(raw map[string]json.RawMessage) er
 	d.required("toolName", &out.ToolName)
 	d.optional("args", &out.Args)
 	d.optional("partialResult", &out.PartialResult)
+	d.optional("snapshot", &out.Snapshot)
 	if d.err != nil {
 		return d.err
 	}

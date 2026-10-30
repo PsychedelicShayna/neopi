@@ -533,8 +533,14 @@ contains identity and bounded recovery mappings, not a second copy of the journa
 
 For a new watcher on an already connected runtime, register the local event
 listener, then send `snapshot_session_journal` before reading history pages.
-The command emits `journal_state` and any current assistant snapshot before
-its response. Its response data is `{ sessionId, sessionFile, leafId }`.
+The command emits `journal_state`, any current assistant snapshot, and the
+`tool_execution_start` plus latest `tool_execution_update` for each still-running
+call before its response. Tool replay frames carry `snapshot: true`; they describe
+an existing execution, never a request to run it again. Their original call IDs,
+arguments and latest partial results are preserved, and they respect the event
+filter. A tool can be running even when no assistant message is streaming.
+Snapshot tool frames carry the ordinary tool-event fields rather than journal
+identity fields. Its response data is `{ sessionId, sessionFile, leafId }`.
 It never replaces subscriptions or restarts a stream. Repeated snapshots and
 new control connections reuse the native owner's current `messageId` across
 stdio/control updates, end and persistence receipt.
