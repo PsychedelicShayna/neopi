@@ -1333,7 +1333,7 @@ export class ExtensionUiController {
 					...editorOptions,
 					externalEditor: this.ctx.isAttachedView ? async () => {
 						this.ctx.showWarning("External editors are not available in attached view yet.");
-						return undefined;
+						return null;
 					} : text => editDialogExternally(text, this.ctx.session.environment.snapshot()),
 				},
 			);

@@ -22,8 +22,17 @@ const toolLabels = ["viewer-live-card", "viewer-late-card"] as const;
 
 /** The production render-cli sink: no real TTY input, output, title or progress. */
 class SinkTerminal implements Terminal {
-	start(): void {}
-	stop(): void {}
+	#onInput: ((data: string) => void) | undefined;
+	start(onInput: (data: string) => void): void {
+		this.#onInput = onInput;
+	}
+	stop(): void {
+		this.#onInput = undefined;
+	}
+	input(data: string): void {
+		if (!this.#onInput) throw new Error("viewer terminal is not accepting input");
+		this.#onInput(data);
+	}
 	async drainInput(): Promise<void> {}
 	write(_data: string): void {}
 	get columns(): number {
@@ -90,6 +99,8 @@ interface Viewer {
 	mode: InteractiveMode;
 	composer: Composer;
 	scheduler: DrainScheduler;
+	terminal: SinkTerminal;
+	detached: boolean;
 }
 
 async function until(check: () => boolean | Promise<boolean>, description: string, ms = 60_000): Promise<void> {
@@ -171,7 +182,8 @@ describe("InteractiveMode attached to a real daemon session", () => {
 		const viewers: Viewer[] = [];
 		let daemon: SessionDaemon | undefined;
 		let provider: Bun.Subprocess<"pipe", "pipe", "pipe"> | undefined;
-		let providerStderr: Promise<string> | undefined;
+		let providerStderr: Promise<void> | undefined;
+		let providerErrors = "";
 
 		async function connect(): Promise<SessionDaemonClient> {
 			if (!daemon) throw new Error("test daemon has not started");
@@ -187,8 +199,9 @@ describe("InteractiveMode attached to a real daemon session", () => {
 		async function openViewer(id: string): Promise<Viewer> {
 			const remote = await attach(id);
 			const scheduler = new DrainScheduler();
+			const terminal = new SinkTerminal();
 			const composer = new Composer({
-				terminal: new SinkTerminal(),
+				terminal,
 				tuiOptions: { renderScheduler: scheduler },
 				preferences: { quiet: true },
 			});
@@ -203,9 +216,9 @@ describe("InteractiveMode attached to a real daemon session", () => {
 				composer,
 				undefined,
 				undefined,
-				{ settings },
+				{ settings, onDetach: () => { viewer.detached = true; } },
 			);
-			const viewer = { remote, mode, composer, scheduler };
+			const viewer: Viewer = { remote, mode, composer, scheduler, terminal, detached: false };
 			viewers.push(viewer);
 			await mode.init({ suppressWelcomeIntro: true });
 			await mode.renderInitialMessages();
@@ -229,7 +242,12 @@ describe("InteractiveMode attached to a real daemon session", () => {
 				stdout: "pipe",
 				stderr: "pipe",
 			});
-			providerStderr = new Response(provider.stderr).text();
+			const providerErrorStream = provider.stderr;
+			providerStderr = (async () => {
+				const decoder = new TextDecoder();
+				for await (const chunk of providerErrorStream) providerErrors += decoder.decode(chunk, { stream: true });
+				providerErrors += decoder.decode();
+			})();
 			let ready = "";
 			for await (const line of readLines(provider.stdout, AbortSignal.timeout(10_000))) {
 				ready = new TextDecoder().decode(line);
@@ -289,9 +307,10 @@ describe("InteractiveMode attached to a real daemon session", () => {
 
 			// No viewer exists when this second real bash child starts. The next
 			// InteractiveMode must rebuild its pending card from the attach cut.
-			first.mode.stop();
+			first.terminal.input("\x18");
+			first.terminal.input("d");
+			await until(() => first.detached, "Ctrl+X d viewer detach", 5_000);
 			viewers.splice(viewers.indexOf(first), 1);
-			await first.remote.dispose();
 			remotes.splice(remotes.indexOf(first.remote), 1);
 			await control.prompt("run_tool_late");
 			await until(() => Bun.file(path.join(gates, "viewer-late-card.started")).exists(), "detached bash child start");
@@ -310,6 +329,24 @@ describe("InteractiveMode attached to a real daemon session", () => {
 			once(completed, "prior-history-reply");
 			once(completed, "live-first-chunk live-final-chunk");
 			expect(completed.split("--tool").length - 1).toBe(2);
+		} catch (error) {
+			const outputs = viewers.map(viewer => {
+				try {
+					return transcript(viewer);
+				} catch (renderError) {
+					return `Unable to render diagnostic transcript: ${String(renderError)}`;
+				}
+			});
+			throw new Error(
+				[
+					error instanceof Error ? error.message : String(error),
+					`Provider stderr:\n${providerErrors}`,
+					`Hosted sessions:\n${JSON.stringify(daemon?.list() ?? [], null, 2)}`,
+					`Remote messages:\n${JSON.stringify(remotes.map(remote => remote.messages), null, 2)}`,
+					`Rendered transcripts:\n${outputs.join("\n--- viewer ---\n")}`,
+				].join("\n\n"),
+				{ cause: error },
+			);
 		} finally {
 			try {
 				await Bun.write(path.join(gates, "stream.release"), "release");

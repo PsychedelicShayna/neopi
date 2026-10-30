@@ -513,6 +513,10 @@ export class EventController {
 		return this.ctx.transcriptSession ?? this.ctx.viewSession;
 	}
 
+	get displaySettings() {
+		return this.ctx.isAttachedView ? this.ctx.settings : settings;
+	}
+
 	/** Surface an idle recap reply in the transcript as a one-line {@link RecapNotice}; a blank reply mounts nothing. */
 	presentIdleRecap(reply: string): void {
 		const recap = previewLine(reply, TRUNCATE_LENGTHS.RECAP);
@@ -842,7 +846,7 @@ export class EventController {
 		if (images.length === 0 && !mediaPath) return false;
 		assistantComponent.setToolResultImages(toolCallId, images, mediaPath);
 		// A media-only result (a model, a PDF) still settles through the read group.
-		return images.length > 0 && cfgTerminalShowImages.get(settings);
+		return images.length > 0 && cfgTerminalShowImages.get(this.displaySettings);
 	}
 
 	#insertAfterTranscriptComponent(anchor: Component | undefined, component: Component): boolean {
@@ -1080,7 +1084,7 @@ export class EventController {
 		this.#pinnedErrorComponent = undefined;
 		this.#pinnedErrorMessage = undefined;
 		this.#restorePinnedErrorInline = true;
-		this.#retryPending = this.transcriptSession.isRetrying;
+		this.#retryPending = this.transcriptSession.isRetrying ?? false;
 		this.composerPrediction.cancel();
 		for (const timer of this.#ircExpiryTimers.values()) {
 			clearTimeout(timer);
@@ -1120,6 +1124,7 @@ export class EventController {
 	}
 
 	async handleEvent(event: AgentSessionEvent): Promise<void> {
+		if (this.ctx.isAttachedView && !this.ctx.isInitialized) return;
 		// Attached viewers consume transcript events, not hosted-runtime controls.
 		// Consent dialogs are routed by the native rpc-ui interaction bridge.
 		if (this.ctx.isAttachedView && ![
@@ -1601,8 +1606,8 @@ export class EventController {
 	 */
 	#vocalizeDelta(event: Extract<AgentSessionEvent, { type: "message_update" }>): void {
 		if (this.ctx.localVoiceActive) return;
-		if (!cfgSpeechEnabled.get(settings)) return;
-		const mode = cfgSpeechMode.get(settings);
+		if (!cfgSpeechEnabled.get(this.displaySettings)) return;
+		const mode = cfgSpeechMode.get(this.displaySettings);
 		const delta = event.assistantMessageEvent;
 		if (delta.type === "text_delta" && (mode === "assistant" || mode === "all")) {
 			vocalizer.pushDelta(delta.delta);
@@ -1618,8 +1623,8 @@ export class EventController {
 	 */
 	#handleTurnEnd(event: Extract<AgentSessionEvent, { type: "turn_end" }>): void {
 		if (this.ctx.localVoiceActive) return;
-		if (!cfgSpeechEnabled.get(settings)) return;
-		if (cfgSpeechMode.get(settings) !== "yield") {
+		if (!cfgSpeechEnabled.get(this.displaySettings)) return;
+		if (cfgSpeechMode.get(this.displaySettings) !== "yield") {
 			vocalizer.flush();
 			return;
 		}
@@ -1848,12 +1853,12 @@ export class EventController {
 			this.ctx.streamingComponent.setHideThinkingBlock(this.ctx.effectiveHideThinkingBlock);
 			this.#streamingReveal.resyncVisibility();
 		}
-		if (event.message.role === "assistant" && cfgSpeechEnabled.get(settings)) {
+		if (event.message.role === "assistant" && cfgSpeechEnabled.get(this.displaySettings)) {
 			if (event.message.stopReason === "aborted") {
 				// Esc / Ctrl+C / interrupt: stop speaking now and drop the trailing partial.
 				vocalizer.clear();
 			} else {
-				const mode = cfgSpeechMode.get(settings);
+				const mode = cfgSpeechMode.get(this.displaySettings);
 				// Speak the last partial sentence of a completed message; yield mode
 				// instead speaks the whole final message at turn end.
 				if (mode === "assistant" || mode === "all") vocalizer.flush();
@@ -1950,7 +1955,7 @@ export class EventController {
 			// meaningful prefix and this request read none of it back, flag the turn.
 			const usage = event.message.usage;
 			if (usage.cacheRead + usage.cacheWrite + usage.input > 0) {
-				if (cfgDisplayCacheMissMarker.get(settings)) {
+				if (cfgDisplayCacheMissMarker.get(this.displaySettings)) {
 					const invalidation = detectCacheInvalidation(this.ctx.lastAssistantUsage, usage);
 					if (invalidation) this.ctx.streamingComponent.setCacheInvalidation(invalidation);
 				}
@@ -1972,9 +1977,9 @@ export class EventController {
 			this.#lastAssistantComponent = lastPostToolAssistantComponent ?? this.ctx.streamingComponent;
 			const turnUsage = this.#turnUsage.add(event.message, this.#turnStartedAt);
 			if (turnUsage) this.#lastAssistantComponent.setTurnUsage(turnUsage);
-			if (cfgDisplayShowTokenUsage.get(settings) && assistantUsageIsBilled(event.message.usage)) {
+			if (cfgDisplayShowTokenUsage.get(this.displaySettings) && assistantUsageIsBilled(event.message.usage)) {
 				const readCallIds = groupedReadUsageCallIds(event.message);
-				const turnElapsed = cfgDisplayShowTurnTime.get(settings)
+				const turnElapsed = cfgDisplayShowTurnTime.get(this.displaySettings)
 					? turnElapsedMs(this.#turnStartedAt, event.message)
 					: undefined;
 				const usageAttached =
@@ -2131,8 +2136,8 @@ export class EventController {
 		const session = this.transcriptSession;
 		const tool = session.getToolByName?.(toolName);
 		if (!tool) return undefined;
-		const mode = cfgToolsApprovalMode.get(settings);
-		const userPolicies: Record<string, unknown> = cfgToolsApproval.get(settings);
+		const mode = cfgToolsApprovalMode.get(this.displaySettings);
+		const userPolicies: Record<string, unknown> = cfgToolsApproval.get(this.displaySettings);
 		const grants =
 			mode === "always-ask-cached"
 				? getApprovalGrants(settings.getAgentDir(), this.ctx.sessionManager.getSessionId())
@@ -3019,7 +3024,7 @@ export class EventController {
 		// protocol is negotiated — avoid a second legacy desktop/OSC-9 toast.
 		if (isWarpCliAgentProtocolActive()) return;
 
-		const notify = cfgErrorNotify.get(settings);
+		const notify = cfgErrorNotify.get(this.displaySettings);
 		if (notify === "off") return;
 
 		// Read the turn's own outcome from `agent_end.messages`, not the mutable
@@ -3041,7 +3046,7 @@ export class EventController {
 	}
 
 	sendCompletionNotification(event: Extract<AgentSessionEvent, { type: "agent_end" }>): void {
-		const notify = cfgCompletionNotify.get(settings);
+		const notify = cfgCompletionNotify.get(this.displaySettings);
 		if (notify === "off") return;
 
 		// Warp structured OSC 777 already drives native completion UX when the

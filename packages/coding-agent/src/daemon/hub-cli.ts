@@ -5,6 +5,7 @@
  * hosted session running.
  */
 import { ensureTheme } from "@oh-my-pi/pi-tui/theme";
+import { isSettingsInitialized, Settings } from "../config/settings";
 import { runInteractiveAttach } from "./interactive-attach";
 import { ensureSessionDaemon, type SessionDaemonClient } from "./client";
 import type { HostedSessionInfo } from "./server";
@@ -39,6 +40,7 @@ async function attachLoop(
 /** `npi hub`: list hosted sessions and attach. */
 export async function runHubCommand(cwd: string = process.cwd()): Promise<void> {
 	// `npi hub` is a subcommand: it can run before main() has initialised a theme.
+	if (!isSettingsInitialized()) await Settings.init({ cwd });
 	await ensureTheme();
 	const client = await ensureSessionDaemon();
 	try {
@@ -50,6 +52,7 @@ export async function runHubCommand(cwd: string = process.cwd()): Promise<void> 
 
 /** `npi new [-- launch args]`: create a hosted session and attach to it. */
 export async function runNewCommand(args: string[], cwd: string = process.cwd()): Promise<void> {
+	if (!isSettingsInitialized()) await Settings.init({ cwd });
 	await ensureTheme();
 	const client = await ensureSessionDaemon();
 	try {

@@ -32,7 +32,7 @@ export function createToolCallBlock(ctx: InteractiveModeContext, call: ToolCallB
 	return new ToolExecutionComponent(
 		call.name,
 		call.args,
-		{ useBuiltInRenderer: builtIn, showImages: cfgTerminalShowImages.get(settings) },
+		{ useBuiltInRenderer: builtIn, showImages: cfgTerminalShowImages.get(ctx.isAttachedView ? ctx.settings : settings) },
 		call.tool,
 		ctx.ui,
 		call.cwd,

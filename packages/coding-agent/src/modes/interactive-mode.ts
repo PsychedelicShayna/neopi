@@ -1441,7 +1441,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#remoteSession !== undefined;
 	}
 	get transcriptStreamMessage(): AgentMessage | undefined {
-		return this.#remoteSession ? this.#remoteSession.streamMessage : this.viewSession.agent.state.streamMessage;
+		return this.#remoteSession ? this.#remoteSession.streamMessage : (this.viewSession.agent.state.streamMessage ?? undefined);
 	}
 	refreshScopedModelsAfterLogin?: () => Promise<void>;
 	settings: Settings;
@@ -6694,8 +6694,9 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/** Apply the `tui.vimMode` setting to an editor and route Visual-mode yanks to the clipboard. */
 	#applyVimMode(editor: CustomEditor): void {
-		editor.setVimMode(cfgTuiVimMode.get(settings));
-		setMenuSearchVimMode(cfgTuiVimMode.get(settings));
+		const displaySettings = this.isAttachedView ? this.settings : settings;
+		editor.setVimMode(cfgTuiVimMode.get(displaySettings));
+		setMenuSearchVimMode(cfgTuiVimMode.get(displaySettings));
 		editor.onYank = text => {
 			void this.#copyYankToClipboard(text);
 		};
@@ -9219,9 +9220,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	}): Promise<void> {
 		// A focus switch replays another session's transcript: claim that session's link schemes first.
 		if (!this.isAttachedView) this.#applyExtensionLinks();
+		if (this.#remoteSession && !this.unsubscribe) this.#remoteSession.beginTranscriptReplay();
 		await this.#uiHelpers.renderInitialMessages(options);
 		if (this.isAttachedView && !this.unsubscribe) {
-			this.unsubscribe = this.#remoteSession!.subscribe(event => {
+			this.unsubscribe = this.#remoteSession!.subscribeTranscript(event => {
 				void this.#eventController.dispatchSessionEvent(event).catch(error => this.showError(String(error)));
 			});
 		}

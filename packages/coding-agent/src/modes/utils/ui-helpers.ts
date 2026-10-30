@@ -257,6 +257,10 @@ export class UiHelpers {
 		return this.ctx.transcriptSession ?? this.ctx.viewSession;
 	}
 
+	get displaySettings() {
+		return this.ctx.isAttachedView ? this.ctx.settings : settings;
+	}
+
 	/**
 	 * Show a status message in the chat.
 	 *
@@ -303,7 +307,7 @@ export class UiHelpers {
 					truncation: message.meta?.truncation,
 					artifactError: message.meta?.artifactError,
 					images: message.images,
-					showImages: cfgTerminalShowImages.get(settings),
+					showImages: cfgTerminalShowImages.get(this.displaySettings),
 				});
 				this.ctx.chatContainer.addChild(component);
 				break;
@@ -823,7 +827,7 @@ export class UiHelpers {
 					if (images.length > 0 && assistantComponent) {
 						assistantComponent.setToolResultImages(message.toolCallId, images, mediaPath);
 						const hasText = message.content.some(c => c.type === "text");
-						if (!hasText && cfgTerminalShowImages.get(settings)) {
+						if (!hasText && cfgTerminalShowImages.get(this.displaySettings)) {
 							if (pendingReadComponent) {
 								pendingReadComponent.updateResult(message, false, message.toolCallId);
 								this.ctx.pendingTools.delete(message.toolCallId);
@@ -1041,7 +1045,7 @@ export class UiHelpers {
 		// means the session was not actually rewound past it — bail before
 		// mutating anything.
 		const context = this.transcriptSession.buildTranscriptSessionContext({
-			collapseCompactedHistory: cfgDisplayCollapseCompacted.get(settings),
+			collapseCompactedHistory: cfgDisplayCollapseCompacted.get(this.displaySettings),
 		});
 		for (const remaining of context.messages) {
 			if (remaining === message) return false;
@@ -1125,7 +1129,7 @@ export class UiHelpers {
 		if (generation !== this.#replayGeneration) return;
 		// Collapsed replay keeps in-flight calls so pending tools remain routable during mid-turn rebuilds.
 		let context = this.transcriptSession.buildTranscriptSessionContext({
-			collapseCompactedHistory: cfgDisplayCollapseCompacted.get(settings),
+			collapseCompactedHistory: cfgDisplayCollapseCompacted.get(this.displaySettings),
 			keepInFlightToolCalls: this.transcriptSession.isStreaming,
 		});
 		let replayEntryCount = this.transcriptSession.sessionManager.getEntries().length;
@@ -1196,7 +1200,7 @@ export class UiHelpers {
 				// initialChatRendered; discard the stale partial tree and replay the current session
 				// once more instead of letting a reentrant synchronous rebuild interleave.
 				context = this.transcriptSession.buildTranscriptSessionContext({
-					collapseCompactedHistory: cfgDisplayCollapseCompacted.get(settings),
+					collapseCompactedHistory: cfgDisplayCollapseCompacted.get(this.displaySettings),
 					keepInFlightToolCalls: this.transcriptSession.isStreaming,
 				});
 				replayEntryCount = this.transcriptSession.sessionManager.getEntries().length;

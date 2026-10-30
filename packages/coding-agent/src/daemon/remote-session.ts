@@ -2,20 +2,18 @@
  * RemoteAgentSession: the session surface a renderer needs, served over a
  * daemon-attached rpc-ui connection instead of an in-process AgentSession.
  *
- * This is the path to running InteractiveMode against a hosted session. It
- * covers the members rpc-ui already serves: state, the event stream,
- * prompting/steering/abort, models, thinking, naming, compaction, messages and
- * the tools in flight. InteractiveMode reaches far more of AgentSession than
- * this (178 distinct members, plus sessionManager/settings/modelRegistry/agent);
- * the remainder is listed in the PR and lands as rpc-ui commands, not as a
- * second protocol.
+ * InteractiveMode consumes this adapter through InteractiveSessionViewer. Native
+ * journal entries and their selected leaf rebuild branch/compaction-aware history;
+ * rpc-ui lifecycle frames supply live messages and tool executions. Capabilities
+ * the protocol cannot supply (including tool provenance) remain absent.
  *
- * Attach cut (exactly once): rpc-ui writes events and responses to one ordered
- * stream, so a `message_end` seen before the `get_messages` response is already
- * in that response and one seen after it is not. Frames that arrive while
- * history loads are held; when it lands, lifecycle frames of messages and
- * tools that completed before the cut are dropped, the in-flight ones are
- * replayed to the first subscriber, and everything after the cut is live.
+ * Ordinary subscribers retain the ordered get_messages response cut: completed
+ * messages before that response are history, and subsequent frames are live.
+ * Transcript renderers instead call beginTranscriptReplay before asynchronous
+ * rendering, then subscribeTranscript afterward. That independent cut freezes the
+ * journal and display metadata together. Native durable message identities remove
+ * only lifecycle frames already represented by the frozen journal; frames arriving
+ * during rendering are replayed once after history, including running-tool starts.
  */
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { InteractiveSessionViewer } from "../modes/interactive-session-viewer";
@@ -24,6 +22,7 @@ import type { AgentSessionEvent } from "../session/agent-session-events";
 import { buildSessionContext, type SessionContext, type TranscriptSessionContextOptions } from "../session/session-context";
 import type { SessionEntry } from "../session/session-entries";
 import type { SessionJournalIdentity } from "../session/session-journal-events";
+import type { MessageEntryIdentity } from "../session/message-entry-ids";
 
 type Frame = Record<string, unknown>;
 
@@ -61,6 +60,18 @@ type Lifecycle = AgentSessionEvent & { messageId?: string };
 const MESSAGE_LIFECYCLE = new Set(["message_start", "message_update", "message_end"]);
 const TOOL_LIFECYCLE = new Set(["tool_execution_start", "tool_execution_update", "tool_execution_end"]);
 
+/** A viewer-owned, immutable initial rendering cut; the live projection continues behind it. */
+interface TranscriptReplaySnapshot {
+	entries: SessionEntry[];
+	entryIndex: Map<string, SessionEntry>;
+	leafId: string | null | undefined;
+	isStreaming: boolean;
+	messages: AgentMessage[];
+	streamMessage: AgentMessage | undefined;
+	toolCallIds: Set<string>;
+	toolUpdates: readonly Extract<AgentSessionEvent, { type: "tool_execution_update" }>[];
+}
+
 export class RemoteAgentSession implements InteractiveSessionViewer {
 	readonly #client: RemoteTransport;
 	readonly #attachedSessionId: string;
@@ -81,13 +92,18 @@ export class RemoteAgentSession implements InteractiveSessionViewer {
 	#beforeCut: Frame[] | undefined = [];
 	/** Frames nobody has consumed yet; flushed to the first subscriber. */
 	#replay: Frame[] = [];
+	#transcriptReplay: Frame[] = [];
+	#transcriptSubscribed = false;
+	#initialTranscript: TranscriptReplaySnapshot | undefined;
+	readonly #messageEntryIds = new Map<string, string>();
+	#disposePromise: Promise<void> | undefined;
 	readonly #unsubscribe: () => void;
 
 	private constructor(client: RemoteTransport, sessionId: string, cwd: string) {
 		this.#client = client;
 		this.#attachedSessionId = sessionId;
 		this.sessionManager = {
-			getEntries: () => [...this.#entries],
+			getEntries: () => [...(this.#initialTranscript?.entries ?? this.#entries)],
 			getCwd: () => cwd,
 			getSessionId: () => this.sessionId,
 			getSessionFile: () => this.sessionFile,
@@ -119,7 +135,7 @@ export class RemoteAgentSession implements InteractiveSessionViewer {
 		return this.#state?.sessionName;
 	}
 	get isStreaming(): boolean {
-		return this.#state?.isStreaming ?? false;
+		return this.#initialTranscript?.isStreaming ?? this.#state?.isStreaming ?? false;
 	}
 	get thinkingLevel(): AgentSession["thinkingLevel"] {
 		return this.#state?.thinkingLevel;
@@ -130,24 +146,32 @@ export class RemoteAgentSession implements InteractiveSessionViewer {
 	}
 	/** Completed messages: history at the cut plus every `message_end` since. */
 	get messages(): readonly AgentMessage[] {
-		return this.#messages;
+		return this.#initialTranscript?.messages ?? this.#messages;
 	}
 	/** The current unsaved assistant message, including an attach snapshot's partial content. */
 	get streamMessage(): AgentMessage | undefined {
-		return this.#streamMessage;
+		return this.#initialTranscript ? this.#initialTranscript.streamMessage : this.#streamMessage;
 	}
 
 	buildTranscriptSessionContext(options?: TranscriptSessionContextOptions): SessionContext {
-		return buildSessionContext(this.#entries, this.#leafId, this.#entryIndex, {
-			transcript: true,
-			collapseCompactedHistory: options?.collapseCompactedHistory,
-			inFlightToolCallIds:
-				options?.keepInFlightToolCalls === true && this.isStreaming ? new Set(this.#tools.keys()) : undefined,
-		});
+		const snapshot = this.#initialTranscript;
+		return buildSessionContext(
+			snapshot?.entries ?? this.#entries,
+			snapshot ? snapshot.leafId : this.#leafId,
+			snapshot?.entryIndex ?? this.#entryIndex,
+			{
+				transcript: true,
+				collapseCompactedHistory: options?.collapseCompactedHistory,
+				inFlightToolCallIds:
+					options?.keepInFlightToolCalls === true && this.isStreaming
+						? (snapshot?.toolCallIds ?? new Set(this.#tools.keys()))
+						: undefined,
+			},
+		);
 	}
 
 	activeToolExecutionUpdates(): readonly Extract<AgentSessionEvent, { type: "tool_execution_update" }>[] {
-		return [...this.#toolUpdates.values()];
+		return this.#initialTranscript?.toolUpdates ?? [...this.#toolUpdates.values()];
 	}
 	/** Tool calls started and not yet ended, in start order. */
 	get runningTools(): readonly RemoteToolExecution[] {
@@ -159,8 +183,73 @@ export class RemoteAgentSession implements InteractiveSessionViewer {
 	 * The first subscriber also receives the in-flight frames held since the cut.
 	 */
 	subscribe(listener: (event: Lifecycle) => void): () => void {
+		this.#transcriptSubscribed = true;
+		this.#initialTranscript = undefined;
+		this.#transcriptReplay = [];
+		this.#messageEntryIds.clear();
 		this.#listeners.add(listener);
 		for (const frame of this.#replay.splice(0)) listener(frame as Lifecycle);
+		return () => this.#listeners.delete(listener);
+	}
+
+	/**
+	 * Freeze the journal, selected leaf, stream state and tool display metadata
+	 * before the renderer's first await. getEntries and context builds keep this
+	 * same cut until subscribeTranscript, so convergence checks cannot absorb a
+	 * reply that will also arrive through the buffered live stream.
+	 *
+	 * Persistence acknowledgements and snapshot identities reconcile older message
+	 * lifecycles with the frozen entries. Running-tool starts remain replayable.
+	 * Repeated calls before handoff preserve the original cut; after handoff they
+	 * leave the live projection alone.
+	 */
+	beginTranscriptReplay(): void {
+		if (this.#initialTranscript || this.#transcriptSubscribed) return;
+		const entries = [...this.#entries];
+		const entryIndex = new Map(this.#entryIndex);
+		this.#initialTranscript = {
+			entries,
+			entryIndex,
+			leafId: this.#leafId,
+			isStreaming: this.isStreaming,
+			messages: [...this.#messages],
+			streamMessage: this.#streamMessage,
+			toolCallIds: new Set(this.#tools.keys()),
+			toolUpdates: [...this.#toolUpdates.values()],
+		};
+		const completedTools = new Set<string>();
+		for (const entry of entries) {
+			if (entry.type === "message" && entry.message.role === "toolResult")
+				completedTools.add(entry.message.toolCallId);
+		}
+		// Native persistence identities, not content or response timing, tell us
+		// which completed lifecycle frames are already represented by this journal.
+		this.#transcriptReplay = this.#transcriptReplay.filter(frame => {
+			if (MESSAGE_LIFECYCLE.has(String(frame.type)) && typeof frame.messageId === "string") {
+				const entryId = this.#messageEntryIds.get(frame.messageId);
+				if (entryId !== undefined && entryIndex.has(entryId)) return false;
+			}
+			if (TOOL_LIFECYCLE.has(String(frame.type)) && completedTools.has(String(frame.toolCallId)))
+				return this.#tools.has(String(frame.toolCallId));
+			return true;
+		});
+	}
+
+	/**
+	 * Release the frozen view only after initial history has finished rendering,
+	 * then synchronously deliver the independent transcript backlog in wire order.
+	 * Frames received during rendering stay live even when their entries have
+	 * already joined the underlying journal. Subsequent subscribers see live events
+	 * only, as with subscribe; neither subscription replays the other's backlog.
+	 */
+	subscribeTranscript(listener: (event: Lifecycle) => void): () => void {
+		if (this.#transcriptSubscribed) return this.subscribe(listener);
+		this.#transcriptSubscribed = true;
+		this.#initialTranscript = undefined;
+		this.#messageEntryIds.clear();
+		this.#listeners.add(listener);
+		this.#replay = [];
+		for (const frame of this.#transcriptReplay.splice(0)) listener(frame as Lifecycle);
 		return () => this.#listeners.delete(listener);
 	}
 
@@ -224,10 +313,16 @@ export class RemoteAgentSession implements InteractiveSessionViewer {
 	}
 
 	/** Detach from the hosted session; the session keeps running. */
-	async dispose(): Promise<void> {
+	dispose(): Promise<void> {
+		if (this.#disposePromise) return this.#disposePromise;
 		this.#unsubscribe();
 		this.#listeners.clear();
-		await this.#client.detach().catch(() => undefined);
+		this.#entriesGeneration++;
+		this.#initialTranscript = undefined;
+		this.#replay = [];
+		this.#transcriptReplay = [];
+		this.#disposePromise = this.#client.detach().catch(() => undefined);
+		return this.#disposePromise;
 	}
 
 	async #loadEntries(): Promise<void> {
@@ -272,6 +367,7 @@ export class RemoteAgentSession implements InteractiveSessionViewer {
 	}
 
 	#onFrame(frame: Frame): void {
+		if (!this.#transcriptSubscribed) this.#transcriptReplay.push(frame);
 		if (this.#beforeCut) {
 			this.#beforeCut.push(frame);
 			this.#track(frame);
@@ -295,6 +391,10 @@ export class RemoteAgentSession implements InteractiveSessionViewer {
 	/** Streaming flag and the running-tool set follow the stream, before and after the cut. */
 	#track(frame: Frame): void {
 		switch (frame.type) {
+			case "message_persisted":
+				if (!this.#transcriptSubscribed && typeof frame.messageId === "string" && typeof frame.entryId === "string")
+					this.#messageEntryIds.set(frame.messageId, frame.entryId);
+				return;
 			case "journal_state":
 			case "journal_entry": {
 				const identity = frame as unknown as SessionJournalIdentity;
@@ -315,6 +415,7 @@ export class RemoteAgentSession implements InteractiveSessionViewer {
 					this.#tools.clear();
 					this.#streamMessageId = undefined;
 					this.#toolUpdates.clear();
+					this.#messageEntryIds.clear();
 					void this.#loadEntries().catch(() => undefined);
 				}
 				if (frame.type === "journal_entry") {
@@ -323,6 +424,10 @@ export class RemoteAgentSession implements InteractiveSessionViewer {
 						this.#entries.push(entry);
 						this.#entryIndex.set(entry.id, entry);
 					}
+				}
+				if (!this.#transcriptSubscribed && frame.type === "journal_state" && Array.isArray(frame.messageEntryIds)) {
+					for (const identity of frame.messageEntryIds as MessageEntryIdentity[])
+						this.#messageEntryIds.set(identity.messageId, identity.entryId);
 				}
 				return;
 			}

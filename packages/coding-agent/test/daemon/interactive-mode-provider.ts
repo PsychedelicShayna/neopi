@@ -30,7 +30,11 @@ function scriptedReply(request: ChatRequest, gates: string): Reply {
 	const last = request.messages?.at(-1);
 	if (last?.role === "tool") return { text: "The gated command completed." };
 	const text = last?.role === "user" ? messageText(last.content) : "";
-	const label = text === "run_tool_live" ? "viewer-live-card" : text === "run_tool_late" ? "viewer-late-card" : undefined;
+	const label = text.includes("run_tool_live")
+		? "viewer-live-card"
+		: text.includes("run_tool_late")
+			? "viewer-late-card"
+			: undefined;
 	if (label) {
 		if (!request.tools?.some(tool => tool.function?.name === "bash")) throw new Error("bash was not offered");
 		return {
@@ -43,8 +47,8 @@ function scriptedReply(request: ChatRequest, gates: string): Reply {
 			},
 		};
 	}
-	if (text === "stream_reply") return { text: "live-first-chunk live-final-chunk" };
-	if (text === "seed_history") return { text: "prior-history-reply" };
+	if (text.includes("stream_reply")) return { text: "live-first-chunk live-final-chunk" };
+	if (text.includes("seed_history")) return { text: "prior-history-reply" };
 	throw new Error(`unexpected fixture prompt: ${text}`);
 }
 
@@ -133,7 +137,7 @@ async function runProvider(agentDir: string, gates: string): Promise<void> {
 			const reply = scriptedReply(body, gates);
 			if (!body.stream) throw new Error("viewer fixture requires streaming completions");
 			const last = body.messages?.at(-1);
-			if (last?.role === "user" && messageText(last.content) === "stream_reply") {
+			if (last?.role === "user" && messageText(last.content).includes("stream_reply")) {
 				return new Response(gatedStream(gates), { headers: { "content-type": "text/event-stream" } });
 			}
 			const events = completionChunks(reply).map(chunk => `data: ${JSON.stringify(chunk)}\n\n`);
