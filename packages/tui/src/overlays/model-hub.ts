@@ -1509,6 +1509,7 @@ export class ModelHubComponent implements Component {
 				rows.push({ kind: "role", role });
 				const chain = chains[role] ?? [];
 				for (let i = 0; i < chain.length; i++) {
+					if (query && !matchesText(chain[i])) continue;
 					rows.push({ kind: "fallback", role, chainIndex: i, selector: chain[i] });
 				}
 			}
@@ -1533,6 +1534,7 @@ export class ModelHubComponent implements Component {
 			const chain = chains[key] ?? [];
 			rows.push({ kind: "chainKey", role: key });
 			for (let i = 0; i < chain.length; i++) {
+				if (query && !matchesText(chain[i])) continue;
 				rows.push({ kind: "fallback", role: key, chainIndex: i, selector: chain[i] });
 			}
 		}
