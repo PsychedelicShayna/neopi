@@ -39,7 +39,7 @@ import { MenuKeyReader, isMenuHistoryParticipant, type MenuNavAction } from "../
 import { MenuHelp, menuHintLines } from "../components/menu-hints";
 import type { SelectListNavigationState } from "../components/select-list";
 
-export type PersonaConfigVariant = "persona" | "live";
+export type PersonaConfigVariant = "persona" | "live" | "personality";
 export type PersonaConfigMode = "replace" | "prepend" | "append" | "literal-substitute";
 export const PERSONA_CONFIG_MODES: readonly PersonaConfigMode[] = [
 	"replace",
@@ -73,6 +73,7 @@ export interface PersonaConfigEntry {
 	name: string;
 	/** Name the entry has on disk; undefined for entries created in this overlay. */
 	originalName?: string;
+	definitionScope?: string;
 	/** Immutable bundled entry (the live `default`); may be cloned, never edited. */
 	builtin?: boolean;
 	/** `persona` variant only. */
@@ -98,6 +99,12 @@ export interface PersonaConfigDoc {
 }
 
 export interface PersonaConfigCallbacks {
+	apply?: (doc: PersonaConfigDoc) => Promise<string>;
+	preview?: (entry: PersonaConfigEntry) => Promise<string>;
+	name?: (initial: string) => Promise<string | undefined>;
+	scopeLabel?: () => string;
+	editingScope?: () => string;
+	cycleScope?: () => Promise<PersonaConfigDoc>;
 	/**
 	 * Persist the doc and apply the active selection. Resolves to a confirmation
 	 * shown in the footer; throw to report a failure there instead.
@@ -222,6 +229,7 @@ export class PersonaConfigOverlayComponent implements Component {
 	#navigationContext: PersonaNavigationContext = { screen: "list" };
 	#creation: PersonaNavigationContext["creation"];
 	#restoringNavigation = false;
+	#yankedPersonality?: PersonaConfigEntry;
 	#generationModel: Model | undefined;
 	#generationReferences: PersonaGenerationReference[] = [];
 	#generationSelected = new Set<string>();
@@ -274,7 +282,11 @@ export class PersonaConfigOverlayComponent implements Component {
 	}
 
 	get #noun(): string {
-		return this.#deps.variant === "live" ? "live persona" : "persona";
+		return this.#deps.variant === "personality"
+			? "personality"
+			: this.#deps.variant === "live"
+				? "live persona"
+				: "persona";
 	}
 
 	// ───────────────────────────── render ─────────────────────────────
@@ -293,7 +305,12 @@ export class PersonaConfigOverlayComponent implements Component {
 		);
 		const bodyRows = Math.max(3, height - 3 - footerLines.length);
 		this.#bodyRowsLast = bodyRows;
-		const heading = this.#deps.variant === "live" ? "Live personas" : "Personas";
+		const heading =
+			this.#deps.variant === "personality"
+				? `Personalities · ${this.#cb.scopeLabel?.() ?? "project"} · Ctrl-S scope`
+				: this.#deps.variant === "live"
+					? "Live personas"
+					: "Personas";
 		const title = `${heading} · active: ${this.#activeLabel()}${this.#dirty ? "  ● unsaved" : ""}${this.#screen === "list" && this.#previewFocused ? " · Preview" : ""}`;
 		this.#split.setNarrowPane(this.#screen === "list" ? undefined : "left");
 		this.#split.setSplitAt(this.#screen === "list" ? 0 : Number.MAX_SAFE_INTEGER);
@@ -301,7 +318,11 @@ export class PersonaConfigOverlayComponent implements Component {
 		const geometry = this.#split.measure(width);
 		const isSplit = geometry.mode === "split";
 		const leftWidth = geometry.left?.width ?? 0;
-		this.#frameTop.setLines([isSplit ? topBorderSplit(width, title, leftWidth) : topBorder(width, title)]);
+		this.#frameTop.setLines([
+			isSplit && this.#deps.variant !== "personality"
+				? topBorderSplit(width, title, leftWidth)
+				: topBorder(width, title),
+		]);
 		this.#frameDivider.setLines([isSplit ? dividerSplit(width, leftWidth) : divider(width)]);
 		this.#frameFooter.setLines(footerLines.map(line => row(theme.fg(this.#footerNote?.tone ?? "dim", line), width)));
 		this.#frameBottom.setLines([bottomBorder(width)]);
@@ -327,6 +348,26 @@ export class PersonaConfigOverlayComponent implements Component {
 			return;
 		}
 		if (this.#saving) return;
+		if (matchesKey(data, "ctrl+s") && this.#cb.cycleScope) {
+			if (this.#dirty) {
+				this.#flash("Save your changes before switching scope.");
+				return;
+			}
+			this.#saving = true;
+			void this.#cb
+				.cycleScope()
+				.then(doc => {
+					this.#doc = doc;
+					this.#listStates.clear();
+					this.#showList();
+				})
+				.catch(error => this.#flash(String(error)))
+				.finally(() => {
+					this.#saving = false;
+					this.#cb.requestRender();
+				});
+			return;
+		}
 		if (data.startsWith("\x1b[<")) {
 			this.#keys.reset();
 			routeSgrMouseInput(data, event => this.#routeMouseEvent(event));
@@ -360,6 +401,97 @@ export class PersonaConfigOverlayComponent implements Component {
 			this.#showList(selected);
 			active = this.#active;
 			cancelledDelete = true;
+		}
+		if (this.#deps.variant === "personality" && this.#screen === "list" && active instanceof SelectList) {
+			const match = /^entry:(\d+)$/.exec(active.getSelectedItem()?.value ?? "");
+			const index = match ? Number(match[1]) : undefined;
+			const entry = index === undefined ? undefined : this.#doc.entries[index];
+			if (entry && matchesKey(data, "ctrl+g") && this.#deps.externalEditor) {
+				this.#saving = true;
+				this.#tui.stop();
+				void this.#deps
+					.externalEditor(entry.content)
+					.then(text => {
+						if (text === null || text === entry.content) return;
+						if (entry.builtin) this.#showNewEntryEditor(text, entry.name, index);
+						else {
+							entry.content = text;
+							this.#dirty = true;
+							this.#showList(`entry:${index}`);
+						}
+					})
+					.catch(error => this.#flash(String(error)))
+					.finally(() => {
+						this.#saving = false;
+						this.#tui.start();
+						this.#cb.requestRender();
+					});
+				return;
+			}
+			if (matchesKey(data, "s")) {
+				this.#save(() =>
+					this.#showList(active instanceof SelectList ? active.getSelectedItem()?.value : undefined),
+				);
+				return;
+			}
+			if (matchesKey(data, "a") && this.#cb.apply) {
+				if (entry) this.#doc.active = entry.name;
+				this.#saving = true;
+				void this.#cb
+					.apply(this.#doc)
+					.then(message => {
+						this.#dirty = false;
+						this.#showList(active instanceof SelectList ? active.getSelectedItem()?.value : undefined);
+						this.#flash(message, "success");
+					})
+					.catch(error => this.#flash(String(error)))
+					.finally(() => {
+						this.#saving = false;
+						this.#cb.requestRender();
+					});
+				return;
+			}
+			if (entry && matchesKey(data, "y")) {
+				this.#yankedPersonality = { ...entry };
+				this.#flash(`Yanked ${entry.name}`, "success");
+				return;
+			}
+			if (matchesKey(data, "p") && this.#yankedPersonality) {
+				this.#showNewEntryEditor(this.#yankedPersonality.content, this.#yankedPersonality.name);
+				return;
+			}
+			if (entry && matchesKey(data, "c")) {
+				this.#showNewEntryEditor(entry.content, entry.name, index);
+				return;
+			}
+			if (entry && matchesKey(data, "e") && !entry.builtin) {
+				this.#showContentEditor(index!);
+				return;
+			}
+			if (entry && matchesKey(data, "v") && this.#cb.preview) {
+				this.#saving = true;
+				void this.#cb
+					.preview(entry)
+					.then(text =>
+						this.#setScreen(
+							"content",
+							new HookEditorComponent(
+								this.#tui,
+								"Full system prompt preview",
+								text,
+								() => this.#showList(),
+								() => this.#showList(),
+							),
+							"",
+						),
+					)
+					.catch(error => this.#flash(String(error)))
+					.finally(() => {
+						this.#saving = false;
+						this.#cb.requestRender();
+					});
+				return;
+			}
 		}
 		const action = this.#keys.read(data);
 		if (this.#screen === "list" && (action === undefined || action === "pending" || action.kind !== "cancel")) {
@@ -550,7 +682,15 @@ export class PersonaConfigOverlayComponent implements Component {
 			if (entry.mode === "literal-substitute") lines.push(theme.fg("dim", `Literal: ${entry.literal || "(none)"}`));
 			lines.push(theme.fg("dim", `Inherit to tasks: ${entry.inheritToTasks ? "yes" : "no"}`), "");
 		} else if (entry.builtin) {
-			lines.push(theme.fg("dim", "Built-in default · read-only · clone to customize"), "");
+			lines.push(
+				theme.fg(
+					"dim",
+					this.#deps.variant === "personality"
+						? "Built-in preset · read-only · clone to customize"
+						: "Built-in default · read-only · clone to customize",
+				),
+				"",
+			);
 		}
 		if (this.#deps.variant === "live" || entry.sourceKind === "inline") {
 			lines.push(...(entry.content.trim() ? wrap(entry.content, bodyWidth) : [theme.fg("muted", "(empty)")]));
@@ -621,13 +761,20 @@ export class PersonaConfigOverlayComponent implements Component {
 
 	/** Space on an entry: make it active, or deactivate it when it already is. */
 	#toggleActive(entry: PersonaConfigEntry): void {
-		this.#doc.active = this.#isActive(entry) || entry.builtin ? undefined : entry.name;
+		this.#doc.active =
+			this.#deps.variant === "personality"
+				? entry.name
+				: this.#isActive(entry) || entry.builtin
+					? undefined
+					: entry.name;
 		this.#dirty = true;
 	}
 
 	#entrySummary(entry: PersonaConfigEntry): string {
 		if (entry.builtin) return "built-in default";
-		if (this.#deps.variant === "live") return `${entry.content.length} chars`;
+		if (this.#deps.variant === "personality")
+			return entry.builtin ? "Built-in preset" : `${entry.definitionScope ?? "new"} · ${entry.content.length} chars`;
+		if (this.#deps.variant !== "persona") return `${entry.content.length} chars`;
 		return `${entry.mode} · ${entry.sourceKind === "file" ? replaceTabs(entry.path) || "(no path)" : "inline"}`;
 	}
 
@@ -646,7 +793,11 @@ export class PersonaConfigOverlayComponent implements Component {
 	#validationError(): string | null {
 		const seen = new Set<string>();
 		for (const entry of this.#doc.entries) {
-			if (!NAME_PATTERN.test(entry.name))
+			if (
+				!(this.#deps.variant === "personality"
+					? entry.name.trim() === entry.name && !!entry.name && !/[\x00-\x1f\x7f]/.test(entry.name)
+					: NAME_PATTERN.test(entry.name))
+			)
 				return `"${entry.name}": names may contain only letters, numbers, '.', '_' or '-'.`;
 			if (seen.has(entry.name)) return `Two ${this.#noun}s are named "${entry.name}".`;
 			seen.add(entry.name);
@@ -700,9 +851,8 @@ export class PersonaConfigOverlayComponent implements Component {
 			description: this.#pendingDelete === index ? undefined : this.#entrySummary(entry),
 		}));
 		items.push({ value: "add", label: `+ New ${this.#noun}` });
-		if (this.#deps.variant === "live" && this.#deps.generation)
-			items.push({ value: "generate", label: "Generate live persona" });
-		items.push({ value: "save", label: "Save & apply" });
+		if (this.#deps.generation) items.push({ value: "generate", label: `Generate ${this.#noun}` });
+		items.push({ value: "save", label: this.#cb.apply ? "Save" : "Save & apply" });
 		items.push({ value: "close", label: "Close" });
 
 		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme(), { search: "always" });
@@ -743,7 +893,9 @@ export class PersonaConfigOverlayComponent implements Component {
 			list,
 			this.#pendingDelete !== null
 				? "Delete again to confirm removal · any other key cancels"
-				: "Enter edit · Space active · Del×2 · s save · Esc close",
+				: this.#deps.variant === "personality"
+					? "Enter details · Space select · a apply · s save · c clone · y/p copy · e edit · Ctrl-G editor · v full prompt · Esc close"
+					: "Enter edit · Space active · Del×2 · s save · Esc close",
 		);
 	}
 
@@ -760,7 +912,15 @@ export class PersonaConfigOverlayComponent implements Component {
 		const entry = this.#doc.entries[index];
 		if (!entry) return;
 		if (entry.builtin) {
-			this.#flash("The built-in default cannot be deleted.");
+			this.#flash("Built-in presets cannot be deleted.");
+			return;
+		}
+		if (
+			this.#deps.variant === "personality" &&
+			entry.definitionScope &&
+			entry.definitionScope !== this.#cb.editingScope?.()
+		) {
+			this.#flash(`Inherited from ${entry.definitionScope}. Switch to that scope to delete it.`);
 			return;
 		}
 		if (this.#pendingDelete === index) {
@@ -805,6 +965,35 @@ export class PersonaConfigOverlayComponent implements Component {
 	}
 
 	#showNewEntryEditor(content = this.#deps.newEntryContent ?? "", from?: string, sourceIndex?: number): void {
+		if (this.#cb.name) {
+			this.#saving = true;
+			void this.#cb
+				.name(this.#uniqueName(from ? `${from}-copy` : `personality-${this.#doc.entries.length + 1}`))
+				.then(name => {
+					if (!name) return;
+					if (!NAME_PATTERN.test(name) || this.#doc.entries.some(entry => entry.name === name)) {
+						this.#flash("Invalid or duplicate name.");
+						return;
+					}
+					this.#doc.entries.push({
+						name,
+						mode: "replace",
+						sourceKind: "inline",
+						content,
+						path: "",
+						literal: "",
+						inheritToTasks: false,
+					});
+					this.#dirty = true;
+					this.#showContentEditor(this.#doc.entries.length - 1);
+				})
+				.catch(error => this.#flash(String(error)))
+				.finally(() => {
+					this.#saving = false;
+					this.#cb.requestRender();
+				});
+			return;
+		}
 		this.#entryIndex = undefined;
 		this.#creation = { content, from, sourceIndex };
 		const sourceEntry = sourceIndex === undefined ? undefined : this.#doc.entries[sourceIndex];
@@ -993,6 +1182,8 @@ export class PersonaConfigOverlayComponent implements Component {
 					label: "Inherit to tasks",
 					description: entry.inheritToTasks ? "● on" : "○ off",
 				});
+			} else if (this.#deps.variant === "personality") {
+				items.push({ value: "content", label: "Instructions", description: previewLineOrNone(entry.content) });
 			} else {
 				items.push(
 					{ value: "content", label: "Instructions", description: previewLineOrNone(entry.content) },

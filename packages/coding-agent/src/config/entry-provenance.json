@@ -1,7 +1,7 @@
 {
 	"previousUpstream": "81e1d892",
 	"upstream": "31147f9d",
-	"forkRevision": "8b6398f",
+	"forkRevision": "344c11c9cc",
 	"fork": {
 		"settings": [
 			"advisor.activationSet",
@@ -94,6 +94,7 @@
 			"control.approvals",
 			"control.enabled",
 			"control.secretInput",
+			"customPersonalities",
 			"effort.mode",
 			"effort.rules",
 			"eventAudio.gain",
@@ -135,6 +136,7 @@
 			"modelFacts.enabled",
 			"modelFacts.overrides",
 			"modelFacts.sources",
+			"models.defaultScope",
 			"monitor.tmux.autoStart",
 			"monitor.tmux.columnWidth",
 			"monitor.tmux.direction",
@@ -152,6 +154,7 @@
 			"roleEffortSelections",
 			"roleSettings",
 			"routingPolicies",
+			"settings.defaultScope",
 			"sidebar.enabled",
 			"sidebar.side",
 			"sidebar.splitAt",
@@ -172,6 +175,7 @@
 			"stt.wake.suppressWhileSpeaking",
 			"symbolBrandGlyph",
 			"symbolEffortGlyphs",
+			"task.definitionGenerationConversationTtlMs",
 			"telemetry.agent_context",
 			"telemetry.threshold_events",
 			"telemetry.tool_results",
@@ -209,6 +213,7 @@
 			"monitor",
 			"notice",
 			"persona",
+			"personality",
 			"repl",
 			"sounds",
 			"statusline",

@@ -6350,8 +6350,8 @@ export class AgentSession implements SettingsScope {
 		// and advisor continuations can still extend it. Ignore this prompt's
 		// own in-flight bracket when checking input queued after the final poll;
 		// that bracket drops before the queued-message drain starts its successor.
-		const queuedContinuation = !this.#queuedMessageDrainBlocked &&
-			this.#canAutoContinueForFollowUp(true) && this.agent.hasQueuedMessages();
+		const queuedContinuation =
+			!this.#queuedMessageDrainBlocked && this.#canAutoContinueForFollowUp(true) && this.agent.hasQueuedMessages();
 		if (!willContinue && !this.agent.state.isStreaming && !queuedContinuation) {
 			this.#advisors.onPrimaryAgentEnd();
 		}
@@ -7599,8 +7599,7 @@ export class AgentSession implements SettingsScope {
 		this.#stopTimeTodoRemindersEnabled = false;
 		this.#recovery.boundRetriesForPrintMode();
 		const streamFn = this.agent.streamFn;
-		this.agent.streamFn = (model, context, options) =>
-			streamFn(model, context, { ...options, maxHttpAttempts: 1 });
+		this.agent.streamFn = (model, context, options) => streamFn(model, context, { ...options, maxHttpAttempts: 1 });
 	}
 
 	/**
@@ -8003,6 +8002,11 @@ export class AgentSession implements SettingsScope {
 	/** Rebuilds the stable base prompt, optionally discarding a stale asynchronous rebuild. */
 	refreshBaseSystemPrompt(commitIf?: () => boolean): Promise<void> {
 		return this.#tools.refreshBaseSystemPrompt(commitIf);
+	}
+
+	/** Preview a personality without selecting it or publishing a new system prompt. */
+	previewPersonalityPrompt(personality: string): Promise<string[]> {
+		return this.#tools.previewPersonalityPrompt(personality);
 	}
 
 	/** Replaces connected MCP tools and enables them immediately. */
@@ -9020,14 +9024,22 @@ export class AgentSession implements SettingsScope {
 	async resume(): Promise<void> {
 		const prompt = this.#recovery.prepareResume();
 		if (!prompt) {
-			await this.prompt(renderPromptAsset("system/manual-continue.md", manualContinuePrompt, {}, {
-				cwd: this.sessionManager.getCwd(),
-				kind: "notice",
-			}), {
-				synthetic: true,
-				userInitiated: true,
-				expandPromptTemplates: false,
-			});
+			await this.prompt(
+				renderPromptAsset(
+					"system/manual-continue.md",
+					manualContinuePrompt,
+					{},
+					{
+						cwd: this.sessionManager.getCwd(),
+						kind: "notice",
+					},
+				),
+				{
+					synthetic: true,
+					userInitiated: true,
+					expandPromptTemplates: false,
+				},
+			);
 			return;
 		}
 		this.#noteUserTurn();
@@ -9901,7 +9913,15 @@ export class AgentSession implements SettingsScope {
 			}
 
 			const preparation = await logger.time("prompt:prepareAgentStart", () =>
-				this.#prepareAgentStart(message, expandedText, options?.images, generation, setupAbort.signal, "direct", options?.solutionSpace),
+				this.#prepareAgentStart(
+					message,
+					expandedText,
+					options?.images,
+					generation,
+					setupAbort.signal,
+					"direct",
+					options?.solutionSpace,
+				),
 			);
 			const preparedMessages = preparation.commit();
 			if (!preparedMessages) return false;
@@ -12227,7 +12247,12 @@ export class AgentSession implements SettingsScope {
 	async #cardTitle(title: string, signal?: AbortSignal): Promise<string> {
 		const icons = this.#cardIcons();
 		if (icons === "boring" || splitCardTitle(title)) return title;
-		const cardPrompt = renderPromptAsset("system/title-card.md", titleCardPrompt, { nerdFonts: icons === "nf+emoji" }, { cwd: this.sessionManager.getCwd() });
+		const cardPrompt = renderPromptAsset(
+			"system/title-card.md",
+			titleCardPrompt,
+			{ nerdFonts: icons === "nf+emoji" },
+			{ cwd: this.sessionManager.getCwd() },
+		);
 		const reply = await this.generateTitle(title, cardPrompt, signal);
 		const card = reply ? parseCardReply(reply, icons) : undefined;
 		return card ? formatCardTitle(card, title) : title;

@@ -87,10 +87,11 @@ describe("live persona generation catalogue and completion", () => {
 		resetSettingsForTest();
 		await fs.rm(dir, { recursive: true, force: true });
 	});
-	async function generation() {
+	async function generation(personality = false) {
 		// Real initialization with no generation configuration must remain safe.
 		const settings = await Settings.init({ inMemory: true, cwd: dir, agentDir: dir });
 		return createLivePersonaGeneration({
+			personality,
 			registry: { getAvailable: () => [model], resolver: () => async () => "test-key" },
 			browserSource: createModelBrowserSource(settings),
 			personas,
@@ -106,6 +107,21 @@ describe("live persona generation catalogue and completion", () => {
 			],
 		});
 	}
+
+	test("generates personality injections from selected references", async () => {
+		const deps = await generation(true);
+		const completion = vi.spyOn(ai, "completeSimple").mockResolvedValue(response("Warm and direct."));
+		expect((await deps.references(doc))[0]?.label).toBe("Personality: default");
+		const result = await deps.generate({
+			model,
+			references: ["live:1"],
+			description: "Warm and direct",
+			doc,
+			signal: new AbortController().signal,
+		});
+		expect(result).toBe("Warm and direct.");
+		expect(completion.mock.calls[0]?.[1].systemPrompt?.join("\n")).toContain("personality injection");
+	});
 
 	test("resolves generator templates from the session project without freezing reference values", async () => {
 		await Bun.write(

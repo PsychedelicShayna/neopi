@@ -176,6 +176,7 @@ interface SessionToolsOptions {
 	rebuildSystemPrompt?: (
 		toolNames: string[],
 		tools: Map<string, AgentTool>,
+		personalityPreview?: string,
 	) => Promise<{ systemPrompt: string[]; xdevCatalogNames?: readonly string[] }>;
 	getMcpServerInstructions?: () => Map<string, string> | undefined;
 	xdev?: XdevState;
@@ -2310,6 +2311,17 @@ export class SessionTools {
 			if (commitIf && !commitIf()) return;
 			prepared?.commit?.();
 		});
+	}
+
+	/** Build a candidate prompt without publishing it or changing the current settings. */
+	async previewPersonalityPrompt(personality: string): Promise<string[]> {
+		const rebuild = this.#rebuildSystemPrompt;
+		if (!rebuild) return this.#baseSystemPrompt;
+		const candidate = this.#derivePromptSurface();
+		const built = await this.#promptSurfaceScope.run(candidate, () =>
+			rebuild(this.getActiveToolNames(), this.#toolRegistry, personality),
+		);
+		return built.systemPrompt;
 	}
 
 	async #prepareBaseSystemPrompt(isCurrent?: () => boolean): Promise<SystemPromptPreparation | undefined> {

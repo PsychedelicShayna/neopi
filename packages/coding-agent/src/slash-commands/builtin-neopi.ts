@@ -14,6 +14,10 @@ import * as prompt from "@oh-my-pi/pi-utils/prompt";
 import type { InteractiveModeContext } from "../modes/types";
 import { deferredSubmissionsFor, DEFER_USAGE, isDeferredSubmissionActive, parseDeferredInput } from "../neopi/defer";
 import { type LoadoutHost, loadoutFeature } from "../neopi/loadout";
+import { BUILTIN_PERSONALITIES, completePersonalityNames, isBuiltinPersonality } from "../neopi/personalities";
+import { listCustomPersonalities, listPersonalityNames, selectPersonality } from "../neopi/personality-settings";
+import { describePersonalityCacheImpact, personalityCacheImpact } from "../neopi/personality-cache";
+import { previewBuiltinPersonality } from "../system-prompt";
 import {
 	PERSONA_SUBCOMMANDS,
 	PERSONA_USAGE,
@@ -222,6 +226,56 @@ function kernelStatus(session: AgentSession): string {
 }
 
 export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
+	{
+		name: "personality",
+		icon: "personality",
+		description: "Choose or manage system-prompt personalities",
+		allowArgs: true,
+		inlineHint: "[name]",
+		getTuiArgumentCompletions: (prefix, runtime) => {
+			const names = runtime ? listPersonalityNames(runtime.ctx.settings) : [...BUILTIN_PERSONALITIES];
+			const matches = completePersonalityNames(names, prefix).map(name => ({
+				value: name,
+				label: name,
+				hint: ghostHint(name.slice(prefix.length)),
+				submitsCommand: true,
+			}));
+			return matches.length ? matches : null;
+		},
+		handleTui: async (command, runtime) => {
+			const ctx = runtime.ctx;
+			clearSubmittedText(runtime);
+			const requested = command.args.trim();
+			if (!requested) {
+				ctx.showPersonalityManager();
+				return;
+			}
+			try {
+				const names = listPersonalityNames(ctx.settings);
+				const matching = names.filter(name => name.toLocaleLowerCase() === requested.toLocaleLowerCase());
+				const name = names.includes(requested) ? requested : matching.length === 1 ? matching[0] : undefined;
+				if (!name) {
+					ctx.showError(`Unknown or ambiguous personality: ${requested}`);
+					return;
+				}
+				const prompt = isBuiltinPersonality(name)
+					? await previewBuiltinPersonality(name, ctx.sessionManager.getCwd())
+					: listCustomPersonalities(ctx.settings).find(item => item.name === name)?.prompt;
+				if (prompt === undefined) {
+					ctx.showError(`Personality not found: ${name}`);
+					return;
+				}
+				const impact = await personalityCacheImpact(ctx.session, prompt);
+				if (impact && !(await ctx.showHookConfirm("Change personality?", describePersonalityCacheImpact(impact))))
+					return;
+				selectPersonality(ctx.settings, "session", name);
+				await ctx.settings.flush();
+				ctx.showStatus(`Personality: ${name} (session)`);
+			} catch (error) {
+				ctx.showError(errorMessage(error));
+			}
+		},
+	},
 	{
 		name: "defer",
 		icon: "prompt",

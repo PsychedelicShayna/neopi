@@ -1116,6 +1116,7 @@ export class SettingsList implements Component {
 		if (this.#submenuComponent) {
 			if (
 				!(this.#submenuComponent instanceof FormField) &&
+				!("handlesOwnCancel" in this.#submenuComponent && this.#submenuComponent.handlesOwnCancel === true) &&
 				!this.filterFocused &&
 				getKeybindings().matches(data, "tui.select.cancel")
 			) {

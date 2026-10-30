@@ -8250,9 +8250,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		try {
 			const proceed = await settleSessionSettingsOnQuit(
 				this.settings,
-				choices => this.#extensionUiController.showCollabAwareSelector(
-					"Session settings changed — Esc keeps them in the session directory and quits", [...choices],
-				),
+				choices =>
+					this.#extensionUiController.showCollabAwareSelector(
+						"Session settings changed — Esc keeps them in the session directory and quits",
+						[...choices],
+					),
 				() => this.sessionManager.ensureOnDisk(),
 			);
 			if (!proceed) return;
@@ -9634,6 +9636,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	showSettingsSelector(scope?: SettingsScope): void {
 		this.#selectorController.showSettingsSelector(scope);
+	}
+
+	showPersonalityManager(): void {
+		this.#selectorController.showPersonalityManager();
 	}
 
 	showUsageDashboard(reports: UsageReport[]): void {

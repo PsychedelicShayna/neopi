@@ -8,7 +8,16 @@ import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { Model, ToolExample, TSchema } from "@oh-my-pi/pi-ai";
 import { renderToolInventory } from "@oh-my-pi/pi-ai/dialect";
 import type { DelegationBias } from "@oh-my-pi/pi-catalog/compat/delegation";
-import { $env, getAgentDir, getProjectDir, hasFsCode, isEnoent, isInteractiveHost, logger, prompt } from "@oh-my-pi/pi-utils";
+import {
+	$env,
+	getAgentDir,
+	getProjectDir,
+	hasFsCode,
+	isEnoent,
+	isInteractiveHost,
+	logger,
+	prompt,
+} from "@oh-my-pi/pi-utils";
 import { compilePromptAsset, renderPromptAsset, resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { contextFileCapability } from "./capability/context-file";
 import { systemPromptCapability } from "./capability/system-prompt";
@@ -50,6 +59,7 @@ import {
 	cfgIncludeWorkspaceTree,
 	cfgInlineToolDescriptors,
 	cfgPersonality,
+	cfgCustomPersonalities,
 } from "./session/settings";
 import { cfgTaskBatch, cfgTaskEager } from "./task/settings";
 import {
@@ -69,6 +79,7 @@ import {
  */
 export const cfgSystemPromptInputs = combine({
 	personality: cfgPersonality,
+	customPersonalities: cfgCustomPersonalities,
 	includeModelInPrompt: cfgIncludeModelInPrompt,
 	includeWorkspaceTree: cfgIncludeWorkspaceTree,
 	inlineToolDescriptors: cfgInlineToolDescriptors,
@@ -103,6 +114,14 @@ const PERSONALITY_SPECS: Record<Exclude<Personality, "none">, string> = {
 	pragmatic: pragmaticPersonality,
 };
 
+/** Render a built-in personality using the same prompt-asset overrides as the system prompt. */
+export function renderBuiltinPersonality(personality: Personality, cwd: string): string {
+	if (personality === "none") return "";
+	return compilePromptAsset(`system/personalities/${personality}.md`, PERSONALITY_SPECS[personality], { cwd })(
+		{},
+	).trim();
+}
+
 /**
  * Load the user-level PERSONALITY.md override for the system prompt's
  * personality block from `<agentDir>/PERSONALITY.md` (`~/.omp/agent` by
@@ -126,6 +145,12 @@ async function loadPersonalityOverride(): Promise<string | null> {
 		}
 	}
 	return null;
+}
+
+/** Preview the text the built-in selection actually injects, including the legacy override. */
+export async function previewBuiltinPersonality(personality: Personality, cwd: string): Promise<string> {
+	if (personality === "none") return "";
+	return (await loadPersonalityOverride()) ?? renderBuiltinPersonality(personality, cwd);
 }
 
 interface AlwaysApplyRule {
@@ -614,6 +639,8 @@ export interface BuildSystemPromptOptions {
 	includeModelInPrompt?: boolean;
 	/** Personality preset rendered into the default system prompt. "none" omits the block. Default: "default" */
 	personality?: Personality;
+	/** Selected custom personality text; takes precedence over the legacy override. */
+	customPersonalityPrompt?: string;
 	/** Whether to include the workspace directory tree in the system prompt. Default: false */
 	includeWorkspaceTree?: boolean;
 	/** Whether Mermaid fenced blocks render as terminal ASCII diagrams. Default: true */
@@ -724,6 +751,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		model,
 		includeModelInPrompt = true,
 		personality = "default",
+		customPersonalityPrompt,
 		includeWorkspaceTree = false,
 		renderMermaid = true,
 		renderSvg = false,
@@ -905,13 +933,14 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	]);
 	clearTimeout(deadlineTimer);
 	const personalityBlock =
-		personality === "none"
-			? ""
-			: (personalityOverride ??
-				compilePromptAsset(`system/personalities/${personality}.md`, PERSONALITY_SPECS[personality], {
-					cwd: resolvedCwd,
-				})({}).trim());
-	const agentsMdFiles = noContextFiles ? [] : Array.from(new Set(workspaceTree.agentsMdFiles)).sort().slice(0, AGENTS_MD_LIMIT);
+		customPersonalityPrompt !== undefined
+			? customPersonalityPrompt
+			: personality === "none"
+				? ""
+				: (personalityOverride ?? renderBuiltinPersonality(personality, resolvedCwd));
+	const agentsMdFiles = noContextFiles
+		? []
+		: Array.from(new Set(workspaceTree.agentsMdFiles)).sort().slice(0, AGENTS_MD_LIMIT);
 
 	if (timedOut.length > 0) {
 		logger.warn("System prompt preparation steps timed out; using minimal fallback for those steps", {

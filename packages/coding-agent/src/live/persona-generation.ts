@@ -6,6 +6,7 @@ import type { ModelRegistry } from "../config/model-registry";
 import type { PromptTemplate } from "../config/prompt-templates";
 import { personaFeature, type PersonaFeature } from "../neopi/persona";
 import generationSystem from "./prompts/generate-persona.md" with { type: "text" };
+import personalityGenerationSystem from "../neopi/prompts/generate-personality.md" with { type: "text" };
 import generationUser from "./prompts/generate-persona-user.md" with { type: "text" };
 
 interface Reference {
@@ -19,12 +20,17 @@ async function catalogue(
 	doc: PersonaConfigDoc,
 	personas: PersonaFeature,
 	templates: readonly PromptTemplate[],
+	personality = false,
 ): Promise<Reference[]> {
 	const ordinary = await personas.data("");
 	return [
 		...doc.entries.map((entry, index) => ({
 			id: `live:${index}`,
-			label: entry.builtin ? "Default live template" : `Live persona: ${entry.name}`,
+			label: personality
+				? `Personality: ${entry.name}`
+				: entry.builtin
+					? "Default live template"
+					: `Live persona: ${entry.name}`,
 			instructions: async () => entry.content,
 		})),
 		...ordinary.items.map(item => ({
@@ -48,15 +54,19 @@ export function createLivePersonaGeneration(options: {
 	sessionId: string;
 	personas?: PersonaFeature;
 	cwd?: string;
+	personality?: boolean;
 }): PersonaGenerationDeps {
 	const personas = options.personas ?? personaFeature();
 	return {
 		getAvailableModels: () => options.registry.getAvailable(),
 		browserSource: options.browserSource,
 		references: async doc =>
-			(await catalogue(doc, personas, options.templates)).map(({ id, label }) => ({ id, label })),
+			(await catalogue(doc, personas, options.templates, options.personality)).map(({ id, label }) => ({
+				id,
+				label,
+			})),
 		async generate({ model, references: selected, description, doc, signal }) {
-			const available = await catalogue(doc, personas, options.templates);
+			const available = await catalogue(doc, personas, options.templates, options.personality);
 			if (!selected.length) throw new Error("Select at least one reference prompt.");
 			const references = await Promise.all(
 				selected.map(async id => {
@@ -70,7 +80,11 @@ export function createLivePersonaGeneration(options: {
 				model,
 				{
 					systemPrompt: [
-						compilePromptAsset("live/generate-persona.md", generationSystem, { cwd: options.cwd })({}),
+						compilePromptAsset(
+							options.personality ? "neopi/generate-personality.md" : "live/generate-persona.md",
+							options.personality ? personalityGenerationSystem : generationSystem,
+							{ cwd: options.cwd },
+						)({}),
 					],
 					messages: [
 						{
