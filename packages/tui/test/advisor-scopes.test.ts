@@ -1,8 +1,8 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import type { TUI } from "../src/tui";
 import type { TspPickerProps } from "@oh-my-pi/pi-wire";
-import type { DescribeContext } from "../src/native/node";
-import type { AdvisorConfigDeps, WatchdogConfigDoc } from "../src/overlays/advisor-config";
+import type { DescribeContext, NativeNode } from "../src/native/node";
+import type { AdvisorConfig, AdvisorConfigCallbacks, AdvisorConfigDeps, WatchdogConfigDoc } from "../src/overlays/advisor-config";
 import { AdvisorScopeOverlayComponent, type AdvisorConfigFile } from "../src/overlays/advisor-scopes";
 import { getThemeByName, setThemeInstance } from "../src/theme";
 
@@ -32,17 +32,32 @@ const strip = (overlay: AdvisorScopeOverlayComponent) =>
 		.join("\n")
 		.replace(/\x1b\[[0-9;]*m/g, "");
 const settle = () => Bun.sleep(0);
+function pickerProps(node: NativeNode): TspPickerProps {
+	if (node.k === "picker") return node.p!;
+	for (const child of node.c ?? []) {
+		if ("k" in child) {
+			try { return pickerProps(child); } catch {}
+		}
+	}
+	throw new Error("No picker");
+}
 
-function fixture(userDoc: WatchdogConfigDoc = { advisors: [{ name: "User" }] }) {
+function fixture(
+	userDoc: WatchdogConfigDoc = { advisors: [{ name: "User" }] },
+	generateAdvisor?: AdvisorConfigCallbacks["generateAdvisor"],
+) {
 	const files: AdvisorConfigFile[] = [
 		{ path: "/user/WATCHDOG.yaml", scope: "user", doc: userDoc },
 		{ path: "/project/WATCHDOG.yml", scope: "project", doc: { advisors: [{ name: "Root", enabled: false }] } },
 		{ path: "/project/nested/WATCHDOG.yml", scope: "project", doc: { advisors: [{ name: "Nested" }] } },
+		{ path: "/project/.omp/WATCHDOG.yml", scope: "project-omp", doc: { advisors: [{ name: "Native" }] } },
+		{ path: "/sessions/one/WATCHDOG.yml", scope: "session", doc: { advisors: [{ name: "Session" }] } },
 	];
 	const disk = new Map(files.map(file => [file.path, structuredClone(file.doc)]));
 	const writes: string[] = [];
 	let applies = 0;
 	let closes = 0;
+	const prompts: string[] = [];
 	const overlay = new AdvisorScopeOverlayComponent({} as TUI, deps, files, {
 		loadFile: async path => structuredClone(disk.get(path)!),
 		saveFile: async (path, doc) => {
@@ -57,11 +72,14 @@ function fixture(userDoc: WatchdogConfigDoc = { advisors: [{ name: "User" }] }) 
 		},
 		requestRender: () => {},
 		notify: () => {},
+		copyPrompt: prompt => { prompts.push(prompt); },
+		generateAdvisor,
 	});
+	overlay.handleInput("j"); // Leave the first, initially focused scope row.
 	const action = (act: string) => overlay.handleNativeEvent({ type: "action", key: "", act, mods: [] });
 	const select = (item: string) => overlay.handleNativeEvent({ type: "select", key: "", item });
 	const activate = (item: string) => overlay.handleNativeEvent({ type: "activate", key: "", item });
-	return { overlay, files, disk, writes, action, select, activate, applies: () => applies, closes: () => closes };
+	return { overlay, files, disk, writes, prompts, action, select, activate, applies: () => applies, closes: () => closes };
 }
 
 beforeAll(async () => {
@@ -71,19 +89,29 @@ beforeAll(async () => {
 });
 
 describe("advisor file scopes", () => {
-	it("lists user and both project files in load order with full paths and selected advisor states", () => {
-		const { overlay, files, select } = fixture();
-		const props = overlay.describe(cx).p as TspPickerProps;
-		expect(props.items?.slice(0, 3).map(item => item.detail)).toEqual(files.map(file => file.path));
+	it("cycles every scope with h/l and arrows immediately and labels both project sources", () => {
+		const { overlay } = fixture();
 		expect(strip(overlay)).toContain("● enabled User");
-		select(files[1].path);
+		overlay.handleInput("k");
+		overlay.handleInput("l");
+		expect(pickerProps(overlay.describe(cx)).items?.map(item => item.detail).filter(Boolean)).toContain("/project/WATCHDOG.yml");
 		expect(strip(overlay)).toContain("○ disabled Root");
-		select(files[2].path);
-		expect(strip(overlay)).toContain("● enabled Nested");
+		overlay.handleInput("\x1b[C");
+		expect(strip(overlay)).toContain("/project/.omp/WATCHDOG.yml");
+		expect(strip(overlay)).toContain("● enabled Native");
+		overlay.handleInput("l");
+		expect(strip(overlay)).toContain("● enabled Session");
+		overlay.handleInput("\x1b[D");
+		expect(strip(overlay)).toContain("● enabled Native");
+		overlay.handleInput("h");
+		expect(strip(overlay)).toContain("○ disabled Root");
 	});
 
 	it("previews the hovered file without entering its editor", () => {
 		const { overlay } = fixture();
+		overlay.handleInput("k");
+		overlay.handleInput("l");
+		overlay.handleInput("j");
 		const rendered = overlay.render(240);
 		const line = rendered.findIndex(value => value.includes("/project/WATCHDOG.yml"));
 		expect(line).toBeGreaterThan(0);
@@ -109,6 +137,9 @@ describe("advisor file scopes", () => {
 
 	it("opens a disabled nested file and clones there without a user/project switch", async () => {
 		const f = fixture();
+		f.overlay.handleInput("k");
+		f.overlay.handleInput("l");
+		f.overlay.handleInput("j");
 		f.select(f.files[2].path);
 		f.action("toggle");
 		await settle();
@@ -151,9 +182,12 @@ describe("advisor file scopes", () => {
 		f.overlay.handleInput("/");
 		f.overlay.handleInput("j");
 		f.overlay.handleInput(" ");
-		expect((f.overlay.describe(cx).p as TspPickerProps).query).toBe("j ");
+		expect(pickerProps(f.overlay.describe(cx)).query).toBe("j ");
 		f.overlay.handleInput("\x1b");
 		expect(f.closes()).toBe(0);
+		f.overlay.handleInput("k");
+		f.overlay.handleInput("l");
+		f.overlay.handleInput("j");
 		f.select(f.files[1].path);
 		f.action("confirm");
 		await settle();
@@ -190,7 +224,98 @@ describe("advisor file scopes", () => {
 		overlay.restoreNavigation(snapshot);
 		expect(strip(overlay)).toContain("Reader-99");
 		overlay.handleInput("h");
+		overlay.handleInput("k");
+		overlay.handleInput("l");
 		overlay.handleInput("j");
 		expect(strip(overlay)).toContain("○ disabled Root");
+	});
+
+	it("copies an advisor into another scope with a new identity and copies its prompt", async () => {
+		const f = fixture({ advisors: [{ id: "original", name: "User", instructions: "Review changes" }] });
+		f.action("confirm");
+		await settle();
+		f.overlay.handleNativeEvent({ type: "action", key: "", act: "edit", value: "copyPrompt", mods: [] });
+		await settle();
+		expect(f.prompts).toEqual(["Baseline\n\nReview changes"]);
+		f.overlay.handleNativeEvent({ type: "action", key: "", act: "edit", value: "copy", mods: [] });
+		await settle();
+		f.overlay.handleInput("\r");
+		await settle();
+		const copied = f.disk.get(f.files[1].path)?.advisors.find(advisor => advisor.name === "User (copy)");
+		expect(copied?.instructions).toBe("Review changes");
+		expect(copied?.id).toBeDefined();
+		expect(copied?.id).not.toBe("original");
+		expect(f.disk.get(f.files[0].path)?.advisors).toHaveLength(1);
+		f.overlay.handleInput("\x1b");
+		f.overlay.handleInput("\x1b");
+		f.overlay.handleInput("\x1b");
+		expect(f.closes()).toBe(1);
+	});
+
+	it("keeps a generated advisor editable and only persists it on save", async () => {
+		const f = fixture(undefined, async () => ({ name: "User", instructions: "A combined review", tools: ["read"] }));
+		f.action("confirm");
+		await settle();
+		f.overlay.handleNativeEvent({ type: "action", key: "", act: "generate", mods: [] });
+		await settle();
+		f.overlay.handleInput("\r");
+		f.overlay.handleInput("G");
+		f.overlay.handleInput("\r");
+		f.overlay.handleInput("Keep it concise");
+		f.overlay.handleInput("\x11");
+		await settle();
+		expect(strip(f.overlay)).toContain("User 2");
+		expect(f.writes).toEqual([]);
+		f.overlay.handleInput("\x1b");
+		f.overlay.handleInput("s");
+		await settle();
+		expect(f.disk.get(f.files[0].path)?.advisors).toEqual([
+			{ name: "User" },
+			{ id: expect.any(String), name: "User 2", instructions: "A combined review", tools: ["read"] },
+		]);
+		expect(f.applies()).toBe(0);
+		expect(f.writes).toEqual([f.files[0].path]);
+
+		f.overlay.handleInput("a");
+		await settle();
+		expect(f.applies()).toBe(1);
+		expect(f.writes).toEqual([f.files[0].path]);
+
+		f.overlay.handleInput("a");
+		await settle();
+		expect(f.applies()).toBe(1);
+		expect(f.writes).toEqual([f.files[0].path]);
+	});
+
+	it("generates from selected advisors and Esc cancels without accepting a late result", async () => {
+		const result = Promise.withResolvers<AdvisorConfig>();
+		let received: { bases: readonly AdvisorConfig[]; comment: string; signal: AbortSignal } | undefined;
+		const f = fixture(undefined, async (bases, comment, signal) => {
+			received = { bases, comment, signal };
+			return result.promise;
+		});
+		f.action("confirm");
+		await settle();
+		f.overlay.handleNativeEvent({ type: "action", key: "", act: "generate", mods: [] });
+		await settle();
+		expect(strip(f.overlay)).toContain("Generate from selected advisors");
+		f.overlay.handleInput("\r");
+		f.overlay.handleInput("G");
+		f.overlay.handleInput("\r");
+		expect(strip(f.overlay)).toContain("Describe the new advisor");
+		f.overlay.handleInput("Combine their strengths");
+		f.overlay.handleInput("\x11");
+		expect(received?.bases.map(base => base.name)).toEqual(["User"]);
+		expect(received?.comment).toBe("Combine their strengths");
+		expect(strip(f.overlay)).toContain("Generating advisor");
+		f.overlay.handleInput("\x1b");
+		expect(received?.signal.aborted).toBe(true);
+		result.resolve({ name: "Late result" });
+		await settle();
+		expect(strip(f.overlay)).not.toContain("Late result");
+		expect(f.writes).toEqual([]);
+		f.overlay.handleInput("\x1b");
+		f.overlay.handleInput("\x1b");
+		expect(f.closes()).toBe(1);
 	});
 });

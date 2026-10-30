@@ -12,8 +12,13 @@ export function watchAdvisorConfigs(
 	cwd: string,
 	agentDir: string,
 	apply: (discovered: DiscoveredAdvisors) => void,
+	getSessionDir?: () => string | undefined,
 ): () => void {
 	const candidates = configCandidatePaths(cwd, agentDir, ROSTER_FILES).candidates;
+	if (getSessionDir) {
+		const sessionDir = getSessionDir();
+		if (sessionDir) candidates.push(...ROSTER_FILES.map(filename => path.join(sessionDir, filename)));
+	}
 	const watchers = new Map<string, fs.FSWatcher>();
 	const filenames = new Map<string, Set<string>>();
 	// Some platforms report only the temporary SOURCE name for an atomic
@@ -48,7 +53,7 @@ export function watchAdvisorConfigs(
 		const requested = revision;
 		timer = setTimeout(() => {
 			timer = undefined;
-			void discoverAdvisorConfigs(cwd, agentDir)
+			void discoverAdvisorConfigs(cwd, agentDir, getSessionDir?.())
 				.then(discovered => {
 					if (disposed || requested !== revision || discovered.unsafeToReconcile) return;
 					apply(discovered);

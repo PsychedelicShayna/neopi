@@ -1,4 +1,4 @@
-import { resolveExtraCa, withExtraCaInit } from "@oh-my-pi/pi-utils";
+import { hasProviderTlsTrust, resolveExtraCa, withExtraCaInit } from "@oh-my-pi/pi-utils";
 import { coworkFetch } from "../providers/cowork-fetch";
 import { withInferenceUserAgent } from "../providers/inference-headers";
 import type { Api, FetchImpl, Model } from "../types";
@@ -34,8 +34,10 @@ export function transportFetch(model: Model<Api>, fetchImpl: FetchImpl | undefin
 			recordDispatchOrigin(model, input);
 		}
 		init = withInferenceUserAgent(input, init);
-		const extraCa = resolveExtraCa();
-		if (extraCa) init = withExtraCaInit(init, extraCa);
+		if (!hasProviderTlsTrust(init)) {
+			const extraCa = resolveExtraCa();
+			if (extraCa) init = withExtraCaInit(init, extraCa);
+		}
 		if (proxyUrl) init = withProxyInit(input, init, proxyUrl);
 		if (!isRequestDebugEnabled()) return base(input, init);
 		const session = await createFetchRequestDebugSession(input, init);

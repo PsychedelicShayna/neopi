@@ -33,6 +33,7 @@ import {
 	resolveAdvisorMaxNotesPerUpdate,
 	saveWatchdogConfigFile,
 } from "../../advisor";
+import { createAdvisorGenerator } from "../../advisor/generate";
 import { reset as resetCapabilities } from "../../capability";
 import type { AdvisorConfigScope } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { type ChainConfigDeps, ChainConfigOverlayComponent } from "@oh-my-pi/pi-tui/overlays/chain-config";
@@ -530,6 +531,7 @@ export class SelectorController {
 			for (const [kind, menu] of [...this.#openMenus]) {
 				this.#openMenus.delete(kind);
 				if (isMenuHistoryLeaver(menu.component)) menu.component.leaveMenu();
+				if (menu.component instanceof SettingsSelectorComponent) menu.component.dispose();
 				menu.handle?.hide();
 			}
 			const reopen = target?.state?.reopen;
@@ -677,6 +679,7 @@ export class SelectorController {
 				// enables mouse tracking (click/hover/wheel) for its lifetime and
 				// the transcript stays untouched underneath.
 				const done = () => {
+					selector.dispose();
 					menu.handle?.hide();
 					this.#releaseMenu("settings", menu);
 					this.focusActiveEditorArea();
@@ -719,6 +722,7 @@ export class SelectorController {
 						onApply: async selectedScope => {
 							await this.ctx.settings.flush();
 							if (selectedScope === "session") return "Session scope is local — no broadcast needed";
+							await this.ctx.settings.applySettingsReload();
 							const result = await broadcastSettingsReload(selectedScope, this.ctx.sessionManager.getCwd());
 							return `Applied to ${result.notified} sessions${result.unsupported ? `; ${result.unsupported} need restart/upgrade` : ""}${result.failed ? `; ${result.failed} failed` : ""}`;
 						},
@@ -997,16 +1001,14 @@ export class SelectorController {
 			} catch {
 				projectDir = cwd;
 			}
-			const discovered = await discoverAdvisorConfigs(cwd, agentDir);
-			const candidates =
-				discovered.files.length > 0
-					? discovered.files
-					: [
-							{
-								path: await resolveAdvisorConfigEditPath("project", { projectDir, agentDir }),
-								scope: "project" as AdvisorConfigScope,
-							},
-						];
+			const sessionDir = this.ctx.sessionManager.getArtifactsDir() ?? undefined;
+			const discovered = await discoverAdvisorConfigs(cwd, agentDir, sessionDir);
+			const candidates = [...discovered.files];
+			const scopes: AdvisorConfigScope[] = ["user", "project", "project-omp", ...(sessionDir ? ["session" as const] : [])];
+			for (const scope of scopes) {
+				const filePath = await resolveAdvisorConfigEditPath(scope, { projectDir, agentDir, sessionDir });
+				if (!candidates.some(file => file.path === filePath)) candidates.push({ path: filePath, scope });
+			}
 			const files = await Promise.all(
 				candidates.map(async file => ({
 					...file,
@@ -1014,9 +1016,16 @@ export class SelectorController {
 				})),
 			);
 			if (this.#openMenus.get(menu.kind) !== menu) return;
+			const generator = createAdvisorGenerator({
+				settings: this.ctx.settings,
+				modelRegistry: this.ctx.session.modelRegistry,
+				cwd,
+				availableToolNames: this.ctx.session.getAdvisorAvailableToolNames(),
+			});
 			// Fullscreen editor on the alternate screen (the /settings idiom): the
 			// overlay holds the alt buffer + mouse tracking; the transcript stays put.
 			const done = () => {
+				generator.dispose();
 				this.#releaseMenu(menu.kind, menu);
 				menu.handle?.hide();
 				this.focusActiveEditorArea();
@@ -1067,6 +1076,8 @@ export class SelectorController {
 					: undefined,
 			};
 			const overlay = new AdvisorScopeOverlayComponent(this.ctx.ui, deps, files, {
+				copyPrompt: copyToClipboard,
+				generateAdvisor: (bases, comment, signal) => generator.generate(bases, comment, signal),
 				openFile: filePath => this.#openConfigFile({ kind: "advisor", filePath }),
 				loadFile: loadWatchdogConfigFile,
 				saveFile: async (filePath, doc) => {
@@ -1078,7 +1089,7 @@ export class SelectorController {
 					// Re-discover the merged roster (project + user) so the live advisors
 					// reflect cross-level precedence, not just the edited file. Only
 					// advisors whose effective configuration changed restart.
-					const discovered = await discoverAdvisorConfigs(cwd, agentDir);
+					const discovered = await discoverAdvisorConfigs(cwd, agentDir, this.ctx.sessionManager.getArtifactsDir() ?? undefined);
 					const count = this.ctx.session.applyAdvisorConfigs(
 						advisorRosterForRuntime(discovered),
 						discovered.sharedInstructions,
@@ -1608,8 +1619,16 @@ export class SelectorController {
 						activeModelPattern,
 						defaultModelPattern,
 						model => this.ctx.session.effectiveServiceTier(model),
+						{
+							tools: () => this.ctx.session.getAllToolInfos(),
+							sessionDir: () => this.ctx.session.sessionManager.getArtifactsDir() ?? undefined,
+							externalEditor: text => {
+								const env = this.ctx.session.environment.snapshot();
+								const command = getEditorCommand(env);
+								return command ? openInEditor(command, text, { env }) : Promise.resolve(null);
+							},
+						},
 					),
-					openConfigFile: agent => this.#openConfigFile({ kind: "agent", filePath: agent.filePath }),
 				},
 				{ onCancel: () => done() },
 			);

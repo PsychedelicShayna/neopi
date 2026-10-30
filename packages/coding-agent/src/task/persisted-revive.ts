@@ -1,3 +1,4 @@
+import { agentAdvisorDeliveryOverrides } from "./agent-advisor";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { logger } from "@oh-my-pi/pi-utils";
@@ -192,6 +193,7 @@ export function createPersistedSubagentReviverFactory(
 								: undefined),
 						}
 					: undefined),
+				...agentAdvisorDeliveryOverrides(init.advisorConfigs),
 				...compactionThresholdSettings(init.compactionThreshold),
 			});
 			// Restore the `subagent:<id>` fallback chain the spawn installed; the
@@ -252,6 +254,7 @@ export function createPersistedSubagentReviverFactory(
 					...restoredSubagentThinkingOptions(reopened),
 					settings: subagentSettings,
 					sessionManager: reopened,
+					advisorConfigs: init.advisorConfigs,
 					agentId: ref.id,
 					agentDisplayName: ref.displayName,
 					// `agents` rule scoping keys on the durable definition name (`scout`,

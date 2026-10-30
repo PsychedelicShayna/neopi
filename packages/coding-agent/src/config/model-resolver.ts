@@ -1,3 +1,4 @@
+import type { AgentAdvisor } from "@oh-my-pi/pi-tui/overlays/agent-definition-editor";
 import {
 	MAX_THINKING_SUFFIX_OPTIONS,
 	parseThinkingSuffix,
@@ -1448,13 +1449,14 @@ export function resolveAgentPrewalkPattern(options: AgentPrewalkResolutionOption
 export interface AgentAdvisorResolutionOptions {
 	/** `task.agentAdvisor` settings value for this agent: `"on"`, `"off"`, or a model pattern. */
 	settingsOverride?: string;
-	/** Agent definition `advisor` frontmatter: `true` = default advisor-role model, string = custom model pattern. */
-	agentAdvisor?: boolean | string;
+	/** Advisor role/model, named catalog reference, or private inline definition. */
+	agentAdvisor?: AgentAdvisor;
 }
 
 /** Effective advisor for one spawned agent: absent `model` resolves through the `advisor` role. */
 export interface AgentAdvisorSelection {
 	model?: string;
+	definition?: Exclude<AgentAdvisor, boolean | string>;
 }
 
 /**
@@ -1475,10 +1477,11 @@ export function resolveAgentAdvisorSelection(
 	if (override) {
 		const lowered = override.toLowerCase();
 		if (lowered === "off" || lowered === "false") return undefined;
-		if (lowered === "on" || lowered === "true") return { model: agentPattern };
+		if (lowered === "on" || lowered === "true") return typeof options.agentAdvisor === "object" ? { definition: options.agentAdvisor } : { model: agentPattern };
 		return { model: override };
 	}
 	if (options.agentAdvisor === true) return {};
+	if (typeof options.agentAdvisor === "object") return { definition: options.agentAdvisor };
 	return agentPattern ? { model: agentPattern } : undefined;
 }
 

@@ -34,6 +34,8 @@ import { resolveClaudePaths } from "../config/claude-paths";
 import type { MCPRequestIdFormat } from "../mcp/types";
 import { type ConfiguredThinkingLevel, parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import { normalizeToolNames } from "../tools/builtin-names";
+import type { AgentAdvisor } from "@oh-my-pi/pi-tui/overlays/agent-definition-editor";
+import { parseAgentAdvisor } from "../task/agent-advisor";
 
 import { realpathIfExists, resolveContainedPath } from "./contained-path";
 import { buildPluginDirRoot } from "./plugin-dir-roots";
@@ -309,8 +311,8 @@ export interface ParsedAgentFields {
 	structured?: boolean;
 	/** `true` = prewalk into the default target; string = prewalk into that model pattern. */
 	prewalk?: boolean | string;
-	/** `true` = advise with the default advisor-role model; string = advise with that model pattern. */
-	advisor?: boolean | string;
+	/** Advisor role/model, named catalog reference, or private inline definition. */
+	advisor?: AgentAdvisor;
 }
 
 /**
@@ -394,12 +396,7 @@ export function parseAgentFields(frontmatter: Record<string, unknown>): ParsedAg
 		const trimmed = frontmatter.prewalk.trim();
 		if (trimmed) prewalk = trimmed;
 	}
-	// advisor: true → advise with the default advisor-role model; "<pattern>" → custom advisor model.
-	let advisor: boolean | string | undefined = parseBoolean(frontmatter.advisor);
-	if (advisor === undefined && typeof frontmatter.advisor === "string") {
-		const trimmed = frontmatter.advisor.trim();
-		if (trimmed) advisor = trimmed;
-	}
+	const advisor = parseAgentAdvisor(frontmatter.advisor);
 	const autoloadSkills = parseArrayOrCSV(frontmatter.autoloadSkills)
 		?.map(s => s.trim())
 		.filter(Boolean);

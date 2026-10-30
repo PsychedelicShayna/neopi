@@ -65,7 +65,9 @@ describe("advisor review mode picker", () => {
 		overlay.handleInput("\r"); // Review mode.
 		overlay.handleInput("\r"); // Accept current mode without navigating.
 		overlay.handleInput("\x1b"); // Back to roster.
-		for (let i = 0; i < 4; i++) overlay.handleInput("\x1b[B");
+		overlay.handleInput("G"); // Close, the last roster row.
+		overlay.handleInput("\x1b[A"); // Save & apply.
+		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "save" });
 		overlay.handleInput("\r"); // Save & apply.
 		await Promise.resolve();
 
@@ -102,7 +104,9 @@ describe("advisor sync backlog picker", () => {
 		for (let i = 0; i < 5; i++) overlay.handleInput("\x1b[B");
 		overlay.handleInput("\r"); // Pick strict.
 		overlay.handleInput("\x1b"); // Back to roster.
-		for (let i = 0; i < 4; i++) overlay.handleInput("\x1b[B");
+		overlay.handleInput("G"); // Close, the last roster row.
+		overlay.handleInput("\x1b[A"); // Save & apply.
+		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "save" });
 		overlay.handleInput("\r"); // Save & apply.
 		await Promise.resolve();
 
@@ -121,7 +125,9 @@ describe("advisor sync backlog picker", () => {
 		overlay.handleInput("\x1b[A"); // Up to inherit.
 		overlay.handleInput("\r"); // Pick inherit.
 		overlay.handleInput("\x1b"); // Back to roster.
-		for (let i = 0; i < 4; i++) overlay.handleInput("\x1b[B");
+		overlay.handleInput("G"); // Close, the last roster row.
+		overlay.handleInput("\x1b[A"); // Save & apply.
+		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "save" });
 		overlay.handleInput("\r"); // Save & apply.
 		await Promise.resolve();
 
@@ -140,7 +146,9 @@ describe("advisor sync backlog picker", () => {
 		for (let i = 0; i < 5; i++) overlay.handleInput("\x1b[B");
 		overlay.handleInput("\r"); // Pick strict.
 		overlay.handleInput("\x1b"); // Back to roster.
-		for (let i = 0; i < 4; i++) overlay.handleInput("\x1b[B");
+		overlay.handleInput("G"); // Close, the last roster row.
+		overlay.handleInput("\x1b[A"); // Save & apply.
+		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "save" });
 		overlay.handleInput("\r"); // Save & apply.
 		await Promise.resolve();
 
@@ -188,7 +196,9 @@ describe("advisor sync backlog picker", () => {
 			saved = structuredClone(doc);
 		});
 
-		for (let i = 0; i < 4; i++) overlay.handleInput("\x1b[B");
+		overlay.handleInput("G"); // Close, the last roster row.
+		overlay.handleInput("\x1b[A"); // Save & apply.
+		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "save" });
 		overlay.handleInput("\r"); // Save & apply without touching the seeded row.
 		await Promise.resolve();
 
@@ -239,7 +249,9 @@ describe("advisor sync backlog picker", () => {
 		});
 
 		overlay.handleInput(" "); // alpha off
-		for (let i = 0; i < 4; i++) overlay.handleInput("\x1b[B"); // → Save & apply
+		overlay.handleInput("G"); // Close, the last roster row.
+		overlay.handleInput("\x1b[A"); // Save & apply.
+		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "save" });
 		overlay.handleInput(" ");
 		await Promise.resolve();
 
@@ -292,7 +304,9 @@ describe("advisor sync backlog picker", () => {
 			saved = structuredClone(doc);
 		});
 
-		for (let i = 0; i < 4; i++) overlay.handleInput("\x1b[B");
+		overlay.handleInput("G"); // Close, the last roster row.
+		overlay.handleInput("\x1b[A"); // Save & apply.
+		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "save" });
 		overlay.handleInput("\r"); // Save & apply without touching the row.
 		await Promise.resolve();
 
@@ -313,7 +327,9 @@ describe("advisor sync backlog picker", () => {
 				saved = structuredClone(doc);
 			});
 
-			for (let i = 0; i < 4; i++) overlay.handleInput("\x1b[B");
+			overlay.handleInput("G"); // Close, the last roster row.
+			overlay.handleInput("\x1b[A"); // Save & apply.
+			expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "save" });
 			overlay.handleInput("\r");
 			await Promise.resolve();
 
@@ -321,49 +337,14 @@ describe("advisor sync backlog picker", () => {
 		}
 	});
 
-	it("surfaces the newly active file's warnings on scope switch, and only there", async () => {
-		const warnings: string[] = [];
-		let pendingLoad: Promise<WatchdogConfigDoc> | undefined;
-		const overlay = new AdvisorConfigOverlayComponent(
-			{} as TUI,
-			deps,
-			"project",
-			{ advisors: [{ name: "Reviewer" }] },
-			{
-				loadDoc: () => {
-					pendingLoad = Promise.resolve({
-						advisors: [],
-						warnings: [
-							`${path.join(os.homedir(), ".omp", "WATCHDOG.yml")}: advisor "\x1b[31mBad\tName\x1b[0m" dropped — boom`,
-						],
-					});
-					return pendingLoad;
-				},
-				save: async () => {},
-				apply: async () => {},
-				close: () => {},
-				requestRender: () => {},
-				notify: () => {},
-				warn: message => warnings.push(message),
-			},
-		);
-
-		// Opening the project file shows nothing — the host owns initial warnings.
-		expect(warnings).toEqual([]);
-
-		for (let i = 0; i < 3; i++) overlay.handleInput("\x1b[B");
-		overlay.handleInput("\r"); // Switch scope to user.
-		// The overlay awaits the same promise; awaiting it here runs after its continuation.
-		await pendingLoad;
-
-		expect(warnings).toHaveLength(1);
-		expect(warnings[0]).toContain('advisor "Bad   Name" dropped');
-		expect(warnings[0]).toContain("~/.omp/WATCHDOG.yml");
-		expect(warnings[0]).not.toContain(path.join(os.homedir(), ".omp", "WATCHDOG.yml"));
-		// The toast is chat-mounted behind the fullscreen overlay, so the warning
-		// must also render inside the editor itself.
+	it("keeps file warnings visible without the obsolete bottom scope button", () => {
+		const overlay = buildOverlay({
+			advisors: [{ name: "Reviewer" }],
+			warnings: [`${path.join(os.homedir(), ".omp", "WATCHDOG.yml")}: advisor "Bad\tName" dropped`],
+		}, () => {});
 		const frame = overlay.render(100).join("\n");
 		expect(frame).toContain('advisor "Bad   Name" dropped');
+		expect(frame).not.toContain("Scope: project");
 	});
 
 	it("renders the opening file's warnings inside the overlay without re-notifying", () => {
@@ -694,30 +675,17 @@ describe("advisor menu navigation and history", () => {
 		}
 	});
 
-	it("blocks actual save/apply operations but discards a stale read-only scope result after restore", async () => {
+	it("blocks menu history while real save and apply operations are pending", async () => {
 		const saving = Promise.withResolvers<void>();
 		const applying = Promise.withResolvers<void>();
-		const load = Promise.withResolvers<WatchdogConfigDoc>();
 		const h = make(
 			{ advisors: [{ name: "Reviewer" }] },
 			{
 				save: () => saving.promise,
 				apply: () => applying.promise,
-				loadDoc: () => load.promise,
 			},
 		);
 		try {
-			const original = h.overlay.navigationSnapshot();
-			h.overlay.handleInput("/");
-			h.overlay.handleInput("Scope");
-			h.overlay.handleInput("\r");
-			h.overlay.handleInput("\r");
-			expect(h.overlay.blocksMenuHistory).toBe(false);
-			h.overlay.restoreNavigation(original);
-			load.resolve({ advisors: [{ name: "Late" }] });
-			await new Promise<void>(resolve => setImmediate(resolve));
-			expect(h.overlay.navigationSnapshot().scope).toBe("project");
-			expect(h.overlay.navigationSnapshot().doc.advisors[0]?.name).toBe("Reviewer");
 			h.overlay.handleInput(" ");
 			h.overlay.handleInput("s");
 			expect(h.overlay.blocksMenuHistory).toBe(true);

@@ -52,7 +52,7 @@ existing subsystems; the launcher does not implement another routing engine.
 Task agents normalize into `AgentDefinition` (`src/task/types.ts`):
 
 - required `name`, `description`, and `systemPrompt`
-- optional `tools`, `spawns`, prioritized `model` list, `thinkingLevel`, `output`, `blocking`, `structured`, `autoloadSkills`, `readSummarize`, `prewalk`, `advisor`
+- optional `harness`, `tools`, `spawns`, prioritized `model` list, `thinkingLevel`, `output`, `blocking`, `structured`, `autoloadSkills`, `readSummarize`, `prewalk`, `advisor`
 - `source`: `"bundled" | "user" | "project"` (extension agents are tagged with their extension root's project/user level)
 - optional `filePath`
 
@@ -72,6 +72,45 @@ Parsing comes from frontmatter via `parseAgentFields()` (`src/discovery/helpers.
 - `autoloadSkills` names skills from the parent session to inject before the first child prompt; unknown names are ignored
 - `prewalk: true` enables the configured [planning and execution crews](./prewalk.md#configure-the-crews) at the first edit/write. An empty planner preserves normal task model routing; execution defaults to `@smol`. A string such as `prewalk: "@smol"` or `prewalk: "openai/gpt-5-mini"` overrides the execution primary selector. `task.agentPrewalk` entries take precedence over frontmatter. Ordered crew fallbacks skip unavailable or unauthenticated candidates. If a configured crew is unavailable, the spawn keeps normal task routing without prewalk. A target is skipped only when both model identity and effective thinking match; effort-only handoffs still arm.
 - `advisor: true` pairs spawned sessions of the agent with an advisor running the model resolved for the `advisor` role; a string value (e.g. `advisor: "deepseek/deepseek-v4-flash"` or `advisor: "@smol:high"`) sets an explicit advisor model pattern (optional `:level` suffix), applied as the spawned session's `modelRoles.advisor`. The `task.agentAdvisor` settings record (agent name → `"on"` / `"off"` / pattern, configured per agent from the `/agents` hub via its advisor strip) overrides the frontmatter. Resolution happens in `runSubprocess` (`src/task/executor.ts`); subagents default to no advisor, and the effective opt-in is persisted in `session_init` so cold revival restores it.
+
+### Rich definition editing
+
+Use **Edit definition** (Ctrl-G) in `/agents` for an existing definition, or **New agent** to start an empty draft. Both open the same editor. Every supported field appears even when absent. Existing files are edited in place; new definitions and copies of bundled agents can be saved in Project or User scope.
+
+The Tools page lists built-ins, hidden structured-output tools and registered extension tools as checkboxes. Default selection remains distinct from an explicit empty allowlist. Structured output has an enable toggle, a JSON Schema / JSON Type Definition selector, nested field rows, required switches and descriptions. Its typed keyword forms support constraints, enums, lists, tagged unions, references and other schema metadata without editing YAML.
+
+**Edit definition file contents** opens the Markdown/front-matter document directly. Rich and raw edits share one draft and write only when saved. Ctrl-G inside a text field opens the configured external editor. With a field row selected, `r` generates that field from the current draft; `R` or Ctrl-R first asks for a comment. **Generate everything** fills the full definition, and **Generate from existing definitions** mixes only the selected bases while preserving pre-set fields. Comment-driven generation retains its conversation for `task.definitionGenerationConversationTtlMs` (one hour by default). Esc leaves every editor page and cancels active generation.
+
+### Named and inline advisors
+
+In addition to the unchanged boolean and model-selector forms, `advisor` accepts a named reference:
+
+```yaml
+advisor:
+  ref: velvet
+  scope: project-omp
+```
+
+`scope` is optional; accepted sources are `user`, `project` (project root), `project-omp` (`.omp/WATCHDOG.yml`) and `session`. An explicit scope selects that source even when another file shadows the same advisor name. A missing reference fails the spawn rather than silently substituting another advisor.
+
+Or attach a private definition:
+
+```yaml
+advisor:
+  inline:
+    name: careful-review
+    model: "@advisor"
+    instructions: Check the proposed change and explain concrete concerns.
+    reviewMode: turn
+    includeThinking: true
+    delivery:
+      nit: on-yield
+      concern: next-tool-call
+      blocker: next-tool-call
+```
+
+Inline definitions support the same model, tools, instructions, base prompt override, enablement, thinking visibility, note budget, review cadence, backlog and session-kind scope as `/advisor configure`. Delivery can be set independently per severity to `on-yield` or `next-tool-call`. Omitted model uses the advisor role. The watched agent and advisory target are implicitly the definition being edited; no ingest-source configuration is introduced. The resolved private roster is passed only to the spawned session and retained for revival, never added to a WATCHDOG catalog.
+
 
 ## Role-backed custom agents
 

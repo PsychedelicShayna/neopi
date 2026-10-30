@@ -1,3 +1,4 @@
+import type { ApiKeyLoginResult } from "../registry/oauth/types";
 import { logger } from "@oh-my-pi/pi-utils";
 import { resolveCredentialIdentityKey, serializeCredential } from "./sqlite-credential-store";
 import type { BlockStoreHealth } from "./blocks";
@@ -11,6 +12,7 @@ import type {
 	AuthCredentialSnapshot,
 	AuthCredentialSnapshotEntry,
 	AuthStorageData,
+	CredentialUpsertOptions,
 	CredentialDisabledEvent,
 	CredentialsApi,
 	DisabledCredentialSummary,
@@ -52,7 +54,18 @@ export function credentialDisabledEvent(
 export function authCredentialEquals(left: AuthCredential, right: AuthCredential): boolean {
 	if (left.type !== right.type) return false;
 	if (left.type === "api_key") {
-		return right.type === "api_key" && left.key === right.key;
+		return (
+			right.type === "api_key" &&
+			left.key === right.key &&
+			left.source === right.source &&
+			left.requestOrigin === right.requestOrigin &&
+			(left.tlsTrust === right.tlsTrust ||
+				(left.tlsTrust != null &&
+					right.tlsTrust != null &&
+					left.tlsTrust.origin === right.tlsTrust.origin &&
+					left.tlsTrust.caPem === right.tlsTrust.caPem &&
+					left.tlsTrust.caFingerprint256 === right.tlsTrust.caFingerprint256))
+		);
 	}
 	if (right.type !== "oauth") return false;
 	return (
@@ -142,9 +155,19 @@ export class CredentialPool implements CredentialsApi {
 	}
 
 	/** Persist a login-entered API key. */
-	async storeLoginApiKey(provider: string, key: string): Promise<void> {
-		const credential: ApiKeyCredential = { type: "api_key", key, source: "login" };
-		const stored = await this.#store.upsertAuthCredential(provider, credential);
+	async storeLoginApiKey(provider: string, input: string | ApiKeyLoginResult): Promise<void> {
+		const options = typeof input === "string" ? undefined : input;
+		const key = typeof input === "string" ? input : input.key;
+		const credential: ApiKeyCredential = {
+			type: "api_key",
+			key,
+			source: "login",
+			...(options?.tlsTrust !== undefined ? { tlsTrust: options.tlsTrust } : {}),
+			...(options?.requestOrigin !== undefined ? { requestOrigin: options.requestOrigin } : {}),
+		};
+		const stored = options?.replaceExisting
+			? await this.#store.upsertAuthCredential(provider, credential, { replaceApiKeys: true })
+			: await this.#store.upsertAuthCredential(provider, credential);
 		this.replace(
 			provider,
 			stored.map(entry => ({ id: entry.id, credential: entry.credential })),
@@ -768,8 +791,12 @@ export class CredentialPool implements CredentialsApi {
 	 * does identity-key matching, so re-uploading the same email/account replaces
 	 * the existing row instead of inserting a duplicate.
 	 */
-	async upsert(provider: string, credential: AuthCredential): Promise<AuthCredentialSnapshotEntry[]> {
-		const stored = await this.#store.upsertAuthCredential(provider, credential);
+	async upsert(
+		provider: string,
+		credential: AuthCredential,
+		options?: CredentialUpsertOptions,
+	): Promise<AuthCredentialSnapshotEntry[]> {
+		const stored = await this.#store.upsertAuthCredential(provider, credential, options);
 		this.replace(
 			provider,
 			stored.map(entry => ({ id: entry.id, credential: entry.credential })),

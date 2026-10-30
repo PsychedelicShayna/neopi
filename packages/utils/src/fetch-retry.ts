@@ -1,4 +1,5 @@
 import { scheduler } from "node:timers/promises";
+import { CredentialScopeError } from "./tls-fetch";
 
 // "reset after 1h2m3s" / "10m15s" / "39s"
 const QUOTA_RESET_PATTERN = /reset after (?:(\d+)h)?(?:(\d+)m)?(\d+(?:\.\d+)?)s/i;
@@ -366,6 +367,7 @@ export async function fetchWithRetry(
 			response = await fetchImpl(requestUrl, init);
 		} catch (error) {
 			if (signal?.aborted) throw new Error("Request was aborted");
+			if (error instanceof CredentialScopeError) throw error;
 			const wrapped = wrapNetworkError(error);
 			if (attempt + 1 >= maxAttempts) throw wrapped;
 			await waitForRetry(resolveDefaultDelay(defaultDelayMs, attempt, maxDelayMs), signal);
@@ -529,6 +531,7 @@ const VALIDATION_MESSAGE_PATTERN =
  * and validation-shaped messages short-circuit to `false`.
  */
 export function isRetryableError(error: unknown): boolean {
+	if (error instanceof CredentialScopeError) return false;
 	const info = error as { message?: string; name?: string } | null;
 	const message = info?.message ?? "";
 	const name = info?.name ?? "";

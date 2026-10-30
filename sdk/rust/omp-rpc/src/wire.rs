@@ -5898,6 +5898,8 @@ pub struct ConfirmUiRequest {
 	pub message: String,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub timeout: Option<i64>,
+	#[serde(rename = "loginId", default, skip_serializing_if = "Option::is_none")]
+	pub login_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -5939,6 +5941,8 @@ pub struct CancelUiRequest {
 	pub id: String,
 	#[serde(rename = "targetId")]
 	pub target_id: String,
+	#[serde(rename = "loginId", default, skip_serializing_if = "Option::is_none")]
+	pub login_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -7264,6 +7268,10 @@ pub struct GetLoginProvidersResult {
 pub struct LoginParams {
 	#[serde(rename = "providerId")]
 	pub provider_id: String,
+	#[serde(rename = "allowSecretInput", default, skip_serializing_if = "Option::is_none")]
+	pub allow_secret_input: Option<bool>,
+	#[serde(rename = "allowTrustConfirmation", default, skip_serializing_if = "Option::is_none")]
+	pub allow_trust_confirmation: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -10339,11 +10347,15 @@ impl Command for GetLoginProvidersCommand {
 	}
 }
 
-/// Run OAuth login; the flow arrives as `open_url` and `input` UI requests.
+/// Run native login with loginId-scoped UI requests; secret input and trust confirmation require explicit capabilities.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LoginCommand {
 	#[serde(rename = "providerId")]
 	pub provider_id: String,
+	#[serde(rename = "allowSecretInput", default, skip_serializing_if = "Option::is_none")]
+	pub allow_secret_input: Option<bool>,
+	#[serde(rename = "allowTrustConfirmation", default, skip_serializing_if = "Option::is_none")]
+	pub allow_trust_confirmation: Option<bool>,
 }
 
 impl Command for LoginCommand {

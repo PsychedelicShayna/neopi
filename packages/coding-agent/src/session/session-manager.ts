@@ -1,3 +1,4 @@
+import type { InlineAgentAdvisor } from "@oh-my-pi/pi-tui/overlays/agent-definition-editor";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type {
@@ -3890,6 +3891,7 @@ export class SessionManager {
 		spawns?: string;
 		readSummarize?: boolean;
 		advisor?: string;
+		advisorConfigs?: readonly InlineAgentAdvisor[];
 		compactionThreshold?: { thresholdPercent: number; thresholdTokens: number };
 		isolated?: boolean;
 		workPoolYieldItems?: WorkPoolYieldItem[];
@@ -5015,6 +5017,7 @@ export interface PersistedSessionInit {
 	spawns?: string;
 	readSummarize?: boolean;
 	advisor?: string;
+	advisorConfigs?: readonly InlineAgentAdvisor[];
 	compactionThreshold?: { thresholdPercent: number; thresholdTokens: number };
 	isolated?: boolean;
 	workPoolYieldItems?: WorkPoolYieldItem[];
@@ -5043,6 +5046,7 @@ export function extractSessionInit(entries: readonly FileEntry[]): PersistedSess
 			readSummarize: entry.readSummarize,
 			spawns: entry.spawns,
 			advisor: entry.advisor,
+			advisorConfigs: entry.advisorConfigs,
 			isolated: entry.isolated,
 			...(entry.compactionThreshold !== undefined ? { compactionThreshold: entry.compactionThreshold } : undefined),
 			...(entry.workPoolYieldItems !== undefined ? { workPoolYieldItems: entry.workPoolYieldItems } : undefined),

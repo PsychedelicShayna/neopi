@@ -10,6 +10,12 @@
  * shapes lands in the right bucket.
  */
 
+import {
+	CredentialScopeError,
+	isTlsCertificateError,
+	TLS_CERTIFICATE_TEXT_PATTERN,
+} from "@oh-my-pi/pi-utils/tls-fetch";
+
 /** Transport-level failure families that get their own user-visible wording. */
 export type NetworkFailureKind = "offline" | "unreachable" | "refused" | "tls";
 
@@ -36,10 +42,6 @@ const UNREACHABLE_CODE_PATTERN = /^(?:ENOTFOUND|FailedToOpenSocket)$/i;
 const UNREACHABLE_TEXT_PATTERN = /\b(?:ENOTFOUND|FailedToOpenSocket|getaddrinfo)\b/i;
 const REFUSED_CODE_PATTERN = /^(?:ECONNREFUSED|ConnectionRefused)$/i;
 const REFUSED_TEXT_PATTERN = /\bECONNREFUSED\b|\bConnectionRefused\b|\bUnable to connect\b/i;
-const TLS_CODE_PATTERN =
-	/^(?:CERT_|SELF_SIGNED|UNABLE_TO_GET_ISSUER_CERT|UNABLE_TO_VERIFY|DEPTH_ZERO_SELF_SIGNED_CERT|ERR_TLS_CERT)/i;
-const TLS_TEXT_PATTERN =
-	/unable to verify|certificate verif(?:y|ication)|self[- ]signed certificate|\bCERT_[A-Z_]+\b|\bSELF_SIGNED[A-Z_]*\b|\bUNABLE_TO_GET_ISSUER_CERT[A-Z_]*\b|\bUNABLE_TO_VERIFY_LEAF_SIGNATURE\b/i;
 const GETADDRINFO_HOST_PATTERN = /\bgetaddrinfo\s+[A-Z_]+\s+([^\s,)]+)/i;
 const CONNECT_HOST_PATTERN = /\b(?:connect|connection to)\s+[A-Z_]+\s+([^\s,)]+?)(?::\d+)?(?=[\s,)]|$)/i;
 const BARE_HOST_PATTERN = /\b((?:[a-z0-9-]+\.)+[a-z]{2,})\b/i;
@@ -54,8 +56,7 @@ interface Link {
 
 function kindOf(code: string | undefined, message: string | undefined): NetworkFailureKind | undefined {
 	// TLS first: a certificate failure usually also reads as a failed connect.
-	if (code !== undefined && TLS_CODE_PATTERN.test(code)) return "tls";
-	if (message !== undefined && TLS_TEXT_PATTERN.test(message)) return "tls";
+	if (isTlsCertificateError(code, message)) return "tls";
 	if (code !== undefined && REFUSED_CODE_PATTERN.test(code)) return "refused";
 	if (message !== undefined && REFUSED_TEXT_PATTERN.test(message)) return "refused";
 	// Offline before unreachable: `getaddrinfo ETIMEOUT` matches both text patterns.
@@ -81,7 +82,7 @@ function detailOf(kind: NetworkFailureKind, code: string | undefined, message: s
 	// The refused template already carries its own wording.
 	if (kind === "refused") return undefined;
 	if (kind === "tls" && code !== undefined) return code;
-	const pattern = kind === "tls" ? TLS_TEXT_PATTERN : GETADDRINFO_DETAIL_PATTERN;
+	const pattern = kind === "tls" ? TLS_CERTIFICATE_TEXT_PATTERN : GETADDRINFO_DETAIL_PATTERN;
 	const matched = message === undefined ? undefined : pattern.exec(message)?.[0];
 	if (matched !== undefined) return matched.replace(/\s+/g, " ").trim().slice(0, MAX_DETAIL_LENGTH);
 	if (kind === "tls") return undefined;
@@ -174,6 +175,7 @@ export function networkFailureMessage(err: unknown, requestUrl?: string): string
  * returned untouched, so provider/HTTP errors keep their identity.
  */
 export function networkFailureError(err: unknown, requestUrl?: string): unknown {
+	if (err instanceof CredentialScopeError) return err;
 	const message = networkFailureMessage(err, requestUrl);
 	return message === undefined ? err : new Error(message, { cause: err });
 }
