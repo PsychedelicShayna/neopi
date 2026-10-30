@@ -65,7 +65,9 @@ describe("advisor review mode picker", () => {
 		overlay.handleInput("\r"); // Review mode.
 		overlay.handleInput("\r"); // Accept current mode without navigating.
 		overlay.handleInput("\x1b"); // Back to roster.
-		for (let i = 0; i < 4; i++) overlay.handleInput("\x1b[B");
+		overlay.handleInput("G"); // Close, the last roster row.
+		overlay.handleInput("\x1b[A"); // Save & apply.
+		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "save" });
 		overlay.handleInput("\r"); // Save & apply.
 		await Promise.resolve();
 
@@ -102,7 +104,9 @@ describe("advisor sync backlog picker", () => {
 		for (let i = 0; i < 5; i++) overlay.handleInput("\x1b[B");
 		overlay.handleInput("\r"); // Pick strict.
 		overlay.handleInput("\x1b"); // Back to roster.
-		for (let i = 0; i < 4; i++) overlay.handleInput("\x1b[B");
+		overlay.handleInput("G"); // Close, the last roster row.
+		overlay.handleInput("\x1b[A"); // Save & apply.
+		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "save" });
 		overlay.handleInput("\r"); // Save & apply.
 		await Promise.resolve();
 
@@ -121,7 +125,9 @@ describe("advisor sync backlog picker", () => {
 		overlay.handleInput("\x1b[A"); // Up to inherit.
 		overlay.handleInput("\r"); // Pick inherit.
 		overlay.handleInput("\x1b"); // Back to roster.
-		for (let i = 0; i < 4; i++) overlay.handleInput("\x1b[B");
+		overlay.handleInput("G"); // Close, the last roster row.
+		overlay.handleInput("\x1b[A"); // Save & apply.
+		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "save" });
 		overlay.handleInput("\r"); // Save & apply.
 		await Promise.resolve();
 
@@ -140,7 +146,9 @@ describe("advisor sync backlog picker", () => {
 		for (let i = 0; i < 5; i++) overlay.handleInput("\x1b[B");
 		overlay.handleInput("\r"); // Pick strict.
 		overlay.handleInput("\x1b"); // Back to roster.
-		for (let i = 0; i < 4; i++) overlay.handleInput("\x1b[B");
+		overlay.handleInput("G"); // Close, the last roster row.
+		overlay.handleInput("\x1b[A"); // Save & apply.
+		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "save" });
 		overlay.handleInput("\r"); // Save & apply.
 		await Promise.resolve();
 
@@ -188,7 +196,9 @@ describe("advisor sync backlog picker", () => {
 			saved = structuredClone(doc);
 		});
 
-		for (let i = 0; i < 4; i++) overlay.handleInput("\x1b[B");
+		overlay.handleInput("G"); // Close, the last roster row.
+		overlay.handleInput("\x1b[A"); // Save & apply.
+		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "save" });
 		overlay.handleInput("\r"); // Save & apply without touching the seeded row.
 		await Promise.resolve();
 
@@ -239,7 +249,9 @@ describe("advisor sync backlog picker", () => {
 		});
 
 		overlay.handleInput(" "); // alpha off
-		for (let i = 0; i < 4; i++) overlay.handleInput("\x1b[B"); // → Save & apply
+		overlay.handleInput("G"); // Close, the last roster row.
+		overlay.handleInput("\x1b[A"); // Save & apply.
+		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "save" });
 		overlay.handleInput(" ");
 		await Promise.resolve();
 
@@ -292,7 +304,9 @@ describe("advisor sync backlog picker", () => {
 			saved = structuredClone(doc);
 		});
 
-		for (let i = 0; i < 4; i++) overlay.handleInput("\x1b[B");
+		overlay.handleInput("G"); // Close, the last roster row.
+		overlay.handleInput("\x1b[A"); // Save & apply.
+		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "save" });
 		overlay.handleInput("\r"); // Save & apply without touching the row.
 		await Promise.resolve();
 
@@ -313,7 +327,9 @@ describe("advisor sync backlog picker", () => {
 				saved = structuredClone(doc);
 			});
 
-			for (let i = 0; i < 4; i++) overlay.handleInput("\x1b[B");
+			overlay.handleInput("G"); // Close, the last roster row.
+			overlay.handleInput("\x1b[A"); // Save & apply.
+			expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "save" });
 			overlay.handleInput("\r");
 			await Promise.resolve();
 

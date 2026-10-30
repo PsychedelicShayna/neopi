@@ -273,7 +273,18 @@ describe("advisor file scopes", () => {
 			{ name: "User" },
 			{ id: expect.any(String), name: "User 2", instructions: "A combined review", tools: ["read"] },
 		]);
+		expect(f.applies()).toBe(0);
+		expect(f.writes).toEqual([f.files[0].path]);
+
+		f.overlay.handleInput("a");
+		await settle();
 		expect(f.applies()).toBe(1);
+		expect(f.writes).toEqual([f.files[0].path]);
+
+		f.overlay.handleInput("a");
+		await settle();
+		expect(f.applies()).toBe(1);
+		expect(f.writes).toEqual([f.files[0].path]);
 	});
 
 	it("generates from selected advisors and Esc cancels without accepting a late result", async () => {
