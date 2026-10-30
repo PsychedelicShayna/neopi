@@ -419,10 +419,11 @@ interface OwnLayers {
 	projectToml?: RawSettings;
 	configOverlay: RawSettings;
 	overrides: RawSettings;
+	session: RawSettings;
 }
 
 /** The layers an {@link Settings.overlay} child writes locally; see {@link Settings.overlayLayers}. */
-export type OverlayLayers = Readonly<Pick<OwnLayers, "global" | "overrides">>;
+export type OverlayLayers = Readonly<Pick<OwnLayers, "global" | "overrides" | "session">>;
 
 /** A persisted layer re-read from disk: its new value, the file(s) it came from, and the read-side state it commits. */
 interface LayerRefresh {
@@ -957,7 +958,7 @@ export class Settings {
 	 * this plain data instead of the live child with its merged view, memoized values and listeners.
 	 */
 	overlayLayers(): OverlayLayers {
-		return structuredClone({ global: this.#global, overrides: this.#overrides });
+		return structuredClone({ global: this.#global, overrides: this.#overrides, session: this.#session });
 	}
 
 	/** {@link overlay} of this instance whose own layers are `layers` (from {@link overlayLayers}). */
@@ -965,6 +966,7 @@ export class Settings {
 		const child = this.overlay();
 		child.#global = structuredClone(layers.global);
 		child.#overrides = structuredClone(layers.overrides);
+		child.#session = structuredClone(layers.session);
 		child.#rebuildMerged();
 		return child;
 	}
@@ -1631,15 +1633,20 @@ export class Settings {
 		this.#watchReloadTimer.unref();
 	}
 
+	/** Shared watcher/explicit-Apply path: adopt each valid durable layer and notify live consumers. */
+	async applySettingsReload(): Promise<void> {
+		if (!this.#persist) return;
+		await this.#exclusive("keep-last-good", () => this.#reloadPersistedLayers("keep-last-good"));
+		this.#syncFileWatchers();
+	}
+
 	async #reloadFromWatch(): Promise<void> {
 		if (!this.#watchingFiles) return;
 		try {
-			await this.#exclusive("keep-last-good", () => this.#reloadPersistedLayers("keep-last-good"));
+			await this.applySettingsReload();
 		} catch (error) {
 			logger.warn("Settings: failed to apply on-disk config change", { error: String(error) });
 		}
-		// Sources may have appeared, moved, or vanished; re-target the watchers.
-		this.#syncFileWatchers();
 	}
 
 	/**
@@ -2408,8 +2415,6 @@ export class Settings {
 			this.#modifiedProjectRoleEfforts.add(role);
 			this.#persistedMutationGeneration++;
 			this.#rebuildMerged();
-			this.#captureRuntimeModelRoleOverride(role);
-			this.#updateRuntimeModelRoleOverride(role, selector);
 			this.#fireIfChanged(cfgModelRoles, previousRoles);
 			this.#fireIfChanged(cfgRoleEffortSelections, previousEfforts);
 			this.#queueProjectSave();
@@ -2435,9 +2440,9 @@ export class Settings {
 		this.#releaseSoftPin(cfgRoleEffortSelections);
 		this.#persistedMutationGeneration++;
 		this.#rebuildMerged();
-		if (!this.isProjectModelRoleRuntimeOverrideActive(role)) {
+		if (this.isProjectModelRoleRuntimeOverrideActive(role)) {
 			this.#savedRuntimeModelRoleOverrides.delete(role);
-			this.#updateRuntimeModelRoleOverride(role, selector);
+			this.#updateRuntimeModelRoleOverride(role, undefined);
 		}
 		this.#fireIfChanged(cfgModelRoles, previousRoles);
 		this.#fireIfChanged(cfgRoleEffortSelections, previousEfforts);
@@ -5172,6 +5177,7 @@ export class Settings {
 			projectToml: this.#projectToml,
 			configOverlay: this.#configOverlay,
 			overrides: this.#overrides,
+			session: this.#session,
 		};
 	}
 
@@ -5180,7 +5186,7 @@ export class Settings {
 		// TOML is folded into each mutable scope at read time, before setters run.
 		let merged = this.#deepMerge(this.#deepMerge({}, layers.global), projectLayerForMerge(layers.project));
 		merged = this.#deepMerge(merged, layers.configOverlay);
-		return this.#deepMerge(this.#deepMerge(merged, this.#session), layers.overrides);
+		return this.#deepMerge(this.#deepMerge(merged, layers.session), layers.overrides);
 	}
 
 	/** `own` merged over an overlay parent's current view (itself for a root instance). */

@@ -12624,6 +12624,7 @@ export class AgentSession implements SettingsScope {
 		}
 
 		await this.flushToDisk();
+		await this.settings.saveSessionSettings();
 		// Work admitted during the hook or flush awaits would be copied mid-flight.
 		if (requireIdleFor) this.#assertIdleForSnapshot(requireIdleFor);
 		let advisorRecordersDetached = false;
@@ -12650,6 +12651,7 @@ export class AgentSession implements SettingsScope {
 				this.#bash.finishSessionTransition(bashTransition, false);
 				return false;
 			}
+			await this.settings.attachSessionFile(this.sessionManager.getSessionFile());
 			this.#bash.markSessionTransition(bashTransition);
 			this.#bash.finishSessionTransition(bashTransition, true);
 			// The fork clones the transcript and keeps this recovery state running

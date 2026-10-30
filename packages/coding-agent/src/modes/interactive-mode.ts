@@ -89,6 +89,7 @@ import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { appKey, editorKey, rawKeyHint } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
 import { formatModelString, type ResolvedModelRoleValue } from "../config/model-resolver";
 import { isSettingsInitialized, Settings, settings, type SettingsScope } from "../config/settings";
+import { settleSessionSettingsOnQuit } from "../config/session-settings-quit";
 import { clearClaudePluginRootsCache } from "../discovery/helpers";
 import type {
 	AutocompleteProviderFactory,
@@ -8244,20 +8245,17 @@ export class InteractiveMode implements InteractiveModeContext {
 			await this.#quitHostOwned(130);
 			return;
 		}
-		if (this.settings.hasUnsavedSessionSettings) {
-			const choices = ["Keep in session directory", "Save to current project", "Discard session overrides", "Cancel quitting"];
-			const choice = await this.#extensionUiController.showCollabAwareSelector(
-				"Session settings changed — Esc keeps them in the session directory and quits",
-				choices,
+		try {
+			const proceed = await settleSessionSettingsOnQuit(
+				this.settings,
+				choices => this.#extensionUiController.showCollabAwareSelector(
+					"Session settings changed — Esc keeps them in the session directory and quits", [...choices],
+				),
+				() => this.sessionManager.ensureOnDisk(),
 			);
-			if (choice === choices[3]) return;
-			try {
-				await this.settings.settleSessionSettings(
-					choice === choices[1] ? "project" : choice === choices[2] ? "discard" : "session",
-				);
-			} catch (error) {
-				this.showWarning(`Could not save session settings: ${error instanceof Error ? error.message : String(error)}`);
-			}
+			if (!proceed) return;
+		} catch (error) {
+			this.showWarning(`Could not save session settings: ${error instanceof Error ? error.message : String(error)}`);
 		}
 		this.#beginClose();
 		const worktreePlan = await this.#planOwnedWorktreeExit();

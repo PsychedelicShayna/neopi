@@ -363,7 +363,6 @@ export const cfgToolsRestrictedFolders = register({
 		editor: "json",
 		description:
 			'Folders where every read, write, edit, search, or command needs an explicit approval, whatever the approval mode or a remembered grant. The folder and everything under it is restricted; commands are matched by the directory they run in. A JSON list of paths, e.g. ["~/secrets"].',
-		condition: "restrictedFoldersNotProject",
 	},
 	validate: raw => {
 		if (raw === undefined) return;
