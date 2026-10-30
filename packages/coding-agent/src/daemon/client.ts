@@ -17,7 +17,10 @@ export class SessionDaemonClient {
 	readonly #connection: IpcConnection;
 	readonly #encoder = new RpcFrameEncoder();
 	readonly #decoder = new RpcFrameDecoder();
-	readonly #pending = new Map<string, PromiseWithResolvers<Record<string, unknown>>>();
+	readonly #pending = new Map<
+		string,
+		{ resolvers: PromiseWithResolvers<Record<string, unknown>>; onResponse?: (data: unknown) => void }
+	>();
 	readonly #frameListeners = new Set<(frame: Record<string, unknown>) => void>();
 	readonly #closed = Promise.withResolvers<string | null>();
 	#isClosed = false;
@@ -59,14 +62,18 @@ export class SessionDaemonClient {
 			this.#connection.send(line.endsWith("\n") ? line.slice(0, -1) : line);
 	}
 
-	/** Send a command with a fresh id and await its `response`. Rejects on `success:false`. */
-	async request(frame: Record<string, unknown>): Promise<unknown> {
+	/**
+	 * Send a command with a fresh id and await its `response`. Rejects on `success:false`.
+	 * `onResponse` runs synchronously as the response is decoded, before any later frame is dispatched,
+	 * so callers can cut an ordered stream exactly at the response.
+	 */
+	async request(frame: Record<string, unknown>, onResponse?: (data: unknown) => void): Promise<unknown> {
 		if (this.#isClosed || this.#connection.closed) throw new Error("session daemon connection closed");
 		const id = `c${++this.#nextId}`;
-		const pending = Promise.withResolvers<Record<string, unknown>>();
-		this.#pending.set(id, pending);
+		const resolvers = Promise.withResolvers<Record<string, unknown>>();
+		this.#pending.set(id, { resolvers, onResponse });
 		this.send({ ...frame, id });
-		const response = await pending.promise;
+		const response = await resolvers.promise;
 		if (response.success === false) throw new Error(String(response.error ?? `${String(frame.type)} failed`));
 		return response.data;
 	}
@@ -112,7 +119,8 @@ export class SessionDaemonClient {
 			const pending = this.#pending.get(frame.id);
 			if (pending) {
 				this.#pending.delete(frame.id);
-				pending.resolve(frame);
+				if (frame.success !== false) pending.onResponse?.(frame.data);
+				pending.resolvers.resolve(frame);
 				return;
 			}
 		}
