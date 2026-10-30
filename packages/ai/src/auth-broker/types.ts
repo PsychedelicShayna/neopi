@@ -72,6 +72,11 @@ export interface ClientUsageSummaryResponse {
 	clients: ClientUsageClientSummary[];
 }
 
+/** POST /v1/credential/:id/refresh request body. Token material stays out of URLs. */
+export interface CredentialRefreshRequest {
+	rejectedAccess?: string;
+}
+
 /** POST /v1/credential/:id/refresh response body. */
 export interface CredentialRefreshResponse {
 	entry: AuthCredentialSnapshotEntry;

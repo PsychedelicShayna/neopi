@@ -1179,16 +1179,22 @@ const response = await complete(
 ```
 
 When an auth-broker client requests recovery after a provider rejects an OAuth
-bearer, the broker may reuse a still-fresh token that it minted in the previous
-five minutes instead of rotating the refresh token again. The process-local
-cache is bound to the credential ID and access token. Scheduled expiry refreshes,
-direct forced refreshes such as MCP recovery, ordinary hard-auth blocks, and
-sibling rotation keep their existing behavior. Cached refresh responses rebind
-by durable credential ID so concurrent row removal cannot switch a pinned
-session to another account.
+bearer, it sends `rejectedAccess` in the refresh request's JSON body, never in
+the URL. The broker may reuse a still-fresh token minted in the previous five
+minutes only if it differs from that rejected access token. Concurrent reports
+of the same rejected token share one refresh; reports of an older token adopt
+the current usable token without another exchange. Delegated refresh hooks
+receive the rejected token after the recovery reason and must preserve it.
+The process-local cache is bound to the credential ID and access token.
+Ordinary expiry refreshes send `reason=expiry`, so a usage refresh and delayed
+gateway consumers reuse the same fresh mint instead of rotating it again.
+Scheduled expiry refreshes, direct forced refreshes such as MCP recovery,
+ordinary hard-auth blocks, and sibling rotation keep their existing behavior.
+Cached refresh responses rebind by durable credential ID so concurrent row
+removal cannot switch a pinned session to another account.
 Generic `forceRefresh: true` requests do not opt into reuse. Provider-401 retry
-paths pass `refreshReason: "auth-recovery"` explicitly; expiry sentinels and
-usage polling do not imply that reason.
+paths pass `refreshReason: "auth-recovery"` explicitly; an expiry sentinel alone
+does not imply provider rejection.
 
 ### Provider Notes
 

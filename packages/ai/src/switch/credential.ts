@@ -1,6 +1,6 @@
 import { extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
 import type { AuthStorage } from "../auth-storage";
-import { seedApiKeyResolver, type ApiKeyResolver } from "../auth-retry";
+import { createOAuthProvenance, seedApiKeyResolver, type ApiKeyResolver } from "../auth-retry";
 import * as AIError from "../error";
 import { isUsageLimitOutcome } from "../error/rate-limit";
 import type { CredentialBinding } from "../auth/types";
@@ -16,14 +16,26 @@ export async function pinnedCredential(
 	const options = { expectedProvider: binding.provider, expectedFingerprint: binding.fingerprint, modelId, signal };
 	const initial = await storage.keys.getPinned(binding.credentialId, sessionId, options);
 	if (!initial) return undefined;
-	const resolver: ApiKeyResolver = async ({ error, lastChance, signal: attemptSignal }) => {
+	const provenance = createOAuthProvenance();
+	const record = (apiKey: string) => {
+		const row = storage.credentials.list(binding.provider).find(candidate => candidate.id === binding.credentialId);
+		provenance.record({
+			apiKey,
+			oauthAccess: row?.credential.type === "oauth" ? row.credential.access : undefined,
+		});
+	};
+	record(initial);
+	const resolver: ApiKeyResolver = async ({ error, lastChance, signal: attemptSignal, previousKey }) => {
 		if (error === undefined) return { apiKey: initial, credentialId: binding.credentialId };
 		if (!lastChance) {
 			const refreshed = await storage.keys.getPinned(binding.credentialId, sessionId, {
 				...options,
 				signal: attemptSignal ?? signal,
 				forceRefresh: true,
+				refreshReason: AIError.status(error) === 401 ? "auth-recovery" : undefined,
+				rejectedAccessToken: provenance.accessFor(previousKey),
 			});
+			if (refreshed !== undefined) record(refreshed);
 			return refreshed === undefined ? undefined : { apiKey: refreshed, credentialId: binding.credentialId };
 		}
 		if (AIError.isUsageLimit(error) || isUsageLimitOutcome(extractHttpStatusFromError(error), String(error))) {
