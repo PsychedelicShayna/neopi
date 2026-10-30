@@ -78,6 +78,7 @@ export function createSettingsHost(scope: Settings = settings, initialScope: Set
 	};
 	return {
 		entries,
+		onReload: listener => scope.onPersistedLayersChange(listener),
 		get scope() { return editingScope; },
 		cycleScope: () => {
 			const scopes: SettingsScope[] = ["global", "project", "session"];

@@ -840,6 +840,8 @@ export class SettingsSelectorComponent implements Component {
 	#externalEditPending = false;
 	#applyPending = false;
 	#applyFeedback = "";
+	#stopReload?: () => void;
+	#editingSetting?: { path: string; baseline: string | undefined; changedElsewhere: boolean };
 	readonly #menuKeys = new MenuKeyReader();
 	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
 	#hasSectionJump = false;
@@ -876,6 +878,45 @@ export class SettingsSelectorComponent implements Component {
 
 		// Initialize with first tab
 		this.#switchToTab("appearance");
+		this.#stopReload = context.settings.onReload?.(() => this.#refreshReloadedSettings());
+	}
+
+	dispose(): void {
+		this.#stopReload?.();
+		this.#stopReload = undefined;
+	}
+
+	/** Refresh existing lists: setItems preserves their cursor, filter, viewport and open editor. */
+	#refreshReloadedSettings(): void {
+		const edit = this.#editingSetting;
+		if (edit && JSON.stringify(this.#context.settings.get(edit.path)) !== edit.baseline)
+			edit.changedElsewhere = true;
+		this.#changedCounts.clear();
+		// An empty global search still displays the underlying tab.
+		if (this.#searchList && this.#currentTabId !== "plugins")
+			this.#refreshCurrentTabItems(getSettingsForTab(this.#context.settings.entries, this.#currentTabId));
+		this.#refreshItems();
+		this.#context.requestRender?.();
+	}
+
+	#editSetting(path: string, done: (value?: string) => void, build: (finish: (value?: string) => void) => Component): Component {
+		this.#editingSetting = {
+			path,
+			baseline: JSON.stringify(this.#context.settings.get(path)),
+			changedElsewhere: false,
+		};
+		return build(value => {
+			this.#editingSetting = undefined;
+			done(value);
+			this.#refreshItems();
+		});
+	}
+
+	#getReloadConflict(): string | undefined {
+		const edit = this.#editingSetting;
+		if (!edit?.changedElsewhere) return undefined;
+		const label = getSettingDef(this.#context.settings.entries, edit.path)?.label ?? edit.path;
+		return `${label}: changed elsewhere — your edit is preserved`;
 	}
 
 	invalidate(): void {
@@ -1008,7 +1049,7 @@ export class SettingsSelectorComponent implements Component {
 			out.push(row(line, width));
 		}
 		out.push(divider(width));
-		out.push(row(theme.fg("dim", this.#footerHintText()), width));
+		out.push(row(theme.fg("dim", this.#getReloadConflict() ?? this.#footerHintText()), width));
 		out.push(bottomBorder(width));
 		return out;
 	}
@@ -1115,6 +1156,7 @@ export class SettingsSelectorComponent implements Component {
 					: searching ? undefined : (pluginPage?.lead ?? (tab ? TAB_LEADS[tab] : undefined)),
 				`Ctrl+S cycle scope${this.#callbacks.onApply ? " · F6 Apply" : ""}`,
 				this.#applyFeedback,
+				this.#getReloadConflict(),
 			].filter(Boolean).join(" · "),
 			query: searching || this.#search.focused ? this.#search.value : pluginPage?.query,
 			cursor: searching || this.#search.focused ? this.#search.input.getCursor() : pluginPage?.cursor,
@@ -1737,7 +1779,7 @@ export class SettingsSelectorComponent implements Component {
 			id: def.path,
 			label: `${this.#context.settings.details?.(def.path).shadowed ? "󰈉 " : ""}${def.label}`,
 			description: [def.description, this.#context.settings.details?.(def.path).description].filter(Boolean).join("\n"),
-			warning: def.warning,
+			warning: [def.warning, this.#editingSetting?.path === def.path ? this.#getReloadConflict() : undefined].filter(Boolean).join("\n") || undefined,
 			changed,
 			defaultLabel: changed ? this.#defaultLabel(def) : undefined,
 		};
@@ -1753,28 +1795,28 @@ export class SettingsSelectorComponent implements Component {
 				return {
 					...item,
 					currentValue: this.#getSubmenuCurrentValue(def.path, currentValue),
-					submenu: (cv, done) => this.#createSubmenu(def, cv, done),
+					submenu: (cv, done) => this.#editSetting(def.path, done, finish => this.#createSubmenu(def, cv, finish)),
 				};
 
 			case "text":
 				return {
 					...item,
 					currentValue: this.#formatTextInputValue(def, currentValue),
-					submenu: (cv, done) => this.#createTextInput(def, cv, done),
+					submenu: (cv, done) => this.#editSetting(def.path, done, finish => this.#createTextInput(def, cv, finish)),
 				};
 
 			case "providerLimits":
 				return {
 					...item,
 					currentValue: this.#formatProviderLimitsValue(currentValue),
-					submenu: (_cv, done) => this.#createProviderLimitsInput(done),
+					submenu: (_cv, done) => this.#editSetting(def.path, done, finish => this.#createProviderLimitsInput(finish)),
 				};
 
 			case "multiselect":
 				return {
 					...item,
 					currentValue: this.#formatMultiSelectValue(def, currentValue),
-					submenu: (_cv, done) => this.#createMultiSelect(def, done),
+					submenu: (_cv, done) => this.#editSetting(def.path, done, finish => this.#createMultiSelect(def, finish)),
 				};
 		}
 	}
@@ -2261,7 +2303,7 @@ export class SettingsSelectorComponent implements Component {
 					})
 					.finally(() => {
 						this.#applyPending = false;
-						this.#context.requestRender?.();
+						this.#refreshReloadedSettings();
 					});
 				this.#context.requestRender?.();
 			}
@@ -2370,6 +2412,7 @@ export class SettingsSelectorComponent implements Component {
 	leaveMenu(): void {
 		this.#search.focused = false;
 		(this.#searchList ?? this.#currentList)?.leaveMenu();
+		this.#editingSetting = undefined;
 		if (isMenuHistoryLeaver(this.#pluginComponent)) this.#pluginComponent.leaveMenu();
 	}
 

@@ -152,6 +152,8 @@ export interface SettingsHost {
 	readonly scope?: "global" | "project" | "session";
 	cycleScope?(): void;
 	details?(path: string): { shadowed: boolean; description: string };
+	/** Adopted durable layers changed, including values hidden by a higher scope. */
+	onReload?(listener: () => void): () => void;
 	get(path: string): unknown;
 	set(path: string, value: unknown): void;
 	/**
