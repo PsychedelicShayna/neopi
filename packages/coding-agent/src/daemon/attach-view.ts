@@ -10,6 +10,7 @@
  * is removed when that lands. See the PR's gap list.
  */
 import { type Component, Input, matchesKey, ProcessTerminal, truncateToWidth, TUI, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
+import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import type { SessionDaemonClient } from "./client";
 
@@ -218,11 +219,6 @@ class AttachView implements Component {
 	invalidate(): void {}
 }
 
-/**
- * Detach chord: Ctrl+X then d. Ctrl+] (jumpForward), Ctrl+S (agent hub) and F6
- * are already bound; a two-key chord leaves Ctrl+X alone for anything else.
- */
-const DETACH_PREFIX = "ctrl+x";
 
 /** Attach `client` to `sessionId` and render it until the user detaches or the connection closes. */
 export async function runAttachView(client: SessionDaemonClient, sessionId: string, title: string): Promise<AttachExit> {
@@ -241,6 +237,10 @@ export async function runAttachView(client: SessionDaemonClient, sessionId: stri
 		else view.model.apply(frame);
 		ui.requestRender();
 	});
+	// `app.daemon.detach` (default Ctrl+X) is a prefix: it, then d, detaches. Ctrl+] (jumpForward),
+	// Ctrl+S (agent hub) and F6 were taken. The prefix consumes its first key, so it shadows the
+	// autoresearch dashboard toggle (also Ctrl+X) while attached; rebind either in keybindings.
+	const detachKeys = KeybindingsManager.create().getKeys("app.daemon.detach");
 	let prefix = false;
 	const removeListener = ui.addInputListener(data => {
 		if (prefix) {
@@ -250,7 +250,7 @@ export async function runAttachView(client: SessionDaemonClient, sessionId: stri
 				return { consume: true };
 			}
 		}
-		if (matchesKey(data, DETACH_PREFIX)) {
+		if (detachKeys.some(key => matchesKey(data, key))) {
 			prefix = true;
 			return { consume: true };
 		}

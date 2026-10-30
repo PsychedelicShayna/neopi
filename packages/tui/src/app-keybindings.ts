@@ -59,6 +59,7 @@ interface AppKeybindings {
 	"app.session.fork": true;
 	"app.session.resume": true;
 	"app.session.observe": true;
+	"app.daemon.detach": true;
 	"app.session.togglePath": true;
 	"app.session.toggleSort": true;
 	"app.session.rename": true;
@@ -256,6 +257,10 @@ export const KEYBINDINGS = {
 	"app.session.observe": {
 		defaultKeys: "ctrl+s",
 		description: "Open the agent hub",
+	},
+	"app.daemon.detach": {
+		defaultKeys: "ctrl+x",
+		description: "Prefix key in a daemon-attached session: press it, then d, to detach to the session hub",
 	},
 	"app.session.togglePath": {
 		defaultKeys: "ctrl+p",
