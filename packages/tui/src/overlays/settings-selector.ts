@@ -937,6 +937,14 @@ export class SettingsSelectorComponent implements Component {
 		return truncateToWidth(`${prefix}${theme.bold(inputLine)} ${count} `, width);
 	}
 
+	get #hasSearchResults(): boolean {
+		return this.#searchList !== null && this.#searchQuery.length > 0 && this.#search.value.length > 0;
+	}
+
+	get #displayList(): SettingsList | null {
+		return this.#hasSearchResults ? this.#searchList : this.#currentList;
+	}
+
 	/**
 	 * Fullscreen frame: title border, tab row, divider, optional search banner,
 	 * the active content sized to fill the terminal, the appearance preview,
@@ -947,15 +955,16 @@ export class SettingsSelectorComponent implements Component {
 		const innerWidth = Math.max(1, width - 4);
 
 		const tabLines = this.#tabBar.render(innerWidth);
-		const searching = this.#searchList !== null;
+		const searching = this.#hasSearchResults;
+		const showSearch = searching || this.#search.focused;
 		const showPreview = !searching && this.#currentTabId === "appearance";
 		const previewLines = showPreview ? ["", theme.fg("muted", "Preview:"), this.#getStatusPreviewString()] : [];
 
 		// Fixed chrome: top border, tabs, divider, [search row], divider, hint, bottom border.
-		const fixedRows = 1 + tabLines.length + 1 + (searching ? 1 : 0) + 1 + 1 + 1;
+		const fixedRows = 1 + tabLines.length + 1 + (showSearch ? 1 : 0) + 1 + 1 + 1;
 		const contentRows = Math.max(7, height - fixedRows - previewLines.length);
 
-		const list = this.#searchList ?? this.#currentList;
+		const list = this.#displayList;
 		let contentLines: readonly string[];
 		if (list) {
 			// SettingsList pads itself to viewport + blank + 3 description rows.
@@ -975,7 +984,7 @@ export class SettingsSelectorComponent implements Component {
 			out.push(row(line, width));
 		}
 		out.push(divider(width));
-		if (searching) {
+		if (showSearch) {
 			out.push(row(this.#renderSearchBanner(innerWidth), width));
 		}
 		this.#contentRowStart = out.length;
@@ -1019,8 +1028,8 @@ export class SettingsSelectorComponent implements Component {
 	 */
 	#describePrefs(): NativeNode {
 		const memo = this.#native;
-		const searching = this.#searchList !== null;
-		const list = this.#searchList ?? this.#currentList;
+		const searching = this.#hasSearchResults;
+		const list = this.#displayList;
 		const entries = this.#context.settings.entries;
 		const plugins = this.#currentTabId === "plugins" ? this.#pluginComponent : null;
 		const pluginPage = plugins?.prefsPage();
@@ -1092,8 +1101,8 @@ export class SettingsSelectorComponent implements Component {
 			lead: searchError
 				? `Invalid regex: ${searchError}`
 				: searching ? undefined : (pluginPage?.lead ?? (tab ? TAB_LEADS[tab] : undefined)),
-			query: searching ? this.#search.value : pluginPage?.query,
-			cursor: searching ? this.#search.input.getCursor() : pluginPage?.cursor,
+			query: searching || this.#search.focused ? this.#search.value : pluginPage?.query,
+			cursor: searching || this.#search.focused ? this.#search.input.getCursor() : pluginPage?.cursor,
 			sections,
 			focus,
 			editing,
@@ -1360,7 +1369,7 @@ export class SettingsSelectorComponent implements Component {
 	 */
 	#describeCard(): NativeNode {
 		const memo = this.#native;
-		const searching = this.#searchList !== null;
+		const searching = this.#hasSearchResults;
 		const children: NativeChild[] = [];
 
 		const active = this.#tabBar.getActiveTab()?.id;
@@ -1369,7 +1378,7 @@ export class SettingsSelectorComponent implements Component {
 		}
 		children.push(memo.tabs.node);
 
-		if (searching) {
+		if (searching || this.#search.focused) {
 			const count = this.#searchMatchCount;
 			if (memo.search?.input !== this.#search.input || memo.search.count !== count) {
 				const countText = count === 1 ? "1 match" : `${count} matches`;
@@ -1391,7 +1400,7 @@ export class SettingsSelectorComponent implements Component {
 			children.push(memo.search.node);
 		}
 
-		const content = this.#searchList ?? this.#currentList ?? this.#pluginComponent;
+		const content = this.#displayList ?? this.#pluginComponent;
 		if (content) children.push(content);
 
 		if (!searching && this.#currentTabId === "appearance") {
@@ -1460,7 +1469,7 @@ export class SettingsSelectorComponent implements Component {
 	}
 
 	#routeMouseEvent(event: SgrMouseEvent): boolean {
-		const list = this.#searchList ?? this.#currentList;
+		const list = this.#displayList;
 		// row() insets content by the border column plus a space.
 		const contentColInset = 2;
 		const innerCol = event.col - contentColInset;
@@ -1538,7 +1547,10 @@ export class SettingsSelectorComponent implements Component {
 		);
 		// Keep the footer tab highlight on the tab owning the selected result.
 		list.onSelectionChange = item => this.#syncTabBarToSelection(item);
+		const currentList = this.#currentList;
 		this.#setContent(() => {
+			// Empty drafts show the original sectioned list, not all global results.
+			this.#currentList = currentList;
 			this.#searchList = list;
 		});
 		this.#setSearchQuery(initialQuery);
@@ -1597,12 +1609,17 @@ export class SettingsSelectorComponent implements Component {
 
 		this.#searchList.setItems(items);
 		this.#searchMatchCount = total;
-		this.#tabs = this.#buildSearchTabs(
-			counts,
-			tabResults.map(result => result.tab),
-		);
-		this.#tabBar.setTabs(this.#tabs);
-		this.#syncTabBarToSelection(this.#searchList.getSelectedItem());
+		if (this.#hasSearchResults) {
+			this.#tabs = this.#buildSearchTabs(
+				counts,
+				tabResults.map(result => result.tab),
+			);
+			this.#tabBar.setTabs(this.#tabs);
+			this.#syncTabBarToSelection(this.#searchList.getSelectedItem());
+		} else {
+			this.#tabs = getSettingsTabs();
+			this.#tabBar.setTabs(this.#tabs, this.#preSearchTabId);
+		}
 	}
 
 	/**
@@ -1663,7 +1680,7 @@ export class SettingsSelectorComponent implements Component {
 	}
 
 	#syncTabBarToSelection(item: SettingItem | undefined): void {
-		if (!this.#searchList || !item) return;
+		if (!this.#hasSearchResults || !item) return;
 		const def = getSettingDef(this.#context.settings.entries, item.id);
 		if (def) this.#tabBar.setActiveById(def.tab);
 	}
@@ -2243,6 +2260,7 @@ export class SettingsSelectorComponent implements Component {
 	}
 
 	#handleSearchModeInput(data: string, list: SettingsList): void {
+		const hadPattern = this.#search.value.length > 0;
 		const field = this.#search.handleInput(data);
 		if (field !== "pass") {
 			this.#menuKeys.reset();
@@ -2250,7 +2268,8 @@ export class SettingsSelectorComponent implements Component {
 				this.#endSearch(false);
 				return;
 			}
-			if (this.#search.query !== this.#searchQuery) this.#setSearchQuery(this.#search.query);
+			if (this.#search.query !== this.#searchQuery || hadPattern !== (this.#search.value.length > 0))
+				this.#setSearchQuery(this.#search.query);
 			return;
 		}
 		const action = this.#menuKeys.read(data);
