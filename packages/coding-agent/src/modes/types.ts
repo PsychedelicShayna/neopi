@@ -36,6 +36,7 @@ import type { Skill } from "../extensibility/skills";
 import type { MCPManager } from "../mcp";
 import type { PlanApprovalDetails } from "../plan-mode/approved-plan";
 import type { AgentSession } from "../session/agent-session";
+import type { InteractiveSessionViewer } from "./interactive-session-viewer";
 import type { CompactMode } from "../session/compact-modes";
 import type { ForeignSessionSource } from "../session/foreign-session-store";
 import type { HistoryStorage } from "../session/history-storage";
@@ -191,6 +192,10 @@ export interface InteractiveModeContext {
 	syncExtensionLinks(): void;
 
 	// Session access
+	/** Display-only seam; absent on legacy local controller hosts. */
+	readonly transcriptSession?: InteractiveSessionViewer;
+	readonly transcriptStreamMessage?: AgentMessage;
+	readonly isAttachedView?: boolean;
 	session: AgentSession;
 	sessionManager: SessionManager;
 	/** Re-resolve the CLI/settings model scope after a successful OAuth login. */

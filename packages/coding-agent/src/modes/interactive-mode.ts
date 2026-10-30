@@ -86,7 +86,7 @@ import { restartArgv } from "../cli/flag-tables";
 import type { CollabGuestLink } from "../collab/guest";
 import { CollabController } from "../collab/controller";
 import type { CollabHost } from "../collab/host";
-import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
+import { KEYBINDINGS, KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { appKey, editorKey, rawKeyHint } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
 import { formatModelString, type ResolvedModelRoleValue } from "../config/model-resolver";
 import { isSettingsInitialized, Settings, settings } from "../config/settings";
@@ -163,6 +163,8 @@ import {
 	type ResolvedRoleModel,
 	SHUTDOWN_CONSOLIDATE_BUDGET_MS,
 } from "../session/agent-session";
+import { RemoteAgentSession } from "../daemon/remote-session";
+import type { InteractiveSessionViewer } from "./interactive-session-viewer";
 import type { CompactMode } from "../session/compact-modes";
 import type { ForeignSessionSource } from "../session/foreign-session-store";
 import { HistoryStorage } from "../session/history-storage";
@@ -254,6 +256,7 @@ import { activePhase, formatTodoLine, renderTodoLines, TODO_LINE_BUDGET, TodoSec
 import { AgentsSection } from "./side-panel/agents-section";
 import { IrcSection } from "./side-panel/irc-section";
 import { SidePanelController } from "./controllers/side-panel-controller";
+import { matchesKey } from "@oh-my-pi/pi-tui";
 import { formatStartupChangelogSummary, type StartupChangelogSelection } from "../utils/changelog";
 import { copyToClipboard } from "../utils/clipboard";
 import type { EventBus } from "../utils/event-bus";
@@ -1410,14 +1413,42 @@ const CTRL_L_APPEARANCE_RESPONSE_DEADLINE_MS = 2000;
 /** Repaint cadence of the open jobs sheet: output tails, pids and list ages are polled, not pushed. */
 const JOBS_SHEET_REFRESH_MS = 250;
 
+export interface AttachedViewerOptions {
+	settings?: Settings;
+	onDetach?: () => void;
+}
+
 export class InteractiveMode implements InteractiveModeContext {
 	#ownsStartedUi: boolean;
-	session: AgentSession;
-	sessionManager: SessionManager;
+	#localSession: AgentSession | undefined;
+	readonly #remoteSession: RemoteAgentSession | undefined;
+	readonly #viewerOptions: AttachedViewerOptions;
+	/** Runtime-only access. Attached viewers never own or dispose this capability. */
+	get session(): AgentSession {
+		if (!this.#localSession) throw new Error("This feature is not available in attached view yet.");
+		return this.#localSession;
+	}
+	set session(session: AgentSession) {
+		this.#localSession = session;
+	}
+	get sessionManager(): SessionManager {
+		return this.session.sessionManager;
+	}
+	get transcriptSession(): InteractiveSessionViewer {
+		return this.#remoteSession ?? this.viewSession;
+	}
+	get isAttachedView(): boolean {
+		return this.#remoteSession !== undefined;
+	}
+	get transcriptStreamMessage(): AgentMessage | undefined {
+		return this.#remoteSession ? this.#remoteSession.streamMessage : this.viewSession.agent.state.streamMessage;
+	}
 	refreshScopedModelsAfterLogin?: () => Promise<void>;
 	settings: Settings;
 	keybindings: KeybindingsManager;
-	agent: Agent;
+	get agent(): Agent {
+		return this.session.agent;
+	}
 	historyStorage?: HistoryStorage;
 
 	/** Canonical composer shared by cold prepaint and the session-aware runtime. */
@@ -1447,7 +1478,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	attachmentChipsContainer: Container;
 	hookWidgetContainerAbove: Container;
 	hookWidgetContainerBelow: Container;
-	statusLine: StatusLineComponent;
+	statusLine!: StatusLineComponent;
 
 	isInitialized = false;
 	initialChatRendered = false;
@@ -1520,17 +1551,17 @@ export class InteractiveMode implements InteractiveModeContext {
 	readonly #todoSection = new TodoSection();
 	#sidePanelController!: SidePanelController;
 	hideThinkingBlock = false;
-	#sessionsWithDisplayableThinkingContent = new WeakSet<AgentSession>();
+	#sessionsWithDisplayableThinkingContent = new WeakSet<InteractiveSessionViewer>();
 	/** Whether the visible session has produced thinking content the user can reveal. */
 	get hasDisplayableThinkingContent(): boolean {
-		return this.#sessionsWithDisplayableThinkingContent.has(this.viewSession);
+		return this.#sessionsWithDisplayableThinkingContent.has(this.transcriptSession);
 	}
 	/** Record received reasoning content so Ctrl+T can reveal it even when model metadata says thinking is off. */
 	noteDisplayableThinkingContent(message: AgentMessage): boolean {
 		if (this.hasDisplayableThinkingContent || !messageHasDisplayableThinking(message, this.proseOnlyThinking)) {
 			return false;
 		}
-		this.#sessionsWithDisplayableThinkingContent.add(this.viewSession);
+		this.#sessionsWithDisplayableThinkingContent.add(this.transcriptSession);
 		return true;
 	}
 	/**
@@ -1541,7 +1572,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * toggle.
 	 */
 	get effectiveHideThinkingBlock(): boolean {
-		const thinkingOff = (this.viewSession?.thinkingLevel ?? ThinkingLevel.Off) === ThinkingLevel.Off;
+		const thinkingOff = (this.transcriptSession.thinkingLevel ?? ThinkingLevel.Off) === ThinkingLevel.Off;
 		return this.hideThinkingBlock || (thinkingOff && !this.hasDisplayableThinkingContent);
 	}
 	proseOnlyThinking = true;
@@ -1882,7 +1913,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	mcpManager?: MCPManager;
 	readonly #toolUiContextSetter: (uiContext: ExtensionUIContext, hasUI: boolean) => void;
 
-	readonly #codexResetFireworksController: CodexResetFireworksController;
+	readonly #codexResetFireworksController!: CodexResetFireworksController;
 	readonly #btwController: BtwController;
 	readonly #tanCommandController: TanCommandController;
 	readonly #issueCommandController: IssueCommandController;
@@ -1952,6 +1983,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#focusController.target === undefined;
 	}
 	resolveAssistantMessageLinkHrefs(hrefs: readonly string[]): Promise<ReadonlyMap<string, string>> {
+		if (this.isAttachedView) return resolveMarkdownLinkHrefs(hrefs, {
+			cwd: this.transcriptSession.sessionManager.getCwd(),
+			sessionFile: this.transcriptSession.sessionManager.getSessionFile(),
+			settings: this.settings,
+		});
 		return resolveMarkdownLinkHrefs(hrefs, this.#linkResolveContext());
 	}
 	#linkResolveContext(): ResolveContext {
@@ -1995,7 +2031,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		return { text, isError: result.isError === true };
 	}
 	get sessionName(): string | undefined {
-		return this.session.sessionName;
+		return this.#remoteSession ? this.#remoteSession.sessionName : this.session.sessionName;
 	}
 	focusAgentSession(id: string): Promise<void> {
 		return this.#focusController.focusAgent(id);
@@ -2202,7 +2238,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	constructor(
-		session: AgentSession,
+		session: AgentSession | RemoteAgentSession,
 		version: string,
 		startupChangelog: StartupChangelogSelection | undefined = undefined,
 		setToolUIContext: (uiContext: ExtensionUIContext, hasUI: boolean) => void = () => {},
@@ -2212,15 +2248,18 @@ export class InteractiveMode implements InteractiveModeContext {
 		composer?: Composer,
 		subagentEventBus?: EventBus,
 		refreshScopedModelsAfterLogin?: () => Promise<void>,
+		viewerOptions: AttachedViewerOptions = {},
 	) {
 		this.refreshScopedModelsAfterLogin = refreshScopedModelsAfterLogin;
-		this.session = session;
-		this.sessionManager = session.sessionManager;
-		this.settings = session.settings;
-		this.#initialComposerModel = session.model;
+		this.#remoteSession = session instanceof RemoteAgentSession ? session : undefined;
+		this.#localSession = session instanceof RemoteAgentSession ? undefined : session;
+		this.#viewerOptions = viewerOptions;
+		this.settings = this.#localSession?.settings ?? viewerOptions.settings ?? settings;
+		this.#initialComposerModel = this.#localSession?.model;
+		const displaySettings = this.isAttachedView ? this.settings : settings;
 		const preferences = {
-			quiet: cfgStartupQuiet.get(settings),
-			composerShape: cfgComposerShape.get(settings),
+			quiet: cfgStartupQuiet.get(displaySettings),
+			composerShape: cfgComposerShape.get(displaySettings),
 			...this.#liveComposerPreferences(),
 		};
 		const wasStarted = composer?.started ?? false;
@@ -2238,18 +2277,20 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.editor.placeholder = () => this.#composerHint();
 		this.editor.prediction = () => this.#eventController.composerPrediction.text;
 		this.editor.composerState = () => this.#composerNativeState();
-		this.editor.onToggleDictation = () => void this.#toggleComposerDictation();
+		this.editor.onToggleDictation = () => {
+			if (this.isAttachedView) this.showWarning("Dictation is not available in attached view yet.");
+			else void this.#toggleComposerDictation();
+		};
 		this.editor.imageReferenceHyperlink = imageReferenceHyperlink;
 		this.editor.skillFilePath = name => this.skillCommands.get(`skill:${name}`)?.filePath;
 		this.editor.modelMentionLabel = selector => {
-			const model = this.session.findMentionableModel(selector);
+			const model = this.#localSession?.findMentionableModel(selector);
 			return model ? modelMentionChipLabel(modelMentionDisplayName(model)) : undefined;
 		};
-		this.editor.modelMentionSelector = agent => this.session.modelMentions.find(m => m.agent === agent)?.selector;
+		this.editor.modelMentionSelector = agent => this.#localSession?.modelMentions.find(m => m.agent === agent)?.selector;
 		this.editor.fileHyperlink = (filePath, text) => fileHyperlink(filePath, text, { line: 1 });
 		this.#ownsStartedUi = wasStarted;
 		this.keybindings = KeybindingsManager.inMemory();
-		this.agent = session.agent;
 		this.#version = version;
 		this.#startupChangelog = startupChangelog;
 		this.#toolUiContextSetter = setToolUIContext;
@@ -2282,9 +2323,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			);
 		}
 
-		setTuiTight(cfgTuiTight.get(settings));
-		setMarkdownMermaidRendering(cfgTuiRenderMermaid.get(settings));
-		setSvgFigureRendering(cfgTuiRenderSvg.get(settings));
+		setTuiTight(cfgTuiTight.get(displaySettings));
+		setMarkdownMermaidRendering(cfgTuiRenderMermaid.get(displaySettings));
+		setSvgFigureRendering(cfgTuiRenderSvg.get(displaySettings));
 		this.#applyAutoGraphSetting();
 		this.#applyTextSizingSetting();
 		// Keep generic pi-tui renderers aligned with the coding-agent setting.
@@ -2317,7 +2358,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// pickable here: re-run the renderers reading `getLinkClicksAvailable()`.
 		this.#eventBusUnsubscribers.push(
 			onNativeRenderingChange(() => {
-				if ((this.viewSession.extensionRunner?.getLinkSchemes().length ?? 0) > 0) this.#redrawExtensionLinks();
+				if ((this.transcriptSession.extensionRunner?.getLinkSchemes().length ?? 0) > 0) this.#redrawExtensionLinks();
 			}),
 		);
 		this.chatContainer = new TranscriptContainer();
@@ -2335,7 +2376,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			settings: this.settings,
 			keybindings: this.keybindings,
 		});
-		this.#registerSidePanelViews();
+		if (!this.isAttachedView) this.#registerSidePanelViews();
 		this.subagentContainer = new SubagentHudContainer(this);
 		this.btwContainer = new AnchoredLiveContainer();
 		this.omfgContainer = new AnchoredLiveContainer();
@@ -2371,11 +2412,12 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#syncEditorMaxHeight();
 		};
 		process.stdout.on("resize", this.#resizeHandler);
+		if (!this.isAttachedView) {
 		setWordPredictionHost(textPredictionBackend);
 		try {
 			this.historyStorage = HistoryStorage.open();
 			this.editor.setHistoryStorage(this.historyStorage);
-			this.historyStorage.setSessionResolver(() => this.sessionManager.getSessionId());
+			this.historyStorage.setSessionResolver(() => this.transcriptSession.sessionManager.getSessionId());
 			// The prediction daemon learns from history.db; nudge it once each prompt is durable.
 			this.historyStorage.setAddListener(syncTextPrediction);
 			this.historyStorage.setErrorListener(() => {
@@ -2384,6 +2426,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		} catch (error) {
 			logger.warn("History storage unavailable", { error: String(error) });
 		}
+		}
 		this.hookWidgetContainerAbove = new Container();
 		this.hookWidgetContainerAbove.addChild(new EditorTopGap(() => this.statusRowOccupied));
 		this.hookWidgetContainerBelow = new Container();
@@ -2391,6 +2434,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		const attachmentChips = new AttachmentChipsBand(this.editor, this.ui.imageBudget, () => this.ui.requestRender());
 		this.attachmentChipsContainer.addChild(attachmentChips);
 		this.editor.attachmentChips = attachmentChips;
+		this.editorContainer = new Container();
+		this.editorContainer.addChild(this.editor);
+		if (!this.isAttachedView) {
 		// Restored drafts (esc-esc, /tree, branch) re-materialize chip links off the render
 		// path so their chip tokens become clickable again instead of degrading to dead text.
 		this.editor.draftImageLinkMaterializer = images => materializeImageChipLinks(images, this.sessionManager);
@@ -2399,9 +2445,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#disposeImageBlobWriter = setImageBlobWriter((data, options) =>
 			this.sessionManager.putBlobSync(data, options),
 		);
-		this.editorContainer = new Container();
-		this.editorContainer.addChild(this.editor);
-		this.statusLine = new StatusLineComponent(session, statusLineHost);
+		this.statusLine = new StatusLineComponent(this.session, statusLineHost);
 		// Native segment clicks open what their slash commands and keys open.
 		this.statusLine.onNativeAction = action => {
 			switch (action) {
@@ -2424,8 +2468,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		};
 		// A TSP terminal has no status strip: the tab title carries the PR.
 		this.statusLine.onNativePullRequest = pr => setTerminalTitlePullRequest(pr?.number);
-		this.statusLine.setAutoCompactEnabled(session.autoCompactionEnabled);
-		if (session.chatMode) this.statusLine.setHookStatus("chat-mode", chatModeLabel(session.chatMode.mode));
+		this.statusLine.setAutoCompactEnabled(this.session.autoCompactionEnabled);
+		if (this.session.chatMode) this.statusLine.setHookStatus("chat-mode", chatModeLabel(this.session.chatMode.mode));
 		this.#codexResetFireworksController = new CodexResetFireworksController(this);
 		this.statusLine.setCodexResetFireworksHandler(event => {
 			this.#codexResetFireworksController.show(event);
@@ -2438,15 +2482,16 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.statusLine.setVibeWorkerTokenRateProvider(() =>
 			aggregateVibeWorkerTokensPerSecond(this.session.getAgentId() ?? MAIN_AGENT_ID),
 		);
+		}
 
-		this.hideToolActivity = cfgDisplayHideToolActivity.get(settings);
+		this.hideToolActivity = cfgDisplayHideToolActivity.get(displaySettings);
 		this.chatContainer.setToolActivityVisible(!this.hideToolActivity);
-		this.hideThinkingBlock = cfgHideThinkingBlock.get(settings);
-		this.proseOnlyThinking = cfgProseOnlyThinking.get(settings);
-		this.expandThinkingBlocks = cfgExpandThinkingBlocks.get(settings);
+		this.hideThinkingBlock = cfgHideThinkingBlock.get(displaySettings);
+		this.proseOnlyThinking = cfgProseOnlyThinking.get(displaySettings);
+		this.expandThinkingBlocks = cfgExpandThinkingBlocks.get(displaySettings);
 
 		// Store pending commands for init() where file commands are loaded async
-		this.#pendingSlashCommands = this.#buildPendingSlashCommands();
+		this.#pendingSlashCommands = this.isAttachedView ? [] : this.#buildPendingSlashCommands();
 
 		this.#uiHelpers = new UiHelpers(this);
 		this.#btwController = new BtwController(this);
@@ -2463,7 +2508,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#focusController = new SessionFocusController(this);
 		this.#inputController = new InputController(this);
 		this.collabController = new CollabController(this);
-		this.session.setPromptDropped?.(prompt => this.#restoreDroppedPrompt(prompt));
+		this.#localSession?.setPromptDropped?.(prompt => this.#restoreDroppedPrompt(prompt));
 		this.#observerRegistry = new SessionObserverRegistry();
 	}
 
@@ -2556,7 +2601,106 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.composer.playWelcomeIntro();
 	}
 
+	/** Viewer startup deliberately owns no session runtime hooks, draft or shutdown lease. */
+	async #initAttachedViewer(options: InteractiveModeInitOptions): Promise<void> {
+		if (this.isInitialized) return;
+		this.keybindings = KeybindingsManager.create();
+		this.composer.setHeaderExtras([
+			new Text(`Attached session ${this.#remoteSession!.sessionName ?? this.#remoteSession!.sessionId}`, 1, 0),
+			new Text("Model/status controls, slash commands, settings, subagents, IRC and context notes are not available in attached view yet.", 1, 0),
+		], []);
+		this.composer.setRuntimeChildren([
+			this.chatContainer,
+			this.pendingMessagesContainer,
+			this.liveTranscriptContainer,
+			this.errorBannerContainer,
+			this.attachmentChipsContainer,
+			this.editorContainer,
+		], { transientChrome: [this.pendingMessagesContainer, this.errorBannerContainer, this.editorContainer] });
+		this.ui.setFocus(this.editor);
+		this.editor.onSubmit = async text => {
+			const remote = this.#remoteSession!;
+			if (text.trimStart().startsWith("/")) {
+				this.editor.setText(text);
+				this.showWarning("Slash commands are not available in attached view yet.");
+				return;
+			}
+			if (!text.trim()) return;
+			try {
+				if (remote.isStreaming) await remote.steer(text);
+				else await remote.prompt(text);
+			} catch (error) {
+				// A rejected send belongs to this viewer, never to the daemon's saved draft.
+				this.editor.setText(text + this.editor.getText());
+				this.showError(error instanceof Error ? error.message : String(error));
+			}
+		};
+		let prefix = false;
+		const appActions = (Object.keys(KEYBINDINGS) as (keyof typeof KEYBINDINGS)[])
+			.filter(action => action.startsWith("app."));
+		this.#eventBusUnsubscribers.push(this.ui.addInputListener(data => {
+			const isPrefix = this.keybindings.matches(data, "app.daemon.detach");
+			if (prefix) {
+				prefix = false;
+				if (data === "d") {
+					void this.shutdown();
+					return { consume: true };
+				}
+				if (isPrefix) return undefined;
+			} else if (isPrefix) {
+				prefix = true;
+				return { consume: true };
+			}
+			// An active dialog owns its keys, including Esc and Ctrl+C.
+			if (this.ui.getFocused() !== this.editor) return undefined;
+			if (this.keybindings.matches(data, "app.interrupt")) {
+				void this.#remoteSession!.abort().catch(error => this.showError(String(error)));
+				return { consume: true };
+			}
+			if (this.keybindings.matches(data, "app.exit") || matchesKey(data, "ctrl+c")) {
+				void this.shutdown();
+				return { consume: true };
+			}
+			const unavailable = appActions.find(action => this.keybindings.matches(data, action));
+			if (unavailable) {
+				this.showWarning(`${KEYBINDINGS[unavailable].description} is not available in attached view yet.`);
+				return { consume: true };
+			}
+			return undefined;
+		}));
+		this.isInitialized = true;
+		if (!this.#ownsStartedUi) {
+			this.composer.start({ clearScrollback: options.clearInitialTerminalHistory === true, playWelcomeIntro: false });
+			this.#ownsStartedUi = true;
+		}
+		this.updateEditorBorderColor();
+	}
+
+	#stopAttachedViewer(): void {
+		if (!this.isInitialized) return;
+		this.unsubscribe?.();
+		this.unsubscribe = undefined;
+		this.#dialogLifetime.abort();
+		this.#eventController.dispose();
+		this.#extensionUiController.hideHookSelector();
+		this.#extensionUiController.hideHookInput();
+		for (const unsubscribe of this.#eventBusUnsubscribers.splice(0)) unsubscribe();
+		if (this.#resizeHandler) process.stdout.removeListener("resize", this.#resizeHandler);
+		this.#resizeHandler = undefined;
+		this.#downloadActivityHud.dispose();
+		this.#sidePanelController.dispose();
+		stopSharedSpinnerTicker();
+		if (this.#ownsStartedUi) this.ui.stop();
+		this.chatContainer.disposeChildren();
+		this.#ownsStartedUi = false;
+		this.isInitialized = false;
+	}
+
 	async init(options: InteractiveModeInitOptions = {}): Promise<void> {
+		if (this.#remoteSession) {
+			await this.#initAttachedViewer(options);
+			return;
+		}
 		if (this.isInitialized) return;
 		this.#idleMaintenanceActivity.scheduledTurn = target =>
 			target === this.session &&
@@ -4838,6 +4982,11 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	updateEditorBorderColor(): void {
+		if (this.isAttachedView) {
+			this.editor.borderColor = theme.getThinkingBorderColor(this.transcriptSession.thinkingLevel ?? ThinkingLevel.Off);
+			this.ui.requestRender();
+			return;
+		}
 		// `vimMode` reads "insert" when modal editing is off, so every Vim branch below must gate on
 		// `vimEnabled` — otherwise non-Vim users would lose the session-accent/thinking border.
 		const vimMode = this.editor.vimEnabled ? this.editor.vimMode : undefined;
@@ -4937,6 +5086,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * title the empty composer's placeholder quotes.
 	 */
 	#composerNativeState(): ComposerNativeState {
+		if (this.#remoteSession) return { running: this.#remoteSession.isStreaming, title: this.#remoteSession.sessionName };
 		const draft = this.editor.getText().trimStart();
 		const dictation = this.#sttController?.state ?? "idle";
 		return {
@@ -4978,6 +5128,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/** Placeholder for the empty composer; see `COMPOSER_HINTS` for the registered hints. */
 	#composerHint(): string | undefined {
+		if (this.isAttachedView) return "Message this session · Ctrl+X d to detach";
 		return resolveComposerHint({
 			runningAgents: this.#runningSubagentCount,
 			focusedOnAgent: this.focusedAgentId !== undefined,
@@ -8115,6 +8266,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	stop(): void {
+		if (this.isAttachedView) {
+			this.#stopAttachedViewer();
+			return;
+		}
 		this.syncIdleMaintenanceView(null);
 		this.#hidePlanReview();
 		this.#appearanceRefreshRequest = undefined;
@@ -8235,6 +8390,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 	async shutdown(): Promise<void> {
+		if (this.#remoteSession) {
+			this.stop();
+			await this.#remoteSession.dispose();
+			this.#viewerOptions.onDetach?.();
+			return;
+		}
 		if (this.#isShuttingDown) return;
 		// The previous graceful teardown failed AT the memoized session.dispose()
 		// (the session is already disposing), so it re-rejects identically forever
@@ -9057,9 +9218,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		clearTerminalHistory?: boolean;
 	}): Promise<void> {
 		// A focus switch replays another session's transcript: claim that session's link schemes first.
-		this.#applyExtensionLinks();
+		if (!this.isAttachedView) this.#applyExtensionLinks();
 		await this.#uiHelpers.renderInitialMessages(options);
-		this.syncRetryHintRow();
+		if (this.isAttachedView && !this.unsubscribe) {
+			this.unsubscribe = this.#remoteSession!.subscribe(event => {
+				void this.#eventController.dispatchSessionEvent(event).catch(error => this.showError(String(error)));
+			});
+		}
+		if (!this.isAttachedView) this.syncRetryHintRow();
 	}
 	/**
 	 * Reconcile the idle "F5 to Retry" status row with the transcript tail:
@@ -10056,8 +10222,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#extensionUiController.hideHookSelector();
 	}
 
-	showHookInput(title: string, placeholder?: string): Promise<string | undefined> {
-		return this.#extensionUiController.showHookInput(title, placeholder);
+	showHookInput(title: string, placeholder?: string, dialogOptions?: ExtensionUIDialogOptions): Promise<string | undefined> {
+		return this.#extensionUiController.showHookInput(title, placeholder, dialogOptions);
 	}
 
 	hideHookInput(): void {

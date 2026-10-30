@@ -19,6 +19,8 @@ export interface AssistantMessageSession {
 /** Host state required to construct and refresh assistant transcript segments. */
 export interface AssistantMessageHost {
 	readonly viewSession: AssistantMessageSession;
+	/** Structured-session viewers supply display state without an in-process runtime. */
+	readonly transcriptSession?: AssistantMessageSession;
 	readonly effectiveHideThinkingBlock: boolean;
 	readonly proseOnlyThinking: boolean;
 	readonly expandThinkingBlocks: boolean;
@@ -69,7 +71,7 @@ export async function refreshAssistantMessageLinkTargets(
 	ctx: AssistantMessageHost,
 	messages: readonly AssistantMessage[],
 ): Promise<ReadonlyMap<string, string>> {
-	const session: SessionWithMarkdownLinkTargets = ctx.viewSession;
+	const session: SessionWithMarkdownLinkTargets = ctx.transcriptSession ?? ctx.viewSession;
 	const previous = session[kMarkdownLinkTargets] ?? EMPTY_LINK_TARGETS;
 	const hrefs = new Set<string>();
 	for (const message of messages) {
@@ -94,7 +96,7 @@ export async function refreshAssistantMessageLinkTargets(
 
 /** Current resolved destinations for synchronous component construction. */
 export function getAssistantMessageLinkTargets(ctx: AssistantMessageHost): ReadonlyMap<string, string> {
-	const session: SessionWithMarkdownLinkTargets = ctx.viewSession;
+	const session: SessionWithMarkdownLinkTargets = ctx.transcriptSession ?? ctx.viewSession;
 	return session[kMarkdownLinkTargets] ?? EMPTY_LINK_TARGETS;
 }
 
@@ -124,16 +126,17 @@ export function createAssistantMessageComponent(
 	linkTargets: ReadonlyMap<string, string> = getAssistantMessageLinkTargets(ctx),
 	contentOffset = 0,
 ): AssistantMessageComponent {
+	const session = ctx.transcriptSession ?? ctx.viewSession;
 	const component = new AssistantMessageComponent(
 		message,
 		ctx.effectiveHideThinkingBlock,
 		() => ctx.ui.requestRender(),
-		ctx.viewSession.extensionRunner?.getAssistantThinkingRenderers(),
+		session.extensionRunner?.getAssistantThinkingRenderers(),
 		ctx.ui.imageBudget,
 		ctx.proseOnlyThinking,
 		linkTargets,
 		ctx.expandThinkingBlocks,
-		{ renderers: ctx.viewSession.extensionRunner?.getAssistantTextRenderers?.() ?? [], contentOffset },
+		{ renderers: session.extensionRunner?.getAssistantTextRenderers?.() ?? [], contentOffset },
 	);
 	applyHostDisplay(ctx, component);
 	return component;
@@ -159,7 +162,7 @@ function applyHostDisplay(ctx: AssistantMessageHost, component: AssistantMessage
 	// A wire the `stream-revision` axis marks `possible` can rewrite text it has
 	// already streamed; published rows are unrecoverable once they reach native
 	// scrollback, so those wires keep finished lines in the live viewport.
-	const compat = ctx.viewSession.model?.compat;
+	const compat = (ctx.transcriptSession ?? ctx.viewSession).model?.compat;
 	const wireRevisable = compat !== undefined && "streamRevision" in compat && compat.streamRevision === "possible";
 	component.setMidStreamPublication(!wireRevisable);
 }

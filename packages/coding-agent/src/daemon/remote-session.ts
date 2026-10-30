@@ -17,7 +17,13 @@
  * tools that completed before the cut are dropped, the in-flight ones are
  * replayed to the first subscriber, and everything after the cut is live.
  */
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { InteractiveSessionViewer } from "../modes/interactive-session-viewer";
+import type { AgentSession } from "../session/agent-session";
 import type { AgentSessionEvent } from "../session/agent-session-events";
+import { buildSessionContext, type SessionContext, type TranscriptSessionContextOptions } from "../session/session-context";
+import type { SessionEntry } from "../session/session-entries";
+import type { SessionJournalIdentity } from "../session/session-journal-events";
 
 type Frame = Record<string, unknown>;
 
@@ -37,7 +43,7 @@ export interface RemoteSessionState {
 	sessionName?: string;
 	isStreaming: boolean;
 	model?: { provider: string; id: string };
-	thinkingLevel?: string;
+	thinkingLevel?: AgentSession["thinkingLevel"];
 	[key: string]: unknown;
 }
 
@@ -55,11 +61,21 @@ type Lifecycle = AgentSessionEvent & { messageId?: string };
 const MESSAGE_LIFECYCLE = new Set(["message_start", "message_update", "message_end"]);
 const TOOL_LIFECYCLE = new Set(["tool_execution_start", "tool_execution_update", "tool_execution_end"]);
 
-export class RemoteAgentSession {
+export class RemoteAgentSession implements InteractiveSessionViewer {
 	readonly #client: RemoteTransport;
+	readonly #attachedSessionId: string;
 	readonly #listeners = new Set<(event: Lifecycle) => void>();
+	readonly sessionManager: InteractiveSessionViewer["sessionManager"];
 	#state: RemoteSessionState | undefined;
-	#messages: unknown[] = [];
+	#identity: SessionJournalIdentity | undefined;
+	#leafId: string | null | undefined;
+	#entries: SessionEntry[] = [];
+	#entryIndex = new Map<string, SessionEntry>();
+	#entriesGeneration = 0;
+	#messages: AgentMessage[] = [];
+	#streamMessage: AgentMessage | undefined;
+	#streamMessageId: string | undefined;
+	readonly #toolUpdates = new Map<string, Extract<AgentSessionEvent, { type: "tool_execution_update" }>>();
 	readonly #tools = new Map<string, RemoteToolExecution>();
 	/** Frames seen before history landed (`undefined` once the cut is made). */
 	#beforeCut: Frame[] | undefined = [];
@@ -67,24 +83,37 @@ export class RemoteAgentSession {
 	#replay: Frame[] = [];
 	readonly #unsubscribe: () => void;
 
-	private constructor(client: RemoteTransport) {
+	private constructor(client: RemoteTransport, sessionId: string, cwd: string) {
 		this.#client = client;
+		this.#attachedSessionId = sessionId;
+		this.sessionManager = {
+			getEntries: () => [...this.#entries],
+			getCwd: () => cwd,
+			getSessionId: () => this.sessionId,
+			getSessionFile: () => this.sessionFile,
+		};
 		this.#unsubscribe = client.onFrame(frame => this.#onFrame(frame));
 	}
 
 	/** Attach `client` to `sessionId` and load state and history after the snapshot cut. */
-	static async attach(client: RemoteTransport, sessionId: string): Promise<RemoteAgentSession> {
-		const session = new RemoteAgentSession(client);
-		await client.request({ type: "daemon.attach", sessionId });
-		await Promise.all([session.refreshState(), session.#loadMessages()]);
-		return session;
+	static async attach(client: RemoteTransport, sessionId: string, cwd: string): Promise<RemoteAgentSession> {
+		const session = new RemoteAgentSession(client, sessionId, cwd);
+		try {
+			// daemon.attach already requests the native ordered journal snapshot, including live tools.
+			await client.request({ type: "daemon.attach", sessionId });
+			await Promise.all([session.refreshState(), session.#loadMessages(), session.#loadEntries()]);
+			return session;
+		} catch (error) {
+			session.#unsubscribe();
+			throw error;
+		}
 	}
 
 	get sessionId(): string {
-		return this.#state?.sessionId ?? "";
+		return this.#identity?.sessionId ?? this.#state?.sessionId ?? this.#attachedSessionId;
 	}
 	get sessionFile(): string | undefined {
-		return this.#state?.sessionFile;
+		return this.#identity ? (this.#identity.sessionFile ?? undefined) : this.#state?.sessionFile;
 	}
 	get sessionName(): string | undefined {
 		return this.#state?.sessionName;
@@ -92,7 +121,7 @@ export class RemoteAgentSession {
 	get isStreaming(): boolean {
 		return this.#state?.isStreaming ?? false;
 	}
-	get thinkingLevel(): string | undefined {
+	get thinkingLevel(): AgentSession["thinkingLevel"] {
 		return this.#state?.thinkingLevel;
 	}
 	get modelId(): string | undefined {
@@ -100,8 +129,25 @@ export class RemoteAgentSession {
 		return model ? `${model.provider}/${model.id}` : undefined;
 	}
 	/** Completed messages: history at the cut plus every `message_end` since. */
-	get messages(): readonly unknown[] {
+	get messages(): readonly AgentMessage[] {
 		return this.#messages;
+	}
+	/** The current unsaved assistant message, including an attach snapshot's partial content. */
+	get streamMessage(): AgentMessage | undefined {
+		return this.#streamMessage;
+	}
+
+	buildTranscriptSessionContext(options?: TranscriptSessionContextOptions): SessionContext {
+		return buildSessionContext(this.#entries, this.#leafId, this.#entryIndex, {
+			transcript: true,
+			collapseCompactedHistory: options?.collapseCompactedHistory,
+			inFlightToolCallIds:
+				options?.keepInFlightToolCalls === true && this.isStreaming ? new Set(this.#tools.keys()) : undefined,
+		});
+	}
+
+	activeToolExecutionUpdates(): readonly Extract<AgentSessionEvent, { type: "tool_execution_update" }>[] {
+		return [...this.#toolUpdates.values()];
 	}
 	/** Tool calls started and not yet ended, in start order. */
 	get runningTools(): readonly RemoteToolExecution[] {
@@ -184,11 +230,23 @@ export class RemoteAgentSession {
 		await this.#client.detach().catch(() => undefined);
 	}
 
+	async #loadEntries(): Promise<void> {
+		const generation = ++this.#entriesGeneration;
+		await this.#client.request({ type: "get_entries" }, data => {
+			if (generation !== this.#entriesGeneration) return;
+			const journal = data as { entries: SessionEntry[]; leafId: string | null };
+			this.#entries = journal.entries;
+			this.#entryIndex = new Map(journal.entries.map(entry => [entry.id, entry]));
+			// The response is the journal cut: earlier entry/leaf events are already included.
+			this.#leafId = journal.leafId;
+		});
+	}
+
 	async #loadMessages(): Promise<void> {
 		// Cut inside the response callback: frames decoded right after the response are dispatched
 		// synchronously, before an `await` here would resume, and they belong after the cut.
 		await this.#client.request({ type: "get_messages" }, data => {
-			this.#messages = (data as { messages?: unknown[] } | undefined)?.messages ?? [];
+			this.#messages = (data as { messages?: AgentMessage[] } | undefined)?.messages ?? [];
 			this.#cut();
 		});
 	}
@@ -209,7 +267,8 @@ export class RemoteAgentSession {
 			if (TOOL_LIFECYCLE.has(type)) return !endedTools.has(String(frame.toolCallId));
 			return true;
 		});
-		for (const frame of inFlight) this.#deliver(frame, false);
+		// Held frames were tracked on arrival; replay must not roll state back to an older snapshot.
+		for (const frame of inFlight) this.#deliver(frame, false, false);
 	}
 
 	#onFrame(frame: Frame): void {
@@ -222,10 +281,10 @@ export class RemoteAgentSession {
 	}
 
 	/** Apply a frame to session state (messages after the cut only) and hand it to subscribers. */
-	#deliver(frame: Frame, appendMessages: boolean): void {
-		this.#track(frame);
+	#deliver(frame: Frame, appendMessages: boolean, track = true): void {
+		if (track) this.#track(frame);
 		if (appendMessages && frame.type === "message_end" && frame.message !== undefined)
-			this.#messages = [...this.#messages, frame.message];
+			this.#messages.push(frame.message as AgentMessage);
 		if (this.#listeners.size === 0) {
 			this.#replay.push(frame);
 			return;
@@ -236,11 +295,62 @@ export class RemoteAgentSession {
 	/** Streaming flag and the running-tool set follow the stream, before and after the cut. */
 	#track(frame: Frame): void {
 		switch (frame.type) {
+			case "journal_state":
+			case "journal_entry": {
+				const identity = frame as unknown as SessionJournalIdentity;
+				const changed =
+					this.#identity !== undefined &&
+					(this.#identity.sessionId !== identity.sessionId || this.#identity.sessionFile !== identity.sessionFile);
+				this.#identity = {
+					sessionId: identity.sessionId,
+					sessionFile: identity.sessionFile,
+					leafId: identity.leafId,
+				};
+				this.#leafId = identity.leafId;
+				if (changed) {
+					this.#entries = [];
+					this.#entryIndex.clear();
+					this.#messages = [];
+					this.#streamMessage = undefined;
+					this.#tools.clear();
+					this.#streamMessageId = undefined;
+					this.#toolUpdates.clear();
+					void this.#loadEntries().catch(() => undefined);
+				}
+				if (frame.type === "journal_entry") {
+					const entry = frame.entry as SessionEntry;
+					if (!this.#entryIndex.has(entry.id)) {
+						this.#entries.push(entry);
+						this.#entryIndex.set(entry.id, entry);
+					}
+				}
+				return;
+			}
+			case "message_start":
+			case "message_update":
+				if ((frame.message as AgentMessage | undefined)?.role === "assistant") {
+					this.#streamMessage = frame.message as AgentMessage;
+					this.#streamMessageId = typeof frame.messageId === "string" ? frame.messageId : undefined;
+				}
+				return;
+			case "message_end":
+				if (
+					(frame.message as AgentMessage | undefined)?.role === "assistant" &&
+					frame.messageId === this.#streamMessageId
+				) {
+					this.#streamMessage = undefined;
+					this.#streamMessageId = undefined;
+				}
+				return;
 			case "agent_start":
 				if (this.#state) this.#state = { ...this.#state, isStreaming: true };
 				return;
 			case "agent_end":
-				if (frame.willContinue !== true && this.#state) this.#state = { ...this.#state, isStreaming: false };
+				if (frame.willContinue !== true) {
+					if (this.#state) this.#state = { ...this.#state, isStreaming: false };
+					this.#streamMessage = undefined;
+					this.#streamMessageId = undefined;
+				}
 				return;
 			case "tool_execution_start":
 				this.#tools.set(String(frame.toolCallId), {
@@ -251,11 +361,16 @@ export class RemoteAgentSession {
 				return;
 			case "tool_execution_update": {
 				const tool = this.#tools.get(String(frame.toolCallId));
+				this.#toolUpdates.set(
+					String(frame.toolCallId),
+					frame as unknown as Extract<AgentSessionEvent, { type: "tool_execution_update" }>,
+				);
 				if (tool) tool.partialResult = frame.partialResult;
 				return;
 			}
 			case "tool_execution_end":
 				this.#tools.delete(String(frame.toolCallId));
+				this.#toolUpdates.delete(String(frame.toolCallId));
 				return;
 			case "config_update":
 			case "session_info_changed":

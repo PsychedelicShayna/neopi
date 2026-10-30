@@ -1,5 +1,4 @@
 import { describe, expect, it } from "bun:test";
-import { FrameSessionModel } from "../../src/daemon/attach-view";
 import type { HostedSessionInfo } from "../../src/daemon/server";
 import { type HubChoice, SessionHubList } from "../../src/daemon/session-hub";
 
@@ -62,36 +61,3 @@ describe("SessionHubList", () => {
 	});
 });
 
-describe("FrameSessionModel", () => {
-	const assistant = (text: string) => ({ role: "assistant", content: [{ type: "text", text }] });
-
-	it("rebuilds the transcript from history, then a snapshot message, then live deltas", () => {
-		const model = new FrameSessionModel();
-		model.loadHistory([{ role: "user", content: "hi" }, assistant("hello")]);
-		model.apply({ type: "agent_start" });
-		model.apply({ type: "message_start", snapshot: true, message: assistant("al") });
-		model.apply({ type: "message_update", message: assistant("alpha be") });
-		expect(model.live?.text).toBe("alpha be");
-		model.apply({ type: "message_end", message: assistant("alpha beta") });
-		model.apply({ type: "agent_end" });
-		expect(model.entries.map(e => `${e.role}:${e.text}`)).toEqual([
-			"user:hi",
-			"assistant:hello",
-			"assistant:alpha beta",
-		]);
-		expect(model.streaming).toBe(false);
-	});
-
-	it("answers a confirm and drops an interaction another viewer settled", () => {
-		const model = new FrameSessionModel();
-		model.apply({ type: "extension_ui_request", id: "d1", method: "confirm", title: "ok?" });
-		model.apply({ type: "tool_approval_request", id: "t1", toolName: "bash" });
-		expect(model.answer(model.interactions[0]!, 0)).toEqual({
-			type: "extension_ui_response",
-			id: "d1",
-			confirmed: true,
-		});
-		model.apply({ type: "tool_approval_cancel", id: "x", targetId: "t1" });
-		expect(model.interactions).toEqual([]);
-	});
-});

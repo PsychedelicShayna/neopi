@@ -363,7 +363,7 @@ export class EventController {
 		// tiny/smol role with this session's registry and credentials; the
 		// vocalizer falls back to mechanical cleanup when unset. Tolerates
 		// partial contexts (tests, minimal embeddings) by wiring null.
-		const session = ctx.session;
+		const session = ctx.isAttachedView ? undefined : ctx.session;
 		this.#detachToolApprovalPreviewWaiter = session?.extensionRunner?.setToolApprovalPreviewWaiter(toolCallId =>
 			this.#waitForToolApprovalPreview(toolCallId),
 		);
@@ -382,7 +382,7 @@ export class EventController {
 			// frame are coalesced), never a partly revealed prefix from the typing reveal.
 			getSmoothStreaming: () =>
 				cfgDisplaySmoothStreaming.get(this.ctx.settings) &&
-				!this.ctx.viewSession.extensionRunner?.getAssistantTextRenderers?.().length,
+				!this.transcriptSession.extensionRunner?.getAssistantTextRenderers?.().length,
 			getHideThinkingBlock: () => this.ctx.effectiveHideThinkingBlock,
 			getProseOnlyThinking: () => this.ctx.proseOnlyThinking,
 			requestRender: component => this.ctx.ui.requestComponentRender(component),
@@ -509,6 +509,10 @@ export class EventController {
 		} satisfies AgentSessionEventHandlers;
 	}
 
+	get transcriptSession() {
+		return this.ctx.transcriptSession ?? this.ctx.viewSession;
+	}
+
 	/** Surface an idle recap reply in the transcript as a one-line {@link RecapNotice}; a blank reply mounts nothing. */
 	presentIdleRecap(reply: string): void {
 		const recap = previewLine(reply, TRUNCATE_LENGTHS.RECAP);
@@ -612,7 +616,7 @@ export class EventController {
 	 * segments of replies already committed are replayed instead.
 	 */
 	liveAssistantSegments(): AssistantMessageComponent[] {
-		const live = this.ctx.viewSession.agent.state.streamMessage;
+		const live = this.ctx.isAttachedView ? this.ctx.transcriptStreamMessage : this.ctx.viewSession.agent.state.streamMessage;
 		if (live?.role !== "assistant") return [];
 		const segments: AssistantMessageComponent[] = [];
 		for (const block of live.content) {
@@ -629,7 +633,7 @@ export class EventController {
 	 */
 	applyAssistantTextRenderers(): void {
 		this.#streamingReveal.resyncSmoothStreaming();
-		const renderers = this.ctx.viewSession.extensionRunner?.getAssistantTextRenderers?.() ?? [];
+		const renderers = this.transcriptSession.extensionRunner?.getAssistantTextRenderers?.() ?? [];
 		this.ctx.streamingComponent?.setTextRenderers(renderers);
 		for (const segment of this.liveAssistantSegments()) segment.setTextRenderers(renderers);
 	}
@@ -878,7 +882,7 @@ export class EventController {
 	}
 
 	#updateWorkingMessageFromIntent(intent: unknown): void {
-		if (this.ctx.session.isAborting) return;
+		if (this.transcriptSession.isAborting) return;
 		const trimmed = normalizeIntent(intent);
 		if (!trimmed || trimmed === this.#lastIntent) return;
 		this.#lastIntent = trimmed;
@@ -1076,7 +1080,7 @@ export class EventController {
 		this.#pinnedErrorComponent = undefined;
 		this.#pinnedErrorMessage = undefined;
 		this.#restorePinnedErrorInline = true;
-		this.#retryPending = this.ctx.viewSession.isRetrying;
+		this.#retryPending = this.transcriptSession.isRetrying;
 		this.composerPrediction.cancel();
 		for (const timer of this.#ircExpiryTimers.values()) {
 			clearTimeout(timer);
@@ -1093,6 +1097,7 @@ export class EventController {
 
 	/** Restore display state without replaying completion notifications or persistence. */
 	#seedHeldCompletionsFromPendingResults(): void {
+		if (this.ctx.isAttachedView) return;
 		const pending = this.ctx.viewSession.agent.getPendingToolResults();
 		for (const result of pending) {
 			this.#orphanedToolCompletions.set(result.toolCallId, {
@@ -1115,6 +1120,13 @@ export class EventController {
 	}
 
 	async handleEvent(event: AgentSessionEvent): Promise<void> {
+		// Attached viewers consume transcript events, not hosted-runtime controls.
+		// Consent dialogs are routed by the native rpc-ui interaction bridge.
+		if (this.ctx.isAttachedView && ![
+			"agent_start", "agent_end", "turn_start", "turn_end",
+			"message_start", "message_update", "message_end",
+			"tool_execution_start", "tool_execution_update", "tool_execution_end", "tool_stream_update",
+		].includes(event.type)) return;
 		if (!this.ctx.isInitialized) {
 			await this.ctx.init();
 		}
@@ -1240,11 +1252,11 @@ export class EventController {
 			this.ctx.statusContainer.disposeChildren();
 		}
 		this.composerPrediction.cancel();
-		this.ctx.statusLine.markActivityStart();
+		if (!this.ctx.isAttachedView) this.ctx.statusLine.markActivityStart();
 		// The turn owns progress from here; a compaction that started it hands it over.
 		this.#compactionOwnsProgress = false;
 		this.#setTerminalProgress(true);
-		this.ctx.ensureLoadingAnimation();
+		if (!this.ctx.isAttachedView) this.ctx.ensureLoadingAnimation();
 		this.#runActive = true;
 		this.#syncComposerActivity();
 		setRunStatus({ state: "working" });
@@ -1254,7 +1266,7 @@ export class EventController {
 	async #handleMessageStart(event: Extract<AgentSessionEvent, { type: "message_start" }>): Promise<void> {
 		this.#ensureWorkingLoaderWhileStreaming();
 		if (event.message.role === "hookMessage" || event.message.role === "custom") {
-			if (event.message.role === "custom" && !this.ctx.initialChatRendered && !this.ctx.viewSession.isStreaming) {
+			if (event.message.role === "custom" && !this.ctx.initialChatRendered && !this.transcriptSession.isStreaming) {
 				// Idle custom append while no transcript render has committed (e.g. a startup
 				// display:true sendMessage before renderInitialMessages): AgentSession persists the
 				// entry before emitting this event, so the replay owns the paint — a render not yet
@@ -1666,7 +1678,7 @@ export class EventController {
 			for (let contentIndex = 0; contentIndex < this.ctx.streamingMessage.content.length; contentIndex++) {
 				const content = this.ctx.streamingMessage.content[contentIndex]!;
 				if (content.type !== "toolCall") continue;
-				const tool = this.ctx.viewSession.getToolByName(content.name);
+				const tool = this.transcriptSession.getToolByName?.(content.name);
 				const renderToolName = toolRenderName(content.name, tool);
 				if (renderToolName === "read") {
 					if (!readArgsHaveTarget(content.arguments)) {
@@ -1737,7 +1749,7 @@ export class EventController {
 						args: renderArgs,
 						tool,
 						id: content.id,
-						cwd: this.ctx.sessionManager.getCwd(),
+						cwd: this.transcriptSession.sessionManager.getCwd(),
 					});
 					const pendingPreview = this.#pendingStreamPreviews.get(content.id);
 					if (pendingPreview !== undefined) {
@@ -1788,7 +1800,7 @@ export class EventController {
 				if (INTENT_FIELD in args) {
 					intent = normalizeIntent(args[INTENT_FIELD]);
 				} else {
-					const tool = this.ctx.viewSession.getToolByName(block.name);
+					const tool = this.transcriptSession.getToolByName?.(block.name);
 					if (typeof tool?.intent !== "function") continue;
 					try {
 						intent = normalizeIntent(tool.intent(args as never));
@@ -1808,7 +1820,7 @@ export class EventController {
 	async #handleMessageEnd(event: Extract<AgentSessionEvent, { type: "message_end" }>): Promise<void> {
 		// The persistence slot exists before message_end notification, unlike
 		// tool_execution_end. Resolve HUD identity only after canonical append.
-		if (event.message.role === "toolResult" && event.message.toolName === "todo" && !event.message.isError) {
+		if (!this.ctx.isAttachedView && event.message.role === "toolResult" && event.message.toolName === "todo" && !event.message.isError) {
 			const details = event.message.details as { op?: string; phases?: TodoPhase[] } | undefined;
 			if (details?.op !== "view" && details?.phases) {
 				const owner = this.ctx.viewSession;
@@ -1816,7 +1828,7 @@ export class EventController {
 				const sessionFile = owner.sessionManager.getSessionFile();
 				await owner.settleInFlightMessagePersistence();
 				if (
-					this.ctx.viewSession === owner &&
+					this.transcriptSession === owner &&
 					owner.sessionManager.getSessionId() === sessionId &&
 					owner.sessionManager.getSessionFile() === sessionFile
 				) {
@@ -1863,7 +1875,7 @@ export class EventController {
 				// for expected internal transitions (plan-compact, TTSR rule
 				// interruption) before this controller ran, so reaching this branch
 				// implies the abort was NOT a silent internal transition.
-				errorMessage = resolveAbortLabel(this.ctx.streamingMessage, this.ctx.viewSession.retryAttempt);
+				errorMessage = resolveAbortLabel(this.ctx.streamingMessage, this.transcriptSession.retryAttempt);
 				this.ctx.streamingMessage.errorMessage = errorMessage;
 			}
 			const displayMessage: AssistantMessage = silentlyAborted
@@ -1910,7 +1922,7 @@ export class EventController {
 				//     failure stays visible; `#handleAutoRetryStart` removes them only
 				//     if a retry actually supersedes them (Codex review on #6881).
 				const supersededByRewind =
-					this.ctx.streamingMessage.stopReason === "aborted" && this.ctx.viewSession.isTtsrAbortPending;
+					this.ctx.streamingMessage.stopReason === "aborted" && this.transcriptSession.isTtsrAbortPending;
 				if (supersededByRewind) {
 					this.ctx.streamingComponent.markRewound();
 					for (const [toolCallId, component] of Array.from(this.ctx.pendingTools.entries())) {
@@ -2009,7 +2021,7 @@ export class EventController {
 				this.#restorePinnedErrorInline = !recoverableEmptyOutput;
 				if (!recoverableEmptyOutput) this.ctx.showPinnedError(event.message.errorMessage);
 			}
-			this.ctx.statusLine.invalidate();
+			if (!this.ctx.isAttachedView) this.ctx.statusLine.invalidate();
 			this.ctx.ui.requestRender();
 		}
 		this.ctx.ui.requestRender();
@@ -2019,7 +2031,7 @@ export class EventController {
 		if (this.#retractedToolCallIds.has(event.toolCallId)) return;
 		this.#ensureWorkingLoaderWhileStreaming();
 		this.#updateWorkingMessageFromIntent(event.intent);
-		const tool = this.ctx.viewSession.getToolByName(event.toolName);
+		const tool = this.transcriptSession.getToolByName?.(event.toolName);
 		const renderToolName = toolRenderName(event.toolName, tool);
 		const blocked = this.#blockingPrompt(renderToolName, event.args);
 		if (blocked) {
@@ -2056,7 +2068,7 @@ export class EventController {
 				args: renderArgsWithIntent(event.args, event.intent),
 				tool,
 				id: event.toolCallId,
-				cwd: this.ctx.sessionManager.getCwd(),
+				cwd: this.transcriptSession.sessionManager.getCwd(),
 			});
 			const pendingPreview = this.#pendingStreamPreviews.get(event.toolCallId);
 			if (pendingPreview !== undefined) {
@@ -2111,12 +2123,13 @@ export class EventController {
 	 * throw in the render path.
 	 */
 	#blockingPrompt(toolName: string, args: unknown): RunStatus | undefined {
+		if (this.ctx.isAttachedView) return undefined;
 		if (toolName === "ask") {
 			const questions = recoverAskQuestions(args)?.map(question => question.question);
 			return { state: "blocked", kind: "question", msg: questions?.join(" ") };
 		}
-		const session = this.ctx.viewSession;
-		const tool = session.getToolByName(toolName);
+		const session = this.transcriptSession;
+		const tool = session.getToolByName?.(toolName);
 		if (!tool) return undefined;
 		const mode = cfgToolsApprovalMode.get(settings);
 		const userPolicies: Record<string, unknown> = cfgToolsApproval.get(settings);
@@ -2333,6 +2346,8 @@ export class EventController {
 			}
 		}
 		if (syntheticFailureCard) this.#syntheticFailureCards.set(event.toolCallId, syntheticFailureCard);
+		// The daemon owns todo persistence, nested tool effects and plan approval.
+		if (this.ctx.isAttachedView) return;
 		if (event.toolName === "todo" && !event.isError) {
 			const details = event.result.details as { op?: string; phases?: TodoPhase[] } | undefined;
 			if (details?.op !== "view" && details?.phases) this.ctx.setTodos(details.phases);
@@ -2406,6 +2421,12 @@ export class EventController {
 		}
 	}
 	async #handleAgentEnd(event: Extract<AgentSessionEvent, { type: "agent_end" }>): Promise<void> {
+		if (this.ctx.isAttachedView) {
+			if (!this.transcriptSession.isStreaming && event.isTerminal !== false) {
+				await this.#finishAgentEnd(event);
+			}
+			return;
+		}
 		// A superseded agent_end: the agent is already streaming a fresh turn, so
 		// this event belongs to a turn that has already been replaced. The session
 		// dispatches to listeners fire-and-forget across an async extension-emit hop
@@ -2419,7 +2440,7 @@ export class EventController {
 			// A focused worker can end while the main session streams; its run is
 			// over even though main's is not. Tear down only what the viewed worker
 			// owns (its loader); main-owned work waits for main's own settle.
-			const view = this.ctx.viewSession;
+			const view = this.transcriptSession;
 			if (view !== this.ctx.session && !view.isStreaming && this.ctx.loadingAnimation) {
 				this.ctx.loadingAnimation.stop();
 				this.ctx.loadingAnimation = undefined;
@@ -2528,7 +2549,7 @@ export class EventController {
 	 */
 	#showAsyncWait(event: Extract<AgentSessionEvent, { type: "agent_end" }>): void {
 		const session = this.ctx.session;
-		if (this.ctx.viewSession !== session || !session.hasPendingAsyncWork()) return;
+		if (this.transcriptSession !== session || !session.hasPendingAsyncWork()) return;
 		this.#asyncWaitEnd = event;
 		this.ctx.ensureLoadingAnimation();
 		this.ctx.setWorkingMessage(() =>
@@ -2539,6 +2560,7 @@ export class EventController {
 
 	/** The run only waits on background work, and the interrupt key would end that wait. */
 	isAwaitingAsyncWork(): boolean {
+		if (this.ctx.isAttachedView) return false;
 		const session = this.ctx.session;
 		return this.#asyncWaitEnd !== undefined && !session.isStreaming && session.hasPendingAsyncWork();
 	}
@@ -2598,7 +2620,7 @@ export class EventController {
 	): Promise<void> {
 		this.#asyncWaitEnd = undefined;
 		this.#setTerminalProgress(false);
-		this.ctx.statusLine.markActivityEnd();
+		if (!this.ctx.isAttachedView) this.ctx.statusLine.markActivityEnd();
 		this.#lastAgentEndAt = Date.now();
 		this.#streamingReveal.stop();
 		this.#toolArgsReveal.flushAll();
@@ -2609,9 +2631,9 @@ export class EventController {
 		}
 		// A stale end landing after the viewed session started a new turn must
 		// not mark that live turn idle.
-		this.#runActive = this.ctx.viewSession.isStreaming;
+		this.#runActive = this.transcriptSession.isStreaming;
 		this.#syncComposerActivity();
-		await this.ctx.flushPendingModelSwitch();
+		if (!this.ctx.isAttachedView) await this.ctx.flushPendingModelSwitch();
 		this.#sealAbandonedForegroundTools();
 		this.#blockingPrompts.clear();
 		this.#readToolCallArgs.clear();
@@ -2631,13 +2653,14 @@ export class EventController {
 		// final history — seal it instead of letting its spinner tick while idle.
 		this.#resolveDisplaceablePoll();
 		this.#resolveDisplaceableTodo();
-		this.ctx.flushPendingCommandOutput();
+		if (!this.ctx.isAttachedView) this.ctx.flushPendingCommandOutput();
 		this.#lastAssistantComponent = undefined;
 		// When the interrupted/failed turn died on a tool call, this replaces the
 		// torn-down "Working…" row with the "F5 to Retry" affordance.
-		this.ctx.syncRetryHintRow();
+		if (!this.ctx.isAttachedView) this.ctx.syncRetryHintRow();
 		this.ctx.ui.requestRender();
 		// The user stopped the run themselves: no prediction or toast for it.
+		if (this.ctx.isAttachedView) return;
 		if (options?.interrupted) return;
 		if (this.#settledRunStatus(event).state === "done") this.composerPrediction.request();
 		this.sendErrorNotification(event);
@@ -2666,7 +2689,8 @@ export class EventController {
 	 * for `viewSession`, so key the reconciler on that session, not the main one.
 	 */
 	#ensureWorkingLoaderWhileStreaming(): void {
-		if (!this.ctx.viewSession.isStreaming) return;
+		if (this.ctx.isAttachedView) return;
+		if (!this.transcriptSession.isStreaming) return;
 		if (this.ctx.autoCompactionLoader || this.ctx.retryLoader) return;
 		this.ctx.ensureLoadingAnimation();
 	}

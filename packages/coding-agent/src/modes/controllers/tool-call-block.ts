@@ -23,7 +23,7 @@ export interface ToolCallBlockSpec {
  * Shared by the live event path and the transcript rebuild so both draw a call the same way.
  */
 export function createToolCallBlock(ctx: InteractiveModeContext, call: ToolCallBlockSpec): ToolExecutionHandle {
-	const builtIn = ctx.viewSession.hasBuiltInTool(call.name);
+	const builtIn = (ctx.transcriptSession ?? ctx.viewSession).hasBuiltInTool?.(call.name) ?? false;
 	if (builtIn && isReplyWrite(call.name, call.args) === true) {
 		const reply = createReplyWriteComponent(ctx);
 		reply.updateArgs(call.args);

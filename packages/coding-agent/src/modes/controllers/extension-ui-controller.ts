@@ -1331,7 +1331,10 @@ export class ExtensionUiController {
 				() => settle(undefined),
 				{
 					...editorOptions,
-					externalEditor: text => editDialogExternally(text, this.ctx.session.environment.snapshot()),
+					externalEditor: this.ctx.isAttachedView ? async () => {
+						this.ctx.showWarning("External editors are not available in attached view yet.");
+						return undefined;
+					} : text => editDialogExternally(text, this.ctx.session.environment.snapshot()),
 				},
 			);
 			this.ctx.editorContainer.clear();

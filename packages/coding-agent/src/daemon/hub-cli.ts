@@ -5,7 +5,7 @@
  * hosted session running.
  */
 import { ensureTheme } from "@oh-my-pi/pi-tui/theme";
-import { runAttachView } from "./attach-view";
+import { runInteractiveAttach } from "./interactive-attach";
 import { ensureSessionDaemon, type SessionDaemonClient } from "./client";
 import type { HostedSessionInfo } from "./server";
 import { runSessionHub } from "./session-hub";
@@ -21,7 +21,7 @@ async function attachLoop(
 			// Each attach gets its own connection: the daemon socket is per viewer once attached.
 			const viewer = await ensureSessionDaemon();
 			try {
-				const exit = await runAttachView(viewer, next.id, next.title ?? `session ${next.id}`);
+				const exit = await runInteractiveAttach(viewer, next);
 				if (exit === "closed") return;
 			} finally {
 				viewer.close();
