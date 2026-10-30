@@ -26,8 +26,8 @@ function row(id: string) {
 	return found;
 }
 
-async function reload(theme: string, shell = "/bin/sh"): Promise<void> {
-	await Bun.write(path.join(root, "profile", "config.yml"), `theme:\n  dark: ${theme}\nshellPath: ${shell}\n`);
+async function reload(theme: string, screenshotDir = "/screenshots"): Promise<void> {
+	await Bun.write(path.join(root, "profile", "config.yml"), `theme:\n  dark: ${theme}\nbrowser:\n  screenshotDir: ${screenshotDir}\n`);
 	await store.applySettingsReload();
 }
 
@@ -35,7 +35,7 @@ beforeAll(async () => { await initTheme(); });
 beforeEach(async () => {
 	root = await fs.mkdtemp(path.join(os.homedir(), ".cache/npi-canary/settings-open-refresh-"));
 	await fs.mkdir(path.join(root, "project"), { recursive: true });
-	await Bun.write(path.join(root, "profile", "config.yml"), "theme:\n  dark: dark\nshellPath: /bin/sh\n");
+	await Bun.write(path.join(root, "profile", "config.yml"), "theme:\n  dark: dark\nbrowser:\n  screenshotDir: /screenshots\n");
 	store = await Settings.loadIsolated({ cwd: path.join(root, "project"), agentDir: path.join(root, "profile") });
 	requestRender.mockClear();
 	selector = new SettingsSelectorComponent({
@@ -88,17 +88,18 @@ describe("open Settings reloads", () => {
 
 	it("preserves a text draft and cursor when that row changes underneath", async () => {
 		selector.handleInput("/");
-		for (const char of "shell path") selector.handleInput(char);
-		selector.handleInput("\n");
-		selector.handleInput("\n");
+		for (const char of "/browser\\.screenshotDir/") selector.handleInput(char);
+		selector.handleInput("\r"); // Confirm the search without activating its result.
+		expect(page()).toMatchObject({ focus: "browser.screenshotDir", editing: null });
+		selector.handleInput("\r"); // Open the matched text setting.
 		selector.handleInput("\x15");
 		selector.handleInput("\x1b[200~/my/draft\x1b[201~");
 		selector.handleInput("\x1b[D");
 		const editing = page().editing;
-		expect(editing).toMatchObject({ row: "shellPath", draft: "/my/draft" });
-		await reload("light", "/bin/bash");
+		expect(editing).toMatchObject({ row: "browser.screenshotDir", draft: "/my/draft", cursor: 8 });
+		await reload("light", "/other/screenshots");
 		expect(page().editing).toEqual(editing);
-		expect(row("shellPath").warning).toContain("changed elsewhere");
+		expect(row("browser.screenshotDir").warning).toContain("changed elsewhere");
 	});
 
 	it("refreshes after this session's Apply and unsubscribes when disposed", async () => {
