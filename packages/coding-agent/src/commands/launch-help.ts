@@ -84,6 +84,7 @@ export const launchHelp = {
 		"no-tools": Flags.boolean({ description: "Disable all built-in tools" }),
 		"no-lsp": Flags.boolean({ description: "Disable LSP tools, formatting, and diagnostics" }),
 		"no-pty": Flags.boolean({ description: "Disable PTY-based interactive bash execution" }),
+		standalone: Flags.boolean({ description: "Run a session in this process without the session daemon (the default unless daemon.enabled)" }),
 		"no-exit-with-parent": Flags.boolean({
 			description: "Print/json modes: keep running after the parent process dies (for nohup/setsid use)",
 		}),

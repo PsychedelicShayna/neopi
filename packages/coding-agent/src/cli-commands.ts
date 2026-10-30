@@ -218,6 +218,16 @@ export const commands: CommandEntry[] = [
 		help: commandHelp.predictHelp,
 	},
 	{
+		name: "hub",
+		load: () => import("./commands/hub").then(m => m.default),
+		help: commandHelp.hubHelp,
+	},
+	{
+		name: "new",
+		load: () => import("./commands/new").then(m => m.default),
+		help: commandHelp.newHelp,
+	},
+	{
 		name: "ps",
 		load: () => import("./commands/ps").then(m => m.default),
 		help: commandHelp.psHelp,

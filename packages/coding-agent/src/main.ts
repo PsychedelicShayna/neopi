@@ -67,6 +67,8 @@ import { all, combine, type ProtocolHost, type SettingValueOf } from "./config/r
 import { Settings, settings } from "./config/settings";
 import { startControlHost } from "./control/host";
 import { cfgControlEnabled } from "./control/settings";
+import { runHubCommand } from "./daemon/hub-cli";
+import { cfgDaemonEnabled } from "./daemon/settings";
 import { startAgentMonitor } from "./monitor/controller";
 import { cfgMonitorAutoStart } from "./monitor/settings";
 import { initializeWithSettings } from "./discovery";
@@ -2052,6 +2054,22 @@ export async function disposeSessionQuietly(session: AgentSession): Promise<void
 	await session.dispose().catch(() => undefined);
 }
 
+/**
+ * Whether this launch is plain `npi`: nothing that names a session, a prompt or
+ * a mode. Only such a launch opens the session hub; anything else (resume,
+ * continue, a prompt, `-p`) keeps its standalone meaning.
+ */
+function isBareDaemonLaunch(args: Args): boolean {
+	return (
+		args.messages.length === 0 &&
+		args.fileArgs.length === 0 &&
+		args.resume === undefined &&
+		args.continue !== true &&
+		args.print !== true &&
+		args.mode === undefined
+	);
+}
+
 export async function runRootCommand(
 	parsed: Args,
 	rawArgs: string[],
@@ -2217,6 +2235,25 @@ export async function runRootCommand(
 		}
 
 		const settingsInstance = await settingsPromise;
+		if (
+			isInteractive &&
+			!parsedArgs.standalone &&
+			cfgDaemonEnabled.get(settingsInstance) &&
+			isBareDaemonLaunch(parsedArgs)
+		) {
+			// Opt-in: plain `npi` opens the session hub. The speculative composer must
+			// release the terminal first; at worst it showed for one frame.
+			stopPendingStartupComposer();
+			try {
+				await runHubCommand(cwd);
+				process.exit(0);
+			} catch (error) {
+				// The daemon must never stop `npi` from starting: fall back to a session here.
+				process.stderr.write(
+					`${chalk.yellow(`Session daemon unavailable (${error instanceof Error ? error.message : String(error)}); starting a standalone session.`)}\n`,
+				);
+			}
+		}
 		// Process-lifetime: broker/account-policy edits reconfigure the shared credential store.
 		createAuthStorageSettingsSync(settingsInstance, authStorage);
 		if (parsedArgs.approvalMode) {
