@@ -7594,9 +7594,13 @@ export class AgentSession implements SettingsScope {
 			}
 		}
 	}
-	/** Stop todo reminders from starting extra turns in a single-shot print run. */
-	disableStopTimeTodoReminders(): void {
+	/** Prepare a single-shot run: no reminder turns or nested HTTP retry budgets. */
+	prepareForPrintMode(): void {
 		this.#stopTimeTodoRemindersEnabled = false;
+		this.#recovery.boundRetriesForPrintMode();
+		const streamFn = this.agent.streamFn;
+		this.agent.streamFn = (model, context, options) =>
+			streamFn(model, context, { ...options, maxHttpAttempts: 1 });
 	}
 
 	/**

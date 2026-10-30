@@ -144,7 +144,7 @@ async function runPrintModeCore(
 	signalTeardownActive: () => boolean,
 ): Promise<number> {
 	const { mode, messages = [], initialMessage, initialImages, printThoughts, planYolo = false } = options;
-	session.disableStopTimeTodoReminders();
+	session.prepareForPrintMode();
 
 	// process.stdout.write is fire-and-forget: a large final record (e.g. a
 	// multi-MB agent_end) can be dropped when the process exits before the pipe
@@ -279,6 +279,7 @@ async function runPrintModeCore(
 	// persisted previous turn must not be reprinted or its old stop reason
 	// reused as this run's exit status.
 	let admittedAgentTurn = false;
+	let retryAttempts = 0;
 	// The session's cost-cap refusal when the last admitted turn started; a newer one stopped that turn.
 	let costCapRefusalBeforeTurn = session.costCapRefusal;
 	// The print-mode-dispatched commands. Only commands whose runtime hooks
@@ -357,6 +358,7 @@ async function runPrintModeCore(
 
 	// Always subscribe to enable session persistence via _handleAgentEvent
 	session.subscribe(event => {
+		if (event.type === "auto_retry_start") retryAttempts++;
 		// In JSON mode, output all events
 		if (mode === "json") {
 			writeStdoutLine(`${JSON.stringify(printableEvent(event))}\n`);
@@ -453,6 +455,7 @@ async function runPrintModeCore(
 		if (!(await prepareAgentTurn())) return;
 		admittedAgentTurn = true;
 		costCapRefusalBeforeTurn = session.costCapRefusal;
+		retryAttempts = 0;
 		await logger.time("print:prompt", () =>
 			images !== undefined ? session.prompt(text, { images }) : session.prompt(text),
 		);
@@ -626,15 +629,14 @@ async function runPrintModeCore(
 		await stderrTail;
 	}
 
-	// Text mode reports the terminal failure on stderr exactly as before: same
-	// line, same ordering after dispose, without terminating the process here.
-	if (mode === "text" && terminalFailure && assistantMsg) {
-		const errorLine = sanitizeText(assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`);
-		if (!process.stderr.write(`${errorLine}\n`)) {
-			const { promise, resolve } = Promise.withResolvers<void>();
-			process.stderr.once("drain", resolve);
-			await promise;
-		}
+	// Always report a terminal provider failure, including in JSON mode, on one
+	// stderr-safe line. Transport retries are disabled so these are real attempts.
+	if (terminalFailure && assistantMsg) {
+		const status = assistantMsg.errorStatus !== undefined ? ` HTTP ${assistantMsg.errorStatus}` : "";
+		const source = `${assistantMsg.provider}/${assistantMsg.model}`;
+		writeStderrLine(
+			`Error:${status} ${singleLine(source)} after ${retryAttempts + 1} attempt${retryAttempts === 0 ? "" : "s"}: ${singleLine(assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`)}`,
+		);
 	}
 
 	await stderrTail;

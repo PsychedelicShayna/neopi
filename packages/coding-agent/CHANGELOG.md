@@ -127,6 +127,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Print mode exits non-zero with the HTTP status, source model, and attempt count after its configured retry budget, without hidden HTTP retries or renewed budgets on fallback ([#627](https://github.com/PsychedelicShayna/neopi/issues/627)).
 - Live effort alerts accept the operator catalog's relative 0–1 fractional ratings without disabling recommendation lookup.
 - Print-mode runs can read screenshots inside their workspace without getting stuck when speculative reads are enabled ([#606](https://github.com/PsychedelicShayna/neopi/issues/606)).
 - Ctrl+Space speech input keeps priority while picking link hints, including enhanced-terminal repeats and key releases.
