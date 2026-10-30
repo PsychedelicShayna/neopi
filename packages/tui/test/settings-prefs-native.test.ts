@@ -628,6 +628,43 @@ describe("settings as a native prefs page", () => {
 		}
 	}
 
+	it("restores headings live when a search draft is deleted, and Escape leaves only the composer", () => {
+		let closed = 0;
+		const { selector, changes } = harness({}, {
+			onCancel: () => {
+				closed++;
+			},
+		});
+		const before = prefs(selector).props;
+		const beforeRows = selector.render(180).map(line => Bun.stripANSI(line));
+		for (const key of ["/", "color", ENTER, "/", "\x01", "\x0b"]) selector.handleInput(key);
+		const cleared = prefs(selector).props;
+		expect(cleared.sections).toEqual(before.sections);
+		expect(cleared.sections.every(section => section.page === undefined)).toBe(true);
+		expect(cleared.focus).toBe(before.focus);
+		expect(selector.render(180).some(line => Bun.stripANSI(line).includes("Theme"))).toBe(true);
+		expect(selector.navigationSnapshot()).toMatchObject({ searchFocused: true });
+		selector.handleInput("\x1b");
+		expect(closed).toBe(0);
+		expect(prefs(selector).props.query).toBeUndefined();
+		expect(selector.render(180).map(line => Bun.stripANSI(line))).toEqual(beforeRows);
+		expect(changes).toEqual([]);
+		selector.handleInput("\x1b");
+		expect(closed).toBe(1);
+	});
+
+	it("keeps headings while composing an empty pattern and Enter returns to the normal list", () => {
+		const { selector, changes } = harness();
+		const before = prefs(selector).props;
+		selector.handleInput("/");
+		expect(prefs(selector).props.sections).toEqual(before.sections);
+		selector.handleInput(ENTER);
+		expect(prefs(selector).props.query).toBeUndefined();
+		expect(prefs(selector).props.sections).toEqual(before.sections);
+		expect(selector.navigationSnapshot()).toMatchObject({ searching: false, searchFocused: false });
+		expect(changes).toEqual([]);
+	});
+
 	it("confirms a focused search pattern with Enter without activating the matched setting", () => {
 		const { selector, changes, values } = harness();
 		selector.handleInput("/");
