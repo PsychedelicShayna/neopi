@@ -215,8 +215,8 @@ import asset199 from "./skills/user-invocation.md" with { type: "text" };
 import asset200 from "./steering/parent-irc.md" with { type: "text" };
 import asset201 from "./steering/user-interjection.md" with { type: "text" };
 import asset202 from "./system/active-repo-context.md" with { type: "text" };
-import asset203 from "./system/agent-creation-architect.md" with { type: "text" };
-import asset204 from "./system/agent-creation-user.md" with { type: "text" };
+import asset203 from "./system/agent-fields-system.md" with { type: "text" };
+import asset204 from "./system/agent-fields-user.md" with { type: "text" };
 import asset205 from "./system/agent-telemetry.md" with { type: "text" };
 import asset206 from "./system/anthropic-usage-wrap-up.md" with { type: "text" };
 import asset207 from "./system/auto-continue.md" with { type: "text" };
@@ -5036,29 +5036,47 @@ export const promptAssets: readonly PromptAsset[] = [
 		],
 	},
 	{
-		id: "system/agent-creation-architect.md",
-		relPath: "system/agent-creation-architect.md",
+		id: "system/agent-fields-system.md",
+		relPath: "system/agent-fields-system.md",
 		bundled: asset203,
-		scope: "feature:system/agent-creation-architect",
+		scope: "feature:system/agent-fields-system",
 		group: "core",
-		keys: [],
-		fixture: {},
+		keys: [
+			{ path: "fieldSchema", type: "string", required: true, resolution: "runtime-only" },
+			{ path: "tools", type: "array", required: true, resolution: "runtime-only", children: [{ path: "name", type: "string" }, { path: "description", type: "string" }] },
+			{ path: "advisors", type: "array", required: true, resolution: "runtime-only", children: [{ path: "name", type: "string" }, { path: "scope", type: "string" }] },
+		],
+		fixture: {
+			fieldSchema: '{"type":"object","properties":{"name":{"type":"string"}}}',
+			tools: [{ name: "read", description: "Read files" }],
+			advisors: [{ name: "reviewer", scope: "project" }],
+		},
 		consumerHints: [
-			"packages/coding-agent/src/prompts/system/agent-creation-architect.md",
-			"packages/coding-agent/src/modes/agents-hub-deps.ts",
+			"packages/coding-agent/src/prompts/system/agent-fields-system.md",
+			"packages/coding-agent/src/task/agent-generation.ts",
 		],
 	},
 	{
-		id: "system/agent-creation-user.md",
-		relPath: "system/agent-creation-user.md",
+		id: "system/agent-fields-user.md",
+		relPath: "system/agent-fields-user.md",
 		bundled: asset204,
-		scope: "feature:system/agent-creation-user",
+		scope: "feature:system/agent-fields-user",
 		group: "core",
-		keys: [{ path: "request", type: "string", required: true, resolution: "session-dependent" }],
-		fixture: { request: "Example request" },
+		keys: [
+			{ path: "target", type: "string", required: true, resolution: "session-dependent" },
+			{ path: "definition", type: "string", required: true, resolution: "session-dependent" },
+			{ path: "comment", type: "string", resolution: "session-dependent" },
+			{ path: "baseDefinitions", type: "array", resolution: "session-dependent", children: [{ path: "name", type: "string" }, { path: "definition", type: "string" }] },
+		],
+		fixture: {
+			target: "description",
+			definition: '{"name":"reviewer","systemPrompt":"Review changes"}',
+			comment: "Make it more specific",
+			baseDefinitions: [{ name: "base", definition: '{"name":"base","description":"Review code"}' }],
+		},
 		consumerHints: [
-			"packages/coding-agent/src/prompts/system/agent-creation-user.md",
-			"packages/coding-agent/src/modes/agents-hub-deps.ts",
+			"packages/coding-agent/src/prompts/system/agent-fields-user.md",
+			"packages/coding-agent/src/task/agent-generation.ts",
 		],
 	},
 	{

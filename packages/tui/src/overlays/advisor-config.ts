@@ -2074,7 +2074,6 @@ export class AdvisorConfigOverlayComponent implements Component {
 			},
 		);
 	}
-
 	#showNameEditor(index: number): void {
 		this.#detailIndex = index;
 		const input = new Input();

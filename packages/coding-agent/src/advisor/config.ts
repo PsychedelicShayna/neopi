@@ -151,7 +151,6 @@ export function parseInlineAdvisorConfig(value: unknown): AdvisorConfig {
 export function advisorDefinitionJsonSchema(): Record<string, unknown> {
 	return advisorEntrySchema.toJsonSchema();
 }
-
 function editableAdvisorConfig(entry: AdvisorYamlEntry): AdvisorConfig {
 	const advisor: AdvisorConfig = { name: entry.name };
 	if (entry.id !== undefined) advisor.id = entry.id;
@@ -433,7 +432,6 @@ export interface NamedAdvisor {
 	sourcePath: string;
 	config: AdvisorConfig;
 }
-
 /**
  * Every named definition, including disabled and shadowed entries, in discovery
  * load order (later entries win for references without an exact scope).

@@ -12,13 +12,10 @@ import {
 	AgentsHubComponent,
 	type AgentsHubDeps,
 	type HubAgent,
-	parseGeneratedAgentSpec,
 } from "../src/overlays/agents-hub";
 import { initTheme } from "../src/theme";
 import type { TUI } from "../src/index";
 import type { DescribeContext, NativeChild, NativeNode } from "../src/native/node";
-import { KeybindingsManager } from "../src/app-keybindings";
-import { getKeybindings, setKeybindings } from "../src/keybindings";
 
 const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 const OVERRIDE_KEYS = {
@@ -124,12 +121,14 @@ async function createHub(
 			setAgentDisabled: (name, { disabled }) =>
 				settings.setMember("task.disabledAgents", name, { member: disabled }),
 			setAgentOverride: (property, name, value) => settings.setEntry(OVERRIDE_KEYS[property], name, value),
-			generateAgent: async () => {
-				throw new Error("Agent generation is not used by configuration tests");
+			editor: {
+				tools: [{ name: "read", description: "Read files" }],
+				listAdvisors: async () => [],
+				parse: raw => JSON.parse(raw),
+				serialize: definition => JSON.stringify(definition),
+				generate: async () => { throw new Error("Not used by navigation tests"); },
 			},
-			saveAgent: async () => {
-				throw new Error("Agent creation is not used by configuration tests");
-			},
+			saveDefinition: async () => { throw new Error("Not used by navigation tests"); },
 			...overrides,
 		},
 		{ onCancel: () => (cancelled = true) },
@@ -317,111 +316,25 @@ function pickerProps(hub: AgentsHubComponent): TspPickerProps {
 	return root.p;
 }
 
-describe("AgentsHub external configuration editing", () => {
-	test("Ctrl-G awaits the host editor, reloads definitions, and preserves the selected source", async () => {
-		const editing = Promise.withResolvers<void>();
-		const agents: HubAgent[] = [
-			{ name: "dev", description: "Project", systemPrompt: "", source: "project", disabled: false },
-			{
-				name: "dev",
-				description: "User",
-				systemPrompt: "",
-				source: "user",
-				filePath: "/agents/dev.md",
-				disabled: false,
-			},
-		];
-		const opened: HubAgent[] = [];
-		let loads = 0;
-		const { hub } = await createHub(new TestSettings(), {
-			loadAgents: async () => {
-				loads++;
-				return agents.map(agent => ({ ...agent }));
-			},
-			openConfigFile: agent => {
-				opened.push(agent);
-				return editing.promise;
-			},
-		});
-		try {
-			hub.handleNativeEvent({ type: "select", key: "", item: "agent:user:dev" });
-			expect(pickerProps(hub).actions?.find(action => action.id === "edit-file")?.keys).toEqual(["ctrl", "g"]);
-			hub.handleInput("\x07");
-			expect(opened.map(agent => agent.filePath)).toEqual(["/agents/dev.md"]);
-			expect(loads).toBe(1);
-			expect(hub.blocksMenuHistory).toBe(true);
-			hub.handleInput("\x07");
-			expect(opened).toHaveLength(1);
-			agents.push({ name: "new", description: "", systemPrompt: "", source: "user", disabled: false });
-			editing.resolve();
-			await Bun.sleep(0);
-			expect(loads).toBe(2);
-			expect(pickerProps(hub).items?.some(item => item.id === "agent:user:new")).toBe(true);
-			expect(pickerProps(hub).selected).toBe("agent:user:dev");
-			expect(hub.blocksMenuHistory).toBe(false);
-		} finally {
-			hub.dispose();
-		}
+describe("AgentsHub definition editing", () => {
+	test("Ctrl-G opens the same rich editor for existing definitions and Esc returns to selection", async () => {
+		const { hub } = await createHub(new TestSettings());
+		hub.handleInput("\x07");
+		expect(pickerProps(hub).title).toBe("Edit dev");
+		expect(pickerProps(hub).items?.map(item => item.id)).toContain("tools");
+		hub.handleInput("\x1b");
+		expect(pickerProps(hub).selected).toBe("agent:project:dev");
+		hub.dispose();
 	});
 
-	test("native edit-file delegates source-less builtins to the host", async () => {
-		const opened: HubAgent[] = [];
-		const { hub } = await createHub(new TestSettings(), {
-			openConfigFile: async agent => {
-				opened.push(agent);
-			},
-		});
-		try {
-			hub.handleNativeEvent({ type: "select", key: "", item: "agent:bundled:scout" });
-			hub.handleNativeEvent({ type: "action", key: "", act: "edit-file", mods: [] });
-			await Bun.sleep(0);
-			expect(opened).toHaveLength(1);
-			expect(opened[0]?.name).toBe("scout");
-			expect(opened[0]?.filePath).toBeUndefined();
-		} finally {
-			hub.dispose();
-		}
-	});
-
-	test("host editing failures show a notice and leave navigation usable", async () => {
-		const { hub } = await createHub(new TestSettings(), {
-			openConfigFile: async () => {
-				throw new Error("No editor configured");
-			},
-		});
-		try {
-			hub.handleInput("\x07");
-			await Bun.sleep(0);
-			expect(pickerProps(hub).subtitle).toBe("No editor configured");
-			expect(hub.blocksMenuHistory).toBe(false);
-			hub.handleInput("j");
-			expect(pickerProps(hub).selected).toBe("agent:bundled:scout");
-		} finally {
-			hub.dispose();
-		}
-	});
-
-	test("editing is absent without a callback and does not claim search or property input", async () => {
-		const without = await createHub(new TestSettings());
-		let opens = 0;
-		const { hub } = await createHub(new TestSettings(), {
-			openConfigFile: async () => {
-				opens++;
-			},
-		});
-		try {
-			expect(pickerProps(without.hub).actions?.some(action => action.id === "edit-file")).toBe(false);
-			without.hub.handleInput("\x07");
-			hub.handleInput("/");
-			hub.handleInput("\x07");
-			hub.handleInput("\x1b");
-			hub.handleInput("\r");
-			hub.handleInput("\x07");
-			expect(opens).toBe(0);
-		} finally {
-			without.hub.dispose();
-			hub.dispose();
-		}
+	test("native Edit opens bundled definitions as editable drafts", async () => {
+		const { hub } = await createHub(new TestSettings());
+		hub.handleNativeEvent({ type: "select", key: "", item: "agent:bundled:scout" });
+		hub.handleNativeEvent({ type: "action", key: "", act: "edit-file", mods: [] });
+		expect(hub.navigationSnapshot().create?.definition.name).toBe("scout");
+		hub.handleInput("\x1b");
+		expect(pickerProps(hub).selected).toBe("agent:bundled:scout");
+		hub.dispose();
 	});
 });
 
@@ -547,29 +460,6 @@ describe("AgentsHub native events", () => {
 	});
 });
 
-describe("parseGeneratedAgentSpec", () => {
-	const spec = {
-		identifier: "code-reviewer",
-		whenToUse: "Use this agent when reviewing code.",
-		systemPrompt: "Review the diff.",
-	};
-
-	test("parses plain JSON", () => {
-		expect(parseGeneratedAgentSpec(JSON.stringify(spec))).toEqual(spec);
-	});
-
-	test("parses JSON wrapped in a json code fence", () => {
-		const fence = "```";
-		const raw = `Here you go:\n${fence}json\n${JSON.stringify(spec)}\n${fence}\n`;
-		expect(parseGeneratedAgentSpec(raw)).toEqual(spec);
-	});
-
-	test("keeps a code fence inside a JSON string value", () => {
-		const systemPrompt = "Emit this report:\n```\n# Report\n```\nThen stop.";
-		const raw = JSON.stringify({ ...spec, systemPrompt });
-		expect(parseGeneratedAgentSpec(raw).systemPrompt).toBe(systemPrompt);
-	});
-});
 
 describe("AgentsHub navigation history", () => {
 	test("body viewport moves one line independently and row motions reveal its selection", async () => {
@@ -700,153 +590,16 @@ describe("AgentsHub navigation history", () => {
 		}
 	});
 
-	test("idle agent description restores as a safe Editor draft without generation or save", async () => {
-		let generationCalls = 0;
-		let saveCalls = 0;
-		const deps: Partial<AgentsHubDeps> = {
-			generateAgent: async () => {
-				generationCalls++;
-				return "";
-			},
-			saveAgent: async () => {
-				saveCalls++;
-				return "";
-			},
-		};
-		const { hub, type } = await createHub(new TestSettings(), deps);
-		const restored = await createHub(new TestSettings(), deps);
-		const visits: string[] = [];
-		restored.hub.onNavigationVisit = page => visits.push(page);
-		try {
-			hub.handleInput("G");
-			hub.handleInput("\r");
-			type("hjkl / draft");
-			hub.handleInput("\t");
-			hub.handleInput("\x1b[D");
-			const snapshot = hub.navigationSnapshot();
-			expect(snapshot.create).toMatchObject({
-				description: "hjkl / draft",
-				scope: "user",
-				editor: { text: "hjkl / draft" },
-			});
-			restored.hub.restoreNavigation(snapshot);
-			expect(restored.hub.navigationSnapshot().create).toEqual(snapshot.create);
-			expect(restored.hub.blocksMenuHistory).toBe(false);
-			expect(visits).toEqual([]);
-			expect(generationCalls).toBe(0);
-			expect(saveCalls).toBe(0);
-		} finally {
-			hub.dispose();
-			restored.hub.dispose();
-		}
-	});
-	test("description typing owns printable shortcut remaps and pending character-jump targets", async () => {
-		let generations = 0;
-		let saves = 0;
-		const { hub } = await createHub(new TestSettings(), {
-			generateAgent: async () => {
-				generations++;
-				return "";
-			},
-			saveAgent: async () => {
-				saves++;
-				return "";
-			},
-		});
-		const previous = getKeybindings();
-		try {
-			hub.handleInput("G");
-			hub.handleInput("\r");
-			setKeybindings(
-				KeybindingsManager.inMemory({
-					"tui.select.cancel": ["escape", "h"],
-					"app.message.followUp": ["ctrl+q", "j"],
-					"tui.editor.deleteCharBackward": "k",
-					"tui.editor.submit": "l",
-					"tui.editor.jumpForward": "ctrl+]",
-				}),
-			);
-			for (const key of "hjkl /") hub.handleInput(key);
-			expect(hub.navigationSnapshot().create).toMatchObject({ description: "hjkl /", editor: { text: "hjkl /" } });
-			hub.handleInput("\x01");
-			hub.handleInput("\x1d");
-			hub.handleInput("j");
-			expect(hub.navigationSnapshot().create).toMatchObject({
-				description: "hjkl /",
-				editor: { text: "hjkl /", cursor: { line: 0, col: 1 } },
-			});
-			expect(generations).toBe(0);
-			expect(saves).toBe(0);
-			hub.handleInput("\x1b");
-			expect(hub.navigationSnapshot().create).toBeUndefined();
-		} finally {
-			setKeybindings(previous);
-			hub.dispose();
-		}
-	});
-
-	test("only explicit generation and save run requests; pending operations block history", async () => {
-		const generation = Promise.withResolvers<string>();
-		const saved = Promise.withResolvers<string>();
-		const reloaded = Promise.withResolvers<HubAgent[]>();
-		const agents: HubAgent[] = [
-			{ name: "dev", description: "Development", systemPrompt: "", source: "project", disabled: false },
-		];
-		let loadCalls = 0;
-		let generationCalls = 0;
-		let saveCalls = 0;
-		const { hub, type } = await createHub(new TestSettings(), {
-			loadAgents: () => (++loadCalls === 1 ? Promise.resolve(agents) : reloaded.promise),
-			generateAgent: () => {
-				generationCalls++;
-				return generation.promise;
-			},
-			saveAgent: () => {
-				saveCalls++;
-				return saved.promise;
-			},
-		});
-		try {
-			hub.handleInput("G");
-			hub.handleInput("\r");
-			type("Create a draft agent");
-			hub.handleInput("\x11");
-			expect(generationCalls).toBe(1);
-			expect(hub.blocksMenuHistory).toBe(true);
-			generation.resolve(
-				JSON.stringify({
-					identifier: "draft-agent",
-					whenToUse: "Use this agent when drafting tasks",
-					systemPrompt: Array.from({ length: 100 }, (_, index) => `Prompt line ${index}`).join("\n"),
-				}),
-			);
-			await new Promise<void>(resolve => setImmediate(resolve));
-			expect(hub.blocksMenuHistory).toBe(false);
-			hub.render(120);
-			hub.handleInput("\x05");
-			hub.render(120);
-			const review = hub.navigationSnapshot();
-			expect(review.create?.preview).toMatchObject({ scrollOffset: 1 });
-			hub.handleInput(" ");
-			expect(saveCalls).toBe(0);
-			hub.handleInput("\r");
-			expect(saveCalls).toBe(1);
-			expect(hub.blocksMenuHistory).toBe(true);
-			saved.resolve("/tmp/draft-agent.md");
-			await new Promise<void>(resolve => setImmediate(resolve));
-			expect(hub.blocksMenuHistory).toBe(true);
-			reloaded.resolve(agents);
-			await new Promise<void>(resolve => setImmediate(resolve));
-			expect(hub.blocksMenuHistory).toBe(false);
-			expect(hub.navigationSnapshot().create).toBeUndefined();
-			hub.restoreNavigation(review);
-			hub.render(120);
-			expect(hub.navigationSnapshot().create?.preview).toMatchObject({ scrollOffset: 1 });
-			expect(generationCalls).toBe(1);
-			expect(saveCalls).toBe(1);
-		} finally {
-			hub.dispose();
-		}
+	test("rich draft restores without generation or persistence", async () => {
+		const { hub } = await createHub(new TestSettings());
+		const restored = await createHub(new TestSettings());
+		hub.handleInput("\x07");
+		const snapshot = hub.navigationSnapshot();
+		restored.hub.restoreNavigation(snapshot);
+		expect(restored.hub.navigationSnapshot().create?.definition).toEqual(snapshot.create?.definition);
+		expect(restored.hub.blocksMenuHistory).toBe(false);
+		hub.dispose();
+		restored.hub.dispose();
 	});
 
 	test("a standalone read-only reload does not block menu history", async () => {
