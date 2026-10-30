@@ -1013,10 +1013,10 @@ export class Agent {
 		for (const hook of this.#beforeQueuedMessageDequeueHooks) await hook(signal);
 	}
 
-	async #dequeueSteeringMessagesAfterHooks(signal: AbortSignal): Promise<AgentMessage[]> {
+	async #dequeueSteeringMessagesAfterHooks(signal: AbortSignal, liveOnly = false): Promise<AgentMessage[]> {
 		if (signal.aborted || this.#steeringQueue.length === 0) return [];
 		await this.#runBeforeQueuedMessageDequeueHooks(signal);
-		return signal.aborted ? [] : this.#prepareQueuedMessageBatch("steering", signal);
+		return signal.aborted ? [] : this.#prepareQueuedMessageBatch("steering", signal, liveOnly);
 	}
 
 	async #dequeueFollowUpMessagesAfterHooks(signal: AbortSignal): Promise<AgentMessage[]> {
@@ -1025,9 +1025,9 @@ export class Agent {
 		return signal.aborted ? [] : this.#prepareQueuedMessageBatch("followUp", signal);
 	}
 
-	async #prepareQueuedMessageBatch(queue: QueuedMessageQueue, signal: AbortSignal): Promise<AgentMessage[]> {
+	async #prepareQueuedMessageBatch(queue: QueuedMessageQueue, signal: AbortSignal, liveOnly = false): Promise<AgentMessage[]> {
 		if (this.#queuedMessageClaims[queue]) return [];
-		const messages = queue === "steering" ? this.#dequeueSteeringMessages() : this.#dequeueFollowUpMessages();
+		const messages = queue === "steering" ? this.#dequeueSteeringMessages(liveOnly) : this.#dequeueFollowUpMessages();
 		const prepare = this.prepareQueuedMessages;
 		if (messages.length === 0) return messages;
 		const runController = this.#abortController;
@@ -1555,9 +1555,32 @@ export class Agent {
 		return queue.slice(0, count);
 	}
 
-	#dequeueSteeringMessages(): AgentMessage[] {
-		const messages = this.#dequeueMessages(this.#steeringQueue, this.#steeringMode);
-		this.#steeringQueue = this.#steeringQueue.slice(messages.length);
+	#dequeueSteeringMessages(liveOnly = false): AgentMessage[] {
+		let messages: AgentMessage[];
+		if (liveOnly) {
+			messages = [];
+			const remaining: AgentMessage[] = [];
+			let groupComplete = false;
+			for (const message of this.#steeringQueue) {
+				// Wait-mode notes remain queue-owned. Live user steering may pass
+				// them without changing FIFO within either delivery class.
+				if (this.#steeringInterruptModes.get(message) === "wait" || groupComplete) {
+					remaining.push(message);
+					continue;
+				}
+				if (this.#steeringMode === "one-at-a-time" && messages.length > 0 &&
+					!this.#queuedMessageGrouping?.(messages[messages.length - 1], message)) {
+					groupComplete = true;
+					remaining.push(message);
+				} else {
+					messages.push(message);
+				}
+			}
+			this.#steeringQueue = remaining;
+		} else {
+			messages = this.#dequeueMessages(this.#steeringQueue, this.#steeringMode);
+			this.#steeringQueue = this.#steeringQueue.slice(messages.length);
+		}
 		if (messages.length > 0) this.#emitQueueChanged();
 		return messages;
 	}
@@ -2068,12 +2091,12 @@ export class Agent {
 			getReasoning: () => this.#state.thinkingLevel,
 			getDisableReasoning: () => this.#state.disableReasoning,
 			getServiceTier: this.#serviceTierResolver,
-			getSteeringMessages: async signal => {
+			getSteeringMessages: async (signal, options) => {
 				if (skipInitialSteeringPoll) {
 					skipInitialSteeringPoll = false;
 					return [];
 				}
-				return this.#dequeueSteeringMessagesAfterHooks(signal ?? loopSignal);
+				return this.#dequeueSteeringMessagesAfterHooks(signal ?? loopSignal, options?.liveOnly);
 			},
 			hasSteeringMessages: () => ({
 				...steeringQueueState(

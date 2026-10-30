@@ -273,12 +273,12 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	/**
 	 * Returns steering messages to inject into the conversation mid-run.
 	 *
-	 * Called at injection boundaries only (loop start and after a tool batch
-	 * fully settles), so dequeued messages are immediately injected. The
-	 * mid-batch interrupt poll uses {@link hasSteeringMessages} instead and
-	 * never consumes the queue.
+	 * Called at injection boundaries (loop start and after a tool batch fully
+	 * settles), or with liveOnly for provider live steering. liveOnly MUST leave
+	 * wait-mode messages queue-owned while selecting eligible messages in order;
+	 * FIFO is preserved within each class, not across their different timings.
 	 */
-	getSteeringMessages?: (signal?: AbortSignal) => Promise<AgentMessage[]>;
+	getSteeringMessages?: (signal?: AbortSignal, options?: { liveOnly: true }) => Promise<AgentMessage[]>;
 
 	/**
 	 * Peeks whether steering messages are queued, without consuming them.
