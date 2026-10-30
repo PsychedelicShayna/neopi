@@ -133,6 +133,9 @@
 - Print mode exits non-zero with the HTTP status, source model, and attempt count after its configured retry budget, without hidden HTTP retries or renewed budgets on fallback ([#627](https://github.com/PsychedelicShayna/neopi/issues/627)).
 - Open Settings views follow settings reloads without losing the selected scope, search, or draft; an edited row changed elsewhere is marked instead of replacing the edit ([#634](https://github.com/PsychedelicShayna/neopi/issues/634)).
 - Clean startup no longer fails when agent and advisor generation retention is unset.
+- Named child advisors expand instruction-file imports relative to their selected definition without rewriting editor drafts.
+- Private child advisor rosters no longer inherit fleet-wide instructions, note budgets, or configuration warnings.
+- The rich `/agents` definition editor opens without obsolete create-flow rendering errors.
 - Live effort alerts accept the operator catalog's relative 0–1 fractional ratings without disabling recommendation lookup.
 - Print-mode runs can read screenshots inside their workspace without getting stuck when speculative reads are enabled ([#606](https://github.com/PsychedelicShayna/neopi/issues/606)).
 - Ctrl+Space speech input keeps priority while picking link hints, including enhanced-terminal repeats and key releases.

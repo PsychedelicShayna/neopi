@@ -5377,6 +5377,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// path below (issue #9553): a large advisor transcript would otherwise
 		// block createAgentSession for tens of seconds while the whole file is
 		// streamed and parsed on the main thread.
+		// An explicit roster owns its policy; fleet-wide defaults and diagnostics
+		// apply only when the roster itself came from discovery.
+		const useDiscoveredAdvisorRoster = options.advisorConfigs === undefined;
 		session = new AgentSession({
 			chatMode,
 			chatModeCodingTools,
@@ -5390,10 +5393,15 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			advisorWatchdogPrompt,
 			advisorContextPrompt,
 			advisorMemoryPrompt,
-			advisorSharedInstructions: discoveredAdvisors.sharedInstructions,
-			advisorSharedMaxNotesPerUpdate: discoveredAdvisors.sharedMaxNotesPerUpdate,
-			advisorConfigs: options.advisorConfigs ? [...options.advisorConfigs] : advisorRosterForRuntime(discoveredAdvisors),
-			advisorConfigWarnings: discoveredAdvisors.warnings,
+			advisorSharedInstructions: useDiscoveredAdvisorRoster ? discoveredAdvisors.sharedInstructions : undefined,
+			advisorSharedMaxNotesPerUpdate: useDiscoveredAdvisorRoster
+				? discoveredAdvisors.sharedMaxNotesPerUpdate
+				: undefined,
+			advisorConfigs:
+				options.advisorConfigs === undefined
+					? advisorRosterForRuntime(discoveredAdvisors)
+					: [...options.advisorConfigs],
+			advisorConfigWarnings: useDiscoveredAdvisorRoster ? discoveredAdvisors.warnings : [],
 			agent,
 			thinkingLevel,
 			thinkingOrigin,

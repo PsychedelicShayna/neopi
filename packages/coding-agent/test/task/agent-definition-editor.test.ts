@@ -27,7 +27,7 @@ function setup(definition: AgentDefinitionDraft = { name: "draft", description: 
 		externalEditor: async () => externalValue ?? null,
 		outputSchemaDialect: schema => isJTDSchema(schema) ? "jtd" : "json-schema",
 		...overrides,
-	}, () => { closed = true; });
+	}, definition, () => { closed = true; });
 	const rows = () => { const node = editor.describe(cx); if (node.k !== "picker") throw new Error(`Expected a form, got ${node.k}`); return node.p?.items ?? []; };
 	const activate = (id: string) => editor.handleNativeEvent({ type: "activate", key: "", item: id });
 	const select = (id: string) => editor.handleNativeEvent({ type: "select", key: "", item: id });
