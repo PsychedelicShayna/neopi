@@ -977,7 +977,7 @@ export class SettingsSelectorComponent implements Component {
 		}
 
 		const out: string[] = [];
-		out.push(topBorder(width, "Settings"));
+		out.push(topBorder(width, `Settings · ${this.#context.settings.scope ?? "global"} · Ctrl+S cycle scope`));
 		this.#tabRowStart = out.length;
 		this.#tabRowCount = tabLines.length;
 		for (const line of tabLines) {
@@ -1095,7 +1095,7 @@ export class SettingsSelectorComponent implements Component {
 
 		const searchError = searching ? compileMenuRegex(this.#searchQuery)?.error : undefined;
 		const props: TspPrefsProps = {
-			title: "omp settings",
+			title: `Settings · ${this.#context.settings.scope ?? "global"} · Ctrl+S cycle scope`,
 			pages,
 			page: searching ? this.#preSearchTabId : this.#currentTabId,
 			lead: searchError
@@ -1720,8 +1720,8 @@ export class SettingsSelectorComponent implements Component {
 		const changed = this.#isChanged(def, currentValue);
 		const item = {
 			id: def.path,
-			label: def.label,
-			description: def.description,
+			label: `${this.#context.settings.details?.(def.path).shadowed ? "󰈉 " : ""}${def.label}`,
+			description: [def.description, this.#context.settings.details?.(def.path).description].filter(Boolean).join("\n"),
 			warning: def.warning,
 			changed,
 			defaultLabel: changed ? this.#defaultLabel(def) : undefined,
@@ -2180,6 +2180,12 @@ export class SettingsSelectorComponent implements Component {
 	}
 
 	handleInput(data: string): void {
+		if (matchesKey(data, "ctrl+s") && !this.#textInputActive) {
+			this.#context.settings.cycleScope?.();
+			this.#refreshItems();
+			this.#context.requestRender?.();
+			return;
+		}
 		if (matchesKey(data, "ctrl+g") && !this.#menuKeys.read(data) && this.#callbacks.onOpenConfigFile) {
 			if (!this.#externalEditPending) {
 				this.#externalEditPending = true;

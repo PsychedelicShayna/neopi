@@ -149,6 +149,9 @@ export interface SettingsDisplayEntry {
 
 export interface SettingsHost {
 	entries: readonly SettingsDisplayEntry[];
+	readonly scope?: "global" | "project" | "session";
+	cycleScope?(): void;
+	details?(path: string): { shadowed: boolean; description: string };
 	get(path: string): unknown;
 	set(path: string, value: unknown): void;
 	/**

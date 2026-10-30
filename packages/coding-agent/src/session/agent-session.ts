@@ -12476,6 +12476,7 @@ export class AgentSession implements SettingsScope {
 					...options,
 					additionalDirectories: cfgWorkspaceAdditionalDirectories.get(this.settings),
 				});
+				await this.settings.attachSessionFile(this.sessionManager.getSessionFile());
 				this.#bash.markSessionTransition(bashTransition);
 				// The new session owns the transcript from here, so the previous
 				// conversation's advisor spend is retired with it. Clearing at the commit
@@ -14419,6 +14420,7 @@ export class AgentSession implements SettingsScope {
 			// switch rolled back via restoreState); re-read it on the next model call either way.
 			this.#sessionInit = undefined;
 			await this.sessionManager.setSessionFile(sessionPath);
+			await this.settings.attachSessionFile(this.sessionManager.getSessionFile());
 			this.#bash.markSessionTransition(bashTransition);
 			const newCwd = this.sessionManager.getCwd();
 			const recordedCwd = this.sessionManager.getRecordedCwd() ?? previousSessionState.cwd;
@@ -14649,6 +14651,7 @@ export class AgentSession implements SettingsScope {
 			}
 		} catch (error) {
 			this.sessionManager.restoreState(previousSessionState);
+			await this.settings.attachSessionFile(this.sessionManager.getSessionFile());
 			this.settings.setActiveRole(previousActiveRole);
 			this.#freshProviderSessionId = previousFreshProviderSessionId;
 			this.#syncAgentSessionId(previousSessionState.sessionId, false);
