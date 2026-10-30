@@ -274,6 +274,8 @@ describe("InteractiveMode attached to a real daemon session", () => {
 					"--no-extensions",
 					"--trusted-extension",
 					readExtensionFixture,
+					"--tools",
+					"bash,read",
 					"--no-skills",
 					"--no-rules",
 					"--no-lsp",
