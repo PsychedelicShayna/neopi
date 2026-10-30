@@ -41,6 +41,7 @@
 
 ### Fixed
 
+- Settings restores its normal section headings as soon as the search pattern is empty, while Escape leaves the search field before closing Settings ([#500](https://github.com/PsychedelicShayna/neopi/issues/500)).
 - Menu search applies patterns only after Enter, keeps navigation keys in the field while typing, and preserves punctuation with working `/pattern/` regex searches ([#500](https://github.com/PsychedelicShayna/neopi/issues/500)).
 - Canceling settings search restores the previous tab, section focus, selection and scroll position; confirmed-search footers show the available Vim motions ([#500](https://github.com/PsychedelicShayna/neopi/issues/500)).
 - Cloned advisors stay visible after applying when another advisor has the same normalized copy name ([#322](https://github.com/PsychedelicShayna/neopi/issues/322)).
