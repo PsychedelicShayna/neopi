@@ -10,11 +10,13 @@
 import { extractHttpStatusFromError, logger } from "@oh-my-pi/pi-utils";
 import { type ApiKeyResolver, createOAuthProvenance, type ResolvedApiKey } from "../auth-retry";
 import type { AuthApiKeyOptions, AuthStorage } from "../auth-storage";
+import { oauthAccountKey, type StoredAuthCredential } from "../auth/types";
 import * as AIError from "../error";
 import { classifyGatewayError, type GatewayErrorClassification } from "../error/gateway";
 import { isUsageLimitOutcome } from "../error/rate-limit";
 import type { Api, FetchImpl, Model, Usage } from "../types";
 import type { ClientUsageIdentity } from "../usage";
+import { deterministicUuid } from "../utils/deterministic-id";
 import { extractProviderRetryHint } from "../utils/retry-after";
 import type { AuthGatewayClientScope } from "./clients";
 import type { AuthGatewayServerOptions } from "./types";
@@ -54,6 +56,8 @@ export interface AuthGatewayRouteOptions {
 	excludeProviders?: ReadonlySet<string>;
 	/** Upstream transport for every provider call; defaults to global `fetch`. Test seam. */
 	fetch?: FetchImpl;
+	/** Private per-request selector, populated by the admitted router, never sent upstream. */
+	credentialId?: string;
 	/**
 	 * The scoped client that sent this request, set per request by the HTTP
 	 * server: it narrows `resolveModel` / `listModels`, and every credential
@@ -63,10 +67,65 @@ export interface AuthGatewayRouteOptions {
 }
 
 /** The route options a request's credential lookups read. */
-export type AuthGatewayCredentialOptions = Pick<AuthGatewayRouteOptions, "storage" | "client">;
+export type AuthGatewayCredentialOptions = Pick<AuthGatewayRouteOptions, "storage" | "client" | "credentialId">;
 
 /** The HTTP server's options: the routes' plus its listener and inbound auth. */
 export interface AuthGatewayBootOptions extends AuthGatewayServerOptions, AuthGatewayRouteOptions {}
+
+/** Server-owned binding retained across provider retries; never accepted from a request body. */
+export interface GatewayResolvedApiKey extends ResolvedApiKey {
+	credentialPin?: { id: number; fingerprint: string };
+}
+
+/** An account-scoped catalogue is authoritative when discovery supplied one. */
+export function gatewayCredentialAllowsModel(row: StoredAuthCredential, model: Model<Api>): boolean {
+	if (row.provider !== model.provider || row.disabledCause !== null) return false;
+	if (model.accountAccess === undefined) return true;
+	if (row.credential.type !== "oauth") return false;
+	const account = oauthAccountKey(row.credential);
+	return account !== undefined && Object.hasOwn(model.accountAccess, account);
+}
+
+async function resolvePinnedGatewayApiKey(
+	storage: AuthStorage,
+	model: Model<Api>,
+	sessionId: string,
+	signal: AbortSignal,
+	pin: { id: number; fingerprint: string },
+	forceRefresh = false,
+	rejectedAccessToken?: string,
+): Promise<GatewayResolvedApiKey | undefined> {
+	const row = storage.credentials.list(model.provider).find(candidate => candidate.id === pin.id);
+	if (!row || !gatewayCredentialAllowsModel(row, model)) return undefined;
+	const apiKey = await storage.keys.getPinned(pin.id, deterministicUuid(`neoproxy\u0000${pin.id}\u0000${sessionId}`), {
+		expectedProvider: model.provider,
+		expectedFingerprint: pin.fingerprint,
+		modelId: model.id,
+		signal,
+		forceRefresh,
+		refreshReason: forceRefresh ? "auth-recovery" : undefined,
+		rejectedAccessToken,
+	});
+	if (apiKey === undefined) return undefined;
+	const latest = storage.credentials.list(model.provider).find(candidate => candidate.id === pin.id);
+	if (!latest || !gatewayCredentialAllowsModel(latest, model)) return undefined;
+	const credential = latest.credential;
+	return {
+		apiKey,
+		credentialId: pin.id,
+		credentialPin: pin,
+		...(credential.type === "oauth"
+			? {
+					oauthAccess: credential.access,
+					oauthIdentity: {
+						orgId: credential.orgId,
+						region: credential.region,
+						inferenceRegion: credential.inferenceRegion,
+					},
+				}
+			: {}),
+	};
+}
 
 /**
  * The client's own session key, or `undefined` when it sent none. A blank key
@@ -122,14 +181,39 @@ export async function resolveGatewayApiKey(
 	sessionId: string,
 	signal: AbortSignal,
 	peer: string,
-): Promise<ResolvedApiKey | GatewayErrorClassification> {
-	let apiKey: ResolvedApiKey | undefined;
+	credentialId?: string,
+): Promise<GatewayResolvedApiKey | GatewayErrorClassification> {
+	let apiKey: GatewayResolvedApiKey | undefined;
 	try {
-		apiKey = await opts.storage.keys.getWithCredential(
-			model.provider,
-			gatewayCredentialSessionId(opts, model, sessionId),
-			modelKeyOptions(model, signal),
-		);
+		const { storage } = opts;
+		credentialId ??= opts.credentialId;
+		if (credentialId !== undefined) {
+			if (opts.client) {
+				return { status: 403, type: "permission_error", message: "Credential selection requires the gateway bearer" };
+			}
+			if (!/^[1-9]\d*$/.test(credentialId) || !Number.isSafeInteger(Number(credentialId))) {
+				return { status: 400, type: "invalid_request_error", message: "Invalid X-Neopi-Credential-Id" };
+			}
+			await storage.credentials.revalidate();
+			const id = Number(credentialId);
+			const fingerprint = await storage.keys.fingerprintPinned(id, model.provider);
+			if (fingerprint !== undefined) {
+				apiKey = await resolvePinnedGatewayApiKey(storage, model, sessionId, signal, { id, fingerprint });
+			}
+			if (!apiKey) {
+				return {
+					status: 403,
+					type: "permission_error",
+					message: `Selected credential is unavailable or not entitled to ${model.provider}/${model.id}`,
+				};
+			}
+		} else {
+			apiKey = await storage.keys.getWithCredential(
+				model.provider,
+				gatewayCredentialSessionId(opts, model, sessionId),
+				modelKeyOptions(model, signal),
+			);
+		}
 	} catch (error) {
 		const classified = classifyGatewayError(error);
 		logger.warn("auth-gateway getApiKey threw", { provider: model.provider, peer, error: classified.message });
@@ -241,7 +325,7 @@ export function buildGatewayApiKeyResolver(
 	opts: AuthGatewayCredentialOptions,
 	model: Model<Api>,
 	sessionId: string,
-	initialKey: ResolvedApiKey,
+	initialKey: GatewayResolvedApiKey,
 	requestSignal: AbortSignal,
 	format: string,
 	peer: string,
@@ -255,9 +339,27 @@ export function buildGatewayApiKeyResolver(
 	provenance.record(initialKey);
 	return async ({ lastChance, error, signal, previousKey }) => {
 		const sig = signal ?? requestSignal;
-		// Only the bearer the failed request actually sent names the rejected
-		// token; a caller that cannot report it keeps the previous behaviour.
 		const rejectedAccessToken = provenance.accessFor(previousKey);
+		if (initialKey.credentialPin) {
+			// A pinned request may refresh this row, but never rotate to a sibling.
+			if (lastChance && error !== undefined) return undefined;
+			await storage.credentials.revalidate();
+			const pinned = await resolvePinnedGatewayApiKey(
+				storage,
+				model,
+				sessionId,
+				sig,
+				initialKey.credentialPin,
+				error !== undefined,
+				rejectedAccessToken,
+			);
+			if (!pinned && error === undefined) {
+				throw new AIError.MissingApiKeyError(model.provider, "Selected credential became unavailable");
+			}
+			provenance.record(pinned);
+			if (pinned) onResolvedKey?.(pinned);
+			return pinned;
+		}
 		if (error === undefined) {
 			lastKey = initialKey.apiKey;
 			return initialKey;
