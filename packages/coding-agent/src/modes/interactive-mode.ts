@@ -9696,6 +9696,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	showModelSelector(options?: {
 		temporaryOnly?: boolean;
 		sessionOnly?: boolean;
+		scope?: SettingsScope;
 		selectOnly?: SelectOnlyModelSelectorOptions;
 	}): void {
 		this.#selectorController.showModelSelector(options);

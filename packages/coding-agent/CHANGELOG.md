@@ -10,6 +10,7 @@
 ### Added
 
 - Settings, slash-command suggestions, hotkey help, model roles and status-line widgets mark fork additions with a crescent and the latest upstream release's additions with a star, while retaining command type icons.
+- Edit role models and token budgets in `/models session`, `/models project`, or `/models global`; role rows explain higher-scope shadowing and `models.defaultScope` selects the scope opened by plain `/models`.
 - Edit global, project, or session settings with `/settings global|project|session`; Ctrl+S cycles scopes, F6 applies durable edits to other running sessions, and session overrides follow the saved session across directory changes.
 - Keep live settings synchronized after dropped notifications or a replaced settings directory, and explicitly refresh other updated sessions through the control socket. Already-running older builds must restart on an updated binary to receive these fixes or Apply notifications.
 

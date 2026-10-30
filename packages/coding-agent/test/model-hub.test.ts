@@ -26,13 +26,16 @@ import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { thinkingLevelGlyph } from "@oh-my-pi/pi-tui/render/render-utils";
 
 import { getKnownRoleIds, getRoleInfo, setRoleDescription } from "@oh-my-pi/pi-coding-agent/config/model-roles";
-import { cfgCycleOrder, cfgModelPresets } from "@oh-my-pi/pi-coding-agent/config/model-settings";
+import { cfgCycleOrder, cfgModelPresets, cfgModelRoles } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { cfgEffortRules, cfgFallbackEffortSelections } from "@oh-my-pi/pi-coding-agent/config/effort-policy";
 import { cfgContextRules } from "../src/config/context-policy";
 import { parseCompactionPointInput } from "../src/config/compaction-threshold";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import type { HubEffortSelection } from "@oh-my-pi/pi-tui/overlays/model-hub";
 import { cfgRetryFallbackChains } from "@oh-my-pi/pi-coding-agent/session/settings";
+import { cfgCompactionThresholdTokens } from "../src/session/context-settings";
+import { cfgRoleSettings } from "../src/config/role-settings";
+import { createSettingsHost } from "../src/config/settings-ui";
 
 function normalize(lines: readonly string[]): string {
 	return stripVTControlCharacters(lines.join("\n").replaceAll(CURSOR_MARKER, "")).replace(/\s+/g, " ").trim();
@@ -131,6 +134,7 @@ const openHubs: ModelHubComponent[] = [];
 function createHub(options: {
 	models: Model[] | (() => Model[]);
 	scoped?: boolean;
+	scope?: "session" | "project" | "global";
 	settings?: Settings;
 	registry?: RegistryOverrides;
 	hub?: ModelHubOptions;
@@ -174,7 +178,7 @@ function createHub(options: {
 	);
 	const hub = new ModelHubComponent(
 		ui,
-		createModelBrowserSource(settings),
+		createModelBrowserSource(settings, undefined, options.scope),
 		registry,
 		options.scoped ? modelsFn().map(model => ({ model })) : [],
 		{
@@ -221,6 +225,9 @@ function createHub(options: {
 			onRoleDescriptionChange:
 				options.callbacks?.onRoleDescriptionChange ??
 				((role, description) => setRoleDescription(role, description, settings)),
+			onRoleTokenBudgetChange:
+				options.callbacks?.onRoleTokenBudgetChange ??
+				((role, value) => settings.setRoleSetting(role, cfgCompactionThresholdTokens, value)),
 			onEffortRulesChange:
 				options.callbacks?.onEffortRulesChange ?? (rules => cfgEffortRules.override(settings, rules)),
 			onContextRulesChange:
@@ -263,6 +270,50 @@ describe("ModelHub", () => {
 		if (!testTheme) {
 			throw new Error("Failed to load dark theme for ModelHub tests");
 		}
+	});
+
+	test.each(["session", "project", "global"] as const)(
+		"Models %s edits its own assignment and shows higher-scope shadowing",
+		scope => {
+			const settings = Settings.isolated({});
+			settings.writeScopeValue(cfgModelRoles, { default: "test/global" }, "global");
+			settings.writeScopeValue(cfgModelRoles, { default: "test/project" }, "project");
+			settings.writeScopeValue(cfgModelRoles, { default: "test/session" }, "session");
+			const models = ["global", "project", "session"].map(id => makeModel("test", id));
+			const source = createModelBrowserSource(settings, undefined, scope);
+			expect(source.getModelRole("default")).toBe(`test/${scope}`);
+			expect(settings.getModelRole("default")).toBe("test/session");
+			const { hub, onUnassign } = createHub({ models, settings, scoped: true, scope });
+			for (const key of [UP, "\n"]) hub.handleInput(key);
+			const rendered = normalize(hub.render(220));
+			if (scope !== "session") expect(rendered).toContain("shadowed by session: test/session");
+			hub.handleInput("x");
+			expect(onUnassign).toHaveBeenCalledWith("default", scope);
+		},
+	);
+
+	test("role token budgets are editable in Models without changing stored keys", () => {
+		const settings = Settings.isolated();
+		settings.writeScopeValue(cfgRoleSettings, { default: { "compaction.thresholdTokens": 120000 } }, "global");
+		const { hub } = createHub({ models: [makeModel("test", "model")], settings, scoped: true });
+		for (const key of [UP, "\n", "b"]) hub.handleInput(key);
+		expect(normalize(hub.render(220))).toContain("default token budget");
+		for (const key of ["\x01", "\x0b", ..."64000", "\n"]) hub.handleInput(key);
+		expect(cfgRoleSettings.get(settings).default).toEqual({ "compaction.thresholdTokens": 64000 });
+		expect(normalize(hub.render(220))).toContain("budget 64,000");
+		for (const key of ["b", "\x01", "\x0b", "\n"]) hub.handleInput(key);
+		expect(settings.getRoleSetting("default", cfgCompactionThresholdTokens)).toBeUndefined();
+		expect(createSettingsHost(settings).entries.some(entry => entry.path.startsWith("roleSettings."))).toBe(false);
+	});
+
+	test("invalid role budget edits retain the field and saved budget", () => {
+		const settings = Settings.isolated({ roleSettings: { default: { "compaction.thresholdTokens": 32000 } } });
+		const { hub } = createHub({ models: [makeModel("test", "model")], settings, scoped: true });
+		for (const key of [UP, "\n", "b", "\x01", "\x0b", ..."-3", "\n"]) hub.handleInput(key);
+		expect(hub.navigationSnapshot().strip?.kind).toBe("name");
+		expect(settings.getRoleSetting("default", cfgCompactionThresholdTokens)).toBe(32000);
+		hub.handleInput("\x1b");
+		expect(settings.getRoleSetting("default", cfgCompactionThresholdTokens)).toBe(32000);
 	});
 
 	test("roles marked hidden remain listed and D edits the selected description", () => {
@@ -947,7 +998,12 @@ describe("ModelHub", () => {
 			// Roles owns its own search rather than switching to the model catalog.
 			hub.handleInput("/");
 			hub.handleInput("t");
-			expect(hub.navigationSnapshot()).toMatchObject({ entry: "roles", rolesQuery: "", rolesValue: "t", focus: "list" });
+			expect(hub.navigationSnapshot()).toMatchObject({
+				entry: "roles",
+				rolesQuery: "",
+				rolesValue: "t",
+				focus: "list",
+			});
 			expect(footerLine(hub.render(220))).toContain("Search · Enter confirm · Esc clear");
 			hub.handleInput(ESC);
 			expect(hub.navigationSnapshot().filterFocused).toBe(false);
@@ -2650,8 +2706,10 @@ describe("ModelHub", () => {
 			query => {
 				const { hub, onAssign } = createHub({
 					models: [
-						makeModel("test", "live"), makeModel("test", "voice"),
-						makeModel("test", "lively"), makeModel("test", "voicemail"),
+						makeModel("test", "live"),
+						makeModel("test", "voice"),
+						makeModel("test", "lively"),
+						makeModel("test", "voicemail"),
 					],
 					scoped: true,
 				});
