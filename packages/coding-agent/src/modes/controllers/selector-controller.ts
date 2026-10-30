@@ -174,6 +174,19 @@ import { type BranchVariantPath, RewindSelectorComponent } from "@oh-my-pi/pi-tu
 import { SessionAccountSelectorComponent } from "@oh-my-pi/pi-tui/overlays/session-account-selector";
 import { SessionSelectorComponent, type SessionSelectorOptions } from "@oh-my-pi/pi-tui/overlays/session-selector";
 import { SettingsSelectorComponent } from "@oh-my-pi/pi-tui/overlays/settings-selector";
+import { HookInputComponent } from "@oh-my-pi/pi-tui/overlays/hook-input";
+import { HookSelectorComponent } from "@oh-my-pi/pi-tui/overlays/hook-selector";
+import { BUILTIN_PERSONALITIES, personalityScopeRank } from "../../neopi/personalities";
+import {
+	currentPersonalityName,
+	personalityAfterDelete,
+	listCustomPersonalities,
+	listCustomPersonalitiesForScope,
+	savePersonalityDefinitions,
+	selectPersonality,
+} from "../../neopi/personality-settings";
+import { describePersonalityCacheImpact, personalityCacheImpact } from "../../neopi/personality-cache";
+import { previewBuiltinPersonality } from "../../system-prompt";
 import { TranscriptBlock } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { TreeSelectorComponent } from "@oh-my-pi/pi-tui/overlays/tree-selector";
 import { ThinkingSelectorComponent } from "@oh-my-pi/pi-tui/overlays/thinking-selector";
@@ -242,6 +255,7 @@ export type MenuKind =
 	| "chain-config"
 	| "mixture-config"
 	| "persona-config"
+	| "personality-config"
 	| "extensions-dashboard"
 	| "history-search"
 	| "plugin-selector"
@@ -650,11 +664,15 @@ export class SelectorController {
 		);
 	}
 
-	showSettingsSelector(scope: SettingsScope = cfgSettingsDefaultScope.get(this.ctx.settings)): void {
+	showSettingsSelector(
+		scope: SettingsScope = cfgSettingsDefaultScope.get(this.ctx.settings),
+		openPersonality = false,
+	): void {
 		if (this.#focusOpenMenu("settings")) return;
 		const menu = this.#claimMenu("settings", () => this.showSettingsSelector(scope));
 		getAvailableThemes()
-			.then(availableThemes => {
+			.then(async availableThemes => {
+				const settingsHost = createSettingsHost(this.ctx.settings, scope);
 				// Fullscreen settings editor on the alternate screen: the overlay
 				// enables mouse tracking (click/hover/wheel) for its lifetime and
 				// the transcript stays untouched underneath.
@@ -672,7 +690,7 @@ export class SelectorController {
 						providers: [...new Set(this.ctx.session.getAvailableModels().map(model => model.provider))].sort(
 							(a, b) => a.localeCompare(b),
 						),
-						settings: createSettingsHost(this.ctx.settings, scope),
+						settings: settingsHost,
 						plugins: createPluginSettingsHost(getProjectDir()),
 						model: this.ctx.session.model,
 						imageBudget: this.ctx.ui.imageBudget,
@@ -680,6 +698,23 @@ export class SelectorController {
 						composerPreviewStatus: this.ctx.statusLine,
 					},
 					{
+						currentPersonality: () => currentPersonalityName(this.ctx.settings),
+						personalityOptions: () => [
+							...BUILTIN_PERSONALITIES.map(name => ({ value: name, label: name, description: "Built-in" })),
+							...listCustomPersonalities(this.ctx.settings).map(entry => ({
+								value: entry.name,
+								label: entry.name,
+								description: entry.scope,
+							})),
+						],
+						createPersonalityManager: (_current, close) => {
+							queueMicrotask(() => {
+								close();
+								done();
+								this.showPersonalityManager(settingsHost.scope ?? scope);
+							});
+							return { render: () => [] };
+						},
 						onChange: (id, value) => this.handleSettingChange(id, lookup(id)?.get(this.ctx.settings) ?? value),
 						onApply: async selectedScope => {
 							await this.ctx.settings.flush();
@@ -748,6 +783,8 @@ export class SelectorController {
 						},
 					},
 				);
+				if (openPersonality && !selector.openPersonalityManager())
+					this.ctx.showError("Personality setting is unavailable.");
 				this.#mountMenu(menu, selector, () => this.#showFullscreenMenu(selector));
 			})
 			.catch((error: unknown) => {
@@ -755,6 +792,140 @@ export class SelectorController {
 				this.#releaseMenu("settings", menu);
 				throw error;
 			});
+	}
+
+	showPersonalityManager(initialScope: SettingsScope = "project"): void {
+		if (this.#focusOpenMenu("personality-config")) return;
+		const menu = this.#claimMenu("personality-config", () => this.showPersonalityManager(initialScope));
+		let scope = initialScope;
+		const cwd = this.ctx.sessionManager.getCwd();
+		const confirm = async (title: string, message: string): Promise<boolean> =>
+			(await this.ctx.showHookCustom<string | undefined>(
+				(_tui, _theme, _keys, done) =>
+					new HookSelectorComponent(`${title}\n${message}`, ["Yes", "No"], done, () => done(undefined)),
+				{ overlay: true },
+			)) === "Yes";
+		const done = () => {
+			this.#releaseMenu(menu.kind, menu);
+			menu.handle?.hide();
+			this.focusActiveEditorArea();
+			this.ctx.ui.requestRender();
+		};
+		void (async () => {
+			const load = async (): Promise<PersonaConfigDoc> => ({
+				active: currentPersonalityName(this.ctx.settings),
+				entries: [
+					...(await Promise.all(
+						BUILTIN_PERSONALITIES.map(async name => ({
+							name,
+							content: await previewBuiltinPersonality(name, cwd),
+							builtin: true,
+							mode: "replace" as const,
+							sourceKind: "inline" as const,
+							path: "",
+							literal: "",
+							inheritToTasks: false,
+						})),
+					)),
+					...listCustomPersonalitiesForScope(this.ctx.settings, scope).map(entry => ({
+						name: entry.name,
+						originalName: entry.name,
+						definitionScope: entry.scope,
+						content: entry.prompt,
+						mode: "replace" as const,
+						sourceKind: "inline" as const,
+						path: "",
+						literal: "",
+						inheritToTasks: false,
+					})),
+				],
+			});
+			const save = async (doc: PersonaConfigDoc): Promise<string> => {
+				const active = currentPersonalityName(this.ctx.settings);
+				const next = doc.entries.find(entry => entry.name === active);
+				const effective = listCustomPersonalities(this.ctx.settings).find(entry => entry.name === active);
+				if (effective && personalityScopeRank(scope) >= personalityScopeRank(effective.scope)) {
+					const candidate =
+						next?.content ??
+						personalityAfterDelete(this.ctx.settings, scope, active) ??
+						(await previewBuiltinPersonality("default", cwd));
+					const impact = await personalityCacheImpact(this.ctx.session, candidate);
+					if (impact && !(await confirm("Save active personality?", describePersonalityCacheImpact(impact))))
+						throw new Error("Save cancelled.");
+				}
+				savePersonalityDefinitions(
+					this.ctx.settings,
+					scope,
+					doc.entries.filter(entry => !entry.builtin).map(entry => ({ name: entry.name, prompt: entry.content })),
+				);
+				const saved = new Map(
+					listCustomPersonalitiesForScope(this.ctx.settings, scope).map(entry => [entry.name, entry.scope]),
+				);
+				for (const entry of doc.entries) if (!entry.builtin) entry.definitionScope = saved.get(entry.name);
+				await this.ctx.settings.flush();
+				await this.ctx.refreshSlashCommandState();
+				return `Saved personalities in ${scope}. Press a to apply the selected personality.`;
+			};
+			const overlay = new PersonaConfigOverlayComponent(
+				this.ctx.ui,
+				{
+					variant: "personality",
+					externalEditor: async text => {
+						const env = this.ctx.session.environment.snapshot();
+						const command = getEditorCommand(env);
+						if (!command) throw new Error("No editor configured. Set VISUAL or EDITOR.");
+						return openInEditor(command, text, { env });
+					},
+					generation: createLivePersonaGeneration({
+						registry: this.ctx.session.modelRegistry,
+						browserSource: createModelBrowserSource(this.ctx.settings),
+						templates: this.ctx.session.promptTemplates,
+						sessionId: this.ctx.session.sessionId,
+						cwd,
+						personality: true,
+					}),
+				},
+				await load(),
+				{
+					save,
+					apply: async doc => {
+						await save(doc);
+						const name = doc.active ?? "none";
+						const entry = doc.entries.find(item => item.name === name);
+						if (!entry) throw new Error("Select a personality first.");
+						const impact = await personalityCacheImpact(this.ctx.session, entry.content);
+						if (impact && !(await confirm("Apply personality?", describePersonalityCacheImpact(impact))))
+							throw new Error("Apply cancelled.");
+						selectPersonality(this.ctx.settings, scope, name);
+						await this.ctx.settings.flush();
+						const effective = currentPersonalityName(this.ctx.settings);
+						return effective === name
+							? `Applied ${name} in ${scope}.`
+							: `Saved ${name} in ${scope}; ${effective} remains active from a higher scope.`;
+					},
+					name: initial =>
+						this.ctx.showHookCustom<string | undefined>(
+							(tui, _theme, _keys, done) =>
+								new HookInputComponent("New personality name", initial, done, () => done(undefined), { tui }),
+							{ overlay: true, overlayOptions: { width: 60 } },
+						),
+					preview: async entry => (await this.ctx.session.previewPersonalityPrompt(entry.content)).join("\n\n"),
+					editingScope: () => scope,
+					scopeLabel: () =>
+						["global", "project", "session"].map(item => (item === scope ? `[${item}]` : item)).join(" / "),
+					cycleScope: async () => {
+						scope = scope === "global" ? "project" : scope === "project" ? "session" : "global";
+						return load();
+					},
+					close: done,
+					requestRender: () => this.ctx.ui.requestRender(),
+				},
+			);
+			this.#mountMenu(menu, overlay, () => this.#showFullscreenMenu(overlay));
+		})().catch(error => {
+			done();
+			this.ctx.showError(String(error));
+		});
 	}
 
 	/**
@@ -1464,7 +1635,12 @@ export class SelectorController {
 		this.ctx.session.setThinkingLevel(level);
 	}
 
-	showModelSelector(options?: { temporaryOnly?: boolean; sessionOnly?: boolean; scope?: SettingsScope; selectOnly?: SelectOnlyModelSelectorOptions }): void {
+	showModelSelector(options?: {
+		temporaryOnly?: boolean;
+		sessionOnly?: boolean;
+		scope?: SettingsScope;
+		selectOnly?: SelectOnlyModelSelectorOptions;
+	}): void {
 		if (options?.selectOnly) {
 			this.#showModelPicker({ selectOnly: options.selectOnly });
 			return;
@@ -1697,7 +1873,11 @@ export class SelectorController {
 		};
 		const hub = new ModelHubComponent(
 			this.ctx.ui,
-			createModelBrowserSource(this.ctx.settings, model => this.ctx.session.effectiveServiceTier(model), hubOptions.sessionOnly ? undefined : editingScope),
+			createModelBrowserSource(
+				this.ctx.settings,
+				model => this.ctx.session.effectiveServiceTier(model),
+				hubOptions.sessionOnly ? undefined : editingScope,
+			),
 			this.ctx.session.modelRegistry,
 			this.ctx.session.scopedModels,
 			{
@@ -1721,13 +1901,22 @@ export class SelectorController {
 							done();
 							this.#showModelFacts(provider, model?.id);
 						},
-				onOpenConfigFile: hubOptions.sessionOnly || editingScope === "session"
-					? undefined
-					: (section, scope) =>
-							this.#openConfigFile({ kind: "models", section, scope: scope === "session" ? undefined : scope ?? editingScope as "global" | "project" }, async () => {
-								await this.ctx.settings.reloadFromDisk();
-								await this.ctx.session.modelRegistry.refresh("offline");
-							}),
+				onOpenConfigFile:
+					hubOptions.sessionOnly || editingScope === "session"
+						? undefined
+						: (section, scope) =>
+								this.#openConfigFile(
+									{
+										kind: "models",
+										section,
+										scope:
+											scope === "session" ? undefined : (scope ?? (editingScope as "global" | "project")),
+									},
+									async () => {
+										await this.ctx.settings.reloadFromDisk();
+										await this.ctx.session.modelRegistry.refresh("offline");
+									},
+								),
 				onAssign: async (
 					model,
 					role,
@@ -1838,7 +2027,9 @@ export class SelectorController {
 							const fallbackRoleValue = this.ctx.settings.getModelRole("default");
 							const fallbackProvenance = this.ctx.settings.getModelRoleProvenance("default");
 							const exposesPersistedFallback =
-								fallbackProvenance === "session" || fallbackProvenance === "project" || fallbackProvenance === "global";
+								fallbackProvenance === "session" ||
+								fallbackProvenance === "project" ||
+								fallbackProvenance === "global";
 							if (fallbackRoleValue && exposesPersistedFallback) {
 								const scopedModels = this.ctx.session.scopedModels.map(sm => sm.model);
 								const availableModels =
@@ -1938,11 +2129,16 @@ export class SelectorController {
 				onRoleTokenBudgetChange: (role, value) => {
 					try {
 						if (value !== undefined) cfgCompactionThresholdTokens.assertRoleWritable(value);
-						const entries = (this.ctx.settings.readScopeValue(cfgRoleSettings, editingScope) ?? {}) as RoleSettings;
-						this.ctx.settings.writeScopeValue(cfgRoleSettings, {
-							...entries,
-							[role]: { ...entries[role], [cfgCompactionThresholdTokens.id]: value ?? null },
-						}, editingScope);
+						const entries = (this.ctx.settings.readScopeValue(cfgRoleSettings, editingScope) ??
+							{}) as RoleSettings;
+						this.ctx.settings.writeScopeValue(
+							cfgRoleSettings,
+							{
+								...entries,
+								[role]: { ...entries[role], [cfgCompactionThresholdTokens.id]: value ?? null },
+							},
+							editingScope,
+						);
 						return true;
 					} catch (error) {
 						this.ctx.showError(error instanceof Error ? error.message : String(error));
@@ -2924,7 +3120,11 @@ export class SelectorController {
 	): Promise<boolean> {
 		const holder = inspectSessionLease(sessionPath);
 		if (holder) {
-			return this.#resumeInUseSession(sessionPath, new SessionInUseError(sessionPath, holder.pid, holder.since), options);
+			return this.#resumeInUseSession(
+				sessionPath,
+				new SessionInUseError(sessionPath, holder.pid, holder.since),
+				options,
+			);
 		}
 		const previousCwd = this.ctx.sessionManager.getCwd();
 		// Flush pending settings writes before switching sessions so a save
@@ -3526,19 +3726,25 @@ export class SelectorController {
 	showThinkingSelector(): void {
 		const viewed = this.ctx.viewSession;
 		const configured = viewed.configuredThinkingLevel();
-		this.showSelector(done => {
-			const selector = new ThinkingSelectorComponent(
-				configured === ThinkingLevel.Inherit ? ThinkingLevel.Off : configured,
-				viewed.getAvailableEffortSelectors(),
-				level => {
-					done();
-					viewed.setThinkingLevel(level);
-					this.ctx.ui.requestRender();
-				},
-				() => { done(); this.ctx.ui.requestRender(); },
-			);
-			return { component: selector, focus: selector.getSelectList() };
-		}, { kind: "thinking-selector", reopen: () => this.showThinkingSelector() });
+		this.showSelector(
+			done => {
+				const selector = new ThinkingSelectorComponent(
+					configured === ThinkingLevel.Inherit ? ThinkingLevel.Off : configured,
+					viewed.getAvailableEffortSelectors(),
+					level => {
+						done();
+						viewed.setThinkingLevel(level);
+						this.ctx.ui.requestRender();
+					},
+					() => {
+						done();
+						this.ctx.ui.requestRender();
+					},
+				);
+				return { component: selector, focus: selector.getSelectList() };
+			},
+			{ kind: "thinking-selector", reopen: () => this.showThinkingSelector() },
+		);
 	}
 
 	showAgentHub(observers: SessionObserverRegistry, options?: AgentHubOpenOptions): void {

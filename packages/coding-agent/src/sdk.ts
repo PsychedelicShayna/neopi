@@ -44,6 +44,7 @@ import { Snowflake } from "@oh-my-pi/pi-utils/snowflake";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { DEFAULT_FRAME_DATA_BYTES_BUDGET, frameDataBytesBudget } from "@oh-my-pi/snapcompact";
 import { type LaunchProfileMemory, renderLaunchProfileMemory, setSessionLaunchProfile } from "./neopi/launch-profile";
+import { isBuiltinPersonality } from "./neopi/personalities";
 import {
 	advisorRosterForRuntime,
 	discoverAdvisorConfigs,
@@ -385,6 +386,7 @@ import {
 	cfgIncludeWorkspaceTree,
 	cfgInlineToolDescriptors,
 	cfgPersonality,
+	cfgCustomPersonalities,
 	cfgProviderAppendOnlyContext,
 	cfgProvidersCacheWarming,
 	cfgProvidersKimiApiFormat,
@@ -2036,19 +2038,21 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	// agent-dir/user-level files carry coding guidance. Raw mode loads none.
 	const chatMode = options.chatMode;
 	const chatKeepsContextFiles = chatMode ? chatModeIncludes(chatMode, "contextFiles") : true;
-	const contextFilesPromise = (pinnedContextFiles
-		? Promise.resolve(pinnedContextFiles)
-		: chatKeepsContextFiles
-			? logger.time(
-					"discoverContextFiles",
-					discoverContextFiles,
-					cwd,
-					agentDir,
-					undefined,
-					chatMode !== undefined,
-					options.contextAncestorRoot,
-				)
-			: Promise.resolve([])).then(contextFileFilter);
+	const contextFilesPromise = (
+		pinnedContextFiles
+			? Promise.resolve(pinnedContextFiles)
+			: chatKeepsContextFiles
+				? logger.time(
+						"discoverContextFiles",
+						discoverContextFiles,
+						cwd,
+						agentDir,
+						undefined,
+						chatMode !== undefined,
+						options.contextAncestorRoot,
+					)
+				: Promise.resolve([])
+	).then(contextFileFilter);
 	contextFilesPromise.catch(() => {});
 	const resolveRepoContext = async (repoCwd: string) => {
 		try {
@@ -4450,12 +4454,14 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			if (!own || own.size === 0) return hosted;
 			return new Map([...own, ...hosted].sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0)));
 		};
+		let lastActiveRepoContext = initialActiveRepoContext;
 		const rebuildSystemPrompt = async (
 			toolNames: string[],
 			tools: Map<string, AgentTool>,
+			personalityPreview?: string,
 		): Promise<BuildSystemPromptResult> => {
 			const promptCwd = sessionManager.getCwd();
-			let activeRepoContext = initialActiveRepoContext;
+			let activeRepoContext = lastActiveRepoContext;
 			const liveChatMode = hasSession ? session.chatMode : chatMode;
 			// Re-discover rules and context files from disk on every session-scoped
 			// rebuild. The rule buckets are otherwise frozen at
@@ -4466,7 +4472,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// injection state is retained only for rule names that remain registered.
 			// Sessions handed an explicit rule set (subagents inherit the parent's) keep it
 			// but still re-bucket, so live `ttsr.*` filter changes apply to them too.
-			if (hasSession) {
+			if (hasSession && personalityPreview === undefined) {
 				// These reads share only the cwd and discovery scope. Start them together:
 				// a slow repository lookup must not delay context files or rules, including
 				// the first refresh after session_start hooks have edited those files.
@@ -4488,11 +4494,16 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					options.rules ??
 						logger
 							.time("rediscoverRules", () =>
-								loadCapability<Rule>(ruleCapability.id, { cwd: promptCwd, agentDir, disabledExtensions: cfgDisabledExtensions.get(settings) }),
+								loadCapability<Rule>(ruleCapability.id, {
+									cwd: promptCwd,
+									agentDir,
+									disabledExtensions: cfgDisabledExtensions.get(settings),
+								}),
 							)
 							.then(result => result.items),
 				]);
 				activeRepoContext = repoContext;
+				lastActiveRepoContext = repoContext;
 				if (refreshedContextFiles !== undefined) {
 					contextFiles = contextFileFilter(refreshedContextFiles);
 					toolSession.contextFiles = contextFiles;
@@ -4528,11 +4539,13 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// Advisors get the same memory block (sharpshooter decisions, mnemopi/
 			// hindsight instructions) wrapped as shared background knowledge; the
 			// tool-availability caveat lives in the wrapper template.
-			advisorMemoryPrompt = formatAdvisorMemoryPrompt(memoryInstructions);
-			if (hasSession) session.setAdvisorMemoryPrompt(advisorMemoryPrompt);
+			if (personalityPreview === undefined) {
+				advisorMemoryPrompt = formatAdvisorMemoryPrompt(memoryInstructions);
+				if (hasSession) session.setAdvisorMemoryPrompt(advisorMemoryPrompt);
+			}
 			const inlineToolDescriptors = resolveInlineToolDescriptors();
 			// Unset only during the initial build; the agent is constructed with it.
-			if (agent) agent.pruneToolDescriptions = inlineToolDescriptors;
+			if (agent && personalityPreview === undefined) agent.pruneToolDescriptions = inlineToolDescriptors;
 			// A fixed string or array in systemPrompt replaces all generated blocks.
 			// Preserve the bookkeeping above, but skip discovering or rendering a
 			// template whose output would be discarded.
@@ -4658,6 +4671,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					? { mode: "compact", toolNames: [...toolNames, ...mountedPromptToolNames] }
 					: { mode: "full" },
 			);
+			const selectedPersonality = cfgPersonality.get(settings);
 			const defaultPrompt = await buildSystemPromptInternal({
 				cwd: promptCwd,
 				additionalWorkspaceRoots: sessionManager.getAdditionalDirectories(),
@@ -4700,7 +4714,17 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				model: getActiveModelString(),
 				activeModel: agent?.state.model ?? model,
 				includeModelInPrompt: cfgIncludeModelInPrompt.get(settings),
-				personality: agentKind === "sub" ? "none" : cfgPersonality.get(settings),
+				personality:
+					agentKind === "sub"
+						? "none"
+						: isBuiltinPersonality(selectedPersonality)
+							? selectedPersonality
+							: "default",
+				customPersonalityPrompt:
+					personalityPreview ??
+					(agentKind === "sub" || isBuiltinPersonality(selectedPersonality)
+						? undefined
+						: cfgCustomPersonalities.get(settings)[selectedPersonality]),
 				subagent: agentKind === "sub",
 				renderMermaid: tuiTranscript && cfgTuiRenderMermaid.get(settings),
 				renderSvg: tuiTranscript && cfgTuiRenderSvg.get(settings),
@@ -4971,7 +4995,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		const createTransformProviderContext = () => {
 			const reminder = new DateCwdReminderInjector();
 			return async (context: Context, transformModel: Model): Promise<Context> => {
-				if (isMixtureModel(transformModel)) return obfuscator ? obfuscateProviderContext(obfuscator, context) : context;
+				if (isMixtureModel(transformModel))
+					return obfuscator ? obfuscateProviderContext(obfuscator, context) : context;
 				return transformModelContext(context, transformModel, reminder);
 			};
 		};

@@ -14,6 +14,7 @@ import {
 	cfgIncludeWorkspaceTree,
 	cfgOmitThinking,
 	cfgPersonality,
+	cfgCustomPersonalities,
 	cfgTemperature,
 	cfgTierOpenai,
 	cfgTopP,
@@ -21,10 +22,55 @@ import {
 import { cfgTtsrEnabled } from "@oh-my-pi/pi-coding-agent/export/ttsr-settings";
 import { cfgToolsFormat } from "@oh-my-pi/pi-coding-agent/session/context-settings";
 import { cfgInterruptMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import {
+	deleteCustomPersonality,
+	listCustomPersonalities,
+	listCustomPersonalitiesForScope,
+	saveCustomPersonality,
+	selectPersonality,
+} from "@oh-my-pi/pi-coding-agent/neopi/personality-settings";
 import { cfgSteeringMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 
 describe("AgentSession live settings", () => {
 	const tempDirs: string[] = [];
+	it("keeps custom definitions scoped and resolves the higher scope", () => {
+		const settings = Settings.isolated();
+		saveCustomPersonality(settings, "global", "warm", "global text");
+		saveCustomPersonality(settings, "project", "warm", "project text");
+		saveCustomPersonality(settings, "session", "warm", "session text");
+		expect(listCustomPersonalities(settings)).toEqual([{ name: "warm", prompt: "session text", scope: "session" }]);
+		expect(listCustomPersonalitiesForScope(settings, "global")[0]?.prompt).toBe("global text");
+		deleteCustomPersonality(settings, "session", "warm");
+		expect(listCustomPersonalities(settings)[0]).toEqual({ name: "warm", prompt: "project text", scope: "project" });
+		selectPersonality(settings, "session", "warm");
+		expect(cfgPersonality.get(settings)).toBe("warm");
+		selectPersonality(settings, "global", "friendly");
+		expect(cfgPersonality.get(settings)).toBe("warm");
+	});
+	it("rebuilds the prompt when a custom personality is selected", async () => {
+		const settings = Settings.isolated();
+		const live = await start(settings);
+		session = live;
+		cfgCustomPersonalities.set(settings, { warm: "A distinct custom personality" });
+		cfgPersonality.set(settings, "warm");
+		await Promise.resolve();
+		await live.refreshBaseSystemPrompt();
+		expect(live.systemPrompt.join("\n")).toContain("A distinct custom personality");
+	});
+
+	it("previews a personality without changing the active prompt", async () => {
+		const settings = Settings.isolated();
+		const live = await start(settings);
+		session = live;
+		const before = [...live.systemPrompt];
+		const preview = await live.previewPersonalityPrompt("A candidate personality");
+		expect(preview.join("\n")).toContain("A candidate personality");
+		expect(live.systemPrompt).toEqual(before);
+		saveCustomPersonality(settings, "session", "candidate", "A candidate personality");
+		selectPersonality(settings, "session", "candidate");
+		await live.refreshBaseSystemPrompt();
+		expect(live.baseSystemPrompt).toEqual(preview);
+	});
 	let modelRegistry!: ModelRegistry;
 	let authDir: string;
 	let session: AgentSession | undefined;
@@ -60,7 +106,7 @@ describe("AgentSession live settings", () => {
 			modelRegistry,
 			sessionManager: SessionManager.inMemory(),
 			settings,
-			model: getBundledModel("openai", "gpt-4o-mini"),
+			model: getBundledModel("openai-codex", "gpt-6-luna"),
 			disableExtensionDiscovery: true,
 			skills: [],
 			contextFiles: [],

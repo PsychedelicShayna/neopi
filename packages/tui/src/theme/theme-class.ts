@@ -678,6 +678,7 @@ export class Theme {
 		return {
 			action: this.#symbols["cmd.action"],
 			prompt: this.#symbols["cmd.prompt"],
+			personality: this.#symbols["cmd.personality"],
 			extension: this.#symbols["cmd.extension"],
 			settings: this.#symbols["cmd.settings"],
 			gear: this.#symbols["cmd.gear"],

@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Personality } from "@oh-my-pi/pi-coding-agent/session/settings";
-import { buildSystemPrompt } from "@oh-my-pi/pi-coding-agent/system-prompt";
+import { buildSystemPrompt, previewBuiltinPersonality } from "@oh-my-pi/pi-coding-agent/system-prompt";
 import { __resetDirsFromEnvForTests, removeSyncWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
 import { restoreEnvValue } from "./helpers/settings-test-state";
 
@@ -64,6 +64,42 @@ describe("PERSONALITY.md override", () => {
 	function writePersonalityFile(content: string): void {
 		fs.writeFileSync(path.join(tempAgentDir, "PERSONALITY.md"), content);
 	}
+
+	it("previews the effective legacy override and honors none", async () => {
+		writePersonalityFile(OVERRIDE);
+		expect(await previewBuiltinPersonality("friendly", tempDir)).toBe(OVERRIDE);
+		expect(await previewBuiltinPersonality("none", tempDir)).toBe("");
+	});
+
+	it("renders a selected custom personality instead of the legacy override", async () => {
+		writePersonalityFile(OVERRIDE);
+		const { systemPrompt } = await buildSystemPrompt({
+			cwd: tempDir,
+			contextFiles: [],
+			skills: [],
+			rules: [],
+			toolNames: [],
+			personality: "friendly",
+			customPersonalityPrompt: "Custom personality text",
+			workspaceTree: { ...EMPTY_TREE, rootPath: tempDir },
+		});
+		expect(systemPrompt.join("\n\n")).toContain("Custom personality text");
+		expect(systemPrompt.join("\n\n")).not.toContain(OVERRIDE);
+	});
+
+	it("allows a custom selection even when the built-in selection is none", async () => {
+		const { systemPrompt } = await buildSystemPrompt({
+			cwd: tempDir,
+			contextFiles: [],
+			skills: [],
+			rules: [],
+			toolNames: [],
+			personality: "none",
+			customPersonalityPrompt: "Custom personality text",
+			workspaceTree: { ...EMPTY_TREE, rootPath: tempDir },
+		});
+		expect(systemPrompt.join("\n\n")).toContain("Custom personality text");
+	});
 
 	it("replaces the selected preset's text with <agentDir>/PERSONALITY.md", async () => {
 		writePersonalityFile(OVERRIDE);

@@ -787,6 +787,11 @@ export interface StatusLinePreviewSettings {
 }
 
 export interface SettingsCallbacks {
+	/** Allow the host to provide a richer personality picker. */
+	createPersonalityManager?: (currentValue: string, done: (value?: string) => void) => Component;
+	/** Effective selection may be a user-defined name outside the built-in enum. */
+	currentPersonality?: () => string;
+	personalityOptions?: () => readonly SubmenuOption[];
 	/** Called when any setting value changes */
 	onChange: (path: string, newValue: unknown) => void;
 	/** Called for theme preview while browsing */
@@ -888,6 +893,19 @@ export class SettingsSelectorComponent implements Component {
 		this.#pluginComponent?.invalidate();
 	}
 
+	/** Open the same personality manager used by the settings row. */
+	openPersonalityManager(): boolean {
+		this.#tabBar.selectTab("model");
+		const opened = this.#currentList?.openSubmenuFor("personality") !== undefined;
+		this.#context.requestRender?.();
+		return opened;
+	}
+
+	refreshValues(): void {
+		this.#refreshItems();
+		this.#context.requestRender?.();
+	}
+
 	/** Swap the active content (per-tab list, search list, or plugins). */
 	#setContent(build: () => void): void {
 		this.#menuKeys.reset();
@@ -932,9 +950,13 @@ export class SettingsSelectorComponent implements Component {
 
 	#scopeTitle(styled = false): string {
 		const active = this.#context.settings.scope ?? "global";
-		const scopes = ["global", "project", "session"].map(scope => scope === active
-			? styled ? theme.bold(theme.fg("accent", `[${scope.toUpperCase()}]`)) : `[${scope.toUpperCase()}]`
-			: scope);
+		const scopes = ["global", "project", "session"].map(scope =>
+			scope === active
+				? styled
+					? theme.bold(theme.fg("accent", `[${scope.toUpperCase()}]`))
+					: `[${scope.toUpperCase()}]`
+				: scope,
+		);
 		return `Settings · ${scopes.join(" / ")} · Ctrl+S cycle scope`;
 	}
 
@@ -988,6 +1010,9 @@ export class SettingsSelectorComponent implements Component {
 		if (list) {
 			// SettingsList pads itself to viewport + blank + 3 description rows.
 			list.setMaxVisible(contentRows - 4);
+			const submenu = list.openSubmenu?.component;
+			if (submenu && "setAvailableRows" in submenu && typeof submenu.setAvailableRows === "function")
+				submenu.setAvailableRows(contentRows);
 			contentLines = list.render(innerWidth);
 		} else if (this.#pluginComponent) {
 			contentLines = this.#pluginComponent.render(innerWidth);
@@ -1119,11 +1144,16 @@ export class SettingsSelectorComponent implements Component {
 			pages,
 			page: searching ? this.#preSearchTabId : this.#currentTabId,
 			lead: [
-				searchError ? `Invalid regex: ${searchError}`
-					: searching ? undefined : (pluginPage?.lead ?? (tab ? TAB_LEADS[tab] : undefined)),
+				searchError
+					? `Invalid regex: ${searchError}`
+					: searching
+						? undefined
+						: (pluginPage?.lead ?? (tab ? TAB_LEADS[tab] : undefined)),
 				`Ctrl+S cycle scope${this.#callbacks.onApply ? " · F6 Apply" : ""}`,
 				this.#applyFeedback,
-			].filter(Boolean).join(" · "),
+			]
+				.filter(Boolean)
+				.join(" · "),
 			query: searching || this.#search.focused ? this.#search.value : pluginPage?.query,
 			cursor: searching || this.#search.focused ? this.#search.input.getCursor() : pluginPage?.cursor,
 			sections,
@@ -1154,6 +1184,7 @@ export class SettingsSelectorComponent implements Component {
 
 	/** Whether row `id`'s choices fit its popup menu (else the submenu opens as a picker over the page). */
 	#inlineMenu(id: string): boolean {
+		if (id === "personality" && this.#callbacks.createPersonalityManager) return false;
 		const def = getSettingDef(this.#context.settings.entries, id);
 		return def?.type !== "submenu" || this.#submenuOptions(def).length <= PREFS_MENU_MAX;
 	}
@@ -1314,6 +1345,10 @@ export class SettingsSelectorComponent implements Component {
 	): void {
 		const def = getSettingDef(this.#context.settings.entries, id);
 		if (!def) return;
+		if (id === "personality" && this.#callbacks.createPersonalityManager) {
+			list.openSubmenuFor(id);
+			return;
+		}
 		if (value === null) {
 			if (list.openSubmenu) list.handleInput(ESCAPE);
 			this.#context.settings.unset(def.path);
@@ -1744,7 +1779,9 @@ export class SettingsSelectorComponent implements Component {
 		const item = {
 			id: def.path,
 			label: `${this.#context.settings.details?.(def.path).shadowed ? "󰈉 " : ""}${def.label}${provenanceSuffix(def.provenance)}`,
-			description: [def.description, this.#context.settings.details?.(def.path).description].filter(Boolean).join("\n"),
+			description: [def.description, this.#context.settings.details?.(def.path).description]
+				.filter(Boolean)
+				.join("\n"),
 			warning: def.warning,
 			changed,
 			defaultLabel: changed ? this.#defaultLabel(def) : undefined,
@@ -1791,6 +1828,7 @@ export class SettingsSelectorComponent implements Component {
 	 * Get the current value for a setting.
 	 */
 	#getCurrentValue(def: SettingDef): unknown {
+		if (def.path === "personality" && this.#callbacks.currentPersonality) return this.#callbacks.currentPersonality();
 		return this.#context.settings.get(def.path);
 	}
 
@@ -1820,6 +1858,7 @@ export class SettingsSelectorComponent implements Component {
 
 	/** A submenu's choices: the declared ones, or the runtime ones (thinking levels, themes, composer shapes). */
 	#submenuOptions(def: SettingDef & { type: "submenu" }): readonly SubmenuOption[] {
+		if (def.path === "personality" && this.#callbacks.personalityOptions) return this.#callbacks.personalityOptions();
 		if (def.path === "defaultThinkingLevel") {
 			// Prepend `auto`; the rest are the model's runtime-supported efforts.
 			const levels: ConfiguredThinkingLevel[] = [AUTO_THINKING, ...this.#context.availableThinkingLevels];
@@ -1845,6 +1884,9 @@ export class SettingsSelectorComponent implements Component {
 		currentValue: string,
 		done: (value?: string) => void,
 	): Component {
+		if (def.path === "personality" && this.#callbacks.createPersonalityManager) {
+			return this.#callbacks.createPersonalityManager(currentValue, done);
+		}
 		if (def.customInput) {
 			return new NumericSettingsField(
 				def,
@@ -2203,6 +2245,17 @@ export class SettingsSelectorComponent implements Component {
 	}
 
 	handleInput(data: string): void {
+		// Nested managers own scope and external-editor shortcuts while open.
+		const nested = (this.#searchList ?? this.#currentList)?.openSubmenu?.component;
+		if (
+			nested &&
+			"managesScope" in nested &&
+			nested.managesScope === true &&
+			(matchesKey(data, "ctrl+s") || matchesKey(data, "ctrl+g"))
+		) {
+			nested.handleInput?.(data);
+			return;
+		}
 		if (
 			(this.#help.open ||
 				(!this.#search.focused &&
@@ -2271,8 +2324,11 @@ export class SettingsSelectorComponent implements Component {
 			if (!this.#applyPending) {
 				this.#applyPending = true;
 				this.#applyFeedback = "Applying…";
-				void this.#callbacks.onApply(this.#context.settings.scope ?? "global")
-					.then(message => { this.#applyFeedback = message; })
+				void this.#callbacks
+					.onApply(this.#context.settings.scope ?? "global")
+					.then(message => {
+						this.#applyFeedback = message;
+					})
 					.catch((error: unknown) => {
 						this.#applyFeedback = `Apply failed: ${error instanceof Error ? error.message : String(error)}`;
 					})

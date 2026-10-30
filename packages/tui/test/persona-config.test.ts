@@ -4,6 +4,7 @@ import type { PersonaGenerationDeps, PersonaGenerationRequest } from "../src/ove
 import type { TUI } from "../src/index";
 import {
 	type PersonaConfigDoc,
+	type PersonaConfigCallbacks,
 	type PersonaConfigDeps,
 	type PersonaConfigEntry,
 	PersonaConfigOverlayComponent,
@@ -37,24 +38,39 @@ function makeOverlay(
 	doc: PersonaConfigDoc,
 	variant: PersonaConfigVariant = "persona",
 	deps: Partial<PersonaConfigDeps> = {},
+	callbacks: Partial<PersonaConfigCallbacks> = {},
 ) {
+	const lifecycle = { starts: 0, stops: 0 };
 	const saved: PersonaConfigDoc[] = [];
 	let closed = false;
-	const overlay = new PersonaConfigOverlayComponent({} as unknown as TUI, { variant, ...deps }, doc, {
-		save: async next => {
-			saved.push(structuredClone(next));
-			return "saved";
+	const overlay = new PersonaConfigOverlayComponent(
+		{
+			start() {
+				lifecycle.starts++;
+			},
+			stop() {
+				lifecycle.stops++;
+			},
+		} as unknown as TUI,
+		{ variant, ...deps },
+		doc,
+		{
+			save: async next => {
+				saved.push(structuredClone(next));
+				return "saved";
+			},
+			close: () => {
+				closed = true;
+			},
+			requestRender: () => {},
+			...callbacks,
 		},
-		close: () => {
-			closed = true;
-		},
-		requestRender: () => {},
-	});
+	);
 	const press = (...keys: string[]) => {
 		for (const key of keys) overlay.handleInput(key);
 	};
 	const frame = () => overlay.render(100).join("\n");
-	return { overlay, saved, press, frame, isClosed: () => closed };
+	return { overlay, saved, press, frame, lifecycle, isClosed: () => closed };
 }
 
 beforeAll(async () => {
@@ -686,4 +702,89 @@ describe("live persona generation", () => {
 		expect(h.frame()).toContain("Provider unavailable");
 		expect(doc.entries).toHaveLength(0);
 	});
+});
+
+describe("standalone personality editor", () => {
+	it("uses personality chrome, saves separately from apply and cycles scopes", async () => {
+		const doc = { entries: [entry("friendly", { builtin: true }), entry("work")], active: "friendly" };
+		let applied = "";
+		let scope = "project";
+		const h = makeOverlay(
+			doc,
+			"personality",
+			{},
+			{
+				apply: async next => {
+					applied = next.active ?? "";
+					return "applied";
+				},
+				scopeLabel: () => scope,
+				cycleScope: async () => {
+					scope = "session";
+					return structuredClone(doc);
+				},
+			},
+		);
+		expect(h.frame()).toContain("Personalities");
+		expect(h.frame()).not.toContain("Appearance");
+		h.press(DOWN, "s");
+		await Bun.sleep(0);
+		expect(applied).toBe("");
+		expect(h.saved).toHaveLength(1);
+		h.press("a");
+		await Bun.sleep(0);
+		expect(applied).toBe("work");
+		h.press("\x13");
+		await Bun.sleep(0);
+		expect(h.frame()).toContain("session");
+	});
+	it("asks only for the clone name and opens the multiline editor with copied content", async () => {
+		let requested = "";
+		const doc = {
+			entries: [entry("friendly", { builtin: true, content: "First line\nSecond line" })],
+			active: "friendly",
+		};
+		const h = makeOverlay(
+			doc,
+			"personality",
+			{},
+			{
+				name: async initial => {
+					requested = initial;
+					return "my-voice";
+				},
+			},
+		);
+		h.press("c");
+		await Bun.sleep(0);
+		expect(requested).toBe("friendly-copy");
+		expect(doc.entries[1]?.content).toBe("First line\nSecond line");
+		expect(h.frame()).toContain("First line");
+		expect(h.frame()).toContain("Second line");
+	});
+});
+
+it("opens a highlighted personality directly in the external editor", async () => {
+	let text = "";
+	const doc = { entries: [entry("custom", { content: "Existing multiline\ncontent" })], active: "custom" };
+	const h = makeOverlay(doc, "personality", {
+		externalEditor: async value => {
+			text = value;
+			return "Edited content";
+		},
+	});
+	h.press("\x07");
+	await Bun.sleep(0);
+	expect(text).toBe("Existing multiline\ncontent");
+	expect(h.lifecycle).toEqual({ starts: 1, stops: 1 });
+	expect(doc.entries[0]?.content).toBe("Edited content");
+	expect(h.frame()).toContain("Edited content");
+});
+
+it("keeps inherited personality deletion in its owning scope", async () => {
+	const doc = { entries: [entry("inherited", { definitionScope: "global" })] };
+	const h = makeOverlay(doc, "personality", {}, { editingScope: () => "project" });
+	h.press(DELETE, DELETE);
+	expect(doc.entries).toHaveLength(1);
+	expect(h.frame()).toContain("Inherited from global");
 });

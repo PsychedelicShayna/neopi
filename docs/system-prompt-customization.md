@@ -290,14 +290,18 @@ This is a complete, runnable Handlebars Markdown template. It uses only built-in
 
 ### Replace the personality block
 
-The default template renders a personality block chosen by the `personality` setting (`default`, `friendly`, `pragmatic`, `none`). A user-level `PERSONALITY.md` replaces the selected preset's text:
+The default template renders a personality block chosen by the `personality` setting. Built-ins are `default`, `friendly`, `pragmatic`, and `none`. Run `/personality` for the standalone fullscreen editor at project scope. **Settings → Model → Personality** opens the same editor using the scope selected in Settings. Use Ctrl-S to choose global, project, or session scope; custom definitions with the same name resolve session first, then project, then global. Built-ins cannot be edited or deleted, but can be cloned. The picker supports `c` to clone, `y` then `p` to copy, `e` to edit, Delete twice to remove a custom definition owned by the current scope, and `v` to preview the complete candidate system prompt. Ctrl-G on a highlighted entry opens its prompt directly in the external editor. Cloning asks for a name in a popup, then opens the shared multiline editor with the copied text. `s` saves definitions; `a` saves and applies the highlighted personality. Generate personality lets you choose a model, select reference personalities or prompts, and describe the new personality before reviewing its generated text.
+
+`/personality <name>` selects a personality for the current session, with completion for built-in and custom names. When the prior request provides evidence of a cached prefix, changing the prompt asks for confirmation and shows the observed cached-token count and an API-rate estimate when available. The entry may already have expired, and subscription charges can differ from API rates. No cache warning is needed before the first request. `/personality` does not change `/persona` or replace the entire system prompt.
+
+Custom definitions are held in the scoped `customPersonalities` settings record, with the selected name in `personality`. A user-level `PERSONALITY.md` replaces the selected **built-in** preset's text; selecting a named custom personality uses that personality's text instead:
 
 ```text
 # ~/.omp/agent/PERSONALITY.md
 Follow ASD-STE100 Simplified Technical English for all responses.
 ```
 
-Only the agent directory is checked (`~/.omp/agent` by default; profile- and XDG-aware) — there is no project-level or other-config-base lookup. `personality: none` still omits the block entirely (subagents always run with `none`), and an empty or unreadable file falls back to the configured preset with a logged warning.
+Only the agent directory is checked (`~/.omp/agent` by default; profile- and XDG-aware) — there is no project-level or other-config-base lookup. `personality: none` still omits the block entirely (subagents always run with `none`), and an empty or unreadable file falls back to the configured preset with a logged warning. If a selected custom definition is no longer available, the prompt falls back to `default`.
 
 ### Customize automatic session titles
 

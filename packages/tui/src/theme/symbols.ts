@@ -141,6 +141,7 @@ export type SymbolKey =
 	// icon.* equivalent — see SlashCommandIconName for the full vocabulary.
 	| "cmd.action"
 	| "cmd.prompt"
+	| "cmd.personality"
 	| "cmd.extension"
 	| "cmd.settings"
 	| "cmd.gear"
@@ -326,6 +327,7 @@ export type SlashCommandIconName =
 	// Dedicated cmd.* symbols
 	| "action"
 	| "prompt"
+	| "personality"
 	| "extension"
 	| "settings"
 	| "gear"
@@ -532,6 +534,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	// Slash-command type indicators
 	"cmd.action": "❯",
 	"cmd.prompt": "✎",
+	"cmd.personality": "🎭",
 	"cmd.extension": "🧩",
 	"cmd.settings": "🎛",
 	"cmd.gear": "⚙",
@@ -955,6 +958,7 @@ const NERD_SYMBOLS: SymbolMap = {
 	"cmd.action": "\uea85",
 	// pick: 󰺫 (nf-md-text_box_plus_outline) | alt:  (nf-fa-comment, matches icon.extensionPrompt)
 	"cmd.prompt": "\u{f0eab}",
+	"cmd.personality": "\u{f0d02}",
 	// pick:  (nf-fa-puzzle_piece) | alt: 󰐱 (nf-md-puzzle)
 	"cmd.extension": "\uf12e",
 	// pick:  (nf-fa-sliders) | alt:  (nf-cod-settings)
@@ -1331,6 +1335,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	// Slash-command type indicators — unused; the icon column is disabled in ASCII mode
 	"cmd.action": "",
 	"cmd.prompt": "",
+	"cmd.personality": "",
 	"cmd.extension": "",
 	"cmd.settings": "",
 	"cmd.gear": "",

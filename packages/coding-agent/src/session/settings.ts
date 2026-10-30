@@ -1,6 +1,7 @@
 import { PRODUCT_NAME } from "@oh-my-pi/pi-utils";
 import { combine, effect, register, type SettingValueOf } from "../config/registry";
 import { compileSelectorRegex, isRegexSelectorPattern } from "../config/selector-pattern";
+import { BUILTIN_PERSONALITIES, validatePersonalityDefinition } from "../neopi/personalities";
 import { cfgEditMode } from "../edit/settings";
 import { cfgEvalJs } from "../eval/settings";
 import {
@@ -161,7 +162,6 @@ export const cfgPrewalkExecutionFallbacks = register({
 		ordered: true,
 	},
 });
-
 
 export const cfgPrewalkAuto = register({
 	id: "prewalk.auto",
@@ -487,12 +487,28 @@ export const cfgSkillful = register({
 });
 
 /** Personality preset. */
-export type Personality = SettingValueOf<typeof cfgPersonality>;
+export type Personality = (typeof BUILTIN_PERSONALITIES)[number];
+
+/** Named personality definitions merge across global, project and session settings. */
+export const cfgCustomPersonalities = register({
+	id: "customPersonalities",
+	type: "record",
+	default: {} as Record<string, string>,
+	validate(value) {
+		if (value === undefined) return;
+		if (!value || typeof value !== "object" || Array.isArray(value))
+			throw new Error("Personalities must be a record");
+		for (const [name, prompt] of Object.entries(value)) {
+			if (typeof prompt !== "string") throw new Error(`Personality prompt must be text: ${name}`);
+			const error = validatePersonalityDefinition({ name, prompt });
+			if (error) throw new Error(`${error}: ${name}`);
+		}
+	},
+});
 
 export const cfgPersonality = register({
 	id: "personality",
-	type: "enum",
-	values: ["default", "friendly", "pragmatic", "none"] as const,
+	type: "string",
 	default: "default",
 	ui: {
 		tab: "model",

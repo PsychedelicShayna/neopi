@@ -9,6 +9,8 @@
 
 ### Added
 
+- Added a scoped personality manager with prompt previews, custom personalities, and `/personality` switching.
+
 - Changed: `chronicle_recall` searches the current session by default; pass `scope: "all"`, `sessions`, or `keywords` to widen. Added literal boolean transcript prefiltering (AND, OR, parentheses, quoted phrases; case-insensitive by default) before existing recall ranking, with matching session counts and equivalent CLI flags. The standalone CLI keeps its all-session default (implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).
 
 - Settings, slash-command suggestions, hotkey help, model roles and status-line widgets mark fork additions with a crescent and the latest upstream release's additions with a star, while retaining command type icons.
