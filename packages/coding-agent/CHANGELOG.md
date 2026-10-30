@@ -9,7 +9,7 @@
 
 ### Added
 
-- Configure advisors separately in User, Project root, Project .omp, and Session scopes; copy advisors and their prompts, or generate a new advisor from existing definitions.
+- Configure advisors separately in User, Project root, Project .omp, and Session scopes; copy advisors and their prompts, or generate a new advisor from existing definitions ([#632](https://github.com/PsychedelicShayna/neopi/issues/632)).
 - Agent and advisor authoring can retain comment-driven generation conversations in memory for a configurable time (default one hour; set `task.definitionGenerationConversationTtlMs` to 0 to disable).
 - Settings, slash-command suggestions, hotkey help, model roles and status-line widgets mark fork additions with a crescent and the latest upstream release's additions with a star, while retaining command type icons.
 - Choose advisor delivery timing independently for nits, concerns, and blockers in Settings → Model → Advisor; nits wait for the actual run end by default, while concerns and blockers arrive at safe tool boundaries without cancelling work.

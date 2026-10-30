@@ -494,6 +494,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 	#scopeLoadRevision = 0;
 	#previewFocused = false;
 	#generationAbort: AbortController | undefined;
+	#viewRevision = 0;
 	#previewRowsLast = 1;
 	#previewWidthLast = 1;
 	#previewLayoutDirty = true;
@@ -750,6 +751,11 @@ export class AdvisorConfigOverlayComponent implements Component {
 					control: { k: "action", label: "Edit…", act: "edit" },
 				},
 			];
+			rows.push({ id: "duplicate", label: "Duplicate advisor", control: { k: "action", label: "Duplicate", act: "edit" } });
+			if (this.#cb.copyAdvisor && this.#cb.getSources)
+				rows.push({ id: "copy", label: "Copy to another scope", control: { k: "action", label: "Choose file…", act: "edit" } });
+			if (this.#cb.copyPrompt)
+				rows.push({ id: "copyPrompt", label: "Copy full prompt", control: { k: "action", label: "Copy", act: "edit" } });
 			sections.push({ id: "advisor", title: advisor.name || "Advisor", rows });
 		} else {
 			sections.push({
@@ -782,18 +788,13 @@ export class AdvisorConfigOverlayComponent implements Component {
 					hint: "Create a new advisor entry, then set its model, tools and instructions.",
 					control: { k: "action", label: "Add", act: "add" },
 				},
-				...(this.#deps.filePath
-					? []
-					: [
-							{
-								id: "scope",
-								label: "Scope",
-								hint: `Editing the ${this.#scope} file. Switch to the ${this.#otherScope()} file.${this.#cb.openConfigFile ? " Ctrl-G edits this file externally." : ""}`,
-								control: { k: "action" as const, label: `Open ${this.#otherScope()}`, act: "scope" },
-							},
-						]),
 			],
 		});
+		if (this.#cb.generateAdvisor && this.#cb.getSources)
+			sections.push({
+				id: "generation", title: "Authoring",
+				rows: [{ id: "generate", label: "New advisor from existing definitions", control: { k: "action", label: "Choose advisors…", act: "generate" } }],
+			});
 
 		// Name editing shows its draft in the row; the other editors sit over the page.
 		const input = this.#screen === "name" && this.#active instanceof Input ? this.#active : undefined;
@@ -811,7 +812,12 @@ export class AdvisorConfigOverlayComponent implements Component {
 			this.#screen === "review-interval" ||
 			this.#screen === "sync-backlog" ||
 			this.#screen === "tools" ||
-			this.#screen === "instructions";
+			this.#screen === "instructions" ||
+			this.#screen === "systemPrompt" ||
+			this.#screen === "copy-target" ||
+			this.#screen === "generate-bases" ||
+			this.#screen === "generate-comment" ||
+			this.#screen === "generating";
 		const editor = overlay ? this.#prefsEditor() : undefined;
 		const focus =
 			this.#screen === "detail" && this.#active instanceof SelectList
@@ -1019,7 +1025,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 					else this.#cb.close();
 					return;
 				}
-				if (event.act === "save" || event.act === "add" || event.act === "scope") {
+				if (event.act === "save" || event.act === "add" || event.act === "generate") {
 					void this.#onListSelect(event.act).catch(err => {
 						this.#cb.notify(`Advisor config: ${err instanceof Error ? err.message : String(err)}`);
 					});
@@ -1163,8 +1169,6 @@ export class AdvisorConfigOverlayComponent implements Component {
 			const help =
 				value === "add"
 					? "Create a new advisor entry, then edit its model, tools, and instructions."
-					: value === "scope"
-						? `Switch between the project and user WATCHDOG.yml. Currently editing the ${this.#scope}-level file.`
 						: value === "save"
 							? "Write this scope's WATCHDOG.yml and reload the live advisors without a restart."
 							: value === "close"
@@ -1451,8 +1455,6 @@ export class AdvisorConfigOverlayComponent implements Component {
 		const help =
 			value === "add"
 				? "Create a new advisor entry, then edit its model, tools, and instructions."
-				: value === "scope"
-					? `Switch between the project and user WATCHDOG.yml. Currently editing the ${this.#scope}-level file.`
 					: value === "save"
 						? "Write this scope's WATCHDOG.yml and reload the live advisors without a restart."
 						: value === "close"
@@ -1518,6 +1520,8 @@ export class AdvisorConfigOverlayComponent implements Component {
 
 	/** `sheet`: how a list screen describes as a picker over the prefs page. */
 	#setScreen(screen: Screen, active: Component, footerHint: string, sheet?: SelectPickerOptions): void {
+		this.#viewRevision++;
+		if (this.#screen === "generating" && screen !== "generating") this.#generationAbort?.abort();
 		const context: AdvisorNavigationContext = {
 			screen,
 			index: this.#detailIndex,
@@ -1571,9 +1575,6 @@ export class AdvisorConfigOverlayComponent implements Component {
 		return `${scope}:${context.screen}:${context.index}:${context.thinking?.selector ?? ""}`;
 	}
 
-	#otherScope(): AdvisorConfigScope {
-		return this.#scope === "project" ? "user" : "project";
-	}
 
 	#ensureRosterVisible(): void {
 		if (this.#doc.advisors.length === 0) this.#doc.advisors.push({ id: crypto.randomUUID(), name: "default" });
@@ -1636,8 +1637,6 @@ export class AdvisorConfigOverlayComponent implements Component {
 			label: "Shared instructions",
 			description: previewLineOrNone(this.#doc.instructions),
 		});
-		if (!this.#deps.filePath)
-			items.push({ value: "scope", label: `Scope: ${this.#scope}`, description: `→ ${this.#otherScope()}` });
 		items.push({ value: "save", label: "Save & apply" });
 		items.push({ value: "close", label: "Close" });
 
@@ -1709,30 +1708,6 @@ export class AdvisorConfigOverlayComponent implements Component {
 		}
 		if (value === "shared") {
 			this.#showInstructionsEditor(-1);
-			return;
-		}
-		if (value === "scope") {
-			if (this.#deps.filePath) return;
-			if (this.#dirty) {
-				this.#cb.notify('Unsaved changes — "Save & apply" or Close before switching scope.');
-				return;
-			}
-			const next = this.#otherScope();
-			const revision = ++this.#scopeLoadRevision;
-			const doc = await this.#cb.loadDoc(next);
-			if (revision !== this.#scopeLoadRevision) return;
-			this.#doc = doc;
-			this.#scope = next;
-			// Surface malformed entries in the file just made active. The host shows
-			// the initial scope's warnings when the overlay opens, so only switches
-			// report here — no double-showing the opening file.
-			if (doc.warnings?.length) {
-				const message = `WATCHDOG.yml: ${sanitizeDisplayWarnings(doc.warnings).join("; ")}`;
-				if (this.#cb.warn) this.#cb.warn(message);
-				else this.#cb.notify(message);
-			}
-			this.#ensureRosterVisible();
-			this.#showList();
 			return;
 		}
 		if (value === "saveOnly") {
@@ -2007,8 +1982,9 @@ export class AdvisorConfigOverlayComponent implements Component {
 	}
 
 	async #showCopyTargets(index: number): Promise<void> {
+		const revision = this.#viewRevision;
 		const sources = await this.#cb.getSources?.();
-		if (!sources) return;
+		if (!sources || revision !== this.#viewRevision) return;
 		const items: SelectItem[] = sources.filter(source => source.path !== this.#deps.filePath).map(source => ({
 			value: source.path,
 			label: source.scope,
@@ -2016,9 +1992,14 @@ export class AdvisorConfigOverlayComponent implements Component {
 		}));
 		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme(), { search: "always" });
 		list.onSelect = item => {
+			const copyRevision = this.#viewRevision;
 			const advisor = this.#doc.advisors[index];
 			void this.#cb.copyAdvisor?.(advisor, item.value).then(
-				() => { this.#pendingApply = true; this.#cb.notify(`Copied ${advisor.name} to ${shortenPath(item.value)}`); this.#showDetail(index); },
+				() => {
+					this.#pendingApply = true;
+					this.#cb.notify(`Copied ${advisor.name} to ${shortenPath(item.value)}`);
+					if (copyRevision === this.#viewRevision) this.#showDetail(index);
+				},
 				error => this.#cb.notify(`Could not copy advisor: ${String(error)}`),
 			);
 		};
@@ -2027,9 +2008,11 @@ export class AdvisorConfigOverlayComponent implements Component {
 	}
 
 	async #showGenerationBases(): Promise<void> {
+		const revision = this.#viewRevision;
 		const sources = await this.#cb.getSources?.();
-		if (!sources) return;
-		const bases = sources.flatMap(source => source.doc.advisors.map(config => ({ path: source.path, config })));
+		if (!sources || revision !== this.#viewRevision) return;
+		const bases = sources.flatMap(source =>
+			(source.path === this.#deps.filePath ? this.#doc : source.doc).advisors.map(config => ({ path: source.path, config })));
 		const selected = new Set<number>();
 		const show = (cursor = 0): void => {
 			const items: SelectItem[] = bases.map((base, index) => ({

@@ -148,6 +148,10 @@ export function parseInlineAdvisorConfig(value: unknown): AdvisorConfig {
 	return editableAdvisorConfig(advisorEntrySchema.assert(value));
 }
 
+export function advisorDefinitionJsonSchema(): Record<string, unknown> {
+	return advisorEntrySchema.toJsonSchema();
+}
+
 function editableAdvisorConfig(entry: AdvisorYamlEntry): AdvisorConfig {
 	const advisor: AdvisorConfig = { name: entry.name };
 	if (entry.id !== undefined) advisor.id = entry.id;
@@ -441,6 +445,10 @@ export async function listNamedAdvisors(
 	for (const file of discovered.files) {
 		const doc = await loadWatchdogConfigFile(file.path);
 		for (const config of doc.advisors) {
+			config.sourceScope = file.scope;
+			if (config.instructions?.trim())
+				config.instructions = (await expandAtImports(config.instructions, file.path)).trim() || undefined;
+			config.tools = filterAdvisorTools(config.tools, file.path);
 			result.push({ name: config.name, scope: file.scope, sourcePath: file.path, config });
 		}
 	}
