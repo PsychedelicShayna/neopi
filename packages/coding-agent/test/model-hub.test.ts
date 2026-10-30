@@ -33,6 +33,9 @@ import { parseCompactionPointInput } from "../src/config/compaction-threshold";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import type { HubEffortSelection } from "@oh-my-pi/pi-tui/overlays/model-hub";
 import { cfgRetryFallbackChains } from "@oh-my-pi/pi-coding-agent/session/settings";
+import { cfgCompactionThresholdTokens } from "../src/session/context-settings";
+import { cfgRoleSettings } from "../src/config/role-settings";
+import { createSettingsHost } from "../src/config/settings-ui";
 
 function normalize(lines: readonly string[]): string {
 	return stripVTControlCharacters(lines.join("\n").replaceAll(CURSOR_MARKER, "")).replace(/\s+/g, " ").trim();
@@ -221,6 +224,9 @@ function createHub(options: {
 			onRoleDescriptionChange:
 				options.callbacks?.onRoleDescriptionChange ??
 				((role, description) => setRoleDescription(role, description, settings)),
+			onRoleTokenBudgetChange:
+				options.callbacks?.onRoleTokenBudgetChange ??
+				((role, value) => settings.setRoleSetting(role, cfgCompactionThresholdTokens, value)),
 			onEffortRulesChange:
 				options.callbacks?.onEffortRulesChange ?? (rules => cfgEffortRules.override(settings, rules)),
 			onContextRulesChange:
@@ -263,6 +269,31 @@ describe("ModelHub", () => {
 		if (!testTheme) {
 			throw new Error("Failed to load dark theme for ModelHub tests");
 		}
+	});
+
+	test("role token budgets are editable in Models without changing stored keys", () => {
+		const settings = Settings.isolated({
+			roleSettings: { default: { "compaction.thresholdTokens": 120000 } },
+		});
+		const { hub } = createHub({ models: [makeModel("test", "model")], settings, scoped: true });
+		for (const key of [UP, "\n", "b"]) hub.handleInput(key);
+		expect(normalize(hub.render(220))).toContain("default token budget");
+		for (const key of ["\x01", "\x0b", ..."64000", "\n"]) hub.handleInput(key);
+		expect(cfgRoleSettings.get(settings).default).toEqual({ "compaction.thresholdTokens": 64000 });
+		expect(normalize(hub.render(220))).toContain("budget 64,000");
+		for (const key of ["b", "\x01", "\x0b", "\n"]) hub.handleInput(key);
+		expect(settings.getRoleSetting("default", cfgCompactionThresholdTokens)).toBeUndefined();
+		expect(createSettingsHost(settings).entries.some(entry => entry.path.startsWith("roleSettings."))).toBe(false);
+	});
+
+	test("invalid role budget edits retain the field and saved budget", () => {
+		const settings = Settings.isolated({ roleSettings: { default: { "compaction.thresholdTokens": 32000 } } });
+		const { hub } = createHub({ models: [makeModel("test", "model")], settings, scoped: true });
+		for (const key of [UP, "\n", "b", "\x01", "\x0b", ..."-3", "\n"]) hub.handleInput(key);
+		expect(hub.navigationSnapshot().strip?.kind).toBe("name");
+		expect(settings.getRoleSetting("default", cfgCompactionThresholdTokens)).toBe(32000);
+		hub.handleInput("\x1b");
+		expect(settings.getRoleSetting("default", cfgCompactionThresholdTokens)).toBe(32000);
 	});
 
 	test("roles marked hidden remain listed and D edits the selected description", () => {

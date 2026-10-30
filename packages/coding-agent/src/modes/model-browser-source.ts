@@ -14,6 +14,7 @@ import {
 import { getSupportedThinkingLevels } from "@oh-my-pi/pi-catalog/model-thinking";
 import { describeModelCompactionPoint, resolveEffectiveContextWindow } from "../session/model-compaction-threshold";
 import { cfgContextRules } from "../config/context-policy";
+import { cfgCompactionThresholdTokens } from "../session/context-settings";
 
 import {
 	cfgCycleOrder,
@@ -101,6 +102,7 @@ export function createModelBrowserSource(
 		getProjectRoleEffortSelection: role => settings.getProjectRoleEffortSelection(role),
 		getGlobalRoleEffortSelection: role => settings.getGlobalRoleEffortSelection(role),
 		getRoleEffortSelection: role => settings.getRoleEffortSelection(role),
+		getRoleTokenBudget: role => settings.getRoleSetting(role, cfgCompactionThresholdTokens),
 		getFallbackEffortSelection: (role, selector) => cfgFallbackEffortSelections.get(settings)[role]?.[selector],
 		getModelRole: role => settings.getModelRole(role),
 		getProjectModelRole: role => settings.getProjectModelRole(role),

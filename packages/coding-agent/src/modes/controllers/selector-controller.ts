@@ -180,7 +180,7 @@ import { renderUsageReports } from "./command-controller";
 import type { SessionObserverRegistry } from "@oh-my-pi/pi-tui/overlays/session-observer-registry";
 
 import { cfgAdvisorSyncBacklog } from "../../advisor/settings";
-import { cfgBranchSummaryEnabled } from "../../session/context-settings";
+import { cfgBranchSummaryEnabled, cfgCompactionThresholdTokens } from "../../session/context-settings";
 import { cfgCycleOrder, cfgDisabledProviders, cfgModelRoleStorage } from "../../config/model-settings";
 import { cfgDefaultThinkingLevel, cfgRetryFallbackChains, cfgSessionWorktreeScope } from "../../session/settings";
 import { cfgEffortRules, cfgFallbackEffortSelections } from "../../config/effort-policy";
@@ -1944,6 +1944,15 @@ export class SelectorController {
 							previousKey,
 						);
 						hub?.refreshAfterExternalMutation();
+						return true;
+					} catch (error) {
+						this.ctx.showError(error instanceof Error ? error.message : String(error));
+						return false;
+					}
+				},
+				onRoleTokenBudgetChange: (role, value) => {
+					try {
+						this.ctx.settings.setRoleSetting(role, cfgCompactionThresholdTokens, value);
 						return true;
 					} catch (error) {
 						this.ctx.showError(error instanceof Error ? error.message : String(error));

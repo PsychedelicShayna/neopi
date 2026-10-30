@@ -205,6 +205,8 @@ export interface ModelHubSource extends ModelBrowserSource {
 	getProjectRoleEffortSelection(role: string): HubEffortSelection | undefined;
 	getGlobalRoleEffortSelection(role: string): HubEffortSelection | undefined;
 	getRoleEffortSelection(role: string): HubEffortSelection | undefined;
+	/** Explicit role context budget; undefined inherits the ordinary context limit. */
+	getRoleTokenBudget?(role: string): number | undefined;
 	getFallbackEffortSelection(role: string, selector: string): HubEffortSelection | undefined;
 	/** Serialize a resolved role model, retaining any host-specific upstream route. */
 	formatModelSelector(model: Model): string;
@@ -267,6 +269,8 @@ export interface ModelHubCallbacks {
 	onUnassign: (role: string, scope?: ModelRoleSelectionScope) => void;
 	/** Persist the selected role's description. Return false to retain its draft. */
 	onRoleDescriptionChange?: (role: string, description: string) => boolean | void;
+	/** Edit the existing roleSettings.<role>["compaction.thresholdTokens"] value. */
+	onRoleTokenBudgetChange?: (role: string, value: number | undefined) => boolean | void;
 	/** Persist a chain and its per-entry effort selections as one mutation. */
 	onFallbackChainChange?: (
 		role: string,
@@ -390,7 +394,7 @@ type StripState =
 	  }
 	| {
 			kind: "name";
-			purpose: "description";
+			purpose: "description" | "roleBudget";
 			role: string;
 			input: Input;
 	  }
@@ -489,6 +493,7 @@ type RolesAction =
 	| "thinking"
 	| "compaction"
 	| "description"
+	| "budget"
 	| "save"
 	| "nextPreset"
 	| "prevPreset";
@@ -499,6 +504,7 @@ const ROLES_ACTION_KEYS: Record<string, RolesAction> = {
 	f: "fallback",
 	c: "cycle",
 	D: "description",
+	b: "budget",
 	"[": "earlier",
 	"]": "later",
 	n: "new",
@@ -2901,6 +2907,15 @@ export class ModelHubComponent implements Component {
 		this.#strip = { kind: "name", purpose: "description", role, input };
 	}
 
+	#openRoleBudgetStrip(role: string): void {
+		if (!this.#callbacks.onRoleTokenBudgetChange) return;
+		const input = new Input();
+		input.focused = true;
+		const value = this.#settings.getRoleTokenBudget?.(role);
+		input.setValue(value === undefined ? "" : String(value));
+		this.#strip = { kind: "name", purpose: "roleBudget", role, input };
+	}
+
 	/** The model a Roles row resolves to (assigned role or fallback), whose compaction point `m` edits. */
 	#roleRowModel(): Model | undefined {
 		const row = this.#rolesRows[this.#roleIndex];
@@ -2937,6 +2952,20 @@ export class ModelHubComponent implements Component {
 				: Math.min(this.#effortIndex, rules.length);
 			this.#strip = null;
 			this.#assigning = null;
+			this.#frame.chipRanges = [];
+			this.#refreshAfterMutation();
+			return;
+		}
+		if (strip.purpose === "roleBudget") {
+			const draft = strip.input.getValue().trim();
+			const value = draft === "" ? undefined : Number(draft);
+			if (value !== undefined && (!Number.isSafeInteger(value) || value < 1)) {
+				this.#configError = "Role token budget must be a positive integer; empty inherits.";
+				return;
+			}
+			if (this.#callbacks.onRoleTokenBudgetChange?.(strip.role, value) === false) return;
+			this.#configError = undefined;
+			this.#strip = null;
 			this.#frame.chipRanges = [];
 			this.#refreshAfterMutation();
 			return;
@@ -3656,6 +3685,9 @@ export class ModelHubComponent implements Component {
 			case "description":
 				if (role) this.#openDescriptionStrip(role);
 				return;
+			case "budget":
+				if (role) this.#openRoleBudgetStrip(role);
+				return;
 			case "clear":
 				if (role) this.#unassignRole(role);
 				else if (row?.kind === "fallback") this.#removeFallback(row);
@@ -4171,7 +4203,9 @@ export class ModelHubComponent implements Component {
 			const limit = assignment && this.#settings.compactionPointFor?.(assignment.model)?.limit;
 			const compactionStyled = limit ? theme.fg("dim", `compact ${limit}`) : "";
 			let line = ` ${cursor} ${dot} ${tagStyled}  ${value}`;
-			const right = [levelStyled, compactionStyled, cycleStyled].filter(part => part.length > 0).join("  ");
+			const budget = this.#settings.getRoleTokenBudget?.(role);
+			const budgetStyled = budget === undefined ? "" : theme.fg("dim", `budget ${budget.toLocaleString("en-US")}`);
+			const right = [budgetStyled, levelStyled, compactionStyled, cycleStyled].filter(part => part.length > 0).join("  ");
 			const rightWidth = visibleWidth(right);
 			const lineWidth = visibleWidth(line);
 			if (rightWidth > 0 && lineWidth + rightWidth + 2 <= width) {
@@ -4308,6 +4342,7 @@ export class ModelHubComponent implements Component {
 			if (strip.kind === "name") {
 				if (!strip.input.focused) return `/ edit · ${enter} set · ${cancel} parent · h/l pane`;
 				if (strip.purpose === "description") return `${enter} save description · ${cancel} leave field`;
+				if (strip.purpose === "roleBudget") return `${enter} save token budget · empty inherits · ${cancel} leave field`;
 				if (strip.purpose === "compaction") {
 					return `${enter} ${compactionConfirmPending(strip) ? "accept" : "set"} compaction point · ${cancel} leave field`;
 				}
@@ -4436,7 +4471,9 @@ export class ModelHubComponent implements Component {
 	#renderStrip(width: number, strip: StripState): string {
 		if (strip.kind === "name") {
 			const labelText =
-				strip.purpose === "compaction"
+				strip.purpose === "roleBudget"
+					? `${strip.role} token budget:`
+					: strip.purpose === "compaction"
 					? `${strip.model.id} limit:`
 					: strip.purpose === "contextRule"
 						? `${strip.selector} limit:`
@@ -4459,6 +4496,8 @@ export class ModelHubComponent implements Component {
 				hint = theme.fg("dim", "400k base · f400k fixed · 80% · empty resets");
 			} else if (strip.purpose === "description") {
 				hint = "";
+			} else if (strip.purpose === "roleBudget") {
+				hint = theme.fg("dim", "positive tokens · empty inherits");
 			} else {
 				hint = theme.fg("dim", "(letters, digits, - and _)");
 			}
@@ -5338,16 +5377,18 @@ export class ModelHubComponent implements Component {
 								{ primary: true },
 							)
 						: pickerAction(
-								strip.purpose === "description"
+								strip.purpose === "description" || strip.purpose === "roleBudget"
 									? "roleDescription"
 									: strip.purpose === "preset"
 										? "presetName"
 										: "roleName",
 								strip.purpose === "description"
 									? "Save description"
-									: strip.purpose === "preset"
-										? "Save preset"
-										: "Create role",
+									: strip.purpose === "roleBudget"
+										? "Save token budget"
+										: strip.purpose === "preset"
+											? "Save preset"
+											: "Create role",
 								"enter",
 								{ primary: true },
 							)
@@ -5412,6 +5453,7 @@ export class ModelHubComponent implements Component {
 						this.#callbacks.onRoleDescriptionChange
 							? roleAction("description", "Description", "shift+d")
 							: undefined,
+						this.#callbacks.onRoleTokenBudgetChange ? roleAction("budget", "Token budget", "b") : undefined,
 						roleAction("fallback", "Add fallback", "f"),
 						assigned && !assigned.autoSelected ? roleAction("clear", "Clear", "x") : undefined,
 						this.#roleThinkingTarget(row.role) ? roleAction("thinking", "Thinking", "t") : undefined,
@@ -5496,6 +5538,8 @@ export class ModelHubComponent implements Component {
 						strip.kind === "name"
 							? strip.purpose === "contextRule"
 								? `${strip.selector} limit `
+								: strip.purpose === "roleBudget"
+									? `${strip.role} token budget `
 								: strip.purpose === "description"
 									? `${strip.role} description `
 									: strip.purpose === "preset"
@@ -5989,6 +6033,13 @@ export class ModelHubComponent implements Component {
 					],
 					"compactionPoint",
 				);
+			}
+			if (strip.purpose === "roleBudget") {
+				return row([
+					text([span(`${strip.role} token budget:`, "accent")]),
+					col([strip.input], { grow: 1 }),
+					text([span("Positive tokens; empty inherits", "dim")]),
+				]);
 			}
 			if (strip.purpose === "description") {
 				return row([text([span(`${strip.role} description:`, "accent")]), col([strip.input], { grow: 1 })]);
