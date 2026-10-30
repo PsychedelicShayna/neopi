@@ -230,6 +230,7 @@
 
 ### Changed
 
+- Model Hub regression tests now cover the shipped compact navigation hints, separate assignment strips, and live search previews; runtime behavior is unchanged.
 - HTML exports include the shared transcript and trace views with the current Markdown parser, while remaining self-contained and usable offline.
 - The `tts` tool now tells agents it exports a file rather than speaking the reply; using it for a conversation already covered by `speech.enabled` wastes a second synthesis. Speech documentation distinguishes this path from `omp say` playback and session-local `/voice` ([#573](https://github.com/PsychedelicShayna/neopi/issues/573)).
 
