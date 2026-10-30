@@ -120,6 +120,7 @@
 ### Fixed
 
 - Ctrl+Space speech input keeps priority while picking link hints, including enhanced-terminal repeats and key releases.
+- Aborting or replacing a session during deferred extension startup now drops the waiting submission instead of sending it afterwards.
 - Synchronous SDK consumers retain immutable build identity without preventing the compiled binary from loading.
 - Attached clients can contribute and replace their own host tools without removing the terminal owner's or another client's tools; conflicting names are rejected without changing either registration ([#591](https://github.com/PsychedelicShayna/neopi/issues/591)).
 - Reopened native sessions no longer reuse live message IDs that could misassociate cached pre-restart output with a different durable entry ([#589](https://github.com/PsychedelicShayna/neopi/issues/589)).

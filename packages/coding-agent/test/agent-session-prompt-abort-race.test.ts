@@ -87,6 +87,39 @@ describe("AgentSession prompt admission racing abort", () => {
 		return { started: started.promise, release: () => release.resolve() };
 	}
 
+	for (const invalidation of ["abort", "new session"] as const) {
+		it(`drops a prompt held by deferred extensions after ${invalidation} without cancelling future prompts`, async () => {
+			const streamCalls: string[] = [];
+			const { session } = await createSession([
+				() => {
+					streamCalls.push("started");
+					return { content: ["done"] };
+				},
+			]);
+			const release = Promise.withResolvers<void>();
+			session.setDeferredExtensionLoader(() => release.promise);
+			let admitted = false;
+			const pending = session.prompt("cancel me", {
+				onPromptAdmitted: () => {
+					admitted = true;
+				},
+			});
+			try {
+				if (invalidation === "abort") await session.abort({ reason: USER_INTERRUPT_LABEL });
+				else expect(await session.newSession()).toBe(true);
+			} finally {
+				release.resolve();
+			}
+			expect(await pending).toBe(true);
+			expect(admitted).toBe(false);
+			expect(streamCalls).toEqual([]);
+			expect(session.agent.state.messages.some(message => JSON.stringify(message).includes("cancel me"))).toBe(false);
+
+			await session.prompt("fresh prompt");
+			expect(streamCalls).toEqual(["started"]);
+		});
+	}
+
 	it("drops an idle prompt instead of dispatching it when abort lands mid-normalization", async () => {
 		const streamCalls: string[] = [];
 		const { session, dropped } = await createSession([

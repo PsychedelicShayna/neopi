@@ -1474,7 +1474,12 @@ export class InputController {
 			const submittedImages = inputImages;
 
 			// A startup-deferred extension's input hook must see the first submission.
-			if (this.ctx.session.hasPendingDeferredExtensions) await this.ctx.session.loadDeferredExtensions();
+			if (this.ctx.session.hasPendingDeferredExtensions) {
+				const session = this.ctx.session;
+				const isCurrent = session.captureSubmissionGuard();
+				await session.loadDeferredExtensions();
+				if (this.ctx.session !== session || !isCurrent() || !isDeferredSubmissionActive()) return;
+			}
 			if (!literalInput && runner?.hasHandlers("input")) {
 				const input = await this.#runInputHandlers(text, inputImages, inputImageLinks);
 				if (!isDeferredSubmissionActive()) return;
