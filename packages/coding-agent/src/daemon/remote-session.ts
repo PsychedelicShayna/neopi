@@ -23,7 +23,8 @@ type Frame = Record<string, unknown>;
 
 /** What the session needs from the daemon connection; `SessionDaemonClient` satisfies it. */
 export interface RemoteTransport {
-	request(frame: Frame): Promise<unknown>;
+	/** `onResponse` must run synchronously at the response, before any later frame reaches `onFrame`. */
+	request(frame: Frame, onResponse?: (data: unknown) => void): Promise<unknown>;
 	send(frame: Frame): void;
 	onFrame(listener: (frame: Frame) => void): () => void;
 	detach(): Promise<void>;
@@ -118,8 +119,10 @@ export class RemoteAgentSession {
 	}
 
 	async refreshState(): Promise<RemoteSessionState> {
-		this.#state = (await this.#client.request({ type: "get_state", includeDump: false })) as RemoteSessionState;
-		return this.#state;
+		await this.#client.request({ type: "get_state", includeDump: false }, data => {
+			this.#state = data as RemoteSessionState;
+		});
+		return this.#state!;
 	}
 
 	async prompt(message: string): Promise<void> {
@@ -182,9 +185,12 @@ export class RemoteAgentSession {
 	}
 
 	async #loadMessages(): Promise<void> {
-		const data = (await this.#client.request({ type: "get_messages" })) as { messages?: unknown[] };
-		this.#messages = data.messages ?? [];
-		this.#cut();
+		// Cut inside the response callback: frames decoded right after the response are dispatched
+		// synchronously, before an `await` here would resume, and they belong after the cut.
+		await this.#client.request({ type: "get_messages" }, data => {
+			this.#messages = (data as { messages?: unknown[] } | undefined)?.messages ?? [];
+			this.#cut();
+		});
 	}
 
 	/** History landed: everything held so far is either inside it or still in flight. */

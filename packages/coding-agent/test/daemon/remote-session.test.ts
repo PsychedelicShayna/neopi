@@ -8,7 +8,15 @@ function transport() {
 	let listener: (frame: Frame) => void = () => {};
 	const pending = new Map<string, (data: unknown) => void>();
 	const t: RemoteTransport = {
-		request: frame => new Promise(resolve => pending.set(String(frame.type), resolve)),
+		// Like SessionDaemonClient: onResponse runs synchronously at the response, the promise settles later.
+		request: (frame, onResponse) => {
+			const response = Promise.withResolvers<unknown>();
+			pending.set(String(frame.type), data => {
+				onResponse?.(data);
+				response.resolve(data);
+			});
+			return response.promise;
+		},
 		send: () => {},
 		onFrame: l => {
 			listener = l;
@@ -16,10 +24,11 @@ function transport() {
 		},
 		detach: async () => {},
 	};
-	const answer = async (type: string, data: unknown) => {
+	const answer = async (type: string, data: unknown, afterResponse?: () => void) => {
 		while (!pending.has(type)) await Bun.sleep(1);
 		pending.get(type)!(data);
 		pending.delete(type);
+		afterResponse?.();
 	};
 	return { t, emit: (f: Frame) => listener(f), answer };
 }
@@ -73,5 +82,40 @@ describe("RemoteAgentSession attach cut", () => {
 		const session = await attaching;
 		expect(session.runningTools).toEqual([{ toolCallId: "t9", toolName: "bash", args: {}, partialResult: "x" }]);
 		expect(session.isStreaming).toBe(true);
+	});
+
+	it("an event decoded in the same batch right after the get_messages response is live, not dropped", async () => {
+		const { t, emit, answer } = transport();
+		const attaching = RemoteAgentSession.attach(t, "s1");
+		await answer("daemon.attach", {});
+		await answer("get_state", { sessionId: "s1", isStreaming: true });
+		emit({ type: "message_start", messageId: "m3", message: { role: "assistant", content: [] } });
+		// No microtask can run between the response callback and the following event.
+		await answer("get_messages", { messages: [user] }, () => {
+			emit({ type: "message_end", messageId: "m3", message: done });
+		});
+		const session = await attaching;
+		expect(session.messages).toEqual([user, done]);
+		const seen: string[] = [];
+		session.subscribe(e => seen.push(e.type));
+		expect(seen).toEqual(["message_start", "message_end"]);
+	});
+
+	it("keeps a streaming event decoded immediately after a state response", async () => {
+		const { t, emit, answer } = transport();
+		const attaching = RemoteAgentSession.attach(t, "s1");
+		await answer("daemon.attach", {});
+		await answer("get_messages", { messages: [] });
+		await answer("get_state", { sessionId: "s1", isStreaming: false }, () => {
+			emit({ type: "agent_start" });
+		});
+		const session = await attaching;
+		expect(session.isStreaming).toBe(true);
+		const refreshing = session.refreshState();
+		await answer("get_state", { sessionId: "s1", isStreaming: true }, () => {
+			emit({ type: "agent_end" });
+		});
+		await refreshing;
+		expect(session.isStreaming).toBe(false);
 	});
 });
