@@ -29,7 +29,8 @@ export class SessionDaemonClient {
 			line => this.#onLine(line),
 			reason => {
 				this.#isClosed = true;
-				for (const pending of this.#pending.values()) pending.reject(new Error(reason ?? "daemon connection closed"));
+				for (const pending of this.#pending.values())
+					pending.reject(new Error(reason ?? "daemon connection closed"));
 				this.#pending.clear();
 				this.#closed.resolve(reason);
 			},
@@ -37,7 +38,9 @@ export class SessionDaemonClient {
 	}
 
 	static async connect(endpoint: string = sessionDaemonEndpoint(currentDaemonDir())): Promise<SessionDaemonClient> {
-		return new SessionDaemonClient(await IpcConnection.connect(endpoint, { framing: "lines", timeoutMs: CONNECT_TIMEOUT_MS }));
+		return new SessionDaemonClient(
+			await IpcConnection.connect(endpoint, { framing: "lines", timeoutMs: CONNECT_TIMEOUT_MS }),
+		);
 	}
 
 	/** Resolves with the close reason (`null` for an orderly close). */
@@ -52,7 +55,8 @@ export class SessionDaemonClient {
 	}
 
 	send(frame: Record<string, unknown>): void {
-		for (const line of this.#encoder.encodeFrames(frame)) this.#connection.send(line.endsWith("\n") ? line.slice(0, -1) : line);
+		for (const line of this.#encoder.encodeFrames(frame))
+			this.#connection.send(line.endsWith("\n") ? line.slice(0, -1) : line);
 	}
 
 	/** Send a command with a fresh id and await its `response`. Rejects on `success:false`. */
@@ -154,5 +158,7 @@ export async function ensureSessionDaemon(): Promise<SessionDaemonClient> {
 			await Bun.sleep(100);
 		}
 	}
-	throw new Error(`session daemon did not start: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+	throw new Error(
+		`session daemon did not start: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+	);
 }

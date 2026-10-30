@@ -19,7 +19,10 @@ const row = (id: string, status: HostedSessionInfo["status"] = "idle"): HostedSe
 describe("SessionHubList", () => {
 	it("moves with arrows and vim keys, attaches with enter, creates with n, quits with q and esc", () => {
 		const choices: HubChoice[] = [];
-		const list = new SessionHubList(c => choices.push(c), () => {});
+		const list = new SessionHubList(
+			c => choices.push(c),
+			() => {},
+		);
 		list.setSessions([row("a"), row("b"), row("c")]);
 		list.handleInput("j");
 		list.handleInput("\x1b[B");
@@ -28,11 +31,19 @@ describe("SessionHubList", () => {
 		list.handleInput("n");
 		list.handleInput("q");
 		list.handleInput("\x1b");
-		expect(choices).toEqual([{ kind: "attach", sessionId: "b" }, { kind: "new" }, { kind: "quit" }, { kind: "quit" }]);
+		expect(choices).toEqual([
+			{ kind: "attach", sessionId: "b" },
+			{ kind: "new" },
+			{ kind: "quit" },
+			{ kind: "quit" },
+		]);
 	});
 
 	it("keeps the selected session selected when the list refreshes in a new order", () => {
-		const list = new SessionHubList(() => {}, () => {});
+		const list = new SessionHubList(
+			() => {},
+			() => {},
+		);
 		list.setSessions([row("a"), row("b")]);
 		list.handleInput("j");
 		list.setSessions([row("c"), row("a"), row("b")]);
@@ -41,7 +52,10 @@ describe("SessionHubList", () => {
 
 	it("does not attach to an exited session", () => {
 		const choices: HubChoice[] = [];
-		const list = new SessionHubList(c => choices.push(c), () => {});
+		const list = new SessionHubList(
+			c => choices.push(c),
+			() => {},
+		);
 		list.setSessions([row("a", "exited")]);
 		list.handleInput("\r");
 		expect(choices).toEqual([]);
@@ -60,7 +74,11 @@ describe("FrameSessionModel", () => {
 		expect(model.live?.text).toBe("alpha be");
 		model.apply({ type: "message_end", message: assistant("alpha beta") });
 		model.apply({ type: "agent_end" });
-		expect(model.entries.map(e => `${e.role}:${e.text}`)).toEqual(["user:hi", "assistant:hello", "assistant:alpha beta"]);
+		expect(model.entries.map(e => `${e.role}:${e.text}`)).toEqual([
+			"user:hi",
+			"assistant:hello",
+			"assistant:alpha beta",
+		]);
 		expect(model.streaming).toBe(false);
 	});
 
@@ -68,7 +86,11 @@ describe("FrameSessionModel", () => {
 		const model = new FrameSessionModel();
 		model.apply({ type: "extension_ui_request", id: "d1", method: "confirm", title: "ok?" });
 		model.apply({ type: "tool_approval_request", id: "t1", toolName: "bash" });
-		expect(model.answer(model.interactions[0]!, 0)).toEqual({ type: "extension_ui_response", id: "d1", confirmed: true });
+		expect(model.answer(model.interactions[0]!, 0)).toEqual({
+			type: "extension_ui_response",
+			id: "d1",
+			confirmed: true,
+		});
 		model.apply({ type: "tool_approval_cancel", id: "x", targetId: "t1" });
 		expect(model.interactions).toEqual([]);
 	});

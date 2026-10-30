@@ -9,7 +9,11 @@ import { ensureSessionDaemon, type SessionDaemonClient } from "./client";
 import type { HostedSessionInfo } from "./server";
 import { runSessionHub } from "./session-hub";
 
-async function attachLoop(client: SessionDaemonClient, first: HostedSessionInfo | undefined, cwd: string): Promise<void> {
+async function attachLoop(
+	client: SessionDaemonClient,
+	first: HostedSessionInfo | undefined,
+	cwd: string,
+): Promise<void> {
 	let next = first;
 	for (;;) {
 		if (next) {

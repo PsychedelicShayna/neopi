@@ -248,7 +248,8 @@ export class SessionDaemon {
 		const decoder = new RpcFrameDecoder();
 		let attached: { hosted: Hosted; viewer: RelayViewer } | undefined;
 		const send = (frame: object): void => {
-			for (const line of encoder.encodeFrames(frame)) connection.send(line.endsWith("\n") ? line.slice(0, -1) : line);
+			for (const line of encoder.encodeFrames(frame))
+				connection.send(line.endsWith("\n") ? line.slice(0, -1) : line);
 		};
 		const reply = (id: unknown, command: string, data?: unknown, error?: string): void =>
 			send(

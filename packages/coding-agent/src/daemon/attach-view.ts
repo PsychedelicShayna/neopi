@@ -9,7 +9,15 @@
  * requested end state is InteractiveMode over a RemoteAgentSession; this file
  * is removed when that lands. See the PR's gap list.
  */
-import { type Component, Input, matchesKey, ProcessTerminal, truncateToWidth, TUI, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
+import {
+	type Component,
+	Input,
+	matchesKey,
+	ProcessTerminal,
+	truncateToWidth,
+	TUI,
+	wrapTextWithAnsi,
+} from "@oh-my-pi/pi-tui";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import type { SessionDaemonClient } from "./client";
@@ -37,7 +45,11 @@ function messageText(message: unknown): string {
 	if (typeof content === "string") return content;
 	if (!Array.isArray(content)) return "";
 	return content
-		.map(part => (typeof part === "object" && part !== null && (part as { type?: unknown }).type === "text" ? String((part as { text?: unknown }).text ?? "") : ""))
+		.map(part =>
+			typeof part === "object" && part !== null && (part as { type?: unknown }).type === "text"
+				? String((part as { text?: unknown }).text ?? "")
+				: "",
+		)
 		.join("");
 }
 
@@ -129,8 +141,15 @@ export class FrameSessionModel {
 			return;
 		}
 		if (method === "confirm" || method === "select" || method === "input" || method === "editor") {
-			const options = method === "confirm" ? ["yes", "no"] : Array.isArray(frame.options) ? frame.options.map(String) : [];
-			this.interactions.push({ id: String(frame.id), type: "extension_ui_request", method, title: String(frame.title ?? frame.message ?? method), options });
+			const options =
+				method === "confirm" ? ["yes", "no"] : Array.isArray(frame.options) ? frame.options.map(String) : [];
+			this.interactions.push({
+				id: String(frame.id),
+				type: "extension_ui_request",
+				method,
+				title: String(frame.title ?? frame.message ?? method),
+				options,
+			});
 		}
 	}
 
@@ -143,7 +162,8 @@ export class FrameSessionModel {
 		this.#close(interaction.id);
 		if (interaction.type === "tool_approval_request")
 			return { type: "tool_approval_response", id: interaction.id, decision: choice === 0 ? "approve" : "deny" };
-		if (interaction.method === "confirm") return { type: "extension_ui_response", id: interaction.id, confirmed: choice === 0 };
+		if (interaction.method === "confirm")
+			return { type: "extension_ui_response", id: interaction.id, confirmed: choice === 0 };
 		const value = typeof choice === "number" ? (interaction.options[choice] ?? "") : choice;
 		return { type: "extension_ui_response", id: interaction.id, value };
 	}
@@ -178,9 +198,15 @@ class AttachView implements Component {
 	render(width: number): readonly string[] {
 		const body: string[] = [];
 		for (const entry of [...this.model.entries, ...(this.model.live ? [this.model.live] : [])]) {
-			const label = entry.role === "user" ? theme.fg("accent", "you") : entry.role === "assistant" ? theme.fg("success", "agent") : theme.fg("muted", "note");
+			const label =
+				entry.role === "user"
+					? theme.fg("accent", "you")
+					: entry.role === "assistant"
+						? theme.fg("success", "agent")
+						: theme.fg("muted", "note");
 			body.push(label);
-			for (const line of entry.text.split("\n")) body.push(...wrapTextWithAnsi(line, Math.max(10, width - 2)).map(l => `  ${l}`));
+			for (const line of entry.text.split("\n"))
+				body.push(...wrapTextWithAnsi(line, Math.max(10, width - 2)).map(l => `  ${l}`));
 			body.push("");
 		}
 		const footer: string[] = [];
@@ -188,11 +214,21 @@ class AttachView implements Component {
 		if (interaction) {
 			footer.push(theme.fg("warning", truncateToWidth(` ? ${interaction.title}`, width)));
 			interaction.options.forEach((option, i) =>
-				footer.push(truncateToWidth(`${i === this.optionIndex ? theme.fg("accent", "  › ") : "    "}${option}`, width)),
+				footer.push(
+					truncateToWidth(`${i === this.optionIndex ? theme.fg("accent", "  › ") : "    "}${option}`, width),
+				),
 			);
 		}
 		const state = this.model.streaming ? "running" : "idle";
-		footer.push(theme.fg("muted", truncateToWidth(` ${this.title} · ${state}${this.model.status ? ` · ${this.model.status}` : ""} · ctrl+x d detach`, width)));
+		footer.push(
+			theme.fg(
+				"muted",
+				truncateToWidth(
+					` ${this.title} · ${state}${this.model.status ? ` · ${this.model.status}` : ""} · ctrl+x d detach`,
+					width,
+				),
+			),
+		);
 		footer.push(...this.input.render(width));
 		const room = Math.max(1, this.rows() - footer.length - 1);
 		return [theme.bold(truncateToWidth(` ${this.title}`, width)), ...body.slice(-room), ...footer];
@@ -202,7 +238,8 @@ class AttachView implements Component {
 		const interaction = this.model.interactions[0];
 		if (interaction && interaction.options.length > 0) {
 			if (matchesKey(data, "up")) this.optionIndex = Math.max(0, this.optionIndex - 1);
-			else if (matchesKey(data, "down")) this.optionIndex = Math.min(interaction.options.length - 1, this.optionIndex + 1);
+			else if (matchesKey(data, "down"))
+				this.optionIndex = Math.min(interaction.options.length - 1, this.optionIndex + 1);
 			else if (matchesKey(data, "enter")) {
 				this.send(this.model.answer(interaction, this.optionIndex));
 				this.optionIndex = 0;
@@ -219,9 +256,12 @@ class AttachView implements Component {
 	invalidate(): void {}
 }
 
-
 /** Attach `client` to `sessionId` and render it until the user detaches or the connection closes. */
-export async function runAttachView(client: SessionDaemonClient, sessionId: string, title: string): Promise<AttachExit> {
+export async function runAttachView(
+	client: SessionDaemonClient,
+	sessionId: string,
+	title: string,
+): Promise<AttachExit> {
 	const done = Promise.withResolvers<AttachExit>();
 	const ui = new TUI(new ProcessTerminal());
 	const view = new AttachView(

@@ -56,10 +56,18 @@ export class SessionHubList implements Component {
 			const status = STATUS_LABEL[s.status];
 			const statusText = s.status === "needs_input" ? theme.fg("warning", status) : theme.fg("muted", status);
 			const viewers = s.viewers > 0 ? theme.fg("muted", ` · ${s.viewers} attached`) : "";
-			lines.push(truncateToWidth(`${marker}${theme.bold(title)}  ${statusText}  ${theme.fg("muted", ago(now - s.lastActivity))}${viewers}`, width));
+			lines.push(
+				truncateToWidth(
+					`${marker}${theme.bold(title)}  ${statusText}  ${theme.fg("muted", ago(now - s.lastActivity))}${viewers}`,
+					width,
+				),
+			);
 			lines.push(truncateToWidth(`    ${theme.fg("muted", `${s.cwd}  ${s.model ?? ""}`)}`, width));
 		});
-		lines.push("", theme.fg("muted", truncateToWidth("  ↑↓/jk move · enter attach · n new · r refresh · q/esc quit", width)));
+		lines.push(
+			"",
+			theme.fg("muted", truncateToWidth("  ↑↓/jk move · enter attach · n new · r refresh · q/esc quit", width)),
+		);
 		return lines;
 	}
 

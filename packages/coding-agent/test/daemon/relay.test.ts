@@ -19,7 +19,13 @@ function harness() {
 		if (!request) throw new Error("no snapshot requested");
 		relay.fromChild({ type: "journal_state", reason: "snapshot", leafId: "L" });
 		if (inFlight) relay.fromChild({ type: "message_start", snapshot: true, message: inFlight });
-		relay.fromChild({ type: "response", id: request.id, command: "snapshot_session_journal", success: true, data: { leafId: "L" } });
+		relay.fromChild({
+			type: "response",
+			id: request.id,
+			command: "snapshot_session_journal",
+			success: true,
+			data: { leafId: "L" },
+		});
 	};
 	const attach = (v: RelayViewer, inFlight?: Frame) => {
 		relay.attach(v);
@@ -54,7 +60,16 @@ describe("SessionRelay", () => {
 		expect(types(b.frames)).toEqual(["journal_state", "message_start", "response", "u3", "agent_end"]);
 		expect(b.frames[1]).toMatchObject({ snapshot: true });
 		// A: the live stream only; no snapshot frames from B's attach.
-		expect(types(a.frames).slice(2)).toEqual(["agent_start", "message_start", "message_end", "message_start", "u1", "u2", "u3", "agent_end"]);
+		expect(types(a.frames).slice(2)).toEqual([
+			"agent_start",
+			"message_start",
+			"message_end",
+			"message_start",
+			"u1",
+			"u2",
+			"u3",
+			"agent_end",
+		]);
 	});
 
 	it("routes concurrent requests with colliding client ids to their askers only", () => {
@@ -71,8 +86,12 @@ describe("SessionRelay", () => {
 		h.relay.fromChild({ type: "response", id: toB!.id, command: "get_state", success: true, data: "for-B" });
 		h.relay.fromChild({ type: "response", id: toA!.id, command: "get_state", success: true, data: "for-A" });
 		const responses = (fs: Frame[]) => fs.filter(f => f.type === "response" && f.command === "get_state");
-		expect(responses(a.frames)).toEqual([{ type: "response", id: "1", command: "get_state", success: true, data: "for-A" }]);
-		expect(responses(b.frames)).toEqual([{ type: "response", id: "1", command: "get_state", success: true, data: "for-B" }]);
+		expect(responses(a.frames)).toEqual([
+			{ type: "response", id: "1", command: "get_state", success: true, data: "for-A" },
+		]);
+		expect(responses(b.frames)).toEqual([
+			{ type: "response", id: "1", command: "get_state", success: true, data: "for-B" },
+		]);
 	});
 
 	it("drops a response whose asker detached instead of broadcasting it", () => {
@@ -101,8 +120,12 @@ describe("SessionRelay", () => {
 		expect(h.toChild.filter(f => f.type === "extension_ui_response")).toEqual([
 			{ type: "extension_ui_response", id: "d1", confirmed: true },
 		]);
-		expect(a.frames).toContainEqual(expect.objectContaining({ type: "extension_ui_request", method: "cancel", targetId: "d1" }));
-		expect(a.frames).toContainEqual(expect.objectContaining({ type: "response", code: "already_answered", id: "d1" }));
+		expect(a.frames).toContainEqual(
+			expect.objectContaining({ type: "extension_ui_request", method: "cancel", targetId: "d1" }),
+		);
+		expect(a.frames).toContainEqual(
+			expect.objectContaining({ type: "response", code: "already_answered", id: "d1" }),
+		);
 		expect(b.frames.some(f => f.method === "cancel")).toBe(false);
 		expect(h.relay.pendingInteractions).toBe(0);
 	});
@@ -150,7 +173,13 @@ describe("SessionRelay", () => {
 		h.answerSnapshot({ id: "m", text: "u1u2" });
 		h.relay.fromChild(ev(3));
 		h.relay.fromChild({ type: "agent_end" });
-		expect(a2.frames.map(f => f.type)).toEqual(["journal_state", "message_start", "response", "message_update", "agent_end"]);
+		expect(a2.frames.map(f => f.type)).toEqual([
+			"journal_state",
+			"message_start",
+			"response",
+			"message_update",
+			"agent_end",
+		]);
 		expect(a2.frames[1]).toMatchObject({ message: { text: "u1u2" } });
 		expect(h.relay.streaming).toBe(false);
 	});
@@ -177,7 +206,13 @@ describe("SessionRelay", () => {
 		h.relay.fromChild({ type: "ready", supportedProtocolVersions: [1, 2] });
 		h.relay.fromViewer("A", { type: "negotiate_protocol", protocolVersion: 2, id: "n" });
 		expect(a.frames[0]).toMatchObject({ type: "ready" });
-		expect(a.frames).toContainEqual({ type: "response", command: "negotiate_protocol", id: "n", success: true, data: { protocolVersion: 2 } });
+		expect(a.frames).toContainEqual({
+			type: "response",
+			command: "negotiate_protocol",
+			id: "n",
+			success: true,
+			data: { protocolVersion: 2 },
+		});
 		expect(a.versions).toEqual([2]);
 		expect(h.toChild.some(f => f.type === "negotiate_protocol")).toBe(false);
 	});

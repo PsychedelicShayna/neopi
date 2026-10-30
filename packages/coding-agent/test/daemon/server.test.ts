@@ -102,7 +102,9 @@ describe("SessionDaemon", () => {
 		await until(() => d.list().every(s => s.model !== null));
 		const sessions = await c.list();
 		expect(sessions).toHaveLength(2);
-		expect(sessions.every(s => s.model === "mock/m1" && s.status === "idle" && s.title?.startsWith("fake"))).toBe(true);
+		expect(sessions.every(s => s.model === "mock/m1" && s.status === "idle" && s.title?.startsWith("fake"))).toBe(
+			true,
+		);
 	});
 
 	it("streams one reply to two viewers; either can prompt; a late attacher resumes mid-message", async () => {
@@ -128,7 +130,9 @@ describe("SessionDaemon", () => {
 		const cFrames = collect(c);
 		await c.attach(id);
 		await until(() => cFrames.some(f => f.type === "agent_end"));
-		const snapshot = cFrames.find(f => f.type === "message_start" && f.snapshot === true) as { message: { text: string } };
+		const snapshot = cFrames.find(f => f.type === "message_start" && f.snapshot === true) as {
+			message: { text: string };
+		};
 		// Snapshot text + live tail reassemble the reply exactly once.
 		expect(snapshot.message.text + deltas(cFrames).join("")).toBe("alpha beta gamma");
 		// A saw no snapshot frames from C's attach (its own attach snapshot came earlier).
@@ -167,6 +171,6 @@ describe("SessionDaemon", () => {
 		const d = await start();
 		const second = new SessionDaemon({ dir: tmp });
 		expect(await second.start()).toBe(false);
-		expect((await (await connect(d)).list())).toEqual([]);
+		expect(await (await connect(d)).list()).toEqual([]);
 	});
 });

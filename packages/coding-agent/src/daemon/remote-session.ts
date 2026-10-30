@@ -144,10 +144,13 @@ export class RemoteAgentSession {
 	}
 
 	#onFrame(frame: Frame): void {
-		if (frame.type === "message_end" && frame.message !== undefined) this.#messages = [...this.#messages, frame.message];
+		if (frame.type === "message_end" && frame.message !== undefined)
+			this.#messages = [...this.#messages, frame.message];
 		if (frame.type === "agent_start" && this.#state) this.#state = { ...this.#state, isStreaming: true };
-		if (frame.type === "agent_end" && frame.willContinue !== true && this.#state) this.#state = { ...this.#state, isStreaming: false };
-		if (frame.type === "config_update" || frame.type === "session_info_changed") void this.refreshState().catch(() => undefined);
+		if (frame.type === "agent_end" && frame.willContinue !== true && this.#state)
+			this.#state = { ...this.#state, isStreaming: false };
+		if (frame.type === "config_update" || frame.type === "session_info_changed")
+			void this.refreshState().catch(() => undefined);
 		for (const listener of this.#listeners) listener(frame);
 	}
 }

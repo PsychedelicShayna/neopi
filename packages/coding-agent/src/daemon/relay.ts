@@ -49,7 +49,15 @@ const INTERACTION_ANSWERS: Record<string, string> = {
 };
 const ANSWER_TYPES = new Set(Object.values(INTERACTION_ANSWERS));
 /** extension_ui methods that only notify; nothing answers them. */
-const UI_NOTIFICATIONS = new Set(["notify", "setStatus", "setWidget", "setTitle", "set_editor_text", "open_url", "cancel"]);
+const UI_NOTIFICATIONS = new Set([
+	"notify",
+	"setStatus",
+	"setWidget",
+	"setTitle",
+	"set_editor_text",
+	"open_url",
+	"cancel",
+]);
 /** Viewer frames that answer a child-initiated request by its id. */
 const CHILD_REPLY_TYPES = new Set(["host_tool_result", "host_tool_update", "host_uri_result"]);
 const HOST_TOOL_FRAMES = new Set(["host_tool_call", "host_tool_cancel"]);
@@ -143,7 +151,8 @@ export class SessionRelay {
 
 	/** The child exited: fail internal queries. */
 	close(): void {
-		for (const resolve of this.#queries.values()) resolve({ type: "response", success: false, error: "session exited" });
+		for (const resolve of this.#queries.values())
+			resolve({ type: "response", success: false, error: "session exited" });
 		this.#queries.clear();
 	}
 
@@ -169,7 +178,13 @@ export class SessionRelay {
 				});
 				return;
 			}
-			viewer.send({ type: "response", command: "negotiate_protocol", id: frame.id, success: true, data: { protocolVersion: 2 } });
+			viewer.send({
+				type: "response",
+				command: "negotiate_protocol",
+				id: frame.id,
+				success: true,
+				data: { protocolVersion: 2 },
+			});
 			viewer.setProtocolVersion(2);
 			return;
 		}
@@ -243,7 +258,15 @@ export class SessionRelay {
 	}
 
 	#enqueueSnapshot(viewer: RelayViewer, clientId: unknown, frame: Record<string, unknown>, attachId?: unknown): void {
-		this.#snapshots.push({ viewer, requestId: this.#requestId("snapshot"), clientId, attachId, frame, cut: false, gone: false });
+		this.#snapshots.push({
+			viewer,
+			requestId: this.#requestId("snapshot"),
+			clientId,
+			attachId,
+			frame,
+			cut: false,
+			gone: false,
+		});
 		if (this.#snapshots.length === 1) this.#startSnapshot();
 	}
 

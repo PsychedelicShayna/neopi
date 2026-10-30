@@ -1456,9 +1456,16 @@ export async function createSessionManager(
 			if (continuation) options.onSessionContinuation?.(continuation);
 			let manager: SessionManager | undefined;
 			try {
-				manager = await openSessionForResume(parsed, continuation?.session.path ?? sessionArg, cwd, parsed.sessionDir, options.onSessionInUse, {
-					throwIfMissing: true,
-				});
+				manager = await openSessionForResume(
+					parsed,
+					continuation?.session.path ?? sessionArg,
+					cwd,
+					parsed.sessionDir,
+					options.onSessionInUse,
+					{
+						throwIfMissing: true,
+					},
+				);
 			} catch (err) {
 				if (isEnoent(err) || isEnotdir(err)) {
 					throw new SessionResolutionError(`Session "${sessionArg}" not found.`, SESSION_NOT_FOUND_HINT);
@@ -1488,13 +1495,7 @@ export async function createSessionManager(
 		if (moveResult.status === "declined") {
 			return undefined;
 		}
-		const opened = await openSessionForResume(
-			parsed,
-			session.path,
-			cwd,
-			parsed.sessionDir,
-			options.onSessionInUse,
-		);
+		const opened = await openSessionForResume(parsed, session.path, cwd, parsed.sessionDir, options.onSessionInUse);
 		return opened ? await forkIfMovedAway(opened, parsed.sessionDir) : opened;
 	}
 	if (parsed.continue) {
@@ -2472,7 +2473,7 @@ export async function runRootCommand(
 					{
 						nativeFlagOwnership: "preliminary",
 						onSessionInUse: isInteractive ? promptSessionInUse : undefined,
-					onSessionContinuation: continuation => resumedContinuations.push(continuation),
+						onSessionContinuation: continuation => resumedContinuations.push(continuation),
 					},
 				);
 			}

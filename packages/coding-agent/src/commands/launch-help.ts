@@ -29,7 +29,9 @@ export const launchHelp = {
 			description:
 				"Plan with the configured crew, then hand off at the first edit/write after the todo list exists (default off; see prewalk.enabled)",
 		}),
-		"no-prewalk": Flags.boolean({ description: "Disable prewalk, including prewalk.auto, even if prewalk.enabled is set" }),
+		"no-prewalk": Flags.boolean({
+			description: "Disable prewalk, including prewalk.auto, even if prewalk.enabled is set",
+		}),
 		"prewalk-into": Flags.string({ description: "Override prewalk.execution for this startup session" }),
 		"plan-yolo": Flags.boolean({
 			description:
@@ -84,7 +86,9 @@ export const launchHelp = {
 		"no-tools": Flags.boolean({ description: "Disable all built-in tools" }),
 		"no-lsp": Flags.boolean({ description: "Disable LSP tools, formatting, and diagnostics" }),
 		"no-pty": Flags.boolean({ description: "Disable PTY-based interactive bash execution" }),
-		standalone: Flags.boolean({ description: "Run a session in this process without the session daemon (the default unless daemon.enabled)" }),
+		standalone: Flags.boolean({
+			description: "Run a session in this process without the session daemon (the default unless daemon.enabled)",
+		}),
 		"no-exit-with-parent": Flags.boolean({
 			description: "Print/json modes: keep running after the parent process dies (for nohup/setsid use)",
 		}),
