@@ -1978,7 +1978,7 @@ function openLiveSteering(
 	return new LiveSteeringChannel({
 		wait: signal => waitForSteeringMessages(bound(signal)),
 		take: async signal => {
-			const messages = await getSteeringMessages(bound(signal));
+			const messages = await getSteeringMessages(bound(signal), { liveOnly: true });
 			if (messages.length > 0) config.onLiveSteeringTaken?.(messages);
 			return messages;
 		},

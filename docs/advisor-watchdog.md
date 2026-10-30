@@ -115,10 +115,23 @@ Rebuilding advisors (saving `/advisor configure`, model-role or context changes)
 
 These settings apply to both the default advisor and named roster advisors, independently of review cadence:
 
+- `advisor.delivery.nit` — `on-yield` (default) or `next-tool-call`. An omitted severity uses the nit setting.
+- `advisor.delivery.concern` — `next-tool-call` (default) or `on-yield`.
+- `advisor.delivery.blocker` — `next-tool-call` (default) or `on-yield`.
 - `advisor.continueSeverity` — lowest severity that may request a continuation after a terminal answer: `nit`, `concern` (default), or `blocker`. `nit` allows any accepted severity to request continuation; `blocker` leaves lower-severity notes as visible cards. Stop, immunity, mode, and client constraints still apply.
 - `advisor.immuneTurns` — completed primary turns protected from further non-blocker steering after successful concern/blocker steering (default `3`; `0` disables the cooldown). Tool-loop continuations count even when the reviewer uses `agent-end`. Blockers are exempt from immunity, not from stop or client guards.
 
 `reviewMode` decides when an advisor reviews, not which advisor owns continuation rights. Both turn and final-yield reviewers use the same severity threshold and delivery guards.
+
+`on-yield` holds admitted notes until the actual primary run ends, after continuation and maintenance decisions. A completed assistant step (`willContinue: false`), a new advisor review, or an advisor-triggered continuation does not release them. At run end, held notes form one terminal batch; `continueSeverity` and the existing guards decide whether it starts one continuation or remains a visible card.
+
+`next-tool-call` makes a note eligible for the next safe completed tool-call/model-call boundary. It does not inherit automatic withholding just because the review covered work in progress, and it never cancels running tools or generation. It uses per-message wait-mode steering, independently of the primary's `interruptMode`. Provider-native live steering cannot ingest those wait-mode notes mid-generation. Ordinary user steering remains live-eligible even when advisor notes are waiting: the queue retains held notes and selects live user messages in order, preserving FIFO within each delivery class. Ordinary completed-boundary dequeue order is unchanged.
+
+Timing settings apply live to both default and roster advisors without rebuilding them. Changing a held severity to `next-tool-call` releases its admitted reservations without re-admission, budget reset, or duplicate delivery. Notes already handed to the primary queue keep their delivery; changing settings cannot retract them. Eligibility and release do not depend on review cadence or catch-up waits.
+
+Late review output after a primary yield follows the same terminal guards. Each late review drain batches its notes, and an advisor-started continuation is latched to the current genuine user turn so it is not reviewed again or cascaded into repeated continuations.
+
+`interrupt` is explicitly unsupported and produces a configuration error. Advisors currently see finalized assistant text/reasoning and completed tool batches, not a streaming primary feed. Genuine streaming ingestion and a provider-independent interrupt mechanism are prerequisites for that separate future option; `next-tool-call` is not an alias for interrupt.
 
 ### Headless runs
 
@@ -185,11 +198,11 @@ Advisor tools are built against the isolated advisor `ToolSession` and wrapped w
 
 The `advise` tool accepts one note and an optional severity:
 
-| Severity        | Delivery | Intended use |
-| --------------- | -------- | ------------ |
-| omitted / `nit` | Non-interrupting aside at the next turn boundary once released. An in-progress review defers it until a final boundary. After a terminal answer, it leaves a visible card unless `advisor.continueSeverity` is `nit` and continuation guards permit waking the primary. | Cleanup, simplification, low-risk edge cases. |
-| `concern` | An in-progress review defers it until a final boundary. Once released, it uses interrupting steering when permitted; immunity downgrades it to an aside, or a visible card when terminal-idle. After a terminal answer it may request continuation at the default `advisor.continueSeverity: concern`, regardless of review mode. | Material risk, likely wrong direction, missing constraint, hallucinated API. |
-| `blocker` | Immediately eligible for interrupting steering, including during partial work and the immunity window. A terminal answer alone does not prevent continuation; stop, mode, and client guards still apply. Interruptible tools may be cancelled; non-interruptible tools retain their execution guarantees. | Continuing would clearly waste work or produce broken output. |
+| Severity        | Default timing | Intended use |
+| --------------- | -------------- | ------------ |
+| omitted / `nit` | `on-yield`: hold until actual run end, then preserve as a visible card unless `continueSeverity: nit` and continuation guards permit a wake. | Cleanup, simplification, low-risk edge cases. |
+| `concern` | `next-tool-call`: safe non-cancelling steering during work. Immunity downgrades it to an aside, or a visible card at terminal idle. | Material risk, likely wrong direction, missing constraint, hallucinated API. |
+| `blocker` | `next-tool-call`: safe non-cancelling steering, exempt from immunity but not deliberate-stop, mode, or client guards. | Continuing would clearly waste work or produce broken output. |
 
 Accepted notes are rendered into the primary transcript as XML-escaped `<advisory>` elements. Named roster advisors add an `advisor` attribute:
 
@@ -203,10 +216,8 @@ When you deliberately interrupt the agent (Esc, or a cancel from collab, ACP, RP
 
 A normal yield the agent drove itself is treated differently from a deliberate interrupt. The loop state and completed turn determine the delivery path:
 
-- **While the loop is still streaming**, blockers can steer immediately. Nits and concerns from an in-progress review remain deferred until a final boundary; they are not released merely because the current tool batch finished.
-- **Once the loop has yielded and gone idle**, delivery keys on how the turn ended:
-  - If the primary's tail is a **terminal text answer with no queued work**, a note at or above `advisor.continueSeverity` (default `concern`) may request one continuation. A note below the threshold remains a visible card and reaches the primary with your next message. Both `turn` and `agent-end` reviewers follow this rule; neither has an exclusive continuation exception.
-  - Otherwise (the agent yielded mid-work, no terminal answer), a released `concern`/`blocker` normally triggers a fresh turn. A nit uses the non-interrupting aside queue.
+- **While the loop is still working**, notes configured as `next-tool-call` use safe wait-mode steering; notes configured as `on-yield` remain reserved. A candidate final step applies continuation guards to eligible notes but does not release on-yield reservations.
+- **Once the primary run has ended**, held notes form one terminal batch. A note at or above `advisor.continueSeverity` (default `concern`) may request one continuation, subject to all guards; lower-severity notes remain visible cards. Late review drains use the same policy.
 
 The threshold does not bypass stop/abort suppression, immunity, plan mode, or client constraints. If they block terminal continuation, the note is preserved as a card rather than stranded in an aside queue the idle primary would never consume.
 
@@ -215,11 +226,11 @@ Session/client constraints can preserve a note whose normal delivery path is ste
 - **Plan mode:** every would-be advisor steer is preserved as a visible card, even while the primary loop is streaming, because only user-driven turns converge on ask/resolve.
 - **ACP with deferred agent-initiated turns:** when `deferAgentInitiatedTurns` is enabled and the bridge has not allowed agent-initiated turns, an idle would-be steer is preserved because the client cannot represent the triggered turn as busy. Advice raised while the primary loop is already streaming can still steer into that live turn.
 
-The three delivery channels are **aside** (non-interrupting boundary delivery), **steer** (interrupting delivery or an allowed continuation), and **preserve** (a visible card without waking the primary). Once released, a concern outside immunity can cancel interruptible tools through steering; it no longer has a special wait-for-the-tool-batch override.
+The three delivery channels are **aside** (non-interrupting boundary delivery during immunity), **steer** (wait-mode steering or an allowed continuation), and **preserve** (a visible card without waking the primary). Advisor steering never cancels in-flight tools or generation.
 
-`advisor.immuneTurns` limits repeated non-blocker steering independently of review cadence. After successful concern/blocker steering, later concerns use asides until the configured number of primary turns has completed; at terminal idle, eligible non-blocker continuations are preserved instead. The default is `3`, and tool-loop continuations count even for an `agent-end` reviewer. Blockers bypass immunity but still obey deliberate-stop, mode, and client preservation constraints. Ordinary nits remain non-interrupting; even with `continueSeverity: nit`, immunity can prevent a nit from waking a terminal-idle primary.
+`advisor.immuneTurns` limits repeated non-blocker steering independently of review cadence. After successful advisor steering, later non-blocker notes use asides until the configured number of primary turns has completed; at terminal idle, eligible non-blocker continuations are preserved instead. The default is `3`, and tool-loop continuations count even for an `agent-end` reviewer. Blockers bypass immunity but still obey timing, deliberate-stop, mode, and client preservation constraints.
 
-While an advisor update reviews work still in progress, `AdviseTool` defers **both nits and concerns** until a final boundary; only a blocker may interrupt partial work. Deferred notes pass the emission guard before reservation. A higher-severity note may displace a pending lower-severity note from the same review, but cannot displace notes from earlier reviews or retract routed advice. The completed-update transition or an explicit final-boundary flush releases pending notes even when cadence skips a new review, without resetting the current review's budget. No separate full-run nit-release gate remains.
+`AdviseTool` reserves notes according to the live per-severity timing, independently of whether the reviewed update was in progress. Reservations pass the emission guard before being held. A higher-severity note may displace a pending lower-severity note from the same review, but cannot displace earlier reviews' notes or retract routed advice. Only the actual run end or a timing edit that makes a reservation eligible releases it; a new review never does. Release does not re-admit notes or reset the current review's budget.
 
 ### Emission guard
 
@@ -415,7 +426,7 @@ Fields:
 - `advisors[].model`: optional model selector with optional `:level` thinking suffix (e.g. `x-ai/grok-code-fast:high`). Omitted → the advisor uses `modelRoles.advisor`.
 - `advisors[].tools`: optional list of built-in tool names to grant. Omitted → `read`/`grep`/`glob`, plus `recall` when the active memory backend provides it; explicit `[]` → no investigative tools. Any name in [`BUILTIN_TOOL_NAMES`](../packages/coding-agent/src/tools/builtin-names.ts) is accepted, including mutating tools. Legacy aliases (`search`→`grep`, `find`→`glob`) are normalized. Unknown names are dropped with a warning; if that leaves a nonempty input with no valid names, the implementation currently treats the result as omitted and uses the default subset.
 - `advisors[].reviewMode`: optional cadence mode. `turn` (default) reviews every primary turn — every tool-call round, including `willContinue: true` tool-loop continuations; `agent-end` reviews only final yields where `willContinue` is not true, i.e. once per run.
-- `advisors[].reviewInterval`: optional positive safe integer (at most `9007199254740991`), default `1`. Reviews every Nth eligible update; skipped updates accumulate and are sent in the next scheduled review. For a review every Nth completed run, combine `reviewMode: agent-end` with this field. Deferred advice still becomes eligible for delivery at final boundaries even when cadence skips that review.
+- `advisors[].reviewInterval`: optional positive safe integer (at most `9007199254740991`), default `1`. Reviews every Nth eligible update; skipped updates accumulate and are sent in the next scheduled review. For a review every Nth completed run, combine `reviewMode: agent-end` with this field. Admitted advice follows its configured delivery timing even when cadence skips a review.
 - `advisors[].syncBacklog`: optional `off`, `1`, `3`, `5`, or `strict`. Numeric thresholds may be unquoted YAML numbers. Omitted → inherit the current global `advisor.syncBacklog`; explicit `off` always disables waiting for this advisor. The editor shows the effective policy and offers `inherit` to remove an override.
 - `advisors[].scope`: optional `main`, `subagent`, or `all` (default `all`). Restricts which session kinds build this advisor: `main` attaches only to the top-level session, while `subagent` attaches only to advised spawned subagent sessions.
 - `maxNotesPerUpdate` (top level or per advisor): accepted non-blocker notes per prompt update, default `4`. A per-advisor value overrides the top-level value, which overrides the `advisor.maxNotesPerUpdate` setting.

@@ -611,6 +611,7 @@ export class Setting<T, Id extends string = string> extends Derived<T> {
 				}
 				const valid = this.enumValues;
 				if (valid && !valid.includes(value)) {
+					this.definition.validate?.(value);
 					throw new Error(`Invalid value: ${text}. Valid values: ${valid.join(", ")}`);
 				}
 				return value as T;

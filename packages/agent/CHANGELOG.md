@@ -10,6 +10,7 @@
 
 ### Fixed
 
+- Wait-mode steering stays out of provider-native live responses without blocking ordinary user steering before or after it.
 - External advisor or IRC records no longer erase a quiet primary reply's in-flight snapshot before it finishes ([NeoCode #135](https://github.com/PsychedelicShayna/neocode/issues/135)).
 - Provider-native V2 compaction keeps user-authored custom prompts and operator notices when they serialize as developer messages, without retaining automatic harness notes as user prompts ([#221](https://github.com/PsychedelicShayna/neopi/issues/221)).
 

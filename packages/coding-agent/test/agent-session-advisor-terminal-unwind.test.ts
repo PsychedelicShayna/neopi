@@ -97,7 +97,7 @@ it.each([
 		stop: true,
 	},
 ] as const)(
-	"routes terminal advice and same-run continuation %j",
+	"routes one actual-yield batch and guarded advisor continuation %j",
 	async ({ severity, continueSeverity, continues, continuation, immuneTurns, stop }) => {
 		const temp = TempDir.createSync("@pi-advisor-terminal-unwind-");
 		const auth = await AuthStorage.create(":memory:");
@@ -193,6 +193,9 @@ it.each([
 			"compaction.enabled": false,
 			"retry.enabled": false,
 			"advisor.syncBacklog": "off",
+			// These scenarios exercise live nit delivery explicitly; default
+			// on-yield holding is covered by the delivery-timing consumer cases.
+			"advisor.delivery.nit": "next-tool-call",
 			...(immuneTurns === 0 ? { "advisor.immuneTurns": 0 } : {}),
 			...(continueSeverity ? { "advisor.continueSeverity": continueSeverity } : {}),
 		});
@@ -235,11 +238,11 @@ it.each([
 			if (continuation) {
 				await continuationStarted.promise;
 				await thirdTurnStart.promise;
-				// Accept live notes only after the queued completed update has reset
-				// AdviseTool's in-progress deferral state.
+				// The queued completed review may still finish while the advisor's
+				// actual-yield continuation starts; delivery is cadence-independent.
 				await completedReviewStarted.promise;
 				expect(agent.state.isStreaming).toBe(true);
-				expect(agentStarts).toBe(1);
+				expect(agentStarts).toBe(2);
 				expect(turnStarts).toBe(3);
 				if (stop) {
 					const aborted = session.abort({ reason: USER_INTERRUPT_LABEL });
@@ -251,7 +254,7 @@ it.each([
 			}
 			await run;
 			await session.waitForIdle();
-			expect(agentStarts).toBe(1);
+			expect(agentStarts).toBe(continues ? 2 : 1);
 			expect(
 				advisor.state.messages.some(message => message.role === "toolResult" && message.toolCallId === "advice-1"),
 			).toBe(true);
@@ -283,7 +286,7 @@ it.each([
 			releaseNextProvider.resolve();
 			await nextRun;
 			await session.waitForIdle();
-			expect(agentStarts).toBe(2);
+			expect(agentStarts).toBe(continues ? 3 : 2);
 			// A new user run also consumes live advice at its next provider request.
 			expect(primaryCalls).toBe(terminalCalls + 2);
 			expect(primaryContexts[terminalCalls]).toContain(nextUserMarker);

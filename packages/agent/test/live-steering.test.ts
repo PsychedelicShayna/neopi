@@ -127,6 +127,56 @@ function userText(message: AgentMessage): string {
 }
 
 describe("agent loop live steering", () => {
+	it.each([
+		{ mixed: false, mode: "all" },
+		{ mixed: true, mode: "all" },
+		{ mixed: true, mode: "one-at-a-time" },
+	] as const)("keeps wait notes queue-owned without blocking live user steering ($mode, mixed=$mixed)", async ({ mixed, mode }) => {
+		const mock = createMockModel({ responses: [{ content: ["first"] }, { content: ["second"] }] });
+		let calls = 0;
+		let agent: Agent;
+		agent = new Agent({
+			initialState: { model: mock.model },
+			interruptMode: "immediate",
+			steeringMode: mode,
+			streamFn: async (model, context, options) => {
+				if (++calls === 1) {
+					const live = options?.liveSteering;
+					const signal = options?.signal;
+					if (!live || !signal) throw new Error("Expected provider live steering");
+					if (mixed) agent.steer(createUserMessage("ordinary immediate input"));
+					agent.steer(createUserMessage("wait for completed work"), { interruptMode: "wait" });
+					const claim = await live.claim(signal);
+					if (mixed) {
+						expect(claim?.messages.map(textOf)).toEqual(["ordinary immediate input"]);
+						claim?.accept();
+						agent.steer(createUserMessage("later immediate input"));
+						const laterClaim = await live.claim(signal);
+						expect(laterClaim?.messages.map(textOf)).toEqual(["later immediate input"]);
+						laterClaim?.accept();
+					} else {
+						expect(claim).toBeUndefined();
+					}
+					// The held advisor is never taken or requeued by live claims.
+					expect(await live.claim(signal)).toBeUndefined();
+					expect(agent.peekSteeringQueue().map(userText)).toEqual(["wait for completed work"]);
+					expect(signal.aborted).toBe(false);
+				}
+				return mock.stream(model, context, options);
+			},
+		});
+		await agent.prompt("start");
+		expect(mock.calls).toHaveLength(2);
+		const second = mock.calls[1].context.messages.map(textOf);
+		expect(second.filter(text => text === "wait for completed work")).toHaveLength(1);
+		if (mixed) {
+			expect(second.indexOf("ordinary immediate input")).toBeLessThan(second.indexOf("wait for completed work"));
+			expect(second.indexOf("later immediate input")).toBeLessThan(second.indexOf("wait for completed work"));
+			expect(second.filter(text => text === "later immediate input")).toHaveLength(1);
+		}
+		expect(liveSteeredTexts(agent.state.messages)).toEqual(mixed ? ["ordinary immediate input", "later immediate input"] : []);
+	});
+
 	it("records accepted steering right after the steered response and holds later input for the next boundary", async () => {
 		let claimedView: string[] | undefined;
 		const { contexts, transcript } = await runSteered(async (live, queue) => {

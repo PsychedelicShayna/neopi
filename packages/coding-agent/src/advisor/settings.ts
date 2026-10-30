@@ -9,6 +9,55 @@ import { cfgRoleSettings } from "../config/role-settings";
 import type { Settings } from "../config/settings";
 import { ADVISOR_DEFAULT_BUDGET_PER_UPDATE } from "./emission-guard";
 
+export const ADVISOR_DELIVERY_TIMINGS = ["on-yield", "next-tool-call"] as const;
+export type AdvisorDeliveryTiming = (typeof ADVISOR_DELIVERY_TIMINGS)[number];
+
+function deliverySetting(severity: "nit" | "concern" | "blocker", defaultTiming: AdvisorDeliveryTiming) {
+	const id = `advisor.delivery.${severity}`;
+	return register({
+		id,
+		protocolDefault: ["rpc", "acp"],
+		type: "enum",
+		values: ADVISOR_DELIVERY_TIMINGS,
+		default: defaultTiming,
+		validate: raw => {
+			if (raw === undefined) return;
+			if (raw === "interrupt") {
+				throw new Error(
+					`${id}: interrupt is unsupported: advisors receive completed primary updates, not streaming output. Use on-yield or next-tool-call; neither cancels live tools or generation.`,
+				);
+			}
+			if (!(ADVISOR_DELIVERY_TIMINGS as readonly unknown[]).includes(raw)) {
+				throw new Error(`${id} must be on-yield or next-tool-call`);
+			}
+		},
+		ui: {
+			tab: "model",
+			group: "Advisor",
+			label: `Advisor ${severity.charAt(0).toUpperCase()}${severity.slice(1)} Delivery`,
+			description:
+				"When admitted notes reach the primary. On yield waits for the actual run end, not an intermediate step. Next tool call waits for a safe completed tool-call boundary without cancelling tools or generation. Interrupt is unsupported.",
+			options: [
+				{ value: "on-yield", label: "On yield" },
+				{ value: "next-tool-call", label: "Next tool call" },
+			],
+			condition: "advisorEnabled",
+		},
+	});
+}
+
+export const cfgAdvisorDeliveryNit = deliverySetting("nit", "on-yield");
+export const cfgAdvisorDeliveryConcern = deliverySetting("concern", "next-tool-call");
+export const cfgAdvisorDeliveryBlocker = deliverySetting("blocker", "next-tool-call");
+
+export function advisorDeliveryTiming(settings: Settings, severity: "nit" | "concern" | "blocker" = "nit"): AdvisorDeliveryTiming {
+	switch (severity) {
+		case "nit": return cfgAdvisorDeliveryNit.get(settings);
+		case "concern": return cfgAdvisorDeliveryConcern.get(settings);
+		case "blocker": return cfgAdvisorDeliveryBlocker.get(settings);
+	}
+}
+
 // Advisor is interactive-session assistance: protocol hosts opt in explicitly instead of inheriting the
 // user's local preference, and get the default tuning rather than the user's local tuning.
 export const cfgAdvisorEnabled = register({

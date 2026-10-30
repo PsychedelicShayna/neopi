@@ -570,7 +570,14 @@ import { LoopGuards, type StreamGuardsHost, StreamingEditGuard } from "./stream-
 import { EAGER_TODO_PRELUDE_MESSAGE_TYPE, TodoTracker, type TodoTrackerHost } from "./todo-tracker";
 import { TtsrCoordinator, type TtsrCoordinatorHost } from "./ttsr-coordinator";
 
-import { cfgAdvisorActivation, cfgAdvisorEnabled, cfgAdvisorMaxNotesPerUpdate } from "../advisor/settings";
+import {
+	cfgAdvisorActivation,
+	cfgAdvisorDeliveryBlocker,
+	cfgAdvisorDeliveryConcern,
+	cfgAdvisorDeliveryNit,
+	cfgAdvisorEnabled,
+	cfgAdvisorMaxNotesPerUpdate,
+} from "../advisor/settings";
 import { cfgBrowserEnabled, cfgBrowserFreezeOnTurnEnd, cfgBrowserIdleCloseSec } from "../tools/browser/settings";
 import {
 	cfgClaudeResets,
@@ -646,6 +653,13 @@ const cfgAdvisorRuntimeInputs = combine({
 	maxNotesPerUpdate: cfgAdvisorMaxNotesPerUpdate,
 	tier: cfgTierAdvisor,
 	activation: cfgAdvisorActivation,
+});
+
+/** Delivery edits do not rebuild reviewers or reset admission/dedupe state. */
+const cfgAdvisorDeliveryInputs = combine({
+	nit: cfgAdvisorDeliveryNit,
+	concern: cfgAdvisorDeliveryConcern,
+	blocker: cfgAdvisorDeliveryBlocker,
 });
 /** Settings behind the session's extra workspace roots and the auto-QA prompt note. */
 const cfgWorkspacePromptInputs = combine({
@@ -3357,6 +3371,7 @@ export class AgentSession implements SettingsScope {
 			if (next.enabled !== previous.enabled) this.setAdvisorEnabled(next.enabled);
 			else if (this.isAdvisorEnabled()) this.setAdvisorEnabled(true);
 		});
+		cfgAdvisorDeliveryInputs.listen(this, () => this.#advisors.reconcileDeliveryTiming());
 		cfgExternalThinking.listen(this, async () => {
 			try {
 				await this.#tools.reconcileThinkTool();
@@ -6317,6 +6332,14 @@ export class AgentSession implements SettingsScope {
 		// after its main lane has already delivered the final answer.
 		const willContinue = options?.willContinue === true;
 		const awaitingAsyncWork = willContinue && options.awaitingAsyncWork === true;
+		// A completed assistant step is not a yield: maintenance, queued input,
+		// and advisor continuations can still extend it. Release held advice only
+		// at the actual run settle, after those continuation decisions.
+		const queuedContinuation = !this.#queuedMessageDrainBlocked &&
+			this.#canAutoContinueForFollowUp() && this.agent.hasQueuedMessages();
+		if (!willContinue && !this.agent.state.isStreaming && !queuedContinuation) {
+			this.#advisors.onPrimaryAgentEnd();
+		}
 		await this.#emitSessionEvent({
 			...event,
 			isTerminal: !willContinue,
