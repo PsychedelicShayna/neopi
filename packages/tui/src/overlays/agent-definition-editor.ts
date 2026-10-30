@@ -45,7 +45,7 @@ export const AGENT_DEFINITION_FIELDS: readonly DefinitionField[] = [
 	{ key: "systemPrompt", label: "Instructions / body", kind: "text", description: "Agent system instructions, stored as the Markdown body." },
 	{ key: "harness", label: "Harness", kind: "choice", choices: ["omp", "claude", "codex"], description: "Runtime harness used to execute this agent." },
 	{ key: "model", label: "Models / roles (priority order)", kind: "list", description: "Prioritized provider/model selectors or @role aliases, with optional :effort suffix." },
-	{ key: "thinkingLevel", label: "Thinking level", kind: "choice", choices: ["auto", "off", "minimal", "low", "medium", "high", "xhigh", "max"], description: "Thinking effort used by the agent." },
+	{ key: "thinkingLevel", label: "Thinking level", kind: "choice", choices: ["auto", "inherit", "off", "minimal", "low", "medium", "high", "xhigh", "max"], description: "Thinking effort used by the agent." },
 	{ key: "prewalk", label: "Prewalk", kind: "text", description: "true uses the default edit-time handoff target; false disables; a model selector chooses the handoff target." },
 	{ key: "advisor", label: "Advisor", kind: "advisor", description: "true uses the advisor role; false disables; a model selector uses that model; ref selects a named advisor; inline attaches a private advisor definition." },
 	{ key: "spawns", label: "Allowed child agents", kind: "list", description: "Agent names this agent may spawn, or * for every agent." },
@@ -120,7 +120,7 @@ export class AgentDefinitionEditor implements Component {
 			try { apply(result); this.#error = ""; this.#dialog?.dispose(); this.#dialog = null; }
 			catch (error) { this.#error = error instanceof Error ? error.message : String(error); this.#prompt(title, result, apply); }
 			this.#render();
-		}, () => { this.#dialog?.dispose(); this.#dialog = null; this.#render(); }, { externalEditor: this.#deps.externalEditor });
+		}, () => { this.#dialog?.dispose(); this.#dialog = null; this.#render(); }, { externalEditor: this.#deps.externalEditor, question: this.#error || undefined });
 		this.#dialog.focused = true;
 	}
 	#set(key: AgentDefinitionField, value: unknown): void {
@@ -158,7 +158,7 @@ export class AgentDefinitionEditor implements Component {
 			{ id: "defaults", label: "Use default tool selection", value: this.#draft.tools === undefined ? "[✓]" : "[ ]", field: "tools", activate: () => { this.#draft.tools = this.#draft.tools === undefined ? [] : undefined; } },
 			...Array.from(new Set([...this.#deps.tools.map(tool => tool.name), ...(this.#draft.tools ?? [])])).sort().map(name => ({
 				id: name, label: name, value: `${this.#draft.tools?.includes(name) ? "[✓]" : "[ ]"} ${this.#deps.tools.find(tool => tool.name === name)?.description ?? ""}`, field: "tools" as const,
-				activate: () => { const selected = this.#draft.tools ?? this.#deps.tools.map(tool => tool.name); this.#draft.tools = selected.includes(name) ? selected.filter(tool => tool !== name) : [...selected, name]; },
+				activate: () => { const selected = this.#draft.tools ?? []; this.#draft.tools = selected.includes(name) ? selected.filter(tool => tool !== name) : [...selected, name]; },
 			})),
 		]);
 	}
@@ -270,14 +270,23 @@ export class AgentDefinitionEditor implements Component {
 	async #generate(target: AgentDefinitionField | "all", comment?: string, baseDefinitions?: readonly AgentDefinitionDraft[]): Promise<void> {
 		if (this.#busy) return;
 		this.#busy = true; this.#error = ""; const controller = new AbortController(); this.#controller = controller; this.#render();
-		try { const result = await this.#deps.generate({ definition: this.definition, target, comment, baseDefinitions, conversationId: this.#conversationId, signal: controller.signal }); if (this.#closed || controller.signal.aborted) return; Object.assign(this.#draft, result.fields); this.#conversationId = result.conversationId; }
-		catch (error) { if (!controller.signal.aborted) this.#error = error instanceof Error ? error.message : String(error); }
-		finally { this.#busy = false; this.#controller = undefined; this.#render(); }
+		try {
+			const result = await this.#deps.generate({ definition: this.definition, target, comment, baseDefinitions, conversationId: this.#conversationId, signal: controller.signal });
+			if (this.#closed || controller.signal.aborted) return;
+			Object.assign(this.#draft, result.fields);
+			this.#conversationId = result.conversationId;
+			this.#pages.length = 1;
+		} catch (error) {
+			if (!controller.signal.aborted) this.#error = error instanceof Error ? error.message : String(error);
+		} finally {
+			if (this.#controller === controller) { this.#busy = false; this.#controller = undefined; }
+			this.#render();
+		}
 	}
 	async #save(): Promise<void> {
 		if (this.#busy) return;
 		this.#busy = true;
-		try { await this.#deps.save(this.definition, this.#scope); this.dispose(); this.#close(); }
+		try { await this.#deps.save(this.definition, this.#scope); if (!this.#closed) { this.dispose(); this.#close(); } }
 		catch (error) { this.#error = error instanceof Error ? error.message : String(error); }
 		finally { this.#busy = false; this.#render(); }
 	}
@@ -322,14 +331,15 @@ export class AgentDefinitionEditor implements Component {
 		const page = this.#pages.at(-1)!;
 		const rows = page.rows();
 		if (!cx.supports("picker")) return col([text(this.render(120).join("\n"))]);
-		return picker({ title: page.title, query: null, items: rows.map(row => ({ id: row.id, label: sanitizeDisplaySingleLine(row.label), detail: row.value ? sanitizeDisplaySingleLine(row.value) : undefined })), selected: rows[page.index]?.id, actions: [{ id: "generate", label: "Generate field", keys: ["r"] }, { id: "comment", label: "Generate with comment", keys: ["shift", "r"] }, CLOSE_ACTION], empty: { head: "No entries" } }, this.#error ? [text(this.#error, { tone: "error" })] : []);
+		return picker({ title: page.title, query: null, items: rows.map(row => ({ id: row.id, label: sanitizeDisplaySingleLine(row.label), detail: row.value ? sanitizeDisplaySingleLine(row.value) : undefined })), selected: rows[page.index]?.id, actions: [{ id: "generate", label: "Generate field", keys: ["r"] }, { id: "comment", label: "Generate with comment", keys: ["shift", "r"] }, CLOSE_ACTION], empty: "No entries" }, this.#error ? [text(this.#error, { tone: "error" })] : []);
 	}
 	handleNativeEvent(event: NativeUiEvent): void {
 		if (this.#dialog) { this.#dialog.handleNativeEvent(event); return; }
 		const picked = pickerEvent(event);
 		if (!picked) return;
+		if (this.#busy && !(picked.kind === "action" && picked.act === "close")) return;
 		const page = this.#pages.at(-1)!; const rows = page.rows();
-		if (picked.kind === "select" || picked.kind === "activate") { const index = rows.findIndex(row => row.id === picked.id); if (index >= 0) { page.index = index; if (picked.kind === "activate") rows[index]?.activate(); } }
+		if (picked.kind === "select" || picked.kind === "activate") { const index = rows.findIndex(row => row.id === picked.item); if (index >= 0) { page.index = index; if (picked.kind === "activate") rows[index]?.activate(); } }
 		else if (picked.act === "close") this.handleInput("\x1b");
 		else if (picked.act === "generate") this.handleInput("r");
 		else if (picked.act === "comment") this.handleInput("R");

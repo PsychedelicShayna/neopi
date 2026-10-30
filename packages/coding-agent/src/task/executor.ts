@@ -1,3 +1,4 @@
+import { buildAgentAdvisorSpawnConfig } from "./agent-advisor";
 /**
  * In-process execution for subagents.
  *
@@ -43,8 +44,6 @@ import {
 	extractExplicitThinkingSelector,
 	formatModelString,
 	formatModelStringWithRouting,
-	resolveAgentAdvisorRolePattern,
-	resolveAgentAdvisorSelection,
 	resolveAgentPrewalkPattern,
 	resolveConfiguredModelPatterns,
 	resolveExplicitModelRole,
@@ -4678,23 +4677,14 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	}
 
 	const settings = options.settings ?? Settings.isolated();
-	// Per-agent advisor: the agent definition's `advisor` frontmatter or the
-	// `task.agentAdvisor` settings override (agent name → "on"/"off"/model
-	// pattern) pairs the spawned session with an advisor. Subagents default to
-	// no advisor (createSubagentSettings forces `advisor.enabled` off); an
-	// explicit model pattern is expanded against this owner's roles (a nested
-	// spawn's owner is its parent subagent) and lands on the child's
-	// `modelRoles.advisor`. The expanded pattern is also what the session
-	// contract persists, so cold revival under root settings reuses it.
-	const advisorSelection = preparedSession
-		? undefined
-		: resolveAgentAdvisorSelection({
-				settingsOverride: cfgTaskAgentAdvisor.get(settings)[agent.name],
-				agentAdvisor: agent.advisor,
-			});
-	const advisorRolePattern = advisorSelection?.model
-		? resolveAgentAdvisorRolePattern(advisorSelection.model, settings)
-		: undefined;
+	const advisorSpawn = await buildAgentAdvisorSpawnConfig({
+		advisor: preparedSession ? undefined : agent.advisor,
+		settingsOverride: preparedSession ? undefined : cfgTaskAgentAdvisor.get(settings)[agent.name],
+		settings,
+		cwd,
+		sessionDir: options.artifactsDir,
+	});
+	const advisorConfigs = advisorSpawn.advisorConfigs;
 	const subagentSettings = createSubagentSettings(
 		settings,
 		{
@@ -4702,10 +4692,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			...(agent.readSummarize === false ? { "read.summarize.enabled": false } : undefined),
 			// Isolated runs must not expose roots outside the worktree.
 			...(worktree !== undefined ? { "workspace.additionalDirectories": [] } : undefined),
-			...(advisorSelection ? { "advisor.enabled": true } : undefined),
-			...(advisorRolePattern
-				? { modelRoles: { ...settings.getModelRoles(), advisor: advisorRolePattern } }
-				: undefined),
+			...advisorSpawn.settingsOverrides,
 		},
 		options.parentServiceTier,
 	);
@@ -5258,6 +5245,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					credentialSourceSessionId: options.credentialSourceSessionId,
 					oauthAccountPools: options.oauthAccountPools,
 					inheritedSessionAgents: options.inheritedSessionAgents,
+					advisorConfigs,
 					model,
 					modelPattern: model || modelOverride === undefined ? undefined : modelPatterns,
 					modelPatternAuthFallback:
@@ -5507,7 +5495,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				readOnly: isReadOnlyAgent(agent),
 				spawns: spawnsEnv,
 				readSummarize: agent.readSummarize,
-				advisor: advisorSelection ? (advisorRolePattern ?? "on") : undefined,
+				advisor: advisorSpawn.persistedAdvisor,
+				advisorConfigs,
 				compactionThreshold: options.compactionThresholdOverride,
 				outputSchema,
 				outputSchemaMode: options.outputSchemaMode,

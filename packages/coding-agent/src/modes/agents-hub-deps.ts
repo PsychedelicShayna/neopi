@@ -1,60 +1,24 @@
-import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { Model, ServiceTier } from "@oh-my-pi/pi-ai";
 import type { AgentsHubDeps } from "@oh-my-pi/pi-tui/overlays/agents-hub";
+import { agentDefinitionFieldSchema } from "@oh-my-pi/pi-tui/overlays/agent-definition-editor";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
-import { isEnoent } from "@oh-my-pi/pi-utils";
-import { YAML } from "bun";
+import { getAgentDir, isEnoent } from "@oh-my-pi/pi-utils";
+import { listNamedAdvisors } from "../advisor/config";
 import type { EffectiveExtensionRoots } from "../capability/types";
 import { getConfigDirs } from "../config";
 import type { ModelRegistry } from "../config/model-registry";
-import {
-	resolveAgentAdvisorSelection,
-	resolveAgentModelPatterns,
-	resolveAgentPrewalkPattern,
-	resolveConfiguredModelPatterns,
-	resolveModelOverride,
-	resolveModelRoleValue,
-} from "../config/model-resolver";
+import { resolveAgentAdvisorSelection, resolveAgentModelPatterns, resolveAgentPrewalkPattern, resolveModelOverride } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
-import agentCreationArchitectPrompt from "../prompts/system/agent-creation-architect.md" with { type: "text" };
-import agentCreationUserPrompt from "../prompts/system/agent-creation-user.md" with { type: "text" };
-import { AgentRegistry } from "../registry/agent-registry";
-import { createAgentSession } from "../sdk";
 import { refreshAgentDiscovery } from "../task";
+import { createAgentFieldGenerator } from "../task/agent-generation";
+import { parseAgentDefinitionDocument, serializeAgentDefinitionDocument } from "../task/agent-definition-document";
 import { discoverAgents } from "../task/discovery";
 import { resolveAgentPrewalkDefault } from "../task/prewalk";
+import { listAgentDefinitionTools } from "../tools/tool-catalog";
+import { cfgTaskAgentAdvisor, cfgTaskAgentModelOverrides, cfgTaskAgentPrewalk, cfgTaskDisabledAgents, cfgTaskPrewalk } from "../task/settings";
 import { createModelBrowserSource } from "./model-browser-source";
-
-import {
-	cfgTaskAgentAdvisor,
-	cfgTaskAgentModelOverrides,
-	cfgTaskAgentPrewalk,
-	cfgTaskDisabledAgents,
-	cfgTaskPrewalk,
-} from "../task/settings";
-
-function extractAssistantText(messages: AgentMessage[]): string | null {
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const message = messages[i];
-		if (message?.role !== "assistant") continue;
-		const blocks = message.content;
-		if (!Array.isArray(blocks)) continue;
-		const text = blocks
-			.map(block => {
-				if (!block || typeof block !== "object") return "";
-				if (!("type" in block) || block.type !== "text" || !("text" in block)) return "";
-				const value = block.text;
-				return typeof value === "string" ? value : "";
-			})
-			.join("\n")
-			.trim();
-		if (text.length > 0) return text;
-	}
-	return null;
-}
 
 export function createAgentsHubDeps(
 	cwd: string,
@@ -64,7 +28,11 @@ export function createAgentsHubDeps(
 	activeModelPattern?: string,
 	defaultModelPattern?: string,
 	sessionServiceTier?: (model: Model) => ServiceTier | undefined,
+	editorContext?: { tools: () => readonly { name: string; description: string }[]; sessionDir: () => string | undefined },
 ): AgentsHubDeps {
+	const tools = () => listAgentDefinitionTools(editorContext?.tools() ?? []);
+	const listAdvisors = () => listNamedAdvisors(cwd, getAgentDir(), editorContext?.sessionDir());
+	const generator = createAgentFieldGenerator({ settings, modelRegistry, cwd, activeModelPattern, defaultModelPattern, schema: () => agentDefinitionFieldSchema, tools, advisors: listAdvisors });
 	return {
 		browserSource: createModelBrowserSource(settings, sessionServiceTier),
 		loadAgents: async () => {
@@ -73,145 +41,56 @@ export function createAgentsHubDeps(
 			const overrides = cfgTaskAgentModelOverrides.get(settings);
 			const prewalkOverrides = cfgTaskAgentPrewalk.get(settings);
 			const advisorOverrides = cfgTaskAgentAdvisor.get(settings);
-			return agents.map(agent => {
+			return Promise.all(agents.map(async agent => {
 				const override = overrides[agent.name];
-				const overrideModel = (Array.isArray(override) ? override.join(",") : (override ?? "")).trim();
-				return {
-					...agent,
-					disabled: disabled.has(agent.name),
-					overrideModel: overrideModel || undefined,
-					prewalkOverride: prewalkOverrides[agent.name]?.trim() || undefined,
-					advisorOverride: advisorOverrides[agent.name]?.trim() || undefined,
-				};
-			});
+				const definition = agent.source !== "bundled" && agent.filePath ? parseAgentDefinitionDocument(await Bun.file(agent.filePath).text()) : agent;
+				return { ...agent, ...definition, disabled: disabled.has(agent.name), overrideModel: (Array.isArray(override) ? override.join(",") : override)?.trim() || undefined, prewalkOverride: prewalkOverrides[agent.name]?.trim() || undefined, advisorOverride: advisorOverrides[agent.name]?.trim() || undefined };
+			}));
 		},
 		getAvailableModels: () => modelRegistry.getAvailable(),
-		effectiveModelPatterns: agent =>
-			resolveAgentModelPatterns({
-				settingsOverride: agent.overrideModel,
-				agentModel: agent.model,
-				settings,
-				activeModelPattern,
-				fallbackModelPattern: defaultModelPattern,
-			}),
+		effectiveModelPatterns: agent => resolveAgentModelPatterns({ settingsOverride: agent.overrideModel, agentModel: agent.model, settings, activeModelPattern, fallbackModelPattern: defaultModelPattern }),
 		resolvePatterns: patterns => {
-			if (patterns.length === 0) return undefined;
-			const { model, thinkingLevel, explicitThinkingLevel } = resolveModelOverride(
-				patterns,
-				modelRegistry,
-				settings,
-			);
-			if (!model) return undefined;
-			const level = explicitThinkingLevel && thinkingLevel ? `:${thinkingLevel}` : "";
-			return `${model.provider}/${model.id}${level}`;
+			if (!patterns.length) return undefined;
+			const { model, thinkingLevel, explicitThinkingLevel } = resolveModelOverride(patterns, modelRegistry, settings);
+			return model ? `${model.provider}/${model.id}${explicitThinkingLevel && thinkingLevel ? `:${thinkingLevel}` : ""}` : undefined;
 		},
-		effectivePrewalkPattern: agent =>
-			resolveAgentPrewalkPattern({
-				settingsOverride: agent.prewalkOverride,
-				agentPrewalk: resolveAgentPrewalkDefault(agent, cfgTaskPrewalk.get(settings)),
-			}),
+		effectivePrewalkPattern: agent => resolveAgentPrewalkPattern({ settingsOverride: agent.prewalkOverride, agentPrewalk: resolveAgentPrewalkDefault(agent, cfgTaskPrewalk.get(settings)) }),
 		effectiveAdvisorPattern: agent => {
-			const selection = resolveAgentAdvisorSelection({
-				settingsOverride: agent.advisorOverride,
-				agentAdvisor: agent.advisor,
-			});
-			return selection ? (selection.model ?? "@advisor") : undefined;
+			const selection = resolveAgentAdvisorSelection({ settingsOverride: agent.advisorOverride, agentAdvisor: agent.advisor });
+			return selection?.definition ? "ref" in selection.definition ? selection.definition.ref : selection.definition.inline.name : selection ? selection.model ?? "@advisor" : undefined;
 		},
 		setAgentDisabled: (name, { disabled }) => cfgTaskDisabledAgents.setMember(settings, name, { member: disabled }),
 		setAgentOverride: (property, name, value) => {
-			const setting =
-				property === "model"
-					? cfgTaskAgentModelOverrides
-					: property === "prewalk"
-						? cfgTaskAgentPrewalk
-						: cfgTaskAgentAdvisor;
-			if (property !== "model") {
-				setting.setEntry(settings, name, value);
-				return;
-			}
-			// A session-only pick (Alt+P) is a runtime override of the whole map and would mask this
-			// saved entry. Drop the override for `name` only; other agents keep their session picks.
+			const setting = property === "model" ? cfgTaskAgentModelOverrides : property === "prewalk" ? cfgTaskAgentPrewalk : cfgTaskAgentAdvisor;
+			if (property !== "model") { setting.setEntry(settings, name, value); return; }
 			const active = cfgTaskAgentModelOverrides.get(settings);
 			cfgTaskAgentModelOverrides.setEntry(settings, name, value);
 			cfgTaskAgentModelOverrides.clearOverride(settings);
 			const persisted = cfgTaskAgentModelOverrides.get(settings);
-			const sessionPicks = Object.entries(active).filter(
-				([agent, pick]) => agent !== name && JSON.stringify(pick) !== JSON.stringify(persisted[agent]),
-			);
-			if (sessionPicks.length > 0) {
-				cfgTaskAgentModelOverrides.override(settings, { ...persisted, ...Object.fromEntries(sessionPicks) });
-			}
+			const picks = Object.entries(active).filter(([agent, pick]) => agent !== name && JSON.stringify(pick) !== JSON.stringify(persisted[agent]));
+			if (picks.length) cfgTaskAgentModelOverrides.override(settings, { ...persisted, ...Object.fromEntries(picks) });
 		},
-		generateAgent: async (description, onText) => {
-			await modelRegistry.refresh();
-			const patterns = resolveConfiguredModelPatterns(
-				activeModelPattern ?? defaultModelPattern ?? settings.getModelRole("default"),
-				settings,
-			);
-			const author = settings.getModelRole("agent-author")
-				? resolveModelRoleValue("@agent-author", modelRegistry.getAvailable(), { settings })
-				: undefined;
-			const { model } = resolveModelOverride(patterns, modelRegistry, settings);
-			const selectedModel = author ? author.model : (model ?? modelRegistry.getAvailable()[0]);
-			if (!selectedModel) throw new Error("No available model to generate agent specification.");
-			const { session } = await createAgentSession({
-				cwd,
-				authStorage: modelRegistry.authStorage,
-				modelRegistry,
-				settings,
-				model: selectedModel,
-				thinkingLevel: author?.thinkingLevel,
-				systemPrompt: [renderPromptAsset("system/agent-creation-architect.md", agentCreationArchitectPrompt, {})],
-				hasUI: false,
-				enableLsp: false,
-				enableMCP: false,
-				disableExtensionDiscovery: true,
-				toolNames: ["__none__"],
-				customTools: [],
-				skills: [],
-				contextFiles: [],
-				promptTemplates: [],
-				slashCommands: [],
-				// A helper for the host session: the host keeps the process-wide effects and provider toggles.
-				bindProcessState: false,
-				// Its own registry: the tool-less architect is never an addressable peer,
-				// and the host's default "Main" id stays owned by the host session.
-				agentRegistry: new AgentRegistry(),
-			});
-			const unsubscribe = session.subscribe(event => {
-				if (event.type === "message_update" && "assistantMessageEvent" in event) {
-					const ame = event.assistantMessageEvent;
-					if (ame.type === "text_delta") onText(ame.delta);
-				}
-			});
-			try {
-				await session.prompt(
-					renderPromptAsset("system/agent-creation-user.md", agentCreationUserPrompt, { request: description }),
-					{
-						expandPromptTemplates: false,
-					},
-				);
-				const raw = extractAssistantText(session.state.messages);
-				if (!raw) throw new Error("No response returned by agent creation architect.");
-				return raw;
-			} finally {
-				unsubscribe();
-				await session.dispose();
-			}
+		editor: {
+			get tools() { return tools(); },
+			listAdvisors,
+			parse: parseAgentDefinitionDocument,
+			serialize: serializeAgentDefinitionDocument,
+			generate: request => generator.generateAgentFields(request),
 		},
-		saveAgent: async (scope, spec) => {
-			const dirs = getConfigDirs("agents", { user: scope === "user", project: scope === "project", cwd });
-			const targetDir = dirs[0]?.path;
-			if (!targetDir) throw new Error(`Cannot resolve ${scope} agents directory.`);
-			const filePath = path.join(targetDir, `${spec.identifier}.md`);
-			try {
-				await fs.stat(filePath);
-				throw new Error(`Agent file already exists: ${shortenPath(filePath)}`);
-			} catch (error) {
-				if (!isEnoent(error)) throw error;
+		dispose: () => generator.dispose(),
+		saveDefinition: async (scope, definition, original) => {
+			if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(definition.name)) throw new Error("Name must contain only letters, numbers, hyphens or underscores.");
+			const raw = serializeAgentDefinitionDocument(definition);
+			parseAgentDefinitionDocument(raw);
+			const existing = original?.source !== "bundled" ? original?.filePath : undefined;
+			const targetDir = getConfigDirs("agents", { user: scope === "user", project: scope === "project", cwd }).find(dir => dir.source === ".omp")?.path;
+			if (!existing && !targetDir) throw new Error(`Cannot resolve ${scope} agents directory.`);
+			const filePath = existing ?? path.join(targetDir!, `${definition.name}.md`);
+			if (!existing) {
+				try { await fs.stat(filePath); throw new Error(`Agent file already exists: ${shortenPath(filePath)}`); }
+				catch (error) { if (!isEnoent(error)) throw error; }
 			}
-			const frontmatter = YAML.stringify({ name: spec.identifier, description: spec.whenToUse }, null, 2).trimEnd();
-			await Bun.write(filePath, `---\n${frontmatter}\n---\n\n${spec.systemPrompt.trim()}\n`);
+			await Bun.write(filePath, raw);
 			await refreshAgentDiscovery(cwd, extensionRoots());
 			return filePath;
 		},

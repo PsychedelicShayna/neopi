@@ -1,3 +1,4 @@
+import type { InlineAgentAdvisor } from "@oh-my-pi/pi-tui/overlays/agent-definition-editor";
 import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import * as path from "node:path";
 import {
@@ -598,6 +599,8 @@ export interface CreateAgentSessionOptions {
 	spawns?: string;
 	/** User-authorized model agents inherited from the parent session for nested delegation. */
 	inheritedSessionAgents?: readonly AgentDefinition[];
+	/** Explicit private advisor roster for this session; bypasses catalog roster selection. */
+	advisorConfigs?: readonly InlineAgentAdvisor[];
 
 	/** Auth storage for credentials. Default: discoverAuthStorage(agentDir) */
 	authStorage?: AuthStorage;
@@ -5385,7 +5388,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			advisorMemoryPrompt,
 			advisorSharedInstructions: discoveredAdvisors.sharedInstructions,
 			advisorSharedMaxNotesPerUpdate: discoveredAdvisors.sharedMaxNotesPerUpdate,
-			advisorConfigs: advisorRosterForRuntime(discoveredAdvisors),
+			advisorConfigs: options.advisorConfigs ? [...options.advisorConfigs] : advisorRosterForRuntime(discoveredAdvisors),
 			advisorConfigWarnings: discoveredAdvisors.warnings,
 			agent,
 			thinkingLevel,

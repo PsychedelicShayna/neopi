@@ -1,3 +1,4 @@
+import type { AgentAdvisor } from "@oh-my-pi/pi-tui/overlays/agent-definition-editor";
 import type { AgentSource } from "@oh-my-pi/pi-tui/tools/task";
 export {
 	TASK_SUBAGENT_PROGRESS_CHANNEL,
@@ -339,8 +340,8 @@ export interface AgentDefinition {
 	readSummarize?: boolean;
 	/** Prewalk hand-off for the spawned session: `true` = switch to the default prewalk target at the first edit/write, string = custom target model pattern. */
 	prewalk?: boolean | string;
-	/** Advisor for spawned sessions of this agent: `true` = advise with the default advisor-role model, string = advise with that model pattern (optional `:level` suffix). Absent/`false` = no advisor. */
-	advisor?: boolean | string;
+	/** Advisor role/model, named catalog reference, or private inline definition. */
+	advisor?: AgentAdvisor;
 	source: AgentSource;
 	filePath?: string;
 }

@@ -1428,6 +1428,10 @@ export class SelectorController {
 						activeModelPattern,
 						defaultModelPattern,
 						model => this.ctx.session.effectiveServiceTier(model),
+						{
+							tools: () => this.ctx.session.getAllToolInfos(),
+							sessionDir: () => this.ctx.session.sessionManager.getArtifactsDir() ?? undefined,
+						},
 					),
 					openConfigFile: agent => this.#openConfigFile({ kind: "agent", filePath: agent.filePath }),
 				},
