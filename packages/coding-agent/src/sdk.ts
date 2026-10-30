@@ -47,6 +47,7 @@ import { type LaunchProfileMemory, renderLaunchProfileMemory, setSessionLaunchPr
 import {
 	advisorRosterForRuntime,
 	discoverAdvisorConfigs,
+	type DiscoveredAdvisors,
 	discoverWatchdogFiles,
 	formatActiveRepoWatchdogPrompt,
 	formatAdvisorContextPrompt,
@@ -2056,8 +2057,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	activeRepoContextPromise.catch(() => {});
 	const watchdogFilesPromise = logger.time("discoverWatchdogFiles", () => discoverWatchdogFiles(cwd, agentDir));
 	watchdogFilesPromise.catch(() => {});
-	const advisorConfigsPromise = logger.time("discoverAdvisorConfigs", () => discoverAdvisorConfigs(cwd, agentDir));
-	advisorConfigsPromise.catch(() => {});
 	const promptTemplatesPromise = options.promptTemplates
 		? Promise.resolve(options.promptTemplates)
 		: logger.time("discoverPromptTemplates", discoverPromptTemplates, cwd, agentDir);
@@ -2087,6 +2086,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		logger.time("sessionManager", () =>
 			SessionManager.create(cwd, SessionManager.getDefaultSessionDir(cwd, agentDir)),
 		);
+	const advisorConfigsPromise = logger.time("discoverAdvisorConfigs", () =>
+		discoverAdvisorConfigs(cwd, agentDir, sessionManager.getArtifactsDir() ?? undefined),
+	);
+	advisorConfigsPromise.catch(() => {});
 	const configuredDirs = options.additionalDirectories
 		? options.additionalDirectories
 		: cfgWorkspaceAdditionalDirectories.get(settings);
@@ -5604,16 +5607,29 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		}
 		hasSession = true;
 		if (!isSubagentSession) {
-			session.addDisposer(
-				watchAdvisorConfigs(cwd, agentDir, discovered => {
-					if (session.isDisposed) return;
+			let stopWatching = () => {};
+			let rosterRevision = 0;
+			const bindAdvisorSources = (reload: boolean): void => {
+				stopWatching();
+				const revision = ++rosterRevision;
+				const currentCwd = sessionManager.getCwd();
+				const apply = (discovered: DiscoveredAdvisors): void => {
+					if (session.isDisposed || rosterRevision !== revision || discovered.unsafeToReconcile) return;
 					session.applyAdvisorConfigs(
 						advisorRosterForRuntime(discovered),
 						discovered.sharedInstructions,
 						discovered.sharedMaxNotesPerUpdate,
 					);
-				}),
-			);
+				};
+				stopWatching = watchAdvisorConfigs(currentCwd, agentDir, apply, () => sessionManager.getArtifactsDir() ?? undefined);
+				if (reload)
+					void discoverAdvisorConfigs(currentCwd, agentDir, sessionManager.getArtifactsDir() ?? undefined)
+						.then(apply)
+						.catch(error => logger.warn("Failed to reload session advisors", { error: String(error) }));
+			};
+			bindAdvisorSources(false);
+			session.addDisposer(session.registerSessionChangeCallback(() => bindAdvisorSources(true)));
+			session.addDisposer(() => { rosterRevision++; stopWatching(); });
 		}
 		credentialNoticeSession = session;
 		session.attachMixtureHost(sessionMixtureHost);
