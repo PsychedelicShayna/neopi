@@ -2,6 +2,7 @@
  * Settings declared by this domain (see `config/registry.ts`). Declaration order is the
  * settings-panel order; `config/all-settings.ts` registers every domain.
  */
+import { ADVISOR_SEVERITIES } from "@oh-my-pi/pi-tui/chat/messages";
 import { ADVISOR_REVIEW_MODES, ADVISOR_SYNC_BACKLOG_MODES } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { Derived, register, type AnySetting } from "../config/registry";
 import { cfgRoleSettings } from "../config/role-settings";
@@ -82,6 +83,50 @@ export const cfgAdvisorSyncBacklog = register({
 		label: "Advisor Sync Backlog",
 		description:
 			"Pause main agent until advisor backlog falls below threshold. Numeric values cap wait at 30 seconds; strict waits for all scheduled reviews without a wall-clock cap. Off disables catch-up delays. Abort, failure, and disposal release waits.",
+		condition: "advisorEnabled",
+	},
+});
+
+export const cfgAdvisorImmuneTurns = register({
+	id: "advisor.immuneTurns",
+	protocolDefault: ["rpc", "acp"],
+	type: "number",
+	default: 3,
+	ui: {
+		tab: "model",
+		group: "Advisor",
+		label: "Advisor Immune Turns",
+		description:
+			"After an advisor concern or blocker interrupts, route further concerns as non-interrupting asides for this many primary turns. Blockers are exempt from the cooldown.",
+		options: [
+			{ value: "0", label: "0 steps", description: "No cooldown." },
+			{ value: "1", label: "1 step" },
+			{ value: "2", label: "2 steps" },
+			{ value: "3", label: "3 steps", description: "Default." },
+			{ value: "4", label: "4 steps" },
+			{ value: "5", label: "5 steps" },
+		],
+		condition: "advisorEnabled",
+	},
+});
+
+export const cfgAdvisorContinueSeverity = register({
+	id: "advisor.continueSeverity",
+	protocolDefault: ["rpc", "acp"],
+	type: "enum",
+	values: ADVISOR_SEVERITIES,
+	default: "concern",
+	ui: {
+		tab: "model",
+		group: "Advisor",
+		label: "Advisor Continue Severity",
+		description:
+			"Minimum severity of an advisor note that wakes the agent after it finished with a final answer. Lower-severity notes stay as a card at the end of the transcript and reach the agent with your next message.",
+		options: [
+			{ value: "nit", label: "Nit", description: "Every note continues the run." },
+			{ value: "concern", label: "Concern", description: "Concerns and blockers continue the run. Default." },
+			{ value: "blocker", label: "Blocker", description: "Only blockers continue the run." },
+		],
 		condition: "advisorEnabled",
 	},
 });

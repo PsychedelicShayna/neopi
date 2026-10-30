@@ -3,7 +3,7 @@
  * snapshot and the build scripts that bake it into compiled binaries.
  * Side-effect free: importing it does not load the native addon.
  */
-import * as fs from "node:fs/promises";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 
@@ -19,7 +19,7 @@ export const UNKNOWN_GIT_BUILD_IDENTITY: GitBuildIdentity = Object.freeze({ gitS
 /** Realpath of `p`, or its resolved form when it does not exist. */
 export async function realpathOrResolved(p: string): Promise<string> {
 	try {
-		return await fs.realpath(p);
+		return await fs.promises.realpath(p);
 	} catch {
 		return path.resolve(p);
 	}
@@ -44,6 +44,25 @@ export async function resolveGitBuildIdentity(checkoutRoot: string): Promise<Git
 	if (gitSha === null) return UNKNOWN_GIT_BUILD_IDENTITY;
 	try {
 		const trackedChanges = await repo.statusPorcelain({ untracked: "no" });
+		return { gitSha, dirty: trackedChanges.trim().length > 0 };
+	} catch {
+		return { gitSha, dirty: null };
+	}
+}
+
+/**
+ * Snapshot source identity for synchronous SDK module loading. Realpath failure
+ * throws rather than claiming the identity of an unverified enclosing checkout.
+ */
+export function resolveGitBuildIdentitySync(checkoutRoot: string): GitBuildIdentity {
+	const repo = vcs.git(checkoutRoot);
+	if (!repo) return UNKNOWN_GIT_BUILD_IDENTITY;
+	const expected = fs.realpathSync(checkoutRoot);
+	if (fs.realpathSync(repo.info().repoRoot) !== expected) return UNKNOWN_GIT_BUILD_IDENTITY;
+	const gitSha = repo.headSync().commit ?? null;
+	if (gitSha === null) return UNKNOWN_GIT_BUILD_IDENTITY;
+	try {
+		const trackedChanges = repo.statusPorcelainSync({ untracked: "no" });
 		return { gitSha, dirty: trackedChanges.trim().length > 0 };
 	} catch {
 		return { gitSha, dirty: null };

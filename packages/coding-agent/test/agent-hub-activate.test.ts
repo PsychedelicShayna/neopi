@@ -230,7 +230,7 @@ describe("Agent hub Enter activation", () => {
 		hub.dispose();
 	});
 
-	it("Enter opens an aborted agent's read-only transcript instead of focusing it", () => {
+	it("Enter opens a killed agent as a read-only transcript without reviving it", () => {
 		const agents = new AgentRegistry();
 		agents.register({
 			id: AGENT_ID,
@@ -241,12 +241,16 @@ describe("Agent hub Enter activation", () => {
 			sessionFile: null,
 			status: "aborted",
 		});
-		const focusAgent = vi.fn(async () => {});
+		const focusAgent = vi.fn(async (_id: string) => {});
 		const showOverlay = vi.fn((_component: unknown, _options: unknown) => ({ hide: () => {} }));
 		const setFocus = vi.fn();
 		const onDone = vi.fn();
+		const ensureLive = vi.fn(async () => {
+			throw new Error("Aborted agents must not be revived");
+		});
 		const hub = new AgentHubOverlayComponent({
 			...createAgentHubRuntime({ settings: Settings.isolated(), registry: agents }),
+			lifecycle: () => ({ ensureLive, release: async () => false }),
 			observers: new SessionObserverRegistry(),
 			hubKeys: [],
 			onDone,
@@ -261,6 +265,23 @@ describe("Agent hub Enter activation", () => {
 				setFocus,
 			} as never,
 		});
+
+		hub.handleInput("r");
+		expect(ensureLive).not.toHaveBeenCalled();
+		const native = hub.describe({
+			cols: 120,
+			reduceMotion: false,
+			dark: true,
+			supports: () => true,
+			feature: () => true,
+		});
+		expect(native.k).toBe("picker");
+		if (native.k !== "picker") throw new Error("Expected native agent picker");
+		const revive = native.p?.actions?.find(action => action.id === "revive");
+		expect(revive).toBeDefined();
+		expect(revive?.disabled).toBeTruthy();
+		hub.handleNativeEvent({ type: "action", key: "", act: "revive", mods: [] });
+		expect(ensureLive).not.toHaveBeenCalled();
 
 		hub.handleInput("\r");
 
@@ -278,6 +299,54 @@ describe("Agent hub Enter activation", () => {
 		expect(onDone).not.toHaveBeenCalled();
 		hub.dispose();
 	});
+
+	for (const action of ["keyboard", "native"] as const) {
+		it(`${action} Revive explicitly resumes a killed transcript without focusing or sending to it`, async () => {
+			const agents = new AgentRegistry();
+			agents.register({
+				id: AGENT_ID,
+				displayName: AGENT_ID,
+				kind: "sub",
+				parentId: "Main",
+				session: null,
+				sessionFile: "/missing/killed-worker.jsonl",
+				status: "aborted",
+			});
+			const prompted = vi.fn(async () => {});
+			const ensureLive = vi.fn(async () => ({ prompt: prompted }));
+			const focusAgent = vi.fn(async () => {});
+			const hub = new AgentHubOverlayComponent({
+				...createAgentHubRuntime({ settings: Settings.isolated(), registry: agents }),
+				lifecycle: () => ({ ensureLive, release: async () => false }),
+				observers: new SessionObserverRegistry(),
+				hubKeys: [],
+				onDone: () => {},
+				requestRender: () => {},
+				registry: agents,
+				irc: new IrcBus(agents),
+				focusAgent,
+			});
+			try {
+				const native = hub.describe({
+					cols: 120,
+					reduceMotion: false,
+					dark: true,
+					supports: () => true,
+					feature: () => true,
+				});
+				if (native.k !== "picker") throw new Error("Expected native agent picker");
+				expect(native.p?.actions?.find(item => item.id === "revive")?.disabled).toBeUndefined();
+				if (action === "keyboard") hub.handleInput("r");
+				else hub.handleNativeEvent({ type: "action", key: "", act: "revive", mods: [] });
+				await Promise.resolve();
+				expect(ensureLive).toHaveBeenCalledWith(AGENT_ID);
+				expect(focusAgent).not.toHaveBeenCalled();
+				expect(prompted).not.toHaveBeenCalled();
+			} finally {
+				hub.dispose();
+			}
+		});
+	}
 
 	it("lists persisted subagent session files after restart", async () => {
 		using tempDir = TempDir.createSync("@omp-agent-hub-persisted-");

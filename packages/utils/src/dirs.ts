@@ -18,6 +18,7 @@ import type * as NativePath from "@oh-my-pi/pi-natives/path";
 import { engines, version } from "../package.json" with { type: "json" };
 import { isEexist, isEnoent, isEnotdir } from "./fs-error";
 import { getEnvValue } from "./launch-env";
+import { isBunTestRuntime } from "./test-runtime";
 
 /** Executable name used in CLI output and launch commands. */
 export const APP_NAME: string = "npi";
@@ -183,12 +184,33 @@ function standardizeProjectPath(p: string): string {
 	return standardizeMacOSPath(p);
 }
 
-export function resolveEquivalentPath(inputPath: string): string {
+export interface EquivalentPathOptions {
+	/**
+	 * Resolve a path that does not exist yet through its deepest existing ancestor, keeping the
+	 * missing suffix, so a symlinked parent canonicalizes the same before and after the path appears.
+	 */
+	throughMissing?: boolean;
+}
+
+export function resolveEquivalentPath(inputPath: string, options?: EquivalentPathOptions): string {
 	const resolvedPath = path.resolve(inputPath);
 	try {
 		return fs.realpathSync(resolvedPath);
 	} catch {
-		return resolvedPath;
+		if (!options?.throughMissing) return resolvedPath;
+	}
+	const missing: string[] = [];
+	let current = resolvedPath;
+	for (;;) {
+		const parent = path.dirname(current);
+		if (parent === current) return resolvedPath;
+		missing.unshift(path.basename(current));
+		current = parent;
+		try {
+			return path.join(fs.realpathSync(current), ...missing);
+		} catch {
+			// Keep walking: a higher ancestor may exist.
+		}
 	}
 }
 
@@ -749,8 +771,17 @@ export function getReportsDir(): string {
 	return dirs.rootSubdir("reports", "state");
 }
 
-/** Get the logs directory (~/.omp/logs). */
+/**
+ * Get the logs directory (~/.omp/logs). `bun test` processes get
+ * `<tmpdir>/omp-test-logs-<uid>` instead, so suites never write into the
+ * developer's real logs; the uid suffix (as for the test session-owners dir)
+ * keeps users of a shared `/tmp` from owning each other's directory.
+ */
 export function getLogsDir(): string {
+	if (isBunTestRuntime()) {
+		const uid = typeof process.getuid === "function" ? process.getuid() : os.userInfo().username;
+		return path.join(os.tmpdir(), `omp-test-logs-${uid}`);
+	}
 	return dirs.rootSubdir("logs", "state");
 }
 

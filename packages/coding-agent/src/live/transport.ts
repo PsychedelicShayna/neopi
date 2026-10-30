@@ -59,6 +59,13 @@ export interface LiveTransportOptions {
 	model: string;
 	callbacks: LiveTransportCallbacks;
 	signal?: AbortSignal;
+	/**
+	 * SDP offer from a caller-owned WebRTC peer (one Opus audio track plus an `oai-events`
+	 * data channel). When set, no native peer is created: the caller's peer carries the audio,
+	 * {@link CodexLiveTransport.sdpAnswer} holds the answer to apply to it, and this transport
+	 * keeps only the sideband.
+	 */
+	sdpOffer?: string;
 }
 
 /** Extracts the server-assigned `rtc_*` call ID from a signaling Location header. */
@@ -111,10 +118,11 @@ function abortReason(signal: AbortSignal | undefined): Error {
 	return new DOMException("Live connection aborted", "AbortError");
 }
 
-/** Native WebRTC transport for a Codex Frameless Bidi live session. */
+/** WebRTC transport for a Codex Frameless Bidi live session, with a native or caller-owned media peer. */
 export class CodexLiveTransport {
 	readonly #options: LiveTransportOptions;
 	#peer: LiveWebRtcPeer | undefined;
+	#sdpAnswer: string | undefined;
 	readonly #realtimeSessionId = crypto.randomUUID();
 	#sideband: Bun.WebSocket | undefined;
 	#state: Lifecycle = "idle";
@@ -134,7 +142,12 @@ export class CodexLiveTransport {
 		if (!options.signal?.aborted) options.signal?.addEventListener("abort", this.#abortListener, { once: true });
 	}
 
-	/** Establish the native peer, perform Codex signaling, and wait for the data channel. */
+	/** SDP answer for the caller's peer once a {@link LiveTransportOptions.sdpOffer} call has been signaled. */
+	get sdpAnswer(): string | undefined {
+		return this.#sdpAnswer;
+	}
+
+	/** Establish the media peer, perform Codex signaling, and wait for the data channel or sideband. */
 	connect(): Promise<void> {
 		if (this.#state === "connected") return Promise.resolve();
 		if (this.#connectPromise) return this.#connectPromise;
@@ -151,7 +164,33 @@ export class CodexLiveTransport {
 	}
 
 	async #connect(): Promise<void> {
-		const peer = new LiveWebRtcPeer(
+		let offer = this.#options.sdpOffer;
+		let peer: LiveWebRtcPeer | undefined;
+		if (offer === undefined) {
+			peer = this.#createPeer();
+			this.#peer = peer;
+			(peer as LiveWebRtcPeer & { setOutputSuppressed(suppressed: boolean): void }).setOutputSuppressed(
+				this.#outputSuppressed,
+			);
+			offer = await peer.createOffer();
+		}
+		if (this.#state !== "connecting") throw abortReason(this.#options.signal);
+		const signaling = await this.#signal(offer);
+		if (peer) {
+			await peer.acceptAnswer(signaling.answer);
+			peer.setMuted(this.#muted);
+			await peer.waitForOpen();
+		} else {
+			this.#sdpAnswer = signaling.answer;
+		}
+		if (this.#state !== "connecting") throw abortReason(this.#options.signal);
+		await this.#connectSideband(signaling.callId, signaling.access, signaling.attestation);
+		if (this.#state !== "connecting") throw abortReason(this.#options.signal);
+		this.#state = "connected";
+	}
+
+	#createPeer(): LiveWebRtcPeer {
+		return new LiveWebRtcPeer(
 			(error, payload) => {
 				if (error) {
 					this.#reportFailure(error.message);
@@ -168,20 +207,7 @@ export class CodexLiveTransport {
 			},
 			(error, message) => this.#reportFailure(error?.message ?? message),
 		);
-		this.#peer = peer;
-		(peer as LiveWebRtcPeer & { setOutputSuppressed(suppressed: boolean): void }).setOutputSuppressed(
-			this.#outputSuppressed,
-		);
-		const offer = await peer.createOffer();
-		if (this.#state !== "connecting") throw abortReason(this.#options.signal);
-		const signaling = await this.#signal(offer);
-		await peer.acceptAnswer(signaling.answer);
-		peer.setMuted(this.#muted);
-		await peer.waitForOpen();
-		if (this.#state !== "connecting") throw abortReason(this.#options.signal);
-		await this.#connectSideband(signaling.callId, signaling.access, signaling.attestation);
-		if (this.#state !== "connecting") throw abortReason(this.#options.signal);
-		this.#state = "connected";
+
 	}
 
 	async #signal(offer: string): Promise<LiveSignalingResult> {

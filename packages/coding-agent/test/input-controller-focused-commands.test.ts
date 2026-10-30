@@ -1,9 +1,11 @@
 /**
- * Focused subagent views allow chat, viewer-scoped commands, effort cycling, and
- * session-only /fast. All other mutations still require returning to main.
+ * Focused subagent views allow chat, viewer-scoped /btw, /export, /jobs and /usage,
+ * effort controls, and session-only /fast. Model changes and other mutations,
+ * including /usage reset and /jobs kill, still require returning to main.
  *
- * Failure mode if this regresses: these commands silently do nothing (or steer the
- * agent) in a focused view, or `/export` writes the main session instead of the viewed one.
+ * Failure mode if this regresses: allowed commands silently do nothing (or steer
+ * the agent), exports use the main transcript, or focused effort/fast controls
+ * change the main session instead of the viewed agent.
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { AgentBusyError, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
@@ -11,7 +13,6 @@ import { CommandController } from "@oh-my-pi/pi-coding-agent/modes/controllers/c
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { setSubagentFast } from "@oh-my-pi/pi-coding-agent/registry/subagent-controls";
-import manualContinuePrompt from "../src/prompts/system/manual-continue.md" with { type: "text" };
 
 function createSessionControls() {
 	let thinkingLevel: ThinkingLevel = ThinkingLevel.Low;
@@ -71,6 +72,7 @@ function createFocusedContext() {
 	const mainControls = createSessionControls();
 	const childControls = createSessionControls();
 	const siblingControls = createSessionControls();
+	const resume = vi.fn(async () => {});
 	const ctx = {
 		editor,
 		ui: { requestRender: vi.fn() },
@@ -86,6 +88,7 @@ function createFocusedContext() {
 			isStreaming: false,
 			queuedMessageCount: 0,
 			prompt,
+			resume,
 			abort: vi.fn(async () => {}),
 		}),
 		focusedAgentId: "Worker" as string | undefined,
@@ -104,6 +107,7 @@ function createFocusedContext() {
 		handleUsageCommand: vi.fn(async () => {}),
 		handleExportCommand: vi.fn(async () => {}),
 		handleBtwCommand: vi.fn(async () => {}),
+		handleJobsCommand: vi.fn(async () => {}),
 		showResetUsageSelector: vi.fn(async () => {}),
 		withLocalSubmission: vi.fn(async <T>(_text: string, fn: () => Promise<T>) => fn()),
 	};
@@ -112,6 +116,7 @@ function createFocusedContext() {
 		raw: ctx,
 		editor,
 		prompt,
+		resume,
 		mainControls,
 		childControls,
 		siblingControls,
@@ -132,34 +137,53 @@ describe("focused subagent view slash commands", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("continues the focused session with a synthetic directive for . and c", async () => {
+	it("routes ordinary chat to the focused session", async () => {
+		const { prompt, resume, raw } = await submit("Keep the parser simple");
+		expect(prompt).toHaveBeenCalledWith("Keep the parser simple", {
+			streamingBehavior: "steer",
+			images: undefined,
+		});
+		expect(resume).not.toHaveBeenCalled();
+		expect(raw.withLocalSubmission).toHaveBeenCalledTimes(1);
+	});
+
+	it("resumes the focused session for . and c", async () => {
 		for (const shortcut of [".", "c"]) {
-			const { prompt, editor, raw } = await submit(shortcut);
-			expect(prompt).toHaveBeenCalledWith(manualContinuePrompt, {
-				synthetic: true,
-				userInitiated: true,
-			});
+			const { prompt, resume, editor, raw } = await submit(shortcut);
+			expect(resume).toHaveBeenCalledTimes(1);
+			expect(prompt).not.toHaveBeenCalled();
 			expect(editor.clearDraft).toHaveBeenCalledWith(shortcut);
 			expect(raw.withLocalSubmission).not.toHaveBeenCalled();
 		}
 	});
 
 	it("restores a focused continue shortcut when the target is busy", async () => {
-		const { ctx, raw, editor, prompt } = createFocusedContext();
-		prompt.mockRejectedValueOnce(new AgentBusyError());
+		const { ctx, raw, editor, resume } = createFocusedContext();
+		resume.mockRejectedValueOnce(new AgentBusyError());
 		const controller = new InputController(ctx);
 		controller.setupEditorSubmitHandler();
 		await ctx.editor.onSubmit?.(".");
 
 		expect(editor.getText()).toBe(".");
 		expect(raw.showError).toHaveBeenCalledTimes(1);
-		expect(prompt).toHaveBeenCalledWith(manualContinuePrompt, { synthetic: true, userInitiated: true });
 	});
 
 	it("runs /usage from the focused view", async () => {
 		const { raw, prompt } = await submit("/usage");
 		expect(raw.handleUsageCommand).toHaveBeenCalledTimes(1);
 		expect(prompt).not.toHaveBeenCalled();
+	});
+
+	it("runs /jobs from the focused view", async () => {
+		for (const [text, full] of [
+			["/jobs", false],
+			["/jobs full", true],
+		] as const) {
+			const { raw, prompt } = await submit(text);
+			expect(raw.handleJobsCommand).toHaveBeenCalledTimes(1);
+			expect(raw.handleJobsCommand).toHaveBeenCalledWith({ full });
+			expect(prompt).not.toHaveBeenCalled();
+		}
 	});
 
 	it("runs /export with its arguments from the focused view", async () => {
@@ -170,7 +194,7 @@ describe("focused subagent view slash commands", () => {
 
 	it("runs /btw with its question from the focused view instead of steering the agent", async () => {
 		const { raw, prompt } = await submit("/btw what is it doing?");
-		expect(raw.handleBtwCommand).toHaveBeenCalledWith("what is it doing?");
+		expect(raw.handleBtwCommand).toHaveBeenCalledWith("what is it doing?", undefined);
 		expect(prompt).not.toHaveBeenCalled();
 	});
 
@@ -307,8 +331,70 @@ describe("focused subagent view slash commands", () => {
 		expect(childControls.cycleThinkingLevel).not.toHaveBeenCalled();
 	});
 
+	it("answers a side file command from the focused view and releases its draft", async () => {
+		const focused = createFocusedContext();
+		Object.assign(focused.raw, { fileSlashCommands: new Set(["sitrep"]) });
+		Object.assign(focused.raw.session, {
+			slashCommands: [
+				{
+					name: "sitrep",
+					description: "",
+					content: "Report. Focus: $ARGUMENTS",
+					side: true,
+					source: "via OMP User",
+				},
+			],
+		});
+		const controller = new InputController(focused.ctx);
+		controller.setupEditorSubmitHandler();
+		focused.editor.setText("/sitrep the migration");
+		await focused.ctx.editor.onSubmit?.("/sitrep the migration");
+		expect(focused.raw.handleBtwCommand).toHaveBeenCalledWith(
+			"Report. Focus: the migration",
+			undefined,
+			"/sitrep the migration",
+		);
+		expect(focused.editor.clearDraft).toHaveBeenCalledTimes(1);
+		expect(focused.prompt).not.toHaveBeenCalled();
+	});
+
+	it("keeps a builtin gated to the main session when a side file command shares its name", async () => {
+		const focused = createFocusedContext();
+		Object.assign(focused.raw, { fileSlashCommands: new Set(["clear"]) });
+		Object.assign(focused.raw.session, {
+			slashCommands: [{ name: "clear", description: "", content: "Side", side: true, source: "via OMP User" }],
+		});
+		const controller = new InputController(focused.ctx);
+		controller.setupEditorSubmitHandler();
+		focused.editor.setText("/clear");
+		await focused.ctx.editor.onSubmit?.("/clear");
+		expect(focused.raw.handleBtwCommand).not.toHaveBeenCalled();
+		expect(focused.raw.showStatus).toHaveBeenCalledTimes(1);
+		expect(focused.editor.getText()).toBe("/clear");
+	});
+
+	it("sets the focused agent's thinking level with /effort, leaving the main session alone", async () => {
+		const focused = createFocusedContext();
+		const setFocusedThinking = vi.fn();
+		const setMainThinking = vi.fn();
+		Object.assign(focused.raw.viewSession, {
+			model: { provider: "anthropic", id: "claude-sonnet", reasoning: true },
+			getAvailableEffortSelectors: () => ["off", "auto", "low", "medium", "high"],
+			setThinkingLevel: setFocusedThinking,
+		});
+		Object.assign(focused.raw.session, { setThinkingLevel: setMainThinking });
+		const controller = new InputController(focused.ctx);
+		controller.setupEditorSubmitHandler();
+		focused.editor.setText("/effort high");
+		await focused.ctx.editor.onSubmit?.("/effort high");
+
+		expect(setFocusedThinking).toHaveBeenCalledWith("high");
+		expect(setMainThinking).not.toHaveBeenCalled();
+		expect(focused.prompt).not.toHaveBeenCalled();
+	});
+
 	it("keeps other commands gated to the main session, draft intact", async () => {
-		for (const text of ["/compact", "/model", "/model openai/gpt-5", "/slow on", "!echo unsafe"]) {
+		for (const text of ["/compact", "/model", "/models", "/model openai/gpt-5", "/switch", "/slow on", "!echo unsafe"]) {
 			const { raw, editor, prompt } = await submit(text);
 			expect(editor.getText()).toBe(text);
 			expect(raw.showStatus).toHaveBeenCalledWith(expect.stringContaining("main session"));
@@ -321,6 +407,15 @@ describe("focused subagent view slash commands", () => {
 			const { raw, editor } = await submit(text);
 			expect(raw.showResetUsageSelector).not.toHaveBeenCalled();
 			expect(raw.handleUsageCommand).not.toHaveBeenCalled();
+			expect(editor.getText()).toBe(text);
+		}
+	});
+
+	it("keeps the mutating /jobs kill form gated to the main session", async () => {
+		for (const text of ["/jobs kill all", "/jobs kill job-1"]) {
+			const { raw, editor } = await submit(text);
+			expect(raw.handleJobsCommand).not.toHaveBeenCalled();
+			expect(raw.showStatus).toHaveBeenCalled();
 			expect(editor.getText()).toBe(text);
 		}
 	});

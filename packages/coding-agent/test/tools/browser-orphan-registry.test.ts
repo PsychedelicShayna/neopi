@@ -50,23 +50,32 @@ async function writeOwnershipFile(
 
 /** A pid that has been spawned and reaped, so `kill(pid, 0)` reports ESRCH. */
 async function deadPid(): Promise<number> {
-	const proc = Bun.spawn(["true"], { stdout: "ignore", stderr: "ignore" });
+	// Bun's own executable is the only binary guaranteed on every platform (`true` is absent on Windows).
+	const proc = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" });
 	await proc.exited;
 	return proc.pid;
 }
 
 /** Minimal puppeteer Browser stub recording closes and optionally failing selected targets. */
 function makeBrowser(closed: string[], failTargets: ReadonlySet<string> = new Set()): Browser {
+	const destroyedHandlers = new Set<(event: { targetId: string }) => void>();
 	const session = {
 		send: async (method: string, params?: { targetId: string }) => {
 			if (method === "Target.getTargets") {
 				return { targetInfos: [...failTargets].map(targetId => ({ targetId })) };
 			}
+			if (method === "Target.setDiscoverTargets") return {};
 			if (!params) throw new Error(`Missing params for ${method}`);
 			if (failTargets.has(params.targetId)) throw new Error("transient CDP failure");
 			closed.push(params.targetId);
+			const { targetId } = params;
+			queueMicrotask(() => {
+				for (const handler of destroyedHandlers) handler({ targetId });
+			});
 			return { success: true };
 		},
+		on: (_event: string, handler: (event: { targetId: string }) => void) => destroyedHandlers.add(handler),
+		off: (_event: string, handler: (event: { targetId: string }) => void) => destroyedHandlers.delete(handler),
 		detach: async () => undefined,
 	};
 	return {
@@ -219,91 +228,129 @@ describe("orphan-registry — reap", () => {
 });
 
 describe("orphan-registry — target close completion", () => {
-	it("waits for an accepted close to disappear from CDP enumeration", async () => {
-		const verifying = Promise.withResolvers<void>();
-		const removed = Promise.withResolvers<void>();
-		let enumerations = 0;
+	function closeFixture(send: (method: string) => Promise<unknown>) {
+		const handlers = new Set<(event: { targetId: string }) => void>();
+		const commands: string[] = [];
+		let detached = false;
 		const session = {
 			send: async (method: string) => {
-				if (method === "Target.closeTarget") return { success: true };
-				if (method !== "Target.getTargets") throw new Error(`Unexpected CDP method ${method}`);
-				if (++enumerations === 1) {
-					return { targetInfos: [{ targetId: "released" }, { targetId: "unrelated" }] };
-				}
-				verifying.resolve();
-				await removed.promise;
-				return { targetInfos: [{ targetId: "unrelated" }] };
+				commands.push(method);
+				return await send(method);
 			},
-			detach: async () => undefined,
+			on: (_event: string, handler: (event: { targetId: string }) => void) => handlers.add(handler),
+			off: (_event: string, handler: (event: { targetId: string }) => void) => handlers.delete(handler),
+			detach: async () => {
+				detached = true;
+			},
 		};
-		const browser = {
-			target: () => ({ createCDPSession: async () => session }),
-		} as unknown as Browser;
-		const closing = closeCdpTarget(browser, "released");
+		return {
+			browser: { target: () => ({ createCDPSession: async () => session }) } as unknown as Browser,
+			commands,
+			destroy(targetId: string) {
+				for (const handler of handlers) handler({ targetId });
+			},
+			get detached() {
+				return detached;
+			},
+			get listenerCount() {
+				return handlers.size;
+			},
+		};
+	}
+
+	it("confirms destruction during an accepted close without enumerating targets", async () => {
+		const fixture = closeFixture(async method => {
+			if (method === "Target.setDiscoverTargets") return {};
+			if (method === "Target.closeTarget") {
+				fixture.destroy("released");
+				return { success: true };
+			}
+			throw new Error(`Unexpected CDP method ${method}`);
+		});
+
+		expect(await closeCdpTarget(fixture.browser, "released")).toBe(true);
+		expect(fixture.commands).toEqual(["Target.setDiscoverTargets", "Target.closeTarget"]);
+		expect(fixture.detached).toBe(true);
+		expect(fixture.listenerCount).toBe(0);
+	});
+
+	it("waits for fallback absence confirmation when the destruction event is missed", async () => {
+		const verifying = Promise.withResolvers<void>();
+		const removed = Promise.withResolvers<void>();
+		const fixture = closeFixture(async method => {
+			if (method === "Target.setDiscoverTargets") return {};
+			if (method === "Target.closeTarget") return { success: true };
+			if (method !== "Target.getTargets") throw new Error(`Unexpected CDP method ${method}`);
+			verifying.resolve();
+			await removed.promise;
+			return { targetInfos: [{ targetId: "unrelated" }] };
+		});
+		let completed = false;
+		const closing = closeCdpTarget(fixture.browser, "released", 0).then(closed => {
+			completed = true;
+			return closed;
+		});
 		try {
-			const first = await Promise.race([closing.then(() => "returned"), verifying.promise.then(() => "verifying")]);
-			expect(first).toBe("verifying");
+			await verifying.promise;
+			expect(completed).toBe(false);
 		} finally {
 			removed.resolve();
 			await closing;
 		}
 		expect(await closing).toBe(true);
+		expect(fixture.commands).toEqual(["Target.setDiscoverTargets", "Target.closeTarget", "Target.getTargets"]);
 	});
 
-	it("reports an accepted close that stays listed past its confirmation budget", async () => {
-		let detached = false;
-		const session = {
-			send: async (method: string) => {
-				if (method === "Target.closeTarget") return { success: true };
-				if (method !== "Target.getTargets") throw new Error(`Unexpected CDP method ${method}`);
-				return { targetInfos: [{ targetId: "released" }, { targetId: "unrelated" }] };
-			},
-			detach: async () => {
-				detached = true;
-			},
-		};
-		const browser = {
-			target: () => ({ createCDPSession: async () => session }),
-		} as unknown as Browser;
+	it("returns unconfirmed when an accepted target stays listed, ignoring another target's destruction", async () => {
+		const fixture = closeFixture(async method => {
+			if (method === "Target.setDiscoverTargets") return {};
+			if (method === "Target.closeTarget") {
+				fixture.destroy("unrelated");
+				return { success: true };
+			}
+			if (method !== "Target.getTargets") throw new Error(`Unexpected CDP method ${method}`);
+			return { targetInfos: [{ targetId: "released" }] };
+		});
 
-		await expect(closeCdpTarget(browser, "released", 0)).rejects.toThrow(
-			'Timed out after 0ms waiting for CDP target "released" to disappear',
-		);
-		expect(detached).toBe(true);
+		expect(await closeCdpTarget(fixture.browser, "released", 0)).toBe(false);
+		expect(fixture.commands).toEqual(["Target.setDiscoverTargets", "Target.closeTarget", "Target.getTargets"]);
+		expect(fixture.detached).toBe(true);
+		expect(fixture.listenerCount).toBe(0);
 	});
 
-	it("surfaces failed enumeration after CDP accepts the close", async () => {
-		let detached = false;
-		const session = {
-			send: async (method: string) => {
-				if (method === "Target.closeTarget") return { success: true };
-				throw new Error("CDP target enumeration failed");
-			},
-			detach: async () => {
-				detached = true;
-			},
-		};
-		const browser = {
-			target: () => ({ createCDPSession: async () => session }),
-		} as unknown as Browser;
+	it("returns unconfirmed when enumeration fails after CDP accepts the close", async () => {
+		const fixture = closeFixture(async method => {
+			if (method === "Target.setDiscoverTargets") return {};
+			if (method === "Target.closeTarget") return { success: true };
+			throw new Error("CDP target enumeration failed");
+		});
 
-		await expect(closeCdpTarget(browser, "released")).rejects.toThrow("CDP target enumeration failed");
-		expect(detached).toBe(true);
+		expect(await closeCdpTarget(fixture.browser, "released", 0)).toBe(false);
+		expect(fixture.detached).toBe(true);
+		expect(fixture.listenerCount).toBe(0);
 	});
 
 	it("confirms a concurrently removed target after CDP rejects its close", async () => {
-		const session = {
-			send: async (method: string) => {
-				if (method === "Target.closeTarget") throw new Error("No target with given id found");
-				if (method !== "Target.getTargets") throw new Error(`Unexpected CDP method ${method}`);
-				return { targetInfos: [{ targetId: "unrelated" }] };
-			},
-			detach: async () => undefined,
-		};
+		const fixture = closeFixture(async method => {
+			if (method === "Target.setDiscoverTargets") return {};
+			if (method === "Target.closeTarget") throw new Error("No target with given id found");
+			if (method !== "Target.getTargets") throw new Error(`Unexpected CDP method ${method}`);
+			return { targetInfos: [{ targetId: "unrelated" }] };
+		});
+
+		expect(await closeCdpTarget(fixture.browser, "released")).toBe(true);
+		expect(fixture.detached).toBe(true);
+	});
+
+	it("returns unconfirmed when no CDP session is available", async () => {
 		const browser = {
-			target: () => ({ createCDPSession: async () => session }),
+			target: () => ({
+				createCDPSession: async () => {
+					throw new Error("CDP disconnected");
+				},
+			}),
 		} as unknown as Browser;
 
-		expect(await closeCdpTarget(browser, "released")).toBe(true);
+		expect(await closeCdpTarget(browser, "released")).toBe(false);
 	});
 });

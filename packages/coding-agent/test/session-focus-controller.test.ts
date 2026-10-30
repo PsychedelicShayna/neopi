@@ -102,6 +102,7 @@ function makeHarness(options: { renderInitialMessages?: () => void | Promise<voi
 				resetTranscriptAnchors++;
 			},
 			restorePendingToolResults() {},
+			markViewIdle() {},
 		},
 		statusLine: {
 			setSession: (session: AgentSession, focusedAgentId?: string) => {
@@ -123,6 +124,7 @@ function makeHarness(options: { renderInitialMessages?: () => void | Promise<voi
 		},
 		updatePendingMessagesDisplay: () => uiHelpers.updatePendingMessagesDisplay(),
 		updateEditorBorderColor() {},
+		syncIdleMaintenanceView() {},
 		ui: { requestRender() {}, requestComponentRender() {} },
 		showStatus() {},
 		collabGuest: undefined,
@@ -186,6 +188,25 @@ describe("SessionFocusController", () => {
 		await worker.emit(event);
 		expect(h.handledEvents).toEqual([event]);
 	});
+
+	for (const kind of ["sub", "advisor", "mailbox", "operator"] as const) {
+		it(`does not implicitly revive or focus a killed ${kind} transcript`, async () => {
+			const h = makeHarness();
+			h.registry.register({
+				id: "Stopped",
+				displayName: "Stopped",
+				parentId: MAIN_AGENT_ID,
+				kind,
+				status: "aborted",
+				session: null,
+				sessionFile: "/missing/stopped.jsonl",
+			});
+			await expect(h.controller.focusAgent("Stopped")).rejects.toThrow(/read-only transcript/);
+			expect(h.controller.target).toBeUndefined();
+			expect(h.registry.get("Stopped")?.status).toBe("aborted");
+			expect(h.counts.renderInitialMessages()).toBe(0);
+		});
+	}
 
 	it("re-attaching the main session refreshes the todo HUD so it can't freeze at the pre-focus snapshot (#9571)", async () => {
 		// While a subagent is focused the main session's `todo` completions never

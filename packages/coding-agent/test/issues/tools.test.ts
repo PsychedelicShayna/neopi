@@ -9,7 +9,8 @@ import {
 	type IssueFilingOutcome,
 	type IssueTargetSelection,
 } from "../../src/issues/tools";
-import { github, type GhCommandResult } from "../../src/utils/github";
+import type { ForgeCliResult } from "../../src/utils/forge-cli";
+import { github } from "../../src/utils/github";
 
 const REPO = "github.com/Owner/Project";
 const OTHER_REPO = "ghe.example.test/Owner/Project";
@@ -284,7 +285,7 @@ describe("issue_publish", () => {
 		const { json, run } = spyDependencies();
 		json.mockResolvedValueOnce(LABELS.map(name => ({ name }))).mockResolvedValueOnce(ACTUAL_ISSUE);
 		const entered = Promise.withResolvers<void>();
-		const creation = Promise.withResolvers<GhCommandResult>();
+		const creation = Promise.withResolvers<ForgeCliResult>();
 		run.mockImplementation(() => {
 			entered.resolve();
 			return creation.promise;

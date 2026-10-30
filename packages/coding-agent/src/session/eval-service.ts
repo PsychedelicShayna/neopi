@@ -1,4 +1,6 @@
+import { withTimeout } from "@oh-my-pi/pi-utils";
 import type { ExecutorBackend, ExecutorBackendExecOptions, ExecutorBackendResult } from "../eval/backend";
+import { DEFAULT_PROBE_TIMEOUT_MS } from "../eval/probe";
 import type { ExtensionEvalBackend } from "../extensibility/extensions/types";
 import type { ToolSession } from "../tools";
 
@@ -84,7 +86,19 @@ export function extensionBackendAdapter(backend: ExtensionEvalBackend): Executor
 		id: backend.id as ExecutorBackend["id"],
 		label: backend.label,
 		highlightLang: backend.highlightLang,
-		isAvailable: async () => await backend.isAvailable(),
+		checkAvailability: async (_session, options) => {
+			const timeoutMs = Math.min(
+				options?.timeoutMs && options.timeoutMs > 0 ? options.timeoutMs : DEFAULT_PROBE_TIMEOUT_MS,
+				DEFAULT_PROBE_TIMEOUT_MS,
+			);
+			const ok = await withTimeout(
+				Promise.resolve(backend.isAvailable()),
+				timeoutMs,
+				`Eval backend "${backend.id}" availability probe timed out after ${timeoutMs}ms.`,
+				options?.signal,
+			);
+			return { ok };
+		},
 		execute: (code, options) => backend.execute(code, options),
 		reset: backend.reset?.bind(backend),
 		interrupt: backend.interrupt?.bind(backend),

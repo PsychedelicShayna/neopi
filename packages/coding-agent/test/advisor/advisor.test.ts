@@ -31,11 +31,13 @@ import {
 	formatAdvisorBatchContent,
 	formatAdvisorContextPrompt,
 	isAdvisorTranscriptName,
-	isSteeringSeverity,
+	isAdvisorInterruptImmuneTurnActive,
+	isInterruptingSeverity,
 	quarantineAdvisorUnsafeOutput,
 	resolveAdvisorDeliveryChannel,
 } from "../../src/advisor";
 import { createAdvisorMessageCard } from "@oh-my-pi/pi-tui/chat/advisor-message";
+import { setChatTranscriptDisplayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { getThemeByName } from "@oh-my-pi/pi-tui/theme";
 import { obfuscateMessages } from "../../src/secrets/message-transform";
 import { SecretObfuscator } from "../../src/secrets/obfuscator";
@@ -805,13 +807,13 @@ describe("advisor", () => {
 			expect(delivered).toHaveLength(2);
 		});
 
-		it("defers nits per update and flushes the backlog on the next completed update", async () => {
+		it("defers non-blockers per update and flushes the backlog on the next completed update", async () => {
 			const onAdvice = vi.fn();
 			const tool = new AdviseTool(onAdvice);
 			const note = "The result still needs a focused regression test.";
 
 			tool.beginUpdate(true);
-			const deferred = await tool.execute("tc-1", { note, severity: "nit" });
+			const deferred = await tool.execute("tc-1", { note, severity: "concern" });
 			await tool.execute("tc-2", { note: "A destructive command is running.", severity: "blocker" });
 
 			// Deferred notes are NOT delivered mid-turn; blocker still goes through.
@@ -828,11 +830,11 @@ describe("advisor", () => {
 			// oldest first — no reliance on the advisor model re-raising them.
 			tool.beginUpdate(false);
 			expect(onAdvice).toHaveBeenCalledTimes(3);
-			expect(onAdvice).toHaveBeenNthCalledWith(2, note, "nit", undefined);
+			expect(onAdvice).toHaveBeenNthCalledWith(2, note, "concern", undefined);
 			expect(onAdvice).toHaveBeenNthCalledWith(3, "Minor naming cleanup.", "nit", undefined);
 
 			// A later explicit re-raise of the same note is deduped (already delivered).
-			await tool.execute("tc-4", { note, severity: "nit" });
+			await tool.execute("tc-4", { note, severity: "concern" });
 			expect(onAdvice).toHaveBeenCalledTimes(3);
 		});
 
@@ -842,17 +844,17 @@ describe("advisor", () => {
 			const note = "Same point raised repeatedly.";
 
 			tool.beginUpdate(true);
-			await tool.execute("tc-1", { note, severity: "nit" });
-			await tool.execute("tc-2", { note, severity: "nit" });
-			await tool.execute("tc-3", { note, severity: "nit" });
+			await tool.execute("tc-1", { note, severity: "concern" });
+			await tool.execute("tc-2", { note, severity: "concern" });
+			await tool.execute("tc-3", { note, severity: "concern" });
 
 			tool.beginUpdate(false);
 			// Identical note queued once, flushed once.
 			expect(onAdvice).toHaveBeenCalledTimes(1);
-			expect(onAdvice).toHaveBeenCalledWith(note, "nit", undefined);
+			expect(onAdvice).toHaveBeenCalledWith(note, "concern", undefined);
 		});
 
-		it("routes an escalating deferred nit immediately at concern severity without replay", async () => {
+		it("retains the highest severity when duplicate deferred advice escalates", async () => {
 			const onAdvice = vi.fn();
 			const tool = new AdviseTool(onAdvice);
 
@@ -860,13 +862,12 @@ describe("advisor", () => {
 			await tool.execute("tc-1", { note: "Same point raised repeatedly.", severity: "nit" });
 			await tool.execute("tc-2", { note: "Same   point raised repeatedly.", severity: "concern" });
 
-			expect(onAdvice).toHaveBeenCalledWith("Same   point raised repeatedly.", "concern", undefined);
-			tool.flushDeferredNotes();
+			tool.beginUpdate(false);
 			expect(onAdvice).toHaveBeenCalledTimes(1);
-			expect(onAdvice).toHaveBeenCalledWith("Same   point raised repeatedly.", "concern", undefined);
+			expect(onAdvice).toHaveBeenCalledWith("Same point raised repeatedly.", "concern", undefined);
 		});
 
-		it("flushes one deferred nit per update past the per-update emission budget on a late catch-up", async () => {
+		it("flushes one deferred concern per update past the per-update emission budget on a late catch-up", async () => {
 			// Regression for #10271 ("The Advisor is Late"): in yolo mode the primary
 			// is continuously mid-turn, so the advisor runs many in-progress updates
 			// (one concern each) and the whole backlog is replayed in a single catch-up
@@ -886,7 +887,7 @@ describe("advisor", () => {
 			// Each concern arrives in its own in-progress advisor update.
 			for (const [i, note] of concerns.entries()) {
 				tool.beginUpdate(true);
-				await tool.execute(`c-${i}`, { note, severity: "nit" });
+				await tool.execute(`c-${i}`, { note, severity: "concern" });
 			}
 			// All withheld mid-turn — nothing reaches the primary yet.
 			expect(delivered).toEqual([]);
@@ -907,9 +908,9 @@ describe("advisor", () => {
 			const tool = new AdviseTool(note => delivered.push(note), new AdvisorEmissionGuard({ budgetPerUpdate: 1 }));
 
 			tool.beginUpdate(true);
-			const accepted = await tool.execute("x-0", { note: "First mid-turn concern.", severity: "nit" });
-			const rejected = await tool.execute("x-1", { note: "Second mid-turn concern.", severity: "nit" });
-			const rejected2 = await tool.execute("x-2", { note: "Third mid-turn concern.", severity: "nit" });
+			const accepted = await tool.execute("x-0", { note: "First mid-turn concern.", severity: "concern" });
+			const rejected = await tool.execute("x-1", { note: "Second mid-turn concern.", severity: "concern" });
+			const rejected2 = await tool.execute("x-2", { note: "Third mid-turn concern.", severity: "concern" });
 			expect(JSON.stringify(accepted.content)).toContain("Queued for the end of the turn");
 			for (const result of [rejected, rejected2]) {
 				const text = JSON.stringify(result.content);
@@ -922,7 +923,7 @@ describe("advisor", () => {
 			expect(delivered).toEqual(["First mid-turn concern."]);
 		});
 
-		it("routes only the concern when it displaces a pending nit from the same in-progress update", async () => {
+		it("flushes only the concern when it displaces a pending nit from the same in-progress update", async () => {
 			// Rank escalation inside one in-progress update is not a flood: the
 			// concern takes the update's slot and the guard names the displaced
 			// pending nit, which must not be flushed alongside it.
@@ -937,15 +938,12 @@ describe("advisor", () => {
 			await tool.execute("e-1", { note: "Concern: the helper drops the lock early.", severity: "concern" });
 			// A blocker in the same update delivers live without touching the slot.
 			await tool.execute("e-2", { note: "Blocker: the write path is broken.", severity: "blocker" });
-			expect(delivered).toEqual([
-				{ note: "Concern: the helper drops the lock early.", severity: "concern" },
-				{ note: "Blocker: the write path is broken.", severity: "blocker" },
-			]);
+			expect(delivered).toEqual([{ note: "Blocker: the write path is broken.", severity: "blocker" }]);
 
 			tool.beginUpdate(false);
 			expect(delivered).toEqual([
-				{ note: "Concern: the helper drops the lock early.", severity: "concern" },
 				{ note: "Blocker: the write path is broken.", severity: "blocker" },
+				{ note: "Concern: the helper drops the lock early.", severity: "concern" },
 			]);
 		});
 
@@ -965,12 +963,12 @@ describe("advisor", () => {
 			await tool.execute("p-1", { note: "Nit from the second review.", severity: "nit" });
 			const escalation = await tool.execute("p-2", { note: "Concern from the second review.", severity: "concern" });
 			// The concern was admitted — the SECOND review's nit paid for it.
-			expect(JSON.stringify(escalation.content)).toContain("Delivered.");
+			expect(JSON.stringify(escalation.content)).toContain("Queued for the end of the turn");
 
 			tool.beginUpdate(false);
 			expect(delivered).toEqual([
-				{ note: "Concern from the second review.", severity: "concern" },
 				{ note: "Nit from the first review.", severity: "nit" },
+				{ note: "Concern from the second review.", severity: "concern" },
 			]);
 		});
 
@@ -1111,7 +1109,7 @@ describe("advisor", () => {
 			const escalatedNote = "THE MIGRATION DROPS THE USERS TABLE WITHOUT A BACKUP!";
 
 			tool.beginUpdate(true);
-			await tool.execute("e-0", { note, severity: "nit" });
+			await tool.execute("e-0", { note, severity: "concern" });
 			// Reserved, not delivered.
 			expect(delivered).toEqual([]);
 
@@ -1163,7 +1161,7 @@ describe("advisor", () => {
 			const tool = new AdviseTool(note => delivered.push(note), new AdvisorEmissionGuard({ budgetPerUpdate: 1 }));
 
 			tool.beginUpdate(true);
-			await tool.execute("q-0", { note: "Queued but never flushed.", severity: "nit" });
+			await tool.execute("q-0", { note: "Queued but never flushed.", severity: "concern" });
 			tool.resetDeliveredNotes();
 
 			// The pending reservation is gone: no flush replay after the reset.
@@ -1171,7 +1169,7 @@ describe("advisor", () => {
 			expect(delivered).toEqual([]);
 
 			// The guard's dedupe memory is gone too: the same note admits again.
-			await tool.execute("q-1", { note: "Queued but never flushed.", severity: "nit" });
+			await tool.execute("q-1", { note: "Queued but never flushed.", severity: "concern" });
 			expect(delivered).toEqual(["Queued but never flushed."]);
 		});
 
@@ -1391,12 +1389,51 @@ describe("advisor", () => {
 	});
 
 	describe("advice delivery policy", () => {
-		it("steers concerns and blockers, defers a plain nit", () => {
-			expect(isSteeringSeverity("blocker")).toBe(true);
-			expect(isSteeringSeverity("concern")).toBe(true);
-			expect(isSteeringSeverity("nit")).toBe(false);
-			expect(isSteeringSeverity(undefined)).toBe(false);
+		it("interrupts on concern and blocker, queues a plain nit", () => {
+			expect(isInterruptingSeverity("blocker")).toBe(true);
+			expect(isInterruptingSeverity("concern")).toBe(true);
+			expect(isInterruptingSeverity("nit")).toBe(false);
+			expect(isInterruptingSeverity(undefined)).toBe(false);
 		});
+
+		it("keeps the interrupt-immune turn fence half-open for the configured window", () => {
+			expect(
+				isAdvisorInterruptImmuneTurnActive({
+					completedTurns: 4,
+					immuneTurnStart: undefined,
+					immuneTurns: 2,
+				}),
+			).toBe(false);
+			expect(
+				isAdvisorInterruptImmuneTurnActive({
+					completedTurns: 4,
+					immuneTurnStart: 5,
+					immuneTurns: 0,
+				}),
+			).toBe(false);
+			expect(
+				isAdvisorInterruptImmuneTurnActive({
+					completedTurns: 4,
+					immuneTurnStart: 5,
+					immuneTurns: 2,
+				}),
+			).toBe(true);
+			expect(
+				isAdvisorInterruptImmuneTurnActive({
+					completedTurns: 6,
+					immuneTurnStart: 5,
+					immuneTurns: 2,
+				}),
+			).toBe(true);
+			expect(
+				isAdvisorInterruptImmuneTurnActive({
+					completedTurns: 7,
+					immuneTurnStart: 5,
+					immuneTurns: 2,
+				}),
+			).toBe(false);
+		});
+
 
 		it("wraps each note in an advisory tag with severity as an attribute and escapes the body", () => {
 			const content = formatAdvisorBatchContent([
@@ -1763,6 +1800,52 @@ describe("advisor", () => {
 			expect(review).not.toContain("superseded by a newer read");
 			expect(review).toContain("inspect the retry config");
 			expect(review).toContain("now raise the limit");
+		});
+		it("omits primary thinking blocks when includeThinking is false, including across model switches", async () => {
+			const promptInputs: Array<string | AgentMessage[]> = [];
+			const agent = makeAgent(promptInputs);
+			let currentModelIdentity = "anthropic/claude-opus-5-5";
+			const messages: AgentMessage[] = [
+				{ role: "user", content: "verify the patch", timestamp: 1 } as AgentMessage,
+				{
+					role: "assistant",
+					content: [
+						{ type: "thinking", thinking: "Internal hypothesis that might anchor the reviewer." },
+						{ type: "text", text: "Observable answer with file:line evidence." },
+					],
+					timestamp: 2,
+				} as unknown as AgentMessage,
+			];
+			const runtime = new AdvisorRuntime(agent, {
+				snapshotMessages: () => messages,
+				includeThinking: false,
+				getModelIdentity: () => currentModelIdentity,
+			});
+
+			runtime.onTurnEnd(messages);
+			await runtime.waitForCatchup(1_000, 1);
+			expect(promptInputs).toHaveLength(1);
+			const firstReview = promptText(promptInputs[0]);
+			expect(firstReview).toContain("Observable answer with file:line evidence.");
+			expect(firstReview).not.toContain("Internal hypothesis that might anchor the reviewer.");
+			expect(firstReview).not.toContain("_thinking:_");
+
+			// Switch advisor model identity and verify includeThinking: false stays enforced
+			currentModelIdentity = "google-antigravity/gemini-4-argon";
+			messages.push({
+				role: "assistant",
+				content: [
+					{ type: "thinking", thinking: "Second turn private reasoning." },
+					{ type: "text", text: "Second turn observable output." },
+				],
+				timestamp: 3,
+			} as unknown as AgentMessage);
+			runtime.onTurnEnd(messages);
+			await runtime.waitForCatchup(1_000, 1);
+			expect(promptInputs).toHaveLength(2);
+			const secondReview = promptText(promptInputs[1]);
+			expect(secondReview).toContain("Second turn observable output.");
+			expect(secondReview).not.toContain("Second turn private reasoning.");
 		});
 
 		it("preserves the next user turn when an accepted empty stop is pruned", async () => {
@@ -2248,6 +2331,66 @@ describe("advisor", () => {
 			expect(promptInputs).toHaveLength(1);
 			expect(promptText(promptInputs[0])).toContain(placeholder);
 			expect(promptText(promptInputs[0])).not.toContain(secret);
+		});
+
+		it("drops a tool call's replay signature when it rewrites the call arguments", async () => {
+			const secret = "ADVISOR_SIGNED_ARG_SECRET_123";
+			const obfuscator = new SecretObfuscator([{ type: "plain", content: secret }]);
+			const promptInputs: Array<string | AgentMessage[]> = [];
+			// The Gemini signature attests to the arguments it was computed over,
+			// so it cannot ride along once those arguments are rewritten.
+			// https://ai.google.dev/gemini-api/docs/thought-signatures
+			const assistant = {
+				role: "assistant",
+				content: [
+					{
+						type: "toolCall",
+						id: "call_1",
+						name: "bash",
+						arguments: { command: `deploy --token ${secret}` },
+						thoughtSignature: "c2lnbmVkLW9yaWdpbmFsLWNhbGw=",
+					},
+				],
+				api: "google-generative-ai",
+				provider: "google",
+				model: "gemini-3.5-flash",
+				usage: {
+					input: 1,
+					output: 1,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 2,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "toolUse",
+				timestamp: 1,
+			} as AssistantMessage;
+			// The advisor's own conversation replays this history to its model, so
+			// it goes through the same re-obfuscation the primary transcript does.
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [assistant] as AgentMessage[] },
+			};
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => [{ role: "user", content: "deploy it", timestamp: 2 } as AgentMessage],
+				obfuscator,
+			};
+			const runtime = new AdvisorRuntime(agent, host);
+
+			runtime.onTurnEnd();
+			await Promise.resolve();
+
+			expect(promptText(promptInputs[0])).not.toContain(secret);
+			const replayed = agent.state.messages[0];
+			expect(replayed?.role).toBe("assistant");
+			const block = (replayed as AssistantMessage).content[0];
+			expect(block?.type).toBe("toolCall");
+			expect(JSON.stringify(block?.type === "toolCall" ? block.arguments : {})).not.toContain(secret);
+			expect(block?.type === "toolCall" ? block.thoughtSignature : "kept").toBeUndefined();
 		});
 
 		it("falls back to one redacted update when a regex secret spans source messages", async () => {
@@ -6944,6 +7087,24 @@ describe("advisor", () => {
 			const text = strip(card.render(30));
 			expect(text).toContain("truncated.");
 		});
+
+		it("caps collapsed note rows at advisorCollapsedLines and shows every row when expanded", async () => {
+			const uiTheme = await getThemeByName("dark");
+			if (!uiTheme) throw new Error("theme unavailable");
+			const note =
+				"This is a very long advisor note that will definitely exceed the restricted width constraint of thirty characters and should therefore wrap across multiple lines rather than getting truncated.";
+			const details = { notes: [{ note, severity: "concern" as const }] };
+			try {
+				setChatTranscriptDisplayPreferences({ advisorCollapsedLines: 1 });
+				const rows = createAdvisorMessageCard(details, () => false, uiTheme).render(30);
+				expect(rows.length).toBe(2);
+				expect(strip(rows)).not.toContain("truncated.");
+				const expanded = createAdvisorMessageCard(details, () => true, uiTheme);
+				expect(strip(expanded.render(30))).toContain("truncated.");
+			} finally {
+				setChatTranscriptDisplayPreferences({ advisorCollapsedLines: 0 });
+			}
+		});
 	});
 
 	// Regression: the advisor must not withhold interrupting advice from a turn
@@ -6964,6 +7125,7 @@ describe("advisor", () => {
 				expect(
 					resolveAdvisorDeliveryChannel({
 						severity,
+						continueSeverity: "nit",
 						autoResumeSuppressed: false,
 						streaming: false,
 						aborting: false,
@@ -6978,16 +7140,18 @@ describe("advisor", () => {
 			expect(
 				resolveAdvisorDeliveryChannel({
 					severity: "nit",
+					continueSeverity: "concern",
 					autoResumeSuppressed: false,
 					streaming: true,
 					aborting: false,
 					preserveOnly: true,
 				}),
-			).toBe("preserve");
+			).toBe("aside");
 			for (const severity of ["concern", "blocker"] as const) {
 				expect(
 					resolveAdvisorDeliveryChannel({
 						severity,
+						continueSeverity: "concern",
 						autoResumeSuppressed: false,
 						streaming: true,
 						aborting: false,
@@ -6997,23 +7161,26 @@ describe("advisor", () => {
 			}
 		});
 
-		it("publishes a released nit as a card without triggering work regardless of state", () => {
+		it("routes a non-interrupting nit to the aside queue unless the primary is idle on a terminal answer", () => {
+			// A `nit` continue threshold only governs the terminal-answer case.
 			expect(
 				resolveAdvisorDeliveryChannel({
 					severity: "nit",
+					continueSeverity: "nit",
 					autoResumeSuppressed: true,
 					streaming: true,
 					aborting: true,
 				}),
-			).toBe("preserve");
+			).toBe("aside");
 			expect(
 				resolveAdvisorDeliveryChannel({
 					severity: undefined,
+					continueSeverity: "nit",
 					autoResumeSuppressed: false,
 					streaming: false,
 					aborting: false,
 				}),
-			).toBe("preserve");
+			).toBe("aside");
 		});
 
 		it("steers concern/blocker when no user interrupt is in effect", () => {
@@ -7022,6 +7189,7 @@ describe("advisor", () => {
 					expect(
 						resolveAdvisorDeliveryChannel({
 							severity,
+							continueSeverity: "blocker",
 							autoResumeSuppressed: false,
 							streaming,
 							aborting: false,
@@ -7031,60 +7199,76 @@ describe("advisor", () => {
 			}
 		});
 
-		it("preserves a late concern when the primary already ended with a terminal answer", () => {
+		it.each([
+			{ severity: undefined, continueSeverity: "nit", channel: "steer" },
+			{ severity: "nit", continueSeverity: "concern", channel: "preserve" },
+			{ severity: "concern", continueSeverity: "concern", channel: "steer" },
+			{ severity: "concern", continueSeverity: "blocker", channel: "preserve" },
+			// #5628: a blocker always continues the run past a terminal answer.
+			{ severity: "blocker", continueSeverity: "blocker", channel: "steer" },
+		] as const)(
+			"after a terminal answer, $severity at continueSeverity=$continueSeverity → $channel",
+			({ severity, continueSeverity, channel }) => {
+				expect(
+					resolveAdvisorDeliveryChannel({
+						severity,
+						continueSeverity,
+						autoResumeSuppressed: false,
+						streaming: false,
+						aborting: false,
+						terminalAnswerNoQueuedWork: true,
+					}),
+				).toBe(channel);
+			},
+		);
+
+		it("preserves a terminal continuation blocked by stop suppression, preserveOnly, or the cooldown", () => {
+			const terminal = {
+				severity: "concern",
+				continueSeverity: "concern",
+				autoResumeSuppressed: false,
+				streaming: false,
+				aborting: false,
+				terminalAnswerNoQueuedWork: true,
+			} as const;
+			expect(resolveAdvisorDeliveryChannel({ ...terminal, autoResumeSuppressed: true })).toBe("preserve");
+			expect(resolveAdvisorDeliveryChannel({ ...terminal, preserveOnly: true })).toBe("preserve");
+			// An aside would sit unseen in the idle yield queue; the card stays visible.
+			expect(resolveAdvisorDeliveryChannel({ ...terminal, interruptImmuneTurnActive: true })).toBe("preserve");
+			expect(
+				resolveAdvisorDeliveryChannel({ ...terminal, severity: "blocker", interruptImmuneTurnActive: true }),
+			).toBe("steer");
+		});
+
+		it("downgrades concern to aside during immune turns, but still steers a blocker (#5628)", () => {
 			expect(
 				resolveAdvisorDeliveryChannel({
 					severity: "concern",
+					continueSeverity: "concern",
 					autoResumeSuppressed: false,
-					streaming: false,
+					streaming: true,
 					aborting: false,
-					terminalAnswerNoQueuedWork: true,
+					interruptImmuneTurnActive: true,
 				}),
-			).toBe("preserve");
-		});
-
-		it("steers a late blocker after a terminal answer so the primary continues and acknowledges it (#5628)", () => {
+			).toBe("aside");
 			expect(
 				resolveAdvisorDeliveryChannel({
 					severity: "blocker",
+					continueSeverity: "concern",
 					autoResumeSuppressed: false,
 					streaming: false,
 					aborting: false,
-					terminalAnswerNoQueuedWork: true,
-				}),
-			).toBe("steer");
-		});
-
-		it("opts a late concern into steering without bypassing stop or preservation guards", () => {
-			expect(
-				resolveAdvisorDeliveryChannel({
-					severity: "concern",
-					autoResumeSuppressed: false,
-					streaming: false,
-					aborting: false,
-					terminalAnswerNoQueuedWork: true,
-					allowTerminalConcernSteering: true,
+					interruptImmuneTurnActive: true,
 				}),
 			).toBe("steer");
 			expect(
 				resolveAdvisorDeliveryChannel({
-					severity: "concern",
+					severity: "blocker",
+					continueSeverity: "concern",
 					autoResumeSuppressed: true,
 					streaming: false,
 					aborting: false,
-					terminalAnswerNoQueuedWork: true,
-					allowTerminalConcernSteering: true,
-				}),
-			).toBe("preserve");
-			expect(
-				resolveAdvisorDeliveryChannel({
-					severity: "concern",
-					autoResumeSuppressed: false,
-					streaming: false,
-					aborting: false,
-					terminalAnswerNoQueuedWork: true,
-					allowTerminalConcernSteering: true,
-					preserveOnly: true,
+					interruptImmuneTurnActive: true,
 				}),
 			).toBe("preserve");
 		});
@@ -7093,6 +7277,7 @@ describe("advisor", () => {
 				expect(
 					resolveAdvisorDeliveryChannel({
 						severity,
+						continueSeverity: "concern",
 						autoResumeSuppressed: true,
 						streaming: false,
 						aborting: false,
@@ -7107,6 +7292,7 @@ describe("advisor", () => {
 			expect(
 				resolveAdvisorDeliveryChannel({
 					severity: "blocker",
+					continueSeverity: "concern",
 					autoResumeSuppressed: true,
 					streaming: true,
 					aborting: true,
@@ -7119,6 +7305,7 @@ describe("advisor", () => {
 				expect(
 					resolveAdvisorDeliveryChannel({
 						severity,
+						continueSeverity: "concern",
 						autoResumeSuppressed: true,
 						streaming: true,
 						aborting: false,

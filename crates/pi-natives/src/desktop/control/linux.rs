@@ -228,7 +228,7 @@ impl X11 {
 								&& !name.contains("XTEST")
 								&& !name.starts_with("OMP MPX ")
 						}) {
-							emergency.cancel(CancellationReason::PhysicalEscape);
+							emergency.escape();
 						}
 					},
 					Ok(Some(Event::XkbNewKeyboardNotify(event))) => {

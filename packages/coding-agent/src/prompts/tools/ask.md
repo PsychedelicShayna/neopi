@@ -5,4 +5,5 @@ Ask only for materially different tradeoffs the user must decide. Default: act u
 - `recommended` auto-adds " (Recommended)"; `multi: true` permits multiple selections.
 - NEVER supply "Other": UI adds "Other (type your own)". Clarifying custom input? Answer first; re-ask unresolved questions.
 - Answers may include `optionNotes`: separate notes bound to offered option labels, including unselected options. Treat them as context, not additional selections; the question-level `note` remains separate.
+- Blocks immediately: MUST first emit unseen decision context (findings, diffs, drafts) as assistant text, even when batching `ask` with other tools.
 </instruction>

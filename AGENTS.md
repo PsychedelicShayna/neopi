@@ -122,20 +122,20 @@ Use Bun APIs where they provide a cleaner alternative; fall back to `node:*` onl
 
 ### Quick reference
 
-| Operation       | Use                                       | Not                                |
-| --------------- | ----------------------------------------- | ---------------------------------- |
-| File read/write | `Bun.file()`, `Bun.write()`               | `readFileSync`, `writeFileSync`    |
-| Spawn process   | `` $`cmd` ``, `Bun.spawn()`               | `child_process`                    |
-| Sleep           | `Bun.sleep(ms)`                           | `setTimeout` promise               |
-| Binary lookup   | `$which("git")` from `@oh-my-pi/pi-utils` | `spawnSync(["which", "git"])`      |
-| HTTP server     | `Bun.serve()`                             | `http.createServer()`              |
-| SQLite          | `bun:sqlite`                              | `better-sqlite3`                   |
-| Hashing         | `Bun.hash()`, `Bun.password.*`, WebCrypto | `node:crypto`                      |
-| Path resolution | `import.meta.dir`, `import.meta.path`     | `fileURLToPath` dance              |
-| JSON5           | `Bun.JSON5.parse()` / `.stringify()`      | `json5` package                    |
-| JSONL           | `Bun.JSONL.parse()` / `.parseChunk()`     | `text.split("\n").map(JSON.parse)` |
-| String width    | `Bun.stringWidth()`                       | `get-east-asian-width`, custom     |
-| Text wrapping   | `Bun.wrapAnsi()`                          | custom ANSI-aware wrappers         |
+|Operation|Use|Not|
+|---|---|---|
+|File read/write|`Bun.file()`, `Bun.write()`|`readFileSync`, `writeFileSync`|
+|Spawn process|`` $`cmd` ``, `Bun.spawn()`|`child_process`|
+|Sleep|`Bun.sleep(ms)`|`setTimeout` promise|
+|Binary lookup|`$which("git")` from `@oh-my-pi/pi-utils`|`spawnSync(["which", "git"])`|
+|HTTP server|`Bun.serve()`|`http.createServer()`|
+|SQLite|`bun:sqlite`|`better-sqlite3`|
+|Hashing|`Bun.hash()`, `Bun.password.*`, WebCrypto|`node:crypto`|
+|Path resolution|`import.meta.dir`, `import.meta.path`|`fileURLToPath` dance|
+|JSON5|`Bun.JSON5.parse()` / `.stringify()`|`json5` package|
+|JSONL|`Bun.JSONL.parse()` / `.parseChunk()`|`text.split("\n").map(JSON.parse)`|
+|String width|`Bun.stringWidth()`|`get-east-asian-width`, custom|
+|Text wrapping|`Bun.wrapAnsi()`|custom ANSI-aware wrappers|
 
 ### Process execution
 
@@ -334,13 +334,13 @@ For the bash tool specifically:
 
 Profiles live in the root `Cargo.toml`; `.cargo/config.toml` carries the settings Cargo.toml cannot express. Both are committed, so no local `~/.cargo/config.toml` is required.
 
-| Profile | Use |
-| --- | --- |
-| `dev` | Default. Line tables for our crates, no debuginfo for deps, deps at `opt-level = 2`. |
-| `release` | Shipping build: fat LTO, 1 codegen unit, stripped. |
-| `local` | Fast local release iteration: thin LTO, 16 codegen units, incremental. |
-| `profiling` | `release` codegen with symbols kept, for `perf`/`samply`/Instruments. |
-| `ci` | Thin LTO, no debuginfo, stripped. |
+|Profile|Use|
+|---|---|
+|`dev`|Default. Line tables for our crates, no debuginfo for deps, deps at `opt-level = 2`.|
+|`release`|Shipping build: fat LTO, 1 codegen unit, stripped.|
+|`local`|Fast local release iteration: thin LTO, 16 codegen units, incremental.|
+|`profiling`|`release` codegen with symbols kept, for `perf`/`samply`/Instruments.|
+|`ci`|Thin LTO, no debuginfo, stripped.|
 
 **Never set `split-debuginfo = "off"` on a profile that has debuginfo.** On Mach-O the linker never merges DWARF into the executable — it writes a debug map (`N_OSO`) pointing at the `.o` files, and `"unpacked"` is what keeps those files. With `"off"` every backtrace frame in our own crates silently loses `file:line`; the `panicked at foo.rs:3` header still prints (that is `#[track_caller]`, not debuginfo), which makes the loss easy to miss. `ci` may use `"off"` only because it sets `debug = false`.
 

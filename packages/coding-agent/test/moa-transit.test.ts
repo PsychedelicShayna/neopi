@@ -3,7 +3,8 @@ import type { AssistantMessage, Message } from "@oh-my-pi/pi-ai";
 import { clearCustomApis } from "@oh-my-pi/pi-ai";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { fitHopRequest, type HopParts } from "@oh-my-pi/pi-coding-agent/moa/budget";
-import { renderToolTrace } from "@oh-my-pi/pi-coding-agent/moa/envelopes";
+import { describeOutcome } from "@oh-my-pi/pi-coding-agent/moa/decisions";
+import { renderToolTrace, renderVerdict } from "@oh-my-pi/pi-coding-agent/moa/envelopes";
 import { registerMixtureApi } from "@oh-my-pi/pi-coding-agent/moa/provider";
 import { renderTranscript, toolCallSummaries } from "@oh-my-pi/pi-coding-agent/moa/transcript";
 import type { HopRecord, MixtureCheckpoint } from "@oh-my-pi/pi-coding-agent/moa/types";
@@ -87,6 +88,26 @@ function userText(message: Message | undefined): string {
 function callEnvelope(model: "writer" | "editor", index: number): string {
 	return userText(members.callsTo(model)[index]?.context.messages[0]);
 }
+
+it("rejects image-localization results instead of inventing text-only mixture verdicts", () => {
+	const answer = {
+		type: "box",
+		box: { top: 0.1, bottom: 0.9, left: 0.2, right: 0.8 },
+		confidence: 0.9,
+	} as const;
+	expect(() => describeOutcome({ kind: "verdict", answer, judgeKind: "native" })).toThrow(
+		"mixture judgment unexpectedly returned a bounding box",
+	);
+	expect(() =>
+		renderVerdict("{{answer.noul}}", {
+			member: { id: "judge" },
+			question: { type: "noul", instructions: "Is the case supported?" },
+			answer,
+			judge: "native/judge",
+			judgeKind: "native",
+		}),
+	).toThrow("mixture verdict unexpectedly returned a bounding box");
+});
 
 it("transcript contains only completed outputs with hop identities, never input envelopes", () => {
 	const hop = (index: number, status: HopRecord["status"]): HopRecord => ({

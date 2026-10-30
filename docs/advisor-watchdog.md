@@ -35,10 +35,10 @@ Example:
 
 ```yaml
 modelRoles:
-  advisor: anthropic/claude-sonnet-4-5:medium
+   advisor: anthropic/claude-sonnet-4-5:medium
 
 advisor:
-  enabled: true
+   enabled: true
 ```
 
 Model selectors use normal role/model resolution, including provider-prefixed ids, canonical ids, fallback lists, and optional thinking suffixes.
@@ -79,13 +79,13 @@ When the advisor's model fails (outage, rate limit, unreachable endpoint), the a
 
 ```yaml
 modelRoles:
-  advisor: openai/gpt-5.5:medium
+   advisor: openai/gpt-5.5:medium
 
 retry:
-  fallbackChains:
-    advisor:
-      - anthropic/claude-sonnet-4-5:medium
-      - google-vertex/gemini-3-pro
+   fallbackChains:
+      advisor:
+         - anthropic/claude-sonnet-4-5:medium
+         - google-vertex/gemini-3-pro
 ```
 
 This follows the same rules as the primary's fallback: `retry.enabled` and `retry.modelFallback` must be on, candidates still cooling down, without credentials, or incompatible with native advisor history are skipped, and `retry.fallbackRevertPolicy: cooldown-expiry` returns the advisor to its primary model once the cooldown ends. Credential rotation is attempted before switching models. Short usage-limit blocks can instead be waited out within `retry.maxDelayMs` and the retry budget; longer/exhausted blocks pause the advisor.
@@ -111,6 +111,15 @@ Roster entries set their own cadence: an omitted `reviewMode` means `turn` and a
 
 Rebuilding advisors (saving `/advisor configure`, model-role or context changes) keeps updates the cadence skipped: each rebuilt advisor receives them with its next scheduled review.
 
+### Delivery controls
+
+These settings apply to both the default advisor and named roster advisors, independently of review cadence:
+
+- `advisor.continueSeverity` — lowest severity that may request a continuation after a terminal answer: `nit`, `concern` (default), or `blocker`. `nit` allows any accepted severity to request continuation; `blocker` leaves lower-severity notes as visible cards. Stop, immunity, mode, and client constraints still apply.
+- `advisor.immuneTurns` — completed primary turns protected from further non-blocker steering after successful concern/blocker steering (default `3`; `0` disables the cooldown). Tool-loop continuations count even when the reviewer uses `agent-end`. Blockers are exempt from immunity, not from stop or client guards.
+
+`reviewMode` decides when an advisor reviews, not which advisor owns continuation rights. Both turn and final-yield reviewers use the same severity threshold and delivery guards.
+
 ### Headless runs
 
 Use `--advisor` to enable the advisor for one print-mode process without
@@ -124,12 +133,12 @@ While a primary prompt is running, eligible advisor notes can steer that run. Af
 
 Slash commands:
 
-| Command              | Effect                                                                                                                               |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `/advisor`           | Toggle the advisor subsystem for this session (session-scoped override; does not change persisted `advisor.enabled`).                |
-| `/advisor on`        | Enable the configured/default advisor runtimes for this session. Session-scoped; not persisted to config.                            |
-| `/advisor off`       | Disable the advisor subsystem for this session and stop its runtimes. Session-scoped; not persisted to config.                       |
-| `/advisor status`    | Show each advisor's runtime state, model, context usage, token usage, and cost.                                                      |
+| Command              | Effect                                                                                                                                |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `/advisor`           | Toggle the advisor subsystem for this session (session-scoped override; does not change persisted `advisor.enabled`).                 |
+| `/advisor on`        | Enable the configured/default advisor runtimes for this session. Session-scoped; not persisted to config.                             |
+| `/advisor off`       | Disable the advisor subsystem for this session and stop its runtimes. Session-scoped; not persisted to config.                        |
+| `/advisor status`    | Show each advisor's runtime state, model, context usage, token usage, and cost.                                                       |
 | `/advisor dump`      | In the TUI, copy the compact transcript (all active advisors when a roster is present) to the clipboard; other hosts return the text. |
 | `/advisor dump raw`  | Copy/return the full dump, including system prompt, tools, thinking, and calls.                                                      |
 | `/advisor configure` | List every discovered advisor file, then edit the selected file's advisors. Non-TUI command hosts report that the editor is TUI-only. |
@@ -176,11 +185,11 @@ Advisor tools are built against the isolated advisor `ToolSession` and wrapped w
 
 The `advise` tool accepts one note and an optional severity:
 
-| Severity        | Delivery                                                                                                                                                             | Intended use                                                                 |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| omitted / `nit` | Held until the full primary turn ends; never interrupts or starts a new primary turn. | Cleanup, simplification, low-risk edge cases. |
-| `concern` | Queued steering delivered at the next tool-batch boundary without aborting running tools, regardless of the user's interrupt mode. After a terminal answer, only an `agent-end` reviewer may request continuation; a turn reviewer leaves a visible card. | Material risk, likely wrong direction, missing constraint, hallucinated API. |
-| `blocker` | Immediate steering interruption, even when the user's interrupt mode is `wait`. Interruptible tools are cancelled; non-interruptible tools retain their execution guarantees. A terminal answer alone does not prevent a triggered turn. | A concrete issue that cannot wait for the running tool to finish. |
+| Severity        | Delivery | Intended use |
+| --------------- | -------- | ------------ |
+| omitted / `nit` | Non-interrupting aside at the next turn boundary once released. An in-progress review defers it until a final boundary. After a terminal answer, it leaves a visible card unless `advisor.continueSeverity` is `nit` and continuation guards permit waking the primary. | Cleanup, simplification, low-risk edge cases. |
+| `concern` | An in-progress review defers it until a final boundary. Once released, it uses interrupting steering when permitted; immunity downgrades it to an aside, or a visible card when terminal-idle. After a terminal answer it may request continuation at the default `advisor.continueSeverity: concern`, regardless of review mode. | Material risk, likely wrong direction, missing constraint, hallucinated API. |
+| `blocker` | Immediately eligible for interrupting steering, including during partial work and the immunity window. A terminal answer alone does not prevent continuation; stop, mode, and client guards still apply. Interruptible tools may be cancelled; non-interruptible tools retain their execution guarantees. | Continuing would clearly waste work or produce broken output. |
 
 Accepted notes are rendered into the primary transcript as XML-escaped `<advisory>` elements. Named roster advisors add an `advisor` attribute:
 
@@ -192,23 +201,25 @@ note text
 
 When you deliberately interrupt the agent (Esc, or a cancel from collab, ACP, RPC, the SDK, or an extension), the advisor stops auto-resuming it. A `concern`/`blocker` raised while the run is stopped is recorded as a visible advisor card instead of restarting the turn, and a concern already in flight when you interrupt is preserved the same way rather than driving a surprise resume. The advice re-enters context the next time you resume — a new message, the `.`/`c` continue shortcut, or a steer/follow-up.
 
-A normal yield the agent drove itself is treated differently from a deliberate interrupt, but it is not a blanket "always steers and resumes". The loop state and completed turn first determine the normal delivery path:
+A normal yield the agent drove itself is treated differently from a deliberate interrupt. The loop state and completed turn determine the delivery path:
 
-- **While the loop is still streaming**, a concern queues for the next tool-batch boundary; a blocker requests immediate interruption.
+- **While the loop is still streaming**, blockers can steer immediately. Nits and concerns from an in-progress review remain deferred until a final boundary; they are not released merely because the current tool batch finished.
 - **Once the loop has yielded and gone idle**, delivery keys on how the turn ended:
-  - If the primary's tail is a **terminal text answer with no queued work**, a late turn-mode `concern` is preserved as a visible card rather than waking the agent to restate a completed turn (#4840). A `blocker`, or a concern from an `agent-end` reviewer, can request a continuation instead. All stop, plan-mode, and client constraints still apply.
-  - Otherwise (the agent yielded mid-work, no terminal answer), an idle `concern`/`blocker` normally triggers a fresh turn so the advice is acted on immediately.
+  - If the primary's tail is a **terminal text answer with no queued work**, a note at or above `advisor.continueSeverity` (default `concern`) may request one continuation. A note below the threshold remains a visible card and reaches the primary with your next message. Both `turn` and `agent-end` reviewers follow this rule; neither has an exclusive continuation exception.
+  - Otherwise (the agent yielded mid-work, no terminal answer), a released `concern`/`blocker` normally triggers a fresh turn. A nit uses the non-interrupting aside queue.
+
+The threshold does not bypass stop/abort suppression, immunity, plan mode, or client constraints. If they block terminal continuation, the note is preserved as a card rather than stranded in an aside queue the idle primary would never consume.
 
 Session/client constraints can preserve a note whose normal delivery path is steering:
 
 - **Plan mode:** every would-be advisor steer is preserved as a visible card, even while the primary loop is streaming, because only user-driven turns converge on ask/resolve.
 - **ACP with deferred agent-initiated turns:** when `deferAgentInitiatedTurns` is enabled and the bridge has not allowed agent-initiated turns, an idle would-be steer is preserved because the client cannot represent the triggered turn as busy. Advice raised while the primary loop is already streaming can still steer into that live turn.
 
-When the current mode/client prohibits steering, the note is preserved as a card rather than waking the agent. Otherwise severity determines timing: concerns wait only for the current tool batch, blockers interrupt, and nits wait for the full turn. The obsolete `advisor.immuneTurns` setting has been removed; repeated concerns no longer fall back to end-of-turn delivery.
+The three delivery channels are **aside** (non-interrupting boundary delivery), **steer** (interrupting delivery or an allowed continuation), and **preserve** (a visible card without waking the primary). Once released, a concern outside immunity can cancel interruptible tools through steering; it no longer has a special wait-for-the-tool-batch override.
 
-While an advisor update reviews work still in progress, only nits are deferred until the definitive full-run end. Concerns enter steering at the next tool boundary; blockers request immediate interruption. Later concerns remain actionable without an immunity window.
+`advisor.immuneTurns` limits repeated non-blocker steering independently of review cadence. After successful concern/blocker steering, later concerns use asides until the configured number of primary turns has completed; at terminal idle, eligible non-blocker continuations are preserved instead. The default is `3`, and tool-loop continuations count even for an `agent-end` reviewer. Blockers bypass immunity but still obey deliberate-stop, mode, and client preservation constraints. Ordinary nits remain non-interrupting; even with `continueSeverity: nit`, immunity can prevent a nit from waking a terminal-idle primary.
 
-Deferred notes pass the emission guard before reservation. A higher-severity note may displace a pending lower-severity note from the same review, but cannot displace notes from earlier reviews or retract routed advice. A final boundary flushes pending notes even when cadence skips a new review, without resetting the current review's budget.
+While an advisor update reviews work still in progress, `AdviseTool` defers **both nits and concerns** until a final boundary; only a blocker may interrupt partial work. Deferred notes pass the emission guard before reservation. A higher-severity note may displace a pending lower-severity note from the same review, but cannot displace notes from earlier reviews or retract routed advice. The completed-update transition or an explicit final-boundary flush releases pending notes even when cadence skips a new review, without resetting the current review's budget. No separate full-run nit-release gate remains.
 
 ### Emission guard
 
@@ -216,12 +227,12 @@ Each advisor has its own `AdvisorEmissionGuard` (`src/advisor/emission-guard.ts`
 
 1. **Normalization.** Lowercase, NFKC, collapse every run of non-alphanumeric characters to one space, then trim. `"Stop."`, `"*Stop*"`, and `"  stop  "` all key to `stop`.
 2. **Content-free phrase filter.** Short phrases with no concrete reason — `stop`, `done`, `complete`, `no issue continue`, `lgtm`, `nothing to add`, and similar — are suppressed.
-3. **Severity-aware dedupe.** A repeated normalized note is dropped at equal or lower severity. A real escalation (`nit` → `concern` → `blocker`) remains eligible even after the earlier note was delivered. The FIFO history holds at most 4096 entries.
+3. **Severity-aware dedupe.** A repeated normalized note is dropped at equal or lower severity. A higher-severity re-raise (`nit` → `concern` → `blocker`) remains eligible even after the earlier note was delivered. The prompt is stricter: it permits re-raising prior non-blocker advice only as a `blocker`, once new transcript evidence meets `blocker` criteria. The FIFO history holds at most 4096 entries.
 4. **Per-update rank budget.** Up to N non-blocker notes per advisor model `prompt()` cycle (default 4, configurable from 1–32). At capacity, a higher-severity note may replace the lowest-rank still-pending note from the same update. Routed notes retain their slots; earlier updates' pending notes remain reserved. Blockers are exempt, and suppressed noise consumes no budget. Precedence: per-advisor config > shared `WATCHDOG.yml` top-level > `advisor.maxNotesPerUpdate` setting > default 4. There is no additional aggregate backlog budget.
 
 Acknowledgments distinguish acceptance, conditional deferral, duplicates, noise, and budget suppression. Acceptance means the host accepted the note for primary delivery, not that the primary model consumed it. Deferred acceptance warns that a higher-severity finding from the same review may displace the note. A rejected note receives no delivery promise; the advisor should not rephrase rejected findings to evade the guard.
 
-The guard's full state — dedupe history and per-update gate — clears on every advisor reset (compaction, session switch, `/new`), so a re-primed reviewer can re-raise issues it already raised against the rewritten transcript.
+The guard's full state — dedupe history and per-update gate — clears on every advisor reset (compaction, session switch, `/new`). That reset does not permit replaying old advice indiscriminately: the advisor prompt allows a prior non-blocker finding to be raised again only as a blocker when **new transcript evidence** now meets blocker criteria, not merely because the primary ignored it or a reminder arrived.
 
 ## Catch-up with `advisor.syncBacklog`
 
@@ -250,23 +261,23 @@ Practical interpretation:
 - `1` is the closest mode to synchronous review: after each queued advisor delta, the primary waits up to 30 seconds for backlog to return to zero.
 - `3` and `5` allow more advisor lag before the primary pauses.
 
-`strict` with an `agent-end` advisor provides synchronous final review: the primary reaches its final boundary, the advisor reviews the accumulated run, then the primary can finish. Notes delivered at that boundary merge into one message, ordered newest turn first, then severity (`blocker` → `concern` → `nit`). Notes about earlier turns carry a `turns_ago` attribute and a dim `T-N` transcript marker between severity and advisor name. The first merged delivery, then at most once every 50 primary turns, includes guidance that findings may be outdated or wrong and may be ignored.
+`strict` with an `agent-end` advisor provides synchronous final review: the primary reaches its final boundary, the advisor reviews the accumulated run, then the primary can finish. Notes released at that boundary are buffered through terminal unwind and merged into one message, ordered newest turn first, then severity (`blocker` → `concern` → `nit`). Notes about earlier turns carry a `turns_ago` attribute and a dim `T-N` transcript marker between severity and advisor name. The first merged delivery, then at most once every 50 primary turns, includes guidance that findings may be outdated or wrong and may be ignored; reminder state is tracked per advisor.
 
-A batch containing a blocker or an `agent-end` concern can request at most one permitted continuation, even when several advisors report findings together. Stop/abort suppression, concern cooldown, plan-mode policy, and client preservation constraints apply to both buffered and live delivery. Otherwise the notes remain visible without restarting the primary. A continuation an advisor delivery starts does not schedule another review or advance cadence; its updates are captured and sent with the next review, without feeding advisor notes back into them.
+A batch containing a note at or above `advisor.continueSeverity` can request **at most one permitted continuation**, even when several advisors report findings together. The continuation latch covers terminal-unwind races as well as live delivery. Stop/abort suppression, non-blocker immunity, plan-mode policy, and client preservation constraints are rechecked for buffered and live notes; they cannot be bypassed by a note admitted before a stop. Otherwise the notes remain visible without restarting the primary. A continuation an advisor delivery starts does not schedule another review or advance cadence; its updates are captured and sent with the next review, without feeding advisor notes back into them.
 
 Keep turn reviews asynchronous while waiting for final reviews:
 
 ```yaml
 advisors:
-  - name: Turn reviewer
-    reviewMode: turn
-    syncBacklog: off
-  - name: Final reviewer
-    reviewMode: agent-end
-    syncBacklog: strict
+   - name: Turn reviewer
+     reviewMode: turn
+     syncBacklog: off
+   - name: Final reviewer
+     reviewMode: agent-end
+     syncBacklog: strict
 ```
 
-Advisor failures do not permanently stall the primary. The host first attempts its credential/fallback recovery. Retriable failures are attempted up to three times before that backlog is dropped; three dropped-backlog cycles halt the runtime until an explicit reset, and a permanent request rejection can halt it after one cycle. A quota/usage-limit failure that cannot recover through credential rotation, model fallback, or a bounded cooldown wait pauses the advisor with its batch retained until `/advisor` rebuilds it, configuration is reloaded, a new session starts, or the process restarts. The primary's catch-up waiters (`advisor.syncBacklog`) are released as soon as an advisor is failing; only the headless shutdown drain waits through recovery.
+Advisor failures do not permanently stall the primary. The host first attempts its credential/fallback recovery. Retriable failures are attempted up to three times before that backlog is dropped; three dropped-backlog cycles halt the runtime until an explicit reset, and a permanent request rejection can halt it after one cycle. Context-maintenance re-primes do not erase these strikes. A quota/usage-limit failure that cannot recover through credential rotation, model fallback, or a bounded cooldown wait pauses the advisor with its batch retained until its runtime is reset or rebuilt: compaction, dropping images, a shake, a session switch or new session, an `/advisor` rebuild, a configuration reload, or a restart. Provider-stated Codex 429 waits use the bounded provider-wait recovery path rather than immediately discarding the review. Tool-output pruning keeps the pause, and no timer resumes it. The primary's catch-up waiters (`advisor.syncBacklog`) are released as soon as an advisor is failing; only the headless shutdown drain waits through recovery.
 
 The advisor also uses `model.toolCallLoopGuard.*` to bound repeated identical tool calls. One detected loop injects a corrective; if the same bound trips again during that review, the review is aborted without treating the stop as a provider failure or starting fallback recovery. The detector resets at the next review/context boundary.
 
@@ -363,7 +374,7 @@ Example:
 
 ```yaml
 instructions: |
-  Everyone: prefer diffs that keep tests unified.
+   Everyone: prefer diffs that keep tests unified.
 
 advisors:
   - name: Architecture
@@ -374,23 +385,23 @@ advisors:
     instructions: |
       Watch cross-module coupling and public-API growth.
 
-  - name: Fixer
-    enabled: false
-    model: anthropic/claude-sonnet-4-5:high
-    tools: [read, grep, glob, edit, bash]
-    instructions: |
-      You may edit and run tests to prove a fix locally, then advise.
+   - name: Fixer
+     enabled: false
+     model: anthropic/claude-sonnet-4-5:high
+     tools: [read, grep, glob, edit, bash]
+     instructions: |
+        You may edit and run tests to prove a fix locally, then advise.
 ```
 
 For a final-yield reviewer that runs every third completed primary turn:
 
 ```yaml
 advisors:
-  - name: Final reviewer
-    reviewMode: agent-end
-    reviewInterval: 3
-    instructions: |
-      Review the complete turn. Stay silent unless concrete evidence shows a material problem.
+   - name: Final reviewer
+     reviewMode: agent-end
+     reviewInterval: 3
+     instructions: |
+        Review the complete turn. Stay silent unless concrete evidence shows a material problem.
 ```
 
 Fields:
@@ -406,6 +417,7 @@ Fields:
 - `advisors[].reviewMode`: optional cadence mode. `turn` (default) reviews every primary turn — every tool-call round, including `willContinue: true` tool-loop continuations; `agent-end` reviews only final yields where `willContinue` is not true, i.e. once per run.
 - `advisors[].reviewInterval`: optional positive safe integer (at most `9007199254740991`), default `1`. Reviews every Nth eligible update; skipped updates accumulate and are sent in the next scheduled review. For a review every Nth completed run, combine `reviewMode: agent-end` with this field. Deferred advice still becomes eligible for delivery at final boundaries even when cadence skips that review.
 - `advisors[].syncBacklog`: optional `off`, `1`, `3`, `5`, or `strict`. Numeric thresholds may be unquoted YAML numbers. Omitted → inherit the current global `advisor.syncBacklog`; explicit `off` always disables waiting for this advisor. The editor shows the effective policy and offers `inherit` to remove an override.
+- `advisors[].scope`: optional `main`, `subagent`, or `all` (default `all`). Restricts which session kinds build this advisor: `main` attaches only to the top-level session, while `subagent` attaches only to advised spawned subagent sessions.
 - `maxNotesPerUpdate` (top level or per advisor): accepted non-blocker notes per prompt update, default `4`. A per-advisor value overrides the top-level value, which overrides the `advisor.maxNotesPerUpdate` setting.
 - `advisors[].instructions`: this advisor's specialization, appended after the shared baseline. Both instruction fields expand `@path` imports like `WATCHDOG.md`.
 - `advisors[].systemPrompt`: optional literal base prompt that replaces the bundled advisor system prompt. Project context, memory instructions, `WATCHDOG.md`, shared instructions, and per-advisor instructions still append in their normal order. Omitted uses the bundled default; an explicit empty string is an empty base, not a reset. Unlike the instruction fields, this field does not expand `@path` imports.
@@ -418,6 +430,8 @@ Saves stage and sync the complete `WATCHDOG.yml` beside its destination,
 then publish it under the existing file lock. Readers see either the previous
 complete YAML or the new one, never a truncated write. Existing symlinks to
 a shared roster keep pointing at that roster after a save.
+
+The editor updates the existing YAML document while preserving comments and fields outside the edited advisor configuration; it does not replace the roster with a freshly serialized subset.
 
 The **Read primary reasoning stream** checkbox sits beside **Enabled** in each advisor's detail screen. Save & apply writes an explicit `false` to `WATCHDOG.yml` and rebuilds that advisor; turning it back on restores readable primary reasoning for future updates.
 

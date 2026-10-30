@@ -1,3 +1,4 @@
+import type { ImageContent } from "@oh-my-pi/pi-ai";
 import {
 	type Component,
 	type Focusable,
@@ -16,8 +17,12 @@ import {
 	type BtwHistoryTurn,
 	getBtwCopyText,
 	getBtwLatestTurn,
+	getBtwTopicLabel,
 	getBtwTurns,
 } from "./btw-history";
+import { compactImageMarkers, formatVisionMarker } from "../prompt/composer-attachments";
+import { extractImagePastePathsFromText } from "../prompt/custom-editor";
+import { BracketedPasteHandler } from "../bracketed-paste";
 import { getMarkdownTheme, type ThemeColor, theme } from "../theme/theme";
 import type { SpaceHoldHandler } from "../space-hold";
 import { sanitizeErrorLine } from "../chrome/error-block";
@@ -40,9 +45,16 @@ import {
 	MenuViewport,
 	menuScrollBy,
 	type MenuViewportPosition,
+	type MenuNavAction,
 } from "../components/menu-navigation";
 import { MenuSelection } from "../components/menu-selection";
 import { fuzzyFilter } from "../fuzzy";
+
+/** The turns as shown: a titled topic's opening question displays as its title, e.g. `/sitrep`. */
+function getDisplayTurns(record: BtwHistoryRecord): readonly BtwHistoryTurn[] {
+	const turns = getBtwTurns(record);
+	return record.title === undefined ? turns : [{ ...turns[0]!, question: record.title }, ...turns.slice(1)];
+}
 
 interface BtwHistoryPanelOptions {
 	records: readonly BtwHistoryRecord[];
@@ -50,7 +62,16 @@ interface BtwHistoryPanelOptions {
 	onCopy: (record: BtwHistoryRecord) => void;
 	onCancel: (record: BtwHistoryRecord) => void;
 	canFollowUp?: (record: BtwHistoryRecord) => boolean;
-	onFollowUp?: (record: BtwHistoryRecord, question: string, signal: AbortSignal) => Promise<boolean>;
+	onFollowUp?: (
+		record: BtwHistoryRecord,
+		question: string,
+		signal: AbortSignal,
+		images?: ImageContent[],
+	) => Promise<boolean>;
+	/** Read a clipboard image into the follow-up. */
+	onPasteImage?: () => Promise<unknown>;
+	/** Attach an image file whose path was pasted or dropped into the follow-up. */
+	onPasteImagePath?: (path: string) => Promise<void>;
 	spaceHold?: (input: Input) => SpaceHoldHandler;
 	requestRender: () => void;
 	getHeight: () => number;
@@ -66,12 +87,18 @@ interface FollowUpComposer {
 	recordId: string;
 	input: Input;
 	abortController: AbortController;
+	/** Images pasted into this follow-up, numbered by their `[Image #N]` markers. */
+	images: ImageContent[];
+	/** Image pastes still loading, in paste order; Enter waits for them. */
+	pendingPastes: { settled: boolean; text: string | undefined }[];
+	submitQueued: boolean;
 	notice?: string;
 }
 
 interface FollowUpDraft {
 	value: string;
 	cursor: number;
+	images: ImageContent[];
 	notice?: string;
 }
 
@@ -149,6 +176,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 	#focused = false;
 	#composer: FollowUpComposer | undefined;
 	readonly #drafts = new Map<string, FollowUpDraft>();
+	readonly #pasteHandler = new BracketedPasteHandler();
 	#followUpPending = false;
 	#followLatest = false;
 	#turns: RenderedTurn[] = [];
@@ -439,15 +467,24 @@ export class BtwHistoryPanel implements Component, Focusable {
 		input.prompt = theme.fg("accent", "Follow up: ");
 		input.placeholder = "Ask about this answer…";
 		input.spaceHold.handler = this.#options.spaceHold?.(input);
-		const composer: FollowUpComposer = { recordId: record.id, input, abortController: new AbortController() };
 		const draft = this.#drafts.get(record.id);
+		const composer: FollowUpComposer = {
+			recordId: record.id,
+			input,
+			abortController: new AbortController(),
+			images: draft?.images ?? [],
+			pendingPastes: [],
+			submitQueued: false,
+		};
 		if (draft) {
 			input.setValue(draft.value);
 			input.setCursor(draft.cursor);
 			composer.notice = draft.notice;
 		}
 		input.onEscape = () => {
-			this.#drafts.set(record.id, { value: input.getValue(), cursor: input.getCursor(), notice: composer.notice });
+			this.#drafts.set(record.id, {
+				value: input.getValue(), cursor: input.getCursor(), notice: composer.notice, images: composer.images,
+			});
 			composer.abortController.abort();
 			this.#composer = undefined;
 		};
@@ -464,7 +501,11 @@ export class BtwHistoryPanel implements Component, Focusable {
 
 	async #submitFollowUp(composer: FollowUpComposer, value: string): Promise<void> {
 		if (this.#followUpPending || this.#composer !== composer) return;
-		const question = value.trim();
+		if (composer.pendingPastes.length > 0) {
+			composer.submitQueued = true;
+			return;
+		}
+		let question = value.trim();
 		if (!question) {
 			composer.notice = "Enter a follow-up question.";
 			return;
@@ -477,8 +518,20 @@ export class BtwHistoryPanel implements Component, Focusable {
 		this.#followUpPending = true;
 		composer.notice = "Starting follow-up…";
 		this.#options.requestRender();
+		let images: ImageContent[] | undefined;
+		if (composer.images.length > 0) {
+			// Path pastes attach as they finish loading; submit numbers images in text order.
+			const compacted = compactImageMarkers(question, composer.images.length, { byAppearance: true });
+			images = compacted ? compacted.keep.map(index => composer.images[index]!) : composer.images;
+			if (compacted) question = compacted.text.trim();
+		}
 		try {
-			const accepted = await this.#options.onFollowUp!(record, question, composer.abortController.signal);
+			const accepted = await this.#options.onFollowUp!(
+				record,
+				question,
+				composer.abortController.signal,
+				images?.length ? images : undefined,
+			);
 			if (this.#composer !== composer) return;
 			if (accepted) {
 				this.#drafts.delete(composer.recordId);
@@ -504,18 +557,77 @@ export class BtwHistoryPanel implements Component, Focusable {
 		return this.#composer?.input.capturesInput(data) ?? false;
 	}
 
-	/** Enhanced clipboard pastes belong only to the active composer. */
+	/** False while a follow-up is sent: it already took its images, and the composer clears after. */
+	get acceptsImages(): boolean {
+		return this.#composer !== undefined && !this.#followUpPending;
+	}
+
+	/** Attach an image to the follow-up; returns its `[Image #N, WxH]` marker to paste. */
+	attachImage(image: ImageContent, dims?: { width: number; height: number }): string | undefined {
+		const composer = this.#composer;
+		if (!composer || this.#followUpPending) return undefined;
+		composer.images.push(image);
+		return formatVisionMarker("image", composer.images.length, dims);
+	}
+
+	/** Reserve ordered delivery for an image paste. Completion delivers its marker once, or releases on undefined. */
+	beginPaste(): (text: string | undefined) => boolean {
+		const composer = this.#composer;
+		if (!composer) return () => false;
+		const pending: { settled: boolean; text: string | undefined } = { settled: false, text: undefined };
+		composer.pendingPastes.push(pending);
+		return text => {
+			if (this.#composer !== composer || pending.settled) return false;
+			pending.settled = true;
+			pending.text = text;
+			// A failed read releases the wait, but must not send the follow-up without its image.
+			if (!text) composer.submitQueued = false;
+			let delivered = 0;
+			for (const paste of composer.pendingPastes) {
+				if (!paste.settled) break;
+				if (paste.text) composer.input.pasteText(paste.text);
+				delivered++;
+			}
+			composer.pendingPastes.splice(0, delivered);
+			if (composer.pendingPastes.length === 0 && composer.submitQueued) {
+				composer.submitQueued = false;
+				void this.#submitFollowUp(composer, composer.input.getValue());
+			}
+			this.#options.requestRender();
+			return !!text;
+		};
+	}
+
+	/** Enhanced clipboard pastes belong only to the active composer, behind any image still loading. */
 	pasteText(text: string): void {
-		if (!this.#composer) return;
-		this.#composer.input.pasteText(text);
+		const composer = this.#composer;
+		if (!composer) return;
+		if (composer.pendingPastes.length > 0) this.beginPaste()(text);
+		else composer.input.pasteText(text);
 		this.#options.requestRender();
 	}
+
+	/** A pasted image path or an empty (clipboard image) paste attaches an image; other text is typed. */
+	#paste(content: string): void {
+		const imagePaths = extractImagePastePathsFromText(content);
+		if (content.length === 0 && this.#options.onPasteImage) void this.#options.onPasteImage();
+		else if (imagePaths && this.#options.onPasteImagePath) {
+			for (const path of imagePaths) void this.#options.onPasteImagePath(path);
+		} else this.pasteText(content);
+	}
+
 	handleInput(data: string): void {
 		if (this.#composer) {
+			const paste = this.#pasteHandler.process(data);
+			if (paste.handled) {
+				if (paste.pasteContent !== undefined) this.#paste(paste.pasteContent);
+				if (paste.remaining.length > 0) this.handleInput(paste.remaining);
+				this.#options.requestRender();
+				return;
+			}
 			const printable = extractPrintableText(data);
 			if (printable !== undefined && !matchesKey(data, "space")) {
-				// Preserve the gesture's non-space release/reset path without
-				// letting remapped menu bindings consume ordinary draft text.
+				// Draft text wins over remapped menu bindings.
 				const input = this.#composer.input;
 				input.spaceHold.process(false);
 				input.insertText(printable);
@@ -523,13 +635,13 @@ export class BtwHistoryPanel implements Component, Focusable {
 				this.#options.requestRender();
 				return;
 			}
-			// Literal input wins; an unconsumed context key leaves the field
-			// with its safe draft retained, rather than deleting it.
 			if (!this.#composer.input.handleInput(data)) {
 				const action = this.#keys.read(data);
-				if (action && action !== "pending" && action.kind === "context") {
-					this.#composer.input.onEscape?.();
-					if (this.#records.length > 1) this.#focus = "list";
+				if (action && action !== "pending") {
+					if (action.kind === "context") {
+						this.#composer.input.onEscape?.();
+						if (this.#records.length > 1) this.#focus = "list";
+					} else this.#scrollDetail(action);
 				}
 			}
 			this.#options.requestRender();
@@ -603,12 +715,19 @@ export class BtwHistoryPanel implements Component, Focusable {
 				const by = menuScrollBy(action);
 				if (by) this.#listNativeScroll = { by, n: (this.#listNativeScroll?.n ?? 0) + 1 };
 			}
-		} else if (this.#detail.handleMenuAction(action)) {
-			const by = menuScrollBy(action);
-			if (by) this.#scroll = { by, n: (this.#scroll?.n ?? 0) + 1 };
-			this.#followLatest = action.kind === "boundary" && action.edge === "last";
+		} else if (!this.#scrollDetail(action)) {
+			return;
 		}
 		this.#options.requestRender();
+	}
+
+	/** Apply an answer-pane scroll key; a scroll stops following the newest row unless it is End. */
+	#scrollDetail(action: MenuNavAction): boolean {
+		if (!this.#detail.handleMenuAction(action)) return false;
+		const by = menuScrollBy(action);
+		if (by) this.#scroll = { by, n: (this.#scroll?.n ?? 0) + 1 };
+		this.#followLatest = action.kind === "boundary" && action.edge === "last";
+		return true;
 	}
 
 	/** A large glass sheet (the list beside the reader), palette-sized while there is nothing to list. */
@@ -695,7 +814,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 					if (!this.#composer && (this.#search.focused || this.#search.value)) this.handleInput("\x1b");
 					else this.#options.onClose();
 					return;
-				case "copy":
+				case "copy-answer":
 					if (record && getBtwCopyText(record) !== undefined) this.#options.onCopy(record);
 					break;
 				case "follow-up":
@@ -747,7 +866,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 			if (followUps > 0) detail.push(span(` · ${followUps} follow-up${followUps === 1 ? "" : "s"}`));
 			const status = describeStatus(getBtwLatestTurn(record).status);
 			// The question is markdown: its `code` reads as mono, without the backticks.
-			const label = sanitizeDisplayLine(record.question)
+			const label = sanitizeDisplayLine(getBtwTopicLabel(record))
 				.split(/`([^`]+)`/)
 				.flatMap((part, index) => (part ? [span(part, index % 2 === 1 ? "mono" : undefined)] : []));
 			return node("item", { label, detail, ...(status ? { value: status } : {}) }, undefined, record.id);
@@ -768,7 +887,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 
 	/** The selected side question as a short document: the asked question titles each answer. */
 	#describeThread(record: BtwHistoryRecord): NativeNode {
-		const turns = getBtwTurns(record);
+		const turns = getDisplayTurns(record);
 		const children: NativeChild[] = turns.map((turn, index) => this.#describeTurn(turn, index, `turn-${index}`));
 		if (this.#composer) children.push(this.#describeComposer(this.#composer));
 		return node("col", { role: "omp.btw.thread" }, children, "thread");
@@ -859,7 +978,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 		const buttons: (NativeNode | null)[] = [];
 		if (running) buttons.push(actionButton("Stop answer", "stop", { keys: hides ? "x" : "escape" }));
 		if (record && getBtwCopyText(record) !== undefined) {
-			buttons.push(actionButton(copied ? "Copy again" : "Copy answer", "copy", { keys: "c" }));
+			buttons.push(actionButton(copied ? "Copy again" : "Copy answer", "copy-answer", { keys: "c" }));
 			if (copied) buttons.push(text([span("✓ Copied", "success")], { role: "omp.btw.copied" }));
 		}
 		buttons.push(null);
@@ -901,7 +1020,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 			const time = theme.fg("dim", this.#timeFormat.format(record.createdAt));
 			const badge = theme.fg(status.color, status.label);
 			const prefix = `${cursor} ${time} ${badge} `;
-			const question = sanitizeDisplayLine(record.question);
+			const question = sanitizeDisplayLine(getBtwTopicLabel(record));
 			const snippet = truncateToWidth(
 				question,
 				Math.max(0, contentWidth - (rowSpan === 2 ? 2 : visibleWidth(prefix))),
@@ -998,7 +1117,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 				lines.push(...wrapTextWithAnsi(theme.fg("success", "✓ Copied to clipboard"), inner), "");
 			}
 			if (record) {
-				const turns = getBtwTurns(record);
+				const turns = getDisplayTurns(record);
 				for (let index = 0; index < turns.length; index++) {
 					const cached = this.#renderTurn(turns[index]!, this.#turns[index], inner);
 					this.#turns[index] = cached;
@@ -1081,7 +1200,10 @@ export class BtwHistoryPanel implements Component, Focusable {
 			const availableRows = Math.max(1, height - chrome - 1);
 			if (availableRows >= 2) {
 				composerLines.push(
-					theme.fg("dim", truncateToWidth(`Topic: ${sanitizeDisplayLine(record?.question ?? "")}`, inner)),
+					theme.fg(
+						"dim",
+						truncateToWidth(`Topic: ${sanitizeDisplayLine(record ? getBtwTopicLabel(record) : "")}`, inner),
+					),
 				);
 			}
 			if (composer.notice && availableRows >= 3) {
