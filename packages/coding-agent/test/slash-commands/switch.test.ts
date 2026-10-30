@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
+import { cfgModelsDefaultScope } from "../../src/config/model-settings";
 
 const MODELS = [
 	{ provider: "anthropic", id: "claude-opus-4-5", contextWindow: 200_000 },
@@ -49,7 +50,31 @@ describe("/model slash command", () => {
 		expect(harness.showModelSelector).toHaveBeenCalledWith({ sessionOnly: true });
 		expect(harness.setText).toHaveBeenCalledWith("");
 		await executeBuiltinSlashCommand("/models", harness.runtime);
-		expect(harness.showModelSelector.mock.calls).toEqual([[{ sessionOnly: true }], [undefined]]);
+		expect(harness.showModelSelector.mock.calls).toEqual([[{ sessionOnly: true }], [{ scope: "global" }]]);
+	});
+	it.each(["session", "project", "global"] as const)("opens /models %s in the requested scope", async scope => {
+		const harness = createRuntime();
+		await executeBuiltinSlashCommand(`/models ${scope}`, harness.runtime);
+		expect(harness.showModelSelector).toHaveBeenCalledWith({ scope });
+	});
+
+	it("resolves the scopable default scope with session precedence", async () => {
+		const harness = createRuntime();
+		harness.settings.writeScopeValue(cfgModelsDefaultScope, "global", "global");
+		harness.settings.writeScopeValue(cfgModelsDefaultScope, "project", "project");
+		harness.settings.writeScopeValue(cfgModelsDefaultScope, "session", "session");
+		await executeBuiltinSlashCommand("/models", harness.runtime);
+		expect(harness.showModelSelector).toHaveBeenLastCalledWith({ scope: "session" });
+		harness.settings.writeScopeValue(cfgModelsDefaultScope, undefined, "session");
+		await executeBuiltinSlashCommand("/models", harness.runtime);
+		expect(harness.showModelSelector).toHaveBeenLastCalledWith({ scope: "project" });
+	});
+
+	it("rejects an invalid scope without opening a model menu", async () => {
+		const harness = createRuntime();
+		await executeBuiltinSlashCommand("/models wrong", harness.runtime);
+		expect(harness.showError).toHaveBeenCalledWith("Usage: /models [session|project|global]");
+		expect(harness.showModelSelector).not.toHaveBeenCalled();
 	});
 });
 

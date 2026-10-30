@@ -19,6 +19,7 @@ import type {
 	CredentialBlocksDeleteResponse,
 	CredentialDisableRequest,
 	CredentialDisableResponse,
+	CredentialRefreshRequest,
 	CredentialRefreshResponse,
 	CredentialUploadRequest,
 	CredentialUploadResponse,
@@ -326,9 +327,12 @@ export class AuthBrokerClient {
 		id: number,
 		signal?: AbortSignal,
 		reason?: OAuthRefreshReason,
+		rejectedAccess?: string,
 	): Promise<CredentialRefreshResponse> {
-		const suffix = reason === "auth-recovery" ? "?reason=auth-recovery" : "";
+		const suffix = reason === undefined ? "" : `?${new URLSearchParams({ reason })}`;
+		const body: CredentialRefreshRequest | undefined = rejectedAccess === undefined ? undefined : { rejectedAccess };
 		return this.#request<CredentialRefreshResponse>("POST", `/v1/credential/${id}/refresh${suffix}`, {
+			body,
 			schema: "credentialRefreshResponseSchema",
 			signal,
 		});

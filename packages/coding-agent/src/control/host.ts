@@ -31,6 +31,7 @@ import type { ControlPresenter, RewindOutcome } from "./presenter";
 import { newControlInstanceId, publishControlEndpoint, type ControlPublication } from "./registry";
 import { ControlServer, type ControlConnection } from "./server";
 import { APPROVAL_GATED_SETTINGS, cfgControlApprovals, cfgControlSecretInput } from "./settings";
+import { settingsProjectPath } from "./settings-reload";
 import { RpcPlanModeController } from "../modes/rpc/rpc-plan-mode";
 import { RpcSessionSettleWatcher } from "../modes/rpc/rpc-session-settle";
 import { buildRpcSessionState, CONTROL_QUEUE_LIMIT, copyQueue } from "../modes/rpc/rpc-session-state";
@@ -936,6 +937,36 @@ export class ControlHost {
 			case "switch_model":
 				await this.#switchModel(connection, frame);
 				return;
+			case "reload_settings": {
+				if (frame.scope !== "global" && frame.scope !== "project") {
+					this.#reply(connection, frame, {
+						success: false,
+						code: "invalid_value",
+						error: "Reload scope must be global or project",
+					});
+					return;
+				}
+				if (frame.scope === "project") {
+					if (typeof frame.projectDir !== "string" || !frame.projectDir) {
+						this.#reply(connection, frame, {
+							success: false,
+							code: "invalid_value",
+							error: "Project directory is required",
+						});
+						return;
+					}
+					if (
+						(await settingsProjectPath(frame.projectDir)) !==
+						(await settingsProjectPath(this.#options.session.settings.getCwd()))
+					) {
+						this.#reply(connection, frame, { success: true, data: { applied: false } });
+						return;
+					}
+				}
+				await this.#options.session.settings.applySettingsReload();
+				this.#reply(connection, frame, { success: true, data: { applied: true } });
+				return;
+			}
 			case "settings_get":
 			case "settings_set":
 			case "settings_unset":

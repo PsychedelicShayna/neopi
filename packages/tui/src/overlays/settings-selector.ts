@@ -803,6 +803,8 @@ export interface SettingsCallbacks {
 	onCancel: () => void;
 	/** Edit the persisted settings file, then re-read it before resolving. */
 	onOpenConfigFile?: () => Promise<void>;
+	/** Persist and apply the selected scope to other sessions through the host's reload mechanism. */
+	onApply?: (scope: "global" | "project" | "session") => Promise<string>;
 }
 
 /**
@@ -838,6 +840,8 @@ export class SettingsSelectorComponent implements Component {
 	#textInputActive = false;
 	#restoringNavigation = false;
 	#externalEditPending = false;
+	#applyPending = false;
+	#applyFeedback = "";
 	readonly #menuKeys = new MenuKeyReader();
 	readonly #help = new MenuHelp();
 	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
@@ -923,7 +927,15 @@ export class SettingsSelectorComponent implements Component {
 			return `${tab}/${confirm} settings · ${cancel} close · ? help`;
 		}
 		const nav = this.#hasSectionJump ? `${tab} sections` : `${tab} tabs`;
-		return `${confirm}/${formatKeyHint("space")} change · ${nav} · / search · ${cancel} close${this.#callbacks.onOpenConfigFile ? " · Ctrl+G config file" : ""} · ? help`;
+		return `${confirm}/${formatKeyHint("space")} change · ${nav} · Ctrl+S scope${this.#callbacks.onApply ? " · F6 Apply" : ""} · / search · ${cancel} close${this.#callbacks.onOpenConfigFile ? " · Ctrl+G config file" : ""} · ? help${this.#applyFeedback ? ` · ${this.#applyFeedback}` : ""}`;
+	}
+
+	#scopeTitle(styled = false): string {
+		const active = this.#context.settings.scope ?? "global";
+		const scopes = ["global", "project", "session"].map(scope => scope === active
+			? styled ? theme.bold(theme.fg("accent", `[${scope.toUpperCase()}]`)) : `[${scope.toUpperCase()}]`
+			: scope);
+		return `Settings · ${scopes.join(" / ")} · Ctrl+S cycle scope`;
 	}
 
 	/** Single-line search banner: accent icon, editable query with live cursor, right-aligned match count. */
@@ -984,7 +996,7 @@ export class SettingsSelectorComponent implements Component {
 		}
 
 		const out: string[] = [];
-		out.push(topBorder(width, "Settings"));
+		out.push(topBorder(width, this.#scopeTitle(true)));
 		this.#tabRowStart = out.length;
 		this.#tabRowCount = tabLines.length;
 		for (const line of tabLines) {
@@ -1103,14 +1115,15 @@ export class SettingsSelectorComponent implements Component {
 
 		const searchError = searching ? compileMenuRegex(this.#searchQuery)?.error : undefined;
 		const props: TspPrefsProps = {
-			title: "omp settings",
+			title: this.#scopeTitle(),
 			pages,
 			page: searching ? this.#preSearchTabId : this.#currentTabId,
-			lead: searchError
-				? `Invalid regex: ${searchError}`
-				: searching
-					? undefined
-					: (pluginPage?.lead ?? (tab ? TAB_LEADS[tab] : undefined)),
+			lead: [
+				searchError ? `Invalid regex: ${searchError}`
+					: searching ? undefined : (pluginPage?.lead ?? (tab ? TAB_LEADS[tab] : undefined)),
+				`Ctrl+S cycle scope${this.#callbacks.onApply ? " · F6 Apply" : ""}`,
+				this.#applyFeedback,
+			].filter(Boolean).join(" · "),
 			query: searching || this.#search.focused ? this.#search.value : pluginPage?.query,
 			cursor: searching || this.#search.focused ? this.#search.input.getCursor() : pluginPage?.cursor,
 			sections,
@@ -1730,8 +1743,8 @@ export class SettingsSelectorComponent implements Component {
 		const changed = this.#isChanged(def, currentValue);
 		const item = {
 			id: def.path,
-			label: def.label + provenanceSuffix(def.provenance),
-			description: def.description,
+			label: `${this.#context.settings.details?.(def.path).shadowed ? "󰈉 " : ""}${def.label}${provenanceSuffix(def.provenance)}`,
+			description: [def.description, this.#context.settings.details?.(def.path).description].filter(Boolean).join("\n"),
 			warning: def.warning,
 			changed,
 			defaultLabel: changed ? this.#defaultLabel(def) : undefined,
@@ -1856,7 +1869,7 @@ export class SettingsSelectorComponent implements Component {
 		const activeThemeBeforePreview = getCurrentThemeName() ?? currentValue;
 		if (def.path === "theme.dark" || def.path === "theme.light") {
 			onPreview = value => {
-				return this.#callbacks.onThemePreview?.(value);
+				if (!this.#context.settings.details?.(def.path).shadowed) return this.#callbacks.onThemePreview?.(value);
 			};
 			onPreviewCancel = () => {
 				this.#callbacks.onThemePreview?.(activeThemeBeforePreview);
@@ -2199,6 +2212,12 @@ export class SettingsSelectorComponent implements Component {
 			this.#help.handleInput(data)
 		)
 			return;
+		if (matchesKey(data, "ctrl+s") && !this.#textInputActive) {
+			this.#context.settings.cycleScope?.();
+			this.#refreshItems();
+			this.#context.requestRender?.();
+			return;
+		}
 		if (matchesKey(data, "ctrl+g") && !this.#menuKeys.read(data) && this.#callbacks.onOpenConfigFile) {
 			if (!this.#externalEditPending) {
 				this.#externalEditPending = true;
@@ -2246,6 +2265,23 @@ export class SettingsSelectorComponent implements Component {
 		if (activeList?.hasOpenSubmenu()) {
 			this.#menuKeys.reset();
 			activeList.handleInput(data);
+			return;
+		}
+		if (matchesKey(data, "f6") && this.#callbacks.onApply) {
+			if (!this.#applyPending) {
+				this.#applyPending = true;
+				this.#applyFeedback = "Applying…";
+				void this.#callbacks.onApply(this.#context.settings.scope ?? "global")
+					.then(message => { this.#applyFeedback = message; })
+					.catch((error: unknown) => {
+						this.#applyFeedback = `Apply failed: ${error instanceof Error ? error.message : String(error)}`;
+					})
+					.finally(() => {
+						this.#applyPending = false;
+						this.#context.requestRender?.();
+					});
+				this.#context.requestRender?.();
+			}
 			return;
 		}
 
