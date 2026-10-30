@@ -13,6 +13,7 @@ import { mapWithConcurrencyLimit, Semaphore } from "../../task/parallel";
 import { localParts, localStamp, spanWithin, type TimeBound, type TimeSpan } from "./calendar";
 import { type CanonicalAtomResult, type ChronicleAtom, readCanonicalAtom } from "./corpus";
 import type { NodeRanker, RankCandidate } from "./rank";
+import { prefilterTranscripts } from "./prefilter";
 import { type AtomEntry, clipText, estimateTokens, type NodeLevel, type Resolution } from "./tree";
 import { nodeDir, readViewManifest, readViewNode, type ViewChildRef, type ViewNode } from "./view";
 
@@ -45,6 +46,13 @@ export interface RecallOptions {
 	project?: string;
 	/** Session id or id prefix. */
 	session?: string;
+	/** Session ids or prefixes selected before descent; [] deliberately selects nothing. */
+	sessions?: readonly string[];
+	/** Raw transcript boolean expression, evaluated before model ranking. */
+	keywords?: string;
+	keywordCaseSensitive?: boolean;
+	/** Transcript root; required with keywords. */
+	sessionsDir?: string;
 	/** A remembered adjacent event used as a temporal anchor. */
 	hint?: string;
 	/** Stop at this level and return candidate periods instead of atoms. */
@@ -145,6 +153,7 @@ export interface RecallResult {
 	rankerFallback: boolean;
 	evidenceErrors: { id: string; reason: string }[];
 	view: { root: string; indexedAt?: string; complete: boolean; viewStale: boolean };
+	prefilter?: { keywords: string; matchingSessions: string[]; matchingTranscripts: number };
 }
 
 interface ScoredAtom {
@@ -208,6 +217,26 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 	let viewStale = false;
 	const project = lower(options.project);
 	const session = lower(options.session);
+	let sessions = options.sessions?.map(value => value.toLowerCase());
+	let prefilter: RecallResult["prefilter"];
+	if (options.keywords !== undefined) {
+		if (!options.sessionsDir) throw new Error("Transcript sessionsDir is required with keywords");
+		await options.onProgress?.("Prefiltering session transcripts by keywords");
+		const matches = await prefilterTranscripts({
+			sessionsDir: options.sessionsDir,
+			keywords: options.keywords,
+			caseSensitive: options.keywordCaseSensitive,
+			signal: options.signal,
+		});
+		const matchingSessions = [...new Set(matches.map(match => match.sessionId.toLowerCase()))].filter(
+			id => (!sessions || sessions.some(prefix => id.startsWith(prefix))) && (!session || id.startsWith(session)),
+		);
+		sessions = matchingSessions;
+		prefilter = { keywords: options.keywords, matchingSessions, matchingTranscripts: matches.length };
+	}
+	const inScopeSession = (id: string): boolean =>
+		(!session || id.toLowerCase().startsWith(session)) &&
+		(!sessions || sessions.some(prefix => id.toLowerCase().startsWith(prefix)));
 	const resolution = options.resolution ?? "atom";
 	const budget = Math.max(1, Math.floor(options.budget));
 	const beam = Math.max(1, Math.floor(options.beam));
@@ -217,7 +246,7 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 	const inScopeRef = (ref: ViewChildRef): boolean =>
 		inScopeSpan(ref) &&
 		(!project || ref.projects.some(value => value.toLowerCase().includes(project))) &&
-		(!session || ref.sessions.some(value => value.toLowerCase().startsWith(session)));
+		ref.sessions.some(inScopeSession);
 	const inScopeAtom = (atom: { eventTime: string; localTime: string; project: string; sessionId: string }): boolean =>
 		inScopeSpan({
 			start: atom.eventTime,
@@ -226,7 +255,7 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 			localEnd: atom.localTime,
 		}) &&
 		(!project || atom.project.toLowerCase().includes(project)) &&
-		(!session || atom.sessionId.toLowerCase().startsWith(session));
+		inScopeSession(atom.sessionId);
 
 	const load = async (
 		key: string,
@@ -837,6 +866,7 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 		ranker: options.ranker.kind,
 		rankerFallback,
 		evidenceErrors,
+		...(prefilter ? { prefilter } : {}),
 		view: {
 			root: options.root,
 			indexedAt: manifest?.indexedAt,
