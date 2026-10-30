@@ -238,19 +238,21 @@ export async function runAttachView(client: SessionDaemonClient, sessionId: stri
 		ui.requestRender();
 	});
 	// `app.daemon.detach` (default Ctrl+X) is a prefix: it, then d, detaches. Ctrl+] (jumpForward),
-	// Ctrl+S (agent hub) and F6 were taken. The prefix consumes its first key, so it shadows the
-	// autoresearch dashboard toggle (also Ctrl+X) while attached; rebind either in keybindings.
+	// Ctrl+S (agent hub) and F6 were taken. Ctrl+X also toggles the autoresearch dashboard: pressing
+	// it twice delivers one Ctrl+X to the session, as tmux does with its prefix.
 	const detachKeys = KeybindingsManager.create().getKeys("app.daemon.detach");
 	let prefix = false;
 	const removeListener = ui.addInputListener(data => {
+		const isPrefix = detachKeys.some(key => matchesKey(data, key));
 		if (prefix) {
 			prefix = false;
 			if (data === "d") {
 				done.resolve("detach");
 				return { consume: true };
 			}
-		}
-		if (detachKeys.some(key => matchesKey(data, key))) {
+			// tmux convention: the prefix twice sends one prefix through; any other key passes as usual.
+			if (isPrefix) return undefined;
+		} else if (isPrefix) {
 			prefix = true;
 			return { consume: true };
 		}
