@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { X509Certificate } from "node:crypto";
 import * as path from "node:path";
 import { streamSimple, type FetchImpl } from "@oh-my-pi/pi-ai";
+import * as AIError from "@oh-my-pi/pi-ai/error";
 import { AuthBrokerClient, RemoteAuthCredentialStore, startAuthBroker } from "@oh-my-pi/pi-ai/auth-broker";
 import { pinnedCredential } from "@oh-my-pi/pi-ai/switch/credential";
 import {
@@ -258,6 +259,7 @@ describe("NeoProxy credential-local private CA", () => {
 	let acceptedKey: string;
 	let invalidCatalogue: boolean;
 	let redirectTo: string | undefined;
+	let redirectStatus: 302 | 307 | 308;
 	let onCatalogue: (() => Promise<void>) | undefined;
 	let requests: Array<{ path: string; authorization: string | null }>;
 	let events: string[];
@@ -279,6 +281,7 @@ describe("NeoProxy credential-local private CA", () => {
 		acceptedKey = assignedKey;
 		invalidCatalogue = false;
 		redirectTo = undefined;
+		redirectStatus = 302;
 		onCatalogue = undefined;
 		requests = [];
 		events = [];
@@ -292,7 +295,7 @@ describe("NeoProxy credential-local private CA", () => {
 				const url = new URL(request.url);
 				requests.push({ path: url.pathname, authorization: request.headers.get("authorization") });
 				events.push("http");
-				if (redirectTo) return Response.redirect(redirectTo);
+				if (redirectTo) return Response.redirect(redirectTo, redirectStatus);
 				if (status !== 200) return new Response("Do not disclose upstream error bodies", { status });
 				if (request.headers.get("authorization") !== `Bearer ${acceptedKey}`)
 					return new Response("Invalid assigned key", { status: 401 });
@@ -706,47 +709,95 @@ describe("NeoProxy credential-local private CA", () => {
 		);
 	});
 
-	test("persisted private-CA discovery and inference also refuse cross-origin redirects", async () => {
+	for (const code of [302, 307, 308] as const) {
+		test(`persisted private-CA discovery and inference refuse cross-origin ${code} redirects`, async () => {
+			await storage.oauth.login("neoproxy", loginCallbacks());
+			await registry.refreshProvider("neoproxy", "online");
+			const model = registry.find("neoproxy", "office-model");
+			if (!model) throw new Error("Expected granted model");
+			const disclosed: string[] = [];
+			const destination = Bun.serve({
+				hostname: "127.0.0.1",
+				port: 0,
+				fetch(request) {
+					disclosed.push(request.headers.get("authorization") ?? "");
+					return Response.json({ data: [] });
+				},
+			});
+			try {
+				redirectTo = `http://127.0.0.1:${destination.port}/v1/models`;
+				redirectStatus = code;
+				await expect(
+					discoverProxyModels(
+						{
+							provider: "neoproxy",
+							baseUrl: `${origin}/v1`,
+							api: "openai-completions",
+							discovery: { type: "proxy" },
+						},
+						{ fetch: localFetch, getBearerApiKeyResolver: async () => storage.keys.resolver("neoproxy") },
+					),
+				).rejects.toThrow();
+				const result = await streamSimple(
+					model,
+					{ messages: [{ role: "user", content: "Do not redirect.", timestamp: 0 }] },
+					{
+						apiKey: registry.resolver(model),
+						fetch: localFetch,
+						maxTokens: 8,
+					},
+				).result();
+				expect(result.stopReason).toBe("error");
+				expect(AIError.is(result.errorId, AIError.Flag.CredentialScope)).toBe(true);
+				expect(AIError.retriable(AIError.classifyMessage(result))).toBe(false);
+				expect(disclosed).toEqual([]);
+			} finally {
+				destination.stop(true);
+			}
+		});
+	}
+
+	test("a replacement certificate at the stored origin fails without transport or turn retries", async () => {
 		await storage.oauth.login("neoproxy", loginCallbacks());
 		await registry.refreshProvider("neoproxy", "online");
 		const model = registry.find("neoproxy", "office-model");
 		if (!model) throw new Error("Expected granted model");
-		const disclosed: string[] = [];
-		const destination = Bun.serve({
+		const port = server.port;
+		await server.stop(true);
+		const replacement = await Bun.file(new URL("./fixtures/neoproxy-tls/replacement.pem", import.meta.url)).text();
+		let disclosed = false;
+		server = Bun.serve({
 			hostname: "127.0.0.1",
-			port: 0,
-			fetch(request) {
-				disclosed.push(request.headers.get("authorization") ?? "");
+			port,
+			tls: { cert: replacement, key: serverKey },
+			fetch() {
+				disclosed = true;
 				return Response.json({ data: [] });
 			},
 		});
-		try {
-			redirectTo = `http://127.0.0.1:${destination.port}/v1/models`;
-			await expect(
-				discoverProxyModels(
-					{
-						provider: "neoproxy",
-						baseUrl: `${origin}/v1`,
-						api: "openai-completions",
-						discovery: { type: "proxy" },
-					},
-					{ fetch: localFetch, getBearerApiKeyResolver: async () => storage.keys.resolver("neoproxy") },
-				),
-			).rejects.toThrow();
-			const result = await streamSimple(
-				model,
-				{ messages: [{ role: "user", content: "Do not redirect.", timestamp: 0 }] },
-				{
-					apiKey: registry.resolver(model),
-					fetch: localFetch,
-					maxTokens: 8,
-				},
-			).result();
-			expect(result.stopReason).toBe("error");
-			expect(disclosed).toEqual([]);
-		} finally {
-			destination.stop(true);
-		}
+		let attempts = 0;
+		const countingFetch: FetchImpl = (input, init) => {
+			attempts++;
+			return localFetch(input, init);
+		};
+		await expect(
+			discoverProxyModels(
+				{ provider: "neoproxy", baseUrl: `${origin}/v1`, api: "openai-completions", discovery: { type: "proxy" } },
+				{ fetch: countingFetch, getBearerApiKeyResolver: async () => storage.keys.resolver("neoproxy") },
+			),
+		).rejects.toThrow("certificate");
+		expect(attempts).toBe(1);
+		const result = await streamSimple(
+			model,
+			{ messages: [{ role: "user", content: "Do not trust a replacement.", timestamp: 0 }] },
+			{ apiKey: registry.resolver(model), fetch: countingFetch, maxTokens: 8 },
+		).result();
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("Reconnect");
+		expect(AIError.is(result.errorId, AIError.Flag.CredentialScope)).toBe(true);
+		expect(AIError.retriable(AIError.classifyMessage(JSON.parse(JSON.stringify(result))))).toBe(false);
+		expect(attempts).toBe(2);
+		expect(disclosed).toBe(false);
 	});
 
 	test("a normal pinned generation retains the credential's private CA for actual inference", async () => {

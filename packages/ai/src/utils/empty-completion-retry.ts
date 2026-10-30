@@ -153,6 +153,7 @@ export function withReplaySafeStreamRetry<M, O extends StreamRetryOptions>(
 				!committed &&
 				failedMessage?.stopReason === "error" &&
 				failedMessage.errorMessage !== undefined &&
+				!AIError.is(failedMessage.errorId, AIError.Flag.CredentialScope) &&
 				providerErrorRetries < (policy.maxProviderErrorRetries ?? 0) &&
 				AIError.isProviderRetryableError(
 					new FinalizedProviderStreamError(failedMessage.errorMessage, failedMessage.errorStatus),

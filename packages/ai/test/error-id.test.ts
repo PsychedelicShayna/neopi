@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
+import { CredentialScopeError } from "@oh-my-pi/pi-utils/tls-fetch";
 
 function message(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
 	return {
@@ -24,6 +25,29 @@ function message(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
 }
 
 describe("error-id classification", () => {
+	it("keeps credential-scope refusal terminal through causes, formatting and persisted turn errors", async () => {
+		const tlsFailure = Object.assign(new Error("self-signed certificate"), { code: "DEPTH_ZERO_SELF_SIGNED_CERT" });
+		const refusal = new CredentialScopeError("TLS certificate verification failed at the trusted origin", {
+			cause: tlsFailure,
+		});
+		for (const error of [refusal, new AIError.AnthropicConnectionError(refusal)]) {
+			expect(AIError.is(AIError.classify(error), AIError.Flag.CredentialScope)).toBe(true);
+			expect(AIError.retriable(AIError.classify(error))).toBe(false);
+			expect(AIError.isProviderRetryableError(error)).toBe(false);
+		}
+		const finalized = await AIError.finalize(refusal);
+		const restored = JSON.parse(
+			JSON.stringify(message({ errorId: finalized.id, errorMessage: finalized.message })),
+		) as AssistantMessage;
+		const id = AIError.classifyMessage(restored);
+		expect(AIError.is(id, AIError.Flag.CredentialScope)).toBe(true);
+		expect(AIError.is(id, AIError.Flag.Transient)).toBe(false);
+		expect(AIError.is(id, AIError.Flag.AuthFailed)).toBe(false);
+		expect(AIError.retriable(id)).toBe(false);
+		expect(AIError.status(restored)).toBeUndefined();
+		expect(AIError.retriable(AIError.create(AIError.Flag.CredentialScope, AIError.Flag.Transient))).toBe(false);
+	});
+
 	it("composes timeout with transient", () => {
 		const id = AIError.classify(new Error("provider stream stall timeout"), "anthropic-messages");
 		expect(AIError.is(id, AIError.Flag.Transient)).toBe(true);
