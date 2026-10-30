@@ -715,6 +715,8 @@ export declare class VcsGitRepo {
   isDirty(signal?: unknown | undefined | null): Promise<boolean>
   /** Porcelain status. */
   statusPorcelain(options: VcsStatusOptions, signal?: unknown | undefined | null): Promise<string>
+  /** Porcelain status for synchronous module initialization. */
+  statusPorcelainSync(options: VcsStatusOptions): string
   /** Status counts. */
   statusSummary(signal?: unknown | undefined | null): Promise<VcsStatusSummary>
   /** Read config. */
