@@ -1508,15 +1508,20 @@ export class Settings {
 		this.#watchReloadTimer.unref();
 	}
 
+	/** Shared watcher/explicit-Apply path: adopt each valid durable layer and notify live consumers. */
+	async applySettingsReload(): Promise<void> {
+		if (!this.#persist) return;
+		await this.#exclusive("keep-last-good", () => this.#reloadPersistedLayers("keep-last-good"));
+		this.#syncFileWatchers();
+	}
+
 	async #reloadFromWatch(): Promise<void> {
 		if (!this.#watchingFiles) return;
 		try {
-			await this.#exclusive("keep-last-good", () => this.#reloadPersistedLayers("keep-last-good"));
+			await this.applySettingsReload();
 		} catch (error) {
 			logger.warn("Settings: failed to apply on-disk config change", { error: String(error) });
 		}
-		// Sources may have appeared, moved, or vanished; re-target the watchers.
-		this.#syncFileWatchers();
 	}
 
 	/**
