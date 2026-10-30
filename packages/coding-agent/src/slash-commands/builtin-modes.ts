@@ -235,8 +235,23 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "settings",
 		icon: "settings",
 		description: "Open settings menu",
-		handleTui: (_command, runtime) => {
-			runtime.ctx.showSettingsSelector();
+		allowArgs: true,
+		subcommands: [
+			{ name: "session", description: "Edit session overrides; session clear removes them" },
+			{ name: "project", description: "Edit project overrides; project clear removes them" },
+			{ name: "global", description: "Edit global settings" },
+		],
+		handleTui: async (command, runtime) => {
+			const [scope, verb, extra] = command.args.trim().split(/\s+/);
+			if (scope && scope !== "session" && scope !== "project" && scope !== "global" ||
+				verb && verb !== "clear" || extra || verb === "clear" && scope === "global") {
+				runtime.ctx.showWarning("Usage: /settings [session|project|global] [clear]");
+			} else if (verb === "clear" && (scope === "session" || scope === "project")) {
+				await runtime.ctx.settings.clearScope(scope);
+				runtime.ctx.showStatus(`Cleared ${scope} settings overrides.`);
+			} else {
+				runtime.ctx.showSettingsSelector(scope || undefined);
+			}
 			clearSubmittedText(runtime);
 		},
 	},

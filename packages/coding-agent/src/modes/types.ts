@@ -14,7 +14,7 @@ import type { CollabHost } from "../collab/host";
 import type { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import type { TrackSegment } from "@oh-my-pi/pi-tui/chrome/segment-track";
 import type { Composer } from "@oh-my-pi/pi-tui/prompt/composer";
-import type { Settings } from "../config/settings";
+import type { Settings, SettingsScope } from "../config/settings";
 import type {
 	AutocompleteProviderFactory,
 	ExtensionCustomOptions,
@@ -611,7 +611,7 @@ export interface InteractiveModeContext {
 	// Selector handling
 	/** Register a command-owned menu with the shared history and single-instance lifecycle. */
 	openMenu(kind: MenuKind, reopen: () => void): MenuHost | undefined;
-	showSettingsSelector(): void;
+	showSettingsSelector(scope?: SettingsScope): void;
 	/** Open the fullscreen `/usage` dashboard overlay for the given reports. */
 	showUsageDashboard(reports: UsageReport[]): void;
 	/** Ctrl-O (-1) / Ctrl-I (+1) through the menu history; false when there is no entry that way. */

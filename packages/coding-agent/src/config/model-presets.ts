@@ -147,6 +147,7 @@ export function modelPresetShadowOwner(
 const SOURCE_LABELS: Record<SettingProvenance, string> = {
 	env: "environment",
 	runtime: "command line",
+	session: "session settings",
 	role: "active role",
 	overlay: "--config file",
 	project: "project config",

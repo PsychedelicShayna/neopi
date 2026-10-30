@@ -89,7 +89,8 @@ import type { CollabHost } from "../collab/host";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { appKey, editorKey, rawKeyHint } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
 import { formatModelString, type ResolvedModelRoleValue } from "../config/model-resolver";
-import { isSettingsInitialized, Settings, settings } from "../config/settings";
+import { isSettingsInitialized, Settings, settings, type SettingsScope } from "../config/settings";
+import { settleSessionSettingsOnQuit } from "../config/session-settings-quit";
 import { clearClaudePluginRootsCache } from "../discovery/helpers";
 import type {
 	AutocompleteProviderFactory,
@@ -8246,6 +8247,18 @@ export class InteractiveMode implements InteractiveModeContext {
 			await this.#quitHostOwned(130);
 			return;
 		}
+		try {
+			const proceed = await settleSessionSettingsOnQuit(
+				this.settings,
+				choices => this.#extensionUiController.showCollabAwareSelector(
+					"Session settings changed — Esc keeps them in the session directory and quits", [...choices],
+				),
+				() => this.sessionManager.ensureOnDisk(),
+			);
+			if (!proceed) return;
+		} catch (error) {
+			this.showWarning(`Could not save session settings: ${error instanceof Error ? error.message : String(error)}`);
+		}
 		this.#beginClose();
 		const worktreePlan = await this.#planOwnedWorktreeExit();
 		try {
@@ -9619,8 +9632,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#selectorController.openMenu(kind, reopen);
 	}
 
-	showSettingsSelector(): void {
-		this.#selectorController.showSettingsSelector();
+	showSettingsSelector(scope?: SettingsScope): void {
+		this.#selectorController.showSettingsSelector(scope);
 	}
 
 	showUsageDashboard(reports: UsageReport[]): void {
