@@ -26,7 +26,7 @@ import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { thinkingLevelGlyph } from "@oh-my-pi/pi-tui/render/render-utils";
 
 import { getKnownRoleIds, getRoleInfo, setRoleDescription } from "@oh-my-pi/pi-coding-agent/config/model-roles";
-import { cfgCycleOrder, cfgModelPresets } from "@oh-my-pi/pi-coding-agent/config/model-settings";
+import { cfgCycleOrder, cfgModelPresets, cfgModelRoles } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { cfgEffortRules, cfgFallbackEffortSelections } from "@oh-my-pi/pi-coding-agent/config/effort-policy";
 import { cfgContextRules } from "../src/config/context-policy";
 import { parseCompactionPointInput } from "../src/config/compaction-threshold";
@@ -134,6 +134,7 @@ const openHubs: ModelHubComponent[] = [];
 function createHub(options: {
 	models: Model[] | (() => Model[]);
 	scoped?: boolean;
+	scope?: "session" | "project" | "global";
 	settings?: Settings;
 	registry?: RegistryOverrides;
 	hub?: ModelHubOptions;
@@ -177,7 +178,7 @@ function createHub(options: {
 	);
 	const hub = new ModelHubComponent(
 		ui,
-		createModelBrowserSource(settings),
+		createModelBrowserSource(settings, undefined, options.scope),
 		registry,
 		options.scoped ? modelsFn().map(model => ({ model })) : [],
 		{
@@ -269,6 +270,23 @@ describe("ModelHub", () => {
 		if (!testTheme) {
 			throw new Error("Failed to load dark theme for ModelHub tests");
 		}
+	});
+
+	test.each(["session", "project", "global"] as const)("Models %s edits its own assignment and shows higher-scope shadowing", scope => {
+		const settings = Settings.isolated({});
+		settings.writeScopeValue(cfgModelRoles, { default: "test/global" }, "global");
+		settings.writeScopeValue(cfgModelRoles, { default: "test/project" }, "project");
+		settings.writeScopeValue(cfgModelRoles, { default: "test/session" }, "session");
+		const models = ["global", "project", "session"].map(id => makeModel("test", id));
+		const source = createModelBrowserSource(settings, undefined, scope);
+		expect(source.getModelRole("default")).toBe(`test/${scope}`);
+		expect(settings.getModelRole("default")).toBe("test/session");
+		const { hub, onUnassign } = createHub({ models, settings, scoped: true, scope });
+		for (const key of [UP, "\n"]) hub.handleInput(key);
+		const rendered = normalize(hub.render(220));
+		if (scope !== "session") expect(rendered).toContain("shadowed by session: test/session");
+		hub.handleInput("x");
+		expect(onUnassign).toHaveBeenCalledWith("default", scope);
 	});
 
 	test("role token budgets are editable in Models without changing stored keys", () => {

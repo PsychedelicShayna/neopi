@@ -4,7 +4,8 @@ import { findActiveModelPreset, getModelPresetNames } from "../config/model-pres
 import { formatModelStringWithRouting, resolveModelRoleValue, rolePriorityDefaults } from "../config/model-resolver";
 import { getKnownRoleIds, getRoleInfo } from "../config/model-roles";
 import { buildServiceTierByFamily } from "../config/service-tier";
-import type { Settings } from "../config/settings";
+import type { Settings, SettingsScope } from "../config/settings";
+import { cfgRoleSettings, type RoleSettings } from "../config/role-settings";
 import {
 	cfgEffortPolicyMode,
 	cfgEffortRules,
@@ -40,8 +41,16 @@ import {
 export function createModelBrowserSource(
 	settings: Settings,
 	sessionServiceTier?: (model: Model) => ServiceTier | undefined,
+	editingScope?: SettingsScope,
 ): ModelHubSource {
 	return {
+		editingScope,
+		getRoleScopeNote: editingScope ? role => {
+			const details = settings.getModelRoleScopeDetails(role, editingScope);
+			return details.shadowed
+				? `${editingScope} · shadowed by ${details.winner}: ${String(details.effective ?? "inherit")}`
+				: `${editingScope} · effective ${details.winner}`;
+		} : undefined,
 		get revision() {
 			return settings.revision;
 		},
@@ -101,10 +110,22 @@ export function createModelBrowserSource(
 		},
 		getProjectRoleEffortSelection: role => settings.getProjectRoleEffortSelection(role),
 		getGlobalRoleEffortSelection: role => settings.getGlobalRoleEffortSelection(role),
-		getRoleEffortSelection: role => settings.getRoleEffortSelection(role),
-		getRoleTokenBudget: role => settings.getRoleSetting(role, cfgCompactionThresholdTokens),
+		getRoleEffortSelection: role => editingScope === "session"
+			? settings.getSessionRoleEffortSelection(role)
+			: editingScope === "project" ? settings.getProjectRoleEffortSelection(role)
+				: editingScope === "global" ? settings.getGlobalRoleEffortSelection(role) : settings.getRoleEffortSelection(role),
+		getRoleTokenBudget: role => {
+			if (!editingScope) return settings.getRoleSetting(role, cfgCompactionThresholdTokens);
+			const entries = settings.readScopeValue(cfgRoleSettings, editingScope) as RoleSettings | undefined;
+			const value = entries?.[role]?.[cfgCompactionThresholdTokens.id];
+			return typeof value === "number" ? value : undefined;
+		},
 		getFallbackEffortSelection: (role, selector) => cfgFallbackEffortSelections.get(settings)[role]?.[selector],
-		getModelRole: role => settings.getModelRole(role),
+		getModelRole: role => editingScope === "session"
+			? settings.getSessionModelRole(role)
+			: editingScope === "project" ? settings.getProjectModelRole(role)
+				: editingScope === "global" ? settings.getGlobalModelRole(role) : settings.getModelRole(role),
+		getSessionModelRole: role => settings.getSessionModelRole(role),
 		getProjectModelRole: role => settings.getProjectModelRole(role),
 		getGlobalModelRole: role => settings.getGlobalModelRole(role),
 		getModelRoleSource: role => settings.getModelRoleSource(role),

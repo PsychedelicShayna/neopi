@@ -182,7 +182,8 @@ import type { SessionObserverRegistry } from "@oh-my-pi/pi-tui/overlays/session-
 
 import { cfgAdvisorSyncBacklog } from "../../advisor/settings";
 import { cfgBranchSummaryEnabled, cfgCompactionThresholdTokens } from "../../session/context-settings";
-import { cfgCycleOrder, cfgDisabledProviders, cfgModelRoleStorage } from "../../config/model-settings";
+import { cfgCycleOrder, cfgDisabledProviders, cfgModelsDefaultScope } from "../../config/model-settings";
+import { cfgRoleSettings, type RoleSettings } from "../../config/role-settings";
 import { cfgDefaultThinkingLevel, cfgRetryFallbackChains, cfgSessionWorktreeScope } from "../../session/settings";
 import { cfgEffortRules, cfgFallbackEffortSelections } from "../../config/effort-policy";
 import { cfgContextRules } from "../../config/context-policy";
@@ -1456,7 +1457,7 @@ export class SelectorController {
 		this.ctx.session.setThinkingLevel(level);
 	}
 
-	showModelSelector(options?: { temporaryOnly?: boolean; sessionOnly?: boolean; selectOnly?: SelectOnlyModelSelectorOptions }): void {
+	showModelSelector(options?: { temporaryOnly?: boolean; sessionOnly?: boolean; scope?: SettingsScope; selectOnly?: SelectOnlyModelSelectorOptions }): void {
 		if (options?.selectOnly) {
 			this.#showModelPicker({ selectOnly: options.selectOnly });
 			return;
@@ -1465,7 +1466,7 @@ export class SelectorController {
 			this.#showModelPicker();
 			return;
 		}
-		this.#showModelHub({ sessionOnly: options?.sessionOnly });
+		this.#showModelHub({ sessionOnly: options?.sessionOnly, scope: options?.scope });
 	}
 
 	/**
@@ -1671,7 +1672,8 @@ export class SelectorController {
 	 * untouched underneath. `initialProviderId` preselects a provider's sidebar
 	 * entry — used when reopening the hub after a /login round-trip.
 	 */
-	#showModelHub(hubOptions: { initialProviderId?: string; sessionOnly?: boolean }): void {
+	#showModelHub(hubOptions: { initialProviderId?: string; sessionOnly?: boolean; scope?: SettingsScope }): void {
+		const editingScope = hubOptions.scope ?? cfgModelsDefaultScope.get(this.ctx.settings);
 		const menuKind = hubOptions.sessionOnly ? "session-model-hub" : "model-hub";
 		if (this.#focusOpenMenu(menuKind)) return;
 		let closed = false;
@@ -1688,7 +1690,7 @@ export class SelectorController {
 		};
 		const hub = new ModelHubComponent(
 			this.ctx.ui,
-			createModelBrowserSource(this.ctx.settings, model => this.ctx.session.effectiveServiceTier(model)),
+			createModelBrowserSource(this.ctx.settings, model => this.ctx.session.effectiveServiceTier(model), hubOptions.sessionOnly ? undefined : editingScope),
 			this.ctx.session.modelRegistry,
 			this.ctx.session.scopedModels,
 			{
@@ -1712,10 +1714,10 @@ export class SelectorController {
 							done();
 							this.#showModelFacts(provider, model?.id);
 						},
-				onOpenConfigFile: hubOptions.sessionOnly
+				onOpenConfigFile: hubOptions.sessionOnly || editingScope === "session"
 					? undefined
 					: (section, scope) =>
-							this.#openConfigFile({ kind: "models", section, scope }, async () => {
+							this.#openConfigFile({ kind: "models", section, scope: scope === "session" ? undefined : scope ?? editingScope as "global" | "project" }, async () => {
 								await this.ctx.settings.reloadFromDisk();
 								await this.ctx.session.modelRegistry.refresh("offline");
 							}),
@@ -1728,42 +1730,21 @@ export class SelectorController {
 					selection,
 				) => {
 					const releaseDefaultMutation = role === "default" ? await this.#acquireDefaultRoleMutation() : undefined;
-					const configuredStorage = cfgModelRoleStorage.get(this.ctx.settings);
-					const targetScope = configuredStorage === "project" ? (scope ?? "global") : "global";
+					const targetScope = scope ?? editingScope;
 					const selectorValue = selector ?? `${model.provider}/${model.id}`;
-					const scopeLabel =
-						configuredStorage === "project" ? `${targetScope === "project" ? "Project" : "Global"} ` : "";
-					const defaultStatusLabel = configuredStorage === "project" ? `${scopeLabel}default` : "Default";
+					const scopeLabel = `${targetScope} `;
+					const defaultStatusLabel = `${scopeLabel}default`;
 					try {
 						if (role === "default") {
 							// `auto` on the default role configures the active session. Other roles
 							// persist an explicit `:auto` suffix and must not mutate the current model.
 							const isAuto = thinkingLevel === AUTO_THINKING;
 							const concreteThinking = isAuto || thinkingLevel === undefined ? undefined : thinkingLevel;
-							const effectiveProvenance = this.ctx.settings.getModelRoleProvenance("default");
-							const shadowedGlobal =
-								configuredStorage === "project" &&
-								targetScope === "global" &&
-								(effectiveProvenance === "project" ||
-									effectiveProvenance === "overlay" ||
-									(effectiveProvenance === "runtime" &&
-										this.ctx.settings.isProjectModelRoleRuntimeOverrideActive("default")));
-							const shadowedProject =
-								configuredStorage === "project" &&
-								targetScope === "project" &&
-								effectiveProvenance === "overlay";
+							const shadowed = this.ctx.settings.getModelRoleScopeDetails("default", targetScope).shadowed;
 							const savedValue = formatModelSelectorValue(selectorValue, concreteThinking);
 							this.ctx.settings.validateRoleModelAndEffort("default", savedValue, selection, targetScope);
-							if (shadowedGlobal) {
+							if (shadowed) {
 								this.ctx.settings.setRoleModelAndEffort("default", savedValue, selection, targetScope);
-								if (isAuto && !selection) {
-									cfgDefaultThinkingLevel.set(this.ctx.settings, AUTO_THINKING);
-								}
-							} else if (shadowedProject) {
-								this.ctx.settings.setRoleModelAndEffort("default", savedValue, selection, targetScope);
-								if (isAuto && !selection) {
-									cfgDefaultThinkingLevel.set(this.ctx.settings, AUTO_THINKING);
-								}
 							} else {
 								const { switched } = await this.ctx.session.setModel(model, role, {
 									selector,
@@ -1831,10 +1812,8 @@ export class SelectorController {
 				},
 				onUnassign: async (role, scope?: ModelRoleSelectionScope) => {
 					const releaseDefaultMutation = role === "default" ? await this.#acquireDefaultRoleMutation() : undefined;
-					const configuredStorage = cfgModelRoleStorage.get(this.ctx.settings);
-					const targetScope = configuredStorage === "project" ? (scope ?? "project") : "global";
-					const scopeLabel =
-						configuredStorage === "project" ? `${targetScope === "project" ? "Project" : "Global"} ` : "";
+					const targetScope = scope ?? editingScope;
+					const scopeLabel = `${targetScope} `;
 					try {
 						const previousEffectiveRoleValue =
 							role === "default" ? this.ctx.settings.getModelRole("default") : undefined;
@@ -1854,7 +1833,7 @@ export class SelectorController {
 							const fallbackRoleValue = this.ctx.settings.getModelRole("default");
 							const fallbackProvenance = this.ctx.settings.getModelRoleProvenance("default");
 							const exposesPersistedFallback =
-								fallbackProvenance === "project" || fallbackProvenance === "global";
+								fallbackProvenance === "session" || fallbackProvenance === "project" || fallbackProvenance === "global";
 							if (fallbackRoleValue && exposesPersistedFallback) {
 								const scopedModels = this.ctx.session.scopedModels.map(sm => sm.model);
 								const availableModels =
@@ -1953,7 +1932,12 @@ export class SelectorController {
 				},
 				onRoleTokenBudgetChange: (role, value) => {
 					try {
-						this.ctx.settings.setRoleSetting(role, cfgCompactionThresholdTokens, value);
+						if (value !== undefined) cfgCompactionThresholdTokens.assertRoleWritable(value);
+						const entries = (this.ctx.settings.readScopeValue(cfgRoleSettings, editingScope) ?? {}) as RoleSettings;
+						this.ctx.settings.writeScopeValue(cfgRoleSettings, {
+							...entries,
+							[role]: { ...entries[role], [cfgCompactionThresholdTokens.id]: value ?? null },
+						}, editingScope);
 						return true;
 					} catch (error) {
 						this.ctx.showError(error instanceof Error ? error.message : String(error));

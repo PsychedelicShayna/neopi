@@ -1838,6 +1838,9 @@ export class ModelHubComponent implements Component {
 				: this.#registry.getAll("all");
 		const roleLookup: ModelRoleLookup = {
 			getModelRole: scopedRole =>
+				scope === "session"
+					? (this.#settings.getSessionModelRole?.(scopedRole) ?? this.#settings.getProjectModelRole(scopedRole) ?? this.#settings.getGlobalModelRole(scopedRole))
+					:
 				scope === "project"
 					? (this.#settings.getProjectModelRole(scopedRole) ?? this.#settings.getGlobalModelRole(scopedRole))
 					: this.#settings.getGlobalModelRole(scopedRole),
@@ -2021,9 +2024,11 @@ export class ModelHubComponent implements Component {
 	): void {
 		const scoped = scope ?? "global";
 		const saved =
-			scoped === "project"
-				? this.#settings.getProjectRoleEffortSelection(role)
-				: this.#settings.getGlobalRoleEffortSelection(role);
+			this.#settings.editingScope
+				? this.#settings.getRoleEffortSelection(role)
+				: scoped === "project"
+					? this.#settings.getProjectRoleEffortSelection(role)
+					: this.#settings.getGlobalRoleEffortSelection(role);
 		const selection =
 			saved?.mode === "auto" && saved.selector && saved.selector !== item.selector ? undefined : saved;
 		const options = this.#thinkingOptionsFor(item.model, role);
@@ -5208,6 +5213,7 @@ export class ModelHubComponent implements Component {
 	#pickerSubtitle(entry: SidebarEntry, rolesView: boolean): TspPickerProps["subtitle"] {
 		if (this.#assignmentPending) return "Applying model…";
 		if (this.#sessionOnly) return "Current session only";
+		if (rolesView && this.#settings.editingScope) return `Editing ${this.#settings.editingScope} · session > project > global`;
 		const assigning = this.#assigning;
 		if (assigning !== null) {
 			if (assigning.kind === "fallbackKey") return "New fallback chain — pick the model it protects";

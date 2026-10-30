@@ -11,6 +11,7 @@ import {
 	type ResolveCliModelResult,
 } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
+import { cfgModelsDefaultScope } from "../config/model-settings";
 import {
 	applyModelPreset,
 	deleteModelPreset,
@@ -416,6 +417,8 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		icon: "model",
 		description: "Switch model for this session",
 		acpDescription: "Show current model selection",
+		allowArgs: true,
+		inlineHint: "[session|project|global]",
 		getTuiAutocompleteDescription: runtime => {
 			const model = runtime.ctx.viewSession.model;
 			return model ? `Model: ${model.provider}/${model.id}` : "Model: none selected";
@@ -450,8 +453,16 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			return commandConsumed();
 		},
 		handleTui: (command, runtime) => {
-			// Fork-local /model scope; the /models alias retains the full role hub.
-			runtime.ctx.showModelSelector(command.name === "model" ? { sessionOnly: true } : undefined);
+			if (command.name === "model") {
+				runtime.ctx.showModelSelector({ sessionOnly: true });
+			} else {
+				const scope = command.args.trim() || cfgModelsDefaultScope.get(runtime.ctx.settings);
+				if (scope !== "session" && scope !== "project" && scope !== "global") {
+					runtime.ctx.showError("Usage: /models [session|project|global]");
+					return;
+				}
+				runtime.ctx.showModelSelector({ scope });
+			}
 			clearSubmittedText(runtime);
 		},
 	},
