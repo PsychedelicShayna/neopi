@@ -1953,7 +1953,7 @@ export class ModelHubComponent implements Component {
 						: undefined;
 				const assignedHere =
 					!!scopedModel && scopedModel.provider === item.model.provider && scopedModel.id === item.model.id;
-				const roleLabel = (info.tag ?? info.name ?? role).toLowerCase();
+				const roleLabel = (info.tag ?? info.name ?? role).toLowerCase() + uiProvenanceSuffix("roles", role);
 				const label = scopedStorage ? `${scope} ${roleLabel}` : roleLabel;
 				chips.push({
 					label,
