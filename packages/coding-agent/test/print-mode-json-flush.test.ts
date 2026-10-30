@@ -52,7 +52,7 @@ function createFlushHarness(): FlushHarness {
 			await promptReleased;
 			return true;
 		},
-		disableStopTimeTodoReminders: () => {},
+		prepareForPrintMode: () => {},
 		prepareForHeadlessAdvisorDrain: () => {
 			advisorDrainPrepared = true;
 		},

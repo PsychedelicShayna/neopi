@@ -14,7 +14,7 @@ const session = {
 		onPersistenceError: () => () => {},
 		onPersistenceNotice: () => () => {},
 	},
-	disableStopTimeTodoReminders() {},
+	prepareForPrintMode() {},
 	setTextOutputCommitted() {},
 	async waitForIdle() {},
 	async prompt() {

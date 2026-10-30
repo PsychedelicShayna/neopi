@@ -408,6 +408,7 @@ export class TurnRecovery {
 	readonly #unexpectedStopJudgeTimeoutMs: number;
 	#retryAbortController: AbortController | undefined;
 	#retryAttempt = 0;
+	#printMode = false;
 	/**
 	 * Selectors a classifier refusal has already moved off in the current retry saga; see the walk
 	 * bound below. Cleared in `resolveRetry()`, which every end of a saga goes through (an answer,
@@ -482,6 +483,11 @@ export class TurnRecovery {
 			this.#markFallbackRouted();
 		}
 		if (!options.deferFallbackChainValidation) this.validateRetryFallbackChains();
+	}
+
+	/** Print runs spend one retry budget, including credential and model switches. */
+	boundRetriesForPrintMode(): void {
+		this.#printMode = true;
 	}
 
 	/** Current automatic retry attempt. */
@@ -2874,6 +2880,15 @@ export class TurnRecovery {
 		const retryBudgetExhausted = this.#retryAttempt > maxRetries;
 
 		const errorMessage = message.errorMessage || "Unknown error";
+		if (this.#printMode && retryBudgetExhausted) {
+			const attempt = this.#retryAttempt - 1;
+			message.errorMessage = `Retry budget exhausted after ${attempt} ${attempt === 1 ? "retry" : "retries"}: ${errorMessage}`;
+			await this.#closeRetrySaga(
+				{ success: false, attempt, finalError: message.errorMessage },
+				{ terminalTurn: message, retryErrors: { status: "superseded" } },
+			);
+			return false;
+		}
 		const id = this.#classifyRetryMessage(message);
 		const preserveFailedTurn =
 			options?.preserveFailedTurn === true ||
