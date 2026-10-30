@@ -288,7 +288,7 @@ describe("AgentSession advisor auto-resume suppression", () => {
 	}
 
 	for (const scenario of ["concern", "blocker", "nit", "nit-continuation", "nit-abort"] as const) {
-		it(`defers real advisor non-blockers and immediately routes blockers (${scenario})`, async () => {
+		it(`defers real advisor non-blockers and queues blockers for the next tool boundary (${scenario})`, async () => {
 			const continuation = scenario === "nit-continuation";
 			const abortAtCard = scenario === "nit-abort";
 			const severity = scenario === "concern" || scenario === "blocker" ? scenario : "nit";
@@ -297,11 +297,8 @@ describe("AgentSession advisor auto-resume suppression", () => {
 			const terminalSeen = Promise.withResolvers<void>();
 			const held = Promise.withResolvers<AbortSignal>();
 			const release = Promise.withResolvers<void>();
-			const advisedSeen = (): boolean =>
-				session
-					.getAdvisorAgent()
-					?.state.messages.some(message => message.role === "toolResult" && message.toolName === "advise") ===
-				true;
+			const advised = Promise.withResolvers<void>();
+			const blockerQueued = Promise.withResolvers<void>();
 			const aborted = Promise.withResolvers<void>();
 			const note = `Inspect the ${severity} fixture before accepting the result.`;
 			const parameters = type({});
@@ -445,6 +442,18 @@ describe("AgentSession advisor auto-resume suppression", () => {
 			});
 			liveIngest.attach();
 			expect(session.setAdvisorEnabled(true)).toBe(true);
+			const advisor = session.getAdvisorAgent();
+			if (!advisor) throw new Error("Expected advisor agent to be live");
+			const unsubscribeAdvice = advisor.subscribe(event => {
+				if (event.type === "message_end" && event.message.role === "toolResult" && event.message.toolName === "advise") {
+					advised.resolve();
+				}
+			});
+			const unsubscribeQueue = agent.onQueueChange(() => {
+				if (agent.peekSteeringQueue().some(message => isAdvisorCard(message) && message.content.includes(note))) {
+					blockerQueued.resolve();
+				}
+			});
 			agent.subscribe(event => {
 				if (
 					continuation &&
@@ -479,17 +488,20 @@ describe("AgentSession advisor auto-resume suppression", () => {
 			const prompt = session.prompt("Run step then held, then finish.");
 			try {
 				const signal = await held.promise;
-				// An advise-only advisor turn ends without another model call, so wait
-				// for the routed note itself rather than the advisor's next request.
-				for (let i = 0; i < 200 && !agent.hasQueuedMessages() && !advisedSeen(); i++) await Bun.sleep(5);
+				// Advise-only reviews have no following model call. Wait for the tool's
+				// acknowledgment, then for the blocker's asynchronous steering admission.
+				await advised.promise;
 				if (severity === "blocker") {
-					await aborted.promise;
-					expect(signal.aborted).toBe(true);
+					await blockerQueued.promise;
+					expect(agent.peekSteeringQueue().filter(isAdvisorCard)).toHaveLength(1);
 				} else {
-					expect(signal.aborted).toBe(false);
-					expect(mock.calls).toHaveLength(2);
-					expect(agent.state.messages.filter(isAdvisorCard)).toHaveLength(0);
+					expect(agent.hasQueuedMessages()).toBe(false);
 				}
+				// The blocker routes immediately, but this run uses interruptMode=wait:
+				// it must not abort the held tool before its next delivery boundary.
+				expect(signal.aborted).toBe(false);
+				expect(mock.calls).toHaveLength(2);
+				expect(agent.state.messages.filter(isAdvisorCard)).toHaveLength(0);
 				release.resolve();
 				if (abortAtCard) {
 					await cardHookStarted.promise;
@@ -502,25 +514,37 @@ describe("AgentSession advisor auto-resume suppression", () => {
 				await session.waitForIdle();
 				expect(mock.calls).toHaveLength(continuation ? 4 : 3);
 				const nextContext = JSON.stringify(mock.calls[2].context.messages);
+				expect(mock.calls[2].context.messages).toContainEqual(
+					expect.objectContaining({
+						role: "toolResult",
+						toolName: "held",
+						content: [{ type: "text", text: "held complete" }],
+					}),
+				);
 				if (severity === "blocker") expect(nextContext).toContain(note);
 				else expect(nextContext).not.toContain(note);
-				expect(
-					agent.state.messages
-						.filter(isAdvisorCard)
-						.map(card => card.content)
-						.join("\n"),
-				).toContain(note);
+				const advisorCards = agent.state.messages.filter(isAdvisorCard);
+				expect(advisorCards).toHaveLength(1);
+				expect(advisorCards[0].content).toContain(note);
 				expect(visibleEvents).toEqual(["advice-card", "terminal-end"]);
 				expect(persistedAtEnd).toEqual([true]);
 				if (continuation) {
 					const continuedContext = JSON.stringify(mock.calls[3].context.messages);
 					expect(continuedContext).toContain("The terminal result needs its missing correction.");
-					expect(continuedContext).not.toContain(note);
+					// One qualifying blocker wakes one continuation carrying the whole
+					// terminal batch, including the previously deferred nit.
+					expect(continuedContext).toContain(note);
+					expect(advisorCards[0].content).toContain("The terminal result needs its missing correction.");
+					expect(
+						advisorMock.calls.some(call => JSON.stringify(call.context.messages).includes("corrected terminal result")),
+					).toBe(false);
 				}
 				expect(spokenAdvice.some(text => text.includes(note))).toBe(true);
 			} finally {
 				release.resolve();
 				releaseCardHook.resolve();
+				unsubscribeAdvice();
+				unsubscribeQueue();
 				liveIngest.detach();
 			}
 		});
@@ -624,16 +648,27 @@ describe("AgentSession advisor auto-resume suppression", () => {
 				await releaseHook.promise;
 			},
 		};
-		const { session, sessionManager } = await createCompletedAdvisorSession({ severity: "concern", extensionRunner });
+		const { session, sessionManager, mock } = await createCompletedAdvisorSession({
+			severity: "concern",
+			continueSeverity: "blocker",
+			extensionRunner,
+		});
 		expect(session.setAdvisorEnabled(true)).toBe(true);
 		await session.prompt("answer with exactly one line");
 		await hookStarted.promise;
 		try {
+			// This concern is explicitly below the continuation threshold. The
+			// primary is idle even though delivery still owns an unsettled hook.
+			expect(session.isStreaming).toBe(false);
+			expect(mock.calls).toHaveLength(1);
+			expect(await session.waitForAdvisorCatchup(0)).toBe(false);
+			expect(session.agent.state.messages.filter(isAdvisorCard)).toHaveLength(1);
 			expect(await session.resetSessionContext()).toBeDefined();
 			const boundary = sessionManager.getEntries().findLastIndex(entry => entry.type === "reset_boundary");
 			expect(boundary).toBeGreaterThanOrEqual(0);
 			releaseHook.resolve();
 			await session.waitForIdle();
+			expect(await session.waitForAdvisorCatchup(1000)).toBe(true);
 			expect(
 				sessionManager
 					.getEntries()
@@ -641,6 +676,7 @@ describe("AgentSession advisor auto-resume suppression", () => {
 					.filter(entry => entry.type === "custom_message" && entry.customType === "advisor"),
 			).toEqual([]);
 			expect(session.agent.state.messages.filter(isAdvisorCard)).toEqual([]);
+			expect(mock.calls).toHaveLength(1);
 		} finally {
 			releaseHook.resolve();
 		}
