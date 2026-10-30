@@ -1,10 +1,39 @@
-import { describe, expect, it } from "bun:test";
-import { MenuSearchField } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import {
+	getMenuSearchVimMode,
+	MenuSearchField,
+	setMenuSearchVimMode,
+} from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { getKeybindings, KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "@oh-my-pi/pi-tui/keybindings";
 
 const theme = { muted: (text: string) => text };
 
-describe("literal menu search fields", () => {
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
+});
+
+it("cancels in one Escape without Vim, retaining the previously confirmed pattern", () => {
+	setMenuSearchVimMode(false);
+	const field = new MenuSearchField("old", true);
+	field.handleInput(" draft");
+	expect(field.query).toBe("old draft");
+	expect(field.handleInput("\x1b")).toBe("exited");
+	expect(field.focused).toBe(false);
+	expect(field.query).toBe("old");
+	field.focused = true;
+	field.handleInput("\x01");
+	field.handleInput("\x0b");
+	field.handleInput("\r");
+	expect(field.confirmedQuery).toBe("");
+	expect(field.focused).toBe(false);
+});
+
+describe("transactional Vim menu search", () => {
 	it("keeps printable remapped menu keys literal while the field is focused", () => {
 		const previous = getKeybindings();
 		setKeybindings(
@@ -54,11 +83,57 @@ describe("literal menu search fields", () => {
 		expect(field.focused).toBe(true);
 	});
 
-	it("cancels search with Escape and clears the active pattern", () => {
+	it("uses Escape for Insert to Normal, then cancels back to the confirmed pattern", () => {
 		const field = new MenuSearchField("voice", true);
+		field.handleInput(" draft");
+		expect(field.query).toBe("voice draft");
+		expect(field.confirmedQuery).toBe("voice");
+		expect(field.handleInput("\x1b")).toBe("edited");
+		expect(field.vimMode).toBe("normal");
+		expect(field.focused).toBe(true);
 		expect(field.handleInput("\x1b")).toBe("exited");
-		expect(field.value).toBe("");
+		expect(field.value).toBe("voice");
+		expect(field.query).toBe("voice");
 		expect(field.focused).toBe(false);
+	});
+
+	it("reuses Vim line operators and confirms empty from Normal mode", () => {
+		const field = new MenuSearchField("voice", true);
+		for (const key of ["\x1b", "d", "d"]) field.handleInput(key);
+		expect(field.value).toBe("");
+		expect(field.confirmedQuery).toBe("voice");
+		expect(field.handleInput("\r")).toBe("exited");
+		expect(field.confirmedQuery).toBe("");
+		expect(field.focused).toBe(false);
+		field.focused = true;
+		field.handleInput("new draft");
+		for (const key of ["\x1b", "0", "D", "i", "new"]) field.handleInput(key);
+		expect(field.value).toBe("new");
+		field.handleInput("\r");
+		expect(field.confirmedQuery).toBe("new");
+	});
+
+	it("clears and consumes Ctrl-C in either editing mode", () => {
+		for (const normal of [false, true]) {
+			const field = new MenuSearchField("voice", true);
+			if (normal) field.handleInput("\x1b");
+			expect(field.handleInput("\x03")).toBe("exited");
+			expect(field.query).toBe("");
+			expect(field.confirmedQuery).toBe("");
+			expect(field.focused).toBe(false);
+		}
+	});
+
+	it("keeps previous preview results for invalid regex and refuses invalid confirmation", () => {
+		const field = new MenuSearchField("", true);
+		field.handleInput("/voice");
+		expect(field.query).toBe("/voice");
+		field.handleInput("[");
+		expect(field.query).toBe("/voice");
+		expect(field.render(140, theme)).toContain("Invalid regex");
+		expect(field.handleInput("\r")).toBe("edited");
+		expect(field.focused).toBe(true);
+		expect(field.confirmedQuery).toBe("");
 	});
 
 	it("restores a literal draft at its caret without selecting or submitting", () => {
@@ -76,7 +151,8 @@ describe("literal menu search fields", () => {
 		field.focused = true;
 		field.handleInput(" draft");
 		expect(field.value).toBe("old draft");
-		expect(field.query).toBe("old");
+		expect(field.query).toBe("old draft");
+		expect(field.confirmedQuery).toBe("old");
 		field.focused = false;
 		expect(field.value).toBe("old");
 		field.focused = true;
@@ -94,14 +170,14 @@ describe("literal menu search fields", () => {
 		expect(field.render(80, theme)).toContain("Search:");
 	});
 
-	it("shows normal navigation motions after confirming a pattern", () => {
+	it("keeps the confirmed pattern visible with compact harness hints", () => {
 		const field = new MenuSearchField("", true);
 		field.handleInput("voice");
 		field.handleInput("\r");
 		const confirmed = field.render(160, theme);
-		expect(confirmed).toContain("Ctrl-d/u");
-		expect(confirmed).toContain("gg/G");
-		expect(confirmed).toContain("j/k");
+		expect(confirmed).toContain("voice");
+		expect(confirmed).toContain("/ search");
+		expect(confirmed).toContain("? help");
 		expect(confirmed).not.toContain("Enter confirm");
 		field.focused = true;
 		expect(field.render(160, theme)).toContain("Enter confirm");

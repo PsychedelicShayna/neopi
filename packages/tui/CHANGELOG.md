@@ -4,6 +4,7 @@
 
 ### Added
 
+- Search composers preview results live, confirm with Enter, share the main composer's Vim editing, restore confirmed patterns on cancel, and support glob patterns alongside slash-prefixed regex ([#500](https://github.com/PsychedelicShayna/neopi/issues/500)).
 - `/advisor configure` lists every loaded file with an advisor preview, whole-file toggles, exact-file editing, and bulk enabled-state actions ([#323](https://github.com/PsychedelicShayna/neopi/issues/323)).
 - New and cloned advisors receive separate hidden identities so role activation sets remain attached after renames ([#89](https://github.com/PsychedelicShayna/neopi/issues/89)).
 - Model effort-rule editors now let you include or exclude native `off` reasoning levels ([#498](https://github.com/PsychedelicShayna/neopi/issues/498)).

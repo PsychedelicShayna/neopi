@@ -244,7 +244,7 @@ export class SelectList implements Component, MouseRoutable {
 	navigationState(): SelectListNavigationState {
 		return {
 			selectedValue: this.#selection.selectedKey,
-			filter: this.#selection.query,
+			filter: this.#search.confirmedQuery,
 			viewportTop: this.#viewport.top,
 			filterFocused: this.#search.focused,
 			filterCursor: this.#search.cursor,
@@ -604,7 +604,7 @@ export class SelectList implements Component, MouseRoutable {
 		}
 	}
 
-	/** Focused search owns every key; Enter confirms the pattern and Esc clears it. */
+	/** The shared composer owns every key while focused, including modal Escape. */
 	#handleFilterInput(rawData: string): void {
 		const before = this.#search.query;
 		this.#search.handleInput(rawData);

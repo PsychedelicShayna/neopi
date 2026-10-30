@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import type { TspPrefsProps } from "@oh-my-pi/pi-wire";
 import type { DescribeContext, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
 import type { InstalledPlugin, PluginSettingsHost } from "@oh-my-pi/pi-tui/overlays/plugin-settings";
@@ -8,10 +8,19 @@ import { getCurrentThemeName, getThemeByName, setThemeInstance } from "@oh-my-pi
 import { getKeybindings, setKeybindings } from "@oh-my-pi/pi-tui";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import type { SelectListNavigationState } from "../src/components/select-list";
-import { isMenuHistoryLeaver } from "../src/components/menu-navigation";
+import { getMenuSearchVimMode, isMenuHistoryLeaver, setMenuSearchVimMode } from "../src/components/menu-navigation";
 
 const ENTER = "\n";
 const DOWN = "\x1b[B";
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
+});
 
 const ENTRIES: SettingsDisplayEntry[] = [
 	{
@@ -525,7 +534,7 @@ describe("settings as a native prefs page", () => {
 		expect(prefs(restored).props.query).toBe("theme hjkl");
 	});
 
-	it("keeps regex drafts modal and applies them only after Enter", () => {
+	it("previews drafts live without applying settings until the menu regains focus", () => {
 		const { selector, changes } = harness();
 		selector.handleInput("/");
 		const initial = prefs(selector).props;
@@ -535,12 +544,12 @@ describe("settings as a native prefs page", () => {
 		for (const key of ["\x1b[D", "\t", DOWN, "\x1b[A", "\x0e", "\x10"]) selector.handleInput(key);
 		const drafting = prefs(selector).props;
 		expect(drafting.page).toBe(initial.page);
-		expect(drafting.focus).toBe(initial.focus);
+		expect(drafting.focus).toBeNull();
 		expect(drafting.query).toBe(".{1000}");
-		expect(drafting.cursor).toBe(6);
-		expect(drafting.sections.flatMap(section => section.rows.map(row => row.id))).toEqual(rows);
+		expect(drafting.cursor).toBe(0);
+		expect(drafting.sections.flatMap(section => section.rows.map(row => row.id))).toEqual([]);
 		expect(selector.navigationSnapshot()).toMatchObject({
-			search: { value: ".{1000}", query: "", focused: true, cursor: 6 },
+			search: { value: ".{1000}", query: "", focused: true, cursor: 0 },
 		});
 		expect(changes).toEqual([]);
 		selector.handleInput(ENTER);
@@ -553,9 +562,13 @@ describe("settings as a native prefs page", () => {
 		expect(prefs(selector).props.page).toBe("appearance");
 		selector.handleInput("/");
 		for (const key of "/^dark/") selector.handleInput(key);
-		expect(prefs(selector).props.sections.flatMap(section => section.rows).length).toBeGreaterThan(1);
+		expect(prefs(selector).props.sections.flatMap(section => section.rows.map(row => row.id))).toEqual([
+			"theme.dark",
+		]);
 		selector.handleInput(ENTER);
-		expect(prefs(selector).props.sections.flatMap(section => section.rows.map(row => row.id))).toEqual(["theme.dark"]);
+		expect(prefs(selector).props.sections.flatMap(section => section.rows.map(row => row.id))).toEqual([
+			"theme.dark",
+		]);
 		selector.handleInput("\x1b");
 		expect(prefs(selector).props.query).toBeUndefined();
 		expect(row(prefs(selector).props, "display.colorBlind")).toBeDefined();
@@ -563,8 +576,8 @@ describe("settings as a native prefs page", () => {
 
 	for (const sectionFocused of [false, true]) {
 		for (const { name, keys } of [
-			{ name: "an empty pattern", keys: ["/", "\x1b"] },
-			{ name: "a dotted draft", keys: ["/", ".", ".", ".", "\x1b"] },
+			{ name: "an empty pattern", keys: ["/", "\x1b", "\x1b"] },
+			{ name: "a dotted draft", keys: ["/", ".", ".", ".", "\x1b", "\x1b"] },
 			{ name: "a confirmed pattern", keys: ["/", "c", "o", "l", "o", "r", ENTER, "\x1b"] },
 		]) {
 			it(`restores the original tab, ${sectionFocused ? "section sidebar" : "setting selection"}, and tab cycling after Esc clears ${name}`, () => {
@@ -628,13 +641,16 @@ describe("settings as a native prefs page", () => {
 		}
 	}
 
-	it("restores headings live when a search draft is deleted, and Escape leaves only the composer", () => {
+	it("restores headings live when a search draft is deleted, and Enter confirms empty", () => {
 		let closed = 0;
-		const { selector, changes } = harness({}, {
-			onCancel: () => {
-				closed++;
+		const { selector, changes } = harness(
+			{},
+			{
+				onCancel: () => {
+					closed++;
+				},
 			},
-		});
+		);
 		const before = prefs(selector).props;
 		const beforeRows = selector.render(180).map(line => Bun.stripANSI(line));
 		for (const key of ["/", "color", ENTER, "/", "\x01", "\x0b"]) selector.handleInput(key);
@@ -644,7 +660,7 @@ describe("settings as a native prefs page", () => {
 		expect(cleared.focus).toBe(before.focus);
 		expect(selector.render(180).some(line => Bun.stripANSI(line).includes("Theme"))).toBe(true);
 		expect(selector.navigationSnapshot()).toMatchObject({ searchFocused: true });
-		selector.handleInput("\x1b");
+		selector.handleInput(ENTER);
 		expect(closed).toBe(0);
 		expect(prefs(selector).props.query).toBeUndefined();
 		expect(selector.render(180).map(line => Bun.stripANSI(line))).toEqual(beforeRows);
@@ -668,10 +684,12 @@ describe("settings as a native prefs page", () => {
 	it("confirms a focused search pattern with Enter without activating the matched setting", () => {
 		const { selector, changes, values } = harness();
 		selector.handleInput("/");
-		const initialRows = prefs(selector).props.sections.flatMap(section => section.rows.map(row => row.id));
+		expect(prefs(selector).props.sections.flatMap(section => section.rows)).toHaveLength(3);
 		for (const key of "/^color/") selector.handleInput(key);
 		expect(prefs(selector).props.query).toBe("/^color/");
-		expect(prefs(selector).props.sections.flatMap(section => section.rows.map(row => row.id))).toEqual(initialRows);
+		expect(prefs(selector).props.sections.flatMap(section => section.rows.map(row => row.id))).toEqual([
+			"display.colorBlind",
+		]);
 		expect(Bun.stripANSI(selector.render(180).at(-2) ?? "")).toContain("confirm search");
 
 		selector.handleInput(ENTER);
@@ -710,7 +728,7 @@ describe("settings as a native prefs page", () => {
 		selector.handleInput("/");
 		selector.handleInput(" draft");
 		expect(prefs(selector).props.query).toBe("theme draft");
-		expect(prefs(selector).props.sections).toEqual(confirmed);
+		expect(prefs(selector).props.sections).toEqual([]);
 		selector.leaveMenu();
 		expect(prefs(selector).props.query).toBe("theme");
 		expect(prefs(selector).props.sections).toEqual(confirmed);
@@ -772,7 +790,7 @@ describe("settings as a native prefs page", () => {
 		send(h.selector, { type: "action", key: "", act: "page", value: "plugins", mods: [] });
 		await h.whenRendered(props => props.sections.some(section => section.id === "installed"));
 		for (const key of ["/", "h", "j", "\x01", "\x1b[C"]) h.selector.handleInput(key);
-		expect(prefs(h.selector).props.sections.flatMap(section => section.rows)).toHaveLength(2);
+		expect(prefs(h.selector).props.sections.flatMap(section => section.rows)).toHaveLength(1);
 		h.selector.handleInput(ENTER);
 		expect(prefs(h.selector).props).toMatchObject({
 			query: "hj",
@@ -905,6 +923,10 @@ describe("settings as a native prefs page", () => {
 			for (const key of ["/", "b", "e"]) h.selector.handleInput(key);
 			send(h.selector, { type: "action", key: "", act: "close", mods: [] });
 			expect(h.selector.navigationSnapshot()).toMatchObject({
+				plugin: { content: { submenu: { filterFocused: true } } },
+			});
+			send(h.selector, { type: "action", key: "", act: "close", mods: [] });
+			expect(h.selector.navigationSnapshot()).toMatchObject({
 				plugin: { content: { submenuId: "config:mode", submenu: { filter: "", filterFocused: false } } },
 			});
 			send(h.selector, { type: "action", key: "", act: "close", value: "config:mode", mods: [] });
@@ -984,7 +1006,7 @@ describe("settings as a native prefs page", () => {
 		expect(h.selector.navigationSnapshot()).toMatchObject({ list: { submenu: { provider: "zeta" } } });
 		h.selector.handleInput("\x1b");
 		expect(h.selector.navigationSnapshot()).toEqual(parent);
-		for (const key of ["/", "\x01", "\x0b", "\x1b", "G", " ", "l"]) h.selector.handleInput(key);
+		for (const key of ["/", "\x01", "\x0b", ENTER, "G", " ", "l"]) h.selector.handleInput(key);
 		expect(h.changes).toEqual([]);
 		expect(h.values.get(limits.path)).toEqual({ acme: 3, zeta: 4 });
 		const count = visits.length;
