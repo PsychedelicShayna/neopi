@@ -398,6 +398,7 @@ export const cfgDefinitionGenerationConversationTtlMs = register({
 	type: "number",
 	default: 3_600_000,
 	validate: value => {
+		if (value === undefined) return;
 		if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0 || value > 2_147_483_647)
 			throw new Error("Definition generation retention must be a non-negative duration in milliseconds (at most 2147483647).");
 	},

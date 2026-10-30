@@ -59,6 +59,26 @@ describe("structured definition generation", () => {
 		await fs.rm(dir, { recursive: true, force: true });
 	});
 
+	test("loads clean Settings with the default generation retention", () => {
+		expect(cfgDefinitionGenerationConversationTtlMs.get(settings)).toBe(3_600_000);
+	});
+
+	test.each([0, 2_147_483_647])("accepts generation retention boundary %s", value => {
+		cfgDefinitionGenerationConversationTtlMs.override(settings, value);
+		expect(cfgDefinitionGenerationConversationTtlMs.get(settings)).toBe(value);
+	});
+
+	test.each([-1, 0.5, 2_147_483_648, NaN, Infinity])(
+		"rejects invalid generation retention %s without changing the prior value",
+		value => {
+			cfgDefinitionGenerationConversationTtlMs.override(settings, 60_000);
+			expect(() => cfgDefinitionGenerationConversationTtlMs.override(settings, value)).toThrow(
+				"Definition generation retention must be a non-negative duration in milliseconds (at most 2147483647).",
+			);
+			expect(cfgDefinitionGenerationConversationTtlMs.get(settings)).toBe(60_000);
+		},
+	);
+
 	test("single-field requests discard incidental fields and never mutate the draft", async () => {
 		const completion = vi.spyOn(ai, "completeSimple").mockResolvedValue(response({ description: "New description", name: "wrong", tools: ["write"] }));
 		const definition = { name: "review", description: "Old description", tools: ["read"] };
