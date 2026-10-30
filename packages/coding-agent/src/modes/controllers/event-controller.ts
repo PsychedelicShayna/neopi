@@ -83,7 +83,7 @@ import { isWarpCliAgentProtocolActive } from "../warp-events";
 import { ComposerPredictionController } from "./composer-prediction-controller";
 import { StreamingRevealController } from "./streaming-reveal";
 import { streamingStringKeysForTool, ToolArgsRevealController } from "./tool-args-reveal";
-import { createToolCallBlock } from "./tool-call-block";
+import { canUseSpecializedReadRendering, createToolCallBlock } from "./tool-call-block";
 
 import {
 	cfgCompletionNotify,
@@ -1685,7 +1685,7 @@ export class EventController {
 				if (content.type !== "toolCall") continue;
 				const tool = this.transcriptSession.getToolByName?.(content.name);
 				const renderToolName = toolRenderName(content.name, tool);
-				if (renderToolName === "read") {
+				if (canUseSpecializedReadRendering(this.ctx, renderToolName)) {
 					if (!readArgsHaveTarget(content.arguments)) {
 						// Args still streaming — defer until path is parseable so we can route to the
 						// read group (files + xd:// devices) vs ToolExecutionComponent (other internal URLs).
@@ -2053,7 +2053,7 @@ export class EventController {
 					this.ctx.chatContainer.removeChild(stale);
 				}
 			}
-			if (renderToolName === "read" && readArgsCollapseIntoGroup(event.args)) {
+			if (canUseSpecializedReadRendering(this.ctx, renderToolName) && readArgsCollapseIntoGroup(event.args)) {
 				this.#trackReadToolCall(event.toolCallId, event.args);
 				if (!this.#toolTimelineComponents.has(event.toolCallId)) {
 					const group = this.#getReadGroup();
@@ -2206,9 +2206,9 @@ export class EventController {
 		component: ToolExecutionHandle,
 		event: Extract<AgentSessionEvent, { type: "tool_execution_end" }>,
 	): void {
-		if (event.toolName === "read") this.#inlineReadToolImages(event.toolCallId, event.result);
+		if (canUseSpecializedReadRendering(this.ctx, event.toolName)) this.#inlineReadToolImages(event.toolCallId, event.result);
 		this.#applyToolCompletion(component, event);
-		if (event.toolName === "read") this.#clearReadToolCall(event.toolCallId);
+		if (canUseSpecializedReadRendering(this.ctx, event.toolName)) this.#clearReadToolCall(event.toolCallId);
 		if (
 			component instanceof ToolExecutionComponent &&
 			component.isDisplaceableBlock() &&
@@ -2288,7 +2288,7 @@ export class EventController {
 		if (this.#blockingPrompts.delete(event.toolCallId)) {
 			setRunStatus(this.#blockingPrompts.values().next().value ?? { state: "working" });
 		}
-		if (event.toolName === "read") {
+		if (canUseSpecializedReadRendering(this.ctx, event.toolName)) {
 			if (this.#inlineReadToolImages(event.toolCallId, event.result)) {
 				const component = this.ctx.pendingTools.get(event.toolCallId);
 				if (component) {

@@ -59,7 +59,7 @@ import { span } from "@oh-my-pi/pi-tui/native/describe";
 import { createUsageRowBlock, turnElapsedMs } from "@oh-my-pi/pi-tui/overlays/usage-row";
 import { UserMessageComponent } from "@oh-my-pi/pi-tui/chat/user-message";
 import { decodeStreamedToolArgs, streamingStringKeysForTool } from "../../modes/controllers/tool-args-reveal";
-import { createToolCallBlock } from "../../modes/controllers/tool-call-block";
+import { canUseSpecializedReadRendering, createToolCallBlock } from "../../modes/controllers/tool-call-block";
 import {
 	materializeImageReferenceLinks,
 	materializeImageReferenceLinksSync,
@@ -704,7 +704,10 @@ export class UiHelpers {
 					const renderToolName = toolRenderName(content.name, tool);
 					resolveWaitingPoll(renderToolName);
 
-					if (renderToolName === "read" && readArgsCollapseIntoGroup(content.arguments)) {
+					if (
+						canUseSpecializedReadRendering(this.ctx, renderToolName) &&
+						readArgsCollapseIntoGroup(content.arguments)
+					) {
 						if (hasErrorStop && errorMessage) {
 							if (!readGroup) {
 								readGroup = new ReadToolGroupComponent({
@@ -811,7 +814,7 @@ export class UiHelpers {
 				if (options.preservedLiveToolCallIds?.has(message.toolCallId)) continue;
 				const pendingReadComponent = this.ctx.pendingTools.get(message.toolCallId);
 				const isReadGroupResult =
-					message.toolName === "read" &&
+					canUseSpecializedReadRendering(this.ctx, message.toolName) &&
 					(!pendingReadComponent || pendingReadComponent instanceof ReadToolGroupComponent);
 				if (isReadGroupResult) {
 					const assistantComponent = readToolCallAssistantComponents.get(message.toolCallId);

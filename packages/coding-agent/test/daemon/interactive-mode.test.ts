@@ -17,6 +17,7 @@ import * as workerClient from "../../src/subprocess/worker-client";
 
 const cli = path.join(import.meta.dir, "../../src/cli.ts");
 const providerFixture = path.join(import.meta.dir, "interactive-mode-provider.ts");
+const readExtensionFixture = path.join(import.meta.dir, "interactive-mode-read-extension.ts");
 const width = 240;
 const toolLabels = ["viewer-live-card", "viewer-late-card"] as const;
 
@@ -152,7 +153,7 @@ async function finishTool(gates: string, label: string): Promise<void> {
 }
 
 describe("InteractiveMode attached to a real daemon session", () => {
-	it("renders history, live replies and real tools, then rebuilds them when reattaching mid-tool", async () => {
+	it("renders history, live replies and tools, preserving extension read blocks across reattach", async () => {
 		const scratch = process.env.NPI_TEST_SCRATCH_DIR ?? path.join(os.homedir(), ".cache", "npi-canary");
 		await fs.mkdir(scratch, { recursive: true });
 		const root = await fs.mkdtemp(path.join(scratch, "daemon-viewer-"));
@@ -265,6 +266,8 @@ describe("InteractiveMode attached to a real daemon session", () => {
 					"--model",
 					"fake/fake-model",
 					"--no-extensions",
+					"--extension",
+					readExtensionFixture,
 					"--no-skills",
 					"--no-rules",
 					"--no-lsp",
@@ -305,6 +308,17 @@ describe("InteractiveMode attached to a real daemon session", () => {
 			once(beforeDetach, "prior-history-reply");
 			once(beforeDetach, "live-first-chunk live-final-chunk");
 
+			// The real rpc-ui child replaces built-in read through an explicit extension.
+			// Path args must not make its unrelated two-block result a built-in read group.
+			first.composer.editor.setText("run_extension_read");
+			first.composer.editor.submit();
+			await rendered(first, "extension-read-first-block:viewer-extension-input.txt");
+			await rendered(first, "extension-read-second-block");
+			await until(() => !first.remote.isStreaming, "extension read turn completion");
+			const liveRead = transcript(first);
+			once(liveRead, "extension-read-first-block:viewer-extension-input.txt");
+			once(liveRead, "extension-read-second-block");
+
 			// No viewer exists when this second real bash child starts. The next
 			// InteractiveMode must rebuild its pending card from the attach cut.
 			first.terminal.input("\x18");
@@ -319,6 +333,8 @@ describe("InteractiveMode attached to a real daemon session", () => {
 			once(reattached, "prior-history-reply");
 			once(reattached, "live-first-chunk live-final-chunk");
 			expect(reattached).toContain("viewer-live-card-finished-output");
+			once(reattached, "extension-read-first-block:viewer-extension-input.txt");
+			once(reattached, "extension-read-second-block");
 			expect(reattached.split("--tool").length - 1).toBe(2);
 			expect(reattached).not.toContain("viewer-late-card-finished-output");
 			expect(second.remote.isStreaming).toBe(true);
@@ -328,6 +344,8 @@ describe("InteractiveMode attached to a real daemon session", () => {
 			const completed = transcript(second);
 			once(completed, "prior-history-reply");
 			once(completed, "live-first-chunk live-final-chunk");
+			once(completed, "extension-read-first-block:viewer-extension-input.txt");
+			once(completed, "extension-read-second-block");
 			expect(completed.split("--tool").length - 1).toBe(2);
 		} catch (error) {
 			const outputs = viewers.map(viewer => {

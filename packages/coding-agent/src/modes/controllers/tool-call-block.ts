@@ -18,6 +18,18 @@ export interface ToolCallBlockSpec {
 }
 
 /**
+ * Read groups and assistant-inline images assume the built-in read result shape.
+ * Local dispatch keeps its existing name routing; attached viewers require provenance
+ * because remote extension tools can reuse the name without exposing their renderer.
+ */
+export function canUseSpecializedReadRendering(ctx: InteractiveModeContext, name: string): boolean {
+	return (
+		name === "read" &&
+		(!ctx.isAttachedView || (ctx.transcriptSession ?? ctx.viewSession).hasBuiltInTool?.(name) === true)
+	);
+}
+
+/**
  * The block a tool call opens in the interactive transcript: a reply block for a built-in
  * `write` to a reply URL (`out://`, see {@link isReplyWrite}), a tool card for anything else.
  * Shared by the live event path and the transcript rebuild so both draw a call the same way.

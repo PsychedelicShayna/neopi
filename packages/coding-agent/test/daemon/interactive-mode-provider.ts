@@ -9,7 +9,10 @@ const chatRequestSchema = type({
 	"stream?": "boolean",
 });
 type ChatRequest = typeof chatRequestSchema.infer;
-type Reply = { text: string } | { tool: string; args: { command: string; timeout: number } };
+type Reply =
+	| { text: string }
+	| { tool: "bash"; args: { command: string; timeout: number } }
+	| { tool: "read"; args: { path: string } };
 
 const usage = { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 };
 const base = { id: "chatcmpl-viewer", created: 0, model: "fake-model" };
@@ -28,7 +31,7 @@ function quote(value: string): string {
 
 function scriptedReply(request: ChatRequest, gates: string): Reply {
 	const last = request.messages?.at(-1);
-	if (last?.role === "tool") return { text: "The gated command completed." };
+	if (last?.role === "tool") return { text: "The requested tool completed." };
 	const text = last?.role === "user" ? messageText(last.content) : "";
 	const label = text.includes("run_tool_live")
 		? "viewer-live-card"
@@ -47,6 +50,10 @@ function scriptedReply(request: ChatRequest, gates: string): Reply {
 			},
 		};
 	}
+	if (text.includes("run_extension_read")) {
+		if (!request.tools?.some(tool => tool.function?.name === "read")) throw new Error("read was not offered");
+		return { tool: "read", args: { path: "viewer-extension-input.txt" } };
+	}
 	if (text.includes("stream_reply")) return { text: "live-first-chunk live-final-chunk" };
 	if (text.includes("seed_history")) return { text: "prior-history-reply" };
 	throw new Error(`unexpected fixture prompt: ${text}`);
@@ -61,7 +68,10 @@ function completionChunks(reply: Reply): object[] {
 					tool_calls: [
 						{
 							index: 0,
-							id: `call_${reply.args.command.includes("viewer-late-card") ? "late" : "live"}`,
+							id:
+								reply.tool === "read"
+									? "call_extension_read"
+									: `call_${reply.args.command.includes("viewer-late-card") ? "late" : "live"}`,
 							type: "function",
 							function: { name: reply.tool, arguments: JSON.stringify(reply.args) },
 						},
