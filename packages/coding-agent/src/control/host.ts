@@ -939,15 +939,26 @@ export class ControlHost {
 				return;
 			case "reload_settings": {
 				if (frame.scope !== "global" && frame.scope !== "project") {
-					this.#reply(connection, frame, { success: false, code: "invalid_value", error: "Reload scope must be global or project" });
+					this.#reply(connection, frame, {
+						success: false,
+						code: "invalid_value",
+						error: "Reload scope must be global or project",
+					});
 					return;
 				}
 				if (frame.scope === "project") {
 					if (typeof frame.projectDir !== "string" || !frame.projectDir) {
-						this.#reply(connection, frame, { success: false, code: "invalid_value", error: "Project directory is required" });
+						this.#reply(connection, frame, {
+							success: false,
+							code: "invalid_value",
+							error: "Project directory is required",
+						});
 						return;
 					}
-					if (await settingsProjectPath(frame.projectDir) !== await settingsProjectPath(this.#options.session.sessionManager.getCwd())) {
+					if (
+						(await settingsProjectPath(frame.projectDir)) !==
+						(await settingsProjectPath(this.#options.session.sessionManager.getCwd()))
+					) {
 						this.#reply(connection, frame, { success: true, data: { applied: false } });
 						return;
 					}

@@ -819,9 +819,12 @@ export class Settings {
 	/** Whether {@link startWatching} is active. */
 	#watchingFiles = false;
 	/** Directory watchers for config sources, keyed by directory, with the basenames that trigger a reload. */
-	#fileWatchers = new Map<string, { watcher: fs.FSWatcher; names: Set<string> }>();
+	#fileWatchers = new Map<string, { watcher: fs.FSWatcher; names: Set<string>; dev: number; ino: number }>();
 	/** Debounce timer for watcher-triggered reloads. */
 	#watchReloadTimer?: NodeJS.Timeout;
+	/** Low-frequency safety net for lost events, invalidated directory inodes, and failed watches. */
+	#watchRecoveryTimer?: NodeJS.Timeout;
+	#watchFingerprints = new Map<string, string>();
 
 	/** Whether to persist changes */
 	#persist: boolean;
@@ -1499,6 +1502,8 @@ export class Settings {
 		if (this.#watchingFiles || !this.#persist || this.#savesCancelled || globalInstance !== this) return;
 		this.#watchingFiles = true;
 		this.#syncFileWatchers();
+		this.#watchRecoveryTimer = setInterval(() => this.#recoverFileWatchers(), 1000);
+		this.#watchRecoveryTimer.unref();
 	}
 
 	/** Stop config-file watching started by {@link startWatching}; idempotent. */
@@ -1506,6 +1511,9 @@ export class Settings {
 		this.#watchingFiles = false;
 		clearTimeout(this.#watchReloadTimer);
 		this.#watchReloadTimer = undefined;
+		clearInterval(this.#watchRecoveryTimer);
+		this.#watchRecoveryTimer = undefined;
+		this.#watchFingerprints.clear();
 		for (const { watcher } of this.#fileWatchers.values()) watcher.close();
 		this.#fileWatchers.clear();
 	}
@@ -1567,6 +1575,29 @@ export class Settings {
 		for (const file of this.#configFiles) addFile(file);
 		return targets;
 	}
+	/** Poll metadata, not config contents: reload only when a source changed or a watch was rearmed. */
+	#recoverFileWatchers(): void {
+		if (!this.#watchingFiles) return;
+		const next = new Map<string, string>();
+		for (const [dir, names] of this.#configWatchTargets()) {
+			for (const name of names) {
+				const file = path.join(dir, name);
+				try {
+					const stat = fs.statSync(file);
+					next.set(file, `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`);
+				} catch {
+					next.set(file, "missing");
+				}
+			}
+		}
+		let changed = next.size !== this.#watchFingerprints.size;
+		for (const [file, fingerprint] of next) {
+			if (this.#watchFingerprints.get(file) !== fingerprint) changed = true;
+		}
+		this.#watchFingerprints = next;
+		this.#syncFileWatchers();
+		if (changed) this.#scheduleWatchReload();
+	}
 
 	/**
 	 * Reconcile directory watchers with the current config sources. Watching
@@ -1577,7 +1608,13 @@ export class Settings {
 		const targets = this.#configWatchTargets();
 		let armed = false;
 		for (const [dir, entry] of this.#fileWatchers) {
-			if (targets.has(dir)) continue;
+			let current: fs.Stats | undefined;
+			try {
+				current = fs.statSync(dir);
+			} catch {
+				// A moved/deleted directory invalidates its watch even if the pathname returns later.
+			}
+			if (targets.has(dir) && current?.dev === entry.dev && current.ino === entry.ino) continue;
 			entry.watcher.close();
 			this.#fileWatchers.delete(dir);
 		}
@@ -1597,11 +1634,18 @@ export class Settings {
 				continue;
 			}
 			let watcher: fs.FSWatcher;
+			let stat: fs.Stats;
 			try {
+				stat = fs.statSync(dir);
 				watcher = fs.watch(dir, { persistent: false }, (_event, filename) => {
 					const entry = this.#fileWatchers.get(dir);
 					if (!entry || entry.watcher !== watcher) return;
-					if (filename && !entry.names.has(path.basename(filename.toString()))) return;
+					if (filename && !entry.names.has(path.basename(filename.toString()))) {
+						// Linux reports the watched directory's own rename using its basename.
+						if (_event === "rename" && path.basename(filename.toString()) === path.basename(dir))
+							this.#recoverFileWatchers();
+						return;
+					}
 					this.#scheduleWatchReload();
 				});
 			} catch (error) {
@@ -1614,7 +1658,7 @@ export class Settings {
 				watcher.close();
 				if (this.#fileWatchers.get(dir)?.watcher === watcher) this.#fileWatchers.delete(dir);
 			});
-			this.#fileWatchers.set(dir, { watcher, names });
+			this.#fileWatchers.set(dir, { watcher, names, dev: stat.dev, ino: stat.ino });
 			armed = true;
 		}
 		// The sources were last read before a watch or name was added. Bun also

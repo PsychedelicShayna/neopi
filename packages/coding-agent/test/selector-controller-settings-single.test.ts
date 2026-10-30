@@ -12,6 +12,8 @@ import type { Component, OverlayHandle, OverlayOptions, TUI } from "@oh-my-pi/pi
 import { SessionSelectorComponent } from "@oh-my-pi/pi-tui/overlays/session-selector";
 import { AgentsHubComponent } from "@oh-my-pi/pi-tui/overlays/agents-hub";
 import * as activityClient from "@oh-my-pi/pi-coding-agent/stats/activity-client";
+import * as settingsReload from "@oh-my-pi/pi-coding-agent/control/settings-reload";
+import * as settingsSelector from "@oh-my-pi/pi-tui/overlays/settings-selector";
 import * as sessionPins from "@oh-my-pi/pi-coding-agent/session/session-pins";
 import { cfgTaskAgentModelOverrides } from "@oh-my-pi/pi-coding-agent/task/settings";
 import type { SessionInfo } from "@oh-my-pi/pi-coding-agent/session/session-listing";
@@ -405,6 +407,31 @@ describe("single-instance menus", () => {
 		controller.showSettingsSelector();
 		expect(overlays).toHaveLength(1);
 		expect(setFocus).toHaveBeenLastCalledWith(overlays[0]);
+	});
+
+	it("distinguishes unsupported settings reload hosts from failed reloads", async () => {
+		const themes = Promise.resolve(["dark"]);
+		spyOn(themeModule, "getAvailableThemes").mockReturnValue(themes);
+		const broadcast = spyOn(settingsReload, "broadcastSettingsReload").mockResolvedValue({
+			notified: 2, unsupported: 1, failed: 1,
+		});
+		let callbacks: settingsSelector.SettingsCallbacks | undefined;
+		spyOn(settingsSelector, "SettingsSelectorComponent").mockImplementation(function (...args: unknown[]) {
+			callbacks = args[1] as settingsSelector.SettingsCallbacks;
+			return { render: () => [], dispose: () => {} };
+		} as never);
+		const { ui } = overlayUi();
+		const ctx = createInteractiveModeContext({
+			settings: Settings.isolated(),
+			session: { getAvailableThinkingLevels: () => [], getAvailableModels: () => [] },
+			ui,
+		});
+		new SelectorController(ctx).showSettingsSelector("global");
+		await themes;
+		expect(await callbacks?.onApply?.("session")).toBe("Session scope is local — no broadcast needed");
+		expect(broadcast).not.toHaveBeenCalled();
+		expect(await callbacks?.onApply?.("global")).toBe("Applied to 2 sessions; 1 need restart/upgrade; 1 failed");
+		expect(broadcast).toHaveBeenCalledWith("global", ctx.sessionManager.getCwd());
 	});
 
 	// Regression: clicking Tern's composer model chip again while the picker was

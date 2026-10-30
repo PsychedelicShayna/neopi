@@ -29,6 +29,15 @@ On Linux and macOS, configured `XDG_DATA_HOME`, `XDG_STATE_HOME`, and `XDG_CACHE
 
 Native project settings are intentionally scoped to the process working directory's `.omp/` folder — settings discovery does **not** walk ancestor directories looking for the nearest `.omp/`. Other discovery providers (Claude, Codex, Gemini, Cursor, OpenCode) can also contribute project-level settings from their own files; those are read-only from `omp` settings commands and can be turned off by provider id (see [Provider and source disabling](#provider-and-source-disabling)).
 
+### Live synchronization
+
+Long-lived interactive and RPC sessions reload global and project settings when their files change. Directory watches survive atomic file replacement; a one-second metadata check catches dropped notifications, retries failed watches, and re-arms watches when a directory is replaced. Invalid edits keep that layer's last good values while other valid layers continue updating.
+
+Control clients can request an immediate durable refresh with `reload_settings`, using `scope: "global"` or `scope: "project"` with `projectDir`. Project requests apply only when the receiver's current directory matches that canonical project path. `broadcastSettingsReload(scope, projectDir?)` notifies other published sessions concurrently and returns `{ notified, failed, unsupported }`; unresponsive targets have short connection/request timeouts. Old binaries that reject this command count as unsupported and need restarting on an updated build. A session-only apply never broadcasts. Each receiver reads its own profile from disk; global Apply does not copy settings between profiles.
+
+Reloading preserves higher-precedence project, CLI, and session/runtime overrides. A global change hidden by one of those overrides is not a missed notification.
+
+
 ## Config file formats
 
 The canonical global file is YAML at `config.yml`; `config.yaml` is accepted as a compatibility filename. The generic config loader used for other files (for example `models.yml`) accepts `.yml`, `.yaml`, `.json`, and `.jsonc`:
@@ -88,7 +97,7 @@ This converter currently covers main settings only. Other YAML families, indepen
 
 Use the interactive `/settings` panel inside a session, or the `omp config` command from a shell. The CLI reads effective values including setting environment variables. The panel shows and edits merged settings-layer values, not environment-supplied values; descriptions note active env overrides so env credentials are never pre-filled or persisted. Ordinary persistent writes land in the **global** file; model-selector role changes are the exception when `modelRoleStorage: project` (see [Where writes go](#where-writes-go)).
 
-Open `/settings global`, `/settings project`, or `/settings session` to edit one layer; Ctrl+S cycles the authoring scope. Press F6 in normal Settings navigation to flush and apply durable changes to other running sessions (project applies only to sessions in the same project). Session scope stays local. Search and open editors own their keys: Ctrl+A moves to the start of the field, and Apply is inactive until you leave the field.
+Open `/settings global`, `/settings project`, or `/settings session` to edit one layer; Ctrl+S cycles the authoring scope. Press F6 in normal Settings navigation to flush and apply durable changes to other running sessions (project applies only to sessions in the same project). Session scope stays local. Older sessions without reload support are listed as needing restart/upgrade, separately from failed reloads. Search and open editors own their keys: Ctrl+A moves to the start of the field, and Apply is inactive until you leave the field.
 
 ```bash
 omp config list                 # all settings with current effective values

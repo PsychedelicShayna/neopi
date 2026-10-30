@@ -685,7 +685,7 @@ export class SelectorController {
 							await this.ctx.settings.flush();
 							if (selectedScope === "session") return "Session scope is local — no broadcast needed";
 							const result = await broadcastSettingsReload(selectedScope, this.ctx.sessionManager.getCwd());
-							return `Applied to ${result.notified} sessions${result.failed ? `; ${result.failed} failed` : ""}`;
+							return `Applied to ${result.notified} sessions${result.unsupported ? `; ${result.unsupported} need restart/upgrade` : ""}${result.failed ? `; ${result.failed} failed` : ""}`;
 						},
 						onOpenConfigFile: () =>
 							this.#openConfigFile({ kind: "settings" }, () => this.ctx.settings.reloadFromDisk()),
