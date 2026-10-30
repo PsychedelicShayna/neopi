@@ -840,15 +840,19 @@ describe("IRC", () => {
 				}
 				turns.push(Promise.resolve(finish?.()));
 			};
+			const sessionManager = SessionManager.inMemory(process.cwd());
 			const bridge = new IrcBridge({
+				agent: new Agent({ initialState: { systemPrompt: [], messages: [], tools: [] } }),
+				sessionManager,
 				isDisposed: () => false,
 				isStreaming: () => false,
 				planModeEnabled: () => false,
 				emitSessionEvent: async () => {},
 				wakeForIrc: wake,
-			} as unknown as IrcBridgeHost);
+			});
 			const session = {
 				...createSessionDefaults(),
+				sessionManager,
 				subscribe: (listener: (event: AgentSessionEvent) => void) => {
 					listeners.push(listener);
 					return () => listeners.splice(listeners.indexOf(listener), 1);
