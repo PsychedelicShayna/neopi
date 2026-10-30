@@ -1,4 +1,5 @@
 import { isUnexpectedSocketCloseMessage } from "@oh-my-pi/pi-utils/fetch-retry";
+import { CredentialScopeError } from "@oh-my-pi/pi-utils/tls-fetch";
 import type { Api, AssistantMessage, Usage } from "../types";
 import { AwsCredentialsError } from "./aws";
 import {
@@ -51,6 +52,8 @@ export const Flag = {
 	 * status value, so no raw status id can set it.
 	 */
 	CacheControlUnsupported: 0x0000_0800,
+	/** Local credential origin/trust refusal; 0x400 is above every raw HTTP status. */
+	CredentialScope: 0x0000_0400,
 	/** HTTP 413 byte/media rejection — token compaction cannot shrink bytes or media budgets (#9235). */
 	PayloadRejected: 0x8000_0000,
 } as const;
@@ -77,6 +80,7 @@ const KIND_MASK =
 	Flag.Grammar |
 	Flag.FastModeUnsupported |
 	Flag.CacheControlUnsupported |
+	Flag.CredentialScope |
 	Flag.OAuthExpiry;
 
 const RETRIABLE_KINDS =
@@ -463,6 +467,7 @@ export function isOAuthExpiry(errorMessage: string): boolean {
 }
 
 const ERROR_KIND_LABELS: readonly [Flag, string][] = [
+	[Flag.CredentialScope, "credential-scope"],
 	[Flag.ThinkingLoop, "thinking-loop"],
 	[Flag.Transient, "transient"],
 	[Flag.Timeout, "timeout"],
@@ -500,6 +505,7 @@ export function is(id: number | undefined, flag: Flag): boolean {
 }
 
 export function retriable(id: number | undefined, opts?: { replayUnsafe?: boolean }): boolean {
+	if (is(id, Flag.CredentialScope)) return false;
 	if (is(id, Flag.ContentBlocked)) return false;
 	if (is(id, Flag.PayloadRejected)) return false;
 	if (opts?.replayUnsafe) return false;
@@ -769,6 +775,12 @@ export function classify(error: unknown, api?: Api): number {
 		if (typeof link === "object") {
 			if (seen.has(link)) break;
 			seen.add(link);
+			if (
+				link instanceof CredentialScopeError ||
+				("errorId" in link && typeof link.errorId === "number" && is(link.errorId, Flag.CredentialScope))
+			) {
+				return create(Flag.CredentialScope);
+			}
 
 			if ("errorId" in link && typeof (link as { errorId: unknown }).errorId === "number") {
 				kinds |= (link as { errorId: number }).errorId & KIND_MASK;
@@ -999,6 +1011,10 @@ export function classifyMessage(message: {
 	errorStatus?: number;
 }): number {
 	const existingId = message.errorId;
+	if (is(existingId, Flag.CredentialScope)) {
+		message.errorId = create(Flag.CredentialScope);
+		return message.errorId;
+	}
 	const currentStatus = message.errorStatus ?? statusFromId(existingId);
 	const existingOverflowOnly =
 		existingId !== undefined && is(existingId, Flag.ContextOverflow) && !is(existingId, Flag.PayloadRejected);

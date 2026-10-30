@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { extractRetryHint, fetchWithRetry, isUnexpectedSocketCloseMessage } from "@oh-my-pi/pi-utils/fetch-retry";
+import { CredentialScopeError } from "@oh-my-pi/pi-utils/tls-fetch";
 
 /** Await a rejection and narrow it to `Error` without asserting a shape. */
 async function rejectionOf(promise: Promise<unknown>): Promise<Error> {
@@ -100,6 +101,21 @@ describe("fetchWithRetry", () => {
 		expect(response.status).toBe(429);
 		expect(await response.text()).toBe("slow down");
 		expect(attempt).toBe(1);
+	});
+
+	it("does not replay a credential-policy refusal even if a later attempt could succeed", async () => {
+		const refusal = new CredentialScopeError("TLS certificate verification failed for the trusted origin");
+		let attempts = 0;
+		await expect(
+			fetchWithRetry("https://example.invalid/private", {
+				fetch: async () => {
+					if (attempts++ === 0) throw refusal;
+					return new Response("A refused credential must not be replayed");
+				},
+				defaultDelayMs: 0,
+			}),
+		).rejects.toBe(refusal);
+		expect(attempts).toBe(1);
 	});
 
 	it("normalizes aborts during response backoff", async () => {

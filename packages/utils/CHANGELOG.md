@@ -10,6 +10,7 @@
 
 ### Fixed
 
+- Stop retrying credential-origin, redirect and pinned-certificate verification refusals while retaining transient network retries ([#649](https://github.com/PsychedelicShayna/neopi/issues/649), [#651](https://github.com/PsychedelicShayna/neopi/issues/651)).
 - Fixed ordinary and cooperative file locks allowing simultaneous owners of the same resource ([#256](https://github.com/PsychedelicShayna/neopi/issues/256)).
 
 ## [18.14.0] - 2026-10-29
