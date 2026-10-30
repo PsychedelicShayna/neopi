@@ -13,7 +13,7 @@
  */
 import * as path from "node:path";
 import { VERSION } from "@oh-my-pi/pi-utils/dirs";
-import { resolveGitBuildIdentity } from "./utils/git-build-identity";
+import { resolveGitBuildIdentity, resolveGitBuildIdentitySync } from "./utils/git-build-identity";
 
 export interface BuildInfo {
 	/** Package version, e.g. "18.3.2". */
@@ -62,7 +62,17 @@ function bakedBuildInfo(): BuildInfo | undefined {
  * Identity of this NeoPi build, snapshotted when the module loads: baked in
  * for compiled binaries, resolved from git for source trees.
  */
-export const BUILD_INFO: BuildInfo =
-	bakedBuildInfo() ??
-	// This module lives at <checkout>/packages/coding-agent/src/build-info.ts.
-	(await resolveGitBuildInfo(path.resolve(import.meta.dir, "..", "..", "..")));
+export const BUILD_INFO: BuildInfo = bakedBuildInfo() ?? snapshotSourceBuildInfo();
+
+/** Keep the public snapshot synchronously loadable by lazy SDK consumers. */
+function snapshotSourceBuildInfo(): BuildInfo {
+	try {
+		// This module lives at <checkout>/packages/coding-agent/src/build-info.ts.
+		return Object.freeze({
+			version: VERSION,
+			...resolveGitBuildIdentitySync(path.resolve(import.meta.dir, "..", "..", "..")),
+		});
+	} catch {
+		return UNKNOWN_BUILD;
+	}
+}
