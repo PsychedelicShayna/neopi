@@ -15,6 +15,11 @@ export type AgentGenerationDefinition = Omit<AgentDefinition, "source" | "filePa
 export type AgentFieldGenerationRequest = DefinitionGenerationRequest<AgentGenerationDefinition>;
 export type AgentFieldGenerationResult = DefinitionGenerationResult<AgentGenerationDefinition>;
 
+export interface AgentFieldGenerator {
+	generateAgentFields(request: AgentFieldGenerationRequest): Promise<AgentFieldGenerationResult>;
+	dispose(): void;
+}
+
 export interface AgentGenerationTool {
 	name: string;
 	description: string;
@@ -25,16 +30,16 @@ export interface AgentGenerationAdvisor {
 	scope: string;
 }
 
-export interface AgentFieldGeneratorOptions extends Omit<DefinitionGeneratorOptions<AgentGenerationDefinition>, "systemPrompt" | "requestPrompt"> {
+export interface AgentFieldGeneratorOptions extends Omit<DefinitionGeneratorOptions<AgentGenerationDefinition>, "systemPrompt" | "requestPrompt" | "validateFields"> {
 	/** The editor's canonical schema, including field descriptions and allowed values. */
 	schema: () => Record<string, unknown>;
-	/** Read the host tool registry, including tools not currently enabled. */
+	/** Read all host registry tools, using the central toolSummary helper for descriptions. */
 	tools: () => readonly AgentGenerationTool[];
 	advisors?: () => Promise<readonly AgentGenerationAdvisor[]>;
 }
 
 /** One authoring API for field regeneration, whole definitions, and selected-reference mixes. */
-export function createAgentFieldGenerator(options: AgentFieldGeneratorOptions) {
+export function createAgentFieldGenerator(options: AgentFieldGeneratorOptions): AgentFieldGenerator {
 	const schema = (): Record<string, unknown> => {
 		const declared = options.schema();
 		const properties = isRecord(declared.properties) ? declared.properties : {};
@@ -60,10 +65,7 @@ export function createAgentFieldGenerator(options: AgentFieldGeneratorOptions) {
 		},
 		systemPrompt: async () => renderPromptAsset("system/agent-fields-system.md", generationSystem, {
 			fieldSchema: JSON.stringify(schema(), null, 2),
-			tools: options.tools().map(tool => ({
-				name: tool.name,
-				description: tool.description.split(/\n\s*\n/, 1)[0].replace(/\s+/g, " ").trim(),
-			})),
+			tools: options.tools(),
 			advisors: await options.advisors?.() ?? [],
 		}, { cwd: options.cwd }),
 		requestPrompt: request => renderPromptAsset("system/agent-fields-user.md", generationUser, {
