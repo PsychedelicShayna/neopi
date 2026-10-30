@@ -97,6 +97,25 @@ describe("agent field generation harness context", () => {
 		expect((await generator.generateAgentFields({ definition: {}, target: "tools" })).fields).toEqual({ tools: ["read"] });
 	});
 
+	test("generates named references and full private advisor policies through the canonical editor schema", async () => {
+		const completion = vi.spyOn(ai, "completeSimple");
+		for (const advisor of [
+			{ ref: "velvet", scope: "project-omp" },
+			{ inline: { name: "private", model: "@advisor", instructions: "Review every change", reviewMode: "agent-end", reviewInterval: 2, tools: ["read"], delivery: { concern: "on-yield", blocker: "next-tool-call" } } },
+		]) {
+			completion.mockResolvedValue(response({ advisor }));
+			expect((await generator.generateAgentFields({ definition: {}, target: "advisor" })).fields.advisor).toEqual(advisor);
+		}
+		for (const advisor of [
+			{ ref: "velvet", inline: { name: "conflicting" } },
+			{ ref: "velvet", scope: "invalid-scope" },
+			{ inline: { name: "private", delivery: { concern: "interrupt" } } },
+		]) {
+			completion.mockResolvedValue(response({ advisor }));
+			await expect(generator.generateAgentFields({ definition: {}, target: "advisor" })).rejects.toThrow("Invalid generated definition");
+		}
+	});
+
 	test("accepts nested JSON Schema and JTD output but rejects an unusable declaration", async () => {
 		const completion = vi.spyOn(ai, "completeSimple");
 		for (const output of [

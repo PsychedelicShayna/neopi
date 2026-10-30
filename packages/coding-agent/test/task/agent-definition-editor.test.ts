@@ -122,6 +122,21 @@ describe("agent definition rich editor", () => {
 		expect(ui.requests).toHaveLength(2); ui.back(); ui.back(); expect(ui.closed()).toBe(true);
 	});
 
+	test("nested schema keywords and inline advisor choices retain their field generation targets", async () => {
+		const ui = setup();
+		ui.activate("output"); ui.activate("enable"); ui.activate("keywords");
+		await ui.fill("add", "enum"); ui.activate("enum"); ui.activate("array"); ui.activate("add"); ui.activate("0");
+		ui.select("text"); ui.editor.handleInput("r"); await Bun.sleep(0);
+		expect(ui.requests[0]?.target).toBe("output");
+		ui.activate("advisor"); ui.activate("inline"); ui.activate("reviewMode"); ui.select("turn");
+		ui.editor.handleInput("\x12"); // Ctrl-R opens the comment dialog.
+		ui.setExternal("Review once per turn");
+		ui.editor.handleNativeEvent({ type: "action", key: "", act: "external", mods: [] });
+		await Bun.sleep(0); ui.submit(); await Bun.sleep(0);
+		expect(ui.requests[1]).toMatchObject({ target: "advisor", comment: "Review once per turn", conversationId: "retained" });
+		ui.editor.dispose();
+	});
+
 	test("generate from existing sends selected definitions and all preset fields to the generator", async () => {
 		const ui = setup({ name: "preset", description: "", systemPrompt: "", blocking: false, tools: [] });
 		ui.activate("from-existing"); ui.activate("0"); ui.activate("generate"); await Bun.sleep(0);

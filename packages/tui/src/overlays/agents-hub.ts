@@ -1142,10 +1142,6 @@ export class AgentsHubComponent implements Component {
 		return lines.slice(0, rows);
 	}
 
-	#renderCreate(width: number, rows: number): readonly string[] {
-		return (this.#definitionEditor?.render(width) ?? []).slice(0, rows);
-	}
-
 	#footerHint(): string {
 		const enter = formatKeyHint("enter");
 		const cancel = editorKey("tui.select.cancel");
@@ -1223,7 +1219,8 @@ export class AgentsHubComponent implements Component {
 
 	/**
 	 * The agent list (and its chip strips) is a `picker` sheet. The pattern
-	 * input, the model browser and the create wizard stay the generic overlay.
+	 * input and model browser stay the generic overlay; the rich definition editor
+	 * chooses its sheet mode according to the currently focused form or text dialog.
 	 */
 	nativeSheet(cx: DescribeContext): boolean {
 		return this.#definitionEditor ? this.#definitionEditor.nativeSheet(cx) : cx.supports("picker") && !this.#assigning && this.#strip?.kind !== "pattern";
@@ -1651,10 +1648,6 @@ export class AgentsHubComponent implements Component {
 		];
 		if (agent.filePath) children.push(text([span(shortenPath(agent.filePath), "path dim")], { truncate: "middle" }));
 		return node("section", { head: [span(agent.name, "accent strong")] }, children, "detail");
-	}
-
-	#describeCreate(): NativeChild[] {
-		return this.#definitionEditor ? [this.#definitionEditor] : [];
 	}
 
 	/** Styled spans of one footer chip, from its action rather than its ANSI label. */

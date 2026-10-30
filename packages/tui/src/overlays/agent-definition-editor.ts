@@ -56,6 +56,44 @@ export const AGENT_DEFINITION_FIELDS: readonly DefinitionField[] = [
 	{ key: "autoloadSkills", label: "Autoload skills", kind: "list", description: "Skills automatically loaded for this agent." },
 	{ key: "readSummarize", label: "Summarize file reads", kind: "boolean", description: "false makes read return verbatim file content instead of structural summaries." },
 ];
+const inlineAdvisorSchema = {
+	type: "object",
+	properties: {
+		name: { type: "string", description: "Display name for this private advisor." },
+		model: { type: "string", description: "Model or @role selector, optionally suffixed with :effort." },
+		instructions: { type: "string", description: "Specialized instructions appended to the advisor's base prompt." },
+		systemPrompt: { type: "string", description: "Optional replacement for the bundled base advisor prompt." },
+		tools: { type: "array", items: { type: "string" }, description: "Tool allowlist; omitted uses advisor defaults and [] grants none." },
+		enabled: { type: "boolean", description: "Whether this advisor runs; defaults to true." },
+		includeThinking: { type: "boolean", description: "Include the watched agent's reasoning; defaults to true." },
+		maxNotesPerUpdate: { type: "integer", minimum: 1, description: "Maximum non-blocker notes per update." },
+		reviewMode: { type: "string", enum: ["turn", "agent-end"], description: "Review each turn or after the watched agent yields." },
+		reviewInterval: { type: "integer", minimum: 1, description: "Number of turns between reviews." },
+		syncBacklog: { type: "string", enum: ["off", "1", "3", "5", "strict"], description: "How much pending context may accumulate before synchronization." },
+		scope: { type: "string", enum: ["main", "subagent", "all"], description: "Session kinds this advisor may watch; defaults to all." },
+		delivery: {
+			type: "object",
+			properties: Object.fromEntries(["nit", "concern", "blocker"].map(severity => [severity, { type: "string", enum: ["on-yield", "next-tool-call"] }])),
+			additionalProperties: false,
+			description: "Optional per-severity delivery timing, local to this agent definition.",
+		},
+	},
+	required: ["name"],
+	additionalProperties: false,
+};
+const advisorFieldSchema = {
+	anyOf: [
+		{ type: "boolean" },
+		{ type: "string", description: "Advisor model or @role selector (not a catalog name)." },
+		{
+			type: "object",
+			properties: { ref: { type: "string" }, scope: { type: "string", enum: ["user", "project", "project-omp", "session"] } },
+			required: ["ref"],
+			additionalProperties: false,
+		},
+		{ type: "object", properties: { inline: inlineAdvisorSchema }, required: ["inline"], additionalProperties: false },
+	],
+};
 export const agentDefinitionFieldSchema = {
 	type: "object",
 	properties: Object.fromEntries(AGENT_DEFINITION_FIELDS.map(field => [field.key, {
@@ -63,7 +101,7 @@ export const agentDefinitionFieldSchema = {
 		...(field.kind === "boolean" ? { type: "boolean" } : field.kind === "list" || field.kind === "tools"
 			? { anyOf: [{ type: "array", items: { type: "string" } }, ...(field.key === "spawns" ? [{ const: "*" }] : [])] }
 			: field.key === "prewalk" ? { anyOf: [{ type: "boolean" }, { type: "string" }] }
-			: field.kind === "output" ? {} : field.kind === "advisor" ? { anyOf: [{ type: "boolean" }, { type: "string" }, { type: "object", properties: { ref: { type: "string" }, scope: { type: "string" }, inline: { type: "object" } } }] }
+			: field.kind === "output" ? {} : field.kind === "advisor" ? advisorFieldSchema
 			: { type: "string", ...(field.choices ? { enum: field.choices } : {}) }),
 	} ])),
 	required: ["name", "description", "systemPrompt"],
@@ -194,7 +232,7 @@ export class AgentDefinitionEditor implements Component {
 		const schemaType = schema.type ?? (schema.elements ? "array" : schema.properties || schema.optionalProperties ? "object" : undefined);
 		return [
 			{ id: "type", label: "Type", value: displayValue(schemaType), field: "output", activate: () => this.#push("Output type", () => types.map(type => ({
-				id: type, label: type, activate: () => {
+				id: type, label: type, field: "output", activate: () => {
 					if (!jtd) update("type", type);
 					else {
 						const next = { ...record(get()) };
@@ -273,21 +311,21 @@ export class AgentDefinitionEditor implements Component {
 	}
 	#jsonValue(title: string, get: () => unknown, set: (value: unknown) => void): void {
 		this.#push(title, () => [
-			{ id: "text", label: "Text", value: typeof get() === "string" ? String(get()) : "", activate: () => this.#prompt(title, typeof get() === "string" ? String(get()) : "", set) },
-			{ id: "number", label: "Number", value: typeof get() === "number" ? String(get()) : "", activate: () => this.#prompt(title, typeof get() === "number" ? String(get()) : "", value => { const number = Number(value); if (!value.trim() || !Number.isFinite(number)) throw new Error("Enter a finite number"); set(number); }) },
-			{ id: "boolean", label: "Boolean", value: typeof get() === "boolean" ? String(get()) : "", activate: () => set(get() !== true) },
-			{ id: "null", label: "Null", activate: () => set(null) },
-			{ id: "object", label: "Object…", activate: () => { if (typeof get() !== "object" || get() === null || Array.isArray(get())) set({}); this.#jsonObject(title, get, set); } },
-			{ id: "array", label: "List…", activate: () => { if (!Array.isArray(get())) set([]); this.#push(title, () => [
-				...(get() as unknown[]).map((value, index) => ({ id: String(index), label: `Item ${index + 1}`, value: displayValue(value), activate: () => this.#jsonValue(`${title} item ${index + 1}`, () => (get() as unknown[])[index], next => { const values = [...get() as unknown[]]; if (next === undefined) values.splice(index, 1); else values[index] = next; set(values); }) })),
-				{ id: "add", label: "+ New item", activate: () => set([...get() as unknown[], null]) },
+			{ id: "text", label: "Text", field: "output", value: typeof get() === "string" ? String(get()) : "", activate: () => this.#prompt(title, typeof get() === "string" ? String(get()) : "", set) },
+			{ id: "number", label: "Number", field: "output", value: typeof get() === "number" ? String(get()) : "", activate: () => this.#prompt(title, typeof get() === "number" ? String(get()) : "", value => { const number = Number(value); if (!value.trim() || !Number.isFinite(number)) throw new Error("Enter a finite number"); set(number); }) },
+			{ id: "boolean", label: "Boolean", field: "output", value: typeof get() === "boolean" ? String(get()) : "", activate: () => set(get() !== true) },
+			{ id: "null", label: "Null", field: "output", activate: () => set(null) },
+			{ id: "object", label: "Object…", field: "output", activate: () => { if (typeof get() !== "object" || get() === null || Array.isArray(get())) set({}); this.#jsonObject(title, get, set); } },
+			{ id: "array", label: "List…", field: "output", activate: () => { if (!Array.isArray(get())) set([]); this.#push(title, () => [
+				...(get() as unknown[]).map((value, index) => ({ id: String(index), label: `Item ${index + 1}`, field: "output" as const, value: displayValue(value), activate: () => this.#jsonValue(`${title} item ${index + 1}`, () => (get() as unknown[])[index], next => { const values = [...get() as unknown[]]; if (next === undefined) values.splice(index, 1); else values[index] = next; set(values); }) })),
+				{ id: "add", label: "+ New item", field: "output", activate: () => set([...get() as unknown[], null]) },
 			]); } },
-			{ id: "remove", label: "Remove", activate: () => { set(undefined); this.#pages.pop(); } },
+			{ id: "remove", label: "Remove", field: "output", activate: () => { set(undefined); this.#pages.pop(); } },
 		]);
 	}
 	#advisor(): void {
 		this.#push("Advisor", () => [
-			{ id: "default", label: "Default (no advisor)", activate: () => { delete this.#draft.advisor; } },
+			{ id: "default", label: "Default (no advisor)", field: "advisor", activate: () => { delete this.#draft.advisor; } },
 			{ id: "role", label: "Use advisor role", value: this.#draft.advisor === true ? "✓" : "", field: "advisor", activate: () => { this.#draft.advisor = true; } },
 			{ id: "off", label: "Disabled", field: "advisor", activate: () => { this.#draft.advisor = false; } },
 			{ id: "model", label: "Use a model / role selector…", field: "advisor", activate: () => this.#prompt("Advisor model", typeof this.#draft.advisor === "string" ? this.#draft.advisor : "@advisor", value => { this.#draft.advisor = value.trim() || true; }) },
@@ -316,13 +354,13 @@ export class AgentDefinitionEditor implements Component {
 			...fields.map(field => ({ id: field.key, label: field.label, value: displayValue(get()[field.key]), field: "advisor" as const, activate: () => {
 				const set = (value: unknown): void => { if (value === undefined) delete get()[field.key]; else Object.assign(get(), { [field.key]: value }); };
 				if (field.kind === "boolean") { set(get()[field.key] === undefined ? true : get()[field.key] === true ? false : undefined); return; }
-				if (field.choices) { this.#push(field.label, () => [undefined, ...field.choices!].map(value => ({ id: value ?? "default", label: value ?? "Default", activate: () => { set(value); this.#pages.pop(); } }))); return; }
+				if (field.choices) { this.#push(field.label, () => [undefined, ...field.choices!].map(value => ({ id: value ?? "default", label: value ?? "Default", field: "advisor", activate: () => { set(value); this.#pages.pop(); } }))); return; }
 				this.#prompt(field.label, get()[field.key] === undefined ? "" : String(get()[field.key]), value => { if (field.kind === "number") { if (!value.trim()) set(undefined); else { const number = Number(value); if (!Number.isFinite(number) || number < 0) throw new Error("Enter a nonnegative number"); set(number); } } else set(value || undefined); });
 			} })),
-			...(["nit", "concern", "blocker"] as const).map(severity => ({ id: `delivery:${severity}`, label: `${severity} delivery`, value: get().delivery?.[severity] ?? "Default", field: "advisor" as const, activate: () => this.#push(`${severity} delivery`, () => [undefined, "on-yield", "next-tool-call"].map(value => ({ id: value ?? "default", label: value ?? "Default", activate: () => { const delivery = { ...get().delivery }; if (value === undefined) delete delivery[severity]; else delivery[severity] = value as "on-yield" | "next-tool-call"; get().delivery = delivery; this.#pages.pop(); } }))) })),
+			...(["nit", "concern", "blocker"] as const).map(severity => ({ id: `delivery:${severity}`, label: `${severity} delivery`, value: get().delivery?.[severity] ?? "Default", field: "advisor" as const, activate: () => this.#push(`${severity} delivery`, () => [undefined, "on-yield", "next-tool-call"].map(value => ({ id: value ?? "default", label: value ?? "Default", field: "advisor", activate: () => { const delivery = { ...get().delivery }; if (value === undefined) delete delivery[severity]; else delivery[severity] = value as "on-yield" | "next-tool-call"; get().delivery = delivery; this.#pages.pop(); } }))) })),
 			{ id: "tools", label: "Tools…", value: displayValue(get().tools), field: "advisor", activate: () => this.#push("Private advisor tools", () => [
-				{ id: "default", label: "Use default tools", value: get().tools === undefined ? "[✓]" : "[ ]", activate: () => { get().tools = get().tools === undefined ? [] : undefined; } },
-				...this.#deps.tools.map(tool => ({ id: tool.name, label: tool.name, value: get().tools?.includes(tool.name) ? "[✓]" : "[ ]", activate: () => { const selected = get().tools ?? []; get().tools = selected.includes(tool.name) ? selected.filter(name => name !== tool.name) : [...selected, tool.name]; } })),
+				{ id: "default", label: "Use default tools", field: "advisor", value: get().tools === undefined ? "[✓]" : "[ ]", activate: () => { get().tools = get().tools === undefined ? [] : undefined; } },
+				...this.#deps.tools.map(tool => ({ id: tool.name, label: tool.name, field: "advisor" as const, value: get().tools?.includes(tool.name) ? "[✓]" : "[ ]", activate: () => { const selected = get().tools ?? []; get().tools = selected.includes(tool.name) ? selected.filter(name => name !== tool.name) : [...selected, tool.name]; } })),
 			]) },
 		]);
 	}
@@ -382,9 +420,9 @@ export class AgentDefinitionEditor implements Component {
 		const page = this.#pages[this.#pages.length - 1]!; const rows = page.rows(); page.index = Math.max(0, Math.min(rows.length - 1, page.index));
 		const height = Math.max(5, (this.#tui.terminal?.rows ?? 30) - 5);
 		const top = Math.max(0, Math.min(page.index - Math.floor(height / 2), rows.length - height));
-		const lines = [theme.bold(` ${page.title}`), theme.fg("dim", "─".repeat(Math.max(1, width)))];
+		const lines = [theme.bold(` ${sanitizeDisplaySingleLine(page.title)}`), theme.fg("dim", "─".repeat(Math.max(1, width)))];
 		for (let index = top; index < Math.min(rows.length, top + height); index++) {
-			const row = rows[index]!; const line = ` ${index === page.index ? "›" : " "} ${row.label}${row.value ? `  ${sanitizeDisplaySingleLine(row.value)}` : ""}`;
+			const row = rows[index]!; const line = ` ${index === page.index ? "›" : " "} ${sanitizeDisplaySingleLine(row.label)}${row.value ? `  ${sanitizeDisplaySingleLine(row.value)}` : ""}`;
 			lines.push(truncateToWidth(index === page.index ? theme.fg("accent", line) : line, width));
 		}
 		if (this.#error) lines.push(truncateToWidth(theme.fg("error", replaceTabs(this.#error)), width));
