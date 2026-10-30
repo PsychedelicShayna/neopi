@@ -31,6 +31,8 @@
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { type ModelKind, modelKind } from "@oh-my-pi/pi-catalog/types";
 import { logger } from "@oh-my-pi/pi-utils";
+import { USAGE_REPORT_TTL_MS } from "../auth/sqlite-credential-store";
+import { isUsageLimitExhausted } from "../auth/usage-report";
 import { classifyGatewayError } from "../error/gateway";
 import * as anthropicMessages from "../providers/anthropic-messages-server";
 import * as openaiChat from "../providers/openai-chat-server";
@@ -38,6 +40,7 @@ import * as openaiResponses from "../providers/openai-responses-server";
 import * as piNative from "../providers/pi-native-server";
 import { completeSimple, streamSimple } from "../stream";
 import type { Api, AssistantMessageEventStream, Context, Model, SimpleStreamOptions } from "../types";
+import { resolveUsedFraction } from "../usage";
 import { deterministicUuid } from "../utils/deterministic-id";
 import { parseBind } from "../utils/parse-bind";
 import { resolvePeer } from "../utils/resolve-peer";
@@ -45,6 +48,7 @@ import {
 	type AuthGatewayBootOptions,
 	type AuthGatewayRouteOptions,
 	buildGatewayApiKeyResolver,
+	gatewayCredentialAllowsModel,
 	mirrorRequestAbort,
 	normalizeClientSessionKey,
 	recordGatewayUsage,
@@ -70,11 +74,13 @@ import { handleTranscriptions } from "./routes/transcriptions";
 import { handleVideoContent, handleVideoPoll, handleVideoSubmit } from "./routes/video";
 import { AuthGatewaySessionStateStore } from "./session-state";
 import type {
+	AuthGatewayAccount,
+	AuthGatewayAccountWindow,
 	AuthGatewayServerHandle,
 	AuthGatewayFormatModule as FormatModule,
 	AuthGatewayParsedRequest as ParsedFormatRequest,
 } from "./types";
-import { DEFAULT_AUTH_GATEWAY_BIND } from "./types";
+import { DEFAULT_AUTH_GATEWAY_BIND, NEOPROXY_CREDENTIAL_HEADER } from "./types";
 
 // `parseBind` lives in ../utils/parse-bind so the gateway and broker can't
 // drift on accepted inputs (e.g. empty hostname, IPv6 brackets).
@@ -232,6 +238,11 @@ function buildStreamOptions(parsed: ParsedFormatRequest, api: Api, signal: Abort
 			hasResponseFormat: options.responseFormat !== undefined,
 		});
 	}
+	if (opts.headers) {
+		for (const name of Object.keys(opts.headers)) {
+			if (name.toLowerCase() === NEOPROXY_CREDENTIAL_HEADER) delete opts.headers[name];
+		}
+	}
 	return opts;
 }
 
@@ -358,7 +369,14 @@ async function handleFormatEndpoint(
 	// expected to resolve the credential and pass it as `options.apiKey`.
 	// For OAuth providers this returns the access token (refreshed via the
 	// broker override on AuthStorage when needed).
-	const apiKey = await resolveGatewayApiKey(bootOpts.storage, model, sessionId, controller.signal, peer);
+	const apiKey = await resolveGatewayApiKey(
+		bootOpts.storage,
+		model,
+		sessionId,
+		controller.signal,
+		peer,
+		bootOpts.credentialId,
+	);
 	if (controller.signal.aborted) return clientClosedResponse(route);
 	if ("status" in apiKey) return route.module.formatError(apiKey.status, apiKey.type, apiKey.message);
 
@@ -375,7 +393,13 @@ async function handleFormatEndpoint(
 		model,
 		context: parsed.context,
 		toolsJson,
-		account: resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, apiKey.apiKey),
+		account: resolveGatewayAccount(
+			bootOpts.storage,
+			model.provider,
+			sessionId,
+			apiKey.apiKey,
+			apiKey.credentialPin?.id,
+		),
 	});
 	streamOpts.providerSessionState = lease.states;
 	streamOpts.apiKey = buildGatewayApiKeyResolver(
@@ -387,7 +411,9 @@ async function handleFormatEndpoint(
 		route.label,
 		peer,
 		resolvedKey =>
-			lease.updateAccount(resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, resolvedKey)),
+			lease.updateAccount(
+				resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, resolvedKey, apiKey.credentialPin?.id),
+			),
 	);
 
 	logger.info("auth-gateway request", {
@@ -553,7 +579,14 @@ async function handlePiNative(
 	const sessionId = clientKey ?? deriveSessionId(parsed.modelId, parsed.context, toolsJson);
 	parsed.options.sessionId = sessionId;
 
-	const apiKey = await resolveGatewayApiKey(bootOpts.storage, model, sessionId, controller.signal, peer);
+	const apiKey = await resolveGatewayApiKey(
+		bootOpts.storage,
+		model,
+		sessionId,
+		controller.signal,
+		peer,
+		bootOpts.credentialId,
+	);
 	if (controller.signal.aborted) return aborted();
 	if ("status" in apiKey) return piNative.formatError(apiKey.status, apiKey.type, apiKey.message);
 
@@ -567,7 +600,13 @@ async function handlePiNative(
 		model,
 		context: parsed.context,
 		toolsJson,
-		account: resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, apiKey.apiKey),
+		account: resolveGatewayAccount(
+			bootOpts.storage,
+			model.provider,
+			sessionId,
+			apiKey.apiKey,
+			apiKey.credentialPin?.id,
+		),
 	});
 	// Build the SimpleStreamOptions actually handed to `streamSimple`. We
 	// trust the client's options (already allow-listed by `parseRequest`) and
@@ -589,7 +628,9 @@ async function handlePiNative(
 		"pi-native",
 		peer,
 		resolvedKey =>
-			lease.updateAccount(resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, resolvedKey)),
+			lease.updateAccount(
+				resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, resolvedKey, apiKey.credentialPin?.id),
+			),
 	);
 	if (model.api === "openai-codex-responses") {
 		delete streamOpts.temperature;
@@ -605,6 +646,9 @@ async function handlePiNative(
 	// headers — the client's values win when they collide.
 	const captured = captureRequestHeaders(req.headers);
 	streamOpts.headers = { ...captured, ...streamOpts.headers };
+	for (const name of Object.keys(streamOpts.headers)) {
+		if (name.toLowerCase() === NEOPROXY_CREDENTIAL_HEADER) delete streamOpts.headers[name];
+	}
 	streamOpts.sessionId = sessionId;
 
 	logger.info("auth-gateway request", {
@@ -782,6 +826,79 @@ function handleModelsList(opts: AuthGatewayRouteOptions): Response {
 	return json(200, { object: "list", data });
 }
 
+/** A secret-free, per-row account catalogue for authenticated NeoProxy sources. */
+async function handleNeoProxyAccounts(opts: AuthGatewayRouteOptions, signal: AbortSignal): Promise<Response> {
+	await opts.storage.credentials.revalidate();
+	const models = [...(opts.listModels?.() ?? [])];
+	const data: AuthGatewayAccount[] = [];
+	for (const row of opts.storage.credentials.list()) {
+		if (signal.aborted) return json(499, { error: "request aborted" });
+		if (opts.excludeProviders?.has(row.provider) || row.disabledCause !== null) continue;
+		const accountModels = [
+			...new Set(
+				models
+					.filter(model => gatewayCredentialAllowsModel(row, model))
+					.map(model => `${model.provider}/${model.id}`),
+			),
+		];
+		if (accountModels.length === 0) continue;
+		const fingerprint = await opts.storage.keys.fingerprintPinned(row.id, row.provider);
+		if (fingerprint === undefined) continue;
+		// The normal per-credential report path preserves broker-owned OAuth
+		// usage and cache behavior. Aggregate reports cannot safely attribute a
+		// nameless API-key quota to one row in a multi-account pool.
+		const report = await opts.storage.usage.report(row.provider, row.credential, { signal }).catch(error => {
+			if (signal.aborted) throw error;
+			return null;
+		});
+		const now = Date.now();
+		const fresh =
+			report !== null &&
+			Number.isFinite(report.fetchedAt) &&
+			report.fetchedAt <= now &&
+			now - report.fetchedAt <= USAGE_REPORT_TTL_MS;
+		const windows: AuthGatewayAccountWindow[] = [];
+		for (const limit of report?.limits ?? []) {
+			const resetsAt = limit.window?.resetsAt;
+			const current = fresh && (resetsAt === undefined || resetsAt > now || (report?.fetchedAt ?? 0) >= resetsAt);
+			const used = current ? resolveUsedFraction(limit) : undefined;
+			const known = used !== undefined && Number.isFinite(used);
+			windows.push({
+				kind: limit.id,
+				known,
+				...(known ? { used: Math.max(0, Math.min(1, used)) } : {}),
+				...(resetsAt !== undefined && Number.isFinite(resetsAt) ? { resetsAt } : {}),
+			});
+		}
+		const blocked =
+			opts.storage.blocks.list([row.id]).some(block => block.blockedUntilMs > now && !block.blockScope) ||
+			(fresh &&
+				report.limits.some(
+					limit =>
+						limit.scope.shared === true &&
+						!limit.scope.modelId &&
+						!limit.scope.tier &&
+						(limit.window?.resetsAt === undefined || limit.window.resetsAt > now) &&
+						isUsageLimitExhausted(limit),
+				));
+		data.push({
+			id: String(row.id),
+			provider: row.provider,
+			// Stored labels and provider metadata can contain credentials. Do
+			// not copy any of them into this deliberately narrow wire contract.
+			label: `${row.provider} account ${row.id}`,
+			models: accountModels,
+			state: blocked ? "blocked" : "healthy",
+			windows,
+		});
+	}
+	// Reports can refresh, disable or remove rows. Revalidate before replying
+	// so an account revoked during the asynchronous probes disappears too.
+	await opts.storage.credentials.revalidate();
+	const active = new Set(opts.storage.credentials.list().map(row => String(row.id)));
+	return json(200, { object: "list", data: data.filter(row => active.has(row.id)) }, { "Cache-Control": "no-store" });
+}
+
 /** `GET /v1/videos/:id` (poll) and `GET /v1/videos/:id/content` (download); group 1 = id, group 2 = `/content`. */
 const VIDEO_JOB_PATH = /^\/v1\/videos\/([^/]+)(\/content)?$/;
 
@@ -802,6 +919,7 @@ const LOGGABLE_PATHS: Record<string, true> = {
 	"/v1/rerank": true,
 	"/v1/videos": true,
 	"/v1/models": true,
+	"/v1/neoproxy/accounts": true,
 };
 
 /** Only static routes reach logs verbatim; dynamic or unknown paths may carry caller-supplied secrets. */
@@ -824,11 +942,26 @@ export interface AuthGatewayRouter {
  * The gateway's routes over `opts`, owning their per-session provider state:
  * two routers in one process never share (or tear down) each other's.
  */
-export function createAuthGatewayRouter(opts: AuthGatewayRouteOptions): AuthGatewayRouter {
+export function createAuthGatewayRouter(bootOpts: AuthGatewayRouteOptions): AuthGatewayRouter {
 	const sessionStates = new AuthGatewaySessionStateStore();
 	const route = async (req: Request, peer: string): Promise<Response> => {
 		const pathname = new URL(req.url).pathname;
+		const credentialId = req.headers.get(NEOPROXY_CREDENTIAL_HEADER);
+		const opts: AuthGatewayRouteOptions =
+			credentialId === null
+				? bootOpts
+				: {
+						...bootOpts,
+						credentialId,
+						resolveModel: id => {
+							const model = bootOpts.resolveModel(id);
+							return model && !bootOpts.excludeProviders?.has(model.provider) ? model : undefined;
+						},
+					};
 		try {
+			if (req.method === "GET" && pathname === "/v1/neoproxy/accounts") {
+				return await handleNeoProxyAccounts(opts, req.signal);
+			}
 			// Aggregated usage — backed by AuthStorage's 5-min per-credential cache.
 			// Same shape as the broker's `/v1/usage`, so widget/llm-git speak to either with the
 			// same client struct.
@@ -947,7 +1080,9 @@ export function startAuthGateway(opts: AuthGatewayBootOptions): AuthGatewayServe
 			if (req.method === "GET" && pathname === "/healthz") {
 				return withCors(json(200, { ok: true, version }), req);
 			}
-			if (!isAuthorized(req, tokens)) {
+			const requiresAccountAuth =
+				pathname === "/v1/neoproxy/accounts" || req.headers.has(NEOPROXY_CREDENTIAL_HEADER);
+			if ((requiresAccountAuth && tokens.size === 0) || !isAuthorized(req, tokens)) {
 				logger.info("auth-gateway request unauthorized", {
 					method: req.method,
 					path: loggablePath(pathname),

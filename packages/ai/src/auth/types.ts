@@ -958,6 +958,7 @@ export interface KeysApi {
 			modelId?: string;
 			signal?: AbortSignal;
 			forceRefresh?: boolean;
+			refreshReason?: OAuthRefreshReason;
 		},
 	): Promise<string | undefined>;
 	/**
@@ -1230,6 +1231,12 @@ export interface SessionsApi {
 
 /** Usage reporting, observation, and provider configuration. */
 export interface UsageApi {
+	/** Fetch the best available native report for exactly one stored credential, never a sibling. */
+	report(
+		provider: Provider,
+		credential: AuthCredential,
+		options?: { baseUrl?: string; timeoutMs?: number; signal?: AbortSignal },
+	): Promise<UsageReport | null>;
 	/** Fetch aggregate usage reports for configured providers. */
 	reports(options?: {
 		baseUrlResolver?: (provider: Provider) => string | undefined;

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Share individual broker-backed accounts with NeoProxy through an authenticated, secret-free account catalogue and credential-pinned inference that refreshes the selected account without rotating to siblings.
+
 ### Fixed
 
 - Auth broker credentials, account policies and usage reserves now honor main-settings TOML overrides and explicit clears ([#34](https://github.com/PsychedelicShayna/neopi/issues/34)).

@@ -6,7 +6,7 @@ The auth broker centralizes credential storage and OAuth refreshes. The auth gat
 - **`omp auth-gateway serve`** is a forward-proxy. It accepts OpenAI Chat Completions, Anthropic Messages, OpenAI Responses, pi-native stream, TypeSafe System One judgment, and OpenAI/OpenRouter-style image, speech, transcription, embedding, rerank, and video requests, resolves the broker-backed credential, and dispatches through `pi-ai` provider logic. Clients (containerised omp, llm-git, the macOS usage widget, …) never see the access token.
 - **`omp auth-gateway stdio`** serves the same routes to its parent process as JSON lines on stdin/stdout, on the CLI's own credentials and model roles; see [stdio](#stdio).
 
-Transport security between operator, broker, and gateway is delegated to the operator (Tailscale / Wireguard / reverse proxy + TLS). Every endpoint except `/v1/healthz` (broker) and `/healthz` (gateway) requires a bearer token by default. The gateway also answers CORS `OPTIONS` preflights without authentication; `--no-auth` disables inbound gateway authentication.
+Transport security between operator, broker, and gateway is delegated to the operator (Tailscale / Wireguard / reverse proxy + TLS). Every endpoint except `/v1/healthz` (broker) and `/healthz` (gateway) requires a bearer token by default. The gateway also answers CORS `OPTIONS` preflights without authentication; `--no-auth` disables inbound gateway authentication for ordinary routes, but never enables NeoProxy account inventory or credential-pinned inference.
 
 Source: `packages/ai/src/auth-broker/`, `packages/ai/src/auth-gateway/`, `packages/ai/src/auth/`, `packages/coding-agent/src/cli/auth-broker-cli.ts`, `packages/coding-agent/src/cli/auth-gateway-cli.ts`, `packages/coding-agent/src/cli/auth-gateway-stdio.ts`, `packages/coding-agent/src/session/auth-broker-config.ts`.
 
@@ -157,7 +157,7 @@ omp auth-gateway status  [--json]
 omp auth-gateway check   [--strict] [--json]
 ```
 
-- `serve` requires `OMP_AUTH_BROKER_URL` (or `auth.broker.url` in `config.yml`) — the gateway is itself a broker client. It fetches a live snapshot, wraps it in `RemoteAuthCredentialStore`, and constructs `AuthStorage` with the configured account pool and account policies. Unlike normal client discovery, gateway startup does not use the encrypted snapshot cache. Default bind is `127.0.0.1:4000`. The gateway token is stored at `<config-dir>/auth-gateway.token` (`0600`); `--no-auth` disables the bearer check entirely. Use that flag only on trusted loopback listeners; it does not enforce a loopback bind.
+- `serve` requires `OMP_AUTH_BROKER_URL` (or `auth.broker.url` in `config.yml`) — the gateway is itself a broker client. It fetches a live snapshot, wraps it in `RemoteAuthCredentialStore`, and constructs `AuthStorage` with the configured account pool and account policies. Unlike normal client discovery, gateway startup does not use the encrypted snapshot cache. Default bind is `127.0.0.1:4000`. The gateway token is stored at `<config-dir>/auth-gateway.token` (`0600`); `--no-auth` disables the bearer check for ordinary routes. Use that flag only on trusted loopback listeners; it does not enforce a loopback bind. NeoProxy account inventory and credential selection still require an authenticated listener.
 - Logs attribute requests to the socket peer address. Behind a trusted reverse proxy, pass `--trust-proxy-headers` to use `X-Forwarded-For` / `X-Real-IP` for authenticated requests; unauthorized requests are always logged with the socket peer. An authenticated request that also carries the gateway token in its URL or in a forwarded, logged, or identity header is rejected with `400` before any credential lookup.
 - `token` manages the token file; `--regenerate` requires a running gateway to restart before accepting the replacement. `status` checks the local token file and an authenticated broker snapshot; it does not probe the gateway listener.
 - `check` constructs its own broker-backed store and probes the credentials the gateway would use, without calling a running gateway. Without `--strict` it uses provider usage probes. `--strict` additionally tries suitable bundled chat models and can consume quota; providers with no suitable candidate (including pi-native forwarding, Bedrock, Vertex, and Cursor transports) cannot be completion-probed.
@@ -186,6 +186,7 @@ omp auth-gateway check   [--strict] [--json]
 | `GET`  | `/v1/usage`             | bearer | Aggregate `UsageReport[]` (proxied through `AuthStorage`)    |
 | `GET`  | `/v1/models`            | bearer | Registry catalog filtered to providers with credentials |
 | `GET`  | `/v1/credentials/check` | bearer | Per-credential auth health probe                             |
+| `GET`  | `/v1/neoproxy/accounts` | bearer | Secret-free per-credential NeoProxy account catalogue and native usage windows |
 | `POST` | `/v1/chat/completions`  | bearer | OpenAI Chat Completions wire format                          |
 | `POST` | `/v1/messages`          | bearer | Anthropic Messages wire format                               |
 | `POST` | `/v1/responses`         | bearer | OpenAI Responses wire format                                 |
@@ -214,6 +215,19 @@ Inference routes record observed usage against `x-omp-install-id`, `x-omp-hostna
 TypeSafe clients using the default base-URL resolver can set `TYPESAFE_BASE_URL=http://gateway:4000` with `TYPESAFE_API_KEY=<gateway token>`. omp's catalog-backed `judge` role passes the model's explicit `baseUrl`, which takes precedence over that environment fallback; configure the TypeSafe provider's `baseUrl` and `apiKey` in `models.yml` to use the gateway. OpenAI-SDK-style clients use `http://gateway:4000/v1`.
 
 There is no raw provider passthrough path. All supported routes go through `pi-ai` provider logic so credential-specific request shaping, OAuth refresh-on-auth-error, and provider quirks stay centralized.
+
+### Sharing individual accounts with NeoProxy
+
+Connect NeoProxy to the gateway URL and its **gateway bearer**, not the broker URL or broker bearer. The gateway performs inference on NeoProxy's behalf; no provider access token, API key, real refresh token, raw usage payload, or account email is included in this interface.
+
+`GET /v1/neoproxy/accounts` answers `{"object":"list","data":[{"id":"42","provider":"opencode-go","label":"opencode-go account 42","models":["opencode-go/provider-model-id"],"state":"healthy","windows":[]}]}`. IDs are the string form of the broker's durable credential row ID and survive normal OAuth refresh. Each account's model IDs are provider-qualified entries from `/v1/models`, filtered by discovered per-account model access when available. Disabled providers, deleted/disabled credentials, and rows without a usable stored credential are omitted. The gateway revalidates the broker snapshot before enumeration and dispatch, so a cached credential cannot keep a removed account serving.
+
+Each native window has `kind` (the provider's normalized limit ID), `known`, optional `used` (a fraction clamped to 0–1), and optional `resetsAt` (epoch milliseconds). Only the exact account's native report supplies these values. Unreported or stale usage has no `used` value; an empty `windows` array does **not** mean unlimited usage or prove the absence of a five-hour window. Account-level blocks appear as `state: "blocked"`; model-scoped eligibility and quota checks still run at dispatch.
+
+Send `X-Neopi-Credential-Id: 42` on Chat Completions, Responses, Messages, pi-native, or a supported modality request to select exactly that active credential. Its provider must match the selected model, and known model entitlements must allow it. The gateway refreshes the same OAuth row through the broker on expiry or authentication recovery. It never falls through to a sibling, runtime key, environment key, or another provider when a pin fails. Invalid selectors return `400`; unknown, removed, disabled, mismatched, blocked, or unentitled selections return a wire-format permission error before provider traffic. A provider failure after dispatch retains the existing provider error envelope. The private selector is consumed by the gateway and is not forwarded upstream.
+
+Requests without the selector retain the gateway's existing credential precedence and sibling-rotation behavior. Credential-pinned requests use separate storage-affinity identities so they do not repin an ordinary session that supplied the same cache key. A listener with no configured bearer (`--no-auth`) rejects the account endpoint and selected-account inference with `401`, even when the caller supplies an arbitrary bearer.
+
 
 `idleTimeout` on the underlying `Bun.serve` is set to `255 s` so long thinking-budget calls do not get killed by Bun’s default idle timeout.
 

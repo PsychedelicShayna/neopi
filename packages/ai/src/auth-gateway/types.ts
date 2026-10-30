@@ -23,6 +23,27 @@ import type {
 /** Default bind. Loopback-only — front with reverse proxy for remote access. */
 export const DEFAULT_AUTH_GATEWAY_BIND = "127.0.0.1:4000";
 
+/** Gateway-private selector. It is consumed server-side, never forwarded to providers. */
+export const NEOPROXY_CREDENTIAL_HEADER = "x-neopi-credential-id";
+
+export interface AuthGatewayAccountWindow {
+	kind: string;
+	known: boolean;
+	/** Missing when the provider does not report a current quantitative amount. */
+	used?: number;
+	/** Native reset timestamp, milliseconds since epoch; absent when unknown. */
+	resetsAt?: number;
+}
+
+export interface AuthGatewayAccount {
+	id: string;
+	provider: string;
+	label: string;
+	models: string[];
+	state: "healthy" | "blocked";
+	windows: AuthGatewayAccountWindow[];
+}
+
 export type AuthGatewayToolChoice = "auto" | "none" | "required" | { name: string } | { type: "computer" };
 
 export interface AuthGatewayParsedRequestOptions {

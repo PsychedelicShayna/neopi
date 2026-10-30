@@ -39,7 +39,14 @@ export async function handleRerank(bootOpts: AuthGatewayRouteOptions, req: Reque
 
 	const client = resolveClientIdentity(req.headers);
 	const sessionId = deterministicUuid(`rerank\u0000${model.provider}/${model.id}`);
-	const apiKey = await resolveGatewayApiKey(bootOpts.storage, model, sessionId, controller.signal, peer);
+	const apiKey = await resolveGatewayApiKey(
+		bootOpts.storage,
+		model,
+		sessionId,
+		controller.signal,
+		peer,
+		bootOpts.credentialId,
+	);
 	if (controller.signal.aborted) return aborted();
 	if ("status" in apiKey) return rerankWire.formatError(apiKey.status, apiKey.type, apiKey.message);
 

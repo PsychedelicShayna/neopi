@@ -57,7 +57,14 @@ async function resolveVideoJob(
 		);
 	}
 	const sessionId = deterministicUuid(`video\u0000${model.provider}/${model.id}`);
-	const apiKey = await resolveGatewayApiKey(bootOpts.storage, model, sessionId, controller.signal, peer);
+	const apiKey = await resolveGatewayApiKey(
+		bootOpts.storage,
+		model,
+		sessionId,
+		controller.signal,
+		peer,
+		bootOpts.credentialId,
+	);
 	if (controller.signal.aborted) return aborted();
 	if ("status" in apiKey) return videoServer.formatError(apiKey.status, apiKey.type, apiKey.message);
 	return { model, upstreamId: identity.upstreamId, sessionId, apiKey, controller };
@@ -140,7 +147,14 @@ export async function handleVideoSubmit(
 		);
 	}
 	const sessionId = deterministicUuid(`video\u0000${model.provider}/${model.id}`);
-	const apiKey = await resolveGatewayApiKey(bootOpts.storage, model, sessionId, controller.signal, peer);
+	const apiKey = await resolveGatewayApiKey(
+		bootOpts.storage,
+		model,
+		sessionId,
+		controller.signal,
+		peer,
+		bootOpts.credentialId,
+	);
 	if (controller.signal.aborted) return aborted();
 	if ("status" in apiKey) return videoServer.formatError(apiKey.status, apiKey.type, apiKey.message);
 	logger.info("auth-gateway request", {

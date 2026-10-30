@@ -1181,6 +1181,26 @@ export class CredentialSelector {
 		options: AuthApiKeyOptions,
 	): Promise<OAuthResolutionResult | undefined> {
 		await this.#deps.pool.adoptExternalChanges();
+		if (options.forceRefresh) {
+			const target = this.#deps.pool.entries(provider).find(row => row.id === credentialId);
+			if (target?.credential.type !== "oauth") return undefined;
+			const refreshed = await this.#deps.refresher.refresh(
+				provider,
+				{ ...target.credential, expires: 0 },
+				credentialId,
+				options.signal,
+				options.refreshReason,
+			);
+			if (
+				this.#deps.pool.replaceById(
+					provider,
+					credentialId,
+					mergeRefreshedCredential(target.credential, refreshed),
+				) < 0
+			) {
+				return undefined;
+			}
+		}
 		const index = this.#deps.pool
 			.entries(provider)
 			.findIndex(row => row.id === credentialId && row.credential.type === "oauth");
