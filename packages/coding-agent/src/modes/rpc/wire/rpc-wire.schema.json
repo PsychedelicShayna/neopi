@@ -4924,6 +4924,13 @@
 							"type": "null"
 						}
 					]
+				},
+				"messageEntryIds": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/MessageEntryIdentity"
+					},
+					"description": "Native live identities for returned journal entries, including entries not yet durable. Identifies the rendering cut; not a persistence acknowledgement."
 				}
 			},
 			"required": [

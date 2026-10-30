@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { SessionManager } from "./session-manager";
+import type { SessionEntry } from "./session-entries";
 
 /**
  * Session entry id behind each in-memory message, keyed by object identity.
@@ -73,6 +74,29 @@ export function getDurableMessageEntryIdentities(
 	const identities: MessageEntryIdentity[] = [];
 	for (const [messageId, entryId] of ownerLiveMessageIds(owner).entryIds) {
 		if (owner.isEntryDurable(entryId)) identities.push({ messageId, entryId });
+	}
+	return identities;
+}
+
+/**
+ * Live identities for entries in a journal read, whether or not they are durable.
+ * Read native message objects as well as the bounded recovery window so an older
+ * live message included in this response is not lost to snapshot-window eviction.
+ * These pairs identify the rendering cut; they are not persistence acknowledgements.
+ */
+export function getMessageEntryIdentities(
+	owner: LiveMessageOwner,
+	entries: readonly SessionEntry[],
+): MessageEntryIdentity[] {
+	const ownerIds = ownerLiveMessageIds(owner);
+	const recentIds = new Map<string, string>();
+	for (const [messageId, entryId] of ownerIds.entryIds) recentIds.set(entryId, messageId);
+	const identities: MessageEntryIdentity[] = [];
+	for (const entry of entries) {
+		const messageId = (entry.type === "message"
+			? ownerIds.ids.get(getMessageEntrySource(entry.message))
+			: undefined) ?? recentIds.get(entry.id);
+		if (messageId !== undefined) identities.push({ messageId, entryId: entry.id });
 	}
 	return identities;
 }

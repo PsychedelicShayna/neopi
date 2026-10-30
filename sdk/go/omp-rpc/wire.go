@@ -4821,6 +4821,8 @@ func (v *AvailableSlashCommand) decodeFrom(raw map[string]json.RawMessage) error
 type SessionEntries struct {
 	Entries []map[string]json.RawMessage `json:"entries"`
 	LeafID  *string                      `json:"leafId"`
+	// Native live identities for returned journal entries, including entries not yet durable. Identifies the rendering cut; not a persistence acknowledgement.
+	MessageEntryIds []MessageEntryIdentity `json:"messageEntryIds,omitempty"`
 }
 
 func (v *SessionEntries) UnmarshalJSON(data []byte) error {
@@ -4832,6 +4834,7 @@ func (v *SessionEntries) decodeFrom(raw map[string]json.RawMessage) error {
 	d := fieldDecoder{raw: raw, owner: "SessionEntries"}
 	d.required("entries", &out.Entries)
 	d.nullable("leafId", &out.LeafID)
+	d.optional("messageEntryIds", &out.MessageEntryIds)
 	if d.err != nil {
 		return d.err
 	}

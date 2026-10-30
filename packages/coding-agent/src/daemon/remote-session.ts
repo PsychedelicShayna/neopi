@@ -23,6 +23,7 @@ import { buildSessionContext, type SessionContext, type TranscriptSessionContext
 import type { SessionEntry } from "../session/session-entries";
 import type { SessionJournalIdentity } from "../session/session-journal-events";
 import type { MessageEntryIdentity } from "../session/message-entry-ids";
+import type { RpcSessionEntries } from "../modes/rpc/rpc-types";
 
 type Frame = Record<string, unknown>;
 
@@ -198,8 +199,9 @@ export class RemoteAgentSession implements InteractiveSessionViewer {
 	 * same cut until subscribeTranscript, so convergence checks cannot absorb a
 	 * reply that will also arrive through the buffered live stream.
 	 *
-	 * Persistence acknowledgements and snapshot identities reconcile older message
-	 * lifecycles with the frozen entries. Running-tool starts remain replayable.
+	 * Journal-response identities, persistence acknowledgements and snapshot identities
+	 * reconcile message lifecycles with every frozen entry, including non-durable ones.
+	 * Running-tool starts remain replayable.
 	 * Repeated calls before handoff preserve the original cut; after handoff they
 	 * leave the live projection alone.
 	 */
@@ -222,8 +224,8 @@ export class RemoteAgentSession implements InteractiveSessionViewer {
 			if (entry.type === "message" && entry.message.role === "toolResult")
 				completedTools.add(entry.message.toolCallId);
 		}
-		// Native persistence identities, not content or response timing, tell us
-		// which completed lifecycle frames are already represented by this journal.
+		// Native entry identities, not content or durability, determine which
+		// lifecycle frames are already represented by this journal read.
 		this.#transcriptReplay = this.#transcriptReplay.filter(frame => {
 			if (MESSAGE_LIFECYCLE.has(String(frame.type)) && typeof frame.messageId === "string") {
 				const entryId = this.#messageEntryIds.get(frame.messageId);
@@ -329,9 +331,13 @@ export class RemoteAgentSession implements InteractiveSessionViewer {
 		const generation = ++this.#entriesGeneration;
 		await this.#client.request({ type: "get_entries" }, data => {
 			if (generation !== this.#entriesGeneration) return;
-			const journal = data as { entries: SessionEntry[]; leafId: string | null };
+			const journal = data as RpcSessionEntries;
 			this.#entries = journal.entries;
 			this.#entryIndex = new Map(journal.entries.map(entry => [entry.id, entry]));
+			if (!this.#transcriptSubscribed) {
+				for (const identity of journal.messageEntryIds ?? [])
+					this.#messageEntryIds.set(identity.messageId, identity.entryId);
+			}
 			// The response is the journal cut: earlier entry/leaf events are already included.
 			this.#leafId = journal.leafId;
 		});

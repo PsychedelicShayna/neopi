@@ -457,7 +457,11 @@ export const stateDefs = {
 		source: "SlashCommandSource",
 	},
 	SessionEntries: doc(
-		{ entries: `${JSON_OBJECT}[]`, leafId: "string | null" },
+		{
+			entries: `${JSON_OBJECT}[]`,
+			leafId: "string | null",
+			"messageEntryIds?": doc("MessageEntryIdentity[]", "Native live identities for returned journal entries, including entries not yet durable. Identifies the rendering cut; not a persistence acknowledgement."),
+		},
 		"OMP-native session entries in append order.",
 	),
 	JournalIdentity: { sessionId: "string", sessionFile: "string | null", leafId: "string | null" },

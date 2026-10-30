@@ -1273,6 +1273,8 @@ class SessionEntries:
     """OMP-native session entries in append order."""
     entries: tuple[JsonObject, ...]
     leaf_id: str | None
+    message_entry_ids: tuple[MessageEntryIdentity, ...] | None = None
+    """Native live identities for returned journal entries, including entries not yet durable. Identifies the rendering cut; not a persistence acknowledgement."""
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -3520,6 +3522,7 @@ def parse_session_entries(value: object, path: str = "SessionEntries") -> Sessio
     return SessionEntries(
         entries=required(payload, "entries", array(decode_json_object), path),
         leaf_id=required(payload, "leafId", nullable(decode_str), path),
+        message_entry_ids=optional(payload, "messageEntryIds", array(parse_message_entry_identity), path),
     )
 
 

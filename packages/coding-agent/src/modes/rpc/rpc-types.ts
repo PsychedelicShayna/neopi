@@ -223,6 +223,13 @@ export type RpcCommand =
 // RPC State
 // ============================================================================
 
+/** Canonical append-history plus identities at the response cut, not durability acknowledgements. */
+export interface RpcSessionEntries {
+	entries: SessionEntry[];
+	leafId: string | null;
+	messageEntryIds?: MessageEntryIdentity[];
+}
+
 export interface RpcSessionState {
 	model?: RpcModel;
 	thinkingLevel: ThinkingLevel | undefined;
@@ -664,7 +671,7 @@ export type RpcResponse =
 			type: "response";
 			command: "get_entries";
 			success: true;
-			data: { entries: SessionEntry[]; leafId: string | null };
+			data: RpcSessionEntries;
 	  }
 	| { id?: string; type: "response"; command: "snapshot_session_journal"; success: true; data: SessionJournalIdentity }
 	| { id?: string; type: "response"; command: "get_entries_page"; success: true; data: RpcJournalPage }

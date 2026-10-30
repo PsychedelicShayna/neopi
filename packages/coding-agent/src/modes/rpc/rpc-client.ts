@@ -18,7 +18,7 @@ import type { BashResult } from "../../exec/bash-executor";
 import type { MixtureIssue } from "../../moa/types";
 import type { AgentSessionEvent, SessionStats } from "../../session/agent-session";
 import type { CacheWarmingMode } from "../../session/cache-warmer";
-import type { SessionEntry, SessionTreeNode } from "../../session/session-entries";
+import type { SessionTreeNode } from "../../session/session-entries";
 import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameDecoder, type RpcProtocolVersion } from "./rpc-frame";
 import type { RpcRolesResult, RpcSetRoleResult } from "./rpc-roles";
 import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
@@ -66,6 +66,7 @@ import type {
 	RpcResponse,
 	RpcSessionSettledFrame,
 	RpcJournalEventFrame,
+	RpcSessionEntries,
 	RpcSessionState,
 	RpcSetModeResult,
 	RpcSubagentEventFrame,
@@ -1284,9 +1285,9 @@ export class RpcClient {
 	 * `SessionManager` on the server: no `since` returns all entries in append
 	 * order, `since` returns entries strictly after the matching durable entry.
 	 */
-	async getEntries(since?: string): Promise<{ entries: SessionEntry[]; leafId: string | null }> {
+	async getEntries(since?: string): Promise<RpcSessionEntries> {
 		const response = await this.#send({ type: "get_entries", since });
-		return this.#getData<{ entries: SessionEntry[]; leafId: string | null }>(response);
+		return this.#getData<RpcSessionEntries>(response);
 	}
 
 	/** Emit an ordered native identity/current-assistant snapshot to existing observers before resolving. */

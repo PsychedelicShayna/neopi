@@ -4193,6 +4193,9 @@ pub struct SessionEntries {
 	pub entries: Vec<Map<String, Value>>,
 	#[serde(rename = "leafId", deserialize_with = "Deserialize::deserialize")]
 	pub leaf_id: Option<String>,
+	/// Native live identities for returned journal entries, including entries not yet durable. Identifies the rendering cut; not a persistence acknowledgement.
+	#[serde(rename = "messageEntryIds", default, skip_serializing_if = "Option::is_none")]
+	pub message_entry_ids: Option<Vec<MessageEntryIdentity>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

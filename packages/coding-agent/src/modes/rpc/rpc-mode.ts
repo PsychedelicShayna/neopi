@@ -65,6 +65,7 @@ import { defaultLoadModeForToolName } from "../../tools/essential-tools";
 import { USER_TODO_EDIT_CUSTOM_TYPE } from "../../tools/todo";
 import type { EventBus } from "../../utils/event-bus";
 import { selectRpcEntries } from "./rpc-compat";
+import { getMessageEntryIdentities } from "../../session/message-entry-ids";
 import {
 	formatPersistenceDurabilityFailure,
 	formatPersistenceFailure,
@@ -1997,15 +1998,15 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 
 			case "get_entries": {
 				try {
-					return success(
-						id,
-						"get_entries",
-						selectRpcEntries(
-							session.sessionManager.getEntries(),
-							session.sessionManager.getLeafId(),
-							command.since,
-						),
+					const journal = selectRpcEntries(
+						session.sessionManager.getEntries(),
+						session.sessionManager.getLeafId(),
+						command.since,
 					);
+					return success(id, "get_entries", {
+						...journal,
+						messageEntryIds: getMessageEntryIdentities(session.sessionManager, journal.entries),
+					});
 				} catch (err) {
 					return error(id, "get_entries", err instanceof Error ? err.message : String(err), "unknown_since");
 				}

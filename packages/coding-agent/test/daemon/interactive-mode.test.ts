@@ -10,9 +10,10 @@ import { isEnoent, readLines } from "@oh-my-pi/pi-utils";
 import { VERSION } from "@oh-my-pi/pi-utils/dirs";
 import { Settings } from "../../src/config/settings";
 import { SessionDaemonClient } from "../../src/daemon/client";
-import { RemoteAgentSession } from "../../src/daemon/remote-session";
+import { RemoteAgentSession, type RemoteTransport } from "../../src/daemon/remote-session";
 import { SessionDaemon } from "../../src/daemon/server";
 import { InteractiveMode } from "../../src/modes/interactive-mode";
+import type { RpcSessionEntries } from "../../src/modes/rpc/rpc-types";
 import * as workerClient from "../../src/subprocess/worker-client";
 
 const cli = path.join(import.meta.dir, "../../src/cli.ts");
@@ -153,7 +154,7 @@ async function finishTool(gates: string, label: string): Promise<void> {
 }
 
 describe("InteractiveMode attached to a real daemon session", () => {
-	it("renders history, live replies and tools, preserving extension read blocks across reattach", async () => {
+	async function runViewerScenario(scenario: "transcript" | "first-prompt-race"): Promise<void> {
 		const scratch = process.env.NPI_TEST_SCRATCH_DIR ?? path.join(os.homedir(), ".cache", "npi-canary");
 		await fs.mkdir(scratch, { recursive: true });
 		const root = await fs.mkdtemp(path.join(scratch, "daemon-viewer-"));
@@ -197,8 +198,8 @@ describe("InteractiveMode attached to a real daemon session", () => {
 			remotes.push(remote);
 			return remote;
 		}
-		async function openViewer(id: string): Promise<Viewer> {
-			const remote = await attach(id);
+		async function openViewer(id: string, attached?: RemoteAgentSession): Promise<Viewer> {
+			const remote = attached ?? await attach(id);
 			const scheduler = new DrainScheduler();
 			const terminal = new SinkTerminal();
 			const composer = new Composer({
@@ -279,9 +280,55 @@ describe("InteractiveMode attached to a real daemon session", () => {
 			const hosted = await (await connect()).create(project);
 			await until(() => daemon?.list().find(session => session.id === hosted.id)?.model === "fake/fake-model", "rpc-ui child ready");
 			const control = await attach(hosted.id);
+			await initTheme(false);
+			if (scenario === "first-prompt-race") {
+				const client = await connect();
+				const observed: Record<string, unknown>[] = [];
+				client.onFrame(frame => observed.push(frame));
+				const cut: { journal?: RpcSessionEntries } = {};
+				// The attaching snapshot is empty. Start the first prompt only once
+				// RemoteAgentSession requests its later journal cut, keeping the
+				// assistant gated so the user's entry remains non-durable.
+				const delayed: RemoteTransport = {
+					request: async (frame, onResponse) => {
+						if (frame.type === "get_entries") {
+							await control.prompt("stream_reply");
+							await until(() => control.messages.some(message => message.role === "user"), "first user in native journal");
+						}
+						return client.request(frame, data => {
+							if (frame.type === "get_entries") cut.journal = data as RpcSessionEntries;
+							onResponse?.(data);
+						});
+					},
+					send: frame => client.send(frame),
+					onFrame: listener => client.onFrame(listener),
+					detach: () => client.detach(),
+				};
+				const remote = await RemoteAgentSession.attach(delayed, hosted.id, project);
+				remotes.push(remote);
+				const viewer = await openViewer(hosted.id, remote);
+				const partial = await rendered(viewer, "live-first-chunk");
+				once(partial, "stream_reply");
+				once(partial, "live-first-chunk");
+				expect(partial).not.toContain("live-final-chunk");
+				const userEntry = cut.journal?.entries.find(entry => entry.type === "message" && entry.message.role === "user");
+				const userStart = observed.find(frame => frame.type === "message_start" &&
+					typeof frame.message === "object" && frame.message !== null &&
+					"role" in frame.message && frame.message.role === "user");
+				expect(userEntry).toBeDefined();
+				expect(userStart).toBeDefined();
+				expect(cut.journal?.messageEntryIds?.some(identity =>
+					identity.entryId === userEntry?.id && identity.messageId === userStart?.messageId)).toBe(true);
+				expect(observed.some(frame => frame.type === "message_persisted")).toBe(false);
+				await Bun.write(path.join(gates, "stream.release"), "release");
+				const completed = await rendered(viewer, "live-first-chunk live-final-chunk");
+				once(completed, "stream_reply");
+				once(completed, "live-first-chunk live-final-chunk");
+				await until(() => !remote.isStreaming, "first reply completion");
+				return;
+			}
 			await control.prompt("seed_history");
 			await until(() => !control.isStreaming && JSON.stringify(control.messages).includes("prior-history-reply"), "seeded prior history");
-			await initTheme(false);
 
 			const first = await openViewer(hosted.id);
 			once(await rendered(first, "prior-history-reply"), "prior-history-reply");
@@ -388,5 +435,10 @@ describe("InteractiveMode attached to a real daemon session", () => {
 				}
 			}
 		}
-	}, 240_000);
+	}
+
+	it("renders history, live replies and tools, preserving extension read blocks across reattach", () =>
+		runViewerScenario("transcript"), 240_000);
+	it("renders a first non-durable user entry only once across the initial attach cut", () =>
+		runViewerScenario("first-prompt-race"), 240_000);
 });

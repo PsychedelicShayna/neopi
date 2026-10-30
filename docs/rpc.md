@@ -566,6 +566,11 @@ no association. Recovery announces entries only after native persistence succeed
 Messages already present in the initial history use their native entry IDs;
 they need no live-message association.
 
+An ordered `get_entries` response can additionally identify entries that exist
+in the native owner's in-memory journal but are not durable yet. Its optional
+`messageEntryIds` field is a rendering-cut association only, **not** a
+`message_persisted` acknowledgement; see [history reads](#pi-compatible-historytree-commands-with-omp-native-entry-payloads).
+
 On every attachment and `snapshot_session_journal`, the `journal_state` frame
 with `reason: "snapshot"` also includes `messageEntryIds`:
 
@@ -1630,11 +1635,21 @@ algorithm across both, while a strict Pi `SessionEntry` decoder cannot assume
 identical payloads.
 
 `get_entries` reads the canonical append-history (not the active branch only)
-and returns `{ entries, leafId }`. Without `since` it returns all entries in
+and returns `{ entries, leafId, messageEntryIds? }`. Without `since` it returns all entries in
 append order; with `since` it returns entries strictly after the matching
 durable entry id. An unknown `since` fails explicitly with
 `code: "unknown_since"`. `get_tree` returns the raw session tree as
 `{ tree, leafId }` straight from `SessionManager`, not a UI projection.
+
+`messageEntryIds` pairs each returned entry's known native live `messageId`
+with its `entryId`, including non-durable entries such as a session's first user
+prompt before an assistant message has been appended. Unlike the bounded durable
+recovery list in `journal_state`, this association is derived from the returned
+native entries at the same ordered response cut. A renderer can therefore avoid
+painting a message both from this history and from its buffered lifecycle frames.
+The field is optional for older producers; it does not make an entry durable and
+does not change when `message_persisted` is emitted. Do not infer durability from
+these pairs or content-match lifecycle output to history.
 
 `get_available_thinking_levels` returns `{ levels }`: the selectable levels
 for the live model with `"off"` first (it is accepted by

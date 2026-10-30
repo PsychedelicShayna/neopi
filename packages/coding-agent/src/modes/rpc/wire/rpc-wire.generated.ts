@@ -1010,6 +1010,8 @@ export interface AvailableSlashCommand {
 export interface SessionEntries {
 	entries: Record<string, unknown>[];
 	leafId: string | null;
+	/** Native live identities for returned journal entries, including entries not yet durable. Identifies the rendering cut; not a persistence acknowledgement. */
+	messageEntryIds?: MessageEntryIdentity[];
 }
 
 export interface JournalIdentity {

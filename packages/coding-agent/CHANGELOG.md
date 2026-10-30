@@ -125,6 +125,7 @@
 ### Fixed
 
 - Attached daemon viewers preserve every text block from extension tools named `read`, both live and after reattaching ([#644](https://github.com/PsychedelicShayna/neopi/pull/644), implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).
+- Attaching during a session's first prompt no longer repeats the user's message before its first reply finishes; native `get_entries` responses identify in-memory entries separately from durability acknowledgements ([#644](https://github.com/PsychedelicShayna/neopi/pull/644), implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).
 - Live effort alerts accept the operator catalog's relative 0–1 fractional ratings without disabling recommendation lookup.
 - Print-mode runs can read screenshots inside their workspace without getting stuck when speculative reads are enabled ([#606](https://github.com/PsychedelicShayna/neopi/issues/606)).
 - Ctrl+Space speech input keeps priority while picking link hints, including enhanced-terminal repeats and key releases.
