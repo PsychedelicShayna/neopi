@@ -434,7 +434,11 @@ export interface NamedAdvisor {
 	config: AdvisorConfig;
 }
 
-/** Every named definition, including shadowed entries, in runtime precedence order. */
+/**
+ * Every named definition, including disabled and shadowed entries, in discovery
+ * load order (later entries win for references without an exact scope).
+ * Instructions and tools match runtime discovery; sourcePath stays exact for UI labels.
+ */
 export async function listNamedAdvisors(
 	cwd: string,
 	agentDir?: string,
@@ -455,11 +459,7 @@ export async function listNamedAdvisors(
 	return result;
 }
 
-/**
- * Resolve the `WATCHDOG.yml` path for a scope: `project` → `<projectDir>/WATCHDOG.yml`
- * (discovered by the project-level walk), `user` → `<agentDir>/WATCHDOG.yml` (the
- * user-level candidate).
- */
+/** Resolve a scope's canonical file beside its user, project, or session configuration. */
 export function advisorConfigFilePath(
 	scope: AdvisorConfigScope,
 	dirs: { projectDir: string; agentDir: string; sessionDir?: string },

@@ -12,7 +12,9 @@ afterEach(async () => {
 	await Promise.all(scratch.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
 });
 async function project() {
-	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "advisor-source-scopes-"));
+	const parent = path.join(os.homedir(), ".cache", "npi-canary");
+	await fs.mkdir(parent, { recursive: true });
+	const dir = await fs.mkdtemp(path.join(parent, "advisor-source-scopes-"));
 	scratch.push(dir);
 	await fs.mkdir(path.join(dir, ".git"));
 	return { dir, agentDir: path.join(dir, "user"), root: path.join(dir, "WATCHDOG.yml"), native: path.join(dir, ".omp", "WATCHDOG.yml") };

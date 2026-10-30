@@ -291,6 +291,7 @@ export class AdvisorScopeOverlayComponent implements Component {
 				},
 				close: () => {
 					const snapshot = this.navigationSnapshot();
+					this.#editor?.leaveMenu();
 					this.#editor = undefined;
 					this.#list = this.#buildList(this.#list.navigationState());
 					this.onNavigationVisit?.("advisor-scopes", snapshot);
@@ -425,7 +426,7 @@ export class AdvisorScopeOverlayComponent implements Component {
 		}
 		if (this.#scopeFocused) {
 			if (action?.kind === "horizontal") this.#setScope(this.#scopeStrip.index + action.delta);
-			else if (action?.kind === "move" && action.delta > 0 || action?.kind === "confirm" || action?.kind === "context") {
+			else if ((action?.kind === "move" && action.delta > 0) || action?.kind === "confirm" || action?.kind === "context") {
 				this.#scopeFocused = false;
 				this.#cb.requestRender();
 			} else if (action?.kind === "search") {

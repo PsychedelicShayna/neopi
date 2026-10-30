@@ -252,6 +252,30 @@ describe("advisor file scopes", () => {
 		expect(f.closes()).toBe(1);
 	});
 
+	it("keeps a generated advisor editable and only persists it on save", async () => {
+		const f = fixture(undefined, async () => ({ name: "User", instructions: "A combined review", tools: ["read"] }));
+		f.action("confirm");
+		await settle();
+		f.overlay.handleNativeEvent({ type: "action", key: "", act: "generate", mods: [] });
+		await settle();
+		f.overlay.handleInput("\r");
+		f.overlay.handleInput("G");
+		f.overlay.handleInput("\r");
+		f.overlay.handleInput("Keep it concise");
+		f.overlay.handleInput("\x11");
+		await settle();
+		expect(strip(f.overlay)).toContain("User 2");
+		expect(f.writes).toEqual([]);
+		f.overlay.handleInput("\x1b");
+		f.overlay.handleInput("s");
+		await settle();
+		expect(f.disk.get(f.files[0].path)?.advisors).toEqual([
+			{ name: "User" },
+			{ id: expect.any(String), name: "User 2", instructions: "A combined review", tools: ["read"] },
+		]);
+		expect(f.applies()).toBe(1);
+	});
+
 	it("generates from selected advisors and Esc cancels without accepting a late result", async () => {
 		const result = Promise.withResolvers<AdvisorConfig>();
 		let received: { bases: readonly AdvisorConfig[]; comment: string; signal: AbortSignal } | undefined;

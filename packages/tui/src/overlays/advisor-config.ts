@@ -2386,11 +2386,14 @@ export class AdvisorConfigOverlayComponent implements Component {
 	}
 
 	dispose(): void {
+		this.#viewRevision++;
 		this.#generationAbort?.abort();
 		this.#scopeLoadRevision++;
 		this.#active.dispose?.();
 	}
 	leaveMenu(): void {
+		this.#viewRevision++;
+		this.#generationAbort?.abort();
 		this.#keys.reset();
 	}
 
