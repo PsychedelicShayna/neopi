@@ -17,6 +17,8 @@
  * - a user message containing `read_uri <url>` → a `read` call for `<url>`
  * - a user message containing `write_uri <url>` → a `write` call storing
  *   `written by model` at `<url>` (or the JSON value after `<url>`, if supplied)
+ * - a user message containing `slow_stream` → text `one two three four five`,
+ *   streamed one word per chunk 200ms apart (so observers can attach mid-reply)
  * - anything else → text `pong`
  */
 import * as path from "node:path";
@@ -111,6 +113,28 @@ function completionBody(reply: Reply): object {
 	};
 }
 
+const SLOW_WORDS = ["one ", "two ", "three ", "four ", "five"];
+
+function slowStream(): ReadableStream<Uint8Array> {
+	const base = { id: "chatcmpl-fake", object: "chat.completion.chunk", created: 0, model: "fake-model" };
+	const encoder = new TextEncoder();
+	const event = (chunk: object) => encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`);
+	return new ReadableStream({
+		async start(controller) {
+			for (const word of SLOW_WORDS) {
+				controller.enqueue(
+					event({ ...base, choices: [{ index: 0, delta: { content: word }, finish_reason: null }] }),
+				);
+				await Bun.sleep(200);
+			}
+			controller.enqueue(event({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }));
+			controller.enqueue(event({ ...base, choices: [], usage: USAGE }));
+			controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+			controller.close();
+		},
+	});
+}
+
 const agentDir = process.argv[2];
 if (!agentDir) throw new Error("usage: fake-openai-server.ts <agentDir>");
 
@@ -126,6 +150,10 @@ const server = Bun.serve({
 		const body = chatRequestSchema.assert(await request.json());
 		const reply = scriptedReply(body);
 		if (!body.stream) return Response.json(completionBody(reply));
+		const last = body.messages?.at(-1);
+		if ("text" in reply && last?.role === "user" && messageText(last.content).includes("slow_stream")) {
+			return new Response(slowStream(), { headers: { "content-type": "text/event-stream" } });
+		}
 		const events = completionChunks(reply).map(chunk => `data: ${JSON.stringify(chunk)}\n\n`);
 		return new Response(`${events.join("")}data: [DONE]\n\n`, {
 			headers: { "content-type": "text/event-stream" },
