@@ -2072,11 +2072,11 @@ export class ModelBrowser implements Component {
 	 * A model picker's search field, fact columns and rows: `catalogue` (from
 	 * {@link pickerItems}) in `view` order (from {@link pickerOrder}), the
 	 * selection, and `current` checked. Memoize hosts on its inputs plus
-	 * {@link query}, {@link cursor} and {@link pickerSelected}.
+	 * {@link value}, {@link cursor} and {@link pickerSelected}.
 	 */
 	pickerRows(catalogue: ModelPickerCatalogue, view: ModelPickerOrder, current: string | undefined): ModelPickerRows {
 		return {
-			query: this.query,
+			query: this.value,
 			cursor: this.cursor,
 			columns: MODEL_PICKER_COLUMNS,
 			...catalogue,

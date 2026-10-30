@@ -127,16 +127,19 @@ export interface MenuSearchTheme {
  * A menu's draft search field. Hosts refilter when `query` changes, repaint
  * on "edited", and delegate only "pass" to navigation. The draft reaches
  * the matcher only after Enter; losing focus discards unconfirmed edits.
+ * Hosts may retain the text when Escape returns to the list instead of clearing it.
  */
 export class MenuSearchField {
 	readonly #input = new Input();
 	#query = "";
+	readonly #cancel: "clear" | "retain";
 
-	constructor(value = "", focused = false) {
+	constructor(value = "", focused = false, cancel: "clear" | "retain" = "clear") {
 		this.#input.prompt = "";
 		this.#input.setValue(value);
 		this.#query = value;
 		this.#input.focused = focused;
+		this.#cancel = cancel;
 	}
 
 	/** Native picker bindings reuse the existing Input query/cursor transport. */
@@ -173,6 +176,7 @@ export class MenuSearchField {
 
 	handleInput(data: string): "edited" | "exited" | "pass" {
 		if (!this.focused) {
+			if (this.#cancel === "retain") return "pass";
 			if (!this.value || extractPrintableText(data) !== undefined) return "pass";
 			if (!matchesKey(data, "escape") && !getKeybindings().matches(data, "tui.select.cancel")) return "pass";
 			this.setValue("");
@@ -185,7 +189,7 @@ export class MenuSearchField {
 		}
 		const kb = getKeybindings();
 		if (matchesKey(data, "escape") || kb.matches(data, "tui.select.cancel")) {
-			this.setValue("");
+			this.setValue(this.#cancel === "retain" ? this.value : "");
 			this.focused = false;
 			return "exited";
 		}
@@ -205,7 +209,9 @@ export class MenuSearchField {
 		const error = compileMenuRegex(this.value)?.error;
 		const hint = error
 			? ` · Invalid regex: ${error}`
-			: this.focused ? " · Enter confirm · Esc clear" : " · j/k · Ctrl-d/u half · gg/G · / search · Esc clear";
+			: this.focused
+				? ` · Enter confirm · Esc ${this.#cancel === "retain" ? "back" : "clear"}`
+				: ` · j/k · Ctrl-d/u half · gg/G · / search${this.#cancel === "clear" ? " · Esc clear" : ""}`;
 		const fieldWidth = Math.max(0, columns - visibleWidth(prefix) - visibleWidth(hint));
 		const value = this.focused
 			? (this.#input.render(fieldWidth)[0] ?? "")
