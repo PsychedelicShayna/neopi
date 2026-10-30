@@ -25,6 +25,7 @@ import {
 	type MenuViewportPosition,
 } from "../components/menu-navigation";
 import { MenuSelection } from "../components/menu-selection";
+import { MenuHelp, menuHintLines } from "../components/menu-hints";
 import { ScrollView } from "../components/scroll-view";
 import { Text } from "../components/text";
 import { fuzzyFilter } from "../fuzzy";
@@ -139,6 +140,7 @@ export class JobsSheet implements Component {
 	} as const;
 	readonly #source: JobsSheetSource;
 	readonly #keys = new MenuKeyReader();
+	readonly #help = new MenuHelp();
 	readonly #search = new MenuSearchField();
 	readonly #selection = new MenuSelection<JobsPanelJob>([], {
 		getKey: job => job.id,
@@ -191,6 +193,7 @@ export class JobsSheet implements Component {
 	}
 
 	describe(cx: DescribeContext): NativeNode {
+		if (this.#help.open) return this.#help.describe();
 		const { rows, jobs, selected, cancellable } = this.#current();
 		const detail = selected && this.#source.inspect(selected.id);
 		const now = Date.now();
@@ -290,12 +293,12 @@ export class JobsSheet implements Component {
 			lines.push(...this.#outputView.render(Math.max(1, width - 3)).map(line => `   ${line}`));
 		}
 		lines.push(
-			truncateToWidth(
-				`j/k rows · h/l or Tab list/output · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · Enter/Space details · / search · x cancel · Esc close`,
+			...menuHintLines(
+				`Tab list/output · PgUp/PgDn page · Enter/Space details · / search${this.#source.cancel ? " · x cancel" : ""} · Esc close · ? help`,
 				width,
 			),
 		);
-		return lines;
+		return this.#help.render(lines, width);
 	}
 
 	invalidate(): void {
@@ -310,6 +313,10 @@ export class JobsSheet implements Component {
 		const before = this.#search.query;
 		if (this.#search.handleInput(data) !== "pass") {
 			if (this.#search.query !== before) this.#viewport.reveal();
+			this.#keys.reset();
+			return;
+		}
+		if (this.#help.handleInput(data)) {
 			this.#keys.reset();
 			return;
 		}

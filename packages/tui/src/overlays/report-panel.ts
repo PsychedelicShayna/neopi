@@ -5,7 +5,7 @@ import { Ellipsis } from "../index";
 import { ScrollView } from "../components/scroll-view";
 import { MenuKeyReader, menuScrollBy } from "../components/menu-navigation";
 import { Spacer } from "../components/spacer";
-import { Text } from "../components/text";
+import { MenuHelp, MenuHints, menuHintLines } from "../components/menu-hints";
 import { routeSgrMouseInput } from "../mouse";
 import { actionBar, actionButton } from "../native/overlay";
 import { col } from "../native/describe";
@@ -58,12 +58,14 @@ export class ReportPanel extends OverlayPanel {
 	readonly #onClose: () => void;
 	readonly #maxRows: (() => number | undefined) | undefined;
 	readonly #view: ScrollView;
-	readonly #footer: Text;
+	readonly #footer: MenuHints;
 	#closeHint: string;
 	#bodyRows = 0;
 	#scroll: NativeScroll | undefined;
 	#native: { scroll: NativeScroll | undefined; node: NativeNode } | undefined;
 	readonly #keys = new MenuKeyReader();
+	readonly #help = new MenuHelp("jk gg/G C-u d e y");
+	#overflows = false;
 
 	constructor(options: ReportPanelOptions) {
 		super(options.title, "omp.overlay.report");
@@ -83,7 +85,12 @@ export class ReportPanel extends OverlayPanel {
 			ellipsis: Ellipsis.Omit,
 			theme: { track: text => theme.fg("dim", text), thumb: text => theme.fg("accent", text) },
 		});
-		this.#footer = new Text(theme.fg("muted", this.#closeHint), 0, 0);
+		this.#footer = new MenuHints(
+			() =>
+				`${this.#overflows ? `${editorKey("tui.select.pageUp")}/${editorKey("tui.select.pageDown")} scroll · ` : ""}${this.#closeHint} · ? help`,
+			text => theme.fg("muted", text),
+			"jk gg/G C-u d e y",
+		);
 		this.addChild(new Spacer(1));
 		this.addChild(this.#view);
 		this.addChild(new Spacer(1));
@@ -119,19 +126,27 @@ export class ReportPanel extends OverlayPanel {
 		const innerWidth = Math.max(1, width - 4);
 		const rows = this.#body.render(innerWidth).length;
 		const cap = this.#maxRows?.();
-		const bodyMax = cap === undefined ? rows : Math.max(1, cap - TEXT_CHROME_ROWS);
+		const footerRows = menuHintLines(
+			`${editorKey("tui.select.pageUp")}/${editorKey("tui.select.pageDown")} scroll · ${this.#closeHint} · ? help`,
+			innerWidth,
+			"jk gg/G C-u d e y",
+		).length;
+		const bodyMax = cap === undefined ? rows : Math.max(1, cap - TEXT_CHROME_ROWS - footerRows + 1);
 		const overflows = rows > bodyMax;
 		this.#bodyRows = Math.min(rows, bodyMax);
 		this.#view.setHeight(this.#bodyRows);
-		const scrollHint = `${editorKey("tui.select.pageUp")}/${editorKey("tui.select.pageDown")} scroll · j/k rows · Ctrl-u/d half · gg/G bounds · Ctrl-e/y scroll · `;
-		this.#footer.setText(theme.fg("muted", overflows ? scrollHint + this.#closeHint : this.#closeHint));
+		this.#overflows = overflows;
 		const lines = super.render(width);
-		return cap !== undefined && lines.length > cap ? lines.slice(0, Math.max(0, cap)) : lines;
+		return this.#help.render(
+			cap !== undefined && lines.length > cap ? lines.slice(0, Math.max(0, cap)) : lines,
+			width,
+		);
 	}
 
 	/** Text mode: rows the whole box takes at `width` when nothing caps it. */
 	heightAt(width: number): number {
-		return this.#body.render(Math.max(1, width - 4)).length + TEXT_CHROME_ROWS;
+		const innerWidth = Math.max(1, width - 4);
+		return this.#body.render(innerWidth).length + TEXT_CHROME_ROWS + this.#footer.render(innerWidth).length - 1;
 	}
 
 	/**
@@ -140,6 +155,7 @@ export class ReportPanel extends OverlayPanel {
 	 * measure, then Close (Esc) as the sheet's footer.
 	 */
 	override describe(): NativeNode {
+		if (this.#help.open) return this.#help.describe();
 		const scroll = this.#scroll;
 		if (this.#native && this.#native.scroll === scroll) return this.#native.node;
 		const body: NativeNode = { ...col([this.#body], { role: "omp.report.body" }), key: "body", scroll };
@@ -158,6 +174,7 @@ export class ReportPanel extends OverlayPanel {
 	 * the arrow, page, Home and End keys and the wheel scroll the body.
 	 */
 	handleInput(data: string): void {
+		if (this.#help.handleInput(data)) return;
 		if (
 			routeSgrMouseInput(data, event => {
 				if (event.wheel === null) return false;
@@ -177,6 +194,10 @@ export class ReportPanel extends OverlayPanel {
 
 	/** Close runs what Esc runs. */
 	handleNativeEvent(event: NativeUiEvent): void {
+		if (this.#help.open) {
+			if (event.type === "action") this.#help.handleInput("\x1b");
+			return;
+		}
 		if (event.type === "action" && event.act === "close") this.#onClose();
 	}
 }

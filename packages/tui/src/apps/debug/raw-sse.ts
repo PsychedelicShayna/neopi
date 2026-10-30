@@ -2,6 +2,7 @@ import type { TspScrollBy } from "@oh-my-pi/pi-wire";
 import type { Component } from "../../tui";
 import { matchesKey } from "../../keys";
 import { MenuKeyReader, menuScrollBy } from "../../components/menu-navigation";
+import { MenuHelp, menuHintLines } from "../../components/menu-hints";
 import { col, compact, keyed, node, row, span, text } from "../../native/describe";
 import { Memo } from "../../native/memo";
 import type { NativeNode, NativeScreen, NativeScroll, NativeUiEvent } from "../../native/node";
@@ -19,7 +20,6 @@ import {
 	rawSseRecordLines,
 } from "./raw-sse-buffer";
 
-const MIN_VIEWER_WIDTH = 40;
 // `data:` lines below this width render fine on a single row; anything wider gets pretty-printed
 // across multiple `data:` lines so streamed JSON blobs stop getting clipped by `truncateToWidth`.
 const PRETTY_PRINT_DATA_THRESHOLD = 100;
@@ -115,6 +115,7 @@ export class RawSseViewerComponent implements Component {
 	#bodyWidth = -1;
 	#bodyThemeEpoch = -1;
 	readonly #keys = new MenuKeyReader();
+	readonly #help = new MenuHelp("jk gg/G C-u d e y PgUp/PgDn");
 
 	constructor(options: RawSseViewerOptions) {
 		this.#deps = options.deps;
@@ -136,7 +137,7 @@ export class RawSseViewerComponent implements Component {
 			frame: context => ({
 				header: [this.#summaryText()],
 				body: { lines: this.#renderRawLines(context.contentWidth) },
-				footer: [this.#statusText()],
+				footer: menuHintLines(this.#statusText(), context.contentWidth, this.#help.vim),
 			}),
 		});
 	}
@@ -163,6 +164,11 @@ export class RawSseViewerComponent implements Component {
 	}
 
 	handleInput(keyData: string): void {
+		if (this.#help.handleInput(keyData)) {
+			this.#keys.reset();
+			this.#onUpdate?.();
+			return;
+		}
 		if (routeSgrMouseInput(keyData, event => this.#handleMouse(event))) {
 			return;
 		}
@@ -251,7 +257,7 @@ export class RawSseViewerComponent implements Component {
 	}
 
 	render(width: number): readonly string[] {
-		return this.#frame.render(Math.max(MIN_VIEWER_WIDTH, width));
+		return this.#help.render(this.#frame.render(width), width);
 	}
 
 	/** The action bar's buttons run the same code as their keys. */
@@ -270,6 +276,7 @@ export class RawSseViewerComponent implements Component {
 	 * so they never scroll away.
 	 */
 	describeScreen(): NativeScreen {
+		if (this.#help.open) return { role: "omp.debug", main: [this.#help.describe()], dock: [] };
 		const snapshot = this.#currentSnapshot();
 		const stream = this.#feedNative(snapshot);
 		const head = this.#nativeHead.get(
@@ -305,6 +312,7 @@ export class RawSseViewerComponent implements Component {
 
 	/** The docked bar under the stream page: the copy status and the buttons. */
 	describe(): NativeNode {
+		if (this.#help.open) return this.#help.describe();
 		return this.#native.get([this.#statusMessage, this.#statusFailed], () =>
 			col(
 				compact([
@@ -478,7 +486,7 @@ export class RawSseViewerComponent implements Component {
 	}
 
 	#statusText(): string {
-		const help = `Esc close · Ctrl-c copy raw · j/k scroll · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · End follow tail · click summary toggles follow`;
+		const help = "Esc close · Ctrl-c copy raw · End follow tail · click summary toggles follow · ? help";
 		return this.#statusMessage
 			? `${theme.fg("success", this.#statusMessage)}  ${theme.fg("dim", help)}`
 			: theme.fg("dim", help);

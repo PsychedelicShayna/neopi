@@ -20,6 +20,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "../index";
+import { MenuHelp, menuHintLines } from "../components/menu-hints";
 import type { ShapeTarget } from "@oh-my-pi/snapcompact";
 import type {
 	ContextLineMode,
@@ -837,6 +838,7 @@ export class SettingsSelectorComponent implements Component {
 	#restoringNavigation = false;
 	#externalEditPending = false;
 	readonly #menuKeys = new MenuKeyReader();
+	readonly #help = new MenuHelp();
 	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
 	#hasSectionJump = false;
 	// Frame geometry from the last render, for mouse hit-testing (the
@@ -906,22 +908,21 @@ export class SettingsSelectorComponent implements Component {
 		const confirm = editorKey("tui.select.confirm");
 		const cancel = editorKey("tui.select.cancel");
 		const tab = formatKeyHint("tab");
-		const switchTabs = "h/l switch tabs";
 		if (this.#searchList) {
 			return this.#search.focused
 				? `${confirm} confirm search · ${cancel} clear search`
-				: `j/k select · Ctrl-u/d half · PgUp/PgDn page · gg/G ends · / search · ${tab} jump tabs · ${cancel} clear search`;
+				: `/ search · ${tab} jump tabs · ${cancel} clear search · ? help`;
 		}
 		if (this.#currentTabId === "plugins") {
 			return this.#pluginComponent?.atRoot
-				? `${switchTabs} · ${tab} switch tabs · / search · ${cancel} close`
-				: `h parent / l open · ${tab} switch tabs · / search · ${cancel} back`;
+				? `${tab} tabs · / search · ${cancel} close · ? help`
+				: `${tab} tabs · / search · ${cancel} back · ? help`;
 		}
 		if (this.#currentList?.sectionFocused) {
-			return `${editorKeys("tui.select.up", "tui.select.down")} to jump sections · ${tab}/${confirm} to settings · ${switchTabs} · ${cancel} to close`;
+			return `${tab}/${confirm} settings · ${cancel} close · ? help`;
 		}
-		const nav = this.#hasSectionJump ? `${tab} to jump sections · ${switchTabs}` : `${tab} to switch tabs`;
-		return `${confirm}/${formatKeyHint("space")} to change · ${nav} · / search · ${cancel} to close${this.#callbacks.onOpenConfigFile ? " · Ctrl+G config file" : ""}`;
+		const nav = this.#hasSectionJump ? `${tab} sections` : `${tab} tabs`;
+		return `${confirm}/${formatKeyHint("space")} change · ${nav} · / search · ${cancel} close${this.#callbacks.onOpenConfigFile ? " · Ctrl+G config file" : ""} · ? help`;
 	}
 
 	/** Single-line search banner: accent icon, editable query with live cursor, right-aligned match count. */
@@ -953,6 +954,11 @@ export class SettingsSelectorComponent implements Component {
 	render(width: number): readonly string[] {
 		const height = Math.max(14, process.stdout.rows || 40);
 		const innerWidth = Math.max(1, width - 4);
+		const hints = menuHintLines(
+			this.#footerHintText(),
+			innerWidth,
+			this.#search.focused || this.#textInputActive ? "" : undefined,
+		);
 
 		const tabLines = this.#tabBar.render(innerWidth);
 		const searching = this.#hasSearchResults;
@@ -961,7 +967,7 @@ export class SettingsSelectorComponent implements Component {
 		const previewLines = showPreview ? ["", theme.fg("muted", "Preview:"), this.#getStatusPreviewString()] : [];
 
 		// Fixed chrome: top border, tabs, divider, [search row], divider, hint, bottom border.
-		const fixedRows = 1 + tabLines.length + 1 + (showSearch ? 1 : 0) + 1 + 1 + 1;
+		const fixedRows = 1 + tabLines.length + 1 + (showSearch ? 1 : 0) + 1 + hints.length + 1;
 		const contentRows = Math.max(7, height - fixedRows - previewLines.length);
 
 		const list = this.#displayList;
@@ -996,9 +1002,9 @@ export class SettingsSelectorComponent implements Component {
 			out.push(row(line, width));
 		}
 		out.push(divider(width));
-		out.push(row(theme.fg("dim", this.#footerHintText()), width));
+		for (const hint of hints) out.push(row(theme.fg("dim", hint), width));
 		out.push(bottomBorder(width));
-		return out;
+		return this.#help.render(out, width);
 	}
 
 	/**
@@ -1016,6 +1022,7 @@ export class SettingsSelectorComponent implements Component {
 	 * root card of today's generic composition.
 	 */
 	describe(cx: DescribeContext): NativeNode {
+		if (this.#help.open) return this.#help.describe();
 		return cx.supports("prefs") ? this.#describePrefs() : this.#describeCard();
 	}
 
@@ -2182,6 +2189,15 @@ export class SettingsSelectorComponent implements Component {
 	}
 
 	handleInput(data: string): void {
+		if (
+			(this.#help.open ||
+				(!this.#search.focused &&
+					!this.#textInputActive &&
+					!this.#pluginComponent?.filterFocused &&
+					!this.#displayList?.filterFocused)) &&
+			this.#help.handleInput(data)
+		)
+			return;
 		if (matchesKey(data, "ctrl+g") && !this.#menuKeys.read(data) && this.#callbacks.onOpenConfigFile) {
 			if (!this.#externalEditPending) {
 				this.#externalEditPending = true;

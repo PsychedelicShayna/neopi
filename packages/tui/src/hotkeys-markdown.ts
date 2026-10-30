@@ -2,6 +2,7 @@ import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { type AppKeybinding, formatKeyHint, type KeybindingsManager, keyHintPlatform } from "./app-keybindings";
 import { Markdown } from "./components/markdown";
 import { MenuKeyReader, menuScrollBy } from "./components/menu-navigation";
+import { MenuHelp, menuHintLines } from "./components/menu-hints";
 import { ScrollView } from "./components/scroll-view";
 import { matchesSelectCancel } from "./keybinding-matchers";
 import type { KeyName } from "./key-hint-format";
@@ -235,6 +236,7 @@ export class HotkeysSheetComponent implements Component {
 	#native: NativeNode | undefined;
 	#markdown: Markdown | undefined;
 	readonly #keys = new MenuKeyReader();
+	readonly #help = new MenuHelp("jk gg/G C-u d e y PgUp/PgDn");
 	readonly #viewport = new ScrollView([], { height: 1 });
 	#nativeScroll: NativeScroll | undefined;
 
@@ -248,6 +250,7 @@ export class HotkeysSheetComponent implements Component {
 	}
 
 	describe(): NativeNode {
+		if (this.#help.open) return this.#help.describe();
 		if (this.#native) return this.#native;
 		const sections = hotkeyGroups(this.#bindings).map((group, index) =>
 			node(
@@ -271,16 +274,9 @@ export class HotkeysSheetComponent implements Component {
 		);
 		const close = actionButton("Close", "close", { keys: "escape" });
 		this.#native = {
-			...col(
-				[
-					...sections,
-					actionBar([
-						text([span("j/k scroll · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll", "dim")]),
-						close,
-					]),
-				],
-				{ gap: "lg" },
-			),
+			...col([...sections, actionBar([close, null, text([span("? help   jk gg/G C-u d e y PgUp/PgDn", "dim")])])], {
+				gap: "lg",
+			}),
 			scroll: this.#nativeScroll,
 		};
 		return this.#native;
@@ -289,9 +285,10 @@ export class HotkeysSheetComponent implements Component {
 	/** The markdown reference, for a terminal that falls back to rows. */
 	render(width: number): readonly string[] {
 		this.#markdown ??= new Markdown(buildHotkeysMarkdown(this.#bindings), 1, 1, getMarkdownTheme());
-		this.#viewport.setHeight(Math.max(1, this.getHeight() - 4));
+		const footer = menuHintLines("Esc close · ? help", width, this.#help.vim);
+		this.#viewport.setHeight(Math.max(1, this.getHeight() - 4 - footer.length));
 		this.#viewport.setLines(this.#markdown.render(Math.max(1, width - 1)));
-		return this.#viewport.render(width);
+		return this.#help.render([...this.#viewport.render(width), ...footer], width);
 	}
 
 	navigationSnapshot(): unknown {
@@ -310,6 +307,10 @@ export class HotkeysSheetComponent implements Component {
 	}
 
 	handleInput(data: string): void {
+		if (this.#help.handleInput(data)) {
+			this.#keys.reset();
+			return;
+		}
 		if (matchesSelectCancel(data)) {
 			this.#onClose();
 			return;

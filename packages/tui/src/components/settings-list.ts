@@ -13,6 +13,7 @@ import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "..
 import type { Component } from "../tui";
 import { Ellipsis, padding, replaceTabs, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils";
 import { ScrollView } from "./scroll-view";
+import { MenuHelp, menuHintLines } from "./menu-hints";
 import { FormField, type FormFieldOptions, type FormFieldTheme, SelectFormField, TextFormField } from "./form";
 import { MenuSelection } from "./menu-selection";
 import {
@@ -205,6 +206,7 @@ export class SettingsList implements Component {
 	readonly #viewport = new MenuViewport();
 	readonly #search = new MenuSearchField();
 	#restoring = false;
+	readonly #help = new MenuHelp();
 
 	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
 
@@ -753,7 +755,7 @@ export class SettingsList implements Component {
 			return this.#padLines([...this.#submenuComponent.render(width)]);
 		}
 
-		return this.#padLines(this.#renderMainList(width));
+		return this.#help.render(this.#padLines(this.#renderMainList(width)), width);
 	}
 
 	/**
@@ -763,6 +765,7 @@ export class SettingsList implements Component {
 	 * replaces the list and describes itself.
 	 */
 	describe(_cx: DescribeContext): NativeNode {
+		if (this.#help.open) return this.#help.describe();
 		let body: NativeChild;
 		let hint = "";
 		if (this.#submenuComponent) {
@@ -800,10 +803,11 @@ export class SettingsList implements Component {
 		const props: TspProps<"list"> = {
 			selected: this.getSelectedItem()?.id ?? null,
 			filter: this.#filterQuery.trim() || undefined,
-			empty:
-				error
-					? `Invalid regex: ${error}`
-					: this.#items.length === 0 ? (this.#options.emptyText ?? "No settings available") : "No matching settings",
+			empty: error
+				? `Invalid regex: ${error}`
+				: this.#items.length === 0
+					? (this.#options.emptyText ?? "No settings available")
+					: "No matching settings",
 			max:
 				typeof cachedMax === "object" && cachedMax.lines === this.#maxVisible
 					? cachedMax
@@ -858,7 +862,7 @@ export class SettingsList implements Component {
 	#hintText(): string {
 		return (
 			this.#options.hint ??
-			`${editorKey("tui.select.confirm")} edit · ${formatKeyHint("space")} cycle · j/k rows · Ctrl-u/d half page · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · Tab sections · / search · ${editorKey("tui.select.cancel")} close`
+			`${editorKey("tui.select.confirm")} edit · ${formatKeyHint("space")} cycle · Tab sections · / search · ${editorKey("tui.select.cancel")} close · ? help`
 		);
 	}
 
@@ -1017,7 +1021,7 @@ export class SettingsList implements Component {
 		// Add hint (suppressed entirely when the host owns the footer)
 		if (this.#options.hint !== "") {
 			lines.push("");
-			lines.push(truncateToWidth(this.#theme.hint(`  ${this.#hintText()}`), width));
+			lines.push(...menuHintLines(this.#hintText(), width).map(this.#theme.hint));
 		}
 
 		return lines;
@@ -1122,6 +1126,7 @@ export class SettingsList implements Component {
 			return;
 		}
 
+		if ((this.#help.open || !this.#search.focused) && this.#help.handleInput(data)) return;
 		if (this.#handleSearchInput(data)) return;
 		const action = this.#keys.read(data);
 		if (action === undefined || action === "pending") return;

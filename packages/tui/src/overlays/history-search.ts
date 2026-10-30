@@ -1,16 +1,7 @@
-import {
-	type Component,
-	Ellipsis,
-	Input,
-	matchesKey,
-	padding,
-	Spacer,
-	Text,
-	truncateToWidth,
-	visibleWidth,
-} from "../index";
+import { type Component, Ellipsis, Input, matchesKey, padding, Spacer, truncateToWidth, visibleWidth } from "../index";
 import { compileMenuRegex } from "../menu-search";
 import { theme } from "../theme/theme";
+import { MenuHelp, MenuHints } from "../components/menu-hints";
 /** Prompt history fields displayed in search results. */
 export interface HistorySearchEntry {
 	prompt: string;
@@ -205,6 +196,7 @@ export class HistorySearchComponent extends OverlayPanel {
 	#searchInput: Input;
 	readonly #search = new MenuSearchField("", true);
 	readonly #keys = new MenuKeyReader();
+	readonly #help = new MenuHelp("jk gg/G C-u d e y");
 	readonly #viewport = new MenuViewport();
 	#nativeScroll: NativeScroll | undefined;
 	#menu: MenuSelection<HistorySearchEntry>;
@@ -241,18 +233,16 @@ export class HistorySearchComponent extends OverlayPanel {
 		this.#resultsList = new HistoryResultsList(this.#menu, this.#viewport);
 
 		const dot = theme.fg("dim", theme.sep.dot);
-		const hint = [
-			"j/k ↑↓ · Ctrl-u/d half · PgUp/Dn · gg/G · Ctrl-e/y view",
-			rawKeyHint("enter", "select"),
-			"/ search · Tab field/list · Esc field/list/close",
-		].join(dot);
+		const hint = [rawKeyHint("enter", "select"), "/ search · Tab field/list · Esc field/list/close · ? help"].join(
+			dot,
+		);
 
 		this.addChild(new Spacer(1));
 		this.addChild({ render: width => [this.#search.render(width, { muted: text => theme.fg("dim", text) })] });
 		this.addChild(new Spacer(1));
 		this.addChild(this.#resultsList);
 		this.addChild(new Spacer(1));
-		this.addChild(new Text(hint, 0, 0));
+		this.addChild(new MenuHints(hint, text => theme.fg("dim", text), "jk gg/G C-u d e y"));
 		this.addChild(new Spacer(1));
 
 		this.#updateResults();
@@ -313,12 +303,21 @@ export class HistorySearchComponent extends OverlayPanel {
 		super.dispose();
 	}
 
+	override render(width: number): readonly string[] {
+		return this.#help.render(super.render(width), width);
+	}
+
 	handleInput(keyData: string): void {
 		const before = this.#search.query;
 		const field = this.#search.handleInput(keyData);
 		if (field !== "pass") {
 			this.#keys.reset();
 			if (this.#search.query !== before) this.#scheduleResults();
+			return;
+		}
+		if (this.#help.handleInput(keyData)) {
+			this.#keys.reset();
+			this.#onRequestRender?.();
 			return;
 		}
 		if (matchesKey(keyData, "ctrl+c")) {
@@ -361,6 +360,7 @@ export class HistorySearchComponent extends OverlayPanel {
 	 * value), and the key hints.
 	 */
 	override describe(cx: DescribeContext): NativeNode {
+		if (this.#help.open) return this.#help.describe();
 		const items = this.#menu.visibleItems;
 		const selected = this.#menu.selectedItem;
 		const usePicker = cx.supports("picker");
@@ -569,9 +569,11 @@ export class HistorySearchComponent extends OverlayPanel {
 		const regex = compileMenuRegex(rawQuery);
 		const query = regex ? rawQuery : rawQuery.trim();
 		this.#resultsQuery = query;
-		const results = regex?.error ? [] : query
-			? this.#historyStorage.search(query, this.#resultLimit)
-			: this.#historyStorage.getRecent(this.#resultLimit);
+		const results = regex?.error
+			? []
+			: query
+				? this.#historyStorage.search(query, this.#resultLimit)
+				: this.#historyStorage.getRecent(this.#resultLimit);
 		this.#menu.setItems(results);
 		this.#menu.moveToBoundary("first");
 		this.#viewport.reveal();

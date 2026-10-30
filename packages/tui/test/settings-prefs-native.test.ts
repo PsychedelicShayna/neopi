@@ -9,6 +9,7 @@ import { getKeybindings, setKeybindings } from "@oh-my-pi/pi-tui";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import type { SelectListNavigationState } from "../src/components/select-list";
 import { getMenuSearchVimMode, isMenuHistoryLeaver, setMenuSearchVimMode } from "../src/components/menu-navigation";
+import { visibleWidth } from "../src/utils";
 
 const ENTER = "\n";
 const DOWN = "\x1b[B";
@@ -707,15 +708,15 @@ describe("settings as a native prefs page", () => {
 		expect(changes).toEqual([["display.colorBlind", true]]);
 	});
 
-	it("shows Vim half-page, page, and boundary motions in the bottom footer after confirming search", () => {
+	it("shows compressed Vim motions in the footer after confirming search", () => {
 		const { selector } = harness();
 		for (const key of ["/", "e", ENTER]) selector.handleInput(key);
 		expect(prefs(selector).props.sections.flatMap(section => section.rows).length).toBeGreaterThan(1);
 		const footer = Bun.stripANSI(selector.render(240).at(-2) ?? "");
 		expect(footer).not.toContain("confirm search");
-		expect(footer).toContain("j/k");
-		expect(footer).toMatch(/Ctrl-(?:u\/d|d\/u) half/);
-		expect(footer).toContain("PgUp/PgDn page");
+		expect(footer).toContain("hjkl");
+		expect(footer).toContain("C-u d e y");
+		expect(footer).toContain("? help");
 		expect(footer).toContain("gg/G");
 	});
 
@@ -1137,4 +1138,40 @@ it("an existing menu Ctrl-G binding wins over opening the settings file", () => 
 	} finally {
 		setKeybindings(previous);
 	}
+});
+
+it("Settings keeps harness actions at narrow widths and right-aligns compressed motions when wide", () => {
+	const { selector } = harness({}, { onOpenConfigFile: async () => {} });
+	const narrow = selector.render(40);
+	const narrowText = narrow.join("\n");
+	for (const action of ["change", "sections", "/ search", "close", "Ctrl+G config file", "? help"])
+		expect(narrowText).toContain(action);
+	expect(narrowText).not.toContain("C-u d e y");
+	const wide = selector.render(180);
+	const hint = wide.find(line => line.includes("hjkl gg/G C-u d e y"));
+	expect(hint).toBeDefined();
+	expect(visibleWidth(hint!)).toBe(180);
+	expect(hint!.indexOf("change")).toBeLessThan(hint!.indexOf("hjkl"));
+});
+
+it("Settings help is modal and focused search keeps question marks literal", () => {
+	let closed = false;
+	const { selector } = harness(
+		{},
+		{
+			onCancel: () => {
+				closed = true;
+			},
+		},
+	);
+	selector.handleInput("?");
+	expect(selector.render(80).join("\n")).toContain("Vim navigation");
+	expect(selector.describe(PREFS).p?.role).toBe("omp.menu.vim-help");
+	selector.handleInput("\x1b");
+	expect(closed).toBe(false);
+	expect(selector.render(80).join("\n")).not.toContain("Vim navigation");
+	selector.handleInput("/");
+	selector.handleInput("?");
+	expect(selector.render(80).join("\n")).not.toContain("Vim navigation");
+	expect(closed).toBe(false);
 });

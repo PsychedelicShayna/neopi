@@ -10,6 +10,7 @@ import * as path from "node:path";
 import { KeyValueList, type KeyValueRow } from "../components/key-value-list";
 import { ScrollView } from "../components/scroll-view";
 import { MenuKeyReader, MenuSearchField, menuScrollBy } from "../components/menu-navigation";
+import { MenuHelp, menuHintLines } from "../components/menu-hints";
 import { compileMenuRegex } from "../menu-search";
 import { renderTableRow, type TableColumn } from "../components/table";
 import { fuzzyFilter } from "../fuzzy";
@@ -103,6 +104,7 @@ export class PsTopComponent implements Component {
 	#statusText = "";
 	readonly #keys = new MenuKeyReader();
 	readonly #search = new MenuSearchField();
+	readonly #help = new MenuHelp(undefined, "h / l or Tab: cycle table, info and logs");
 	#filteredQuery = "";
 	#nativeScroll: NativeScroll | undefined;
 	#viewRequest = 0;
@@ -279,6 +281,11 @@ export class PsTopComponent implements Component {
 	// -- input -----------------------------------------------------------------
 
 	handleInput(data: string): void {
+		if (!this.#search.focused && this.#help.handleInput(data)) {
+			this.#keys.reset();
+			this.#ui.requestRender();
+			return;
+		}
 		const before = this.#search.query;
 		if (this.#search.handleInput(data) !== "pass") {
 			if (this.#search.query !== before) this.#applyFilter();
@@ -421,6 +428,7 @@ export class PsTopComponent implements Component {
 	 * mirrors the keys. Info and logs replace the list.
 	 */
 	describe(cx?: DescribeContext): NativeNode {
+		if (this.#help.open) return this.#help.describe();
 		if (this.#filteredQuery !== this.#search.query) this.#applyFilter();
 		const statusVisible = Date.now() - this.#statusAt < STATUS_TTL_MS;
 		const search = cx ? this.#search.input.describe(cx) : text(this.#search.value);
@@ -699,14 +707,13 @@ export class PsTopComponent implements Component {
 
 	render(width: number): readonly string[] {
 		const height = Math.max(6, this.#ui.terminal.rows);
-		switch (this.#view) {
-			case "info":
-				return this.#renderInfo(width, height);
-			case "logs":
-				return this.#renderLogs(width, height);
-			default:
-				return this.#renderTable(width, height);
-		}
+		const lines =
+			this.#view === "info"
+				? this.#renderInfo(width, height)
+				: this.#view === "logs"
+					? this.#renderLogs(width, height)
+					: this.#renderTable(width, height);
+		return this.#help.render(lines, width);
 	}
 
 	#header(width: number, title: string): string {
@@ -719,7 +726,7 @@ export class PsTopComponent implements Component {
 
 	#footer(width: number, hints: string): string[] {
 		const status = Date.now() - this.#statusAt < STATUS_TTL_MS ? this.#status : "";
-		return [truncateToWidth(` ${status}`, width), truncateToWidth(chalk.dim(` ${hints}`), width)];
+		return [truncateToWidth(` ${status}`, width), ...menuHintLines(` ${hints}`, width).map(line => chalk.dim(line))];
 	}
 
 	#renderTable(width: number, height: number): string[] {
@@ -732,7 +739,7 @@ export class PsTopComponent implements Component {
 		const header = this.#header(width, scopesLabel);
 		const footer = this.#footer(
 			width,
-			`j/k rows · h/l or Tab views · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · Space/Enter info · o logs · s stop · x kill · r restart · a scopes · / search · q quit`,
+			`Space/Enter info · o logs · s stop · x kill · r restart · a scopes · Tab views · PgUp/PgDn page · / search · ? keys · q quit`,
 		);
 		footer.unshift(this.#search.render(width, { muted: chalk.dim }));
 		const bodyHeight = height - 1 - footer.length;
@@ -801,10 +808,7 @@ export class PsTopComponent implements Component {
 	#renderInfo(width: number, height: number): string[] {
 		const info = this.#info;
 		const header = this.#header(width, "process info");
-		const footer = this.#footer(
-			width,
-			`j/k scroll · h/l or Tab views · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · Esc back · q back`,
-		);
+		const footer = this.#footer(width, `Tab views · PgUp/PgDn page · Esc back · q back · ? keys`);
 		const body = [""];
 		if (info) {
 			const daemon = info.daemon;
@@ -837,10 +841,7 @@ export class PsTopComponent implements Component {
 			width,
 			`logs ${chalk.bold(name)}${this.#logsState ? chalk.dim(` · ${this.#logsState}`) : ""}`,
 		);
-		const footer = this.#footer(
-			width,
-			`j/k scroll · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · h/l or Tab views · Esc back · q back · live refresh`,
-		);
+		const footer = this.#footer(width, `Tab views · PgUp/PgDn page · Esc back · q back · live refresh · ? keys`);
 		const bodyHeight = height - 1 - footer.length;
 		this.#logsView.setLines(this.#logsLines.map(line => ` ${line}`));
 		this.#logsView.setHeight(bodyHeight);

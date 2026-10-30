@@ -185,7 +185,7 @@ export class HubFrame {
 				{ content: this.#top, height: 1 },
 				{ content: this.#split, grow: 1 },
 				{ content: this.#divider, height: 1 },
-				{ content: this.#footer, height: 1 },
+				{ content: this.#footer },
 				{ content: this.#bottom, height: 1 },
 			],
 		});
@@ -337,8 +337,14 @@ export class HubFrame {
 	}
 
 	/** Paint a complete fullscreen hub with its title, width bounds, and contextual footer. */
-	render(width: number, height: number, entries: readonly SidebarEntry<string>[], footer: string): readonly string[] {
-		const contentRows = Math.max(10, height - 4);
+	render(
+		width: number,
+		height: number,
+		entries: readonly SidebarEntry<string>[],
+		footer: string | readonly string[],
+	): readonly string[] {
+		const footerLines = typeof footer === "string" ? [footer] : footer;
+		const contentRows = Math.max(1, height - 3 - footerLines.length);
 		const sidebarWidth = this.sidebarWidth(entries);
 		this.#split.setLeftSize({
 			fixed: sidebarWidth,
@@ -353,9 +359,9 @@ export class HubFrame {
 		const leftWidth = this.#split.measure(width).left?.width ?? 0;
 		this.#top.setLines([topBorderSplit(width, this.#title, leftWidth)]);
 		this.#divider.setLines([dividerSplit(width, leftWidth)]);
-		this.#footer.setLines([row(footer, width)]);
+		this.#footer.setLines(footerLines.map(line => row(line, width)));
 		this.#bottom.setLines([bottomBorder(width)]);
-		this.#stack.setHeight(contentRows + 4);
+		this.#stack.setHeight(contentRows + 3 + footerLines.length);
 		return this.#stack.render(width);
 	}
 }

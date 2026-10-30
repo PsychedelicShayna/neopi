@@ -19,6 +19,7 @@ import { compileMenuRegex } from "../menu-search";
 import { theme } from "../theme/theme";
 import { matchesAppInterrupt } from "../keybinding-matchers";
 import { isUserRequestEntry, type TranscriptEntryLike } from "../chat/transcript-entry";
+import { MenuHelp, MenuHints } from "../components/menu-hints";
 
 /** Fields consumed when displaying persisted entries in the session tree. */
 export type SessionTreeEntry = { id: string; parentId: string | null } & (
@@ -601,8 +602,9 @@ class TreeList implements Component {
 		const filterMode = this.#filterMode;
 		const leafId = this.currentLeafId;
 		const query = this.getSearchQuery();
-		const searchTokens = (compileMenuRegex(query) ? [query] : query.toLowerCase().split(/\s+/).filter(Boolean))
-			.map(token => new FuzzyQuery(token));
+		const searchTokens = (compileMenuRegex(query) ? [query] : query.toLowerCase().split(/\s+/).filter(Boolean)).map(
+			token => new FuzzyQuery(token),
+		);
 		return node => {
 			const entry = node.entry;
 			const isCurrentLeaf = entry.id === leafId;
@@ -1615,6 +1617,7 @@ class LabelInput implements Component {
  */
 export class TreeSelectorComponent extends OverlayPanel {
 	#treeList: TreeList;
+	readonly #help = new MenuHelp(undefined, "h collapses a branch or selects its parent; l expands it.");
 	#labelInput: LabelInput | null = null;
 	#labelInputContainer: Container;
 	#treeContainer: Container;
@@ -1676,24 +1679,19 @@ export class TreeSelectorComponent extends OverlayPanel {
 
 		this.addChild(new Spacer(1));
 		this.addChild(
-			new TruncatedText(
-				theme.fg(
-					"muted",
-					[
-						`${formatKeyHint("enter")}: switch.`,
-						`${formatKeyHints(["alt+up", "alt+down"])}: previous/next turn.`,
-						...(branchKeys ? [`${branchKeys}: previous/next branch.`] : []),
-						"j/k ↑↓ · Ctrl-u/d half · PgUp/Dn page · gg/G/Home/End bounds · Ctrl-e/y view.",
-						"h/← collapse or parent · l/→ expand · Space toggle.",
-						`${formatKeyHint("shift+enter")}: summarize & switch.`,
-						`${formatKeyHint("e")}: label.`,
-						"Tab/Shift-Tab or Ctrl-n/p: filter mode.",
-						`${formatKeyHints(["alt+d", "alt+t", "alt+u", "alt+l", "alt+a"])}: filter.`,
-						"/ search · Esc field/list/close",
-					].join(" "),
-				),
-				0,
-				0,
+			new MenuHints(
+				[
+					`${formatKeyHint("enter")} switch`,
+					`${formatKeyHints(["alt+up", "alt+down"])} previous/next turn`,
+					...(branchKeys ? [`${branchKeys} previous/next branch`] : []),
+					"← collapse/parent · → expand · Space toggle",
+					`${formatKeyHint("shift+enter")} summarize & switch`,
+					`${formatKeyHint("e")} label`,
+					"Tab/Shift-Tab or Ctrl-n/p filter mode",
+					`${formatKeyHints(["alt+d", "alt+t", "alt+u", "alt+l", "alt+a"])} filter`,
+					"/ search · Esc field/list/close · ? help",
+				].join(" · "),
+				text => theme.fg("muted", text),
 			),
 		);
 		this.addChild(new SearchLine(this.#treeList));
@@ -1752,6 +1750,7 @@ export class TreeSelectorComponent extends OverlayPanel {
 	}
 
 	override describe(cx: DescribeContext): NativeNode {
+		if (this.#help.open) return this.#help.describe();
 		return cx.supports("picker") ? this.#describePicker() : this.#describeCard();
 	}
 
@@ -1906,6 +1905,10 @@ export class TreeSelectorComponent extends OverlayPanel {
 
 	/** Filter tab → switch mode; entry click → highlight it and switch, exactly like Enter. */
 	handleNativeEvent(event: NativeUiEvent): void {
+		if (this.#help.open) {
+			if (event.type === "action") this.#help.handleInput("\x1b");
+			return;
+		}
 		const picked = pickerEvent(event, "picker");
 		if (picked) {
 			this.#handlePickerEvent(picked);
@@ -1952,7 +1955,12 @@ export class TreeSelectorComponent extends OverlayPanel {
 		if (recordVisit) this.onNavigationVisit?.("", previous);
 	}
 
+	override render(width: number): readonly string[] {
+		return this.#help.render(super.render(width), width);
+	}
+
 	handleInput(keyData: string): void {
+		if (!this.#labelInput && !this.#treeList.filterFocused && this.#help.handleInput(keyData)) return;
 		if (this.#labelInput) {
 			this.#labelInput.handleInput(keyData);
 		} else {

@@ -1,6 +1,7 @@
 import type { Component, TUI } from "../tui";
 import { SelectList, type SelectItem, type SelectListNavigationState } from "../components/select-list";
 import { SplitPane } from "../components/layout/split-pane";
+import { MenuHelp, menuHintLines } from "../components/menu-hints";
 import {
 	MenuKeyReader,
 	MenuViewport,
@@ -9,7 +10,6 @@ import {
 } from "../components/menu-navigation";
 import { bottomBorder, divider, row, topBorder } from "../chrome/overlay-box";
 import { routeSgrMouseInput } from "../mouse";
-import { truncateToWidth } from "../utils";
 import { matchesKey } from "../keys";
 import { getSelectListTheme, theme } from "../theme";
 import { node, text } from "../native/describe";
@@ -60,6 +60,7 @@ export class AdvisorScopeOverlayComponent implements Component {
 	readonly #files: AdvisorConfigFile[];
 	readonly #cb: AdvisorScopeCallbacks;
 	readonly #keys = new MenuKeyReader();
+	readonly #help = new MenuHelp();
 	readonly #previewViewport = new MenuViewport();
 	#previewFocused = false;
 	#list: SelectList;
@@ -265,23 +266,24 @@ export class AdvisorScopeOverlayComponent implements Component {
 
 	render(width: number): readonly string[] {
 		if (this.#editor) return this.#editor.render(width);
-		this.#rows = Math.max(10, (process.stdout.rows || 40) - 4);
+		const hints = menuHintLines(
+			`Tab panes · / filter · Space toggle file · Enter edit${this.#cb.openFile ? " · Ctrl-G edit config file" : ""} · a apply · Esc close · ? help`,
+			Math.max(1, width - 4),
+		);
+		this.#rows = Math.max(10, (process.stdout.rows || 40) - 3 - hints.length);
 		this.#split.setHeight(this.#rows);
 		this.#split.setNarrowPane(this.#previewFocused ? "right" : "left");
 		const title = `Advisor configuration · files${this.#busy ? " · saving" : this.#pendingApply ? " · saved, not applied" : ""}`;
-		return [
-			topBorder(width, title),
-			...this.#split.render(width),
-			divider(width),
-			row(
-				truncateToWidth(
-					`j/k move · h/l or Tab panes · / filter · Space toggle file · Enter edit${this.#cb.openFile ? " · Ctrl-G edit config file" : ""} · a apply · Esc close`,
-					width - 4,
-				),
-				width,
-			),
-			bottomBorder(width),
-		];
+		return this.#help.render(
+			[
+				topBorder(width, title),
+				...this.#split.render(width),
+				divider(width),
+				...hints.map(line => row(theme.fg("dim", line), width)),
+				bottomBorder(width),
+			],
+			width,
+		);
 	}
 
 	nativeSheet(cx: DescribeContext): boolean {
@@ -290,6 +292,7 @@ export class AdvisorScopeOverlayComponent implements Component {
 
 	describe(cx: DescribeContext): NativeNode {
 		if (this.#editor) return this.#editor.describe(cx);
+		if (this.#help.open) return this.#help.describe();
 		const preview = this.#preview().map(line => text(line, { wrap: "word" }));
 		if (cx.supports("picker"))
 			return picker(
@@ -342,6 +345,11 @@ export class AdvisorScopeOverlayComponent implements Component {
 		if (this.#list.filterFocused) {
 			this.#keys.reset();
 			this.#list.handleInput(data);
+			return;
+		}
+		if (this.#help.handleInput(data)) {
+			this.#keys.reset();
+			this.#cb.requestRender();
 			return;
 		}
 		const action = this.#keys.read(data);

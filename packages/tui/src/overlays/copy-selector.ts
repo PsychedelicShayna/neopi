@@ -47,6 +47,7 @@ import type { DescribeContext, NativeChild, NativeNode, NativeScroll, NativeUiEv
 import { actionHint, hintsRow, type NativeHint, overlayCard } from "../native/overlay";
 import { CLOSE_ACTION, type PickerEvent, picker, pickerAction, pickerEvent } from "../native/picker";
 import { MenuKeyReader, menuScrollBy } from "../components/menu-navigation";
+import { MenuHelp, menuHintLines } from "../components/menu-hints";
 
 /** Key of the leading list item that replays the history older than the startup tail. */
 const EARLIER_TURNS_KEY = "earlier";
@@ -348,6 +349,7 @@ export class CopySelectorComponent implements Component {
 	/** Click targets of the last render, keyed by composed-column line index. */
 	#controls = new Map<number, ControlRegion[]>();
 	readonly #keys = new MenuKeyReader();
+	readonly #help = new MenuHelp();
 	#nativeScroll: NativeScroll | undefined;
 	#width = 0;
 	#pageStarts: number[] = [];
@@ -566,6 +568,11 @@ export class CopySelectorComponent implements Component {
 	// ========================================================================
 
 	handleInput(data: string): void {
+		if (this.#help.handleInput(data)) {
+			this.#keys.reset();
+			this.deps.requestRender();
+			return;
+		}
 		if (data.startsWith("\x1b[<")) {
 			routeSgrMouseInput(data, event => {
 				if (event.wheel !== null) {
@@ -816,6 +823,7 @@ export class CopySelectorComponent implements Component {
 	}
 
 	describe(cx: DescribeContext): NativeNode {
+		if (this.#help.open) return this.#help.describe();
 		return cx.supports("picker") ? this.#describePicker() : this.#describeCard();
 	}
 
@@ -1003,7 +1011,7 @@ export class CopySelectorComponent implements Component {
 
 	render(width: number): readonly string[] {
 		this.#width = width;
-		return this.#browser.render(width);
+		return this.#help.render(this.#browser.render(width), width);
 	}
 
 	#frame(contentWidth: number): TranscriptBrowserFrame {
@@ -1068,8 +1076,8 @@ export class CopySelectorComponent implements Component {
 		const upDown = editorKeys("tui.select.up", "tui.select.down");
 		const cancel = editorKey("tui.select.cancel");
 		const hint = this.#blocks
-			? `${this.#blockSelected + 1}/${this.#blocks.length} · j/k ${upDown} block · h/Left/Esc back · Enter/Space ${action}${openHint}`
-			: `${this.#targets.length > 0 ? `${this.#selected + 1}/${this.#targets.length} · ` : ""}j/k ${upDown} step · ${blocks.length > 0 ? "l/Right blocks · " : ""}Enter/Space ${action} · ${this.#truncated ? "a earlier turns · " : ""}${expandKeyHint()} expand · ${cancel} close`;
+			? `${this.#blockSelected + 1}/${this.#blocks.length} · ${upDown} block · Left/Esc back · Enter/Space ${action}${openHint}`
+			: `${this.#targets.length > 0 ? `${this.#selected + 1}/${this.#targets.length} · ` : ""}${upDown} step · ${blocks.length > 0 ? "Right blocks · " : ""}Enter/Space ${action} · ${this.#truncated ? "a earlier turns · " : ""}${expandKeyHint()} expand · ${cancel} close`;
 		const anchorId = target
 			? this.#blocks
 				? `copy:${target.turnId}:block:${this.#blockSelected}`
@@ -1088,7 +1096,9 @@ export class CopySelectorComponent implements Component {
 						? { id: anchorId, start: composed.selStart, end: composed.selEnd }
 						: undefined,
 			},
-			footer: [theme.fg("dim", `${hint} · Ctrl-u/d half · PgUp/Dn · gg/G · Ctrl-e/y view · Tab context`)],
+			footer: menuHintLines(`${hint} · PgUp/Dn page · Tab context · ? help`, contentWidth).map(line =>
+				theme.fg("dim", line),
+			),
 		};
 	}
 

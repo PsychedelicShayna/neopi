@@ -1,4 +1,4 @@
-import { type Component, Ellipsis, ScrollView, Text, truncateToWidth } from "../index";
+import { type Component, Ellipsis, ScrollView, Text } from "../index";
 import { theme } from "../theme/theme";
 import { OverlayPanel, PanelDivider, PanelRows } from "../chrome/overlay-box";
 import { editorKey } from "../chrome/keybinding-hints";
@@ -10,6 +10,7 @@ import { actionBar, actionButton } from "../native/overlay";
 import { plainText, styledSpans } from "../native/spans";
 import type { ContextUsage } from "../status-line/types";
 import { MenuKeyReader, menuScrollBy } from "../components/menu-navigation";
+import { MenuHelp, menuHintLines } from "../components/menu-hints";
 const PANEL_CHROME_ROWS = 4;
 
 /** One headed block of a key/value report. */
@@ -134,6 +135,7 @@ export class SessionInfoOverlay implements Component {
 	#lastInfoLines: readonly string[] | undefined;
 	#lastHeight: number | undefined;
 	readonly #keys = new MenuKeyReader();
+	readonly #help = new MenuHelp("jk gg/G C-u d e y");
 	#scroll: NativeScroll | undefined;
 
 	/** `context` adds a context-window meter to the native sheet. */
@@ -153,7 +155,6 @@ export class SessionInfoOverlay implements Component {
 			},
 		});
 		this.#footer = new PanelRows();
-		this.#footer.setHeight(1);
 		this.#panel = new OverlayPanel("Session Info");
 		this.#panel.addChild(this.#scrollView);
 		this.#panel.addChild(new PanelDivider());
@@ -161,6 +162,7 @@ export class SessionInfoOverlay implements Component {
 	}
 
 	handleInput(data: string): void {
+		if (this.#help.handleInput(data)) return;
 		const action = this.#keys.read(data);
 		if (!action || action === "pending") return;
 		if (action.kind === "cancel") return this.#onClose();
@@ -207,6 +209,7 @@ export class SessionInfoOverlay implements Component {
 	 * ends it.
 	 */
 	describe(cx: DescribeContext): NativeNode {
+		if (this.#help.open) return this.#help.describe();
 		const meter = cx.supports("meter");
 		if (this.#nativeNode?.meter === meter) return { ...this.#nativeNode.node, scroll: this.#scroll };
 		// The report prints the append-only context mode after the message counts;
@@ -382,15 +385,19 @@ export class SessionInfoOverlay implements Component {
 
 	/** The Close button runs Esc's path. */
 	handleNativeEvent(event: NativeUiEvent): void {
+		if (this.#help.open) {
+			if (event.type === "action") this.#help.handleInput("\x1b");
+			return;
+		}
 		if (event.type === "action" && event.act === "close") this.#onClose();
 	}
 
 	render(width: number): readonly string[] {
 		const innerWidth = Math.max(1, width - 4);
-		const footerHint = `j/k rows · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · ${editorKey("tui.select.cancel")} close`;
-		this.#footer.setLines([theme.fg("dim", truncateToWidth(footerHint, innerWidth))]);
+		const footer = menuHintLines(`${editorKey("tui.select.cancel")} close · ? help`, innerWidth, "jk gg/G C-u d e y");
+		this.#footer.setLines(footer.map(line => theme.fg("dim", line)));
 
-		const maxBodyHeight = Math.max(1, this.#host.terminal.rows - PANEL_CHROME_ROWS);
+		const maxBodyHeight = Math.max(1, this.#host.terminal.rows - PANEL_CHROME_ROWS - footer.length + 1);
 		const fullWidthInfoLines = this.#info.render(innerWidth);
 		const infoWidth = fullWidthInfoLines.length > maxBodyHeight ? Math.max(1, innerWidth - 1) : innerWidth;
 		const infoLines = infoWidth === innerWidth ? fullWidthInfoLines : this.#info.render(infoWidth);
@@ -405,6 +412,6 @@ export class SessionInfoOverlay implements Component {
 			this.#scrollView.setHeight(height);
 			this.#lastHeight = height;
 		}
-		return this.#panel.render(width);
+		return this.#help.render(this.#panel.render(width), width);
 	}
 }

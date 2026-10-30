@@ -87,6 +87,7 @@ import {
 import { renderSegmentTrack } from "../chrome/segment-track";
 import { EffortToggle } from "./effort-toggle";
 import { ModelOverridesPanel, type ModelOverridesHost } from "./model-overrides";
+import { MenuHelp, menuHintLines } from "../components/menu-hints";
 
 export type HubEffortSelection =
 	| { mode: "inherit" }
@@ -162,7 +163,7 @@ function patternStripHint(value: string): string {
 }
 
 const MODEL_HUB_BODY_MIN_WIDTH = 28;
-const MODEL_SCOPE_HINT = "h/l pane · j/k providers · ⏎ models · / search · Alt+←/→ kind · ⎋ close";
+const MODEL_SCOPE_HINT = "⏎ models · / search · Alt+←/→ kind · ⎋ close";
 
 /**
  * A row of the Roles view: a role, a model/wildcard chain-key header, one of a
@@ -631,6 +632,7 @@ export class ModelHubComponent implements Component {
 	#configError: string | undefined;
 	#effortIndex = 0;
 	#keys = new MenuKeyReader();
+	readonly #help = new MenuHelp();
 	#rolesSearch = new MenuSearchField();
 	#effortSearch = new MenuSearchField();
 	#roleViewport = new MenuViewport();
@@ -3083,6 +3085,12 @@ export class ModelHubComponent implements Component {
 			this.#handleInput(rawData);
 			return;
 		}
+		const overridesEditing =
+			this.#activeEntry().kind === "overrides" && this.#assigning === null && this.#overrides().editing;
+		if (!fieldFocused && !overridesEditing && this.#help.handleInput(rawData)) {
+			this.#requestRender();
+			return;
+		}
 		this.#withNavigationVisit(() => this.#handleInput(rawData));
 	}
 
@@ -4280,25 +4288,13 @@ export class ModelHubComponent implements Component {
 			return `${MODEL_SCOPE_HINT}${facts}${configFile}`;
 		const detail = this.#surfaceFooterHint();
 		if (this.#strip || this.#filterEditing) return detail;
-		const query =
-			this.#assigning === null && entry.kind === "roles"
-				? this.#rolesSearch.query
-				: this.#assigning === null && entry.kind === "effort"
-					? this.#effortSearch.query
-					: this.#browser.query;
-		const motions =
-			this.#focus === "list" &&
-			query &&
-			(this.#isBrowserView(entry) || entry.kind === "roles" || entry.kind === "effort")
-				? "gg/G ends · Ctrl-u/d half · "
-				: "";
-		return `h/l pane · / search · ${motions}${detail}${facts}${configFile}`;
+		return `/ search · ${detail}${facts}${configFile}`;
 	}
 
 	#surfaceFooterHint(): string {
 		const enter = formatKeyHint("enter");
 		const cancel = editorKey("tui.select.cancel");
-		const upDown = `j/k ${editorKeys("tui.select.up", "tui.select.down")}`;
+		const upDown = editorKeys("tui.select.up", "tui.select.down");
 		const left = formatKeyHint("left");
 		const leftRight = formatKeyHints(["left", "right"]);
 		const enterRight = formatKeyHints(["enter", "right"]);
@@ -4306,7 +4302,7 @@ export class ModelHubComponent implements Component {
 		const strip = this.#strip;
 		if (strip) {
 			if (strip.kind === "name") {
-				if (!strip.input.focused) return `/ edit · ${enter} set · ${cancel} parent · h/l pane`;
+				if (!strip.input.focused) return `/ edit · ${enter} set · ${cancel} parent`;
 				if (strip.purpose === "description") return `${enter} save description · ${cancel} leave field`;
 				if (strip.purpose === "compaction") {
 					return `${enter} ${compactionConfirmPending(strip) ? "accept" : "set"} compaction point · ${cancel} leave field`;
@@ -4320,16 +4316,15 @@ export class ModelHubComponent implements Component {
 			if (strip.kind === "pattern")
 				return strip.input.focused
 					? `${enter} continue to ${strip.target === "rule" && this.#contextRulesView() ? "limit" : "effort"} · ${cancel} leave field`
-					: `/ edit · ${enter} continue · ${cancel} parent · h/l pane`;
+					: `/ edit · ${enter} continue · ${cancel} parent`;
 			if (strip.kind === "effortLevels")
-				return `h/l ${leftRight} effort · ${formatKeyHint("space")} toggle · ${enter} save · ${cancel} discard`;
+				return `${leftRight} effort · ${formatKeyHint("space")} toggle · ${enter} save · ${cancel} discard`;
 			if (strip.kind === "selectorChoice")
-				return `j/k choose exact/pattern · ${enter}/Space set · h/l pane · Tab context · ${cancel} cancel`;
-			if (strip.kind === "role")
-				return `j/k choose role · ${enter} assign/clear · h/l pane · Tab context · ${cancel} cancel`;
+				return `${upDown} exact/pattern · ${enter}/Space set · Tab context · ${cancel} cancel`;
+			if (strip.kind === "role") return `${upDown} role · ${enter} assign/clear · Tab context · ${cancel} cancel`;
 			if (strip.kind === "scope")
-				return `j/k save scope · ${enter}/Space set · h/l pane · Tab context · ${cancel} cancel`;
-			return `h/l ${leftRight} effort · ${enter}/Space apply · ${cancel} keep`;
+				return `${upDown} save scope · ${enter}/Space set · Tab context · ${cancel} cancel`;
+			return `${leftRight} effort · ${enter}/Space apply · ${cancel} keep`;
 		}
 		if (this.#filterEditing) return "Search · Enter confirm · Esc clear";
 		if (this.#sessionOnly && this.#isBrowserView(this.#activeEntry())) {
@@ -4418,10 +4413,10 @@ export class ModelHubComponent implements Component {
 									? "Enter set · Esc leave field"
 									: "/ edit · Esc parent"
 								: strip.kind === "effortLevels"
-									? "h/l effort · Space toggle"
+									? "←/→ effort · Space toggle"
 									: strip.kind === "thinking" || strip.kind === "patternEffort"
-										? "h/l effort · Enter set"
-										: "j/k choose · Enter set · h/l pane";
+										? "←/→ effort · Enter set"
+										: "↑/↓ choose · Enter set";
 						const hint = truncateToWidth(label, Math.max(0, width - 36));
 						const columns = Math.max(1, width - visibleWidth(hint) - (hint ? 3 : 0));
 						const line = this.#renderStrip(columns, strip);
@@ -4539,7 +4534,20 @@ export class ModelHubComponent implements Component {
 
 	render(width: number): readonly string[] {
 		const height = Math.max(16, this.#tui.terminal?.rows || process.stdout.rows || 40);
-		return this.#frame.render(width, height, this.#entries, this.#renderFooter(width - 4));
+		const innerWidth = Math.max(1, width - 4);
+		const strip = this.#strip;
+		const textFocused =
+			this.#filterEditing ||
+			((strip?.kind === "name" || strip?.kind === "pattern") && strip.input.focused) ||
+			(this.#activeEntry().kind === "overrides" && this.#assigning === null && this.#overrides().editing);
+		const footer = menuHintLines(
+			`${this.#footerHint()}${textFocused ? "" : " · ? help"}`,
+			innerWidth,
+			textFocused ? "" : undefined,
+		).map(line => theme.fg("dim", line));
+		if (strip) footer.unshift(this.#renderFooter(innerWidth));
+		else this.#frame.chipRanges = [];
+		return this.#help.render(this.#frame.render(width, height, this.#entries, footer), width);
 	}
 
 	// ═══════════════════════════════════════════════════════════════════════
@@ -4552,6 +4560,7 @@ export class ModelHubComponent implements Component {
 	}
 
 	describe(cx: DescribeContext): NativeNode {
+		if (this.#help.open) return this.#help.describe();
 		const usePicker = this.nativeSheet(cx);
 		const cached = this.#nativeCache;
 		if (cached?.version === this.#nativeVersion && cached.picker === usePicker) return cached.node;
@@ -4576,6 +4585,11 @@ export class ModelHubComponent implements Component {
 	}
 
 	handleNativeEvent(event: NativeUiEvent): void {
+		if (this.#help.open) {
+			if (event.type === "action") this.#help.handleInput("\x1b");
+			this.#requestRender();
+			return;
+		}
 		this.#withNavigationVisit(() => this.#handleNativeEvent(event));
 	}
 
@@ -5007,11 +5021,13 @@ export class ModelHubComponent implements Component {
 				? this.#surfaceFooterHint()
 				: this.#focus === "scope"
 					? this.#footerHint()
-					: "j/k rows · h/l pane · / search · gg/G ends · Ctrl-u/d half";
+					: "/ search · ? help";
 		const queryError = compileMenuRegex(
 			entry.kind === "effort" && this.#assigning === null
 				? this.#effortSearch.value
-				: rolesView ? this.#rolesSearch.value : this.#browser.query,
+				: rolesView
+					? this.#rolesSearch.value
+					: this.#browser.query,
 		)?.error;
 		const props: TspPickerProps = {
 			title: this.#sessionOnly ? "Session model" : "Models",
@@ -5062,18 +5078,19 @@ export class ModelHubComponent implements Component {
 					order: indices.map(index => `effort:${index}`),
 					selected: this.#effortIndex < 0 ? null : `effort:${this.#effortIndex}`,
 					total: rules.length,
-					actions: this.#strip || this.#filterEditing
-						? props.actions
-						: compact([
-								this.#effortIndex >= 0
-									? pickerAction("effort:edit", "Edit / add", "enter", { primary: true })
-									: undefined,
-								this.#effortIndex >= 0 && this.#effortIndex < rules.length
-									? pickerAction("effort:remove", "Remove", "x")
-									: undefined,
-								this.#effortSearch.value ? pickerAction("clear", "Clear search") : undefined,
-								this.#pickerCancelAction(),
-							]),
+					actions:
+						this.#strip || this.#filterEditing
+							? props.actions
+							: compact([
+									this.#effortIndex >= 0
+										? pickerAction("effort:edit", "Edit / add", "enter", { primary: true })
+										: undefined,
+									this.#effortIndex >= 0 && this.#effortIndex < rules.length
+										? pickerAction("effort:remove", "Remove", "x")
+										: undefined,
+									this.#effortSearch.value ? pickerAction("clear", "Clear search") : undefined,
+									this.#pickerCancelAction(),
+								]),
 				},
 				[],
 			);
@@ -5803,8 +5820,7 @@ export class ModelHubComponent implements Component {
 		if (this.#filterEditing) {
 			if (
 				event.kind === "activate" ||
-				(event.kind === "action" &&
-					["searchConfirm", "assign", "roles:pick", "effort:edit"].includes(event.act))
+				(event.kind === "action" && ["searchConfirm", "assign", "roles:pick", "effort:edit"].includes(event.act))
 			) {
 				this.#handleInput("\r");
 			}
