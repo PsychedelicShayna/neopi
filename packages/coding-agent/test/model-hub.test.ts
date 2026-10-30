@@ -290,9 +290,8 @@ describe("ModelHub", () => {
 	});
 
 	test("role token budgets are editable in Models without changing stored keys", () => {
-		const settings = Settings.isolated({
-			roleSettings: { default: { "compaction.thresholdTokens": 120000 } },
-		});
+		const settings = Settings.isolated();
+		settings.writeScopeValue(cfgRoleSettings, { default: { "compaction.thresholdTokens": 120000 } }, "global");
 		const { hub } = createHub({ models: [makeModel("test", "model")], settings, scoped: true });
 		for (const key of [UP, "\n", "b"]) hub.handleInput(key);
 		expect(normalize(hub.render(220))).toContain("default token budget");

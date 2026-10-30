@@ -7,8 +7,10 @@ import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import type { EffortSelection } from "@oh-my-pi/pi-coding-agent/config/effort-policy";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { type RawSettings, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { type RawSettings, Settings, type SettingsScope } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { SelectorController } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
+import { cfgRoleSettings } from "@oh-my-pi/pi-coding-agent/config/role-settings";
+import { cfgCompactionThresholdTokens } from "@oh-my-pi/pi-coding-agent/session/context-settings";
 import * as factEditorModule from "@oh-my-pi/pi-coding-agent/modes/components/model-fact-editor";
 import { SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -71,16 +73,51 @@ describe("SelectorController model hub writes", () => {
 		return { controller, showError };
 	}
 
-	function openModelHub(controller: SelectorController): modelHubModule.ModelHubCallbacks {
+	function openModelHub(controller: SelectorController, scope?: SettingsScope): modelHubModule.ModelHubCallbacks {
 		let callbacks: modelHubModule.ModelHubCallbacks | undefined;
 		vi.spyOn(modelHubModule, "ModelHubComponent").mockImplementation(function (...args: unknown[]) {
 			callbacks = args[4] as modelHubModule.ModelHubCallbacks;
 			return { refreshAfterExternalMutation: () => {}, dispose: () => {} };
 		} as never);
-		controller.showModelSelector();
+		controller.showModelSelector({ scope });
 		if (!callbacks) throw new Error("model hub was not opened");
 		return callbacks;
 	}
+
+	it.each(["global", "project", "session"] as const)("keeps %s default assignments below higher scopes", async scope => {
+		const settings = Settings.isolated();
+		for (const layer of ["global", "project", "session"] as const) {
+			settings.setRoleModelAndEffort("default", "anthropic/claude-opus-4-5", undefined, layer);
+		}
+		const { controller, showError } = start(settings, model("claude-opus-4-5"));
+		const hub = openModelHub(controller, scope);
+		expect(await hub.onAssign(
+			model("claude-sonnet-4-5"), "default", undefined, "anthropic/claude-sonnet-4-5", scope,
+		)).toBe(true);
+		expect(showError).not.toHaveBeenCalled();
+		expect(settings.getModelRoleScopeDetails("default", scope)[scope]).toBe("anthropic/claude-sonnet-4-5");
+		expect(settings.getModelRoleProvenance("default")).toBe("session");
+		expect(session?.model?.id).toBe(scope === "session" ? "claude-sonnet-4-5" : "claude-opus-4-5");
+	});
+
+	it.each(["global", "project", "session"] as const)("edits and clears only the %s role token budget", scope => {
+		const settings = Settings.isolated();
+		for (const layer of ["global", "project", "session"] as const) {
+			settings.writeScopeValue(cfgRoleSettings, { default: { "compaction.thresholdTokens": 120000 } }, layer);
+		}
+		const { controller, showError } = start(settings, model("claude-opus-4-5"));
+		const hub = openModelHub(controller, scope);
+		expect(hub.onRoleTokenBudgetChange?.("default", 64000)).toBe(true);
+		for (const layer of ["global", "project", "session"] as const) {
+			expect(settings.readScopeValue(cfgRoleSettings, layer)).toEqual({
+				default: { "compaction.thresholdTokens": layer === scope ? 64000 : 120000 },
+			});
+		}
+		expect(settings.getRoleSetting("default", cfgCompactionThresholdTokens)).toBe(scope === "session" ? 64000 : 120000);
+		expect(hub.onRoleTokenBudgetChange?.("default", undefined)).toBe(true);
+		expect(settings.readScopeValue(cfgRoleSettings, scope)).toEqual({ default: { "compaction.thresholdTokens": null } });
+		expect(showError).not.toHaveBeenCalled();
+	});
 
 	it("rich session-only selection changes the live model without changing saved defaults or roles", async () => {
 		const agentDir = tempDir.join("agent");

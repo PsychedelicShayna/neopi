@@ -10,7 +10,6 @@
 ### Added
 
 - Edit role models and token budgets in `/models session`, `/models project`, or `/models global`; role rows explain higher-scope shadowing and `models.defaultScope` selects the scope opened by plain `/models`.
-- Edit global, project, or session settings with `/settings global|project|session`; Ctrl+S cycles scopes, shadow details explain effective values, and session overrides follow the saved session across directory changes.
 - Edit global, project, or session settings with `/settings global|project|session`; Ctrl+S cycles scopes, F6 applies durable edits to other running sessions, and session overrides follow the saved session across directory changes.
 - Choose advisor delivery timing independently for nits, concerns, and blockers in Settings → Model → Advisor; nits wait for the actual run end by default, while concerns and blockers arrive at safe tool boundaries without cancelling work.
 - Explicitly revive killed subagents from their saved transcripts in the Agent Hub; opening a transcript, focusing an agent, or sending ordinary IRC/chat no longer undoes a kill.

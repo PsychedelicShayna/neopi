@@ -1829,12 +1829,10 @@ export class SelectorController {
 						this.ctx.showStatus(
 							`${scopeLabel}${roleInfo?.tag ?? roleInfo?.name ?? role} role cleared — auto-selection applies`,
 						);
-						// Clearing either persisted scope can also remove a captured
-						// runtime override. When that changes the effective default, or
-						// the live session runs a different model than it (an earlier
-						// in-session pick that a project role shadows), resolve the
-						// exposed persisted layer and switch the live session without
-						// writing it back to global settings. Overlay and runtime
+						// Resolve the layer exposed by clearing the selected scope. Switch
+						// the live default only when its effective persisted selection
+						// changes or differs from an earlier session-only pick; never
+						// write the fallback back into another scope. Overlay and runtime
 						// provenance remain authoritative and session-neutral.
 						if (role === "default") {
 							const fallbackRoleValue = this.ctx.settings.getModelRole("default");
