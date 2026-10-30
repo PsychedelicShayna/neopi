@@ -1,3 +1,4 @@
+import type { ProviderTlsTrust } from "@oh-my-pi/pi-utils";
 import type { FetchImpl } from "../../types";
 import type { OAuthProviderUnion } from "../registry";
 
@@ -38,6 +39,19 @@ export type OAuthCredentials = {
 	 */
 	authorizedAt?: number;
 };
+
+/** Custom login result for an API key with credential-local transport trust. */
+export interface ApiKeyLoginResult {
+	type: "api_key";
+	key: string;
+	tlsTrust?: ProviderTlsTrust;
+	/** Exact credential-bearing request origin, including cleartext loopback connections. */
+	requestOrigin?: string;
+	/** A single-endpoint reconnect replaces prior API-key rows only after validation succeeds. */
+	replaceExisting?: true;
+	/** Ephemeral activation hook; invoked only after durable credential persistence, never serialized. */
+	onPersisted?(): Promise<void>;
+}
 
 export type OAuthProvider = OAuthProviderUnion;
 
@@ -103,6 +117,8 @@ export interface OAuthController {
 	/** Request pasted callback input; stop any visible prompt when `signal` aborts. */
 	onManualCodeInput?(signal?: AbortSignal): Promise<string>;
 	onPrompt?(prompt: OAuthPrompt): Promise<string>;
+	/** Native, explicit human consent. Capability support alone never grants trust. */
+	onConfirm?(prompt: { title: string; message: string }): Promise<boolean>;
 	/** Complete browser login and return one matching cookie value privately. Reject on cancellation or failure. */
 	onBrowserSession?(request: OAuthBrowserSessionRequest, signal?: AbortSignal): Promise<string>;
 	signal?: AbortSignal;
@@ -120,7 +136,7 @@ export interface OAuthProviderInterface {
 	readonly sourceId?: string;
 	readonly loginKind?: OAuthLoginKind;
 	readonly deviceCode?: boolean;
-	login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials | string>;
+	login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials | string | ApiKeyLoginResult>;
 	/** Refresh a stored grant; the signal bounds provider network work to refresh ownership. */
 	refreshToken?(credentials: OAuthCredentials, signal?: AbortSignal): Promise<OAuthCredentials>;
 	getApiKey?(credentials: OAuthCredentials): string;

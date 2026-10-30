@@ -272,7 +272,8 @@ export type RpcSessionChangeSession = Pick<AgentSession, "newSession" | "switchS
 export type RpcSkillCommandSession = Pick<
 	AgentSession,
 	"buildUserSkillPrompt" | "renderUserSkillPrompt" | "promptCustomMessage" | "skills" | "skillsSettings"
-> & SkillRediscoverySource;
+> &
+	SkillRediscoverySource;
 export type RpcSkillCommandResult = { agentInvoked: true; userEntryId?: string };
 
 export interface RpcSkillInvocation extends SkillPromptInput {
@@ -1212,6 +1213,30 @@ export function requestRpcInput(
 	);
 }
 
+/** Confirmation requires the boolean response variant; text input is never consent. */
+export function requestRpcConfirm(
+	pendingRequests: Map<string, PendingExtensionRequest>,
+	output: RpcOutput,
+	title: string,
+	message: string,
+	dialogOptions?: ExtensionUIDialogOptions,
+): Promise<boolean> {
+	return requestRpcDialog(
+		pendingRequests,
+		output,
+		dialogOptions,
+		false,
+		{ method: "confirm", title, message, timeout: dialogOptions?.timeout },
+		response => {
+			if ("cancelled" in response && response.cancelled) {
+				if (response.timedOut) dialogOptions?.onTimeout?.();
+				return false;
+			}
+			return "confirmed" in response && response.confirmed === true;
+		},
+	);
+}
+
 /** Validates `ask` answers against the questions; any mismatch throws instead of guessing. */
 function parseAskDialogResponse(
 	response: RpcExtensionUIResponse,
@@ -1592,6 +1617,11 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				{ method: "input", title, placeholder, secret, loginId, timeout: 600_000 },
 				response => parseValueDialogResponse(response, undefined),
 			),
+		confirm: (title, message, loginId, signal) =>
+			requestRpcConfirm(pendingExtensionRequests, frame => output({ ...frame, loginId }), title, message, {
+				signal,
+				timeout: 600_000,
+			}),
 	});
 	// Without a frame encoder (control sockets) no response-size cap applies.
 	const maxResponseBytes = (): number => ctx.maxResponseBytes?.() ?? Number.MAX_SAFE_INTEGER;
@@ -2013,7 +2043,12 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 
 			case "snapshot_session_journal": {
 				if (session.isSessionTransitioning)
-					return error(id, "snapshot_session_journal", "Native session transition is still applying", "session_busy");
+					return error(
+						id,
+						"snapshot_session_journal",
+						"Native session transition is still applying",
+						"session_busy",
+					);
 				return success(id, "snapshot_session_journal", sessionEvents.snapshotJournal(session));
 			}
 
@@ -2661,7 +2696,15 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 }
 
 export async function runRpcMode(session: AgentSession, options: RpcModeOptions = {}): Promise<never> {
-	const { setToolUIContext, headless = false, subagentEventBus, input = claimRpcInput(), launchModel, createLiveSession, createDictationController } = options;
+	const {
+		setToolUIContext,
+		headless = false,
+		subagentEventBus,
+		input = claimRpcInput(),
+		launchModel,
+		createLiveSession,
+		createDictationController,
+	} = options;
 	// Signal to RPC clients that the server is ready to accept commands
 	// Suppress terminal notifications: they write \x07 (BEL) or OSC sequences directly to
 	// process.stdout with no newline, which the reader merges with the next JSON line and
@@ -2814,21 +2857,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		}
 
 		confirm(title: string, message: string, dialogOptions?: ExtensionUIDialogOptions): Promise<boolean> {
-			return requestRpcDialog(
-				this.pendingRequests,
-				this.output,
-				dialogOptions,
-				false,
-				{ method: "confirm", title, message, timeout: dialogOptions?.timeout },
-				response => {
-					if ("cancelled" in response && response.cancelled) {
-						if (response.timedOut) dialogOptions?.onTimeout?.();
-						return false;
-					}
-					if ("confirmed" in response) return response.confirmed;
-					return false;
-				},
-			);
+			return requestRpcConfirm(this.pendingRequests, this.output, title, message, dialogOptions);
 		}
 
 		input(

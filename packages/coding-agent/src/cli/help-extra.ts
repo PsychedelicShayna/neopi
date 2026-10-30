@@ -5,7 +5,7 @@ import { APP_NAME, CONFIG_DIR_NAME } from "@oh-my-pi/pi-utils/dirs";
 export function getExtraHelpText(): string {
 	return `${chalk.bold("NeoProxy connection:")}
   ${APP_NAME} login neoproxy --url https://proxy.example.com
-  Prompts for your username and a hidden password; stores only an inference key.
+  Prompts for your existing administrator-assigned API key in a hidden field.
   Discovers granted models automatically. Use /login in-session, then /model or /models.
   Remote servers require validated HTTPS; loopback HTTP is supported for local use.
 

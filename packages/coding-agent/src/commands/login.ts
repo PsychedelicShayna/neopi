@@ -22,7 +22,7 @@ export default class Login extends Command {
 	static examples = [
 		`# Pick a provider interactively\n  ${APP_NAME} login`,
 		`# Log in to a specific provider\n  ${APP_NAME} login anthropic`,
-		`# Connect to NeoProxy with a username and hidden password\n  ${APP_NAME} login neoproxy --url https://proxy.example.com`,
+		`# Connect to NeoProxy with an existing administrator-assigned API key (hidden prompt)\n  ${APP_NAME} login neoproxy --url https://proxy.example.com`,
 	];
 
 	async run(): Promise<void> {

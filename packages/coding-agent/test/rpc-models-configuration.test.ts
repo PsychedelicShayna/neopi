@@ -132,6 +132,31 @@ describe("native model configuration", () => {
 		expect(JSON.stringify(result)).not.toContain("fixture-key-never-returned");
 	});
 
+	test("an unconfigured session can read native setup metadata while prompts still require a model", async () => {
+		auth.keys.removeRuntime("anthropic");
+		await session.dispose();
+		session = new AgentSession({
+			agent: new Agent({ initialState: { model: undefined, systemPrompt: [], tools: [], messages: [] } }),
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry: session.modelRegistry,
+		});
+		vi.spyOn(session.modelRegistry, "getAll").mockReturnValue([]);
+		vi.spyOn(session.modelRegistry, "getAvailable").mockReturnValue([]);
+		const commands = new RpcModelsCommands({
+			session,
+			output: () => {},
+			pending: new RpcPendingExtensionRequests(),
+			input: async () => undefined,
+		});
+		const response = await commands.handle({ type: "get_models_configuration", id: "fresh-configuration" });
+		expect(response).toMatchObject({ success: true, data: { models: [] } });
+		const providers = await commands.handle({ type: "get_login_providers", id: "fresh-providers" });
+		expect(providers).toMatchObject({ success: true });
+		expect(auth.credentials.list("anthropic")).toEqual([]);
+		await expect(session.prompt("A model call must not start before setup")).rejects.toThrow("No model selected.");
+	});
+
 	test("catalog reports the native effective budget separately from model capability", async () => {
 		cfgCompactionEnabled.override(settings, true);
 		cfgCompactionThresholdTokens.override(settings, 50000);

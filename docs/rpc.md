@@ -27,6 +27,7 @@ Behavior notes:
 - `@file` CLI arguments are rejected in RPC mode.
 - `--no-ui` (with `--mode rpc` or `--mode rpc-ui`) runs extensions headless: `ctx.hasUI` is `false`, dialogs resolve to their defaults, and extension presentation updates are dropped. With `rpc-ui`, tool UI such as `ask` remains enabled. With `rpc`, no UI requests are emitted except for a host-issued `login`. See [Extension UI Sub-Protocol](#extension-ui-sub-protocol) for the exact boundaries.
 - CLI RPC modes disable automatic session title generation (`PI_NO_TITLE=1`) to avoid an extra model call. `rpc-ui` also sets `PI_NO_PTY=1`.
+- RPC and RPC-UI reach `ready` without credentials or a selected model, so a fresh host can negotiate the protocol, read setup metadata and run native login. A model prompt still fails with native login/model-selection guidance until setup is complete. Print/JSON runs retain their no-model startup failure.
 - A flagless RPC launch (`--mode rpc` or `--mode rpc-ui` with no session flags) always starts a new session in the default per-cwd session directory. Protocol modes (`rpc`, `rpc-ui`, `acp`) ignore the user's `autoResume` setting. `--new-session` makes that explicit (and applies it in every mode); it combines with `--session-dir <dir>` to create the session in `<dir>`, and is rejected at argument parsing together with `--continue`, `--resume`/`--session`, or `--fork`.
 - RPC/ACP pin neutral defaults for settings declaring the corresponding `protocolDefault`, including task isolation/execution, memory, advisor, and advisor tier settings. RPC additionally pins async-job and bash/eval auto-background defaults. Explicit project/global config, `--config`, and isolated settings remain authoritative; on-disk config changes are watched in long-lived CLI RPC processes. Todo settings are not host-defaulted.
 - The process claims stdin before extension discovery, then parses it one non-empty JSONL line at a time. Malformed JSON emits a recoverable `command: "parse"` failure and does not terminate the loop.
@@ -44,7 +45,7 @@ Behavior notes:
 | `theme_palette` | Read any installed theme's resolved palette by name with `get_theme`, without changing the selected theme. |
 | `model_selector` | Read-only `query_model_selector` returns native `/switch` matches, ordering, role aliases and row facts. |
 | `models_configuration` | Native provider/model catalog and scoped role/effort configuration, with expected-value write conflicts. |
-| `cancellable_login` | Login prompts can request secret input; `cancel_login` cancels only a login owned by the same connection. |
+| `cancellable_login` | Login-ID-scoped dialogs, explicit `allowSecretInput` / `allowTrustConfirmation` capabilities, and same-connection `cancel_login`. Capabilities never substitute for user consent. |
 | `set_chat_mode` | Live chat-mode switching: the `set_chat_mode` command, `get_state.chatMode`, the `chat_mode_changed` event, and the `/chat` builtin in `get_available_commands`. |
 | `tool_approval_request` | `set_approval_handler` and the typed `tool_approval_request` / `tool_approval_response` / `tool_approval_cancel` frames; see [Tool Approval Sub-Protocol](#tool-approval-sub-protocol) |
 | `set_mode` | `set_mode` command, `get_state` `mode`/`planMode`, `mode_changed` event, and the `plan_proposal_request`/`plan_proposal_response` round trip. See [Plan Mode Sub-Protocol](#plan-mode-sub-protocol). |
@@ -69,6 +70,28 @@ Each `loginProviders` entry includes `loginKind` (`api-key`, `oauth-code`,
 starting login and use `storeCredentialsAs` to identify the credential provider.
 Models include their optional native catalog `description`.
 
+Fresh `rpc` and `rpc-ui` processes can reach `ready` without a selected model or
+stored credentials. Setup metadata and login remain usable; a prompt still
+requires a model. The configuration response's `providers` is an array. Look up
+the entry with `id: "neoproxy"`; its `loginProviders` contains
+`{id: "neoproxy", name: "NeoProxy", loginKind: "custom", available: true}`.
+That login-method availability is independent of the inference provider's
+`disabled`, `authenticated`, and `available` fields.
+
+`models[].available` and the inference provider's `available` are **not** grant
+diagnostics: disabled providers are unavailable even when authenticated and their
+catalogue is populated. The model flag checks provider authentication/keyless
+eligibility and disabling; it does not apply the session's `enabledModels`
+allowlist or a host-only hidden filter. `get_available_models` separately applies
+the active model scope. Roles' `hidden` field is role metadata, not model
+availability. Check provider disabling, authentication, discovery errors, and
+scope before offering missing-grant guidance. A successful NeoProxy login whose
+verified upstream `/v1/models` response was empty is the authoritative
+empty-granted-catalogue case.
+
+Negotiate protocol v2 as described under startup before reading a full catalogue;
+large configuration responses can exceed protocol v1's single-frame limit.
+
 `set_model_role_configuration` takes `role`, explicit write-target `scope`, optional single `selector`, optional native `effort`, and `expected`, the previous scoped `{selector, effort}` pair with unset fields represented as `null`. Omitting the selector clears that scope. It uses the model hub's Settings transaction. Both scopes are writable regardless of the `roleStorage` preference; writing a project assignment never changes that preference. Assigning a new role id creates a custom role through the ordinary role registry. `set_effort_rules` takes `scope`, optional ordered `rules`, and the prior scoped list as `expected`, or `null` for an unset layer. Omitting `rules` clears the layer. Both await persistence and reject stale snapshots with `configuration_conflict`. Patterns, `re:` expressions and effort choices, including `off`, retain native semantics.
 
 `set_model_role_storage` takes `value` and the previous `expected` preference, each `global` or `project`. It uses the native setting owner and persistence receipt without deleting either scope's saved roles. Configuration writes consume the applied/conflict decision made under the native YAML lock; matching a value after saving is not proof that a stale transaction won.
@@ -83,7 +106,7 @@ Authored role, fallback and effort-rule patterns are validated before persistenc
 
 Model-role and effort changes emit `models_configuration_changed`, including adopted raw scope changes hidden by a higher layer and native settings-file notifications from another client. Equal disk reloads do not emit. Hosts should reread configuration instead of resolving patterns themselves. Role definitions change configuration, not another session's explicit current model selection.
 
-`set_provider_api_key` upserts a key through the native credential pool without replacing other accounts. `get_logout_accounts` and `logout` retain account-specific removal. `login` requires a unique request ID and runs without blocking later commands. Its `extension_ui_request` frames include `loginId`; input frames may set `secret: true`. Answer them through `extension_ui_response`. `cancel_login` takes that login request ID, aborts the native flow and cancels its outstanding input. Disconnect also aborts the flow. A cancelled login never reports a saved credential.
+`set_provider_api_key` upserts a key through the native credential pool without replacing other accounts. `get_logout_accounts` and `logout` retain account-specific removal. Native connection flows use `login`, not host-written config or credentials. Login runs without blocking later commands; its UI, cancellation and capability contract is described in [Login](#login).
 
 
 ### Session lease
@@ -378,17 +401,79 @@ The bundled TypeScript `RpcClient.getMessages()` and Python `RpcClient.get_messa
 ### Login
 
 - `{ id?, type: "get_login_providers" }`
-- `{ id?, type: "login", providerId: string }`
+- `{ id: string, type: "login", providerId: string, allowSecretInput?: boolean, allowTrustConfirmation?: boolean }`
+- `{ id?, type: "cancel_login", loginId: string }`
 - `{ id?, type: "get_logout_accounts", providerId: string }` → `data: { accounts: LogoutAccount[] }`
 - `{ id?, type: "logout", providerId: string, credentialId: number }` → `data: { remainingSource?: string }`
 - `{ id?, type: "activate_account", providerId: string, credentialId: number }`
 
-Login forwards ordinary OAuth input prompts only after the provider emits an
-authorization URL. Prompts marked `secret: true` are always rejected with a
-failed `login` response directing the user to the terminal UI; no ordinary
-`input` request is emitted because RPC does not negotiate whether a host masks
-`secret` inputs. (Extension and tool `input` dialogs may still attach an
-unnegotiated `secret?: boolean` hint on `extension_ui_request`; see below.)
+`login` requires a unique command ID. All of its UI requests (`open_url`,
+`notify`, `input`, `confirm` and dialog `cancel`) carry `loginId` equal to that
+ID. Hosts must correlate on `loginId` before presenting a login dialog or
+invoking its callbacks. Replies use the individual dialog's `id`, not `loginId`.
+Unrelated, untagged and completed-login dialogs must not capture credentials.
+
+The two per-command capabilities are **not user consent**:
+
+- `allowSecretInput: true` promises a masked input UI for `input` requests
+  carrying `secret: true`. Without it native login fails with
+  `code: "login_ui_unsupported"` before emitting the secret request.
+- `allowTrustConfirmation: true` promises a boolean confirmation UI. Without
+  it native login fails with `code: "login_ui_unsupported"` before emitting
+  a certificate trust request. It must not be replaced by text input.
+
+For NeoProxy, request the existing native provider with both capabilities:
+
+```json
+{"id":"connect-1","type":"login","providerId":"neoproxy","allowSecretInput":true,"allowTrustConfirmation":true}
+```
+
+Native login asks for the server URL as ordinary `input`. For a first private-CA
+connection it inspects the certificate without credentials, then emits:
+
+```json
+{"type":"extension_ui_request","id":"trust-dialog-1","loginId":"connect-1","method":"confirm","title":"Trust this NeoProxy server?","message":"Native-authored certificate details and verification guidance"}
+```
+
+The native-authored message identifies the canonical origin, server-certificate
+SHA256 and CA SHA256 fingerprints, explains how to verify them, and states that
+trust applies only to this provider's credential. Display that message intact.
+No CA PEM or key material is sent in the confirmation. Explicit user acceptance
+is the existing boolean response:
+
+```json
+{"type":"extension_ui_response","id":"trust-dialog-1","confirmed":true}
+```
+
+`confirmed: false`, `cancelled: true`, or a text `value: "yes"` declines;
+only the boolean `true` accepts. After confirmation, the assigned member key
+arrives as an `input` request with `secret: true` and the same `loginId`. Answer
+with `{type:"extension_ui_response",id:<dialog id>,value:<entered key>}` over the
+private native transport. Do not log, echo or retain the key in host state.
+Native code performs the verified `/v1/models` check and persists credential-local
+trust and credentials itself. No dashboard password or upstream-provider login
+is required. An authenticated empty catalogue is a successful connection; native
+notifications explain that an administrator must grant models.
+
+Success remains `{type:"response",id:<login id>,command:"login",success:true,
+data:{providerId:<requested provider id>}}`; provider models are refreshed through
+the existing native login path. No credential bytes are returned. `cancel_login`
+takes the original login command ID, succeeds only for a login on the same
+connection, and aborts its outstanding dialog. A declined/cancelled login returns
+`success:false`, `code:"login_cancelled"`, `error:"Login cancelled"`. Disconnect
+also aborts the flow. Other failures retain the normal failed-command shape;
+entered secret values are redacted from login errors and progress notifications.
+
+The TypeScript `RpcClient.login` accepts `allowSecretInput`,
+`allowTrustConfirmation`, `onInput({title,placeholder,secret,signal})`,
+`onConfirm({title,message,signal})` and an optional cancellation `signal`.
+`onInput` must render secret prompts masked; returning `undefined` or rejecting
+cancels that dialog. `onConfirm` must return a boolean based on a fresh user
+decision; callback rejection declines. Existing `onOpenUrl` and
+`onManualCodeInput` consumers remain supported, but the latter receives only
+nonsecret prompts. All callbacks are scoped to the explicit generated login
+request ID, and late replies after completion, cancellation or disconnect are
+dropped. Extension/tool secret hints outside login are unchanged.
 
 Logout works per stored credential, as `/logout` does in the TUI, because one
 provider can hold several accounts. `get_logout_accounts` lists them (`credentialId`,

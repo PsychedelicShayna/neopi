@@ -186,6 +186,7 @@ export const frameDefs = {
 		title: "string",
 		message: "string",
 		"timeout?": "number.integer",
+		"loginId?": "string",
 	},
 	InputUiRequest: {
 		type: UI,
@@ -210,7 +211,7 @@ export const frameDefs = {
 		"Every question of one `ask` tool call; sent only after `set_ask_dialog` enables it.",
 	),
 	CancelUiRequest: doc(
-		{ type: UI, id: "string", method: "'cancel'", targetId: "string" },
+		{ type: UI, id: "string", method: "'cancel'", targetId: "string", "loginId?": "string" },
 		"Close the dialog opened by request `targetId`; a later answer to it is ignored.",
 	),
 	NotifyUiRequest: {

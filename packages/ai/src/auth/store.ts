@@ -11,6 +11,7 @@ import type {
 } from "../usage";
 import type {
 	AuthCredential,
+	CredentialUpsertOptions,
 	DisabledCredentialSummary,
 	OAuthCredential,
 	OAuthRefreshReason,
@@ -82,7 +83,11 @@ export interface CredentialRowStore {
 	 * broker. Implementations MUST update their local snapshot before returning
 	 * so subsequent reads see the persisted result.
 	 */
-	upsertAuthCredential(provider: string, credential: AuthCredential): Promise<StoredAuthCredential[]>;
+	upsertAuthCredential(
+		provider: string,
+		credential: AuthCredential,
+		options?: CredentialUpsertOptions,
+	): Promise<StoredAuthCredential[]>;
 	/** Disable all active rows for a provider (logout), forwarding remote writes to the broker before returning. */
 	deleteAuthCredentials(provider: string, disabledCause: string): Promise<void>;
 }

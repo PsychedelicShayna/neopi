@@ -93,26 +93,51 @@ This repository does not prescribe a remote installer or a global package-manage
 
 ## Connect to NeoProxy
 
-NeoProxy keeps provider accounts and routing on the proxy. NeoPi signs in as a
-user and stores a separate inference key:
+NeoProxy keeps provider accounts and routing on the proxy. Connect NeoPi with
+the server URL and an existing inference API key assigned by your administrator:
 
 ```sh
 npi login neoproxy --url https://proxy.example.com
 ```
 
-Enter your NeoProxy username and password at the prompts. The password is hidden
-and is never saved; the temporary dashboard session is logged out after minting
-the key. Account owners must explicitly select accounts from their own pool.
-The key remains limited by current grants and, for owners, that selected pool.
-Remote servers require validated HTTPS. `http://127.0.0.1:PORT` is supported for
-local use; there is no insecure-TLS switch.
+On HTTPS connections, NeoPi first inspects the TLS certificate without sending
+HTTP requests or credentials. It shows the requested hostname, canonical origin,
+server certificate SHA-256 fingerprint, and CA SHA-256 fingerprint. Compare both
+fingerprints with your administrator over a trusted channel, then explicitly
+confirm trust. Only then does NeoPi ask for the administrator-assigned inference
+key in a hidden prompt and validate it with authenticated `GET /v1/models`.
+It does not sign in to the dashboard, create keys, or ask you to log in to an
+upstream provider plan. Your administrator controls model grants and routing.
 
-The command saves only the inference key through NeoPi's normal credential store
-and the nonsecret endpoint/discovery settings through its existing provider
-configuration. No hand-written `models.yml` or copied provider credentials are
-needed. `/login` → **NeoProxy** (or `/login neoproxy`) uses the same connection
-flow inside a session, with a masked password field. A graphical/control host
-must explicitly allow secret input before answering that field.
+The confirmed CA and fingerprint are saved **beside this provider's key in the
+normal credential store**, even when the inspection connection was already
+trusted through a public, system, or pre-existing extra CA. They never go into
+`models.yml`, the process environment, or the system/global certificate store.
+Reopening the profile reuses that explicit credential-local pin for discovery
+and inference; `NODE_EXTRA_CA_CERTS` is not needed. Trust is bound to the exact
+HTTPS origin, including its port. Authenticated requests verify the hostname,
+certificate validity, and confirmed CA, and refuse redirects. A changed origin
+or CA requires a new explicit connection; a failed pin never falls back to
+ambient trust or insecure TLS.
+
+An untrusted private-CA server must serve its **complete certificate chain,
+including the private root CA**. A leaf-only or incomplete private chain cannot
+supply a CA for confirmation. Public/already-trusted servers need not send a
+redundant root when the runtime's verified chain or CA store supplies it.
+NeoPi never treats a server leaf as a CA or fetches trust from a speculative
+management endpoint.
+
+Only nonsecret endpoint/discovery settings are saved in provider configuration.
+An existing `/v1` suffix is normalized; meaningful reverse-proxy prefixes such
+as `/team/neo` are preserved. No hand-written `models.yml` or copied upstream
+credentials are needed. `/login` → **NeoProxy** (or `/login neoproxy`) uses the
+same flow inside a session. Without `--url`, the server URL is requested first.
+A graphical/control host must explicitly support both native trust confirmation
+and hidden secret input; advertising those capabilities is not user consent.
+There is no command-line key flag, so keys do not enter shell history or process
+arguments. `http://127.0.0.1:PORT` (also `localhost` and `[::1]`) is supported for
+local use only; that cleartext loopback exception has no TLS certificate or
+fingerprint confirmation and must not be presented as TLS-verified.
 
 Granted models appear under the NeoProxy provider. For a server model named
 `neoproxy/office-cheap`, the complete NeoPi selector is
@@ -121,10 +146,28 @@ remaining server-issued ID is sent unchanged. Select it with `/model`, or use
 `/models` to assign it to an existing model role. A missing grant is an empty
 catalogue, not a fallback to a direct provider account.
 
-Use `/logout` → **NeoProxy** to remove the locally stored inference key. Revoke
-the corresponding **NeoPi** key in NeoProxy's dashboard to invalidate that key
-at the server. Changing the NeoProxy password also revokes existing inference
-keys; sign in again afterward.
+Before durable credential persistence begins, refusing trust, cancelling
+validation, an invalid key, or an invalid catalogue leaves existing credentials,
+trust, and endpoint configuration unchanged. A valid empty catalogue can still
+connect; ask your administrator to assign models to the key.
+
+Commit stores the validated, origin-bound credential first, then activates
+nonsecret endpoint settings. Once durable persistence starts, activation
+finishes even if cancellation arrives. A credential-store failure cannot publish
+the new endpoint with an old key. If the later settings write fails or conflicts
+with a concurrent edit, login reports that the validated credential was stored
+but the settings save did not complete. The new key cannot be sent to a
+different previous origin, including for cleartext loopback. Check the endpoint
+settings and reconnect after fixing the write conflict or storage problem.
+
+Successful explicit reconnect replaces this profile's active NeoProxy
+connection. Prior API-key rows are soft-disabled, not physically deleted;
+revalidating the same key reuses its stored row identity. No server-issued key
+is revoked.
+
+Use `/logout` → **NeoProxy** to deactivate the locally stored inference key and its private-CA trust. This does
+not revoke the key at the server; ask your NeoProxy administrator to revoke or
+replace an assigned key when needed.
 
 
 ## GitHub releases

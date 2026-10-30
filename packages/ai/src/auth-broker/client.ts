@@ -8,7 +8,12 @@
 
 import { type } from "@oh-my-pi/omptype";
 import { readSseEvents } from "@oh-my-pi/pi-utils";
-import type { AuthCredential, DisabledCredentialSummary, OAuthRefreshReason } from "../auth-storage";
+import type {
+	AuthCredential,
+	CredentialUpsertOptions,
+	DisabledCredentialSummary,
+	OAuthRefreshReason,
+} from "../auth-storage";
 import type {
 	ClientUsageReportRequest,
 	ClientUsageReportResponse,
@@ -372,8 +377,9 @@ export class AuthBrokerClient {
 		provider: string,
 		credential: AuthCredential,
 		signal?: AbortSignal,
+		options?: CredentialUpsertOptions,
 	): Promise<CredentialUploadResponse> {
-		const body: CredentialUploadRequest = { provider, credential };
+		const body: CredentialUploadRequest = { provider, credential, ...options };
 		return this.#request<CredentialUploadResponse>("POST", "/v1/credential", {
 			body,
 			schema: "credentialUploadResponseSchema",
