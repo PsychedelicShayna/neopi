@@ -1,3 +1,4 @@
+import { entryProvenance } from "../config/entry-provenance";
 import { clearSubmittedText, restoreDetachedDraft } from "./helpers/draft";
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
 import { COLLAB_GUEST_ALLOWED_COMMANDS } from "../collab/guest";
@@ -75,6 +76,7 @@ export const BUILTIN_SLASH_COMMAND_DEFS: ReadonlyArray<BuiltinSlashCommand> = BU
 			return command.description;
 		},
 		icon: command.icon,
+		provenance: entryProvenance("commands", command.name),
 		subcommands: command.subcommands,
 		subcommandOptional: command.subcommandOptional,
 		inlineHint: command.inlineHint,

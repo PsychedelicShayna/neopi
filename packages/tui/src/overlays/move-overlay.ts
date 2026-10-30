@@ -24,6 +24,7 @@ import { node, span } from "../native/describe";
 import { actionBar, actionButton, overlayCard, statusHintsRow } from "../native/overlay";
 import { getKeybindings } from "../keybindings";
 import { MenuSelection } from "../components/menu-selection";
+import { MenuHelp, menuHintLines } from "../components/menu-hints";
 import { contentRowWidth, renderScrollableList } from "../chrome/selector-helpers";
 
 export interface MoveOverlayResult {
@@ -55,6 +56,7 @@ export class MoveOverlay implements Component, Focusable {
 	readonly #field: TextFormField;
 	readonly #keys = new MenuKeyReader();
 	readonly #viewport = new MenuViewport();
+	readonly #help = new MenuHelp("jk gg/G C-u d e y");
 	readonly #menu = new MenuSelection<MoveDirectoryEntry>([], {
 		getKey: entry => entry.value,
 		getSearchText: entry => `${entry.label} ${entry.value}`,
@@ -155,6 +157,10 @@ export class MoveOverlay implements Component, Focusable {
 				return;
 			}
 		}
+		if (!this.#pathFocused && this.#help.handleInput(data)) {
+			this.#revision++;
+			return;
+		}
 		const action = this.#keys.read(data);
 		if (!action || action === "pending") return;
 		if (action.kind === "cancel") {
@@ -216,14 +222,18 @@ export class MoveOverlay implements Component, Focusable {
 		lines.push(row("", width));
 		const hint = this.#pathFocused
 			? `Type path · ${formatKeyHint("tab")} complete · Enter confirm · Esc back to list`
-			: `j/k ↑↓ · Ctrl-u/d half · PgUp/Dn · gg/G · Ctrl-e/y view · / or Tab edit · Enter confirm · ${editorKey("tui.select.cancel")} cancel`;
-		lines.push(row(theme.fg("dim", hint), width));
+			: `/ or Tab edit · Enter confirm · ${editorKey("tui.select.cancel")} cancel · ? help`;
+		for (const line of menuHintLines(hint, innerWidth, this.#pathFocused ? "" : "jk gg/G C-u d e y")) {
+			lines.push(row(theme.fg("dim", line), width));
+		}
 		lines.push(bottomBorder(width));
-		this.#renderMemo = { width, fieldLines, revision: this.#revision, lines };
-		return lines;
+		const rendered = this.#help.render(lines, width);
+		this.#renderMemo = { width, fieldLines, revision: this.#revision, lines: rendered };
+		return rendered;
 	}
 
 	describe(): NativeNode {
+		if (this.#help.open) return this.#help.describe();
 		const memo = this.#native;
 		if (memo?.revision === this.#revision) return memo.node;
 		const items = this.#menu.visibleItems.map(item =>
@@ -243,14 +253,7 @@ export class MoveOverlay implements Component, Focusable {
 			scroll: this.#nativeScroll,
 		};
 		const hints = statusHintsRow(
-			[
-				span(
-					this.#pathFocused
-						? "Type path · Tab complete · Esc back to list"
-						: "j/k ↑↓ · Ctrl-u/d · PgUp/Dn · gg/G · Ctrl-e/y · / edit",
-					"dim",
-				),
-			],
+			[span(this.#pathFocused ? "Type path · Tab complete · Esc back to list" : "/ or Tab edit · ? help", "dim")],
 			[],
 		);
 		const actions = actionBar([
@@ -267,6 +270,11 @@ export class MoveOverlay implements Component, Focusable {
 	}
 
 	handleNativeEvent(event: NativeUiEvent): void {
+		if (this.#help.open) {
+			if (event.type === "action") this.#help.handleInput("\x1b");
+			this.#revision++;
+			return;
+		}
 		if (event.type === "action") {
 			if (event.act === "accept") this.#accept();
 			else if (event.act === "confirm") this.#confirm();

@@ -37,7 +37,14 @@ import {
 import { formatKeyHint, type KeyId } from "../app-keybindings";
 import type { MessageRenderer } from "../chat/extension-types";
 import type { AgentLifecycleLike, IrcBusLike } from "./agent-hub-types";
-import { type AgentRecordLike, type AgentHubRegistry, type AgentStatus, MAIN_AGENT_ID, canReviveAgent, isAgentTranscriptReadOnly } from "./agent-hub-types";
+import {
+	type AgentRecordLike,
+	type AgentHubRegistry,
+	type AgentStatus,
+	MAIN_AGENT_ID,
+	canReviveAgent,
+	isAgentTranscriptReadOnly,
+} from "./agent-hub-types";
 import { USER_INTERRUPT_LABEL } from "../chat/messages";
 import { shortenPath, truncateToWidth } from "../render/render-utils";
 import { formatLocalDateTimeWithOffset } from "../chrome/local-date";
@@ -88,6 +95,7 @@ import { compileMenuRegex } from "../menu-search";
 import { bottomBorder, divider, dividerSplit, PanelRows, row, topBorder, topBorderSplit } from "../chrome/overlay-box";
 import { SplitPane } from "../components/layout/split-pane";
 import { Stack } from "../components/layout/stack";
+import { MenuHelp, menuHintLines } from "../components/menu-hints";
 import { node, span, stableKey, text } from "../native/describe";
 import { type DescribeContext, leafKey, type NativeChild, type NativeNode, type NativeUiEvent } from "../native/node";
 import { hintsRow, type NativeHint, overlayCard } from "../native/overlay";
@@ -398,6 +406,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	#rosterTotalRows = 0;
 	readonly #rosterViewport = new MenuViewport();
 	readonly #keys = new MenuKeyReader();
+	readonly #help = new MenuHelp();
 	readonly #rosterMotion = {
 		move: (delta: number) => this.#moveRosterSelection(this.#selectedRow + delta),
 		moveToBoundary: (edge: "first" | "last") =>
@@ -488,7 +497,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			{ content: this.#frameTop, height: 1 },
 			{ content: this.#split, grow: 1 },
 			{ content: this.#frameDivider, height: 1 },
-			{ content: this.#frameFooter, height: 1 },
+			{ content: this.#frameFooter },
 			{ content: this.#frameBottom, height: 1 },
 		],
 	});
@@ -618,13 +627,13 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 				? this.#renderActivityTable(width, termHeight)
 				: this.#renderTable(width, termHeight)
 		).map(line => clampHubLine(line, width));
-		if (frame.length <= termHeight) return frame;
+		if (frame.length <= termHeight) return this.#help.render(frame, width);
 
 		// A tiny terminal can leave less room than the fixed chrome needs. Keep
 		// the title and footer visible instead of spilling into scrollback.
-		const footerLines = Math.min(3, frame.length);
+		const footerLines = Math.min(1 + (this.#frameFooter.render(width).length || 1), frame.length);
 		const bodyEnd = Math.max(0, termHeight - footerLines);
-		return [...frame.slice(0, bodyEnd), ...frame.slice(-footerLines)].slice(0, termHeight);
+		return this.#help.render([...frame.slice(0, bodyEnd), ...frame.slice(-footerLines)], width);
 	}
 
 	handleInput(keyData: string): void {
@@ -668,6 +677,11 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 					this.#rosterViewport.reveal();
 				}
 			}
+			this.#requestRender();
+			return;
+		}
+		if (this.#help.handleInput(keyData)) {
+			this.#keys.reset();
 			this.#requestRender();
 			return;
 		}
@@ -873,6 +887,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 
 	override describe(cx: DescribeContext): NativeNode {
 		if (this.#transcriptViewer) return this.#transcriptViewer.describe(cx);
+		if (this.#help.open) return this.#help.describe();
 		const usePicker = cx.supports("picker");
 		const nativeTree = cx.supports("tree");
 		const meter = cx.supports("meter");
@@ -1082,7 +1097,11 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 				id: "revive",
 				label: "Revive",
 				keys: ["r"],
-				disabled: readOnly ?? (selected && canReviveAgent(selected) ? undefined : "Only parked agents or killed agents with transcripts can be revived"),
+				disabled:
+					readOnly ??
+					(selected && canReviveAgent(selected)
+						? undefined
+						: "Only parked agents or killed agents with transcripts can be revived"),
 			},
 			{ id: "kill", label: "Kill", keys: ["x"], danger: true, disabled: readOnly ?? (selected ? undefined : true) },
 			{ id: "view", label: "By parent", keys: ["t"], on: this.#viewMode === "tree" },
@@ -1903,7 +1922,11 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	#renderActivityTable(width: number, termHeight: number): string[] {
 		this.#hitRows.length = 0;
 		const innerWidth = Math.max(1, width - 4);
-		const contentRows = Math.max(1, termHeight - 4);
+		const hints = menuHintLines(
+			`Tab:section  ${formatKeyHint("enter")}:transcript  Space:follow  f:filter  s:scope  /:search  Esc:close  ?:help`,
+			innerWidth,
+		);
+		const contentRows = Math.max(1, termHeight - 3 - hints.length);
 		const body: string[] = [this.#sectionTabs()];
 		const selectedAgent = this.#rows[this.#selectedRow]?.id;
 		const scope =
@@ -1949,15 +1972,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		const lines = [topBorder(width, "Agent Hub")];
 		for (const line of body.slice(0, contentRows)) lines.push(row(line, width));
 		lines.push(divider(width));
-		lines.push(
-			row(
-				theme.fg(
-					"dim",
-					`Tab:section  j/k Pg C-d/u gg/G:move  C-e/y:view  ${formatKeyHint("enter")}:transcript  Space:follow  f:filter  s:scope  /:search  Esc:close`,
-				),
-				width,
-			),
-		);
+		lines.push(...hints.map(line => row(theme.fg("dim", line), width)));
 		lines.push(bottomBorder(width));
 		return lines;
 	}
@@ -1981,7 +1996,9 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	}
 	#renderTable(width: number, termHeight: number): string[] {
 		this.#hitRows.length = 0;
-		const contentRows = Math.max(1, termHeight - 4);
+		const innerWidth = Math.max(1, width - 4);
+		const hints = this.#footer(this.#narrowDetailsOpen, innerWidth);
+		const contentRows = Math.max(1, termHeight - 3 - hints.length);
 		this.#contentRowsLast = contentRows;
 		this.#paneHitRows = [];
 		const selected = this.#rows[this.#selectedRow];
@@ -1989,7 +2006,6 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		this.#split.setHeight(contentRows);
 		const geometry = this.#split.measure(width);
 		const isSplit = geometry.mode === "split";
-		const innerWidth = Math.max(1, width - 4);
 		let topLine: string;
 		if (isSplit) {
 			topLine = topBorderSplit(width, "Agent Hub", geometry.left?.width ?? 0);
@@ -2001,9 +2017,9 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		const dividerLine = isSplit && geometry.left ? dividerSplit(width, geometry.left.width) : divider(width);
 		this.#frameTop.setLines([topLine]);
 		this.#frameDivider.setLines([dividerLine]);
-		this.#frameFooter.setLines([row(this.#footer(this.#narrowDetailsOpen, innerWidth), width)]);
+		this.#frameFooter.setLines(hints.map(line => row(line, width)));
 		this.#frameBottom.setLines([bottomBorder(width)]);
-		this.#frame.setHeight(contentRows + 4);
+		this.#frame.setHeight(contentRows + 3 + hints.length);
 		const lines = [...this.#frame.render(width)];
 		const bodyRow = this.#frame.childRect(1)?.row ?? 1;
 		for (let i = 0; i < this.#paneHitRows.length; i++) {
@@ -2013,24 +2029,18 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		return lines;
 	}
 
-	#footer(detailsFocused: boolean, availableWidth: number): string {
+	#footer(detailsFocused: boolean, availableWidth: number): string[] {
 		if (this.#agentFilter.focused)
-			return this.#agentFilter.render(availableWidth, { muted: value => theme.fg("muted", value) });
+			return [this.#agentFilter.render(availableWidth, { muted: value => theme.fg("muted", value) })];
 		const filter = this.#agentFilter.value
 			? `${this.#agentFilter.render(Math.min(34, availableWidth), { muted: value => theme.fg("muted", value) })}${theme.sep.dot}`
 			: "";
 		const close = this.#lastLeftTap > 0 && Date.now() - this.#lastLeftTap < LEFT_TAP_WINDOW_MS ? "←:close  " : "";
-		const motion = availableWidth < 96 ? "j/k Pg gg/G:move" : "j/k Pg C-d/u gg/G:move  C-e/y:view";
-		if (detailsFocused)
-			return theme.fg(
-				"dim",
-				`${filter}h/←:roster  ${motion.replace(":move", ":scroll")}  Tab:section  Enter:open  Esc:roster`,
-			);
 		const nextView = this.#viewMode === "roster" ? "tree" : "flat";
-		return theme.fg(
-			"dim",
-			`${filter}${close}${motion}  h/l:panes  /:filter  Enter:open  t:${nextView}  Tab:section  r/x:manage  Esc:close`,
-		);
+		const hint = detailsFocused
+			? `${filter}←:roster  Tab:section  Enter:open  Esc:roster  ?:help`
+			: `${filter}${close}/:filter  Enter:open  t:${nextView}  Tab:section  r/x:manage  Esc:close  ?:help`;
+		return menuHintLines(hint, availableWidth).map(line => theme.fg("dim", line));
 	}
 
 	#renderRosterPanel(width: number, rows: number, observedById: ReadonlyMap<string, ObservableSession>): RosterRender {

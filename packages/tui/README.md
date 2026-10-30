@@ -482,6 +482,16 @@ settings.updateValue("theme", "light");
 - Arrow keys: Navigate
 - Enter/Space: Activate (cycle value or open submenu)
 - Escape: Cancel
+- `?`: Open the menu's Vim navigation reference; Escape returns to the menu.
+
+Menu footers put menu-specific actions first and reserve the far right for terse
+Vim motions (`hjkl gg/G C-u d e y`). At narrow widths, the motion group disappears
+before any menu action; action hints wrap rather than being cut off. `?` remains
+literal input while a search field or text editor has focus.
+
+Built-in menus share `MenuHints` / `menuHintLines()` for this layout and
+`MenuHelp` for the navigation reference. Hosts route text-field input first,
+then help, then normal menu navigation.
 
 ### Spacer
 

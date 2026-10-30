@@ -98,6 +98,20 @@ After explicit conflicts are resolved, inspect automatically merged changes at e
 
 For generated lockfiles, take upstream as the starting point, then regenerate from the merged tree. Review dependency changes before executing installers; audit every newly introduced dependency rather than accepting it because a lockfile changed.
 
+### Regenerate UI entry provenance
+
+After the integrated tree is committed, regenerate the committed provenance inventory:
+
+```sh
+bun scripts/generate-entry-provenance.ts "$PREVIOUS_UPSTREAM_COMMIT" "$TAG" "$(git rev-parse HEAD)"
+bun test scripts/generate-entry-provenance.test.ts packages/tui/test/entry-provenance.test.ts packages/tui/test/hotkeys-markdown.test.ts packages/tui/test/status-line-config.test.ts packages/tui/test/model-hub-roles-search.test.ts
+```
+
+`PREVIOUS_UPSTREAM_COMMIT` is the upstream release commit from the preceding sync, not the fork's pre-merge head. The generator parses settings, builtin slash commands, app and TUI keybinding actions, status-line segments, builtin model roles, and builtin composer shapes at all three revisions without executing historical code. Commit both `packages/coding-agent/src/config/entry-provenance.json` and `packages/tui/src/theme/ui-entry-provenance.json` with the sync's post-merge changes. It replaces, rather than accumulates, the latest-release marks: entries added between the two upstream revisions receive a star; entries in the integrated fork but absent from the new upstream receive a crescent. The theme's Unicode, Nerd Font and ASCII presets supply the corresponding glyphs. The star means “new in the most recent upstream sync,” not “new to this session.”
+
+Regenerate against the same two upstream revisions after adding or removing entries in any covered registry. The settings/command artifact records the fork revision shared by both inventories; pass an immutable commit as above. Regression tests compare generated output with both historical revisions and current runtime registries, so stale inventories and incomplete extraction are detected. Runtime-created models, user roles, extensions, agent instances and jobs do not receive release provenance; neither do view-navigation controls that have no release-entry registry.
+
+
 ## 5. Commit and verify
 
 Complete the merge with a signed merge commit:

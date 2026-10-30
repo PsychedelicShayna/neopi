@@ -1,3 +1,4 @@
+import { type EntryProvenance, provenanceSuffix } from "./theme/provenance";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -220,6 +221,7 @@ export interface AutocompleteItem {
 	icon?: string;
 	/** Named icon for TSP terminals (`folder`, `file`, a slash-command icon name). */
 	iconName?: string;
+	provenance?: EntryProvenance;
 	/** Native detail when it differs from {@link description} (static text, parent dir). */
 	nativeDetail?: string;
 	/** Live state drawn right-aligned natively ("demo/demo", "off"). */
@@ -250,6 +252,7 @@ export interface SlashCommand {
 	icon?: string;
 	/** Named icon for TSP terminals, drawn instead of the {@link icon} glyph. */
 	iconName?: string;
+	provenance?: EntryProvenance;
 	argumentHint?: string;
 	/** Whether the command consumes argument text after the command name. False means the full input stays normal prompt text once args are present. */
 	allowArgs?: boolean;
@@ -442,7 +445,7 @@ function buildSlashCommandCompletions(
 					const fullDesc = resolveFullDesc();
 					best = {
 						value: name,
-						label: "name" in cmd ? cmd.name : cmd.label,
+						label: ("name" in cmd ? cmd.name : cmd.label) + provenanceSuffix(cmd.provenance),
 						score: primaryScore,
 						usage,
 						...(cmd.icon && { icon: cmd.icon }),
@@ -465,7 +468,7 @@ function buildSlashCommandCompletions(
 						const fullDesc = resolveFullDesc();
 						best = {
 							value: alias,
-							label: alias,
+							label: alias + provenanceSuffix(cmd.provenance),
 							score: aliasScore,
 							usage,
 							...(cmd.icon && { icon: cmd.icon }),

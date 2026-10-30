@@ -1,3 +1,4 @@
+import type { EntryProvenance } from "@oh-my-pi/pi-tui/theme/provenance";
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
 import type { Settings } from "../config/settings";
 import type { SlashCommandIconName } from "@oh-my-pi/pi-tui/theme/symbols";
@@ -22,6 +23,7 @@ export interface BuiltinSlashCommand {
 	description: string;
 	/** Autocomplete type-indicator icon. Defaults to "action" (generic terminal glyph). */
 	icon?: SlashCommandIconName;
+	provenance?: EntryProvenance;
 	/** Whether the command consumes text after the command name. */
 	allowArgs?: boolean;
 	/** Subcommands for dropdown completion (e.g. /mcp add, /mcp list). */

@@ -5,6 +5,8 @@ import { Container, ScrollView, type SgrMouseEvent, Spacer, TruncatedText } from
 import { theme } from "../theme/theme";
 import { OverlayPanel } from "../chrome/overlay-box";
 import { MenuSelection } from "../components/menu-selection";
+import { MenuHelp, MenuHints } from "../components/menu-hints";
+import { editorKey, editorKeys } from "../chrome/keybinding-hints";
 import {
 	applyMenuMotion,
 	MenuKeyReader,
@@ -66,6 +68,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 	#menu: MenuSelection<OAuthProviderInfo>;
 	/** The provider search field; its value drives `#menu`'s query. */
 	readonly #search = new MenuSearchField();
+	readonly #help = new MenuHelp("jk gg/G C-u d e y");
 	#hoveredIndex: number | null = null;
 	/** First provider index of the visible ScrollView window (last #updateList). */
 	#scrollStart = 0;
@@ -304,8 +307,6 @@ export class OAuthSelectorComponent extends OverlayPanel {
 	}
 
 	#renderStatusLine(_total: number): string {
-		if (!this.#search.focused && !this.#search.value)
-			return theme.fg("muted", `j/k select · / search · Enter choose · Esc ${this.#cancelLabel}`);
 		return this.#search.render(72, { muted: text => theme.fg("muted", text) });
 	}
 
@@ -361,7 +362,16 @@ export class OAuthSelectorComponent extends OverlayPanel {
 
 		// Search status line (scrollbar covers overflow indication)
 		if (this.#shouldRenderSearchStatus()) {
-			this.#listContainer.addChild(new TruncatedText(this.#renderStatusLine(total), 0, 0));
+			this.#listContainer.addChild(
+				!this.#search.focused && !this.#search.value
+					? new MenuHints(
+							() =>
+								`${editorKeys("tui.select.up", "tui.select.down")} select · / search · Enter choose · ${editorKey("tui.select.cancel")} ${this.#cancelLabel} · ? help`,
+							text => theme.fg("muted", text),
+							"jk gg/G C-u d e y",
+						)
+					: new TruncatedText(this.#renderStatusLine(total), 0, 0),
+			);
 		}
 
 		if (total === 0) {
@@ -430,12 +440,20 @@ export class OAuthSelectorComponent extends OverlayPanel {
 		this.stopValidation();
 	}
 
+	override render(width: number): readonly string[] {
+		return this.#help.render(super.render(width), width);
+	}
+
 	handleInput(data: string): void {
 		const before = this.#search.query;
 		const field = this.#search.handleInput(data);
 		if (field !== "pass") {
 			if (this.#search.query !== before) this.#syncSearchQuery();
 			else this.#updateList();
+			return;
+		}
+		if (this.#help.handleInput(data)) {
+			this.#requestRenderCallback?.();
 			return;
 		}
 		const action = this.#navigationKeys.read(data);
@@ -572,7 +590,11 @@ export class OAuthSelectorComponent extends OverlayPanel {
 					...leave,
 					label: this.#search.focused
 						? "Back to list"
-						: sheet ? sheet.leave.label : this.#cancelLabel === "close" ? "Close" : this.#cancelLabel,
+						: sheet
+							? sheet.leave.label
+							: this.#cancelLabel === "close"
+								? "Close"
+								: this.#cancelLabel,
 				},
 			],
 		});
@@ -580,6 +602,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 	}
 
 	override describe(cx: DescribeContext): NativeNode {
+		if (this.#help.open) return this.#help.describe();
 		if (cx.supports("picker")) return this.#describePicker();
 		if (this.#nativeRoot) return this.#nativeRoot;
 		const items = this.#menu.visibleItems;
@@ -636,6 +659,11 @@ export class OAuthSelectorComponent extends OverlayPanel {
 
 	/** A click (or double-click) on a provider selects and confirms it, like the SGR click in {@link routeMouse}. */
 	handleNativeEvent(event: NativeUiEvent): void {
+		if (this.#help.open) {
+			if (event.type === "action") this.#help.handleInput("\x1b");
+			this.#requestRenderCallback?.();
+			return;
+		}
 		const ev = pickerEvent(event, PICKER_KEY);
 		if (ev?.kind === "action") {
 			if (ev.act === "confirm") this.#confirmSelection();

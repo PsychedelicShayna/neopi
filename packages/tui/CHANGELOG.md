@@ -4,6 +4,8 @@
 
 ### Added
 
+- Search composers preview results live, confirm with Enter, share the main composer's Vim editing, restore confirmed patterns on cancel, and support glob patterns alongside slash-prefixed regex ([#500](https://github.com/PsychedelicShayna/neopi/issues/500)).
+- Settings, command suggestions, hotkey help, role pickers and status-line widget lists can show themed fork and latest-upstream provenance marks without changing entry identifiers.
 - `/advisor configure` lists every loaded file with an advisor preview, whole-file toggles, exact-file editing, and bulk enabled-state actions ([#323](https://github.com/PsychedelicShayna/neopi/issues/323)).
 - New and cloned advisors receive separate hidden identities so role activation sets remain attached after renames ([#89](https://github.com/PsychedelicShayna/neopi/issues/89)).
 - Model effort-rule editors now let you include or exclude native `off` reasoning levels ([#498](https://github.com/PsychedelicShayna/neopi/issues/498)).
@@ -34,6 +36,7 @@
 
 ### Changed
 
+- Menu footers keep their actions visible at narrow widths, move compact Vim motions to the far right, and open a navigation reference with `?`.
 - Search menus with `/`, confirm patterns with Enter without activating a result, and clear with Escape; `//` and `re:` use Vim very-magic regex by default, with bare groups/alternation, `\m` for default-magic, and inline errors ([#416](https://github.com/PsychedelicShayna/neopi/issues/416)).
 - The selected model role's reasoning label and glyph use the model's highlight color, including Auto effort allowlists, even while the sidebar has focus ([#245](https://github.com/PsychedelicShayna/neopi/issues/245)).
 - `/statusline` keeps edits in an unapplied draft that survives closing and restarts: `s` applies without leaving, Escape asks before applying, and Reset to Active is the only way to discard it ([#341](https://github.com/PsychedelicShayna/neopi/issues/341)).

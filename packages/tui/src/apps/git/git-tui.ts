@@ -33,6 +33,7 @@ import { formatKeyHint, formatKeyHints, formatTooltipKey } from "../../app-keybi
 import { SplitPane } from "../../components/layout/split-pane";
 import { Stack } from "../../components/layout/stack";
 import { MenuKeyReader, menuScrollBy } from "../../components/menu-navigation";
+import { menuHintLines } from "../../components/menu-hints";
 import { matchesKey } from "../../keys";
 import { ProcessTerminal } from "../../terminal";
 import { routeSgrMouseInput } from "../../mouse";
@@ -103,8 +104,10 @@ type Focus = "diff" | "sidebar";
  * rows), so the commit view drops those too and says what it is showing.
  */
 export function gitFooterHints(clean: boolean, focus: Focus): string {
-	const edit = clean ? "" : ` · ${formatKeyHint("space")} stage`;
-	return `j/k rows · h/l panes · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · Alt-←/→ ${focus === "diff" ? "pan" : "fold"}${edit} · / search · ? keys · q quit`;
+	const edit = clean
+		? ""
+		: ` · ${formatKeyHint("space")} stage · s/u stage/unstage${focus === "diff" ? " · Shift-↑/↓ select · x discard" : ""} · ${formatKeyHint("delete")} discard file · c commit`;
+	return `v view · 1–4 views · w wrap · b whitespace · ${focus === "sidebar" ? "t tree · " : ""}[/] files · Alt-↑/↓ hunks · Tab panes · PgUp/PgDn page · Alt-←/→ ${focus === "diff" ? "pan" : "fold"}${edit} · r refresh · / search · ? keys · q quit`;
 }
 
 /** Tone of a status message: its colour in the header and its span token natively. */
@@ -874,16 +877,19 @@ export class GitTuiComponent implements Component {
 
 	render(width: number): readonly string[] {
 		const height = Math.max(10, this.#ui.terminal.rows);
+		const footer = menuHintLines(gitFooterHints(this.#model.clean, this.#focus), width).map(line =>
+			theme.fg("dim", line),
+		);
 		const sidebarWidth = Math.max(30, Math.min(48, Math.floor(width * 0.3)));
 		this.#centerWidth = width - sidebarWidth - 1;
-		const contentHeight = height - 2;
+		const contentHeight = Math.max(0, height - 2 - footer.length);
 		this.#contentHeight = contentHeight;
 
 		this.#split.setHeight(contentHeight);
 		this.#split.setLeftSize({ fixed: this.#centerWidth });
 		this.#split.setRightMinWidth(sidebarWidth);
-		this.#stack.setHeight(height);
-		return this.#stack.render(width);
+		this.#stack.setHeight(Math.max(0, height - footer.length));
+		return [...this.#stack.render(width), ...footer];
 	}
 
 	#header(width: number): string {
@@ -913,9 +919,8 @@ export class GitTuiComponent implements Component {
 			right.button(pill(" Unstage File ", theme.getColorHex("warning")), () => this.#stageCurrentFile());
 		right.add(" ").button(softPill(` ${glyphs.close} `), () => this.#done.resolve());
 
-		// The empty middle carries the key hints (or a fresh status message).
-		const status = this.#visibleStatus() ? theme.fg(this.#statusTone, this.#status) : "";
-		const middle = status || theme.fg("dim", gitFooterHints(this.#model.clean, this.#focus));
+		// Keep transient status in the header; wrapped key hints live below the panes.
+		const middle = this.#visibleStatus() ? theme.fg(this.#statusTone, this.#status) : "";
 		const free = width - row.width - right.width - 1;
 		const middleText = free > visibleWidth(middle) + 4 ? middle : truncateToWidth(middle, Math.max(0, free - 4));
 		const leftPad = Math.max(1, Math.floor((free - visibleWidth(middleText)) / 2));

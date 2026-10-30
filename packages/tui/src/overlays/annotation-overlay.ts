@@ -18,6 +18,7 @@ import { formatKeyHint, formatKeyHints, type KeybindingsManager } from "../app-k
 import type { Keybinding } from "../keybindings";
 import { extractPrintableText } from "../keys";
 import { MenuSelection } from "../components/menu-selection";
+import { MenuHelp, menuHintLines } from "../components/menu-hints";
 import {
 	applyMenuMotion,
 	MenuKeyReader,
@@ -232,6 +233,7 @@ export class AnnotationOverlay implements Focusable {
 	#scrollView: ScrollView;
 	#editor: Editor;
 	readonly #keys: MenuKeyReader;
+	readonly #help = new MenuHelp(undefined, "Shift+arrows scroll faster; h/l switch panes.");
 	readonly #fileMenu: MenuSelection<ReviewDiffFile>;
 	readonly #fileViewport = new MenuViewport();
 	readonly #fileRows: number[];
@@ -521,6 +523,11 @@ export class AnnotationOverlay implements Focusable {
 
 	handleInput(data: string): void {
 		if (this.#finished || this.#externalOperation) return;
+		if (!this.#annotating && this.#help.handleInput(data)) {
+			this.#keys.reset();
+			this.#tui.requestRender();
+			return;
+		}
 		const discardArmed = this.#discardArmed;
 		this.#discardArmed = false;
 		if (this.#annotationChooser) {
@@ -1320,9 +1327,13 @@ export class AnnotationOverlay implements Focusable {
 				`${this.#key("tui.select.cancel")} close, keep note`,
 			];
 			hints.push(`${formatKeyHint(appExternalEditorKey())} editor`);
-			return [caption, ...this.#editor.render(width), this.#theme.fg("dim", hints.join(" · "))];
+			return [
+				caption,
+				...this.#editor.render(width),
+				...menuHintLines(hints.join(" · "), width, "").map(line => this.#theme.fg("dim", line)),
+			];
 		}
-		return [this.#theme.fg("dim", this.#helpText())];
+		return menuHintLines(this.#helpText(), width).map(line => this.#theme.fg("dim", line));
 	}
 
 	/** What the active annotation draft does and where it lands. */
@@ -1368,10 +1379,10 @@ export class AnnotationOverlay implements Focusable {
 			this.#focus === "files"
 				? `${upDown} file · ${confirm} diff · ${formatKeyHints(["a", "shift+a"])} file note · ${editNote}`
 				: this.#focus === "diff"
-					? `j/k line · Shift faster · gg/G ends · Ctrl-u/d half · Ctrl-e/y view · ${formatKeyHint("a")} line note · ${formatKeyHint("shift+a")} ${this.#textSource ? "text" : "file"} note · ${editNote}`
+					? `Shift faster · ${formatKeyHint("a")} line note · ${formatKeyHint("shift+a")} ${this.#textSource ? "text" : "file"} note · ${editNote}`
 					: `${upDown} select · ${confirm} confirm`;
 		const editorHint = this.#callbacks.onExternalEditor ? ` · ${formatKeyHint(appExternalEditorKey())} editor` : "";
-		return `${focusHelp}${editorHint} · h/l panes · ${formatKeyHint("u")} undo · ${formatKeyHint("tab")} regions · ${this.#key("tui.select.cancel")} cancel`;
+		return `${focusHelp}${editorHint} · ${formatKeyHint("u")} undo · ${formatKeyHint("tab")} regions · ${this.#key("tui.select.cancel")} cancel · ? help`;
 	}
 
 	#ensureCursorVisible(renderedRowBySource: readonly number[]): boolean {
@@ -1504,6 +1515,7 @@ export class AnnotationOverlay implements Focusable {
 	 * and the actions.
 	 */
 	describe(): NativeNode {
+		if (this.#help.open) return this.#help.describe();
 		// The terminal lays out the file sidebar; diffs always have one, text never does.
 		this.#sidebarShown = !this.#textSource;
 		if (!this.#sidebarShown && this.#focus === "files") this.#focus = "diff";
@@ -2067,6 +2079,6 @@ export class AnnotationOverlay implements Focusable {
 		for (const footerLine of footer) output.push(row(footerLine, width));
 		output.push(bottomBorder(width));
 		this.#revealSelectedFile(output, width);
-		return output;
+		return this.#help.render(output, width);
 	}
 }

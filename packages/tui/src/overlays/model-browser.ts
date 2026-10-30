@@ -1,3 +1,4 @@
+import { uiProvenanceSuffix } from "../theme/provenance";
 /**
  * Frameless, reusable model browser: a fuzzy search row, a windowed model
  * list with role chips and metadata columns, and a selection detail block.
@@ -750,7 +751,7 @@ export function rankModelItems(
  */
 export function formatRoleChip(role: string, assignment: RoleAssignment, settings: ModelBrowserSource): string {
 	const info = settings.getRoleInfo(role);
-	const label = (info.tag ?? info.name ?? role).toLowerCase();
+	const label = (info.tag ?? info.name ?? role).toLowerCase() + uiProvenanceSuffix("roles", role);
 	const glyph = thinkingLevelGlyph(assignment.thinkingLevel, theme);
 	const suffix = glyph ? ` ${theme.fg("dim", glyph)}` : "";
 	if (assignment.autoSelected) {
@@ -762,7 +763,7 @@ export function formatRoleChip(role: string, assignment: RoleAssignment, setting
 /** {@link formatRoleChip} as styled spans for a described node. */
 function roleChipSpans(role: string, assignment: RoleAssignment, settings: ModelBrowserSource): TspSpan[] {
 	const info = settings.getRoleInfo(role);
-	const label = (info.tag ?? info.name ?? role).toLowerCase();
+	const label = (info.tag ?? info.name ?? role).toLowerCase() + uiProvenanceSuffix("roles", role);
 	const glyph = thinkingLevelGlyph(assignment.thinkingLevel, theme);
 	const spans = assignment.autoSelected
 		? [span(`${theme.status.shadowed} ${label}`, "dim")]
@@ -1266,7 +1267,7 @@ export class ModelBrowser implements Component {
 
 	navigationSnapshot(): ModelBrowserNavigation {
 		return {
-			query: this.query,
+			query: this.#search.confirmedQuery,
 			value: this.value,
 			cursor: this.cursor,
 			filterFocused: this.#search.focused,
@@ -1340,7 +1341,9 @@ export class ModelBrowser implements Component {
 			const pattern = compileMenuRegex(query);
 			if (pattern) {
 				return this.#insertSeparator(
-					items.filter(item => !this.#isDisabled(item) && !!pattern.regex && modelMatchesRegex(item, pattern.regex)),
+					items.filter(
+						item => !this.#isDisabled(item) && !!pattern.regex && modelMatchesRegex(item, pattern.regex),
+					),
 				);
 			}
 			const base = items.filter(item => !this.#isDisabled(item));
@@ -1918,13 +1921,12 @@ export class ModelBrowser implements Component {
 		const selected = this.getSelected()?.selector ?? null;
 		const filter = this.query.trim();
 		const error = compileMenuRegex(this.query)?.error;
-		const empty =
-			error
-				? `Invalid regex: ${error}`
-				: items.length > 0
-					? ""
-					: plainText(this.#emptyText?.() ?? "").trim() ||
-						(filter ? "No matching models" : "No models available in this scope");
+		const empty = error
+			? `Invalid regex: ${error}`
+			: items.length > 0
+				? ""
+				: plainText(this.#emptyText?.() ?? "").trim() ||
+					(filter ? "No matching models" : "No models available in this scope");
 		const prev = this.#nativeListNode;
 		if (
 			prev?.children === cached.children &&
@@ -2177,7 +2179,7 @@ export class ModelBrowser implements Component {
 			const info = this.#settings.getRoleInfo(role);
 			const dot = thinkingDotToken(assignment.thinkingLevel);
 			return {
-				text: (info.tag ?? info.name ?? role).toLowerCase(),
+				text: (info.tag ?? info.name ?? role).toLowerCase() + uiProvenanceSuffix("roles", role),
 				on: !assignment.autoSelected,
 				...(assignment.autoSelected ? { auto: true } : {}),
 				...(dot ? { dot } : {}),
@@ -2344,7 +2346,7 @@ export class ModelBrowser implements Component {
 					? getConfiguredThinkingLevelMetadata(assignment.thinkingLevel).label
 					: undefined;
 			return node("badge", {
-				text: (info.tag ?? info.name ?? role).toLowerCase(),
+				text: (info.tag ?? info.name ?? role).toLowerCase() + uiProvenanceSuffix("roles", role),
 				...(assignment ? { tone: assignment.autoSelected ? "muted" : "accent" } : {}),
 				title: assignment
 					? `${info.name}${assignment.autoSelected ? " (auto-selected)" : ""}${level ? ` · thinking ${level}` : ""}`

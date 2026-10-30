@@ -19,6 +19,7 @@ import { OverlayPanel } from "../chrome/overlay-box";
 import { TextFormField, type FormFieldTheme } from "../components/form";
 import { SelectList } from "../components/select-list";
 import { MenuKeyReader, menuScrollBy } from "../components/menu-navigation";
+import { MenuHelp, MenuHints } from "../components/menu-hints";
 import { WizardStep, type WizardStepKind } from "../components/wizard-step";
 import { col, compact, node, row, span, text } from "../native/describe";
 import { type DescribeContext, leafKey, type NativeChild, type NativeNode, type NativeUiEvent } from "../native/node";
@@ -187,7 +188,7 @@ function inputHint(escapeAction: string): string {
 
 /** Choice rows own their viewport; submit and back remain explicit wizard actions. */
 function choiceHint(escapeAction: string): string {
-	return `[j/k, ↑/↓ navigate · Ctrl+U/D half page · PgUp/Dn page · gg/G bounds · Ctrl+E/Y scroll · ${formatKeyHint("enter")} select · ${interruptKey()} ${escapeAction}]`;
+	return `${formatKeyHint("enter")} select · ${interruptKey()} ${escapeAction} · ? help`;
 }
 
 /** The wizard's phases, the native progress strip's segments in order. */
@@ -345,6 +346,7 @@ export class MCPAddWizard extends OverlayPanel {
 	#selectedIndex = 0;
 	#choiceList: SelectList | null = null;
 	#keys = new MenuKeyReader();
+	readonly #help = new MenuHelp("jk gg/G C-u d e y");
 	#choiceScroll: NativeNode["scroll"];
 	/** Non-auth field drafts stay in this mounted prompt, never in menu history. */
 	#inputDrafts = new Map<MCPWizardStep, { value: string; cursor: number }>();
@@ -554,7 +556,7 @@ export class MCPAddWizard extends OverlayPanel {
 				heading: ansiHeading(options.title, tone, phase),
 				intro: options.intro ?? (options.lead ? new Text(options.lead, 0, 0) : undefined),
 				content: list,
-				footer: new Text(theme.fg("muted", choiceHint(options.escape)), 0, 0),
+				footer: new MenuHints(choiceHint(options.escape), text => theme.fg("muted", text), "jk gg/G C-u d e y"),
 			}),
 			{
 				phase,
@@ -612,6 +614,7 @@ export class MCPAddWizard extends OverlayPanel {
 	 * Escape, Enter and Ctrl+C run.
 	 */
 	override describe(_cx: DescribeContext): NativeNode {
+		if (this.#help.open) return this.#help.describe();
 		if (this.#native) return this.#native;
 		const step = this.#nativeStep;
 		const title = row(
@@ -696,6 +699,11 @@ export class MCPAddWizard extends OverlayPanel {
 	 * arrows and pressing Enter; the footer's buttons run what their keys run.
 	 */
 	handleNativeEvent(event: NativeUiEvent): void {
+		if (this.#help.open) {
+			if (event.type === "action") this.#help.handleInput("\x1b");
+			this.#requestRender();
+			return;
+		}
 		if (event.type === "action") {
 			this.#runAction(event.act);
 			return;
@@ -1011,6 +1019,10 @@ export class MCPAddWizard extends OverlayPanel {
 		if (this.#stepKind === "input") this.#inputField?.pasteText(text);
 	}
 
+	override render(width: number): readonly string[] {
+		return this.#help.render(super.render(width), width);
+	}
+
 	handleInput(keyData: string): void {
 		// While an OAuth callback is being awaited, Esc/Ctrl+C aborts the flow
 		// rather than stepping back through the form: the wizard advertises
@@ -1031,6 +1043,10 @@ export class MCPAddWizard extends OverlayPanel {
 		// Input steps own Enter/Escape through the field (submit/back or cancel).
 		if (this.#inputField) {
 			this.#step?.handleInput(keyData);
+			return;
+		}
+		if (this.#stepKind === "choice" && this.#help.handleInput(keyData)) {
+			this.#requestRender();
 			return;
 		}
 
