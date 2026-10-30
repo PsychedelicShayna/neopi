@@ -1940,6 +1940,7 @@ export interface ConfirmUiRequest {
 	title: string;
 	message: string;
 	timeout?: number;
+	loginId?: string;
 }
 
 export interface InputUiRequest {
@@ -1977,6 +1978,7 @@ export interface CancelUiRequest {
 	id: string;
 	method: "cancel";
 	targetId: string;
+	loginId?: string;
 }
 
 export interface NotifyUiRequest {
@@ -2682,6 +2684,8 @@ export interface GetLoginProvidersResult {
 
 export interface LoginParams {
 	providerId: string;
+	allowSecretInput?: boolean;
+	allowTrustConfirmation?: boolean;
 }
 
 export interface LoginResult {

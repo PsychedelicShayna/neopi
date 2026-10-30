@@ -1088,10 +1088,7 @@ export class RpcClient {
 	 * apply the returned answer; omp keeps signaling, delegation and transcripts, and opens
 	 * no host microphone or speaker. Frames arrive through {@link onLive}; `live_levels` are not sent.
 	 */
-	async liveConnect(
-		sdpOffer: string,
-		options?: { voice?: string },
-	): Promise<{ voice: string; sdpAnswer: string }> {
+	async liveConnect(sdpOffer: string, options?: { voice?: string }): Promise<{ voice: string; sdpAnswer: string }> {
 		const response = await this.#send({
 			type: "live_connect",
 			sdpOffer,
@@ -1598,11 +1595,13 @@ export class RpcClient {
 	}
 
 	/**
-	 * Trigger OAuth login for the given provider.
-	 * The server will emit an `open_url` extension_ui_request for the auth URL.
-	 * Providers that require pasted-code completion may then emit an `input`
-	 * extension_ui_request; pass `onManualCodeInput` to satisfy it.
-	 * Resolves when login completes or rejects on failure.
+	 * Run native provider login. Every dialog is scoped to this request's loginId.
+	 * `onInput` receives both ordinary and secret prompts; a secret-capable host
+	 * must explicitly set `allowSecretInput` and render secret prompts masked.
+	 * Legacy `onManualCodeInput` receives nonsecret prompts only.
+	 * Returning undefined or rejecting an input callback cancels the login.
+	 * Trust confirmation additionally requires `allowTrustConfirmation` and
+	 * `onConfirm`, which must obtain a fresh boolean user decision.
 	 *
 	 * @param onOpenUrl Called when the server emits the auth URL. The host must
 	 *   open `url` in a browser. When the flow's callback server hosts a
@@ -1616,40 +1615,109 @@ export class RpcClient {
 		options?: {
 			onOpenUrl?: (url: string, instructions?: string, launchUrl?: string, userCode?: string) => void;
 			onManualCodeInput?: (prompt: { title: string; placeholder?: string }) => string | Promise<string>;
+			allowSecretInput?: boolean;
+			allowTrustConfirmation?: boolean;
+			onConfirm?: (prompt: { title: string; message: string; signal: AbortSignal }) => boolean | Promise<boolean>;
+			onInput?: (prompt: {
+				title: string;
+				placeholder?: string;
+				secret: boolean;
+				signal: AbortSignal;
+			}) => string | undefined | Promise<string | undefined>;
+			signal?: AbortSignal;
 		},
 	): Promise<{ providerId: string }> {
-		const { onManualCodeInput, onOpenUrl } = options ?? {};
-		const listener =
-			onOpenUrl || onManualCodeInput
-				? (req: RpcExtensionUIRequest) => {
-						if (req.method === "open_url") {
-							onOpenUrl?.(req.url, req.instructions, req.launchUrl, req.userCode);
-							return;
-						}
-						// Provider login rejects secret prompts on the server, so any `secret: true`
-						// input frame is an unrelated concurrent extension dialog and must not be
-						// intercepted as unmasked OAuth code input.
-						if (req.method !== "input" || req.secret || !onManualCodeInput) return;
-						// The prompt can outlive the agent (e.g. a broken stdin pipe stops the client); drop the reply
-						// instead of throwing "Client not started" out of a detached promise chain.
-						void Promise.resolve(onManualCodeInput({ title: req.title, placeholder: req.placeholder })).then(
-							value => {
-								if (this.#process) this.#writeFrame({ type: "extension_ui_response", id: req.id, value });
-							},
-							() => {
-								if (this.#process) {
-									this.#writeFrame({ type: "extension_ui_response", id: req.id, cancelled: true });
-								}
-							},
-						);
-					}
-				: undefined;
-		if (listener) this.#extensionUiListeners.add(listener);
+		const { onManualCodeInput, onOpenUrl, onInput, onConfirm, allowSecretInput, allowTrustConfirmation, signal } =
+			options ?? {};
+		signal?.throwIfAborted();
+		const loginId = `req_${++this.#requestId}`;
+		const process = this.#process;
+		const controller = new AbortController();
+		let active = true;
+		const canReply = (): boolean =>
+			active && !controller.signal.aborted && this.#process === process && this.#pendingRequests.has(loginId);
+		const cancel = (): void => {
+			if (controller.signal.aborted) return;
+			controller.abort();
+			if (active && this.#process === process && this.#pendingRequests.has(loginId)) {
+				void this.#send({ type: "cancel_login", loginId }).catch(() => {});
+			}
+		};
+		const listener = (req: RpcExtensionUIRequest): void => {
+			if (
+				(req.method !== "input" && req.method !== "open_url" && req.method !== "confirm") ||
+				req.loginId !== loginId ||
+				!canReply()
+			)
+				return;
+			if (req.method === "open_url") {
+				try {
+					onOpenUrl?.(req.url, req.instructions, req.launchUrl, req.userCode);
+				} catch {
+					cancel();
+				}
+				return;
+			}
+			if (req.method === "confirm") {
+				const reply = (confirmed: boolean): void => {
+					if (canReply())
+						this.#writeFrame({ type: "extension_ui_response", id: req.id, confirmed: confirmed === true });
+				};
+				if (!allowTrustConfirmation || !onConfirm) {
+					reply(false);
+					return;
+				}
+				void Promise.resolve()
+					.then(
+						() => canReply() && onConfirm({ title: req.title, message: req.message, signal: controller.signal }),
+					)
+					.then(reply, () => reply(false));
+				return;
+			}
+			if (req.method !== "input") return;
+			const reply = (value: string | undefined): void => {
+				if (!canReply()) return;
+				this.#writeFrame({
+					type: "extension_ui_response",
+					id: req.id,
+					...(value === undefined ? { cancelled: true } : { value }),
+				});
+			};
+			// Never send a secret prompt through the legacy plaintext code callback.
+			if (req.secret && (!allowSecretInput || !onInput)) {
+				reply(undefined);
+				return;
+			}
+			if (!onInput && !onManualCodeInput) return;
+			void Promise.resolve()
+				.then(() =>
+					canReply()
+						? onInput
+							? onInput({
+									title: req.title,
+									placeholder: req.placeholder,
+									secret: req.secret === true,
+									signal: controller.signal,
+								})
+							: onManualCodeInput?.({ title: req.title, placeholder: req.placeholder })
+						: undefined,
+				)
+				.then(reply, () => reply(undefined));
+		};
+		this.#extensionUiListeners.add(listener);
+		signal?.addEventListener("abort", cancel, { once: true });
 		try {
-			const response = await this.#send({ type: "login", providerId }, 600_000);
+			const response = await this.#send(
+				{ type: "login", providerId, allowSecretInput, allowTrustConfirmation },
+				600_000,
+				loginId,
+			);
 			return this.#getData<{ providerId: string }>(response);
 		} finally {
-			if (listener) this.#extensionUiListeners.delete(listener);
+			active = false;
+			controller.abort();
+			signal?.removeEventListener("abort", cancel);
+			this.#extensionUiListeners.delete(listener);
 		}
 	}
 

@@ -58,6 +58,7 @@ export interface RpcModelsCommandsOptions {
 		loginId: string,
 		signal: AbortSignal,
 	): Promise<string | undefined>;
+	confirm?(title: string, message: string, loginId: string, signal: AbortSignal): Promise<boolean>;
 }
 
 /** Per-connection auth lifetimes. Other clients cannot answer or cancel this connection's login. */
@@ -140,6 +141,10 @@ export class RpcModelsCommands {
 					if (!provider) throw new Error(`Unknown OAuth provider: ${command.providerId}`);
 					if (!id || this.#logins.has(id)) throw new Error("Login requires a unique request id");
 					const controller = new AbortController();
+					let unsupportedUi: string | undefined;
+					const secrets: string[] = [];
+					const redact = (message: string): string =>
+						secrets.reduce((value, secret) => value.replaceAll(secret, "[redacted]"), message);
 					this.#logins.set(id, controller);
 					const closeKey = `login:${id}`;
 					pending.set(closeKey, { resolve: () => {}, reject: () => controller.abort() });
@@ -159,11 +164,16 @@ export class RpcModelsCommands {
 									type: "extension_ui_request",
 									id: Snowflake.next() as string,
 									method: "notify",
-									message,
+									message: redact(message),
 									notifyType: "info",
 									loginId: id,
 								}),
 							onPrompt: async prompt => {
+								if (controller.signal.aborted) throw new Error("Login cancelled");
+								if (prompt.secret && command.allowSecretInput !== true) {
+									unsupportedUi = "Secret login input requires allowSecretInput: true";
+									throw new Error(unsupportedUi);
+								}
 								const answer = await input(
 									prompt.message,
 									prompt.placeholder,
@@ -175,9 +185,29 @@ export class RpcModelsCommands {
 									controller.abort();
 									throw new Error("Login cancelled");
 								}
+								if (prompt.secret && answer) secrets.push(answer);
 								return answer;
 							},
+							onConfirm: async prompt => {
+								controller.signal.throwIfAborted();
+								if (command.allowTrustConfirmation !== true || !this.options.confirm) {
+									unsupportedUi = "Certificate confirmation requires allowTrustConfirmation: true";
+									throw new Error(unsupportedUi);
+								}
+								const confirmed = await this.options.confirm(
+									prompt.title,
+									prompt.message,
+									id,
+									controller.signal,
+								);
+								if (!confirmed) {
+									controller.abort();
+									throw new Error("Login cancelled");
+								}
+								return true;
+							},
 						});
+						controller.signal.throwIfAborted();
 						if (!identity) throw new Error("No credential was saved");
 						await session.modelRegistry.refreshProvider(provider.storeCredentialsAs ?? provider.id, "online");
 						return success({ providerId: command.providerId });
@@ -191,7 +221,16 @@ export class RpcModelsCommands {
 								error: "Login cancelled",
 								code: "login_cancelled",
 							};
-						throw cause;
+						if (unsupportedUi)
+							return {
+								id,
+								type: "response",
+								command: "login",
+								success: false,
+								error: unsupportedUi,
+								code: "login_ui_unsupported",
+							};
+						throw new Error(redact(cause instanceof Error ? cause.message : String(cause)));
 					} finally {
 						this.#logins.delete(id);
 						pending.delete(closeKey);

@@ -1,3 +1,4 @@
+import type { ProviderTlsTrust } from "@oh-my-pi/pi-utils";
 import type { ApiKeyResolver, ResolvedApiKey } from "../auth-retry";
 import type {
 	OAuthAuthInfo,
@@ -29,7 +30,14 @@ export type ApiKeyCredential = {
 	type: "api_key";
 	key: string;
 	source?: "login";
+	tlsTrust?: ProviderTlsTrust;
+	requestOrigin?: string;
 };
+
+/** Explicit, validated single-endpoint login; prior keys remain recoverable tombstones. */
+export interface CredentialUpsertOptions {
+	replaceApiKeys?: true;
+}
 
 /** Stored OAuth token and provider account identity. */
 export type OAuthCredential = {
@@ -912,7 +920,11 @@ export interface CredentialsApi {
 	 * the existing row instead of inserting a duplicate. Resolves after
 	 * persistence and the in-memory snapshot update.
 	 */
-	upsert(provider: string, credential: AuthCredential): Promise<AuthCredentialSnapshotEntry[]>;
+	upsert(
+		provider: string,
+		credential: AuthCredential,
+		options?: CredentialUpsertOptions,
+	): Promise<AuthCredentialSnapshotEntry[]>;
 	/**
 	 * Remove credential for a provider.
 	 */

@@ -8869,10 +8869,11 @@ func (v SelectUiRequest) MarshalJSON() ([]byte, error) {
 }
 
 type ConfirmUiRequest struct {
-	ID      string `json:"id"`
-	Title   string `json:"title"`
-	Message string `json:"message"`
-	Timeout *int64 `json:"timeout,omitempty"`
+	ID      string  `json:"id"`
+	Title   string  `json:"title"`
+	Message string  `json:"message"`
+	Timeout *int64  `json:"timeout,omitempty"`
+	LoginID *string `json:"loginId,omitempty"`
 }
 
 func (v *ConfirmUiRequest) UnmarshalJSON(data []byte) error {
@@ -8888,6 +8889,7 @@ func (v *ConfirmUiRequest) decodeFrom(raw map[string]json.RawMessage) error {
 	d.required("title", &out.Title)
 	d.required("message", &out.Message)
 	d.optional("timeout", &out.Timeout)
+	d.optional("loginId", &out.LoginID)
 	if d.err != nil {
 		return d.err
 	}
@@ -9001,8 +9003,9 @@ func (v AskUiRequest) MarshalJSON() ([]byte, error) {
 
 // Close the dialog opened by request `targetId`; a later answer to it is ignored.
 type CancelUiRequest struct {
-	ID       string `json:"id"`
-	TargetID string `json:"targetId"`
+	ID       string  `json:"id"`
+	TargetID string  `json:"targetId"`
+	LoginID  *string `json:"loginId,omitempty"`
 }
 
 func (v *CancelUiRequest) UnmarshalJSON(data []byte) error {
@@ -9016,6 +9019,7 @@ func (v *CancelUiRequest) decodeFrom(raw map[string]json.RawMessage) error {
 	d.required("id", &out.ID)
 	d.constant("method", "cancel")
 	d.required("targetId", &out.TargetID)
+	d.optional("loginId", &out.LoginID)
 	if d.err != nil {
 		return d.err
 	}
@@ -12537,10 +12541,12 @@ func (c Commands) GetLoginProviders(ctx context.Context) ([]LoginProvider, error
 
 // LoginCommand holds the parameters of "login".
 type LoginCommand struct {
-	ProviderID string `json:"providerId"`
+	ProviderID             string `json:"providerId"`
+	AllowSecretInput       *bool  `json:"allowSecretInput,omitempty"`
+	AllowTrustConfirmation *bool  `json:"allowTrustConfirmation,omitempty"`
 }
 
-// Login sends "login": Run OAuth login; the flow arrives as `open_url` and `input` UI requests.
+// Login sends "login": Run native login with loginId-scoped UI requests; secret input and trust confirmation require explicit capabilities.
 func (c Commands) Login(ctx context.Context, p LoginCommand) (string, error) {
 	var out LoginResult
 	err := c.call(ctx, "login", p, 600*time.Second, &out)
