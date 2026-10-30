@@ -131,8 +131,6 @@ export interface AgentsHubDeps {
 	editor: Omit<AgentEditorDeps, "existing" | "save">;
 	saveDefinition: (scope: "project" | "user", definition: AgentDefinitionDraft, original?: HubAgent) => Promise<string>;
 	dispose?: () => void;
-	/** Open the selected definition in the host's editor; source-less agents are handled by the host. */
-	openConfigFile?: (agent: HubAgent) => Promise<void>;
 }
 
 export interface AgentsHubCallbacks {
@@ -678,6 +676,7 @@ export class AgentsHubComponent implements Component {
 		this.#definitionEditor = new AgentDefinitionEditor(this.#tui, {
 			...this.#deps.editor,
 			existing: this.#allAgents,
+			saveScopeEditable: !agent?.filePath || agent.source === "bundled",
 			save: async (definition, scope) => {
 				const filePath = await this.#deps.saveDefinition(scope, definition, agent);
 				this.#notice = `Saved agent ${definition.name} at ${shortenPath(filePath)}`;
@@ -1166,7 +1165,7 @@ export class AgentsHubComponent implements Component {
 		if (this.#focus === "scope") {
 			return `Enter agents · / search · ${cancel} close`;
 		}
-		const edit = this.#deps.openConfigFile ? " · Ctrl-G edit file" : "";
+		const edit = " · Ctrl-G edit definition";
 		return `${enter} configure · Space enable/disable · / search · Ctrl-R reload${edit} · ${cancel} close`;
 	}
 
@@ -1398,9 +1397,7 @@ export class AgentsHubComponent implements Component {
 				},
 				{ id: "model", label: "Model", disabled: noAgent },
 				{ id: "new", label: "New agent" },
-				...(this.#deps.openConfigFile
-					? [{ id: "edit-file", label: "Edit file", keys: ["ctrl", "g"], disabled: noAgent }]
-					: []),
+				{ id: "edit-file", label: "Edit definition", keys: ["ctrl", "g"], disabled: noAgent },
 				{ id: "reload", label: "Reload", keys: ["ctrl", "r"] },
 				{ ...CLOSE_ACTION, label: this.#search.focused ? "Back to list" : "Close" },
 			];
@@ -1757,7 +1754,7 @@ export class AgentsHubComponent implements Component {
 			upDown("rows"),
 			{ keys: ["/"], label: "search" },
 			{ keys: ["ctrl+r"], label: "reload" },
-			this.#deps.openConfigFile ? { keys: ["ctrl+g"], label: "edit file" } : undefined,
+			{ keys: ["ctrl+g"], label: "edit definition" },
 			cancel("close"),
 		];
 	}

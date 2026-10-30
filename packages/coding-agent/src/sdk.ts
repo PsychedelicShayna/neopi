@@ -5609,7 +5609,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			);
 		}
 		hasSession = true;
-		if (!isSubagentSession) {
+		if (!isSubagentSession && !options.advisorConfigs) {
 			let stopWatching = () => {};
 			let rosterRevision = 0;
 			const bindAdvisorSources = (reload: boolean): void => {

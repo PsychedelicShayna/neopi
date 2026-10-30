@@ -8,6 +8,7 @@ import { Settings, resetSettingsForTest } from "../src/config/settings";
 import { createAgentFieldGenerator, type AgentFieldGenerator } from "../src/task/agent-generation";
 import { BUILTIN_TOOLS, type Tool, type ToolSession } from "../src/tools";
 import { toolSummary } from "../src/tools/xdev";
+import { agentDefinitionFieldSchema as fieldSchema } from "@oh-my-pi/pi-tui/overlays/agent-definition-editor";
 
 const model = buildModel({
 	id: "generator", name: "Generator", provider: "test", api: "ollama-chat", baseUrl: "https://example.test",
@@ -23,20 +24,6 @@ function response(fields: Record<string, unknown>): ai.AssistantMessage {
 		stopReason: "toolUse", timestamp: Date.now(),
 	};
 }
-// The UI adapter supplies its canonical schema through this callback. This fixture
-// deliberately includes descriptions and choices so drift in schema propagation is observable.
-const fieldSchema = {
-	type: "object", properties: {
-		name: { type: "string", description: "Agent identifier" },
-		description: { type: "string", description: "When to delegate to this agent" },
-		systemPrompt: { type: "string", description: "Agent instructions in the Markdown body" },
-		thinkingLevel: { type: "string", enum: ["auto", "off", "minimal", "low", "medium", "high", "xhigh", "max"] },
-		autoloadSkills: { type: "array", items: { type: "string" }, description: "Skills loaded before work" },
-		tools: { type: "array", items: { type: "string" }, description: "Allowed tools" },
-		output: {},
-		advisor: { anyOf: [{ type: "boolean" }, { type: "string" }, { type: "object" }] },
-	}, required: ["name", "description", "systemPrompt"],
-};
 
 describe("agent field generation harness context", () => {
 	let dir: string;
@@ -76,7 +63,7 @@ describe("agent field generation harness context", () => {
 		await generator.generateAgentFields({ definition: { systemPrompt: "Review the selected change" }, target: "description" });
 		const system = completion.mock.calls[0][1].systemPrompt!.join("\n");
 		for (const field of Object.keys(fieldSchema.properties)) expect(system).toContain(`"${field}"`);
-		expect(system).toContain("When to delegate to this agent");
+		expect(system).toContain("When the delegating agent should choose this definition.");
 		expect(system).toContain('"thinkingLevel"');
 		expect(system).toContain('"xhigh"');
 		expect(system).toContain('"autoloadSkills"');

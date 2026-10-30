@@ -19,6 +19,7 @@ import { resolveAgentPrewalkDefault } from "../task/prewalk";
 import { listAgentDefinitionTools } from "../tools/tool-catalog";
 import { cfgTaskAgentAdvisor, cfgTaskAgentModelOverrides, cfgTaskAgentPrewalk, cfgTaskDisabledAgents, cfgTaskPrewalk } from "../task/settings";
 import { createModelBrowserSource } from "./model-browser-source";
+import { isJTDSchema } from "../tools/jtd-to-json-schema";
 
 export function createAgentsHubDeps(
 	cwd: string,
@@ -28,7 +29,7 @@ export function createAgentsHubDeps(
 	activeModelPattern?: string,
 	defaultModelPattern?: string,
 	sessionServiceTier?: (model: Model) => ServiceTier | undefined,
-	editorContext?: { tools: () => readonly { name: string; description: string }[]; sessionDir: () => string | undefined },
+	editorContext?: { tools: () => readonly { name: string; description: string }[]; sessionDir: () => string | undefined; externalEditor?: (text: string) => Promise<string | null> },
 ): AgentsHubDeps {
 	const tools = () => listAgentDefinitionTools(editorContext?.tools() ?? []);
 	const listAdvisors = () => listNamedAdvisors(cwd, getAgentDir(), editorContext?.sessionDir());
@@ -76,10 +77,12 @@ export function createAgentsHubDeps(
 			parse: parseAgentDefinitionDocument,
 			serialize: serializeAgentDefinitionDocument,
 			generate: request => generator.generateAgentFields(request),
+			externalEditor: editorContext?.externalEditor,
+			outputSchemaDialect: schema => isJTDSchema(schema) ? "jtd" : "json-schema",
 		},
 		dispose: () => generator.dispose(),
 		saveDefinition: async (scope, definition, original) => {
-			if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(definition.name)) throw new Error("Name must contain only letters, numbers, hyphens or underscores.");
+			if (/[\\/\0]/.test(definition.name)) throw new Error("Agent names cannot contain path separators or NUL characters.");
 			const raw = serializeAgentDefinitionDocument(definition);
 			parseAgentDefinitionDocument(raw);
 			const existing = original?.source !== "bundled" ? original?.filePath : undefined;

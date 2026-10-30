@@ -1431,9 +1431,13 @@ export class SelectorController {
 						{
 							tools: () => this.ctx.session.getAllToolInfos(),
 							sessionDir: () => this.ctx.session.sessionManager.getArtifactsDir() ?? undefined,
+							externalEditor: text => {
+								const env = this.ctx.session.environment.snapshot();
+								const command = getEditorCommand(env);
+								return command ? openInEditor(command, text, { env }) : Promise.resolve(null);
+							},
 						},
 					),
-					openConfigFile: agent => this.#openConfigFile({ kind: "agent", filePath: agent.filePath }),
 				},
 				{ onCancel: () => done() },
 			);

@@ -9,6 +9,7 @@
 
 ### Added
 
+- Create and edit agent definitions in one rich `/agents` editor, with tool checkboxes, nested JSON Schema/JTD output fields, raw file editing, per-field generation, and named or private inline advisors.
 - Configure advisors separately in User, Project root, Project .omp, and Session scopes; copy advisors and their prompts, or generate a new advisor from existing definitions.
 - Agent and advisor authoring can retain comment-driven generation conversations in memory for a configurable time (default one hour; set `task.definitionGenerationConversationTtlMs` to 0 to disable).
 - Settings, slash-command suggestions, hotkey help, model roles and status-line widgets mark fork additions with a crescent and the latest upstream release's additions with a star, while retaining command type icons.

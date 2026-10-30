@@ -78,6 +78,8 @@ export interface AgentEditorDeps {
 	existing: readonly AgentDefinitionDraft[];
 	save: (definition: AgentDefinitionDraft, scope: "project" | "user") => Promise<void>;
 	externalEditor?: (raw: string) => Promise<string | null>;
+	outputSchemaDialect?: (schema: unknown) => "json-schema" | "jtd";
+	saveScopeEditable?: boolean;
 }
 interface FormRow { id: string; label: string; value?: string; activate: () => void; field?: AgentDefinitionField }
 interface FormPage { title: string; rows: () => FormRow[]; index: number }
@@ -131,7 +133,7 @@ export class AgentDefinitionEditor implements Component {
 		return [
 			{ id: "generate-all", label: "Generate everything", activate: () => void this.#generate("all") },
 			{ id: "from-existing", label: "Generate from existing definitions…", activate: () => this.#existingPicker() },
-			{ id: "scope", label: "Save scope", value: this.#scope, activate: () => { this.#scope = this.#scope === "project" ? "user" : "project"; } },
+			{ id: "scope", label: this.#deps.saveScopeEditable === false ? "File scope (edit in place)" : "Save scope", value: this.#scope, activate: () => { if (this.#deps.saveScopeEditable !== false) this.#scope = this.#scope === "project" ? "user" : "project"; } },
 			...AGENT_DEFINITION_FIELDS.map(field => ({ id: field.key, label: field.label, value: displayValue(this.#draft[field.key]), field: field.key, activate: () => this.#editField(field) })),
 			{ id: "raw", label: "Edit definition file contents…", activate: () => this.#prompt("Definition file contents", this.#deps.serialize(this.#draft), value => { this.#draft = this.#deps.parse(value); }) },
 			{ id: "save", label: "Save definition", activate: () => void this.#save() },
@@ -163,39 +165,103 @@ export class AgentDefinitionEditor implements Component {
 		]);
 	}
 	#output(): void {
+		if (typeof this.#draft.output === "string") {
+			try { this.#draft.output = JSON.parse(this.#draft.output); }
+			catch { this.#error = "The output schema is not valid JSON. Edit the raw definition to repair it."; return; }
+		}
+		let jtd = this.#deps.outputSchemaDialect?.(this.#draft.output) === "jtd";
+		const variants = new Map<boolean, unknown>();
+		const blank = (): unknown => jtd ? { properties: {}, optionalProperties: {} } : { type: "object", properties: {}, required: [] };
 		this.#push("Structured output", () => [
-			{ id: "enable", label: "Enable structured output", value: this.#draft.output === undefined || this.#draft.output === false ? "[ ]" : "[✓]", field: "output", activate: () => { this.#draft.output = this.#draft.output === undefined || this.#draft.output === false ? { type: "object", properties: {}, required: [] } : undefined; } },
-			...(this.#draft.output === undefined || this.#draft.output === false ? [] : this.#schemaRows(() => this.#draft.output, value => { this.#draft.output = value; })),
+			{ id: "enable", label: "Enable structured output", value: this.#draft.output == null || this.#draft.output === false ? "[ ]" : "[✓]", field: "output", activate: () => { this.#draft.output = this.#draft.output == null || this.#draft.output === false ? blank() : undefined; } },
+			{ id: "format", label: "Schema format", value: jtd ? "JSON Type Definition" : "JSON Schema", field: "output", activate: () => { variants.set(jtd, this.#draft.output); jtd = !jtd; this.#draft.output = variants.get(jtd) ?? blank(); } },
+			...(this.#draft.output == null || this.#draft.output === false ? [] : this.#schemaRows(() => this.#draft.output, value => { this.#draft.output = value; }, jtd)),
 		]);
 	}
-	#schemaRows(get: () => unknown, set: (value: unknown) => void): FormRow[] {
+
+	#schemaRows(get: () => unknown, set: (value: unknown) => void, jtd = false): FormRow[] {
 		const schema = record(get());
-		const properties = record(schema.properties);
-		const update = (key: string, value: unknown): void => { const next = { ...record(get()) }; if (value === undefined) delete next[key]; else next[key] = value; set(next); };
+		const properties = { ...record(schema.properties), ...(jtd ? record(schema.optionalProperties) : {}) };
+		const update = (key: string, value: unknown): void => {
+			const next = { ...record(get()) };
+			if (value === undefined) delete next[key]; else next[key] = value;
+			set(next);
+		};
+		const description = jtd ? record(schema.metadata).description : schema.description;
+		const types = jtd
+			? ["object", "array", "string", "boolean", "timestamp", "float32", "float64", "int8", "uint8", "int16", "uint16", "int32", "uint32"]
+			: ["object", "array", "string", "number", "integer", "boolean", "null"];
+		const schemaType = schema.type ?? (schema.elements ? "array" : schema.properties || schema.optionalProperties ? "object" : undefined);
 		return [
-			{ id: "type", label: "Type", value: displayValue(schema.type), field: "output", activate: () => this.#push("Output type", () => ["object", "array", "string", "number", "integer", "boolean", "null"].map(type => ({ id: type, label: type, activate: () => { update("type", type); this.#pages.pop(); } }))) },
-			{ id: "description", label: "Description", value: displayValue(schema.description), field: "output", activate: () => this.#prompt("Field description", typeof schema.description === "string" ? schema.description : "", value => update("description", value || undefined)) },
-			...Object.keys(properties).map(name => ({ id: `property:${name}`, label: name, value: `${displayValue(record(properties[name]).type)}${Array.isArray(schema.required) && schema.required.includes(name) ? " · Required" : " · Optional"}`, field: "output" as const, activate: () => this.#schemaProperty(get, set, name) })),
-			{ id: "add-field", label: "+ New output field", field: "output", activate: () => this.#prompt("New output field name", "", name => { if (!name.trim()) throw new Error("Field name is required"); const next = record(get()); const props = record(next.properties); if (Object.hasOwn(props, name)) throw new Error("That field already exists"); set({ ...next, type: next.type ?? "object", properties: { ...props, [name]: { type: "string" } } }); }) },
-			{ id: "items", label: "Array item schema…", value: displayValue(schema.items), field: "output", activate: () => this.#push("Array items", () => this.#schemaRows(() => record(get()).items, value => update("items", value))) },
-			{ id: "keywords", label: "Constraints, unions and other schema keywords…", field: "output", activate: () => this.#jsonObject("Schema keywords", get, set) },
+			{ id: "type", label: "Type", value: displayValue(schemaType), field: "output", activate: () => this.#push("Output type", () => types.map(type => ({
+				id: type, label: type, activate: () => {
+					if (!jtd) update("type", type);
+					else {
+						const next = { ...record(get()) };
+						for (const key of ["type", "elements", "values", "enum", "ref", "discriminator", "mapping", "properties", "optionalProperties"]) delete next[key];
+						if (type === "object") Object.assign(next, { properties: schema.properties ?? {}, optionalProperties: schema.optionalProperties ?? {} });
+						else if (type === "array") next.elements = schema.elements ?? {};
+						else next.type = type;
+						set(next);
+					}
+					this.#pages.pop();
+				},
+			}))) },
+			{ id: "description", label: "Description", value: displayValue(description), field: "output", activate: () => this.#prompt("Field description", typeof description === "string" ? description : "", value => {
+				if (jtd) { const metadata = { ...record(record(get()).metadata) }; if (value) metadata.description = value; else delete metadata.description; update("metadata", metadata); }
+				else update("description", value || undefined);
+			}) },
+			...Object.keys(properties).map(name => ({
+				id: `property:${name}`, label: name,
+				value: `${displayValue(record(properties[name]).type)}${jtd ? Object.hasOwn(record(schema.properties), name) ? " · Required" : " · Optional" : Array.isArray(schema.required) && schema.required.includes(name) ? " · Required" : " · Optional"}`,
+				field: "output" as const, activate: () => this.#schemaProperty(get, set, name, jtd),
+			})),
+			{ id: "add-field", label: "+ New output field", field: "output", activate: () => this.#prompt("New output field name", "", name => {
+				if (!name.trim()) throw new Error("Field name is required");
+				const next = { ...record(get()) };
+				if (Object.hasOwn(record(next.properties), name) || jtd && Object.hasOwn(record(next.optionalProperties), name)) throw new Error("That field already exists");
+				const bucket = jtd ? "optionalProperties" : "properties";
+				if (jtd) for (const key of ["type", "elements", "values", "enum", "ref", "discriminator", "mapping"]) delete next[key];
+				else next.type ??= "object";
+				next[bucket] = { ...record(next[bucket]), [name]: { type: "string" } };
+				set(next);
+			}) },
+			{ id: "items", label: "Array item schema…", value: displayValue(jtd ? schema.elements : schema.items), field: "output", activate: () => this.#push("Array items", () => this.#schemaRows(() => record(get())[jtd ? "elements" : "items"], value => update(jtd ? "elements" : "items", value), jtd)) },
+			{ id: "keywords", label: jtd ? "Enums, records, tagged unions, references and metadata…" : "Constraints, unions and other schema keywords…", field: "output", activate: () => this.#jsonObject("Schema keywords", get, set) },
 		];
 	}
-	#schemaProperty(get: () => unknown, set: (value: unknown) => void, initialName: string): void {
+
+	#schemaProperty(get: () => unknown, set: (value: unknown) => void, initialName: string, jtd = false): void {
 		let name = initialName;
-		const childGet = (): unknown => record(record(get()).properties)[name];
-		const childSet = (value: unknown): void => { const root = record(get()); set({ ...root, properties: { ...record(root.properties), [name]: value } }); };
+		const bucket = (): string => jtd && Object.hasOwn(record(record(get()).optionalProperties), name) ? "optionalProperties" : "properties";
+		const childGet = (): unknown => record(record(get())[bucket()])[name];
+		const childSet = (value: unknown): void => { const root = record(get()); const key = bucket(); set({ ...root, [key]: { ...record(root[key]), [name]: value } }); };
 		this.#push(`Output field: ${name}`, () => [
 			{ id: "name", label: "Field name", value: name, field: "output", activate: () => this.#prompt("Field name", name, nextName => {
 				if (!nextName.trim()) throw new Error("Field name is required");
-				const root = record(get()); const props = { ...record(root.properties) };
-				if (nextName !== name && Object.hasOwn(props, nextName)) throw new Error("That field already exists");
+				const root = record(get()); const key = bucket(); const props = { ...record(root[key]) };
+				if (nextName !== name && (Object.hasOwn(record(root.properties), nextName) || jtd && Object.hasOwn(record(root.optionalProperties), nextName))) throw new Error("That field already exists");
 				const value = props[name]; delete props[name]; props[nextName] = value;
-				set({ ...root, properties: props, ...(Array.isArray(root.required) ? { required: root.required.map(item => item === name ? nextName : item) } : {}) }); name = nextName;
+				set({ ...root, [key]: props, ...(!jtd && Array.isArray(root.required) ? { required: root.required.map(item => item === name ? nextName : item) } : {}) });
+				name = nextName;
 			}) },
-			{ id: "required", label: "Required", value: Array.isArray(record(get()).required) && (record(get()).required as unknown[]).includes(name) ? "[✓]" : "[ ]", field: "output", activate: () => { const root = record(get()); const required = Array.isArray(root.required) ? root.required : []; set({ ...root, required: required.includes(name) ? required.filter(item => item !== name) : [...required, name] }); } },
-			...this.#schemaRows(childGet, childSet),
-			{ id: "delete", label: "Remove this field", activate: () => { const root = record(get()); const props = { ...record(root.properties) }; delete props[name]; set({ ...root, properties: props, ...(Array.isArray(root.required) ? { required: root.required.filter(item => item !== name) } : {}) }); this.#pages.pop(); } },
+			{ id: "required", label: "Required", value: jtd ? bucket() === "properties" ? "[✓]" : "[ ]" : Array.isArray(record(get()).required) && (record(get()).required as unknown[]).includes(name) ? "[✓]" : "[ ]", field: "output", activate: () => {
+				const root = record(get());
+				if (jtd) {
+					const from = bucket(); const to = from === "properties" ? "optionalProperties" : "properties";
+					const properties = { ...record(root[from]) }; const value = properties[name]; delete properties[name];
+					set({ ...root, [from]: properties, [to]: { ...record(root[to]), [name]: value } });
+				} else {
+					const required = Array.isArray(root.required) ? root.required : [];
+					set({ ...root, required: required.includes(name) ? required.filter(item => item !== name) : [...required, name] });
+				}
+			} },
+			...this.#schemaRows(childGet, childSet, jtd),
+			{ id: "delete", label: "Remove this field", activate: () => {
+				const root = record(get()); const key = bucket(); const props = { ...record(root[key]) }; delete props[name];
+				set({ ...root, [key]: props, ...(!jtd && Array.isArray(root.required) ? { required: root.required.filter(item => item !== name) } : {}) });
+				this.#pages.pop();
+			} },
 		]);
 	}
 	/** Recursive typed data editor keeps every JSON Schema keyword expressible without YAML. */
