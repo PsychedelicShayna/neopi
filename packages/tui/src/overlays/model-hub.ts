@@ -194,6 +194,10 @@ export interface ModelHubSource extends ModelBrowserSource {
 	readonly disabledProviders: readonly string[];
 	readonly fallbackChains: Record<string, string[]>;
 	readonly modelRoleStorage: "global" | "project";
+	/** Fixed authoring scope selected by /models; absent retains the embedding host's scope picker. */
+	readonly editingScope?: ModelRoleSelectionScope;
+	getSessionModelRole?(role: string): string | undefined;
+	getRoleScopeNote?(role: string): string;
 	readonly cycleOrder: readonly string[];
 	getProjectModelRole(role: string): string | undefined;
 	getGlobalModelRole(role: string): string | undefined;
@@ -245,7 +249,7 @@ export interface ScopedModelItem {
 	thinkingLevel?: string;
 }
 
-export type ModelRoleSelectionScope = "global" | "project";
+export type ModelRoleSelectionScope = "global" | "project" | "session";
 
 export interface ModelHubCallbacks {
 	/** Select a model without authoring a role or changing saved preferences. */
@@ -520,6 +524,7 @@ const ROLE_PICKER_COLUMNS: readonly TspPickerColumn[] = [
 	{ id: "model", head: "Model", format: "text", priority: 2 },
 	{ id: "thinking", head: "Thinking", format: "dim", priority: 1 },
 	{ id: "compaction", head: "Compaction", format: "dim", priority: 1 },
+	{ id: "budget", head: "Role budget", format: "dim", priority: 1 },
 ];
 
 /** Kind tab labels (sentence case; acronyms stay upper). */
@@ -1821,7 +1826,9 @@ export class ModelHubComponent implements Component {
 
 	#roleForScope(role: string, scope: ModelRoleSelectionScope): ResolvedModelRoleValue {
 		const roleValue =
-			scope === "project" ? this.#settings.getProjectModelRole(role) : this.#settings.getGlobalModelRole(role);
+			scope === "session"
+				? this.#settings.getSessionModelRole?.(role)
+				: scope === "project" ? this.#settings.getProjectModelRole(role) : this.#settings.getGlobalModelRole(role);
 		const allModels =
 			this.#scopedModels.length > 0
 				? scopedRolePool(
@@ -1866,6 +1873,7 @@ export class ModelHubComponent implements Component {
 
 	/** Stage a reasoning model and scope; cancel before choosing effort leaves the assignment unchanged. */
 	#assignRole(item: ModelBrowserItem, role: string, returnToRoles: boolean, scope?: ModelRoleSelectionScope): void {
+		scope = this.#settings.editingScope ?? scope;
 		if (this.#settings.modelRoleStorage === "project" && scope === undefined) {
 			this.#openScopeStrip(item, role, returnToRoles);
 			return;
@@ -1887,7 +1895,9 @@ export class ModelHubComponent implements Component {
 	#unassignRole(role: string): void {
 		const assignment = this.#roles[role];
 		if (!assignment || assignment.autoSelected) return;
-		if (this.#settings.modelRoleStorage === "project") {
+		if (this.#settings.editingScope) {
+			this.#callbacks.onUnassign(role, this.#settings.editingScope);
+		} else if (this.#settings.modelRoleStorage === "project") {
 			const source = this.#settings.getModelRoleSource(role);
 			this.#callbacks.onUnassign(role, source === "default" ? undefined : source);
 		} else {
@@ -1922,7 +1932,7 @@ export class ModelHubComponent implements Component {
 		if (!assignment) return undefined;
 		const source =
 			this.#settings.modelRoleStorage === "project" ? this.#settings.getModelRoleSource(role) : "default";
-		const scope = source === "project" || source === "global" ? source : undefined;
+		const scope = this.#settings.editingScope ?? (source === "project" || source === "global" ? source : undefined);
 		const model = scope ? this.#roleForScope(role, scope).model : assignment.model;
 		if (!model || this.#thinkingOptionsFor(model).length === 0) return undefined;
 		const storedSelector =
@@ -1945,7 +1955,9 @@ export class ModelHubComponent implements Component {
 	#openRoleStrip(item: ModelBrowserItem): void {
 		const chips: StripChip[] = [];
 		const scopedStorage = this.#settings.modelRoleStorage === "project";
-		const scopes: readonly ModelRoleSelectionScope[] = scopedStorage ? ["global", "project"] : ["global"];
+		const scopes: readonly ModelRoleSelectionScope[] = this.#settings.editingScope
+			? [this.#settings.editingScope]
+			: scopedStorage ? ["global", "project"] : ["global"];
 		for (const role of this.#visibleRoleIds()) {
 			const info = this.#settings.getRoleInfo(role);
 			if (!info.accepts(item.model)) continue;
@@ -4169,9 +4181,11 @@ export class ModelHubComponent implements Component {
 				value = `${theme.fg("dim", `${assignment.model.provider}/`)}${selected ? theme.fg("accent", assignment.model.id) : assignment.model.id}`;
 				const source = this.#settings.getModelRoleSource(role);
 				const policy =
-					source === "project"
-						? this.#settings.getProjectRoleEffortSelection(role)
-						: this.#settings.getGlobalRoleEffortSelection(role);
+					this.#settings.editingScope
+						? this.#settings.getRoleEffortSelection(role)
+						: source === "project"
+							? this.#settings.getProjectRoleEffortSelection(role)
+							: this.#settings.getGlobalRoleEffortSelection(role);
 				const effective =
 					policy?.mode === "auto"
 						? AUTO_THINKING
@@ -4203,6 +4217,8 @@ export class ModelHubComponent implements Component {
 			const limit = assignment && this.#settings.compactionPointFor?.(assignment.model)?.limit;
 			const compactionStyled = limit ? theme.fg("dim", `compact ${limit}`) : "";
 			let line = ` ${cursor} ${dot} ${tagStyled}  ${value}`;
+			const scopeNote = this.#settings.getRoleScopeNote?.(role);
+			if (scopeNote) line += theme.fg("dim", `  [${scopeNote}]`);
 			const budget = this.#settings.getRoleTokenBudget?.(role);
 			const budgetStyled = budget === undefined ? "" : theme.fg("dim", `budget ${budget.toLocaleString("en-US")}`);
 			const right = [budgetStyled, levelStyled, compactionStyled, cycleStyled].filter(part => part.length > 0).join("  ");
@@ -5053,7 +5069,7 @@ export class ModelHubComponent implements Component {
 				: rolesView ? this.#rolesSearch.value : this.#browser.query,
 		)?.error;
 		const props: TspPickerProps = {
-			title: this.#sessionOnly ? "Session model" : "Models",
+			title: this.#sessionOnly ? "Session model" : this.#settings.editingScope ? `Models · ${this.#settings.editingScope}` : "Models",
 			subtitle: [
 				...(queryError ? [span(queryError, "error")] : []),
 				...(typeof subtitle === "string" ? [span(subtitle)] : (subtitle ?? [])),
@@ -5664,6 +5680,8 @@ export class ModelHubComponent implements Component {
 			const tag = info.tag ?? info.name ?? row.role;
 			const assignment = this.#roles[row.role];
 			const facts: Record<string, string> = {};
+			const budget = this.#settings.getRoleTokenBudget?.(row.role);
+			if (budget !== undefined) facts.budget = String(budget);
 			if (assignment) {
 				const selector = `${assignment.model.provider}/${assignment.model.id}`;
 				facts.model = assignment.autoSelected ? `auto → ${selector}` : selector;
@@ -5679,7 +5697,7 @@ export class ModelHubComponent implements Component {
 			items.push({
 				id,
 				label: tag,
-				...(info.name && info.name !== tag ? { detail: info.name } : {}),
+				detail: [info.name && info.name !== tag ? info.name : "", this.#settings.getRoleScopeNote?.(row.role) ?? ""].filter(Boolean).join(" · "),
 				facts,
 				...(assignment && !assignment.autoSelected ? {} : { tone: "muted" as const }),
 				...(cycleIndex >= 0
