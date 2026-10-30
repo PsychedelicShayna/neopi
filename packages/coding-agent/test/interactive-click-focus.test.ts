@@ -485,6 +485,27 @@ describe("inline click-to-focus geometry", () => {
 		expect(activated).toEqual(["demo:open/7"]);
 	});
 
+	it.each(["\x00", "\x1b[32;5u", "\x1b[32;5:2u", "\x1b[32;5:3u"])(
+		"routes reserved speech input %j before link hints, leaving hints active",
+		async shortcut => {
+			cfgExtensionAssistantTextRenderers.set(mode.settings, true);
+			installDemoLinkExtension();
+			await mode.init({ suppressWelcomeIntro: true });
+			void mode.getUserInput();
+			await term.waitForRender();
+			await showReply("Open [the details](demo:open/7).", "the details");
+			expect(mode.startLinkHints()).toBe(true);
+			const speech = vi.spyOn(mode.editor, "handleSpeechShortcut").mockReturnValue(true);
+
+			term.sendInput(shortcut);
+			await term.waitForRender();
+
+			expect(speech).toHaveBeenCalledWith(shortcut);
+			expect(mode.linkHintsActive).toBe(true);
+			expect(mode.editor.getText()).toBe("");
+		},
+	);
+
 	it("reports links as unavailable with the hint key unbound until tui.mouse turns on", async () => {
 		cfgExtensionAssistantTextRenderers.set(mode.settings, true);
 		installDemoLinkExtension();
