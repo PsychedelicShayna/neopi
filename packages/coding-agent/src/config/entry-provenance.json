@@ -1,7 +1,7 @@
 {
 	"previousUpstream": "81e1d892",
 	"upstream": "31147f9d",
-	"forkRevision": "1b89e89db5",
+	"forkRevision": "344c11c9cc",
 	"fork": {
 		"settings": [
 			"advisor.activationSet",
@@ -175,6 +175,7 @@
 			"stt.wake.suppressWhileSpeaking",
 			"symbolBrandGlyph",
 			"symbolEffortGlyphs",
+			"task.definitionGenerationConversationTtlMs",
 			"telemetry.agent_context",
 			"telemetry.threshold_events",
 			"telemetry.tool_results",
