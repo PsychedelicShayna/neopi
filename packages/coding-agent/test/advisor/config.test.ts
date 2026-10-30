@@ -509,11 +509,12 @@ describe("WATCHDOG.yml file round-trip", () => {
 		const file = path.join(tmp, "WATCHDOG.yml");
 		const original = "instructions: Existing\n";
 		await Bun.write(file, original);
+		const target = await fsp.realpath(file);
 		const staged = Promise.withResolvers<void>();
 		const publish = Promise.withResolvers<void>();
 		const rename = fs.promises.rename.bind(fs.promises);
 		vi.spyOn(fs.promises, "rename").mockImplementation(async (from, to) => {
-			if (to === file) {
+			if (to === target) {
 				staged.resolve();
 				await publish.promise;
 			}
@@ -522,7 +523,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 
 		const save = saveWatchdogConfigFile(file, { instructions: "Replacement", advisors: [] });
 		try {
-			const ready = await Promise.race([staged.promise.then(() => true), Bun.sleep(500).then(() => false)]);
+			const ready = await Promise.race([staged.promise.then(() => true), save.then(() => false)]);
 			expect(ready).toBe(true);
 			expect(await Bun.file(file).text()).toBe(original);
 		} finally {
@@ -1277,5 +1278,68 @@ describe("per-advisor syncBacklog override", () => {
 		expect(doc.advisors).toEqual([]);
 		expect(doc.warnings).toHaveLength(1);
 		expect(doc.warnings?.[0]).toContain("expected a YAML mapping");
+	});
+
+	it("parses, validates, and round-trips scope and includeThinking", async () => {
+		const doc: WatchdogConfigDoc = {
+			advisors: [
+				{ name: "Main Only", scope: "main", includeThinking: true },
+				{ name: "Subagent Evidence Only", scope: "subagent", includeThinking: false },
+				{ name: "Both Scopes", scope: "all" },
+				{ name: "Default Scope" },
+			],
+		};
+		const file = path.join(tmp, "WATCHDOG.yml");
+		await saveWatchdogConfigFile(file, doc);
+
+		const text = await Bun.file(file).text();
+		expect(text).toContain("scope: main");
+		expect(text).toContain("scope: subagent");
+		expect(text).toContain("includeThinking: false");
+		expect(await loadWatchdogConfigFile(file)).toEqual(doc);
+
+		const { advisors } = await discoverAdvisorConfigs(tmp, tmp);
+		expect(advisors.map(a => ({ name: a.name, scope: a.scope, includeThinking: a.includeThinking }))).toEqual([
+			{ name: "Main Only", scope: "main", includeThinking: true },
+			{ name: "Subagent Evidence Only", scope: "subagent", includeThinking: false },
+			{ name: "Both Scopes", scope: "all", includeThinking: undefined },
+			{ name: "Default Scope", scope: undefined, includeThinking: undefined },
+		]);
+
+		// Saving an edited, loaded document uses the formatting-preserving patch path.
+		const edited = await loadWatchdogConfigFile(file);
+		edited.advisors[0]!.scope = "subagent";
+		delete edited.advisors[1]!.scope;
+		await saveWatchdogConfigFile(file, edited);
+		expect((await loadWatchdogConfigFile(file)).advisors.map(advisor => advisor.scope)).toEqual([
+			"subagent",
+			undefined,
+			"all",
+			undefined,
+		]);
+
+		// Each invalid field drops only its own entry, in discovery and the editor.
+		await Bun.write(
+			file,
+			[
+				"advisors:",
+				"  - name: Valid",
+				"    scope: main",
+				"    includeThinking: false",
+				"  - name: Invalid Scope",
+				"    scope: worker-only",
+				"  - name: Invalid Thinking",
+				"    includeThinking: never",
+			].join("\n"),
+		);
+		const partial = await discoverAdvisorConfigs(tmp, tmp);
+		expect(partial.advisors.map(a => a.name)).toEqual(["Valid"]);
+		expect(partial.advisors[0]?.includeThinking).toBe(false);
+		expect(partial.warnings).toHaveLength(2);
+		expect(partial.warnings.join("\n")).toContain('"Invalid Scope"');
+		expect(partial.warnings.join("\n")).toContain('"Invalid Thinking"');
+		const editable = await loadWatchdogConfigFile(file);
+		expect(editable.advisors).toEqual([{ name: "Valid", scope: "main", includeThinking: false }]);
+		expect(editable.warnings).toHaveLength(2);
 	});
 });

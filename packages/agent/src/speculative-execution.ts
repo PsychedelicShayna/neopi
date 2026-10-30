@@ -239,6 +239,12 @@ export class SpeculativeOperationCoordinator {
 	#closed = false;
 	#admissionsFinalized = false;
 	#running = 0;
+	/** Observer of existing speculative execution draining; no separate work ledger. */
+	onIdle?: () => void;
+
+	get isRunning(): boolean {
+		return this.#running > 0;
+	}
 
 	constructor(
 		readonly config: SpeculativeToolExecutionConfig,
@@ -914,10 +920,11 @@ export class SpeculativeOperationCoordinator {
 				// I/O. Hosts without the hook keep capturing during `authorize`.
 				if (this.config.host?.captureEvidence) {
 					const ready = await this.config.host.captureEvidence(this.#createContext(candidate));
-					if (!ready || candidate.state === "discarded") {
-						await this.#discardCandidate(candidate, "discarded", "host declined speculative evidence capture");
-						return;
-					}
+					if (candidate.state === "discarded") return;
+					// Dispatch may already be claiming this candidate while capture
+					// performs I/O. A claimed candidate cannot be discarded until its
+					// outcome settles, so reject through the execution failure path.
+					if (!ready) throw new Error("host declined speculative evidence capture");
 				}
 				const outcome = await candidate.policy.execute(executionContext, signal);
 				if (candidate.state === "discarded") return;
@@ -955,6 +962,7 @@ export class SpeculativeOperationCoordinator {
 			} finally {
 				this.#running--;
 				this.#drain();
+				if (this.#running === 0) this.onIdle?.();
 			}
 		})();
 	}

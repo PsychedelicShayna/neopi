@@ -59,6 +59,8 @@ export interface ExtensionAskDialogResultItem {
 	note?: string;
 	noteImages?: ImageContent[];
 	optionNotes?: AskDialogOptionNote[];
+	/** Label of the option the note is on; unset when it is on the custom answer. */
+	noteOption?: string;
 	timedOut?: boolean;
 }
 
@@ -147,14 +149,21 @@ interface AskDialogCallbacks {
 	): Promise<AskDialogPromptValue | undefined>;
 }
 
+/**
+ * Routes typing to a composer draft that was in progress when the dialog
+ * opened, so in-flight keystrokes never answer by accident. The up/down select
+ * keys are the explicit hand-off: they release the guard for the rest of the
+ * dialog's life and the draft stays parked (intact) beneath it.
+ */
 interface AskDialogInputGuard {
 	isBlocked(): boolean;
 	handleInput(keyData: string): void;
+	/** Shown after the release keys while the guard holds input. */
 	hint: string;
 	/** Mirror the guard's blocked state onto the proxied draft surface each
 	 *  render, so a draft that owns input shows a visible insertion cursor even
-	 *  though this dialog holds TUI focus. */
-	syncPresentation?(): void;
+	 *  though this dialog holds TUI focus, and drops it once the dialog takes over. */
+	syncPresentation?(blocked: boolean): void;
 }
 
 interface AskDialogOptions {
@@ -420,7 +429,7 @@ function describeAnswer(question: ExtensionAskDialogQuestion, state: QuestionSta
 			push(optionLabelSpans(question, index, labels[index] ?? option.label));
 	});
 	if (state.customInput !== undefined) push([span(`“${normalizedInlineInput(state.customInput)}”`)]);
-	const note = noteForSubmittedAnswer(question, state)?.trim();
+	const note = noteForSubmittedAnswer(question, state)?.text.trim();
 	if (note) spans.push(span("  ✎ ", "dim"), span(normalizedInlineInput(note), "em"));
 	for (const entry of state.optionNotes) {
 		spans.push(
@@ -475,13 +484,17 @@ function clearNoteUnlessRow(state: QuestionState, rowKey: string): void {
 	if (state.noteRowKey !== undefined && state.noteRowKey !== rowKey) clearNote(state);
 }
 
-function noteForSubmittedAnswer(question: ExtensionAskDialogQuestion, state: QuestionState): string | undefined {
+/** The note that goes out with the answer (its row is part of it), and the option it is on (unset for Other). */
+function noteForSubmittedAnswer(
+	question: ExtensionAskDialogQuestion,
+	state: QuestionState,
+): { text: string; option?: string } | undefined {
 	if (state.note === undefined || state.noteRowKey === undefined) return undefined;
-	if (state.noteRowKey === "other") return state.customInput !== undefined ? state.note : undefined;
+	if (state.noteRowKey === "other") return state.customInput !== undefined ? { text: state.note } : undefined;
 	const match = /^option:(\d+)$/.exec(state.noteRowKey);
 	const optionIndex = match?.[1] === undefined ? Number.NaN : Number.parseInt(match[1], 10);
 	const option = Number.isInteger(optionIndex) ? question.options[optionIndex] : undefined;
-	return option && state.selectedOptions.has(option.label) ? state.note : undefined;
+	return option && state.selectedOptions.has(option.label) ? { text: state.note, option: option.label } : undefined;
 }
 
 function renderRowLabel(
@@ -623,10 +636,18 @@ export class AskDialogComponent implements Component {
 	#native: NativeNode | undefined;
 	/** Input-guard blocked state {@link #native} was described with (the guard flips outside this dialog). */
 	#nativeBlocked = false;
+	/** Set once the user explicitly takes the dialog (up/down, or a pointer action) while a draft held input. */
+	#guardReleased = false;
 	/** When the countdown runs out (epoch ms), for the native ring. */
 	#countdownDeadline = 0;
 	/** Once-a-second re-describe while the native countdown ring is shown. */
 	#ringTick: NodeJS.Timeout | undefined;
+	/**
+	 * The answer whose pick just moved the dialog on to the next question. Note annotates it, not the
+	 * next question's highlighted row, until that question is answered or any other input arrives:
+	 * a Tern click commits a single-choice row, so picking then pressing Note is the mouse flow.
+	 */
+	#justAnswered: { questionIndex: number; rowKey: string } | undefined;
 	readonly #panel: OverlayPanel;
 	readonly #headerRegion: PanelRows;
 	readonly #bodyRegion: PanelRows;
@@ -729,10 +750,10 @@ export class AskDialogComponent implements Component {
 		// closed/prompt guards, matching HookSelector/HookInput semantics.
 		this.#countdown?.reset();
 		this.#native = undefined;
+		if (keyData !== "n" && keyData !== "N") this.#justAnswered = undefined;
 		const inputGuard = this.options.inputGuard;
-		// A proxied draft owns printable text even when a menu action was
-		// rebound to that character. Its host retains ordinary editing.
-		if (inputGuard && (inputGuard.isBlocked() || this.#hidden) && extractPrintableText(keyData) !== undefined) {
+		// Proxied draft text wins over remapped menu actions.
+		if (inputGuard && (this.#guardBlocks() || this.#hidden) && extractPrintableText(keyData) !== undefined) {
 			this.#keys.reset();
 			inputGuard.handleInput(keyData);
 			this.#requestRender();
@@ -756,9 +777,16 @@ export class AskDialogComponent implements Component {
 			this.toggleQuestionExpansion();
 			return;
 		}
-		if (inputGuard?.isBlocked()) {
+		if (this.#guardBlocks()) {
 			this.#keys.reset();
-			inputGuard.handleInput(keyData);
+			if (
+				getKeybindings().matches(keyData, "tui.select.up") ||
+				getKeybindings().matches(keyData, "tui.select.down")
+			) {
+				this.#releaseGuard();
+				return;
+			}
+			inputGuard?.handleInput(keyData);
 			this.#requestRender();
 			return;
 		}
@@ -792,7 +820,7 @@ export class AskDialogComponent implements Component {
 		// Keep the proxied draft's cursor visible while it owns input (the editor
 		// renders as the next sibling in the same container, so this lands in the
 		// same frame).
-		this.options.inputGuard?.syncPresentation?.();
+		this.options.inputGuard?.syncPresentation?.(this.#guardBlocks());
 		if (this.#hidden) return this.#renderHidden(width);
 		const innerWidth = Math.max(1, width - 4);
 		this.#contentWidth = innerWidth;
@@ -844,10 +872,9 @@ export class AskDialogComponent implements Component {
 			this.#submitLayoutDirty = true;
 			this.#native = undefined;
 		}
-		const inputGuard = this.options.inputGuard;
 		// Same draft-cursor mirroring as render(): the proxied draft describes itself next to this dialog.
-		inputGuard?.syncPresentation?.();
-		const blocked = inputGuard?.isBlocked() ?? false;
+		const blocked = this.#guardBlocks();
+		this.options.inputGuard?.syncPresentation?.(blocked);
 		const ring = this.#countdown !== undefined && cx.supports("meter");
 		if (ring) this.#startRingTick();
 		if (this.#native && this.#nativeBlocked === blocked) return this.#native;
@@ -1066,7 +1093,7 @@ export class AskDialogComponent implements Component {
 		if (blocked && inputGuard) {
 			return actionBar([
 				...lead,
-				text([span(plainText(inputGuard.hint), "muted")], { truncate: "end", role: "omp.ask.summary" }),
+				text([span(plainText(this.#guardHint(inputGuard)), "muted")], { truncate: "end", role: "omp.ask.summary" }),
 				skip,
 			]);
 		}
@@ -1087,7 +1114,10 @@ export class AskDialogComponent implements Component {
 			tone: "accent",
 			title: question?.multi ? `${enterLabel}  enter · Toggle  space` : `${enterLabel}  enter`,
 		});
-		const note = actionButton("Note", "note", { keys: "n", title: "Add a note to the highlighted answer  n" });
+		const note = actionButton("Note", "note", {
+			keys: "n",
+			title: "Add a note to the highlighted answer, or to the one just picked  n",
+		});
 		const optionNote = actionButton("Option note", "option-note", {
 			keys: "a",
 			title: "Add option note  a · Edit latest  A",
@@ -1099,11 +1129,12 @@ export class AskDialogComponent implements Component {
 	 * Pointer actions: a tab click switches to it; a click on an answer row is
 	 * Enter on it (Space for a multi-select option, so it toggles; its
 	 * double-click `activate` is Enter); the action bar's Submit, Note and Skip
-	 * run exactly what Enter, `n` and Esc run on the highlighted row; Hide/Show
+	 * run what Enter (see {@link #pressEnter} for Other), `n` and Esc run on the highlighted row; Hide/Show
 	 * collapse and restore the dialog.
 	 */
 	handleNativeEvent(event: NativeUiEvent): void {
 		if (this.#closed || this.#promptActive) return;
+		if (event.type !== "action" || event.act !== "note") this.#justAnswered = undefined;
 		if (event.type === "action") {
 			if (event.act === "cancel") {
 				this.#finishCancel();
@@ -1113,14 +1144,17 @@ export class AskDialogComponent implements Component {
 				this.#setHidden(event.act === "hide");
 				return;
 			}
-			if (this.#hidden || this.options.inputGuard?.isBlocked()) return;
+			if (this.#hidden) return;
+			// A pointer action on the dialog is an explicit hand-off from the draft.
+			this.#releaseGuardForPointer();
 			if (event.act === "submit") this.#pressEnter();
 			else if (event.act === "note") this.#pressNote();
 			else if (event.act === "option-note") this.#pressOptionNote(false);
 			return;
 		}
 		if (event.type !== "select" && event.type !== "activate") return;
-		if (this.#hidden || this.options.inputGuard?.isBlocked()) return;
+		if (this.#hidden) return;
+		this.#releaseGuardForPointer();
 		const key = leafKey(event.key);
 		if (key === "tabs") {
 			if (!this.#hasSubmitTab()) return;
@@ -1151,7 +1185,13 @@ export class AskDialogComponent implements Component {
 		this.#requestRender();
 	}
 
-	/** Enter: submit on the Review tab, else commit the highlighted row. */
+	/**
+	 * The action bar's Submit/Next: submit on the Review tab, else commit the highlighted row —
+	 * except Other, whose row (click or Enter) already opens the editor. Reopening it here trapped a
+	 * cancelled Other: Next kept bringing the editor back instead of moving on. With a Review tab to
+	 * land on, Next keeps any custom answer and moves on; a lone single-select question has nowhere
+	 * to go but submitting nothing, so it still asks.
+	 */
 	#pressEnter(): void {
 		this.#countdown?.reset();
 		if (this.#isSubmitTab()) {
@@ -1161,18 +1201,38 @@ export class AskDialogComponent implements Component {
 		const active = this.#activeQuestionState();
 		const rowItem = active ? this.#questionRows(active.question)[active.state.cursorIndex] : undefined;
 		if (!active || !rowItem) return;
+		if (rowItem.kind === "other" && this.#hasSubmitTab()) {
+			this.#advanceAfterQuestion(active.state.customInput === undefined ? undefined : rowItem.key);
+			return;
+		}
 		this.#commitRow(active.question, active.state, rowItem, true);
 		this.#requestRender();
 	}
 
-	/** `n`: a note on the highlighted row (questions only). */
+	/** `n`: a note on the {@link #noteTarget} row (questions only). */
 	#pressNote(): void {
 		if (this.#isSubmitTab()) return;
 		this.#countdown?.reset();
+		const target = this.#noteTarget();
+		if (target) void this.#promptForNote(target.question, target.state, target.rowItem);
+	}
+
+	/**
+	 * The row a note goes to: the answer just picked while the question it moved on to is still
+	 * unanswered, else the highlighted row.
+	 */
+	#noteTarget(): { question: ExtensionAskDialogQuestion; state: QuestionState; rowItem: QuestionRow } | undefined {
 		const active = this.#activeQuestionState();
-		const rowItem = active ? this.#questionRows(active.question)[active.state.cursorIndex] : undefined;
-		if (!active || !rowItem) return;
-		void this.#promptForNote(active.question, active.state, rowItem);
+		if (!active) return undefined;
+		const last = this.#justAnswered;
+		if (last && last.questionIndex !== this.#currentQuestionIndex() && !isAnswered(active.state)) {
+			const question = this.#questions[last.questionIndex];
+			const state = this.#states[last.questionIndex];
+			const rowItem = question ? this.#questionRows(question).find(row => row.key === last.rowKey) : undefined;
+			if (question && state && rowItem) return { question, state, rowItem };
+		}
+		const rowItem = this.#questionRows(active.question)[active.state.cursorIndex];
+		return rowItem ? { question: active.question, state: active.state, rowItem } : undefined;
 	}
 
 	#pressOptionNote(edit: boolean): void {
@@ -1271,16 +1331,39 @@ export class AskDialogComponent implements Component {
 		this.#requestRender();
 	}
 
+	/** True while a draft that predates the dialog still owns typing. */
+	#guardBlocks(): boolean {
+		return !this.#guardReleased && (this.options.inputGuard?.isBlocked() ?? false);
+	}
+
+	/** Up/down hand the keyboard to the dialog for good; the draft stays untouched beneath it. */
+	#releaseGuard(): void {
+		this.#guardReleased = true;
+		this.#native = undefined;
+		this.#hidden = false;
+		this.#requestRender();
+	}
+
+	#releaseGuardForPointer(): void {
+		if (!this.#guardBlocks()) return;
+		this.#guardReleased = true;
+		this.#native = undefined;
+	}
+
+	#guardHint(inputGuard: AskDialogInputGuard): string {
+		return `${editorKeys("tui.select.up", "tui.select.down")} answer · ${inputGuard.hint}`;
+	}
+
 	/** Hidden: one line in the composer's place — title (with countdown), the question clipped to fit, and how to bring it back. */
 	#renderHidden(width: number): readonly string[] {
 		const hideKey = editorKey("app.ask.hide");
 		const enter = formatKeyHint("enter");
 		const inputGuard = this.options.inputGuard;
-		const blocked = inputGuard?.isBlocked() ?? false;
+		const blocked = this.#guardBlocks();
 		// While a draft owns input, Enter goes to the draft, so only the hide key restores.
 		const show = blocked ? hideKey : hideKey ? `${hideKey}/${enter}` : enter;
 		const hints: string[] = [];
-		if (blocked && inputGuard) hints.push(inputGuard.hint);
+		if (blocked && inputGuard) hints.push(this.#guardHint(inputGuard));
 		else if (inputGuard) hints.push("type to write a message");
 		if (show) hints.push(`${show} show`);
 		hints.push(`${editorKey("tui.select.cancel")} cancel`);
@@ -1364,7 +1447,7 @@ export class AskDialogComponent implements Component {
 		const enter = formatKeyHint("enter");
 		const upDown = `j/k, ${editorKeys("tui.select.up", "tui.select.down")}`;
 		const inputGuard = this.options.inputGuard;
-		if (inputGuard?.isBlocked()) return `${inputGuard.hint}${this.#expandHint()} · ${cancel}`;
+		if (inputGuard && this.#guardBlocks()) return `${this.#guardHint(inputGuard)}${this.#expandHint()} · ${cancel}`;
 		if (this.#isSubmitTab()) {
 			const scroll = indicator ? ` ${indicator} scroll ·` : "";
 			return `${enter} submit · ${cancel} · ${upDown}, Ctrl+E/Y scroll ·${scroll} PgUp/Dn page · gg/G bounds`;
@@ -1488,7 +1571,7 @@ export class AskDialogComponent implements Component {
 			return;
 		}
 		if (!action && (keyData === "n" || keyData === "N")) {
-			if (rowItem.kind === "option" || rowItem.kind === "other") void this.#promptForNote(question, state, rowItem);
+			this.#pressNote();
 			return;
 		}
 		if (action?.kind === "confirm") this.#commitRow(question, state, rowItem, true);
@@ -1517,7 +1600,7 @@ export class AskDialogComponent implements Component {
 				// focused option; Space toggles. Advances to the next question
 				// (submitting only for a single-question dialog), matching
 				// single-select Enter (#8252).
-				this.#advanceAfterQuestion();
+				this.#advanceAfterQuestion(state.selectedOptions.has(option.label) ? rowItem.key : undefined);
 				return;
 			}
 			if (state.selectedOptions.has(option.label)) {
@@ -1533,7 +1616,7 @@ export class AskDialogComponent implements Component {
 		state.customInput = undefined;
 		state.customInputImages = undefined;
 		clearNoteUnlessRow(state, rowItem.key);
-		this.#advanceAfterQuestion();
+		this.#advanceAfterQuestion(rowItem.key);
 	}
 
 	#handleSubmitTabInput(action: MenuNavAction): void {
@@ -1555,10 +1638,15 @@ export class AskDialogComponent implements Component {
 		this.#nativeScroll = undefined;
 	}
 
-	#advanceAfterQuestion(): void {
+	/** Move past the current question, retaining the just-picked row as the note target. */
+	#advanceAfterQuestion(answeredRowKey?: string): void {
 		this.#keys.reset();
 		this.#nativeScroll = undefined;
 		const current = this.#currentQuestionIndex();
+		this.#justAnswered =
+			answeredRowKey !== undefined && this.#questions.length > 1
+				? { questionIndex: current, rowKey: answeredRowKey }
+				: undefined;
 		if (this.#questions.length === 1) {
 			this.#finishSubmit();
 			return;
@@ -1611,7 +1699,7 @@ export class AskDialogComponent implements Component {
 				this.#activeTabIndex = this.#submitTabIndex();
 				this.#submitScrollOffset = 0;
 			} else {
-				this.#advanceAfterQuestion();
+				this.#advanceAfterQuestion(rowItem.key);
 			}
 		} finally {
 			this.#promptActive = false;
@@ -1782,7 +1870,7 @@ export class AskDialogComponent implements Component {
 			const label = questionTabLabel(question, index);
 			const answer = renderAnswerSummary(question, state);
 			allLines.push(`${theme.fg("dim", `${index + 1}. ${label}:`)} ${answer}`);
-			const submittedNote = noteForSubmittedAnswer(question, state);
+			const submittedNote = noteForSubmittedAnswer(question, state)?.text;
 			if (submittedNote?.trim()) {
 				const note = normalizedInlineInput(submittedNote);
 				allLines.push(
@@ -1925,9 +2013,10 @@ export class AskDialogComponent implements Component {
 				selectedOptions,
 				customInput: state.customInput,
 				customInputImages: state.customInputImages,
-				note,
+				note: note?.text,
 				noteImages: note === undefined ? undefined : state.noteImages,
 				...(state.optionNotes.length ? { optionNotes: state.optionNotes.map(entry => ({ ...entry })) } : {}),
+				noteOption: note?.option,
 				timedOut: state.timedOut || undefined,
 			});
 		}

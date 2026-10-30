@@ -99,7 +99,6 @@ import asset89 from "../discovery/builtin-rules/rs-box-leak.md" with { type: "te
 import asset90 from "../discovery/builtin-rules/rs-future-prelude.md" with { type: "text" };
 import asset91 from "../discovery/builtin-rules/rs-lazylock.md" with { type: "text" };
 import asset92 from "../discovery/builtin-rules/rs-match-ergonomics.md" with { type: "text" };
-import asset93 from "../discovery/builtin-rules/rs-parking-lot.md" with { type: "text" };
 import asset94 from "../discovery/builtin-rules/rs-result-type.md" with { type: "text" };
 import asset95 from "../discovery/builtin-rules/ts-bare-catch.md" with { type: "text" };
 import asset96 from "../discovery/builtin-rules/ts-import-type.md" with { type: "text" };
@@ -343,7 +342,6 @@ import asset326 from "./tools/context-notes.md" with { type: "text" };
 import asset327 from "./tools/ctl.md" with { type: "text" };
 import asset328 from "./tools/debug.md" with { type: "text" };
 import asset329 from "./tools/eval-agents.md" with { type: "text" };
-import asset330 from "./tools/eval-code-mode.md" with { type: "text" };
 import asset331 from "./tools/eval-helpers.md" with { type: "text" };
 import asset332 from "./tools/eval-judge.md" with { type: "text" };
 import asset333 from "./tools/eval.md" with { type: "text" };
@@ -2276,19 +2274,6 @@ export const promptAssets: readonly PromptAsset[] = [
 		fixture: {},
 		consumerHints: [
 			"packages/coding-agent/src/discovery/builtin-rules/rs-match-ergonomics.md",
-			"packages/coding-agent/src/discovery/builtin-rules/index.ts",
-		],
-	},
-	{
-		id: "discovery/builtin-rules/rs-parking-lot.md",
-		relPath: "discovery/builtin-rules/rs-parking-lot.md",
-		bundled: asset93,
-		scope: "feature:discovery/builtin-rules/rs-parking-lot",
-		group: "feature",
-		keys: [],
-		fixture: {},
-		consumerHints: [
-			"packages/coding-agent/src/discovery/builtin-rules/rs-parking-lot.md",
 			"packages/coding-agent/src/discovery/builtin-rules/index.ts",
 		],
 	},
@@ -7279,27 +7264,6 @@ export const promptAssets: readonly PromptAsset[] = [
 		},
 		consumerHints: [
 			"packages/coding-agent/src/prompts/tools/eval-agents.md",
-			"packages/coding-agent/src/tools/eval.ts",
-		],
-	},
-	{
-		id: "tools/eval-code-mode.md",
-		relPath: "tools/eval-code-mode.md",
-		bundled: asset330,
-		scope: "tool:eval-code-mode",
-		group: "core",
-		keys: [
-			{ path: "baseDescription", type: "string", required: true, resolution: "session-dependent" },
-			{ path: "declarations", type: "string", required: true, resolution: "session-dependent" },
-			{ path: "preludeDeclarations", type: "string", required: true, resolution: "session-dependent" },
-		],
-		fixture: {
-			baseDescription: "Example baseDescription",
-			declarations: "Example declarations",
-			preludeDeclarations: "Example preludeDeclarations",
-		},
-		consumerHints: [
-			"packages/coding-agent/src/prompts/tools/eval-code-mode.md",
 			"packages/coding-agent/src/tools/eval.ts",
 		],
 	},

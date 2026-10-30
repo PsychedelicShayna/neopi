@@ -68,6 +68,13 @@ describe("AgentSession.fork(entryId)", () => {
 		return { session, artifactId, forkAt };
 	}
 
+	/** Starts user eval work on `target` that, like a real eval run, settles once `controller` aborts it. */
+	function startUserEval(target: AgentSession, controller: AbortController): void {
+		const run = Promise.withResolvers<void>();
+		controller.signal.addEventListener("abort", () => run.resolve(), { once: true });
+		void target.trackEvalExecution(run.promise, controller);
+	}
+
 	it("keeps cited artifacts resolvable and allocates fresh ids after the cut", async () => {
 		const { session, artifactId, forkAt } = await createSeededSession();
 		const sourceFile = session.sessionFile;
@@ -165,7 +172,7 @@ describe("AgentSession.fork(entryId)", () => {
 		const extensionRunner = {
 			hasHandlers: (eventType: string) => eventType === "session_before_branch",
 			emit: async () => {
-				session!.trackEvalExecution(Promise.withResolvers<void>().promise, userEval).catch(() => undefined);
+				startUserEval(session!, userEval);
 				return undefined;
 			},
 		} as unknown as ExtensionRunner;
@@ -195,7 +202,7 @@ describe("AgentSession.fork(entryId)", () => {
 		const userEval = new AbortController();
 		const flush = seeded.sessionManager.flush.bind(seeded.sessionManager);
 		vi.spyOn(seeded.sessionManager, "flush").mockImplementation(async () => {
-			seeded.trackEvalExecution(Promise.withResolvers<void>().promise, userEval).catch(() => undefined);
+			startUserEval(seeded, userEval);
 			await flush();
 		});
 		expect(seeded.isBusyForSnapshot).toBe(false);
@@ -218,7 +225,7 @@ describe("AgentSession.fork(entryId)", () => {
 		const userEval = new AbortController();
 		const flush = seeded.sessionManager.flush.bind(seeded.sessionManager);
 		vi.spyOn(seeded.sessionManager, "flush").mockImplementation(async () => {
-			seeded.trackEvalExecution(Promise.withResolvers<void>().promise, userEval).catch(() => undefined);
+			startUserEval(seeded, userEval);
 			await flush();
 		});
 

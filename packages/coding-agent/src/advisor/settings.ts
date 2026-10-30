@@ -2,11 +2,61 @@
  * Settings declared by this domain (see `config/registry.ts`). Declaration order is the
  * settings-panel order; `config/all-settings.ts` registers every domain.
  */
+import { ADVISOR_SEVERITIES } from "@oh-my-pi/pi-tui/chat/messages";
 import { ADVISOR_REVIEW_MODES, ADVISOR_SYNC_BACKLOG_MODES } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { Derived, register, type AnySetting } from "../config/registry";
 import { cfgRoleSettings } from "../config/role-settings";
 import type { Settings } from "../config/settings";
 import { ADVISOR_DEFAULT_BUDGET_PER_UPDATE } from "./emission-guard";
+
+export const ADVISOR_DELIVERY_TIMINGS = ["on-yield", "next-tool-call"] as const;
+export type AdvisorDeliveryTiming = (typeof ADVISOR_DELIVERY_TIMINGS)[number];
+
+function deliverySetting(severity: "nit" | "concern" | "blocker", defaultTiming: AdvisorDeliveryTiming) {
+	const id = `advisor.delivery.${severity}`;
+	return register({
+		id,
+		protocolDefault: ["rpc", "acp"],
+		type: "enum",
+		values: ADVISOR_DELIVERY_TIMINGS,
+		default: defaultTiming,
+		validate: raw => {
+			if (raw === undefined) return;
+			if (raw === "interrupt") {
+				throw new Error(
+					`${id}: interrupt is unsupported: advisors receive completed primary updates, not streaming output. Use on-yield or next-tool-call; neither cancels live tools or generation.`,
+				);
+			}
+			if (!(ADVISOR_DELIVERY_TIMINGS as readonly unknown[]).includes(raw)) {
+				throw new Error(`${id} must be on-yield or next-tool-call`);
+			}
+		},
+		ui: {
+			tab: "model",
+			group: "Advisor",
+			label: `Advisor ${severity.charAt(0).toUpperCase()}${severity.slice(1)} Delivery`,
+			description:
+				"When admitted notes reach the primary. On yield waits for the actual run end, not an intermediate step. Next tool call waits for a safe completed tool-call boundary without cancelling tools or generation. Interrupt is unsupported.",
+			options: [
+				{ value: "on-yield", label: "On yield" },
+				{ value: "next-tool-call", label: "Next tool call" },
+			],
+			condition: "advisorEnabled",
+		},
+	});
+}
+
+export const cfgAdvisorDeliveryNit = deliverySetting("nit", "on-yield");
+export const cfgAdvisorDeliveryConcern = deliverySetting("concern", "next-tool-call");
+export const cfgAdvisorDeliveryBlocker = deliverySetting("blocker", "next-tool-call");
+
+export function advisorDeliveryTiming(settings: Settings, severity: "nit" | "concern" | "blocker" = "nit"): AdvisorDeliveryTiming {
+	switch (severity) {
+		case "nit": return cfgAdvisorDeliveryNit.get(settings);
+		case "concern": return cfgAdvisorDeliveryConcern.get(settings);
+		case "blocker": return cfgAdvisorDeliveryBlocker.get(settings);
+	}
+}
 
 // Advisor is interactive-session assistance: protocol hosts opt in explicitly instead of inheriting the
 // user's local preference, and get the default tuning rather than the user's local tuning.
@@ -82,6 +132,50 @@ export const cfgAdvisorSyncBacklog = register({
 		label: "Advisor Sync Backlog",
 		description:
 			"Pause main agent until advisor backlog falls below threshold. Numeric values cap wait at 30 seconds; strict waits for all scheduled reviews without a wall-clock cap. Off disables catch-up delays. Abort, failure, and disposal release waits.",
+		condition: "advisorEnabled",
+	},
+});
+
+export const cfgAdvisorImmuneTurns = register({
+	id: "advisor.immuneTurns",
+	protocolDefault: ["rpc", "acp"],
+	type: "number",
+	default: 3,
+	ui: {
+		tab: "model",
+		group: "Advisor",
+		label: "Advisor Immune Turns",
+		description:
+			"After an advisor concern or blocker interrupts, route further concerns as non-interrupting asides for this many primary turns. Blockers are exempt from the cooldown.",
+		options: [
+			{ value: "0", label: "0 steps", description: "No cooldown." },
+			{ value: "1", label: "1 step" },
+			{ value: "2", label: "2 steps" },
+			{ value: "3", label: "3 steps", description: "Default." },
+			{ value: "4", label: "4 steps" },
+			{ value: "5", label: "5 steps" },
+		],
+		condition: "advisorEnabled",
+	},
+});
+
+export const cfgAdvisorContinueSeverity = register({
+	id: "advisor.continueSeverity",
+	protocolDefault: ["rpc", "acp"],
+	type: "enum",
+	values: ADVISOR_SEVERITIES,
+	default: "concern",
+	ui: {
+		tab: "model",
+		group: "Advisor",
+		label: "Advisor Continue Severity",
+		description:
+			"Minimum severity of an advisor note that wakes the agent after it finished with a final answer. Lower-severity notes stay as a card at the end of the transcript and reach the agent with your next message.",
+		options: [
+			{ value: "nit", label: "Nit", description: "Every note continues the run." },
+			{ value: "concern", label: "Concern", description: "Concerns and blockers continue the run. Default." },
+			{ value: "blocker", label: "Blocker", description: "Only blockers continue the run." },
+		],
 		condition: "advisorEnabled",
 	},
 });

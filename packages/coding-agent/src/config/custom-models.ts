@@ -100,6 +100,7 @@ export function buildCustomModelOverlay(
 		discoveryMissingMaxTokens: modelDef.discoveryMissingMaxTokens,
 		discoveryMissingReasoningEffort: modelDef.discoveryMissingReasoningEffort,
 		imageInputDecoder: modelDef.imageInputDecoder,
+		imageCountBudget: modelDef.imageCountBudget,
 		tokenizer: modelDef.tokenizer,
 		supportsTools: modelDef.supportsTools,
 		cost: modelDef.cost,
@@ -119,15 +120,7 @@ export function buildCustomModelOverlay(
 	};
 }
 
-function applyStandaloneCustomModelPolicies(model: CustomModelOverlay): CustomModelOverlay {
-	if (model.id !== "gpt-5.4" || model.provider === "github-copilot" || model.contextWindow !== undefined) {
-		return model;
-	}
-	return { ...model, contextWindow: 1_000_000 };
-}
-
-export function finalizeCustomModel(model: CustomModelOverlay, options: CustomModelBuildOptions): Model<Api> {
-	const resolvedModel = options.useDefaults ? applyStandaloneCustomModelPolicies(model) : model;
+export function finalizeCustomModel(resolvedModel: CustomModelOverlay, options: CustomModelBuildOptions): Model<Api> {
 	const reference = options.useDefaults
 		? resolveModelReference(resolvedModel.id, getBundledModelReferenceIndex())
 		: undefined;
@@ -156,6 +149,7 @@ export function finalizeCustomModel(model: CustomModelOverlay, options: CustomMo
 			resolvedModel.discoveryMissingMaxTokens ?? (resolvedModel.maxTokens == null && reference?.maxTokens == null),
 		discoveryMissingReasoningEffort: resolvedModel.discoveryMissingReasoningEffort,
 		imageInputDecoder: resolvedModel.imageInputDecoder,
+		imageCountBudget: resolvedModel.imageCountBudget,
 		...(supportsTools !== undefined ? { supportsTools } : {}),
 		cost,
 		promptCache: resolvedModel.promptCache,
@@ -180,6 +174,9 @@ export function finalizeCustomModel(model: CustomModelOverlay, options: CustomMo
 		built.cost = { ...resolvedModel.cost };
 		delete built.cost.timeBased;
 	}
+	// Explicit custom limits outrank the catalog `limits-patch` buildModel applied.
+	if (resolvedModel.contextWindow !== undefined) built.contextWindow = resolvedModel.contextWindow;
+	if (resolvedModel.maxTokens !== undefined) built.maxTokens = resolvedModel.maxTokens;
 	return built;
 }
 

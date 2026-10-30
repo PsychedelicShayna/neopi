@@ -57,7 +57,7 @@ function harness() {
 		settings: session.settings,
 		editor,
 		onInputCallback: undefined,
-		handleTanCommand: vi.fn(async () => {}),
+		handleTanCommand: vi.fn(async () => true),
 		flushPendingBashComponents: vi.fn(),
 		withLocalSubmission: async <T>(_text: string, fn: () => Promise<T>): Promise<T> => await fn(),
 		isKnownSlashCommand: text => lookupBuiltinSlashCommand(text.slice(1).split(/\s|:/, 1)[0] ?? "") !== undefined,
@@ -113,7 +113,7 @@ describe("/defer", () => {
 
 	it("executes deferred slash commands through the same interpreter", async () => {
 		const h = harness();
-		const tan = vi.spyOn(h.ctx, "handleTanCommand").mockResolvedValue();
+		const tan = vi.spyOn(h.ctx, "handleTanCommand").mockResolvedValue(true);
 		await h.submit("/defer 5ms /tan finish the task");
 		await waitUntil(() => tan.mock.calls.length === 1);
 		expect(tan).toHaveBeenCalledWith("finish the task");
@@ -368,6 +368,7 @@ describe("/defer", () => {
 				} finally {
 					finished.resolve();
 				}
+				return true;
 			});
 			await h.submit("/defer 5ms /tan old command [Image #1]");
 			await entered.promise;
@@ -396,6 +397,7 @@ describe("/defer", () => {
 		vi.spyOn(h.ctx, "handleTanCommand").mockImplementation(async () => {
 			await child.session.prompt("intentional child task");
 			finished.resolve();
+			return true;
 		});
 		await h.submit("/defer 5ms /tan launch child");
 		await finished.promise;

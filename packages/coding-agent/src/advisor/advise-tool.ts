@@ -58,69 +58,48 @@ export function formatAdvisorBatchContent(notes: readonly AdvisorNote[], opts?: 
 		.join("\n");
 }
 
-/**
- * Whether advice uses the steering channel at the next tool boundary.
- * Concerns wait for running tools; blockers interrupt them immediately.
- * Nits wait for the terminal primary turn.
- */
-export function isSteeringSeverity(severity: AdvisorSeverity | undefined): boolean {
-	return severity === "concern" || severity === "blocker";
+/** Whether `severity` is at least `minimum` (an omitted severity is a plain `nit`). */
+export function meetsAdvisorSeverity(severity: AdvisorSeverity | undefined, minimum: AdvisorSeverity): boolean {
+	return advisorSeverityRank(severity) >= advisorSeverityRank(minimum);
 }
 
 /** How an advisor note is routed to the primary. */
-export type AdvisorDeliveryChannel = "steer" | "preserve";
+export type AdvisorDeliveryChannel = "aside" | "steer" | "preserve";
+/** Half-open turn-count fence for the post-interrupt cooldown. */
+export function isAdvisorInterruptImmuneTurnActive(opts: {
+	completedTurns: number;
+	immuneTurnStart: number | undefined;
+	immuneTurns: number;
+}): boolean {
+	if (opts.immuneTurnStart === undefined || opts.immuneTurns <= 0) return false;
+	return opts.completedTurns < opts.immuneTurnStart + opts.immuneTurns;
+}
 
 /**
- * Decide how one advisor note reaches the primary agent.
- *
- * - A `preserveOnly` caller records every note that arrives while the primary
- *   is idle as a visible card and never starts a new primary turn.
- * - A `nit` is published as a visible card when AdviseTool releases it at turn end.
- * - A `concern`/`blocker` is steered into the agent: concerns queue at the next
- *   tool boundary without cancellation; blockers interrupt immediately. When
- *   idle, either can trigger a turn subject to the preservation guards below.
- * - If the primary tail is already a terminal text answer and there is no queued
- *   work, late non-blocker advice (a `nit` or `concern`) is preserved as a visible
- *   card instead of waking the primary to restate completion. A `blocker` is the
- *   exception: it means the agent handed off broken or unexercised work, so it
- *   still steers a triggered turn to force the primary to acknowledge and continue
- *   before the turn is considered done (#5628) — deferring it to the next user
- *   turn is the bug.
- *   `allowTerminalConcernSteering` opts out of ONLY this preservation branch
- *   (a final-review continuation policy); stop/abort suppression and `preserveOnly`
- *   still run first and are never bypassed.
- * - After a deliberate user interrupt (`autoResumeSuppressed`) the advisor must
- *   not auto-resume the stopped run. While the agent is idle — or still tearing
- *   the interrupted turn down (`aborting`) — the note is preserved as a visible
- *   card instead of restarting the run. But once a turn is actively streaming
- *   again (a resume the user already drove), steering the note in does NOT
- *   auto-resume anything, so it is delivered live. Parking it during an active
- *   run instead strands it (it never reaches the running agent) and the withheld
- *   notes dump as one burst at the next user prompt — the bug this guards.
+ * Route an eligible, already-admitted note. Timing is owned by AdviseTool's
+ * live deferral policy; every live delivery uses non-cancelling steering.
+ * Finished-run continuations still honor the severity threshold, user stop,
+ * headless preservation, and non-blocker immunity. Immunity downgrades a live
+ * note to an aside, or preserves it when idle; blockers remain exempt.
  */
 export function resolveAdvisorDeliveryChannel(opts: {
 	severity: AdvisorSeverity | undefined;
+	/** Lowest severity that may wake a primary idle on a terminal answer. */
+	continueSeverity: AdvisorSeverity;
 	autoResumeSuppressed: boolean;
 	streaming: boolean;
 	aborting: boolean;
 	terminalAnswerNoQueuedWork?: boolean;
-	/** Opt out of terminal-answer preservation for a late `concern` (default
-	 *  false). Bypasses ONLY that branch — never stop/abort suppression or
-	 *  `preserveOnly`. */
-	allowTerminalConcernSteering?: boolean;
+	interruptImmuneTurnActive?: boolean;
 	preserveOnly?: boolean;
 }): AdvisorDeliveryChannel {
 	if (opts.preserveOnly && !opts.streaming) return "preserve";
-	if (!isSteeringSeverity(opts.severity)) return "preserve";
+	const terminalIdle = opts.terminalAnswerNoQueuedWork === true && !opts.streaming && !opts.aborting;
+	if (terminalIdle) {
+		if (!meetsAdvisorSeverity(opts.severity, opts.continueSeverity)) return "preserve";
+	}
 	if (opts.autoResumeSuppressed && (opts.aborting || !opts.streaming)) return "preserve";
-	if (
-		opts.terminalAnswerNoQueuedWork &&
-		opts.severity !== "blocker" &&
-		!opts.allowTerminalConcernSteering &&
-		!opts.streaming &&
-		!opts.aborting
-	)
-		return "preserve";
+	if (opts.interruptImmuneTurnActive && opts.severity !== "blocker") return terminalIdle ? "preserve" : "aside";
 	return "steer";
 }
 
@@ -178,8 +157,8 @@ export function compareAdvisorNotes(a: AdvisorNote, b: AdvisorNote): number {
 
 /** Admission acks: one line each — the advisor needs the verdict, not a policy essay. */
 const ADVISOR_ACK_SENT = "Delivered.";
-/** Held behind the in-progress primary turn; flushed when it completes. */
-const ADVISOR_ACK_DEFERRED = "Queued for the end of the turn. Do not re-raise.";
+/** Admission reserves a note until its configured delivery point. */
+const ADVISOR_ACK_DEFERRED = "Queued for the configured delivery point. Do not re-raise.";
 /** A suppressed note is never described as recorded or queued. */
 const ADVISOR_ACK_SUPPRESSED: Record<AdvisorSuppressionReason, string> = {
 	empty: "Dropped: empty note.",
@@ -203,16 +182,12 @@ export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails>
 	 * pending note.
 	 */
 	readonly #guard: AdvisorEmissionGuard;
-	#inProgressUpdate = false;
 	/** Primary-turn count the in-flight update reviews (stamped on emitted notes
 	 *  so merged batches can report how stale each review was at delivery). */
 	#coveredTurn: number | undefined;
-	/** Notes admitted but withheld while the primary was mid-turn, in arrival
-	 *  order. Flushed deterministically at the completed-update transition or an
-	 *  explicit {@link flushDeferredNotes}, so delivery does not depend on the
-	 *  advisor model choosing to re-raise (it may not — the deferred
-	 *  acknowledgment tells it the note is queued). Only these still-pending
-	 *  notes can be displaced by the guard; routed notes are never retracted. */
+	/** Admitted reservations in arrival order. Only an explicit eligibility
+	 *  flush releases them; starting another review never does. Pending notes
+	 *  can be displaced by the guard; routed advice is never retracted. */
 	#deferredNotes: {
 		key: string;
 		note: string;
@@ -232,41 +207,19 @@ export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails>
 	constructor(
 		private readonly onAdvice: (note: string, severity: AdviseDetails["severity"] | undefined, turn?: number) => void,
 		guard?: AdvisorEmissionGuard,
+		private readonly shouldDefer: (severity: AdvisorSeverity | undefined) => boolean = () => false,
 	) {
 		this.#guard = guard ?? new AdvisorEmissionGuard();
 	}
 
-	/**
-	 * Start one advisor update: resets the guard's per-update budget and marks
-	 * whether the update reviews an in-progress primary turn. Nits
-	 * emitted while in progress are withheld so partial work does not interrupt
-	 * the primary before it can finish its planned steps. Transitioning to a
-	 * completed update flushes the withheld backlog, oldest first — each note
-	 * was admitted when emitted, so the flush routes without re-admission and a
-	 * backlog of one note per originating update reaches the primary intact.
-	 */
-	beginUpdate(inProgress: boolean, coveredTurn?: number): void {
-		const wasInProgress = this.#inProgressUpdate;
-		this.#inProgressUpdate = inProgress;
+	/** Start a review's admission budget; review completion never releases notes. */
+	beginUpdate(coveredTurn?: number): void {
 		this.#coveredTurn = coveredTurn;
 		this.#guard.beginUpdate();
-		if (wasInProgress && !inProgress) this.#flushDeferred();
 	}
 
-	/** Hold nits during a primary run without resetting the advisor update budget. */
-	setPrimaryTurnActive(): void {
-		this.#inProgressUpdate = true;
-	}
-
-	/**
-	 * Mark the primary no longer active and flush the withheld backlog
-	 * WITHOUT starting a new advisor update or resetting the guard's budget.
-	 * Called only after the primary run rules out further continuations, so
-	 * nits cannot enter model context during an advisor-triggered continuation.
-	 * Flushed notes stay charged to their originating update as routed deliveries.
-	 */
+	/** Release only notes eligible under the live timing policy, without re-admission. */
 	flushDeferredNotes(): void {
-		this.#inProgressUpdate = false;
 		this.#flushDeferred();
 	}
 
@@ -275,7 +228,6 @@ export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails>
 	 *  together, so a re-primed advisor can re-raise old issues. */
 	resetDeliveredNotes(): void {
 		this.#guard.reset();
-		this.#inProgressUpdate = false;
 		this.#deferredNotes = [];
 	}
 
@@ -288,9 +240,8 @@ export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails>
 	): Promise<AgentToolResult<AdviseDetails>> {
 		const rank = advisorSeverityRank(args.severity);
 		const key = advisorNoteDedupeKey(args.note);
-		if (this.#inProgressUpdate && !isSteeringSeverity(args.severity)) {
-			// Withheld, not delivered: reserve for the deterministic flush at the
-			// completed-update transition / terminal boundary.
+		if (this.shouldDefer(args.severity)) {
+			// Reserve at admission, independently of whether this review saw WIP.
 			const pending = this.#deferredNotes.find(item => item.key === key);
 			if (pending) {
 				// Re-raise of a still-queued note is not a new admission: escalate
@@ -314,11 +265,8 @@ export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails>
 			this.#deferredNotes.push({ key, note: args.note, severity: args.severity, turn: this.#coveredTurn });
 			return this.#result(ADVISOR_ACK_DEFERRED, args);
 		}
-		// Live path (completed update, or a blocker that must interrupt now). A
-		// blocker re-raise of a still-queued note pulls the reservation first:
-		// the guard admits it as a rank escalation (nit/concern → blocker), so
-		// it interrupts at blocker severity now instead of arriving late at the
-		// lower deferred severity.
+		// A severity escalation may move a pending note to an earlier delivery
+		// point. Pull its old reservation before routing, never deliver both.
 		const decision = this.#guard.admit(args.note, { rank, pending: false });
 		if (!decision.accepted) return this.#suppressed(args, decision.reason);
 		this.#deferredNotes = this.#deferredNotes.filter(item => item.key !== key && item.key !== decision.displacedKey);
@@ -326,16 +274,20 @@ export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails>
 		return this.#result(ADVISOR_ACK_SENT, args);
 	}
 
-	/** Route every withheld note, oldest first, without re-admission — each was
+	/** Route eligible reservations in arrival order without re-admission — each was
 	 *  admitted when emitted. Routed notes are marked so their originating
 	 *  update's slots stay charged and can no longer be displaced. */
 	#flushDeferred(): void {
 		if (this.#deferredNotes.length === 0) return;
 		const pending = this.#deferredNotes;
 		this.#deferredNotes = [];
-		for (const { note, severity, turn } of pending) {
-			this.#guard.markRouted(note);
-			this.onAdvice(note, severity, turn ?? this.#coveredTurn);
+		for (const item of pending) {
+			if (this.shouldDefer(item.severity)) {
+				this.#deferredNotes.push(item);
+				continue;
+			}
+			this.#guard.markRouted(item.note);
+			this.onAdvice(item.note, item.severity, item.turn ?? this.#coveredTurn);
 		}
 	}
 

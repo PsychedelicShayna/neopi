@@ -1793,8 +1793,9 @@ export class AgentsHubComponent implements Component {
 		} else {
 			children.push(...this.#describeList());
 		}
+		// Zero basis keeps the body within the space left of the sidebar.
 		return {
-			...node("col", { gap: "sm", grow: 1 }, children, "body"),
+			...node("col", { gap: "sm", grow: 1, basis: 0, min: { w: 0 } }, children, "body"),
 			scroll: this.#createSpec ? this.#createNativeScroll : undefined,
 		};
 	}

@@ -23,7 +23,7 @@ import {
 	type ToolResultMessage,
 } from "@oh-my-pi/pi-ai";
 import type { Dialect } from "@oh-my-pi/pi-ai/dialect";
-import { openAIResponsesReplaysNativeHistory } from "@oh-my-pi/pi-ai/providers/openai-responses";
+import { openAIResponsesReplaysNativeHistory } from "@oh-my-pi/pi-ai/providers/openai-responses-state";
 import type { HarmonyAuditEvent } from "@oh-my-pi/pi-ai/utils/harmony-leak";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { logger } from "@oh-my-pi/pi-utils";
@@ -40,6 +40,7 @@ import {
 	unpairedToolCallTail,
 } from "./agent-loop";
 import type { AppendOnlyContextManager } from "./append-only-context";
+import { agentPauseGate } from "./pause";
 import { isProviderRefusalMessage } from "./replay-policy";
 import { SentToolDefinitions } from "./sent-tool-definitions";
 import { Tokenizer } from "./tokenizer";
@@ -59,15 +60,16 @@ import type {
 	AgentTool,
 	AgentToolContext,
 	AgentTurnEndContext,
+	AsideBoundary,
 	AsideMessage,
 	PrepareQueuedMessages,
+	QueuedMessageQueue,
 	SpeculativeToolExecutionConfig,
 	StreamFn,
 	ToolCallContext,
 	ToolChoiceDirective,
 } from "./types";
 import { isSoftToolRequirement } from "./types";
-import { EventLoopKeepalive } from "./utils/yield";
 
 /**
  * Default convertToLlm: Keep only LLM-compatible replay messages.
@@ -388,8 +390,6 @@ interface CursorToolResultEntry {
 	additionalContext?: string;
 }
 
-type QueuedMessageQueue = "steering" | "followUp";
-
 interface LiveSteeredEntry {
 	message: AgentMessage;
 	controller: AbortController | undefined;
@@ -479,6 +479,12 @@ export class Agent {
 	#cwdResolver?: () => string | undefined;
 
 	#runningPrompt?: Promise<void>;
+	#isPaused = false;
+
+	/** True while this unfinished turn is safely parked by the process pause gate. */
+	get isPaused(): boolean {
+		return this.#isPaused && agentPauseGate.paused && !this.#abortController?.signal.aborted;
+	}
 	#resolveRunningPrompt?: () => void;
 	#kimiApiFormat?: "openai" | "anthropic";
 	#preferWebsockets?: boolean;
@@ -505,11 +511,11 @@ export class Agent {
 	#onModelCallSystemPrompt?: (systemPrompt: string[]) => void;
 	#beforeModelCall?: AgentBeforeModelCall;
 	#additionalBeforeModelCalls = new Set<AgentBeforeModelCall>();
-	#asideMessageProvider?: () => AsideMessage[] | Promise<AsideMessage[]>;
+	#asideMessageProvider?: (boundary: AsideBoundary) => AsideMessage[] | Promise<AsideMessage[]>;
 	#telemetry?: AgentLoopConfig["telemetry"];
 	#appendOnlyContext?: AppendOnlyContextManager;
 	#beforeQueuedMessageDequeueHooks = new Set<(signal?: AbortSignal) => Promise<void> | void>();
-	#beforeModelCallHooks = new Set<(signal?: AbortSignal) => Promise<void> | void>();
+	#beforeModelCallHooks = new Set<(signal: AbortSignal | undefined, context: AgentContext) => Promise<void> | void>();
 
 	/** Buffered Cursor tool results with text length at time of call (for correct ordering) */
 	#cursorToolResultBuffer: CursorToolResultEntry[] = [];
@@ -640,6 +646,12 @@ export class Agent {
 	set promptCacheKey(value: string | undefined) {
 		this.#promptCacheKey = value;
 	}
+
+	/**
+	 * Fields added to every log record written while this agent runs (the
+	 * owning session's `sessionId`), so in-process agents' records stay apart.
+	 */
+	logContext: Readonly<Record<string, unknown>> | undefined;
 
 	/**
 	 * Static metadata forwarded to every API request when no resolver is installed
@@ -817,6 +829,22 @@ export class Agent {
 		this.#pruneToolDescriptions = value;
 	}
 
+	/**
+	 * Whether requests to `model` actually ship description-stripped tool specs.
+	 * Owned dialects render full definitions in-band, so they never prune; the
+	 * loop applies the same rule (`pruneToolDescriptions && !ownedDialect`).
+	 * Context accounting reads this instead of the raw setting.
+	 */
+	prunesToolDescriptions(model: Model | undefined): boolean {
+		return this.#pruneToolDescriptions && model !== undefined && !this.#ownedDialect(model);
+	}
+
+	#ownedDialect(model: Model): Dialect | undefined {
+		return this.#dialectResolver
+			? this.#dialectResolver(model)
+			: (this.#dialect ?? resolveOwnedDialectFromEnv(Bun.env.PI_DIALECT));
+	}
+
 	/** Inject/strip the intent field on tool calls; applies from the next prompt run. */
 	get intentTracing(): boolean {
 		return this.#intentTracing;
@@ -926,9 +954,7 @@ export class Agent {
 	): Promise<Context> {
 		const model = this.#state.model;
 		if (!model) throw new Error("No active model on agent");
-		const ownedDialect = this.#dialectResolver
-			? this.#dialectResolver(model)
-			: (this.#dialect ?? resolveOwnedDialectFromEnv(Bun.env.PI_DIALECT));
+		const ownedDialect = this.#ownedDialect(model);
 		const messages = normalizeMessagesForProvider(llmMessages, model);
 		const tools = ownedDialect
 			? []
@@ -969,25 +995,28 @@ export class Agent {
 		return () => this.#beforeQueuedMessageDequeueHooks.delete(registration);
 	}
 
-	/** Register an independently removable hook that runs immediately before each model call. */
-	addBeforeModelCallHook(hook: (signal?: AbortSignal) => Promise<void> | void): () => void {
-		const registration = (signal?: AbortSignal) => hook(signal);
+	/** Register an independently removable hook that runs immediately before each model call, with the
+	 *  loop's live context (mutating `context.messages` changes what this and later calls send). */
+	addBeforeModelCallHook(
+		hook: (signal: AbortSignal | undefined, context: AgentContext) => Promise<void> | void,
+	): () => void {
+		const registration = (signal: AbortSignal | undefined, context: AgentContext) => hook(signal, context);
 		this.#beforeModelCallHooks.add(registration);
 		return () => this.#beforeModelCallHooks.delete(registration);
 	}
 
-	async #runBeforeModelCallHooks(signal?: AbortSignal): Promise<void> {
-		for (const hook of this.#beforeModelCallHooks) await hook(signal);
+	async #runBeforeModelCallHooks(signal: AbortSignal | undefined, context: AgentContext): Promise<void> {
+		for (const hook of this.#beforeModelCallHooks) await hook(signal, context);
 	}
 
 	async #runBeforeQueuedMessageDequeueHooks(signal?: AbortSignal): Promise<void> {
 		for (const hook of this.#beforeQueuedMessageDequeueHooks) await hook(signal);
 	}
 
-	async #dequeueSteeringMessagesAfterHooks(signal: AbortSignal): Promise<AgentMessage[]> {
+	async #dequeueSteeringMessagesAfterHooks(signal: AbortSignal, liveOnly = false): Promise<AgentMessage[]> {
 		if (signal.aborted || this.#steeringQueue.length === 0) return [];
 		await this.#runBeforeQueuedMessageDequeueHooks(signal);
-		return signal.aborted ? [] : this.#prepareQueuedMessageBatch("steering", signal);
+		return signal.aborted ? [] : this.#prepareQueuedMessageBatch("steering", signal, liveOnly);
 	}
 
 	async #dequeueFollowUpMessagesAfterHooks(signal: AbortSignal): Promise<AgentMessage[]> {
@@ -996,9 +1025,9 @@ export class Agent {
 		return signal.aborted ? [] : this.#prepareQueuedMessageBatch("followUp", signal);
 	}
 
-	async #prepareQueuedMessageBatch(queue: QueuedMessageQueue, signal: AbortSignal): Promise<AgentMessage[]> {
+	async #prepareQueuedMessageBatch(queue: QueuedMessageQueue, signal: AbortSignal, liveOnly = false): Promise<AgentMessage[]> {
 		if (this.#queuedMessageClaims[queue]) return [];
-		const messages = queue === "steering" ? this.#dequeueSteeringMessages() : this.#dequeueFollowUpMessages();
+		const messages = queue === "steering" ? this.#dequeueSteeringMessages(liveOnly) : this.#dequeueFollowUpMessages();
 		const prepare = this.prepareQueuedMessages;
 		if (messages.length === 0) return messages;
 		const runController = this.#abortController;
@@ -1011,7 +1040,7 @@ export class Agent {
 		this.#queuedMessageClaims[queue] = claim;
 		const preparationSignal = AbortSignal.any([signal, claim.controller.signal]);
 		try {
-			const preparation = await prepare(messages, preparationSignal);
+			const preparation = await prepare(messages, preparationSignal, queue);
 			signal.throwIfAborted();
 			if (preparationSignal.aborted || this.#queuedMessageClaims[queue] !== claim) return [];
 			const additional = preparation?.commit();
@@ -1207,7 +1236,9 @@ export class Agent {
 	 * aborts foreground tools; an interruptible `wait` may end early through the
 	 * peek hooks. See `AgentLoopConfig.getAsideMessages`.
 	 */
-	setAsideMessageProvider(fn: (() => AsideMessage[] | Promise<AsideMessage[]>) | undefined): void {
+	setAsideMessageProvider(
+		fn: ((boundary: AsideBoundary) => AsideMessage[] | Promise<AsideMessage[]>) | undefined,
+	): void {
 		this.#asideMessageProvider = fn;
 	}
 
@@ -1404,6 +1435,20 @@ export class Agent {
 	}
 
 	/**
+	 * Move the given pending steering messages (by identity) ahead of the rest,
+	 * keeping both groups' relative order, so one-at-a-time delivery takes them
+	 * first. Messages no longer pending, including a claimed batch already
+	 * being delivered, are ignored.
+	 */
+	prioritizeSteering(messages: readonly AgentMessage[]): void {
+		const wanted = new Set(messages);
+		const front = this.#steeringQueue.filter(message => wanted.has(message));
+		if (front.every((message, index) => this.#steeringQueue[index] === message)) return;
+		this.#steeringQueue = [...front, ...this.#steeringQueue.filter(message => !wanted.has(message))];
+		this.#emitQueueChanged();
+	}
+
+	/**
 	 * Queue a follow-up message to be processed after the agent finishes.
 	 * Delivered only when agent has no more tool calls or steering messages.
 	 */
@@ -1510,9 +1555,32 @@ export class Agent {
 		return queue.slice(0, count);
 	}
 
-	#dequeueSteeringMessages(): AgentMessage[] {
-		const messages = this.#dequeueMessages(this.#steeringQueue, this.#steeringMode);
-		this.#steeringQueue = this.#steeringQueue.slice(messages.length);
+	#dequeueSteeringMessages(liveOnly = false): AgentMessage[] {
+		let messages: AgentMessage[];
+		if (liveOnly) {
+			messages = [];
+			const remaining: AgentMessage[] = [];
+			let groupComplete = false;
+			for (const message of this.#steeringQueue) {
+				// Wait-mode notes remain queue-owned. Live user steering may pass
+				// them without changing FIFO within either delivery class.
+				if (this.#steeringInterruptModes.get(message) === "wait" || groupComplete) {
+					remaining.push(message);
+					continue;
+				}
+				if (this.#steeringMode === "one-at-a-time" && messages.length > 0 &&
+					!this.#queuedMessageGrouping?.(messages[messages.length - 1], message)) {
+					groupComplete = true;
+					remaining.push(message);
+				} else {
+					messages.push(message);
+				}
+			}
+			this.#steeringQueue = remaining;
+		} else {
+			messages = this.#dequeueMessages(this.#steeringQueue, this.#steeringMode);
+			this.#steeringQueue = this.#steeringQueue.slice(messages.length);
+		}
 		if (messages.length > 0) this.#emitQueueChanged();
 		return messages;
 	}
@@ -1659,7 +1727,7 @@ export class Agent {
 			promptOptions = imagesOrOptions as AgentPromptOptions | undefined;
 		}
 
-		await this.#runLoop(msgs, promptOptions);
+		await this.#inLogContext(() => this.#runLoop(msgs, promptOptions));
 	}
 
 	/**
@@ -1683,7 +1751,12 @@ export class Agent {
 		return signals.length === 1 ? signals[0] : AbortSignal.any(signals);
 	}
 
-	async continue(signal?: AbortSignal) {
+	continue(signal?: AbortSignal): Promise<void> {
+		// Queued-message hooks run before the loop and are this agent's work too.
+		return this.#inLogContext(() => this.#continue(signal));
+	}
+
+	async #continue(signal?: AbortSignal) {
 		if (this.#state.isStreaming) {
 			throw new AgentBusyError();
 		}
@@ -1794,6 +1867,10 @@ export class Agent {
 		);
 	}
 
+	/** Run `fn` with {@link logContext} on every record it logs. */
+	#inLogContext<T>(fn: () => T): T {
+		return this.logContext ? logger.withContext(this.logContext, fn) : fn();
+	}
 	/**
 	 * Run the agent loop.
 	 * If messages are provided, starts a new conversation turn with those messages.
@@ -1812,7 +1889,6 @@ export class Agent {
 		if (!model) throw new Error("No model configured");
 
 		let skipInitialSteeringPoll = options?.skipInitialSteeringPoll === true;
-		using _ = new EventLoopKeepalive();
 		if (!runStateClaimed) {
 			const { promise, resolve } = Promise.withResolvers<void>();
 			this.#runningPrompt = promise;
@@ -1828,6 +1904,7 @@ export class Agent {
 		this.#state.isStreaming = true;
 		this.#state.streamMessage = null;
 		this.#state.error = undefined;
+		this.#isPaused = false;
 
 		// Clear Cursor tool result buffer at start of each run
 		this.#cursorToolResultBuffer = [];
@@ -1869,10 +1946,19 @@ export class Agent {
 			// that, a transformer resolving after the swap would patch a detached
 			// object while the persisted result kept the original payload — the
 			// rewrite silently lost.
+			//
+			// A result for a call already buffered is the server re-dispatching
+			// that call; the provider keeps one block for it, so the re-run's
+			// result replaces the first rather than pairing a second result with
+			// the same id (issue #15749).
 			const entry: CursorToolResultEntry = {
 				toolResult: message,
 				additionalContext: (message as ToolResultWithAdditionalContext)[TOOL_RESULT_ADDITIONAL_CONTEXT],
 			};
+			const superseded = this.#cursorToolResultBuffer.findIndex(
+				({ toolResult }) => toolResult.toolCallId === message.toolCallId,
+			);
+			if (superseded >= 0) this.#cursorToolResultBuffer.splice(superseded, 1);
 			this.#cursorToolResultBuffer.push(entry);
 			const transform = this.#cursorOnToolResult;
 			if (transform) {
@@ -1950,7 +2036,7 @@ export class Agent {
 			getApiKey: this.getApiKey,
 			getToolContext: this.#getToolContext,
 			syncContextBeforeModelCall: async (context, signal) => {
-				await this.#runBeforeModelCallHooks(signal);
+				await this.#runBeforeModelCallHooks(signal, context);
 				if (this.#listeners.size > 0) {
 					await Bun.sleep(0);
 				}
@@ -1993,6 +2079,9 @@ export class Agent {
 			onAssistantMessageEvent: this.#onAssistantMessageEvent,
 			onHarmonyLeak: this.#onHarmonyLeak,
 			onTurnEnd: (messages, signal, context) => this.#onTurnEnd?.(messages, signal, context),
+			onPauseChange: paused => {
+				this.#isPaused = paused;
+			},
 			getToolChoice,
 			softToolRequirementState: this.#softToolRequirementState,
 			onToolChoiceRejected: () => {
@@ -2002,12 +2091,12 @@ export class Agent {
 			getReasoning: () => this.#state.thinkingLevel,
 			getDisableReasoning: () => this.#state.disableReasoning,
 			getServiceTier: this.#serviceTierResolver,
-			getSteeringMessages: async signal => {
+			getSteeringMessages: async (signal, options) => {
 				if (skipInitialSteeringPoll) {
 					skipInitialSteeringPoll = false;
 					return [];
 				}
-				return this.#dequeueSteeringMessagesAfterHooks(signal ?? loopSignal);
+				return this.#dequeueSteeringMessagesAfterHooks(signal ?? loopSignal, options?.liveOnly);
 			},
 			hasSteeringMessages: () => ({
 				...steeringQueueState(
@@ -2025,7 +2114,7 @@ export class Agent {
 			hasBackgroundCompletions: this.hasBackgroundCompletions,
 			hasQueuedAsides: this.hasQueuedAsides,
 			getFollowUpMessages: signal => this.#dequeueFollowUpMessagesAfterHooks(signal ?? loopSignal),
-			getAsideMessages: async () => (await this.#asideMessageProvider?.()) ?? [],
+			getAsideMessages: async boundary => (await this.#asideMessageProvider?.(boundary)) ?? [],
 			onBeforeYield: () => this.#onBeforeYield?.(),
 			onDetachedToolUpdate: event => this.emitExternalEvent(event),
 			telemetry: this.#telemetry,
@@ -2255,6 +2344,7 @@ export class Agent {
 				this.#emit({ type: "agent_end", messages: [errorMsg] });
 			}
 		} finally {
+			this.#isPaused = false;
 			this.#restoreUndeliveredQueuedMessages(loopAbortController);
 			resolveRun?.();
 			if (this.#abortController === loopAbortController) {

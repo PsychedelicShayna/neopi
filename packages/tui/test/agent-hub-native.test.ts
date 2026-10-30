@@ -333,6 +333,33 @@ test("hub transcript stays in the same overlay and restores its unsent editor dr
 	}
 });
 
+test("hub history keeps frozen ranks but ranks replacement generations and new agents above them", () => {
+	const alpha = agent("alpha", 3);
+	const beta = agent("beta", 2, { status: "parked" });
+	const agents = [alpha, beta, agent("gamma", 1)];
+	const hub = createHub(agents);
+	let restored: AgentHubOverlayComponent | undefined;
+	try {
+		hub.handleInput("j");
+		expect(pickerProps(hub).items?.map(item => item.id)).toEqual(["alpha", "gamma", "beta"]);
+		const saved = hub.navigationSnapshot();
+		alpha.status = "parked";
+		alpha.lastActivity = 0;
+		beta.status = "running";
+		beta.lastActivity = 100;
+		agents[2] = agent("gamma", -10);
+		agents.push(agent("delta", -20, { status: "parked" }));
+		restored = createHub(agents);
+		restored.restoreNavigation(saved);
+		expect(pickerProps(restored).items?.map(item => item.id)).toEqual(["gamma", "delta", "alpha", "beta"]);
+		expect(pickerProps(restored).selected).toBe("gamma");
+	} finally {
+		hub.dispose();
+		restored?.dispose();
+	}
+});
+
+
 test("hub native close respects focused search before closing its root", () => {
 	const onDone = vi.fn();
 	const hub = createHub([agent("alpha", 1)], [], undefined, { onDone });

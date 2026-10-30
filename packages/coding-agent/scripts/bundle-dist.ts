@@ -10,11 +10,26 @@ import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
 const packageDir = path.join(import.meta.dir, "..");
 const defaultOutDir = path.join(packageDir, "dist");
 const shebang = "#!/usr/bin/env bun\n";
+// Clean both current file-loader sidecars and assets from older viewer builds.
 const htmlExportAssetPattern =
-	/^(?:template-[^.]+\.(?:css|html|js)|tool-views\.generated-[^.]+\.js|(?:marked|highlight)\.min-[^.]+\.js)$/;
+	/^(?:template-[^.]+\.(?:css|html|js)|(?:tool-views|viewer|marked)\.generated-[^.]+\.js|(?:marked|highlight)\.min-[^.]+\.js)$/;
 
 // Native / optional / platform-specific deps are loaded from installed files.
 const ALWAYS_EXTERNAL = ["@oh-my-pi/pi-natives", "@huggingface/transformers", "fastembed", "onnxruntime-node"];
+
+/**
+ * Embeds `@oh-my-pi/pi-natives/THIRD-PARTY-NOTICES.txt` even though the natives package is external. An external
+ * text import would be hoisted to a top-level import of `dist/cli.js`, reading the installed addon's notices on every
+ * launch instead of only for `omp --license`.
+ */
+const inlineNativeNoticesPlugin: Bun.BunPlugin = {
+	name: "inline-native-notices",
+	setup(build) {
+		build.onResolve({ filter: /^@oh-my-pi\/pi-natives\/THIRD-PARTY-NOTICES\.txt$/ }, () => ({
+			path: path.join(packageDir, "../natives/THIRD-PARTY-NOTICES.txt"),
+		}));
+	},
+};
 
 // Heavy, lazily-used third-party leaf deps. Each is a declared `dependency`, so the
 // published package resolves it from node_modules at runtime; bundling only embeds a
@@ -65,6 +80,7 @@ async function cleanBundleOutputs(outDir: string): Promise<void> {
 					entry === "docs-index.generated.txt" ||
 					entry.endsWith(".node") ||
 					entry.endsWith(".js.map") ||
+					/\.json-[^/]+\.zst$/.test(entry) ||
 					(entry.startsWith("CHANGELOG-") && entry.endsWith(".md")) ||
 					htmlExportAssetPattern.test(entry),
 			)
@@ -86,6 +102,7 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 	// SDK consumers importing `@oh-my-pi/pi-coding-agent/*` (TypeScript source, no
 	// build-time embed) can still resolve omp:// docs (see src/internal-urls/docs-index.ts).
 	try {
+		await runCommand(["bun", "--cwd=../collab-web", "run", "gen:export-viewer"]);
 		const docsPayload = await buildDocsIndexPayload();
 		// Build in-process: the docs embed payload is far larger than Linux's
 		// 128KiB per-argv-string cap, so it can never be passed as a CLI
@@ -94,7 +111,7 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 			entrypoints: [path.join(packageDir, "src/cli.ts")],
 			outdir: outDir,
 			target: "bun",
-			plugins: [createJsonParsePlugin(), await createLegacyPiVirtualModulePlugin()],
+			plugins: [createJsonParsePlugin(), await createLegacyPiVirtualModulePlugin(), inlineNativeNoticesPlugin],
 			external: [...ALWAYS_EXTERNAL, ...RUNTIME_EXTERNAL],
 			define: {
 				"process.env.PI_BUNDLED": JSON.stringify("true"),

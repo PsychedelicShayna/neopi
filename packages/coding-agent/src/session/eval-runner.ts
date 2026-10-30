@@ -76,7 +76,7 @@ export class EvalRunner {
 			}
 
 			const session = this.#host.toolSession();
-			const backend = await this.#resolveBackend(language, session);
+			const backend = await this.#resolveBackend(language, session, abortController.signal);
 			const sessionId = this.getSessionId();
 			const result = await invokeEvalCell(backend, code, {
 				cwd,
@@ -103,7 +103,7 @@ export class EvalRunner {
 		return this.execute("py", code, onChunk, options);
 	}
 
-	async #resolveBackend(token: string, session: ToolSession): Promise<ExecutorBackend> {
+	async #resolveBackend(token: string, session: ToolSession, signal: AbortSignal): Promise<ExecutorBackend> {
 		const builtin: Record<string, ExecutorBackend> = {
 			py: pythonBackend,
 			python: pythonBackend,
@@ -117,7 +117,13 @@ export class EvalRunner {
 				return registered ? extensionBackendAdapter(registered) : undefined;
 			})();
 		if (!backend) throw new Error(`Unknown eval backend: ${token}`);
-		if (!(await backend.isAvailable(session))) throw new Error(`Eval backend "${token}" is unavailable`);
+		const availability = await backend.checkAvailability(session, { signal });
+		signal.throwIfAborted();
+		if (!availability.ok) {
+			throw new Error(
+				`Eval backend "${token}" is unavailable${availability.reason ? `: ${availability.reason}` : ""}`,
+			);
+		}
 		return backend;
 	}
 

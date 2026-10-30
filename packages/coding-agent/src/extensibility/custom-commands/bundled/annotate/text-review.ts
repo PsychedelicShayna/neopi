@@ -36,6 +36,7 @@ function sanitizePreviewLabel(value: string, maxLength = 96): string {
 interface RenderedTextAnnotation {
 	number: number;
 	isLine: boolean;
+	line?: number;
 	quote?: string;
 	note: string;
 	quoteIsInline?: boolean;
@@ -101,6 +102,7 @@ export function buildTextReviewPrompt(
 		return {
 			number: index + 1,
 			isLine: true,
+			line: annotation.line,
 			quote: exact("QUOTE", annotation.quote),
 			note,
 			quoteIsInline,

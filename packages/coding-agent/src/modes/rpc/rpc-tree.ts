@@ -46,6 +46,7 @@ const answerMetadata = {
 	"customInput?": "string",
 	"note?": "string",
 	"optionNotes?": [optionNote, "[]"],
+	"noteOption?": "string",
 	"timedOut?": "boolean",
 } as const;
 const reanswerSchema = type({
@@ -108,6 +109,7 @@ function validateExpected(options: TreeNavigationExpected): void {
 export async function navigateRpcTree(
 	session: AgentSession,
 	options: RpcNavigateTreeOptions,
+	onRemoteAdmitted?: () => Promise<void>,
 ): Promise<RpcNavigateTreeResult> {
 	validateExpected(options);
 	if (
@@ -123,6 +125,7 @@ export async function navigateRpcTree(
 	}
 	const result = await session.navigateTree(options.targetId, {
 		expected: options,
+		onRemoteAdmitted,
 		summarize: options.summarize,
 		customInstructions: options.customInstructions,
 		allowAskReopen: options.allowAskReopen,

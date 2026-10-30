@@ -478,6 +478,9 @@ async function executeCompletion(
 	for (const [index, candidate] of candidates.entries()) {
 		if (index > 0 && retriesUsed >= maxRetries) break;
 		model = candidate.model;
+		// The session's cost cap covers completions a cell makes, attempt by attempt.
+		const refusal = session.costGate?.check();
+		if (refusal) throw new ToolError(refusal.message);
 		try {
 			const inherited = candidate.parent ? effective.get(candidate.parent) : undefined;
 			let reasoning = candidate.inheritsReasoning && inherited ? inherited.reasoning : candidate.reasoning;
@@ -562,6 +565,7 @@ async function executeCompletion(
 				},
 				{ telemetry, oneshotKind: "eval_completion" },
 			);
+			session.costGate?.record(response.usage.cost.total);
 		} catch (error) {
 			lastError = error;
 			if (error instanceof EffortPolicyError)

@@ -78,6 +78,7 @@ export const systemPromptContextFixture = {
 	personality: "Be clear and direct.",
 	intentTracing: false,
 	intentField: "i",
+	intentGuidance: "",
 	eagerTasks: false,
 	eagerTasksAlways: false,
 	inlineFirstDelegation: true,

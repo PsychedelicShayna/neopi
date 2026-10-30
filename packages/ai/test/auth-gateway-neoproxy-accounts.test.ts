@@ -3,7 +3,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { completeSimple } from "@oh-my-pi/pi-ai";
 import { AuthBrokerClient, RemoteAuthCredentialStore, startAuthBroker } from "@oh-my-pi/pi-ai/auth-broker";
 import type { AuthBrokerServerHandle } from "@oh-my-pi/pi-ai/auth-broker";
-import { buildGatewayApiKeyResolver, resolveGatewayApiKey, startAuthGateway } from "@oh-my-pi/pi-ai/auth-gateway";
+import { buildGatewayApiKeyResolver, hashAuthGatewayToken, resolveGatewayApiKey, startAuthGateway } from "@oh-my-pi/pi-ai/auth-gateway";
 import type { AuthGatewayAccount, AuthGatewayServerHandle } from "@oh-my-pi/pi-ai/auth-gateway";
 import { AuthStorage, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai/auth-storage";
 import type { OAuthCredential } from "@oh-my-pi/pi-ai/auth-storage";
@@ -148,6 +148,7 @@ async function boot(bearerTokens = [GATEWAY_TOKEN]): Promise<Fixture> {
 		storage,
 		bind: "127.0.0.1:0",
 		bearerTokens,
+		clients: bearerTokens.length > 0 ? [{ name: "scoped-source", tokenSha256: hashAuthGatewayToken("scoped-source-token"), models: ["openai/*"] }] : undefined,
 		version: "test",
 		fetch: transport,
 		resolveModel: id => models.find(model => id === `${model.provider}/${model.id}`),
@@ -231,6 +232,28 @@ describe("NeoProxy authenticated account source", () => {
 		expect((await fetch(`${fixture.gateway.url}/v1/models`)).status).toBe(200);
 	});
 
+	test("scoped client tokens cannot enumerate or select gateway accounts", async () => {
+		fixture = await boot();
+		const headers = { ...HEADERS, authorization: "Bearer scoped-source-token" };
+		const inventory = await fetch(`${fixture.gateway.url}/v1/neoproxy/accounts`, { headers });
+		expect(inventory.status).toBe(403);
+		expect(await inventory.text()).not.toContain("openai account");
+		const selected = await fetch(`${fixture.gateway.url}/v1/chat/completions`, {
+			method: "POST",
+			headers: { ...headers, [PRIVATE_HEADER]: "1" },
+			body: JSON.stringify({ model: "openai/pool-chat", messages: [{ role: "user", content: "forbidden pin" }] }),
+		});
+		expect(selected.status).toBe(403);
+		expect(fixture.attempts).toHaveLength(0);
+		const native = await fetch(`${fixture.gateway.url}/v1/chat/completions`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify({ model: "openai/pool-chat", messages: [{ role: "user", content: "ordinary scoped request" }] }),
+		});
+		expect(native.status).toBe(200);
+		await native.text();
+	});
+
 	test("inventory exposes stable secret-free rows, exact catalogue entitlements and real per-account windows", async () => {
 		fixture = await boot();
 		const [firstOAuth, secondOAuth] = await fixture.addOAuth();
@@ -302,10 +325,10 @@ describe("NeoProxy authenticated account source", () => {
 		const model = chatModel("opencode-zen", "keyless-race");
 		const id = fixture.storage.credentials.list("opencode-zen")[0].id;
 		const signal = new AbortController().signal;
-		const initial = await resolveGatewayApiKey(fixture.storage, model, "revocation-race", signal, "test", String(id));
+		const initial = await resolveGatewayApiKey({ storage: fixture.storage }, model, "revocation-race", signal, "test", String(id));
 		if ("status" in initial) throw new Error("pin preflight unexpectedly failed");
 		const resolver = buildGatewayApiKeyResolver(
-			fixture.storage,
+			{ storage: fixture.storage },
 			model,
 			"revocation-race",
 			initial,

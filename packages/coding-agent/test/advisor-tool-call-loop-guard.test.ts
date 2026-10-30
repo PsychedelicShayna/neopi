@@ -20,7 +20,7 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 import type { AdvisorConfig } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { AdvisorLoopGuard } from "../src/advisor/loop-guard";
 import { cfgAdvisorReviewInterval } from "../src/advisor/settings";
-import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
+import { activateTodoTool, createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
 const zeroUsage = {
 	input: 0,
@@ -259,27 +259,40 @@ describe("advisor tool-call loop guard", () => {
 		expect(messages[0]?.role).toBe("user");
 	});
 
-	it("preserves terminal-boundary notes as cards instead of steering a new turn", async () => {
-		const { reviewStarts } = createAdvisor({ "advisor.syncBacklog": "1" }, 0, undefined, 0, "looks fine");
-		if (!session) throw new Error("Expected live session");
+	it.each([
+		{ severity: "nit", settings: {} },
+		{ severity: "concern", settings: { "advisor.continueSeverity": "blocker" } },
+	] as const)(
+		"preserves terminal-boundary notes below advisor.continueSeverity as cards %j",
+		async ({ severity, settings }) => {
+			const { reviewStarts } = createAdvisor(
+				{ "advisor.syncBacklog": "1", ...settings },
+				0,
+				undefined,
+				0,
+				"looks fine",
+				severity,
+			);
+			if (!session) throw new Error("Expected live session");
 
-		await session.prompt("only update");
-		expect(await session.waitForAdvisorCatchup(2_000)).toBe(true);
-		expect(reviewStarts).toHaveLength(1);
+			await session.prompt("only update");
+			expect(await session.waitForAdvisorCatchup(2_000)).toBe(true);
+			expect(reviewStarts).toHaveLength(1);
 
-		// The nit delivered while the terminal boundary was open is preserved as
-		// a visible card: it must not steer an advisor-triggered turn against
-		// completed work (stale "keep going" advice causes spurious tool calls).
-		const messages = session.agent.state.messages;
-		const completions = messages.filter(
-			message => message.role === "assistant" && JSON.stringify(message.content).includes("primary complete"),
-		);
-		expect(completions).toHaveLength(1);
-		const cards = messages.filter(
-			message => message.role === "custom" && JSON.stringify(message).includes("looks fine"),
-		);
-		expect(cards).toHaveLength(1);
-	});
+			// A note below the continue threshold delivered while the terminal boundary
+			// was open is preserved as a visible card: it must not steer an
+			// advisor-triggered turn against completed work.
+			const messages = session.agent.state.messages;
+			const completions = messages.filter(
+				message => message.role === "assistant" && JSON.stringify(message.content).includes("primary complete"),
+			);
+			expect(completions).toHaveLength(1);
+			const cards = messages.filter(
+				message => message.role === "custom" && JSON.stringify(message).includes("looks fine"),
+			);
+			expect(cards).toHaveLength(1);
+		},
+	);
 
 	it("lets a terminal blocker steer one continuation that schedules no review of its own", async () => {
 		const { reviewStarts } = createAdvisor(
@@ -326,6 +339,7 @@ describe("advisor tool-call loop guard", () => {
 		);
 		if (!session) throw new Error("Expected live session");
 		const live = session;
+		activateTodoTool(live, tempDir.path());
 		live.setTodoPhases([{ name: "Work", tasks: [{ content: "Finish the migration", status: "in_progress" }] }]);
 		const reminderRunEnded = Promise.withResolvers<void>();
 		let reminded = false;
@@ -381,41 +395,25 @@ describe("advisor tool-call loop guard", () => {
 		expect(merged).toContain("aggregated review from other models");
 	});
 
-	it("steers one continuation turn when an agent-end advisor raises a concern at a terminal boundary", async () => {
-		// An agent-end advisor reviews the complete run at the final boundary.
+	it("steers one continuation turn for a terminal-boundary concern at the default advisor.continueSeverity", async () => {
 		// A concern means a material issue in finished work — it deserves one
 		// steering turn, not a silent preserved card; that continuation schedules
-		// no review of its own. A turn-mode concern at the same boundary preserves
-		// as a card instead (work was reviewed per-turn).
-		createAdvisor(
-			{ "advisor.syncBacklog": "1" },
-			0,
-			{ name: "Final reviewer", reviewMode: "agent-end", reviewInterval: 1 },
-			0,
-			"finished work has a null deref",
-			"concern",
-		);
+		// no review of its own.
+		createAdvisor({ "advisor.syncBacklog": "1" }, 0, undefined, 0, "finished work has a null deref", "concern");
 		if (!session) throw new Error("Expected live session");
 
 		await session.prompt("only update");
 		expect(await session.waitForAdvisorCatchup(2_000)).toBe(true);
 
-		// The agent-end concern steered exactly one continuation turn.
+		// The concern steered exactly one continuation turn.
 		const completions = session.agent.state.messages.filter(
 			message => message.role === "assistant" && JSON.stringify(message.content).includes("primary complete"),
 		);
 		expect(completions).toHaveLength(2);
 	});
 
-	it("steers one continuation for an agent-end concern that lands after the boundary with catch-up off", async () => {
-		createAdvisor(
-			{ "advisor.syncBacklog": "off" },
-			0,
-			{ name: "Final reviewer", reviewMode: "agent-end" },
-			0,
-			"finished work has a null deref",
-			"concern",
-		);
+	it("steers one continuation for a concern that lands after the boundary with catch-up off", async () => {
+		createAdvisor({ "advisor.syncBacklog": "off" }, 0, undefined, 0, "finished work has a null deref", "concern");
 		if (!session) throw new Error("Expected live session");
 		const live = session;
 		const continuationEnded = Promise.withResolvers<void>();
@@ -509,6 +507,116 @@ describe("advisor tool-call loop guard", () => {
 		const delivered = JSON.stringify(contexts[0]!.messages);
 		expect(delivered).toContain("inspect missing file");
 		expect(delivered).toContain("ENOENT: no such file or directory");
+	});
+
+	it("expires interruption immunity across tool-loop steps even for an agent-end reviewer", async () => {
+		const { advisor } = createAdvisor(
+			{ "advisor.syncBacklog": "1", "advisor.immuneTurns": 1 },
+			0,
+			{ name: "Final reviewer", reviewMode: "agent-end" },
+			2,
+		);
+		if (!session) throw new Error("Expected live session");
+		const advise = advisor.state.tools.find(tool => tool.name === "advise");
+		if (!advise) throw new Error("Expected advisor delivery tool");
+		// Simulate delivery into a live primary before its next two steps.
+		session.agent.state.isStreaming = true;
+		try {
+			await advise.execute("first-note", {
+				note: "The first operation loses the selected file.",
+				severity: "concern",
+			});
+			await new Promise<void>(resolve => setImmediate(resolve));
+			expect(session.agent.peekSteeringQueue()).toHaveLength(1);
+			session.agent.clearSteeringQueue();
+		} finally {
+			session.agent.state.isStreaming = false;
+		}
+		await session.prompt("inspect missing file");
+		expect(await session.waitForAdvisorCatchup(2_000)).toBe(true);
+		// Hold a real primary run open so agent_start clears terminal-unwind
+		// preservation before the next concern arrives.
+		const liveStarted = Promise.withResolvers<void>();
+		const releaseLiveRun = Promise.withResolvers<void>();
+		session.agent.streamFn = model => {
+			const message: AssistantMessage = {
+				role: "assistant",
+				content: [{ type: "text", text: "primary complete" }],
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
+				usage: zeroUsage,
+				stopReason: "stop",
+				timestamp: Date.now(),
+			};
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				stream.push({ type: "start", partial: message });
+				liveStarted.resolve();
+				void releaseLiveRun.promise.then(() => stream.push({ type: "done", reason: "stop", message }));
+			});
+			return stream;
+		};
+		const livePrompt = session.prompt("continue inspection");
+		await liveStarted.promise;
+		try {
+			await advise.execute("next-note", {
+				note: "The next operation overwrites the destination file.",
+				severity: "concern",
+			});
+			await new Promise<void>(resolve => setImmediate(resolve));
+			expect(session.agent.peekSteeringQueue()).toHaveLength(1);
+		} finally {
+			session.agent.clearSteeringQueue();
+			releaseLiveRun.resolve();
+			await livePrompt;
+		}
+	});
+
+	it("holds a final-review continuation during the post-interrupt cooldown", async () => {
+		// The boundary flush decides steering through the same delivery policy as
+		// live routing: inside the post-interrupt immune window a final-review
+		// concern must preserve as a visible card, not steer a second consecutive
+		// continuation turn.
+		const { advisor } = createAdvisor(
+			{ "advisor.syncBacklog": "1" },
+			0,
+			{ name: "Final reviewer", reviewMode: "agent-end" },
+			0,
+			"finished work drops the audit row",
+			"concern",
+		);
+		if (!session) throw new Error("Expected live session");
+		const advise = advisor.state.tools.find(tool => tool.name === "advise");
+		if (!advise) throw new Error("Expected advisor delivery tool");
+		// Arm the post-interrupt cooldown with a live steered concern first.
+		session.agent.state.isStreaming = true;
+		try {
+			await advise.execute("arm-immune", {
+				note: "The running step loses the selected file.",
+				severity: "concern",
+			});
+			await new Promise<void>(resolve => setImmediate(resolve));
+			expect(session.agent.peekSteeringQueue()).toHaveLength(1);
+			session.agent.clearSteeringQueue();
+		} finally {
+			session.agent.state.isStreaming = false;
+		}
+
+		await session.prompt("only update");
+		expect(await session.waitForAdvisorCatchup(2_000)).toBe(true);
+
+		// One turn completed, well inside the 3-turn immune window: the final
+		// reviewer's concern preserves as a card instead of forcing a
+		// continuation against work the primary already finished.
+		const completions = session.agent.state.messages.filter(
+			message => message.role === "assistant" && JSON.stringify(message.content).includes("primary complete"),
+		);
+		expect(completions).toHaveLength(1);
+		const cards = session.agent.state.messages.filter(
+			message => message.role === "custom" && JSON.stringify(message).includes("drops the audit row"),
+		);
+		expect(cards).toHaveLength(1);
 	});
 
 	it("releases deferred advice at a terminal boundary skipped by cadence", async () => {

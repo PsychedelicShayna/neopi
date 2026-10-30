@@ -357,6 +357,7 @@ export class RpcPlanModeController {
 				...owned.tools.mounted.filter(name => !capturedHostTools.has(name)),
 				...new Set([...retainedMountedHostTools, ...currentMountedHostTools]),
 			],
+			owned.tools.registered,
 		);
 	}
 

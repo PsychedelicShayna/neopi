@@ -296,18 +296,19 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 	{ name: "get_tree", doc: "Read the raw session tree.", result: "SessionTree" },
 	{
 		name: "navigate_tree",
-		doc: "Navigate the native tree in the same session file; rebuild the transcript before acknowledging a returned resumeToken.",
+		doc: "Navigate the native tree in the same session file, optionally summarizing the abandoned branch; refused while busy. Rebuild the transcript before acknowledging a returned resumeToken.",
 		params: {
 			targetId: "string",
 			expectedSessionId: "string",
 			expectedSessionFile: "string | null",
 			expectedLeafId: "string | null",
-			"summarize?": "boolean",
-			"customInstructions?": "string",
+			"summarize?": doc("boolean", "Summarize the abandoned branch at the target."),
+			"customInstructions?": doc("string", "Instructions for the summarizer."),
 			"allowAskReopen?": "boolean",
 			"reanswerAskResult?": "TreeAskReanswer",
 		},
 		result: "NavigateTreeResult",
+		timeoutMs: 600_000,
 	},
 	{
 		name: "resume_tree",
@@ -398,6 +399,12 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 		result: { voice: "string" },
 		unwrap: "voice",
 	},
+	{
+		name: "live_connect",
+		doc: "Start a live voice session whose audio runs on a caller-owned WebRTC peer: send its SDP offer, apply the returned answer.",
+		params: { sdpOffer: "string", "voice?": "string", "instructions?": "string" },
+		result: { voice: "string", sdpAnswer: "string" },
+	},
 	{ name: "live_stop", doc: "Stop the live voice session, if any." },
 	{
 		name: "live_mute",
@@ -405,6 +412,19 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 		params: { "muted?": "boolean" },
 		result: { muted: "boolean" },
 		unwrap: "muted",
+	},
+	{
+		name: "dictation_start",
+		doc: "Start draft-only speech-to-text; resolves once the microphone is recording.",
+		params: { captureId: "string" },
+		timeoutMs: 600_000,
+	},
+	{
+		name: "dictation_stop",
+		doc: "Stop and flush draft-only dictation, returning the accumulated text.",
+		result: { text: "string" },
+		unwrap: "text",
+		timeoutMs: 600_000,
 	},
 
 	{
@@ -480,6 +500,12 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 		doc: "Fork into a new session file: history through `entryId`, or the whole session.",
 		params: { "entryId?": "string" },
 		result: "CancellationResult",
+	},
+	{ name: "abort_branch_summary", doc: "Stop a running `navigate_tree` branch summary; the navigation is cancelled." },
+	{
+		name: "set_label",
+		doc: "Set or clear (omit `label`) an entry's label.",
+		params: { entryId: "string", "label?": "string" },
 	},
 	{
 		name: "get_branch_messages",
