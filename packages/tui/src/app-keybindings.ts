@@ -39,7 +39,9 @@ interface AppKeybindings {
 	"app.tools.expand": true;
 	"app.tools.toggleVisibility": true;
 	"app.ask.hide": true;
+	"app.approval.approve": true;
 	"app.editor.external": true;
+	"app.local.open": true;
 	"app.message.followUp": true;
 	"app.message.chain": true;
 	"app.repl.toggle": true;
@@ -62,12 +64,15 @@ interface AppKeybindings {
 	"app.session.rename": true;
 	"app.session.delete": true;
 	"app.session.deleteNoninvasive": true;
+	"app.session.pin": true;
+	"app.session.unpin": true;
 	"app.tree.previousBranch": true;
 	"app.tree.nextBranch": true;
 	"app.plan.toggle": true;
 	"app.history.search": true;
 	"app.navigation.back": true;
 	"app.navigation.forward": true;
+	"app.links.hint": true;
 	"app.stt.toggle": true;
 	"app.dictation.toggle": true;
 	"app.live.toggle": true;
@@ -156,9 +161,19 @@ export const KEYBINDINGS = {
 		defaultKeys: "alt+h",
 		description: "Hide or show a pending ask dialog",
 	},
+	"app.approval.approve": {
+		// A chord, not Enter: an Enter typed for the composer as the prompt appears must not approve.
+		// Ctrl+Q backs up Ctrl+Enter, which Windows Terminal cannot deliver (#1903).
+		defaultKeys: ["ctrl+enter", "ctrl+q"],
+		description: "Approve a pending tool call",
+	},
 	"app.editor.external": {
 		defaultKeys: "ctrl+g",
 		description: "Open external editor",
+	},
+	"app.local.open": {
+		defaultKeys: "alt+g",
+		description: "Open a local:// file in external editor",
 	},
 	"app.message.followUp": {
 		// Ctrl+Enter is preserved for terminals that deliver it (Kitty/iTerm2/WezTerm/Ghostty),
@@ -262,6 +277,14 @@ export const KEYBINDINGS = {
 		defaultKeys: "ctrl+backspace",
 		description: "Delete session (non-invasive)",
 	},
+	"app.session.pin": {
+		defaultKeys: "alt+k",
+		description: "Pin the selected session in the resume picker",
+	},
+	"app.session.unpin": {
+		defaultKeys: "alt+shift+k",
+		description: "Unpin the selected session in the resume picker",
+	},
 	"app.tree.previousBranch": {
 		defaultKeys: [],
 		description: "Jump to the previous branch in /tree",
@@ -281,6 +304,10 @@ export const KEYBINDINGS = {
 	"app.navigation.back": {
 		defaultKeys: "ctrl+o",
 		description: "Go back to the previously visited menu or the conversation",
+	},
+	"app.links.hint": {
+		defaultKeys: [],
+		description: "Pick an extension link on screen by its hint tag",
 	},
 	"app.navigation.forward": {
 		// Ctrl+I is distinct from Tab only under the Kitty keyboard protocol or

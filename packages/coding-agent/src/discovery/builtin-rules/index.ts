@@ -21,7 +21,6 @@ import bundledRsBoxLeak from "./rs-box-leak.md" with { type: "text" };
 import bundledRsFuturePrelude from "./rs-future-prelude.md" with { type: "text" };
 import bundledRsLazylock from "./rs-lazylock.md" with { type: "text" };
 import bundledRsMatchErgonomics from "./rs-match-ergonomics.md" with { type: "text" };
-import bundledRsParkingLot from "./rs-parking-lot.md" with { type: "text" };
 import bundledRsResultType from "./rs-result-type.md" with { type: "text" };
 import bundledTsBareCatch from "./ts-bare-catch.md" with { type: "text" };
 import bundledTsImportType from "./ts-import-type.md" with { type: "text" };
@@ -97,10 +96,6 @@ export function getBuiltinRuleSources(cwd?: string): readonly BuiltinRuleSource[
 			content: resolvePromptAsset("discovery/builtin-rules/rs-match-ergonomics.md", bundledRsMatchErgonomics, {
 				cwd,
 			}).text,
-		},
-		{
-			name: "rs-parking-lot",
-			content: resolvePromptAsset("discovery/builtin-rules/rs-parking-lot.md", bundledRsParkingLot, { cwd }).text,
 		},
 		{
 			name: "rs-result-type",

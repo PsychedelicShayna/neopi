@@ -30,8 +30,8 @@ describe("owner-scoped retained kernel resets", () => {
 		const childId = `${sessionId}:child`;
 		const parent = createSession(parentId);
 		const child = createSession(childId);
-		const run = async (session: ToolSession, code: string, reset = false): Promise<unknown[]> => {
-			const outputs: unknown[] = [];
+		const run = async (session: ToolSession, code: string, reset = false): Promise<string> => {
+			let output = "";
 			await executeInVmContext({
 				sessionKey: sessionId,
 				sessionId,
@@ -41,39 +41,39 @@ describe("owner-scoped retained kernel resets", () => {
 				reset,
 				filename: "owner-reset.js",
 				runState: {
-					onDisplay: output => {
-						if (output.type === "json") outputs.push(output.data);
+					onText: text => {
+						output += text;
 					},
 				},
 			});
-			return outputs;
+			return output.trim();
 		};
 		try {
 			await run(parent, "globalThis.parentValue = 17;");
-			expect(await run(child, "globalThis.childOldValue = 19; display([parentValue]);")).toEqual([[17]]);
-			expect(await run(parent, "display([childOldValue]);")).toEqual([[19]]);
+			expect(await run(child, "globalThis.childOldValue = 19; display([parentValue]);")).toBe("[ 17 ]");
+			expect(await run(parent, "display([childOldValue]);")).toBe("[ 19 ]");
 			expect(
 				await run(child, "display([typeof parentValue, typeof childOldValue]); globalThis.childValue = 23;", true),
-			).toEqual([["undefined", "undefined"]]);
-			expect(await run(child, "display([typeof parentValue, childValue]);")).toEqual([["undefined", 23]]);
-			expect(await run(parent, "display([parentValue, childOldValue, typeof childValue]);")).toEqual([
-				[17, 19, "undefined"],
-			]);
+			).toBe("[ 'undefined', 'undefined' ]");
+			expect(await run(child, "display([typeof parentValue, childValue]);")).toBe("[ 'undefined', 23 ]");
+			expect(await run(parent, "display([parentValue, childOldValue, typeof childValue]);")).toBe(
+				"[ 17, 19, 'undefined' ]",
+			);
 
 			expect(
 				(await snapshotVmContext({ sessionKey: sessionId, sessionId, cwd: process.cwd(), ownerId: childId }))
 					?.values,
 			).toEqual({ childValue: 23 });
-			expect(await run(child, "display([typeof childValue]); globalThis.childValue = 29;", true)).toEqual([
-				["undefined"],
-			]);
-			expect(await run(child, "display([childValue]);")).toEqual([[29]]);
+			expect(await run(child, "display([typeof childValue]); globalThis.childValue = 29;", true)).toBe(
+				"[ 'undefined' ]",
+			);
+			expect(await run(child, "display([childValue]);")).toBe("[ 29 ]");
 
 			await disposeVmContextsByOwner(childId);
-			expect(await run(parent, "display([parentValue, childOldValue]);")).toEqual([[17, 19]]);
+			expect(await run(parent, "display([parentValue, childOldValue]);")).toBe("[ 17, 19 ]");
 			await run(child, "globalThis.childValue = 31;", true);
 			await disposeVmContextsByOwner(parentId);
-			expect(await run(child, "display([typeof parentValue, childValue]);")).toEqual([["undefined", 31]]);
+			expect(await run(child, "display([typeof parentValue, childValue]);")).toBe("[ 'undefined', 31 ]");
 		} finally {
 			await Promise.all([disposeVmContextsByOwner(childId), disposeVmContextsByOwner(parentId)]);
 		}
@@ -87,8 +87,8 @@ describe("owner-scoped retained kernel resets", () => {
 		const child = createSession(childId);
 		const controller = new AbortController();
 		const abortError = new Error("cancel child fork");
-		const run = async (session: ToolSession, code: string, reset = false): Promise<unknown[]> => {
-			const outputs: unknown[] = [];
+		const run = async (session: ToolSession, code: string, reset = false): Promise<string> => {
+			let output = "";
 			await executeInVmContext({
 				sessionKey: sessionId,
 				sessionId,
@@ -98,12 +98,12 @@ describe("owner-scoped retained kernel resets", () => {
 				reset,
 				filename: "owner-reset-cancel.js",
 				runState: {
-					onDisplay: output => {
-						if (output.type === "json") outputs.push(output.data);
+					onText: text => {
+						output += text;
 					},
 				},
 			});
-			return outputs;
+			return output.trim();
 		};
 		try {
 			await run(parent, "globalThis.parentValue = 41;");
@@ -118,16 +118,16 @@ describe("owner-scoped retained kernel resets", () => {
 					code: "display({ ready: true }); await Promise.withResolvers().promise;",
 					runState: {
 						signal: controller.signal,
-						onDisplay: output => {
-							if (output.type === "json") controller.abort(abortError);
+						onText: text => {
+							if (text.includes("ready")) controller.abort(abortError);
 						},
 					},
 				}),
 			).rejects.toThrow("cancel child fork");
-			expect(await run(child, "display([typeof parentValue, typeof childValue]);")).toEqual([
-				["undefined", "undefined"],
-			]);
-			expect(await run(parent, "display([parentValue]);")).toEqual([[41]]);
+			expect(await run(child, "display([typeof parentValue, typeof childValue]);")).toBe(
+				"[ 'undefined', 'undefined' ]",
+			);
+			expect(await run(parent, "display([parentValue]);")).toBe("[ 41 ]");
 		} finally {
 			controller.abort(abortError);
 			await Promise.all([disposeVmContextsByOwner(childId), disposeVmContextsByOwner(parentId)]);

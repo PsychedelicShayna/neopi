@@ -89,12 +89,13 @@ describe("BUILD_INFO", () => {
 		const { dir: cwdRepo } = await gitRepo("cwd", "cwd\n");
 		const expectedSha = (await $`git rev-parse HEAD`.cwd(checkoutRoot).quiet().text()).trim();
 		const probe = path.join(await tempDir("probe"), "probe.ts");
-		const module = path.join(checkoutRoot, "packages", "coding-agent", "src", "build-info.ts");
+		const hostApi = path.join(checkoutRoot, "packages", "coding-agent", "src", "extensibility", "host-api.ts");
 		await Bun.write(
 			probe,
 			[
 				`import { $ } from "bun";`,
-				`const { BUILD_INFO } = await import(${JSON.stringify(module)});`,
+				`const { getCodingAgentApi } = require(${JSON.stringify(hostApi)});`,
+				`const { BUILD_INFO } = getCodingAgentApi();`,
 				`const before = JSON.stringify(BUILD_INFO);`,
 				`await Bun.write("tracked.txt", "moved\\n");`,
 				`await $\`git -c commit.gpgsign=false commit -qam moved\`.quiet();`,

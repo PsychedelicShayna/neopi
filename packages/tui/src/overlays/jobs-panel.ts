@@ -1,16 +1,18 @@
 /**
  * The async background jobs of a session as {@link JobsSheet}: the dismissable
  * sheet the native jobs pill and `/jobs` open. A master–detail split lists
- * every job (running first) beside the selected one's status, command, facts
+ * every job of the session's agent and its subagents as a tree (see
+ * {@link buildJobTree}) beside the selected one's status, command, facts
  * (cwd, live pids, exit code, artifact) and live output.
  */
 import type { TspSpan, TspTone } from "@oh-my-pi/pi-wire";
-import { formatDuration } from "@oh-my-pi/pi-utils";
+import { formatDuration, sanitizeText } from "@oh-my-pi/pi-utils";
 import type { Component } from "../tui";
 import { matchesKey } from "../keys";
-import { replaceTabs, truncateToWidth } from "../utils";
+import { replaceTabs, truncateToWidth, wrapTextWithAnsi } from "../utils";
 import { collapseCommand } from "../apps/ps-data";
 import { compileMenuRegex } from "../menu-search";
+import { PREVIEW_LIMITS, shortenEmbeddedPaths } from "../render/render-utils";
 import { ansi, code, col, compact, item, node, row, span, stableKey, text } from "../native/describe";
 import type { DescribeContext, NativeChild, NativeNode, NativeScroll, NativeUiEvent } from "../native/node";
 import { actionBar, actionButton, selectList } from "../native/overlay";
@@ -26,6 +28,9 @@ import { MenuSelection } from "../components/menu-selection";
 import { ScrollView } from "../components/scroll-view";
 import { Text } from "../components/text";
 import { fuzzyFilter } from "../fuzzy";
+import { theme } from "../theme/theme";
+import { buildJobTree, type JobTreeAgent, type JobTreeRow, jobTreeGuide } from "./job-tree";
+import { describeJobWidget, type JobWidgetView, renderJobWidgetLines } from "../tools/job-widget";
 
 /** One async job as the session snapshots it. */
 export interface JobsPanelJob {
@@ -35,14 +40,20 @@ export interface JobsPanelJob {
 	readonly label: string;
 	readonly startTime: number;
 	readonly endTime?: number;
+	/** Registry id of the agent that owns the job. */
+	readonly ownerId?: string;
 	/** Registry id of the subagent a task job runs. */
 	readonly agentId?: string;
 }
 
-/** Running and recently settled jobs. */
+/** Running and recently settled jobs of an agent and its subagents. */
 export interface JobsPanelSnapshot {
 	readonly running: readonly JobsPanelJob[];
 	readonly recent: readonly JobsPanelJob[];
+	/** The agent the sheet is for: its jobs sit at the top level, and only they can be cancelled. */
+	readonly rootId?: string;
+	/** Subagents owning listed jobs, with the ancestors linking them to the root. */
+	readonly agents?: readonly JobTreeAgent[];
 }
 
 /** What the sheet shows about the selected job beyond its row. */
@@ -57,6 +68,8 @@ export interface JobsPanelDetail {
 	readonly output?: string;
 	/** Artifact holding the full output when `output` is cut. */
 	readonly artifactId?: string;
+	/** The job's live widget (frozen once it settles), drawn above the output. */
+	readonly widget?: JobWidgetView;
 }
 
 /** The session behind a {@link JobsSheet}. */
@@ -65,8 +78,12 @@ export interface JobsSheetSource {
 	load(): JobsPanelSnapshot;
 	/** The selected job's detail; runs once per frame, undefined once the job is gone. */
 	inspect(id: string): JobsPanelDetail | undefined;
-	/** Cancel a running job. */
-	cancel(id: string): void;
+	/**
+	 * Cancel a running job. Omitted by a read-only sheet (a focused subagent
+	 * view, which only watches that agent): it lists the jobs and offers no way
+	 * to stop them.
+	 */
+	cancel?(id: string): void;
 	/** Dismiss the sheet. */
 	close(): void;
 }
@@ -103,13 +120,15 @@ const OUTPUT_ROWS = 8;
 
 /**
  * The jobs pill's sheet: a centred `lg` glass sheet titled Background jobs.
- * A master–detail split (it stacks in a narrow pane): the selectable job list,
- * grouped Running / Recent, beside the selected job's detail — a status pill
- * with live elapsed and Cancel job, its command or task, facts (agent, cwd,
- * live pids, exit code, artifact) and a tail-following output pane. With no
- * jobs it shows an empty state. It re-reads the session every frame, so the
- * caller re-renders it on a timer while it is open. ↑/↓ select, X cancels the
- * selected running job, Esc or Close dismisses; nothing enters the transcript.
+ * A master–detail split (it stacks in a narrow pane): the selectable job tree
+ * beside the selected job's detail — a status pill with live elapsed and
+ * Cancel job, its command or task, facts (agent, cwd, live pids, exit code,
+ * artifact) and a tail-following output pane. With no jobs it shows an empty
+ * state. It re-reads the session every frame, so the caller re-renders it on
+ * a timer while it is open. ↑/↓ select, X cancels the selected running job,
+ * Esc or Close dismisses; nothing enters the transcript. A source without
+ * `cancel` renders read-only, and a subagent's job never offers Cancel: only
+ * the root's own jobs can be stopped here.
  */
 export class JobsSheet implements Component {
 	readonly nativeOverlay = {
@@ -172,7 +191,7 @@ export class JobsSheet implements Component {
 	}
 
 	describe(cx: DescribeContext): NativeNode {
-		const { jobs, selected } = this.#current();
+		const { rows, jobs, selected, cancellable } = this.#current();
 		const detail = selected && this.#source.inspect(selected.id);
 		const now = Date.now();
 		const close = actionButton("Close", "close", { keys: "escape" });
@@ -189,10 +208,10 @@ export class JobsSheet implements Component {
 								node(
 									"col",
 									{ role: "omp.jobs.master" },
-									[{ ...describeJobList(jobs, selected, now), scroll: this.#nativeListScroll }],
+									[{ ...describeJobList(rows, selected, now), scroll: this.#nativeListScroll }],
 									"master",
 								),
-								describeDetail(selected, detail, now, this.#nativeOutputScroll),
+								describeDetail(selected, detail, now, cancellable, this.#nativeOutputScroll),
 							],
 							"split",
 						),
@@ -202,8 +221,9 @@ export class JobsSheet implements Component {
 		]);
 	}
 
+	/** The job tree and selected job details, with shared menu navigation and output scrolling. */
 	render(width: number): readonly string[] {
-		const { jobs, selected } = this.#current();
+		const { rows, jobs, selected } = this.#current();
 		const now = Date.now();
 		const running = jobs.filter(job => job.status === "running").length;
 		const lines = [
@@ -212,18 +232,43 @@ export class JobsSheet implements Component {
 		];
 		const window = this.#viewport.layout(this.#rowCounts, this.#selection.selectedIndex, this.#listRows());
 		if (jobs.length === 0) lines.push(this.#search.query ? "No matching jobs" : "No background jobs");
-		for (let index = window.startIndex; index < window.endIndex; index++) {
-			const job = jobs[index]!;
+		let jobIndex = 0;
+		const groupRows: string[] = [];
+		for (const entry of rows) {
+			if (entry.kind === "agent") {
+				groupRows.push(truncateToWidth(`  ${jobTreeGuide(entry, theme)}${entry.agent.id}`, width));
+				continue;
+			}
+			const index = jobIndex++;
+			if (index < window.startIndex || index >= window.endIndex) {
+				groupRows.length = 0;
+				continue;
+			}
+			lines.push(...groupRows);
+			groupRows.length = 0;
+			const guide = jobTreeGuide(entry, theme);
+			const { job } = entry;
 			const cursor = job === selected ? ">" : " ";
+			const age = formatDuration(jobAge(job, now));
+			const agent = entry.agent && entry.agent.id !== job.label ? `${entry.agent.id}: ` : "";
 			lines.push(
 				truncateToWidth(
-					`${cursor} ${job.status}  ${job.type} ${formatDuration(jobAge(job, now))}  ${collapseCommand(job.label)}`,
+					`${cursor} ${guide}${job.status}  ${job.type} ${age}  ${agent}${collapseCommand(job.label)}`,
 					width,
 				),
 			);
 		}
 		const detail = selected && this.#source.inspect(selected.id);
 		if (selected && detail) {
+			if (detail.command) {
+				const commandRows = wrapTextWithAnsi(
+					shortenEmbeddedPaths(replaceTabs(sanitizeText(detail.command))),
+					Math.max(1, width - 3),
+				);
+				for (const line of commandRows.slice(0, PREVIEW_LIMITS.EXPANDED_LINES)) lines.push(`   ${line}`);
+				const hidden = commandRows.length - PREVIEW_LIMITS.EXPANDED_LINES;
+				if (hidden > 0) lines.push(truncateToWidth(`   … ${hidden} more command lines`, width));
+			}
 			const facts = compact([
 				detail.cwd && `cwd ${detail.cwd}`,
 				detail.pids.length > 0 && `pid ${detail.pids.join(", ")}`,
@@ -231,6 +276,11 @@ export class JobsSheet implements Component {
 				detail.artifactId && `artifact://${detail.artifactId}`,
 			]);
 			if (facts.length > 0) lines.push(truncateToWidth(`   ${facts.join(" · ")}`, width));
+			if (detail.widget) {
+				for (const line of renderJobWidgetLines(detail.widget, Math.max(0, width - 3), theme)) {
+					lines.push(`   ${line}`);
+				}
+			}
 			const output = detail.output ?? "";
 			if (this.#outputSource?.id !== selected.id || this.#outputSource.output !== output) {
 				if (this.#outputSource && this.#outputSource.id !== selected.id) this.#outputView.setFollowTail(true);
@@ -327,22 +377,38 @@ export class JobsSheet implements Component {
 		return Math.max(1, Math.min(12, Math.floor(((process.stdout.rows || 24) - 6) / 2)));
 	}
 
-	#current(): { jobs: readonly JobsPanelJob[]; selected: JobsPanelJob | undefined } {
-		const { running, recent } = this.#source.load();
+	#current(): {
+		rows: readonly JobTreeRow<JobsPanelJob>[];
+		jobs: readonly JobsPanelJob[];
+		selected: JobsPanelJob | undefined;
+		cancellable: boolean;
+	} {
+		const { running, recent, rootId, agents } = this.#source.load();
 		const all = [...running, ...recent];
-		const jobs = this.#search.query.trim()
+		const filtered = this.#search.query.trim()
 			? fuzzyFilter(all, this.#search.query, job => `${job.label} ${job.id} ${job.type} ${job.status}`)
 			: all;
+		const rows = buildJobTree(filtered, agents ?? [], rootId);
+		const jobs = rows.flatMap(entry => (entry.kind === "job" ? [entry.job] : []));
 		this.#selection.setItems(jobs, this.#selectedId);
 		const selected = this.#selection.selectedItem;
 		this.#selectedId = selected?.id;
-		if (this.#rowCounts.length !== jobs.length) this.#rowCounts = jobs.map(() => 1);
-		return { jobs, selected };
+		this.#rowCounts.length = 0;
+		let pendingGroupRows = 0;
+		for (const entry of rows) {
+			if (entry.kind === "agent") pendingGroupRows++;
+			else {
+				this.#rowCounts.push(1 + pendingGroupRows);
+				pendingGroupRows = 0;
+			}
+		}
+		const owned = selected?.ownerId === undefined || selected.ownerId === rootId;
+		return { rows, jobs, selected, cancellable: this.#source.cancel !== undefined && owned };
 	}
 
 	#cancelSelected(): void {
-		const { selected } = this.#current();
-		if (selected?.status === "running") this.#source.cancel(selected.id);
+		const { selected, cancellable } = this.#current();
+		if (cancellable && selected?.status === "running") this.#source.cancel?.(selected.id);
 	}
 }
 
@@ -352,31 +418,41 @@ function jobAge(job: JobsPanelJob, nowMs: number): number {
 }
 
 /**
- * The master list: Running, then Recent, each under a quiet group label (a
- * plain text child: no row behavior, so ↑/↓ and clicks pass it by).
+ * The master list: the job tree, connectors leading each label. A subagent
+ * without a listed task job heads its jobs as a quiet label.
  */
-function describeJobList(jobs: readonly JobsPanelJob[], selected: JobsPanelJob, nowMs: number): NativeNode {
-	const rows: NativeChild[] = [];
-	for (const [label, group] of [
-		["Running", jobs.filter(job => job.status === "running")],
-		["Recent", jobs.filter(job => job.status !== "running")],
-	] as const) {
-		if (group.length === 0) continue;
-		rows.push(node("text", { role: "omp.jobs.group", text: label, wrap: "none" }, undefined, `group-${label}`));
-		for (const job of group) rows.push(describeJobItem(job, nowMs));
-	}
-	return selectList("jobs", rows, { selected: selected.id, max: { lines: 12 } });
+function describeJobList(rows: readonly JobTreeRow<JobsPanelJob>[], selected: JobsPanelJob, nowMs: number): NativeNode {
+	const children: NativeChild[] = rows.map(entry => {
+		const guide = jobTreeGuide(entry, theme);
+		if (entry.kind === "job") return describeJobItem(entry.job, entry.agent?.id, guide, nowMs);
+		return node(
+			"text",
+			{
+				role: "omp.jobs.group",
+				spans: compact([guide !== "" && span(guide, "mono dim"), span(entry.agent.id)]),
+				wrap: "none",
+			},
+			undefined,
+			`agent-${stableKey(entry.agent.id)}`,
+		);
+	});
+	return selectList("jobs", children, { selected: selected.id, max: { lines: 12 } });
 }
 
 /**
- * One list row: the type icon tinted by status, the one-line label (a process
- * job's command in mono, a task's work in prose) and how long it ran.
+ * One list row: the type icon tinted by status, the tree connector, the
+ * subagent a task job runs, the one-line label (a process job's command in
+ * mono, a task's work in prose) and how long it ran.
  */
-function describeJobItem(job: JobsPanelJob, nowMs: number): NativeNode {
+function describeJobItem(job: JobsPanelJob, agentName: string | undefined, guide: string, nowMs: number): NativeNode {
 	const status = STATUS_LABEL[job.status];
 	const age = formatDuration(jobAge(job, nowMs));
 	return item(job.id, {
-		label: [job.type === "task" ? span(job.label) : span(collapseCommand(job.label), "mono")],
+		label: compact([
+			guide !== "" && span(guide, "mono dim"),
+			agentName !== undefined && agentName !== job.label && span(`${agentName} `, "strong"),
+			job.type === "task" ? span(job.label) : span(collapseCommand(job.label), "mono"),
+		]),
 		value: [span(age, "mono")],
 		icon: TYPE_ICON[job.type] ?? "job",
 		tone: STATUS_TONE[job.status],
@@ -413,13 +489,15 @@ function describeEmpty(): NativeNode {
 }
 
 /**
- * The selected job: a status line (pill, live elapsed, type · id, Cancel job),
- * its task or full command, facts and the output pane (or its empty state).
+ * The selected job: a status line (pill, live elapsed, type · id, Cancel job
+ * when `cancellable`), its task or full command, facts and the output pane (or
+ * its empty state).
  */
 function describeDetail(
 	job: JobsPanelJob,
 	detail: JobsPanelDetail | undefined,
 	nowMs: number,
+	cancellable: boolean,
 	scroll?: NativeScroll,
 ): NativeNode {
 	const settled = job.status !== "running";
@@ -451,7 +529,7 @@ function describeDetail(
 				}),
 				text([span(`${job.type} · ${job.id}`, "mono")], { role: "omp.jobs.id", wrap: "none", truncate: "end" }),
 				node("spacer", { grow: 1 }),
-				!settled && actionButton("Cancel job", "cancel", { keys: "x", tone: "error" }),
+				cancellable && !settled && actionButton("Cancel job", "cancel", { keys: "x", tone: "error" }),
 			]),
 			{ role: "omp.jobs.status", gap: "sm", align: "center" },
 		),
@@ -459,6 +537,7 @@ function describeDetail(
 			? code(command, { lang: "bash", wrap: true, preview: { lines: 4 }, role: "omp.jobs.command" })
 			: text(job.label, { role: "omp.jobs.title", wrap: "word" }),
 		facts.length > 0 && node("kv", { items: facts, role: "omp.jobs.facts" }),
+		detail?.widget && node("col", { role: "omp.jobs.widget" }, [describeJobWidget(detail.widget)], "widget"),
 		node(
 			"col",
 			{ role: "omp.jobs.out", gap: "sm" },

@@ -25,7 +25,7 @@ import { formatKeyHint, type KeyId } from "../app-keybindings";
 import { editorKey } from "../chrome/keybinding-hints";
 import type { MessageRenderer } from "../chat/extension-types";
 import type { AgentLifecycleLike } from "./agent-hub-types";
-import type { AgentHubRegistry, AgentStatus } from "./agent-hub-types";
+import { type AgentHubRegistry, type AgentStatus, isAgentTranscriptReadOnly } from "./agent-hub-types";
 import type { SessionMessageEntryLike } from "../chat/transcript-entry";
 import type { ObservableSession, SessionObserverRegistry } from "./session-observer-registry";
 import { getEditorTheme, theme } from "../theme/theme";
@@ -266,17 +266,10 @@ export class AgentTranscriptViewer implements Component {
 		});
 	}
 
-	/** Advisor and aborted-agent transcripts are read-only. */
+	/** Killed transcripts require explicit revival; passive participants never receive prompts. */
 	get #sendable(): boolean {
 		const ref = this.#deps.registry.get(this.#deps.agentId);
-		if (
-			!ref ||
-			ref.kind === "advisor" ||
-			ref.kind === "mailbox" ||
-			ref.kind === "operator" ||
-			ref.status === "aborted"
-		)
-			return false;
+		if (!ref || isAgentTranscriptReadOnly(ref) || ref.status === "aborted") return false;
 		return Boolean(this.#deps.remote || this.#deps.lifecycle);
 	}
 
@@ -659,7 +652,7 @@ export class AgentTranscriptViewer implements Component {
 	#submit(text: string): void {
 		const trimmed = text.trim();
 		this.#editor?.setText("");
-		if (!trimmed) return;
+		if (!trimmed || !this.#sendable) return;
 		this.#notice = undefined;
 		const id = this.#deps.agentId;
 		if (this.#deps.remote) {

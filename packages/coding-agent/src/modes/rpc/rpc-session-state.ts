@@ -4,11 +4,12 @@
  */
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import type { AgentSession } from "../../session/agent-session";
+import { isSessionSettled } from "../../session/session-settle";
 import { calculateTokensPerSecond } from "../../utils/token-rate";
 import { MAX_RPC_FRAME_BYTES } from "./rpc-frame";
 import { serializeRpcModel } from "./rpc-model";
 import { rpcPlanModeState } from "./rpc-plan-mode";
-import { isRpcSessionSettled, type RpcScheduledTurnProbe } from "./rpc-session-settle";
+import type { RpcScheduledTurnProbe } from "./rpc-session-settle";
 import type { RpcSessionState } from "./rpc-types";
 import { rpcSessionTelemetry } from "./rpc-session-telemetry";
 
@@ -84,7 +85,7 @@ export function buildRpcSessionState(session: AgentSession, options: RpcSessionS
 			liveSteered: queuedMessages.liveSteered,
 		},
 		hasPendingAsyncWork: session.hasPendingAsyncWork(),
-		isSettled: isRpcSessionSettled(session, options.scheduledTurn),
+		isSettled: isSessionSettled(session, options.scheduledTurn),
 		todoPhases: session.getTodoPhases(),
 		fastModeEnabled: session.isFastModeEnabled(),
 		tokensPerSecond: calculateTokensPerSecond(session.messages, session.isStreaming),

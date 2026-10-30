@@ -3,7 +3,7 @@
  *
  * Replaces the old auto-reply model: a `send` never blocks on the recipient
  * generating anything. Delivery resolves the recipient via the global
- * AgentRegistry — parked agents are revived through the
+ * AgentRegistry — parked and killed agents are revived through the
  * AgentLifecycleManager, idle agents are woken with a real turn, and busy
  * agents receive the message as a non-interrupting aside at the next step
  * boundary (see AgentSession.deliverIrcMessage).
@@ -20,6 +20,12 @@ interface IrcWaiter {
 	from?: string;
 	resolve: (msg: IrcMessage) => void;
 	cancel: () => void;
+}
+
+/** When a send went out: wall-clock `ts`, and `seq` to order sends within one millisecond. */
+interface SendMark {
+	ts: number;
+	seq: number;
 }
 
 /** Mailbox cap per agent; oldest messages are dropped beyond it. */
@@ -65,12 +71,31 @@ export class IrcBus {
 		IrcBus.#global = undefined;
 	}
 
+	/**
+	 * Count a settled job of agent `from` owned by `to` as `from`'s reply to
+	 * `to`: the job delivers that agent's outcome, so it answers what `to`
+	 * asked it before now (see {@link unansweredSends}). With no bus yet no
+	 * message was ever sent, so there is nothing to answer.
+	 */
+	static recordReply(from: string, to: string): void {
+		const bus = IrcBus.#global;
+		if (bus) bus.#recordReply(from, to);
+	}
+
 	readonly #registry: AgentRegistry;
 	readonly #lifecycle: () => AgentLifecycleManager;
 	readonly #mailboxes = new Map<string, IrcMessage[]>();
 	readonly #waiters = new Map<string, IrcWaiter[]>();
-	/** Timestamp of the latest successful send per `from` → `to`; see {@link sentSince}. */
-	readonly #lastSent = new Map<string, Map<string, number>>();
+	/** The latest successful non-progress send per `from` → `to`; see {@link sentSince}. */
+	readonly #lastSent = new Map<string, Map<string, SendMark>>();
+	/** The latest direct (non-broadcast, non-progress) send per `from` → `to`; see {@link unansweredSends}. */
+	readonly #lastDirect = new Map<string, Map<string, SendMark>>();
+	/** The latest progress message per `from` → `to`: a promise that a reply will follow. */
+	readonly #lastProgress = new Map<string, Map<string, SendMark>>();
+	/** The latest job-carried reply per agent → owner; see {@link IrcBus.recordReply}. */
+	readonly #lastJobReply = new Map<string, Map<string, SendMark>>();
+	/** Last {@link SendMark.seq} handed out, taken when a send starts. */
+	#sendSeq = 0;
 	/** Operator-only log of every delivery attempt; agents never read it. */
 	readonly #history: IrcHistoryRecord[] = [];
 	readonly #historyListeners = new Set<() => void>();
@@ -107,8 +132,11 @@ export class IrcBus {
 		const message: IrcMessage = { ...msg, id: Snowflake.next(), ts: Date.now() };
 		const seq = this.#nextHistorySeq++;
 		const scope = this.#historyScope(message.from);
+		// Taken before delivery: a reply sent while this message is still being
+		// delivered must still order after it.
+		const mark: SendMark = { ts: message.ts, seq: ++this.#sendSeq };
 		const receipt = await this.#deliver(message, opts);
-		this.#record({
+		this.#recordHistory({
 			message,
 			outcome: receipt.outcome,
 			error: receipt.error,
@@ -117,24 +145,63 @@ export class IrcBus {
 			seq,
 		});
 		if (receipt.outcome !== "failed") {
-			let sent = this.#lastSent.get(message.from);
-			if (!sent) {
-				sent = new Map();
-				this.#lastSent.set(message.from, sent);
+			if (message.progress) {
+				this.#record(this.#lastProgress, message.from, message.to, mark);
+			} else {
+				this.#record(this.#lastSent, message.from, message.to, mark);
+				if (!message.broadcast && !message.wakeRelay)
+					this.#record(this.#lastDirect, message.from, message.to, mark);
 			}
-			sent.set(message.to, message.ts);
 		}
 		return receipt;
 	}
 
+	#record(table: Map<string, Map<string, SendMark>>, from: string, to: string, mark: SendMark): void {
+		let sent = table.get(from);
+		if (!sent) {
+			sent = new Map();
+			table.set(from, sent);
+		}
+		// Deliveries can settle out of order; keep the latest send.
+		if ((sent.get(to)?.seq ?? 0) < mark.seq) sent.set(to, mark);
+	}
+
+	#recordReply(from: string, to: string): void {
+		this.#record(this.#lastJobReply, from, to, { ts: Date.now(), seq: ++this.#sendSeq });
+	}
+
 	/**
-	 * Whether `from` successfully sent `to` anything at or after `sinceTs`.
-	 * The wake-turn relay uses it to skip agents that already answered their
-	 * waker themselves.
+	 * Whether `from` successfully sent `to` anything, progress included, at or
+	 * after `sinceTs`. The wake-turn relay uses it to skip agents that already
+	 * answered their waker themselves, or promised it a later answer.
 	 */
 	sentSince(from: string, to: string, sinceTs: number): boolean {
-		const ts = this.#lastSent.get(from)?.get(to);
-		return ts !== undefined && ts >= sinceTs;
+		return [this.#lastSent, this.#lastProgress].some(table => (table.get(from)?.get(to)?.ts ?? -1) >= sinceTs);
+	}
+
+	/**
+	 * Agents `from` messaged directly at or after `sinceTs` that have not
+	 * answered since, with when the latest of those messages went out: the
+	 * replies a `wait` can block for. A message back answers, and so does a
+	 * settled job of the agent `from` owns, which delivers its result. Progress
+	 * answers nothing; it marks the request `promised`, and from then on only
+	 * an explicit message answers it (a job settling the turn that sent the
+	 * progress must not). "Since" is by send order, not timestamp, so an answer
+	 * to an earlier question never settles a later one sent within the same
+	 * millisecond.
+	 */
+	unansweredSends(from: string, sinceTs: number): Array<{ to: string; sentAt: number; promised: boolean }> {
+		const sends = this.#lastDirect.get(from);
+		if (!sends) return [];
+		const unanswered: Array<{ to: string; sentAt: number; promised: boolean }> = [];
+		for (const [to, sent] of sends) {
+			if (sent.ts < sinceTs) continue;
+			const after = (table: Map<string, Map<string, SendMark>>) => (table.get(to)?.get(from)?.seq ?? 0) > sent.seq;
+			const promised = after(this.#lastProgress);
+			if (after(this.#lastSent) || (!promised && after(this.#lastJobReply))) continue;
+			unanswered.push({ to, sentAt: sent.ts, promised });
+		}
+		return unanswered;
 	}
 
 	/**
@@ -163,7 +230,7 @@ export class IrcBus {
 		return root ? { rootId: root.id, sessionId: ircHistorySessionId(root) } : undefined;
 	}
 
-	#record(record: IrcHistoryRecord): void {
+	#recordHistory(record: IrcHistoryRecord): void {
 		// Concurrent sends finish out of order; keep the history in the order they started.
 		let index = this.#history.length;
 		while (index > 0 && this.#history[index - 1]!.seq > record.seq) index--;
@@ -192,7 +259,7 @@ export class IrcBus {
 			return {
 				to: message.to,
 				outcome: "failed",
-				error: `Agent "${message.to}" was hard-aborted and cannot be messaged or revived. Its transcript remains readable at history://${message.to}.`,
+				error: `Agent "${message.to}" was hard-aborted and cannot be messaged. Explicitly revive it in the Agent Hub first, or read its transcript at history://${message.to}.`,
 			};
 		}
 		// A control mailbox has no session. Buffer the message for a later wait/inbox.
@@ -214,8 +281,8 @@ export class IrcBus {
 			if (root && message.from !== root.id) this.#showOnUi(root, message);
 			return { to: message.to, outcome: "injected" };
 		}
-		// Advisor refs are observability-only transcripts, never messageable peers.
-		if (ref.kind === "advisor") {
+		// Advisor/read-only refs are observability-only transcripts, never messageable peers.
+		if (ref.kind === "advisor" || ref.history?.readOnly) {
 			return {
 				to: message.to,
 				outcome: "failed",
@@ -223,14 +290,14 @@ export class IrcBus {
 			};
 		}
 
-		// A `parked` recipient always needs the lifecycle to revive it — this is
-		// read from *this* bus's registry, so it holds for any registry. The
-		// mid-park / adopted checks below query the lifecycle's own state, which
-		// only describes the registry it manages: consult them only when the
-		// lifecycle owns this bus's registry, otherwise a custom-registry bus
-		// (fallen back to the global manager) would gate a live recipient on
-		// unrelated global park state. Main/non-adopted live peers skip the gate,
-		// and pending waiters still win without a session.
+		// A `parked` recipient needs the lifecycle to revive it from its
+		// transcript — this is read from *this* bus's registry,
+		// so it holds for any registry. The mid-park / adopted checks below query
+		// the lifecycle's own state, which only describes the registry it manages:
+		// consult them only when the lifecycle owns this bus's registry, otherwise
+		// a custom-registry bus (fallen back to the global manager) would gate a
+		// live recipient on unrelated global park state. Main/non-adopted live
+		// peers skip the gate, and pending waiters still win without a session.
 		const lifecycle = this.#lifecycle();
 		const lifecycleOwnsRegistry = lifecycle.manages(this.#registry);
 		const needsLifecycleGate =

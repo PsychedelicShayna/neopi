@@ -61,6 +61,26 @@ describe("in-process VCS bindings", () => {
 		expect(await repo.isDirty()).toBe(true);
 	});
 
+	test("synchronous status distinguishes clean, tracked, untracked and non-repository paths", async () => {
+		const outside = await mkdtemp(join(tmpdir(), "pi-natives-vcs-outside-"));
+		roots.push(outside);
+		expect(vcsGitDiscover(outside)).toBeNull();
+
+		const root = await repository();
+		const repo = vcsGitDiscover(root)!;
+		expect(repo.statusPorcelainSync({ untracked: "no" })).toBe("");
+		await writeFile(join(root, "untracked.txt"), "new\n");
+		expect(repo.statusPorcelainSync({ untracked: "no" })).toBe("");
+		expect(repo.statusPorcelainSync({ untracked: "normal" })).toContain("?? untracked.txt");
+
+		await writeFile(join(root, "tracked.txt"), "one\nchanged\n");
+		const unstaged = repo.statusPorcelainSync({ untracked: "no" });
+		expect(unstaged).toContain(" M tracked.txt");
+		expect(unstaged).not.toContain("untracked.txt");
+		await git(root, "add", "tracked.txt");
+		expect(repo.statusPorcelainSync({ untracked: "no" })).toContain("M  tracked.txt");
+	});
+
 	test("discovers, diffs, applies, stages, and commits", async () => {
 		const root = await repository();
 		const nested = join(root, "nested");

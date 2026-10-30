@@ -22,7 +22,8 @@ on:
          - "deny.toml"
          - "about.toml"
          - "LICENSE"
-         - "THIRD-PARTY-NOTICES.txt"
+         - "packages/coding-agent/THIRD-PARTY-NOTICES.txt"
+         - "packages/natives/THIRD-PARTY-NOTICES.txt"
          - "rust-toolchain.toml"
          - "rustfmt.toml"
          - "bun.lock"
@@ -1099,6 +1100,11 @@ jobs:
          # is needed on this runner.
          - name: Build browser relay artifacts
            run: bun run --cwd packages/browser-relay build
+         - name: Stage component legal notices
+           run: |
+              mkdir -p release-legal
+              cp packages/coding-agent/THIRD-PARTY-NOTICES.txt release-legal/npi-THIRD-PARTY-NOTICES.txt
+              cp packages/natives/THIRD-PARTY-NOTICES.txt release-legal/npi-natives-THIRD-PARTY-NOTICES.txt
          # Generated after every other release asset is in place and before
          # the release is created, so SHA256SUMS.txt itself ships as an asset
          # and covers every other file uploaded alongside it.
@@ -1108,7 +1114,7 @@ jobs:
                 packages/coding-agent/binaries/npi-* \
                 packages/browser-relay/dist/npi-browser-relay-extension.zip \
                 LICENSE \
-                THIRD-PARTY-NOTICES.txt
+                release-legal/*.txt
          - name: Create GitHub release without replacing existing releases
            shell: bash
            env:
@@ -1131,5 +1137,5 @@ jobs:
               gh release create "$RELEASE_TAG" "${args[@]}" \
                 packages/coding-agent/binaries/npi-* \
                 packages/browser-relay/dist/npi-browser-relay-extension.zip \
-                LICENSE THIRD-PARTY-NOTICES.txt SHA256SUMS.txt
+                LICENSE release-legal/*.txt SHA256SUMS.txt
 

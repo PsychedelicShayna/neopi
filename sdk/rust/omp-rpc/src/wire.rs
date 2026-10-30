@@ -185,6 +185,8 @@ pub struct ThinkingContent {
 	pub thinking: Option<String>,
 	pub thinking_signature: Option<String>,
 	pub item_id: Option<String>,
+	/// Prose the model addressed to the user, returned by the provider as thinking; present it as answer text.
+	pub narration: Option<bool>,
 	/// Every key not decoded into a declared field.
 	pub extra: Map<String, Value>,
 }
@@ -201,11 +203,15 @@ impl Serialize for ThinkingContent {
 		if let Some(value) = &self.item_id {
 			map.serialize_entry("itemId", value)?;
 		}
+		if let Some(value) = &self.narration {
+			map.serialize_entry("narration", value)?;
+		}
 		for (key, value) in &self.extra {
 			match key.as_str() {
 				"thinking" if self.thinking.is_some() => continue,
 				"thinkingSignature" if self.thinking_signature.is_some() => continue,
 				"itemId" if self.item_id.is_some() => continue,
+				"narration" if self.narration.is_some() => continue,
 				_ => {}
 			}
 			map.serialize_entry(key, value)?;
@@ -221,6 +227,7 @@ impl<'de> Deserialize<'de> for ThinkingContent {
 			thinking: take(&mut extra, "thinking"),
 			thinking_signature: take(&mut extra, "thinkingSignature"),
 			item_id: take(&mut extra, "itemId"),
+			narration: take(&mut extra, "narration"),
 			extra,
 		})
 	}
@@ -2747,6 +2754,8 @@ impl ApprovalHandler {
 pub enum ApprovalMode {
 	#[serde(rename = "always-ask")]
 	AlwaysAsk,
+	#[serde(rename = "always-ask-cached")]
+	AlwaysAskCached,
 	#[serde(rename = "write")]
 	Write,
 	#[serde(rename = "yolo")]
@@ -2758,6 +2767,7 @@ impl ApprovalMode {
 	pub fn as_str(self) -> &'static str {
 		match self {
 			Self::AlwaysAsk => "always-ask",
+			Self::AlwaysAskCached => "always-ask-cached",
 			Self::Write => "write",
 			Self::Yolo => "yolo",
 		}
@@ -3508,7 +3518,7 @@ impl CacheWarmingMode {
 	}
 }
 
-/// `set_event_filter` projection: `delta` drops the accumulated snapshots from `message_update`.
+/// `set_event_filter` projection: `delta` replaces the accumulated snapshots with the block a start/end event touches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MessageUpdates {
 	#[serde(rename = "full")]
@@ -4000,6 +4010,8 @@ pub struct CompactionResult {
 	pub details: Option<Value>,
 	#[serde(rename = "preserveData", default, skip_serializing_if = "Option::is_none")]
 	pub preserve_data: Option<Map<String, Value>>,
+	#[serde(rename = "providerReplayThroughEntryId", default, skip_serializing_if = "Option::is_none")]
+	pub provider_replay_through_entry_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -4129,6 +4141,9 @@ pub struct SessionStats {
 	pub credits: Option<SessionCredits>,
 	#[serde(rename = "routedModels", default, skip_serializing_if = "Option::is_none")]
 	pub routed_models: Option<BTreeMap<String, f64>>,
+	/// Failed edits by the engine's `errorKind`.
+	#[serde(rename = "editRejections", default, skip_serializing_if = "Option::is_none")]
+	pub edit_rejections: Option<BTreeMap<String, f64>>,
 	#[serde(rename = "contextUsage", default, skip_serializing_if = "Option::is_none")]
 	pub context_usage: Option<ContextUsage>,
 }
@@ -4234,6 +4249,8 @@ pub struct TreeAskQuestionResult {
 	pub note: Option<String>,
 	#[serde(rename = "optionNotes", default, skip_serializing_if = "Option::is_none")]
 	pub option_notes: Option<Vec<TreeAskOptionNote>>,
+	#[serde(rename = "noteOption", default, skip_serializing_if = "Option::is_none")]
+	pub note_option: Option<String>,
 	#[serde(rename = "timedOut", default, skip_serializing_if = "Option::is_none")]
 	pub timed_out: Option<bool>,
 }
@@ -4254,6 +4271,8 @@ pub struct TreeAskDetails {
 	pub note: Option<String>,
 	#[serde(rename = "optionNotes", default, skip_serializing_if = "Option::is_none")]
 	pub option_notes: Option<Vec<TreeAskOptionNote>>,
+	#[serde(rename = "noteOption", default, skip_serializing_if = "Option::is_none")]
+	pub note_option: Option<String>,
 	#[serde(rename = "timedOut", default, skip_serializing_if = "Option::is_none")]
 	pub timed_out: Option<bool>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4290,8 +4309,10 @@ pub struct NavigateTreeResult {
 	pub cancelled: bool,
 	#[serde(rename = "sessionFile", default, skip_serializing_if = "Option::is_none")]
 	pub session_file: Option<String>,
+	/// True when abort_branch_summary stopped the summary without moving the leaf.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub aborted: Option<bool>,
+	/// The target was a user message: its text, for the editor; the leaf moved to its parent.
 	#[serde(rename = "editorText", default, skip_serializing_if = "Option::is_none")]
 	pub editor_text: Option<String>,
 	#[serde(rename = "editorImages", default, skip_serializing_if = "Option::is_none")]
@@ -4395,6 +4416,9 @@ pub struct BtwHistoryTurn {
 	pub created_at: i64,
 	#[serde(rename = "updatedAt")]
 	pub updated_at: i64,
+	/// Images attached to the question.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub images: Option<Vec<ImageContent>>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub error: Option<String>,
 }
@@ -4412,6 +4436,9 @@ pub struct BtwHistoryRecord {
 	pub id: String,
 	#[serde(rename = "leafId", deserialize_with = "Deserialize::deserialize")]
 	pub leaf_id: Option<String>,
+	/// Images attached to the question.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub images: Option<Vec<ImageContent>>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub error: Option<String>,
 	#[serde(rename = "followUps", default, skip_serializing_if = "Option::is_none")]
@@ -4905,6 +4932,9 @@ pub struct AgentStartEvent {
 	pub run_owners: Option<Vec<String>>,
 	#[serde(rename = "agentStarts", default, skip_serializing_if = "Option::is_none")]
 	pub agent_starts: Option<i64>,
+	/// Calls of an unpaired assistant tail a continued run executes before its first model request.
+	#[serde(rename = "resumedToolCallIds", default, skip_serializing_if = "Option::is_none")]
+	pub resumed_tool_call_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -5073,6 +5103,29 @@ pub struct AutoCompactionEndEvent {
 	pub skipped: Option<bool>,
 }
 
+/// A manual compaction (`compact` command, `/compact`, extension `ctx.compact()`) began; the live turn is already aborted.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ManualCompactionStartEvent {
+	/// The `/compact <mode>` subcommand, when one was given.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub mode: Option<String>,
+}
+
+/// Outcome of the compaction announced by the matching `manual_compaction_start`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ManualCompactionEndEvent {
+	/// The compaction was cancelled (abort, or a `session_before_compact` hook).
+	pub aborted: bool,
+	/// Present when the compaction committed.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub result: Option<CompactionResult>,
+	/// There was nothing to compact; `errorMessage` says why.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub skipped: Option<bool>,
+	#[serde(rename = "errorMessage", default, skip_serializing_if = "Option::is_none")]
+	pub error_message: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AutoRetryStartEvent {
 	pub attempt: i64,
@@ -5153,6 +5206,7 @@ pub struct AdvisorCostChangedEvent {}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AdvisorYieldedEvent {}
 
+/// Rule injection: a TTSR rule matched the stream and its text was injected. Each rule carries at least `name`, `path`, and `content`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TtsrTriggeredEvent {
 	pub rules: Vec<Map<String, Value>>,
@@ -5244,6 +5298,10 @@ pub enum RpcAgentEvent {
 	ToolExecutionEnd(ToolExecutionEndEvent),
 	AutoCompactionStart(AutoCompactionStartEvent),
 	AutoCompactionEnd(AutoCompactionEndEvent),
+	/// A manual compaction (`compact` command, `/compact`, extension `ctx.compact()`) began; the live turn is already aborted.
+	ManualCompactionStart(ManualCompactionStartEvent),
+	/// Outcome of the compaction announced by the matching `manual_compaction_start`.
+	ManualCompactionEnd(ManualCompactionEndEvent),
 	AutoRetryStart(AutoRetryStartEvent),
 	AutoRetryEnd(AutoRetryEndEvent),
 	/// A prompt-cache refresh was handed to the provider.
@@ -5258,6 +5316,7 @@ pub enum RpcAgentEvent {
 	ConfigWarningsChanged(ConfigWarningsChangedEvent),
 	AdvisorCostChanged(AdvisorCostChangedEvent),
 	AdvisorYielded(AdvisorYieldedEvent),
+	/// Rule injection: a TTSR rule matched the stream and its text was injected. Each rule carries at least `name`, `path`, and `content`.
 	TtsrTriggered(TtsrTriggeredEvent),
 	TodoReminder(TodoReminderEvent),
 	TodoAutoClear(TodoAutoClearEvent),
@@ -5301,6 +5360,8 @@ impl RpcAgentEvent {
 			Some("tool_execution_end") => |value| serde_json::from_value(value).map(Self::ToolExecutionEnd),
 			Some("auto_compaction_start") => |value| serde_json::from_value(value).map(Self::AutoCompactionStart),
 			Some("auto_compaction_end") => |value| serde_json::from_value(value).map(Self::AutoCompactionEnd),
+			Some("manual_compaction_start") => |value| serde_json::from_value(value).map(Self::ManualCompactionStart),
+			Some("manual_compaction_end") => |value| serde_json::from_value(value).map(Self::ManualCompactionEnd),
 			Some("auto_retry_start") => |value| serde_json::from_value(value).map(Self::AutoRetryStart),
 			Some("auto_retry_end") => |value| serde_json::from_value(value).map(Self::AutoRetryEnd),
 			Some("cache_warming_start") => |value| serde_json::from_value(value).map(Self::CacheWarmingStart),
@@ -5358,6 +5419,8 @@ impl Serialize for RpcAgentEvent {
 			Self::ToolExecutionEnd(member) => serialize_tagged(member, &[("type", "tool_execution_end")], serializer),
 			Self::AutoCompactionStart(member) => serialize_tagged(member, &[("type", "auto_compaction_start")], serializer),
 			Self::AutoCompactionEnd(member) => serialize_tagged(member, &[("type", "auto_compaction_end")], serializer),
+			Self::ManualCompactionStart(member) => serialize_tagged(member, &[("type", "manual_compaction_start")], serializer),
+			Self::ManualCompactionEnd(member) => serialize_tagged(member, &[("type", "manual_compaction_end")], serializer),
 			Self::AutoRetryStart(member) => serialize_tagged(member, &[("type", "auto_retry_start")], serializer),
 			Self::AutoRetryEnd(member) => serialize_tagged(member, &[("type", "auto_retry_end")], serializer),
 			Self::CacheWarmingStart(member) => serialize_tagged(member, &[("type", "cache_warming_start")], serializer),
@@ -5435,6 +5498,9 @@ pub struct PromptError {
 	pub model: Option<String>,
 	#[serde(rename = "httpStatus", default, skip_serializing_if = "Option::is_none")]
 	pub http_status: Option<i64>,
+	/// `cost_cap`: the session reached `session.maxCost` (`--max-cost`) and omp did not send the next request.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub code: Option<LitCostCap>,
 }
 
 /// Terminal outcome of one accepted `prompt` / `abort_and_prompt`, keyed by request `id`.
@@ -5658,6 +5724,32 @@ pub struct LiveTranscriptEvent {
 /// Sent exactly once when a live session ends; `error` carries the failure cause.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LiveEndEvent {
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub error: Option<String>,
+}
+
+/// State of one draft-only microphone capture.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DictationStateEvent {
+	#[serde(rename = "captureId")]
+	pub capture_id: String,
+	pub state: DictationStateEventState,
+}
+
+/// Full accumulated draft preview; replaces the previous preview for this capture.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DictationTranscriptEvent {
+	#[serde(rename = "captureId")]
+	pub capture_id: String,
+	pub text: String,
+}
+
+/// Exactly one terminal frame per capture; text is the accumulated result.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DictationEndEvent {
+	#[serde(rename = "captureId")]
+	pub capture_id: String,
+	pub text: String,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub error: Option<String>,
 }
@@ -6344,6 +6436,12 @@ pub enum RpcNotification {
 	LiveTranscript(LiveTranscriptEvent),
 	/// Sent exactly once when a live session ends; `error` carries the failure cause.
 	LiveEnd(LiveEndEvent),
+	/// State of one draft-only microphone capture.
+	DictationState(DictationStateEvent),
+	/// Full accumulated draft preview; replaces the previous preview for this capture.
+	DictationTranscript(DictationTranscriptEvent),
+	/// Exactly one terminal frame per capture; text is the accumulated result.
+	DictationEnd(DictationEndEvent),
 	/// Text appended to the running side question's latest answer.
 	BtwDelta(BtwDeltaEvent),
 	/// Full side-question record on every lifecycle change (started, complete, cancelled, error); the last one per id wins.
@@ -6379,13 +6477,16 @@ impl RpcNotification {
 			Some("live_levels") => |value| serde_json::from_value(value).map(Self::LiveLevels),
 			Some("live_transcript") => |value| serde_json::from_value(value).map(Self::LiveTranscript),
 			Some("live_end") => |value| serde_json::from_value(value).map(Self::LiveEnd),
+			Some("dictation_state") => |value| serde_json::from_value(value).map(Self::DictationState),
+			Some("dictation_transcript") => |value| serde_json::from_value(value).map(Self::DictationTranscript),
+			Some("dictation_end") => |value| serde_json::from_value(value).map(Self::DictationEnd),
 			Some("btw_delta") => |value| serde_json::from_value(value).map(Self::BtwDelta),
 			Some("btw_record") => |value| serde_json::from_value(value).map(Self::BtwRecord),
 			Some("command_output") => |value| serde_json::from_value(value).map(Self::CommandOutput),
 			Some("session_info_update") => |value| serde_json::from_value(value).map(Self::SessionInfoUpdate),
 			Some("config_update") => |value| serde_json::from_value(value).map(Self::ConfigUpdate),
 			Some("rpc_frame_error") => |value| serde_json::from_value(value).map(Self::RpcFrameError),
-			Some("journal_state" | "journal_entry" | "message_persisted" | "advisor_message" | "run_owners_joined" | "run_owners_skipped" | "chat_mode_changed" | "approval_mode_changed" | "mixture_hop_end" | "mixture_decision" | "mixture_limit" | "mixture_checkpoint" | "mixture_run_end" | "agent_start" | "agent_end" | "turn_start" | "turn_end" | "message_start" | "message_update" | "message_end" | "tool_execution_start" | "tool_execution_update" | "tool_stream_update" | "tool_execution_end" | "auto_compaction_start" | "auto_compaction_end" | "auto_retry_start" | "auto_retry_end" | "cache_warming_start" | "cache_warming_end" | "retry_fallback_applied" | "retry_fallback_succeeded" | "model_changed" | "models_configuration_changed" | "themes_configuration_changed" | "config_warnings_changed" | "advisor_cost_changed" | "advisor_yielded" | "ttsr_triggered" | "todo_reminder" | "todo_auto_clear" | "irc_message" | "notice" | "thinking_level_changed" | "goal_updated" | "queue_update") => |value| serde_json::from_value(value).map(Self::RpcAgentEvent),
+			Some("journal_state" | "journal_entry" | "message_persisted" | "advisor_message" | "run_owners_joined" | "run_owners_skipped" | "chat_mode_changed" | "approval_mode_changed" | "mixture_hop_end" | "mixture_decision" | "mixture_limit" | "mixture_checkpoint" | "mixture_run_end" | "agent_start" | "agent_end" | "turn_start" | "turn_end" | "message_start" | "message_update" | "message_end" | "tool_execution_start" | "tool_execution_update" | "tool_stream_update" | "tool_execution_end" | "auto_compaction_start" | "auto_compaction_end" | "manual_compaction_start" | "manual_compaction_end" | "auto_retry_start" | "auto_retry_end" | "cache_warming_start" | "cache_warming_end" | "retry_fallback_applied" | "retry_fallback_succeeded" | "model_changed" | "models_configuration_changed" | "themes_configuration_changed" | "config_warnings_changed" | "advisor_cost_changed" | "advisor_yielded" | "ttsr_triggered" | "todo_reminder" | "todo_auto_clear" | "irc_message" | "notice" | "thinking_level_changed" | "goal_updated" | "queue_update") => |value| serde_json::from_value(value).map(Self::RpcAgentEvent),
 			_ => |value| Ok(Self::Unknown(value)),
 		};
 		decode(value)
@@ -6408,6 +6509,9 @@ impl Serialize for RpcNotification {
 			Self::LiveLevels(member) => serialize_tagged(member, &[("type", "live_levels")], serializer),
 			Self::LiveTranscript(member) => serialize_tagged(member, &[("type", "live_transcript")], serializer),
 			Self::LiveEnd(member) => serialize_tagged(member, &[("type", "live_end")], serializer),
+			Self::DictationState(member) => serialize_tagged(member, &[("type", "dictation_state")], serializer),
+			Self::DictationTranscript(member) => serialize_tagged(member, &[("type", "dictation_transcript")], serializer),
+			Self::DictationEnd(member) => serialize_tagged(member, &[("type", "dictation_end")], serializer),
 			Self::BtwDelta(member) => serialize_tagged(member, &[("type", "btw_delta")], serializer),
 			Self::BtwRecord(member) => serialize_tagged(member, &[("type", "btw_record")], serializer),
 			Self::CommandOutput(member) => serialize_tagged(member, &[("type", "command_output")], serializer),
@@ -6445,7 +6549,7 @@ impl RpcServerFrame {
 		let decode: fn(Value) -> Result<Self, serde_json::Error> = match value.get("type").and_then(Value::as_str) {
 			Some("response") => |value| serde_json::from_value(value).map(Self::Response),
 			Some("host_tool_call" | "host_tool_cancel" | "host_uri_request" | "host_uri_cancel") => |value| serde_json::from_value(value).map(Self::RpcHostRequest),
-			Some("ready" | "prompt_result" | "session_settled" | "extension_error" | "extension_ui_request" | "available_commands_update" | "subagent_lifecycle" | "subagent_progress" | "subagent_event" | "live_phase" | "live_levels" | "live_transcript" | "live_end" | "btw_delta" | "btw_record" | "command_output" | "session_info_update" | "config_update" | "rpc_frame_error" | "journal_state" | "journal_entry" | "message_persisted" | "advisor_message" | "run_owners_joined" | "run_owners_skipped" | "chat_mode_changed" | "approval_mode_changed" | "mixture_hop_end" | "mixture_decision" | "mixture_limit" | "mixture_checkpoint" | "mixture_run_end" | "agent_start" | "agent_end" | "turn_start" | "turn_end" | "message_start" | "message_update" | "message_end" | "tool_execution_start" | "tool_execution_update" | "tool_stream_update" | "tool_execution_end" | "auto_compaction_start" | "auto_compaction_end" | "auto_retry_start" | "auto_retry_end" | "cache_warming_start" | "cache_warming_end" | "retry_fallback_applied" | "retry_fallback_succeeded" | "model_changed" | "models_configuration_changed" | "themes_configuration_changed" | "config_warnings_changed" | "advisor_cost_changed" | "advisor_yielded" | "ttsr_triggered" | "todo_reminder" | "todo_auto_clear" | "irc_message" | "notice" | "thinking_level_changed" | "goal_updated" | "queue_update") => |value| serde_json::from_value(value).map(Self::RpcNotification),
+			Some("ready" | "prompt_result" | "session_settled" | "extension_error" | "extension_ui_request" | "available_commands_update" | "subagent_lifecycle" | "subagent_progress" | "subagent_event" | "live_phase" | "live_levels" | "live_transcript" | "live_end" | "dictation_state" | "dictation_transcript" | "dictation_end" | "btw_delta" | "btw_record" | "command_output" | "session_info_update" | "config_update" | "rpc_frame_error" | "journal_state" | "journal_entry" | "message_persisted" | "advisor_message" | "run_owners_joined" | "run_owners_skipped" | "chat_mode_changed" | "approval_mode_changed" | "mixture_hop_end" | "mixture_decision" | "mixture_limit" | "mixture_checkpoint" | "mixture_run_end" | "agent_start" | "agent_end" | "turn_start" | "turn_end" | "message_start" | "message_update" | "message_end" | "tool_execution_start" | "tool_execution_update" | "tool_stream_update" | "tool_execution_end" | "auto_compaction_start" | "auto_compaction_end" | "manual_compaction_start" | "manual_compaction_end" | "auto_retry_start" | "auto_retry_end" | "cache_warming_start" | "cache_warming_end" | "retry_fallback_applied" | "retry_fallback_succeeded" | "model_changed" | "models_configuration_changed" | "themes_configuration_changed" | "config_warnings_changed" | "advisor_cost_changed" | "advisor_yielded" | "ttsr_triggered" | "todo_reminder" | "todo_auto_clear" | "irc_message" | "notice" | "thinking_level_changed" | "goal_updated" | "queue_update") => |value| serde_json::from_value(value).map(Self::RpcNotification),
 			_ => |value| Ok(Self::Unknown(value)),
 		};
 		decode(value)
@@ -6821,8 +6925,10 @@ pub struct NavigateTreeParams {
 	pub expected_session_file: Option<String>,
 	#[serde(rename = "expectedLeafId", deserialize_with = "Deserialize::deserialize")]
 	pub expected_leaf_id: Option<String>,
+	/// Summarize the abandoned branch at the target.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub summarize: Option<bool>,
+	/// Instructions for the summarizer.
 	#[serde(rename = "customInstructions", default, skip_serializing_if = "Option::is_none")]
 	pub custom_instructions: Option<String>,
 	#[serde(rename = "allowAskReopen", default, skip_serializing_if = "Option::is_none")]
@@ -6967,6 +7073,23 @@ pub struct LiveStartResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LiveConnectParams {
+	#[serde(rename = "sdpOffer")]
+	pub sdp_offer: String,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub voice: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub instructions: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LiveConnectResult {
+	pub voice: String,
+	#[serde(rename = "sdpAnswer")]
+	pub sdp_answer: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LiveMuteParams {
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub muted: Option<bool>,
@@ -6975,6 +7098,17 @@ pub struct LiveMuteParams {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LiveMuteResult {
 	pub muted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DictationStartParams {
+	#[serde(rename = "captureId")]
+	pub capture_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DictationStopResult {
+	pub text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -7076,6 +7210,14 @@ pub struct BranchParams {
 pub struct ForkParams {
 	#[serde(rename = "entryId", default, skip_serializing_if = "Option::is_none")]
 	pub entry_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetLabelParams {
+	#[serde(rename = "entryId")]
+	pub entry_id: String,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub label: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -8168,6 +8310,27 @@ impl MixtureDecisionJudgeKind {
 	}
 }
 
+/// The constant `"cost_cap"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct LitCostCap;
+
+impl Serialize for LitCostCap {
+	fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+		serializer.serialize_str("cost_cap")
+	}
+}
+
+impl<'de> Deserialize<'de> for LitCostCap {
+	fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+		let value = Value::deserialize(deserializer)?;
+		if value.as_str() == Some("cost_cap") {
+			Ok(Self)
+		} else {
+			Err(D::Error::custom(format!("expected \"cost_cap\", got {value}")))
+		}
+	}
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SubagentLifecyclePayloadRunKind {
 	#[serde(rename = "spawn")]
@@ -8185,6 +8348,27 @@ impl SubagentLifecyclePayloadRunKind {
 			Self::Spawn => "spawn",
 			Self::Wake => "wake",
 			Self::FollowUp => "followUp",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum DictationStateEventState {
+	#[serde(rename = "starting")]
+	Starting,
+	#[serde(rename = "recording")]
+	Recording,
+	#[serde(rename = "transcribing")]
+	Transcribing,
+}
+
+impl DictationStateEventState {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Starting => "starting",
+			Self::Recording => "recording",
+			Self::Transcribing => "transcribing",
 		}
 	}
 }
@@ -9312,7 +9496,7 @@ impl Command for GetTreeCommand {
 	}
 }
 
-/// Navigate the native tree in the same session file; rebuild the transcript before acknowledging a returned resumeToken.
+/// Navigate the native tree in the same session file, optionally summarizing the abandoned branch; refused while busy. Rebuild the transcript before acknowledging a returned resumeToken.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NavigateTreeCommand {
 	#[serde(rename = "targetId")]
@@ -9323,8 +9507,10 @@ pub struct NavigateTreeCommand {
 	pub expected_session_file: Option<String>,
 	#[serde(rename = "expectedLeafId", deserialize_with = "Deserialize::deserialize")]
 	pub expected_leaf_id: Option<String>,
+	/// Summarize the abandoned branch at the target.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub summarize: Option<bool>,
+	/// Instructions for the summarizer.
 	#[serde(rename = "customInstructions", default, skip_serializing_if = "Option::is_none")]
 	pub custom_instructions: Option<String>,
 	#[serde(rename = "allowAskReopen", default, skip_serializing_if = "Option::is_none")]
@@ -9335,7 +9521,7 @@ pub struct NavigateTreeCommand {
 
 impl Command for NavigateTreeCommand {
 	const NAME: &'static str = "navigate_tree";
-	const TIMEOUT_MS: Option<u64> = None;
+	const TIMEOUT_MS: Option<u64> = Some(600000);
 	type Output = NavigateTreeResult;
 
 	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
@@ -9574,6 +9760,27 @@ impl Command for LiveStartCommand {
 	}
 }
 
+/// Start a live voice session whose audio runs on a caller-owned WebRTC peer: send its SDP offer, apply the returned answer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LiveConnectCommand {
+	#[serde(rename = "sdpOffer")]
+	pub sdp_offer: String,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub voice: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub instructions: Option<String>,
+}
+
+impl Command for LiveConnectCommand {
+	const NAME: &'static str = "live_connect";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = LiveConnectResult;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<LiveConnectResult>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
 /// Stop the live voice session, if any.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct LiveStopCommand {}
@@ -9603,6 +9810,38 @@ impl Command for LiveMuteCommand {
 
 	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
 		serde_json::from_value::<LiveMuteResult>(data.unwrap_or_else(|| Value::Object(Map::new()))).map(|result| result.muted)
+	}
+}
+
+/// Start draft-only speech-to-text; resolves once the microphone is recording.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DictationStartCommand {
+	#[serde(rename = "captureId")]
+	pub capture_id: String,
+}
+
+impl Command for DictationStartCommand {
+	const NAME: &'static str = "dictation_start";
+	const TIMEOUT_MS: Option<u64> = Some(600000);
+	type Output = ();
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		let _ = data;
+		Ok(())
+	}
+}
+
+/// Stop and flush draft-only dictation, returning the accumulated text.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct DictationStopCommand {}
+
+impl Command for DictationStopCommand {
+	const NAME: &'static str = "dictation_stop";
+	const TIMEOUT_MS: Option<u64> = Some(600000);
+	type Output = String;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<DictationStopResult>(data.unwrap_or_else(|| Value::Object(Map::new()))).map(|result| result.text)
 	}
 }
 
@@ -9950,6 +10189,41 @@ impl Command for ForkCommand {
 
 	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
 		serde_json::from_value::<CancellationResult>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
+/// Stop a running `navigate_tree` branch summary; the navigation is cancelled.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct AbortBranchSummaryCommand {}
+
+impl Command for AbortBranchSummaryCommand {
+	const NAME: &'static str = "abort_branch_summary";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = ();
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		let _ = data;
+		Ok(())
+	}
+}
+
+/// Set or clear (omit `label`) an entry's label.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetLabelCommand {
+	#[serde(rename = "entryId")]
+	pub entry_id: String,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub label: Option<String>,
+}
+
+impl Command for SetLabelCommand {
+	const NAME: &'static str = "set_label";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = ();
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		let _ = data;
+		Ok(())
 	}
 }
 

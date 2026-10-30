@@ -21,7 +21,7 @@ import { type as arkType } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { type ImageContent, type TextContent, type ToolExample, validateToolArguments } from "@oh-my-pi/pi-ai";
 import { replaceTabs, TERMINAL, truncateToWidth } from "@oh-my-pi/pi-tui";
-import { isRecord, logger, untilAborted } from "@oh-my-pi/pi-utils";
+import { isRecord, logger, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 
 import type { ExtensionUISelectItem } from "../extensibility/extensions";
 import { formatKeyHint, formatKeyHints } from "@oh-my-pi/pi-tui/app-keybindings";
@@ -29,6 +29,7 @@ import { editorKey, editorKeys } from "@oh-my-pi/pi-tui/chrome/keybinding-hints"
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import askDescription from "../prompts/tools/ask.md" with { type: "text" };
+import askHeadlessForkMessage from "../prompts/tools/ask-headless-fork.md" with { type: "text" };
 import { vocalizer } from "../tts/vocalizer";
 
 import type { ToolSession } from ".";
@@ -38,6 +39,7 @@ import {
 	TRUNCATE_LENGTHS,
 } from "@oh-my-pi/pi-tui/render/render-utils";
 import { shiftImageMarkers } from "@oh-my-pi/pi-tui/prompt/composer-attachments";
+import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { ToolAbortError } from "./tool-errors";
 
 import { sessionLocalProtocolOptions } from "../internal-urls/context";
@@ -49,6 +51,9 @@ import { describeAttachedImagesForTextModel, shouldDescribeImagesForTextModel } 
 // =============================================================================
 // Types
 // =============================================================================
+
+/** Returned to a headless fork's model instead of aborting its run. */
+const HEADLESS_FORK_ASK_ERROR = prompt.render(askHeadlessForkMessage);
 
 export const OTHER_OPTION = "Other (type your own)";
 const CHAT_ABOUT_THIS_OPTION = "Chat about this";
@@ -494,8 +499,9 @@ function formatOptionNotes(result: { selectedOptions: string[]; optionNotes?: As
 }
 
 function formatQuestionResult(result: QuestionResult): string {
+	const noteOn = result.noteOption === undefined ? "" : ` on ${result.noteOption}`;
 	const noteSuffix =
-		(result.note ? ` (note: ${result.note})` : "") +
+		(result.note ? ` (note${noteOn}: ${result.note})` : "") +
 		(result.optionNotes?.length ? `\n${formatOptionNotes(result)}` : "");
 	const custom = result.customInput === undefined ? undefined : `"${result.customInput}"`;
 	if (result.selectedOptions.length === 0) {
@@ -513,6 +519,7 @@ function formatSingleQuestionResponse(result: {
 	customInput?: string;
 	note?: string;
 	optionNotes?: AskOptionNote[];
+	noteOption?: string;
 	timedOut?: boolean;
 	multi: boolean;
 }): string {
@@ -534,13 +541,14 @@ function formatSingleQuestionResponse(result: {
 		);
 	}
 	if (result.note) {
+		const label = `User added note${result.noteOption === undefined ? "" : ` on ${result.noteOption}`}:`;
 		responseParts.push(
 			result.note.includes("\n")
-				? `User added note:\n${result.note
+				? `${label}\n${result.note
 						.split("\n")
 						.map(line => `  ${line}`)
 						.join("\n")}`
-				: `User added note: ${result.note}`,
+				: `${label} ${result.note}`,
 		);
 	}
 	if (result.optionNotes?.length) responseParts.push(formatOptionNotes(result));
@@ -597,7 +605,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 	constructor(private readonly session: ToolSession) {}
 
 	static createIf(session: ToolSession): AskTool | null {
-		return (session.canPromptUser ?? session.hasUI) ? new AskTool(session) : null;
+		return (session.canPromptUser ?? session.hasUI) || session.advertiseHeadlessAsk ? new AskTool(session) : null;
 	}
 
 	/** Send terminal notification when ask tool is waiting for input */
@@ -638,6 +646,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 						activeModelString: this.session.getActiveModelString?.(),
 						telemetryConfig: this.session.getTelemetry?.(),
 						sessionId: this.session.getSessionId?.() ?? undefined,
+						costGate: this.session.costGate,
 					},
 					signal,
 				);
@@ -668,6 +677,10 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 	): Promise<AgentToolResult<AskToolDetails>> {
 		// Headless fallback
 		if (!context?.hasUI || !context.ui) {
+			// A headless fork (`/tan`) keeps `ask` advertised only to share the parent's
+			// prompt-cache prefix. Aborting would end its run with no final answer, and the
+			// parent would receive an empty result; let the model put the question there.
+			if (this.session.advertiseHeadlessAsk) throw new ToolError(HEADLESS_FORK_ASK_ERROR);
 			context?.abort();
 			throw new ToolAbortError("Ask tool requires interactive mode");
 		}
@@ -858,6 +871,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 								? undefined
 								: shiftImageMarkers(result.note, noteOffset, result.noteImages?.length ?? 0),
 						...(optionNotes?.length ? { optionNotes } : {}),
+						noteOption: result.noteOption,
 						timedOut: result.timedOut,
 					});
 				}
@@ -884,6 +898,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 						customInput: result.customInput,
 						note: result.note,
 						...(result.optionNotes?.length ? { optionNotes: result.optionNotes } : {}),
+						noteOption: result.noteOption,
 						timedOut: result.timedOut,
 					};
 					const responseText = formatSingleQuestionResponse(result);

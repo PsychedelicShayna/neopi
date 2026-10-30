@@ -6,14 +6,24 @@ import { type Api, Effort, type Model } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { CustomToolAdapter } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/wrapper";
+import { DeferredMCPTool } from "@oh-my-pi/pi-coding-agent/mcp/tool-bridge";
+import { dispatchXdevTool, type XdevDispatch, type XdevState } from "@oh-my-pi/pi-coding-agent/tools/xdev";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
+import { getRestorableSessionModels } from "@oh-my-pi/pi-coding-agent/session/session-context";
+import {
+	EPHEMERAL_MODEL_CHANGE_ROLE,
+	PREWALK_MODEL_CHANGE_ROLE,
+} from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import {
 	cfgPrewalkEnabled,
+	cfgPrewalkPlanner,
+	cfgPrewalkExecution,
 	cfgRetryBaseDelayMs,
 	cfgRetryFallbackChains,
 	cfgRetryFallbackRevertPolicy,
@@ -127,6 +137,8 @@ describe("AgentSession prewalk", () => {
 			startupTarget?: Model;
 			planner?: string;
 			execution?: string;
+			tools?: AgentTool[];
+			registry?: Map<string, AgentTool>;
 		} = {},
 	) {
 		const primary = modelOrThrow("claude-sonnet-4-5");
@@ -148,7 +160,7 @@ describe("AgentSession prewalk", () => {
 			initialState: {
 				model: primary,
 				systemPrompt: ["Test"],
-				tools: [todoTool as AgentTool, writeTool as AgentTool],
+				tools: options.tools ?? [todoTool as AgentTool, writeTool as AgentTool],
 				messages: [],
 				thinkingLevel: Effort.High,
 			},
@@ -169,7 +181,7 @@ describe("AgentSession prewalk", () => {
 			sessionManager: options.sessionManager ?? SessionManager.inMemory(tempDir.path()),
 			settings,
 			modelRegistry,
-			toolRegistry,
+			toolRegistry: options.registry ?? toolRegistry,
 			thinkingLevel: Effort.High,
 			prewalk:
 				options.armed === false
@@ -222,12 +234,61 @@ describe("AgentSession prewalk", () => {
 		);
 		expect(await created.session.newSession()).toBe(true);
 		expect(created.session.model?.id).toBe(planner.id);
+		expect(
+			created.session.sessionManager.getBranch().findLast(entry => entry.type === "model_change"),
+		).toMatchObject({ role: EPHEMERAL_MODEL_CHANGE_ROLE });
+		expect(created.session.sessionManager.getSessionLocalModelChange()).toBeUndefined();
 		expect(created.session.getPrewalkState()?.target.id).toBe(created.target.id);
 		await created.session.prompt("Implement the change");
 		expect(created.requested).toEqual([planner.id, planner.id, created.target.id]);
+		expect(created.session.sessionManager.getSessionLocalModelChange()).toMatchObject({
+			model: `anthropic/${created.target.id}`,
+			role: PREWALK_MODEL_CHANGE_ROLE,
+		});
 		cfgPrewalkEnabled.override(created.settings, false);
 		expect(await created.session.newSession()).toBe(true);
 		expect(created.session.getPrewalkState()).toBeUndefined();
+	});
+
+	it("/new prefers scoped models for both configured crews without losing selector effort", async () => {
+		const planner = modelOrThrow("claude-sonnet-4-5");
+		const execution = modelOrThrow("claude-opus-4-5");
+		const created = createLifecycleSession([], {
+			armed: false,
+			planner: "claude-sonnet:high",
+			execution: "claude-opus:low",
+		});
+		created.session.setScopedModels([{ model: planner }, { model: execution }]);
+		expect(await created.session.newSession()).toBe(true);
+		expect(created.session.model?.id).toBe(planner.id);
+		expect(created.session.configuredThinkingLevel()).toBe(Effort.High);
+		expect(created.session.getPrewalkState()).toMatchObject({
+			target: { id: execution.id },
+			thinkingLevel: Effort.Low,
+		});
+	});
+
+	it("/prewalk prefers the scoped execution model for a configured unqualified selector", async () => {
+		const created = createLifecycleSession([], {
+			armed: false,
+			enabled: false,
+			execution: "claude-sonnet:low",
+		});
+		created.session.setScopedModels([{ model: created.primary }]);
+		const ctx = {
+			session: created.session,
+			sessionManager: created.session.sessionManager,
+			settings: created.settings,
+			collabGuest: false,
+			showStatus: vi.fn(),
+			editor: { setText: vi.fn() },
+			refreshSlashCommandState: vi.fn(),
+		} as unknown as InteractiveModeContext;
+		expect(await executeBuiltinSlashCommand("/prewalk", { ctx })).toBe(true);
+		expect(created.session.getPrewalkState()).toMatchObject({
+			target: { id: created.primary.id },
+			thinkingLevel: Effort.Low,
+		});
 	});
 
 	it("/new restores the previous prewalk source and effort, then requires a fresh todo before handoff", async () => {
@@ -258,6 +319,35 @@ describe("AgentSession prewalk", () => {
 			created.target.id,
 		]);
 		expect(created.nudges[boundary]).not.toContain("prewalk-checklist");
+	});
+
+	it("resumes on the handoff target while retry-role lookup keeps the assigned role", async () => {
+		const created = createLifecycleSession([
+			toolCall("todo", "todo"),
+			toolCall("write", "write"),
+			{ content: ["done"] },
+		]);
+		const manager = created.session.sessionManager;
+		manager.appendModelChange(`${created.primary.provider}/${created.primary.id}`, "slow");
+		await created.session.prompt("task");
+		expect(created.session.model?.id).toBe(created.target.id);
+
+		const context = manager.buildSessionContext();
+		expect(getRestorableSessionModels(context.models, manager.getLastModelChangeRole())[0]).toBe(
+			`${created.target.provider}/${created.target.id}`,
+		);
+		expect(context.configuredThinkingLevel).toBe(Effort.Low);
+		expect(manager.getLastModelChangeRole({ skipEphemeral: true })).toBe("slow");
+	});
+
+	it("keeps the arm when a session with a recorded handoff resumes on a different model", () => {
+		const target = modelOrThrow("claude-sonnet-4-6");
+		const manager = SessionManager.inMemory(tempDir.path());
+		manager.appendModelChange(`${target.provider}/${target.id}`, "prewalk");
+		const created = createLifecycleSession([], { sessionManager: manager, target });
+
+		expect(created.session.model?.id).toBe(created.primary.id);
+		expect(created.session.getPrewalkState()?.target.id).toBe(target.id);
 	});
 
 	it("/new restores the prewalk source and effort after automatic fallback and primary restoration", async () => {
@@ -943,6 +1033,71 @@ describe("AgentSession prewalk", () => {
 		expect(session.model?.id).toBe(primary.id);
 	});
 
+	it.each([
+		{ readOnlyHint: true, thirdTurnModel: "claude-sonnet-4-5" },
+		{ readOnlyHint: false, thirdTurnModel: "claude-sonnet-4-6" },
+	])(
+		"keeps write approval while honoring MCP readOnlyHint=$readOnlyHint at the prewalk gate",
+		async ({ readOnlyHint, thirdTurnModel }) => {
+			const mcp = new DeferredMCPTool(
+				"memory",
+				{ name: "list_projects", inputSchema: { type: "object" }, annotations: { readOnlyHint } },
+				async () => {
+					throw new Error("MCP connection is not used by this write fixture");
+				},
+			);
+			const xdevState: XdevState = {
+				tools: new Map([
+					[
+						mcp.name,
+						new CustomToolAdapter(mcp, () => {
+							throw new Error("MCP context is not used");
+						}),
+					],
+				]),
+				mountedNames: new Set([mcp.name]),
+				builtInNames: new Set(),
+				isActive: () => false,
+			};
+			let writes = 0;
+			const dispatchedWrite: AgentTool<typeof writeToolSchema, { xdev: XdevDispatch } | undefined> = {
+				name: "write",
+				label: "Write",
+				description: "MCP lookup then workspace write",
+				parameters: writeToolSchema,
+				async execute(toolCallId) {
+					if (writes++ === 0) {
+						const { result, xdev } = await dispatchXdevTool(xdevState, mcp.name, "{}", toolCallId);
+						// A tools/list_changed refresh drops the definition before the turn ends; the
+						// gate must classify the tool that ran.
+						xdevState.tools.delete(mcp.name);
+						return { content: result.content, details: { xdev } };
+					}
+					return { content: [{ type: "text", text: "implementation written" }], details: undefined };
+				},
+			};
+			const created = createLifecycleSession(
+				[
+					toolCall("todo", "todo"),
+					toolCall("lookup", "write"),
+					toolCall("implementation", "write"),
+					{ content: ["done"] },
+				],
+				{
+					tools: [todoTool, dispatchedWrite],
+					registry: new Map<string, AgentTool>([
+						[todoTool.name, todoTool],
+						[dispatchedWrite.name, dispatchedWrite],
+					]),
+				},
+			);
+			await created.session.prompt("inspect projects then implement");
+			expect(mcp.approval).toBe("write");
+			expect(created.requested[2]).toBe(thirdTurnModel);
+			expect(created.session.model?.id).toBe(created.target.id);
+		},
+	);
+
 	it("switches on a write-tier xd:// device dispatched through write (issue #7312)", async () => {
 		const primary = modelOrThrow("claude-sonnet-4-5");
 		const target = modelOrThrow("claude-sonnet-4-6");
@@ -1375,6 +1530,105 @@ describe("AgentSession prewalk", () => {
 		expect(session.getPrewalkState()).toBeUndefined();
 		expect(showStatus).toHaveBeenCalledTimes(2);
 		expect(showStatus).toHaveBeenCalledWith(expect.stringContaining("Prewalk reset"));
+	});
+
+	function createSelectorFixture(initial: Model, roles: { default: Model; smol: Model }) {
+		const mock = createMockModel({
+			responses: [toolCall("first-todo", "todo"), toolCall("first-write", "write"), { content: ["first done"] }],
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: {
+				model: initial,
+				systemPrompt: ["Test"],
+				tools: [todoTool as AgentTool, writeTool as AgentTool],
+				messages: [],
+				thinkingLevel: Effort.Medium,
+			},
+			convertToLlm,
+			streamFn: (model, context, options) => mock.stream(model, context, options),
+		});
+		const settings = Settings.isolated({ "compaction.enabled": false });
+		settings.setModelRole("default", `${roles.default.provider}/${roles.default.id}:medium`);
+		settings.setModelRole("smol", `${roles.smol.provider}/${roles.smol.id}:medium`);
+		const sessionManager = SessionManager.inMemory();
+		const created = new AgentSession({
+			agent,
+			sessionManager,
+			settings,
+			modelRegistry,
+			toolRegistry,
+			thinkingLevel: Effort.Medium,
+		});
+		session = created;
+		const showStatus = vi.fn();
+		const ctx = {
+			session: created,
+			sessionManager,
+			settings,
+			collabGuest: false,
+			showStatus,
+			editor: { setText: vi.fn() },
+			refreshSlashCommandState: vi.fn(),
+		} as unknown as InteractiveModeContext;
+		return { session: created, settings, showStatus, runtime: { ctx } satisfies TuiSlashCommandRuntime };
+	}
+
+	it("configured planning and execution crews drive every bare /prewalk restart", async () => {
+		const primary = modelOrThrow("claude-sonnet-4-5");
+		const target = modelOrThrow("claude-sonnet-4-6");
+		// Both roles resolve to `target`, so the role defaults would plan on `target` and never hand off.
+		const { session, settings, showStatus, runtime } = createSelectorFixture(target, {
+			default: target,
+			smol: target,
+		});
+		const from = `${primary.provider}/${primary.id}:medium`;
+		cfgPrewalkPlanner.override(settings, from);
+		cfgPrewalkExecution.override(settings, `${target.provider}/${target.id}:medium`);
+
+		expect(await executeBuiltinSlashCommand("/prewalk restart", runtime)).toBe(true);
+		expect(session.model?.id).toBe(primary.id);
+		expect(session.getPrewalkState()?.target.id).toBe(target.id);
+		await session.prompt("first task");
+		expect(session.model?.id).toBe(target.id);
+
+		expect(await executeBuiltinSlashCommand("/prewalk restart", runtime)).toBe(true);
+		expect(session.model?.id).toBe(primary.id);
+		expect(session.getPrewalkState()?.target.id).toBe(target.id);
+		expect(showStatus).toHaveBeenLastCalledWith(expect.stringContaining(`plan ${from}`));
+	});
+
+	it("/prewalk arguments override the configured pair for that command only", async () => {
+		const primary = modelOrThrow("claude-sonnet-4-5");
+		const target = modelOrThrow("claude-sonnet-4-6");
+		// Both roles resolve to `primary`, so the configured defaults hand off nowhere.
+		const { session, showStatus, runtime } = createSelectorFixture(primary, { default: primary, smol: primary });
+		const from = `${primary.provider}/${primary.id}:medium`;
+		const into = `${target.provider}/${target.id}:medium`;
+
+		expect(await executeBuiltinSlashCommand(`/prewalk ${into}`, runtime)).toBe(true);
+		expect(session.getPrewalkState()?.target.id).toBe(target.id);
+		await session.prompt("first task");
+		expect(session.model?.id).toBe(target.id);
+
+		// The override is not remembered: a bare restart uses @default → @smol, which coincide here.
+		expect(await executeBuiltinSlashCommand("/prewalk restart", runtime)).toBe(true);
+		expect(session.model?.id).toBe(primary.id);
+		expect(session.getPrewalkState()).toBeUndefined();
+		expect(showStatus).toHaveBeenLastCalledWith(
+			expect.stringContaining("Prewalk reset: planning and execution resolve to the same model"),
+		);
+
+		expect(await executeBuiltinSlashCommand(`/prewalk restart ${from} ${into}`, runtime)).toBe(true);
+		expect(session.getPrewalkState()?.target.id).toBe(target.id);
+		expect(showStatus).toHaveBeenLastCalledWith(expect.stringContaining("Prewalk restarted"));
+
+		// Extra arguments are rejected without touching the session.
+		const calls = showStatus.mock.calls.length;
+		expect(await executeBuiltinSlashCommand(`/prewalk restart ${from} ${into} extra`, runtime)).toBe(true);
+		expect(session.getPrewalkState()?.target.id).toBe(target.id);
+		expect(showStatus.mock.calls.length).toBe(calls + 1);
+		expect(showStatus).toHaveBeenLastCalledWith(expect.stringContaining("Usage: /prewalk"));
 	});
 
 	it("requires a fresh todo before a later explicit prewalk can hand off", async () => {

@@ -23,7 +23,7 @@ export const stateDefs = {
 	},
 	ThemePalette: { name: "string", colors: "Record<string, string>" },
 	ApprovalHandler: "'host' | 'ui'",
-	ApprovalMode: "'always-ask' | 'write' | 'yolo'",
+	ApprovalMode: "'always-ask' | 'always-ask-cached' | 'write' | 'yolo'",
 	SessionUsage: {
 		input: "number",
 		output: "number",
@@ -218,7 +218,7 @@ export const stateDefs = {
 	CacheWarmingMode: "'off' | 'streaming' | 'idle'",
 	MessageUpdates: doc(
 		"'full' | 'delta'",
-		"`set_event_filter` projection: `delta` drops the accumulated snapshots from `message_update`.",
+		"`set_event_filter` projection: `delta` replaces the accumulated snapshots with the block a start/end event touches.",
 	),
 	TodoStatus: "'pending' | 'in_progress' | 'completed' | 'abandoned' | 'blocked'",
 	GoalOp: "'get' | 'create' | 'resume' | 'pause' | 'drop'",
@@ -377,6 +377,7 @@ export const stateDefs = {
 		tokensBefore: "number.integer",
 		"details?": "unknown",
 		"preserveData?": JSON_OBJECT,
+		"providerReplayThroughEntryId?": "string",
 	},
 	ModelCycleResult: { model: "ModelInfo", "thinkingLevel?": "ThinkingLevel", isScoped: "boolean" },
 	ThinkingLevelCycleResult: { level: "Effort" },
@@ -437,6 +438,7 @@ export const stateDefs = {
 		cost: "number",
 		"credits?": "SessionCredits",
 		"routedModels?": "Record<string, number>",
+		"editRejections?": doc("Record<string, number>", "Failed edits by the engine's `errorKind`."),
 		"contextUsage?": "ContextUsage",
 	},
 	MessagesPage: {
@@ -478,6 +480,7 @@ export const stateDefs = {
 		"customInput?": "string",
 		"note?": "string",
 		"optionNotes?": "TreeAskOptionNote[]",
+		"noteOption?": "string",
 		"timedOut?": "boolean",
 	},
 	TreeAskDetails: {
@@ -488,6 +491,7 @@ export const stateDefs = {
 		"customInput?": "string",
 		"note?": "string",
 		"optionNotes?": "TreeAskOptionNote[]",
+		"noteOption?": "string",
 		"timedOut?": "boolean",
 		"results?": "TreeAskQuestionResult[]",
 		"chatRedirect?": "boolean",
@@ -501,8 +505,11 @@ export const stateDefs = {
 		leafId: "string | null",
 		outcome: "'navigated' | 'unchanged' | 'cancelled' | 'ask_reopen'",
 		cancelled: "boolean",
-		"aborted?": "boolean",
-		"editorText?": "string",
+		"aborted?": doc("boolean", "True when abort_branch_summary stopped the summary without moving the leaf."),
+		"editorText?": doc(
+			"string",
+			"The target was a user message: its text, for the editor; the leaf moved to its parent.",
+		),
 		"editorImages?": "ImageContent[]",
 		"summaryEntry?": JSON_OBJECT,
 		"reopenAsk?": "TreeAskReopen",
@@ -546,6 +553,7 @@ export const stateDefs = {
 	BtwHistoryTurn: doc(
 		{
 			question: "string",
+			"images?": doc("ImageContent[]", "Images attached to the question."),
 			answer: "string",
 			status: "BtwStatus",
 			createdAt: "number.integer",
@@ -557,6 +565,7 @@ export const stateDefs = {
 	BtwHistoryRecord: doc(
 		{
 			question: "string",
+			"images?": doc("ImageContent[]", "Images attached to the question."),
 			answer: "string",
 			status: "BtwStatus",
 			createdAt: "number.integer",

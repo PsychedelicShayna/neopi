@@ -17,6 +17,8 @@ export function createSessionDefaults(emit?: (event: AgentSessionEvent) => void)
 		abort: async () => {},
 		dispose: async () => {},
 		setIrcWakeTurnObserver: () => {},
+		holdIrcWakes: () => () => {},
+		isParentIrcSteer: () => false,
 		isAdvisorActive: () => false,
 		subscribeRunState: () => () => {},
 		addDisposer: () => {},

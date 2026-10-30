@@ -12,7 +12,12 @@ import computerUsePrompt from "../prompts/system/computer-use.md" with { type: "
 import { enforceInlineByteCap } from "@oh-my-pi/pi-tui/tools/streaming-output";
 import { type ComputerCallStep, isReadOnlyComputerCall, renderComputerCall } from "./computer/call";
 import { type ComputerScreenshot, type ComputerSessionSnapshot, screenStateNotice } from "./computer/protocol";
-import { type ComputerController, ComputerSupervisor, registerComputerController } from "./computer/supervisor";
+import {
+	type ComputerController,
+	ComputerSupervisor,
+	computerTurnInFlight,
+	registerComputerController,
+} from "./computer/supervisor";
 import type { ToolSession } from "./index";
 import { renderCallChain, renderFunctionRun } from "./run-code";
 import { throwIfAborted } from "./tool-errors";
@@ -20,6 +25,7 @@ import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { clampTimeout } from "./tool-timeouts";
 
 import {
+	cfgComputerBackgroundFallback,
 	cfgComputerDisplay,
 	cfgComputerEnabled,
 	cfgComputerMaxHeight,
@@ -150,10 +156,10 @@ export function createComputerPrelude(
 		get documentation(): string {
 			return getComputerPreludeDocumentation(session.cwd);
 		},
+		inlineDocumentation: true,
 		javascript: computerPreludeAssets.javascript,
 		python: computerPreludeAssets.python,
 		exports: ["computer"],
-		codeModeDeclarations: computerPreludeAssets.codeModeDeclarations,
 		get guidance(): string {
 			const { text } = resolvePromptAsset("system/computer-use.md", computerUsePrompt, { cwd: session.cwd });
 			return text === computerUsePrompt ? text : renderPrompt(text);
@@ -261,6 +267,8 @@ function buildComputerSnapshot(session: ToolSession, readOnly: boolean): Compute
 			: configuredMaxHeight,
 		display: cfgComputerDisplay.get(session.settings),
 		readOnly,
+		backgroundFallback: cfgComputerBackgroundFallback.get(session.settings),
+		displayTurn: computerTurnInFlight(session.getEvalKernelOwnerId?.() ?? undefined),
 	};
 }
 
