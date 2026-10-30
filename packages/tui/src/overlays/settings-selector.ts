@@ -921,7 +921,15 @@ export class SettingsSelectorComponent implements Component {
 			return `${editorKeys("tui.select.up", "tui.select.down")} to jump sections · ${tab}/${confirm} to settings · ${switchTabs} · ${cancel} to close`;
 		}
 		const nav = this.#hasSectionJump ? `${tab} to jump sections · ${switchTabs}` : `${tab} to switch tabs`;
-		return `${confirm}/${formatKeyHint("space")} to change · ${nav} · / search · ${cancel} to close${this.#callbacks.onOpenConfigFile ? " · Ctrl+G config file" : ""}`;
+		return `${confirm}/${formatKeyHint("space")} to change · ${nav} · Ctrl+S scope · / search · ${cancel} to close${this.#callbacks.onOpenConfigFile ? " · Ctrl+G config file" : ""}`;
+	}
+
+	#scopeTitle(styled = false): string {
+		const active = this.#context.settings.scope ?? "global";
+		const scopes = ["global", "project", "session"].map(scope => scope === active
+			? styled ? theme.bold(theme.fg("accent", `[${scope.toUpperCase()}]`)) : `[${scope.toUpperCase()}]`
+			: scope);
+		return `Settings · ${scopes.join(" / ")} · Ctrl+S cycle scope`;
 	}
 
 	/** Single-line search banner: accent icon, editable query with live cursor, right-aligned match count. */
@@ -977,7 +985,7 @@ export class SettingsSelectorComponent implements Component {
 		}
 
 		const out: string[] = [];
-		out.push(topBorder(width, `Settings · ${this.#context.settings.scope ?? "global"} · Ctrl+S cycle scope`));
+		out.push(topBorder(width, this.#scopeTitle(true)));
 		this.#tabRowStart = out.length;
 		this.#tabRowCount = tabLines.length;
 		for (const line of tabLines) {
@@ -1095,7 +1103,7 @@ export class SettingsSelectorComponent implements Component {
 
 		const searchError = searching ? compileMenuRegex(this.#searchQuery)?.error : undefined;
 		const props: TspPrefsProps = {
-			title: `Settings · ${this.#context.settings.scope ?? "global"} · Ctrl+S cycle scope`,
+			title: this.#scopeTitle(),
 			pages,
 			page: searching ? this.#preSearchTabId : this.#currentTabId,
 			lead: searchError
