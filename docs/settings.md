@@ -88,6 +88,8 @@ This converter currently covers main settings only. Other YAML families, indepen
 
 Use the interactive `/settings` panel inside a session, or the `omp config` command from a shell. The CLI reads effective values including setting environment variables. The panel shows and edits merged settings-layer values, not environment-supplied values; descriptions note active env overrides so env credentials are never pre-filled or persisted. Ordinary persistent writes land in the **global** file; model-selector role changes are the exception when `modelRoleStorage: project` (see [Where writes go](#where-writes-go)).
 
+Open `/settings global`, `/settings project`, or `/settings session` to edit one layer; Ctrl+S cycles the authoring scope. Press F6 in normal Settings navigation to flush and apply durable changes to other running sessions (project applies only to sessions in the same project). Session scope stays local. Search and open editors own their keys: Ctrl+A moves to the start of the field, and Apply is inactive until you leave the field.
+
 ```bash
 omp config list                 # all settings with current effective values
 omp config list --json          # same, machine-readable

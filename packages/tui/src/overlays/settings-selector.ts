@@ -925,7 +925,7 @@ export class SettingsSelectorComponent implements Component {
 			return `${editorKeys("tui.select.up", "tui.select.down")} to jump sections · ${tab}/${confirm} to settings · ${switchTabs} · ${cancel} to close`;
 		}
 		const nav = this.#hasSectionJump ? `${tab} to jump sections · ${switchTabs}` : `${tab} to switch tabs`;
-		return `${confirm}/${formatKeyHint("space")} to change · ${nav} · Ctrl+S scope${this.#callbacks.onApply ? " · Ctrl+A Apply" : ""} · / search · ${cancel} to close${this.#callbacks.onOpenConfigFile ? " · Ctrl+G config file" : ""}${this.#applyFeedback ? ` · ${this.#applyFeedback}` : ""}`;
+		return `${confirm}/${formatKeyHint("space")} to change · ${nav} · Ctrl+S scope${this.#callbacks.onApply ? " · F6 Apply" : ""} · / search · ${cancel} to close${this.#callbacks.onOpenConfigFile ? " · Ctrl+G config file" : ""}${this.#applyFeedback ? ` · ${this.#applyFeedback}` : ""}`;
 	}
 
 	#scopeTitle(styled = false): string {
@@ -1113,7 +1113,7 @@ export class SettingsSelectorComponent implements Component {
 			lead: [
 				searchError ? `Invalid regex: ${searchError}`
 					: searching ? undefined : (pluginPage?.lead ?? (tab ? TAB_LEADS[tab] : undefined)),
-				`Ctrl+S cycle scope${this.#callbacks.onApply ? " · Ctrl+A Apply" : ""}`,
+				`Ctrl+S cycle scope${this.#callbacks.onApply ? " · F6 Apply" : ""}`,
 				this.#applyFeedback,
 			].filter(Boolean).join(" · "),
 			query: searching || this.#search.focused ? this.#search.value : pluginPage?.query,
@@ -2195,24 +2195,6 @@ export class SettingsSelectorComponent implements Component {
 	}
 
 	handleInput(data: string): void {
-		if (matchesKey(data, "ctrl+a") && !this.#textInputActive && !this.#search.focused &&
-			!this.#displayList?.openSubmenu && this.#callbacks.onApply) {
-			if (!this.#applyPending) {
-				this.#applyPending = true;
-				this.#applyFeedback = "Applying…";
-				void this.#callbacks.onApply(this.#context.settings.scope ?? "global")
-					.then(message => { this.#applyFeedback = message; })
-					.catch((error: unknown) => {
-						this.#applyFeedback = `Apply failed: ${error instanceof Error ? error.message : String(error)}`;
-					})
-					.finally(() => {
-						this.#applyPending = false;
-						this.#context.requestRender?.();
-					});
-				this.#context.requestRender?.();
-			}
-			return;
-		}
 		if (matchesKey(data, "ctrl+s") && !this.#textInputActive) {
 			this.#context.settings.cycleScope?.();
 			this.#refreshItems();
@@ -2266,6 +2248,23 @@ export class SettingsSelectorComponent implements Component {
 		if (activeList?.hasOpenSubmenu()) {
 			this.#menuKeys.reset();
 			activeList.handleInput(data);
+			return;
+		}
+		if (matchesKey(data, "f6") && this.#callbacks.onApply) {
+			if (!this.#applyPending) {
+				this.#applyPending = true;
+				this.#applyFeedback = "Applying…";
+				void this.#callbacks.onApply(this.#context.settings.scope ?? "global")
+					.then(message => { this.#applyFeedback = message; })
+					.catch((error: unknown) => {
+						this.#applyFeedback = `Apply failed: ${error instanceof Error ? error.message : String(error)}`;
+					})
+					.finally(() => {
+						this.#applyPending = false;
+						this.#context.requestRender?.();
+					});
+				this.#context.requestRender?.();
+			}
 			return;
 		}
 
