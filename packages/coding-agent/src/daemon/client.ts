@@ -20,6 +20,7 @@ export class SessionDaemonClient {
 	readonly #pending = new Map<string, PromiseWithResolvers<Record<string, unknown>>>();
 	readonly #frameListeners = new Set<(frame: Record<string, unknown>) => void>();
 	readonly #closed = Promise.withResolvers<string | null>();
+	#isClosed = false;
 	#nextId = 0;
 
 	private constructor(connection: IpcConnection) {
@@ -27,6 +28,7 @@ export class SessionDaemonClient {
 		connection.start(
 			line => this.#onLine(line),
 			reason => {
+				this.#isClosed = true;
 				for (const pending of this.#pending.values()) pending.reject(new Error(reason ?? "daemon connection closed"));
 				this.#pending.clear();
 				this.#closed.resolve(reason);
@@ -55,6 +57,7 @@ export class SessionDaemonClient {
 
 	/** Send a command with a fresh id and await its `response`. Rejects on `success:false`. */
 	async request(frame: Record<string, unknown>): Promise<unknown> {
+		if (this.#isClosed || this.#connection.closed) throw new Error("session daemon connection closed");
 		const id = `c${++this.#nextId}`;
 		const pending = Promise.withResolvers<Record<string, unknown>>();
 		this.#pending.set(id, pending);

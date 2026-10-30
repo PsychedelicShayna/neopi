@@ -88,13 +88,15 @@ export async function runSessionHub(client: SessionDaemonClient): Promise<HubCho
 				list.setSessions(sessions);
 				ui.requestRender();
 			},
-			() => done.resolve({ kind: "quit" }),
+			error => done.reject(error instanceof Error ? error : new Error(String(error))),
 		);
 	};
 	const list = new SessionHubList(choice => done.resolve(choice), refresh);
 	const overlay = ui.showOverlay(list, { fullscreen: true, width: "100%", margin: 0 });
 	ui.setFocus(list);
 	ui.start();
+	// A daemon that dies under an idle hub must surface as an error, not as a quit.
+	void client.closed.then(reason => done.reject(new Error(`session daemon closed${reason ? `: ${reason}` : ""}`)));
 	refresh();
 	const timer = setInterval(refresh, 1_000);
 	try {
