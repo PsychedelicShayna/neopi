@@ -2618,6 +2618,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.editorContainer,
 		], { transientChrome: [this.pendingMessagesContainer, this.errorBannerContainer, this.editorContainer] });
 		this.ui.setFocus(this.editor);
+		this.editor.disableSubmit = false;
+		this.editor.onEscape = () => {
+			void this.#remoteSession!.abort().catch(error => this.showError(String(error)));
+		};
 		this.editor.onSubmit = async text => {
 			const remote = this.#remoteSession!;
 			if (text.trimStart().startsWith("/")) {
