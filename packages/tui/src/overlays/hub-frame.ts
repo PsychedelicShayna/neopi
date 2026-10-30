@@ -60,6 +60,37 @@ export function moveStripSelection(strip: StripState<StripChip<unknown>>, data: 
 	return false;
 }
 
+/** Shared horizontal selector used by agent property strips and advisor scopes. */
+export function renderHubChips(
+	width: number,
+	prefix: string,
+	strip: StripState<StripChip<unknown>>,
+	ranges: ChipRange[],
+	start = 0,
+): string {
+	ranges.length = 0;
+	let line = prefix;
+	let col = 2 + visibleWidth(prefix);
+	if (start > 0) {
+		line += theme.fg("dim", "… ");
+		col += 2;
+	}
+	for (let i = start; i < strip.chips.length; i++) {
+		const chip = strip.chips[i];
+		if (!chip) continue;
+		const selected = i === strip.index;
+		const body = ` ${chip.styled} `;
+		const rendered = selected
+			? theme.bg("selectedBg", `${theme.fg("accent", "[")}${body}${theme.fg("accent", "]")}`)
+			: body;
+		const w = visibleWidth(body) + (selected ? 2 : 0);
+		ranges.push({ start: col, end: col + w, index: i });
+		line += `${rendered} `;
+		col += w + 1;
+	}
+	return truncateToWidth(line, width);
+}
+
 /**
  * Native sidebar: a `list` whose `item`s are keyed by entry id (the `item` of
  * `select`/`activate` events), separators as `rule`s. Scrolling and clipping
@@ -284,28 +315,7 @@ export class HubFrame {
 
 	/** Render footer chips from a hub-selected horizontal window and record their hit ranges. */
 	renderChips(width: number, prefix: string, strip: StripState<StripChip<unknown>>, start = 0): string {
-		let line = prefix;
-		let col = 2 + visibleWidth(prefix);
-		if (start > 0) {
-			line += theme.fg("dim", "… ");
-			col += 2;
-		}
-		for (let i = start; i < strip.chips.length; i++) {
-			const chip = strip.chips[i];
-			if (!chip) continue;
-			const selected = i === strip.index;
-			const body = ` ${chip.styled} `;
-			const rendered = selected
-				? theme.bg("selectedBg", `${theme.fg("accent", "[")}${body}${theme.fg("accent", "]")}`)
-				: body;
-			const w = visibleWidth(body) + (selected ? 2 : 0);
-			this.chipRanges.push({ start: col, end: col + w, index: i });
-			line += rendered;
-			col += w;
-			line += " ";
-			col += 1;
-		}
-		return truncateToWidth(line, width);
+		return renderHubChips(width, prefix, strip, this.chipRanges, start);
 	}
 
 	/** Translate a mouse position into footer, sidebar, and body coordinates. */
