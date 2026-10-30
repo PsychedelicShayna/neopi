@@ -43,6 +43,17 @@ export async function buildExportViewer(options: ExportViewerBuildOptions = {}):
 		define: { "process.env.NODE_ENV": JSON.stringify("production") },
 		plugins: [
 			{
+				name: "shared-export-react",
+				setup(build) {
+					// Workspace-local installs can otherwise give the shared stats
+					// components a different hook dispatcher from their React renderer.
+					// Include JSX runtimes and transitive imports (e.g. icon components).
+					build.onResolve({ filter: /^react(?:-dom)?(?:\/.*)?$/ }, args => ({
+						path: Bun.resolveSync(args.path, collabDir),
+					}));
+				},
+			},
+			{
 				name: "shared-export-markdown",
 				setup(build) {
 					build.onResolve({ filter: /^@oh-my-pi\/pi-utils\/marked$/ }, () => ({
