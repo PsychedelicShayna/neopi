@@ -40,6 +40,19 @@ const EMPTY_UNKNOWN_RECORD: Record<string, unknown> = {};
 // ────────────────────────────────────────────────────────────────────────
 export const cfgSetupVersion = register({ id: "setupVersion", type: "number", default: 0 });
 
+export const cfgSettingsDefaultScope = register({
+	id: "settings.defaultScope",
+	type: "enum",
+	values: ["global", "project", "session"] as const,
+	default: "global",
+	ui: {
+		tab: "interaction",
+		group: "Settings",
+		label: "Default Settings Scope",
+		description: "Scope edited by /settings without an explicit scope. Ctrl+S cycles scopes in the menu.",
+	},
+});
+
 export const cfgAutoResume = register({
 	id: "autoResume",
 	type: "boolean",

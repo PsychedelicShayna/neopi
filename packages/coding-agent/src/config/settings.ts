@@ -124,7 +124,17 @@ function validateRuntimeModelOverrides(overrides: RuntimeModelOverrides): Runtim
 // ═══════════════════════════════════════════════════════════════════════════
 
 /** Settings layer that supplies an effective value; see {@link Settings.getProvenance}. */
-export type SettingProvenance = "env" | "runtime" | "role" | "overlay" | "project" | "global" | "default";
+export type SettingProvenance = "env" | "runtime" | "session" | "role" | "overlay" | "project" | "global" | "default";
+
+export type SettingsScope = "global" | "project" | "session";
+export interface SettingsScopeDetails {
+	global: unknown;
+	project: unknown;
+	session: unknown;
+	effective: unknown;
+	winner: SettingProvenance | "session";
+	shadowed: boolean;
+}
 
 /** Raw settings object as stored in YAML */
 export interface RawSettings {
@@ -712,6 +722,10 @@ export class Settings {
 	#overlayShellPathSource: string | undefined;
 	/** Runtime overrides (not persisted) */
 	#overrides: RawSettings = {};
+	/** User session overrides travel with the transcript's artifact directory, not cwd. */
+	#session: RawSettings = {};
+	#sessionSettingsPath: string | undefined;
+	#sessionDirty = false;
 	/** Session-local role selection. Role defaults never write the global settings layer. */
 	#activeRole: string | null | undefined;
 	/** Active atomic model loadout and the pre-loadout runtime values it shadows. */
@@ -1005,7 +1019,8 @@ export class Settings {
 	 */
 	rawValue(setting: AnySetting): unknown {
 		const merged = this.#mergedView();
-		if (setting.roleScoped && configuredValue(this.#overrides, setting, this.#cwd) === undefined) {
+		if (setting.roleScoped && configuredValue(this.#overrides, setting, this.#cwd) === undefined &&
+			configuredValue(this.#session, setting, this.#cwd) === undefined) {
 			const roleValue = this.activeRole === undefined ? undefined : this.getRoleSetting(this.activeRole, setting);
 			if (roleValue !== undefined) return roleValue;
 		}
@@ -1030,6 +1045,7 @@ export class Settings {
 		if (!this.isConfigured(setting)) return "default";
 		const segments = setting.segments;
 		if (getByPath(this.#overrides, segments) !== undefined) return "runtime";
+		if (getByPath(this.#session, segments) !== undefined) return "session";
 		if (
 			setting.roleScoped &&
 			this.activeRole !== undefined &&
@@ -1040,6 +1056,113 @@ export class Settings {
 		if (getByPath(projectLayerForMerge(this.#project), segments) !== undefined) return "project";
 		if (getByPath(this.#global, segments) !== undefined) return "global";
 		return this.#parent?.getProvenance(setting) ?? "default";
+	}
+
+	/** Raw value owned by one scope, without copying a higher scope into the editor. */
+	readScopeValue(setting: AnySetting, scope: SettingsScope): unknown {
+		const layer = scope === "session" ? this.#session : scope === "project" ? this.#project : this.#global;
+		return structuredClone(getByPath(layer, setting.segments) ?? this.#parent?.readScopeValue(setting, scope));
+	}
+
+	getScopeDetails(setting: AnySetting, scope: SettingsScope): SettingsScopeDetails {
+		const winner = setting.provenance(this);
+		const rank = { global: 0, project: 1, overlay: 2, session: 3, role: 3, runtime: 4, env: 5, default: -1 };
+		return {
+			global: this.readScopeValue(setting, "global"),
+			project: this.readScopeValue(setting, "project"),
+			session: this.readScopeValue(setting, "session"),
+			effective: setting.get(this),
+			winner,
+			shadowed: rank[winner] > rank[scope],
+		};
+	}
+
+	writeScopeValue(setting: AnySetting, value: unknown, scope: SettingsScope): void {
+		if (scope === "global") {
+			if (value === undefined) setting.unset(this);
+			else setting.set(this, value);
+			return;
+		}
+		if (scope === "project") {
+			this.writeProjectValue(setting, value);
+			return;
+		}
+		if (value !== undefined) setting.assertWritable(value);
+		const previous = setting.get(this);
+		this.#session = structuredClone(this.#session);
+		if (value === undefined) deleteByPath(this.#session, setting.segments);
+		else setByPath(this.#session, setting.segments, structuredClone(value));
+		this.#sessionDirty = true;
+		this.#rebuildMerged();
+		this.#fireIfChanged(setting, previous);
+	}
+
+	async clearScope(scope: "session" | "project"): Promise<void> {
+		if (scope === "project") {
+			for (const setting of allSettings()) {
+				if (this.readScopeValue(setting, scope) !== undefined) this.writeProjectValue(setting, undefined);
+			}
+			await this.flush();
+			return;
+		}
+		const previous = this.#snapshot();
+		this.#session = {};
+		this.#sessionDirty = true;
+		this.#rebuildMerged();
+		this.#fireChangesSince(previous);
+		await this.saveSessionSettings();
+	}
+
+	get hasUnsavedSessionSettings(): boolean {
+		return this.#sessionDirty;
+	}
+
+	/** Bind only at a session identity change; changing cwd must not rebind this path. */
+	async attachSessionFile(sessionFile: string | undefined): Promise<void> {
+		const nextPath = sessionFile?.endsWith(".jsonl") ? path.join(sessionFile.slice(0, -6), "settings.yml") : undefined;
+		if (nextPath === this.#sessionSettingsPath) return;
+		await this.saveSessionSettings();
+		let loaded: RawSettings = {};
+		if (nextPath) {
+			try {
+				const parsed: unknown = YAML.parse(await Bun.file(nextPath).text());
+				if (!isRecord(parsed)) throw new Error(`Session settings must be a mapping: ${nextPath}`);
+				assertKnownSettingPaths(parsed);
+				for (const setting of allSettings()) {
+					const value = getByPath(parsed, setting.segments);
+					if (value !== undefined) setting.assertWritable(value);
+				}
+				loaded = parsed;
+			} catch (error) {
+				if (!isEnoent(error)) throw error;
+			}
+		}
+		const previous = this.#snapshot();
+		this.#sessionSettingsPath = nextPath;
+		this.#session = loaded;
+		this.#sessionDirty = false;
+		this.#rebuildMerged();
+		this.#fireChangesSince(previous);
+	}
+
+	async saveSessionSettings(): Promise<void> {
+		if (!this.#sessionDirty || !this.#sessionSettingsPath) return;
+		const snapshot = this.#session;
+		await writeFileAtomically(this.#sessionSettingsPath, stringifyYamlConfig(snapshot));
+		if (snapshot === this.#session) this.#sessionDirty = false;
+	}
+
+	/** Quit decisions share the same scope writers as the menus. */
+	async settleSessionSettings(choice: "session" | "project" | "discard"): Promise<void> {
+		if (choice === "project") {
+			for (const setting of allSettings()) {
+				const value = this.readScopeValue(setting, "session");
+				if (value !== undefined) this.writeProjectValue(setting, value);
+			}
+			await this.flush();
+		}
+		if (choice !== "session") await this.clearScope("session");
+		else await this.saveSessionSettings();
 	}
 
 	/**
@@ -1623,6 +1746,9 @@ export class Settings {
 		cloned.#globalTomlPath = this.#globalTomlPath;
 		cloned.#projectTomlPath = this.#projectTomlPath;
 		cloned.#configOverlay = structuredClone(this.#configOverlay);
+		cloned.#session = structuredClone(this.#session);
+		cloned.#sessionSettingsPath = this.#sessionSettingsPath;
+		cloned.#sessionDirty = this.#sessionDirty;
 		// A soft-pinned default yields to a value the clone's own scope configures.
 		cloned.#softPins = new Set(this.#softPins);
 		const layers = { ...cloned.#ownLayers(), overrides: this.#buildOriginalOverrides() };
@@ -2207,7 +2333,7 @@ export class Settings {
 		role: string,
 		selector: string | undefined,
 		selection: EffortSelection | undefined,
-		scope: "global" | "project",
+		scope: SettingsScope,
 	): void {
 		this.#stageRoleModelAndEffort(role, selector, selection, scope);
 	}
@@ -2216,7 +2342,7 @@ export class Settings {
 		role: string,
 		selector: string | undefined,
 		selection: EffortSelection | undefined,
-		scope: "global" | "project",
+		scope: SettingsScope,
 	): RawSettings {
 		if (!role.trim()) throw new Error("Model role must have a name");
 		if (selector !== undefined) {
@@ -2224,7 +2350,7 @@ export class Settings {
 			assertValidSelectorPattern(selector);
 		}
 		if (selection !== undefined) validateEffortSelection(selection);
-		const source = scope === "global" ? this.#global : this.#project;
+		const source = scope === "session" ? this.#session : scope === "global" ? this.#global : this.#project;
 		const staged: RawSettings = { ...source };
 		const rawRoles = getByPath(source, ["modelRoles"]);
 		const roles: Record<string, unknown> = isRecord(rawRoles) ? { ...rawRoles } : {};
@@ -2238,6 +2364,10 @@ export class Settings {
 		else selections[role] = selection;
 		cfgRoleEffortSelections.assertWritable(selections);
 		setByPath(staged, ["roleEffortSelections"], selections);
+		if (scope === "session") {
+			this.#validateAll(this.#deepMerge(this.#mergedView(), staged), this.#cwd);
+			return staged;
+		}
 		const layers = this.#ownLayers();
 		this.#validateAll(
 			this.#mergeOverParent(
@@ -2256,11 +2386,19 @@ export class Settings {
 		role: string,
 		selector: string | undefined,
 		selection: EffortSelection | undefined,
-		scope: "global" | "project",
+		scope: SettingsScope,
 	): void {
 		const staged = this.#stageRoleModelAndEffort(role, selector, selection, scope);
 		const previousRoles = cfgModelRoles.get(this);
 		const previousEfforts = cfgRoleEffortSelections.get(this);
+		if (scope === "session") {
+			this.#session = staged;
+			this.#sessionDirty = true;
+			this.#rebuildMerged();
+			this.#fireIfChanged(cfgModelRoles, previousRoles);
+			this.#fireIfChanged(cfgRoleEffortSelections, previousEfforts);
+			return;
+		}
 		if (scope === "project") {
 			this.#captureProjectMutation(["modelRoles", role]);
 			this.#captureProjectMutation(["roleEffortSelections", role]);
@@ -2486,6 +2624,27 @@ export class Settings {
 		return modelId || this.#parent?.getProjectModelRole(role);
 	}
 
+	getSessionModelRole(role: string): string | undefined {
+		const roles = this.readScopeValue(cfgModelRoles, "session");
+		return isRecord(roles) ? modelRoleValueFromUnknown(roles[role]) : undefined;
+	}
+
+	getSessionRoleEffortSelection(role: string): EffortSelection | undefined {
+		const values = this.readScopeValue(cfgRoleEffortSelections, "session");
+		return (isRecord(values) ? values[role] : undefined) as EffortSelection | undefined;
+	}
+
+	getModelRoleScopeDetails(role: string, scope: SettingsScope): SettingsScopeDetails {
+		const value = (scope: SettingsScope) => {
+			const roles = this.readScopeValue(cfgModelRoles, scope);
+			return isRecord(roles) ? roles[role] : undefined;
+		};
+		const winner = this.getModelRoleProvenance(role);
+		const rank = { global: 0, project: 1, overlay: 2, session: 3, role: 3, runtime: 4, env: 5, default: -1 };
+		return { global: value("global"), project: value("project"), session: value("session"),
+			effective: this.getModelRole(role), winner, shadowed: rank[winner] > rank[scope] };
+	}
+
 	/**
 	 * Report which layer actually supplies the effective model role across
 	 * full merge precedence (runtime override → config overlay → project →
@@ -2499,6 +2658,7 @@ export class Settings {
 	 */
 	getModelRoleProvenance(role: ModelRole | string): SettingProvenance {
 		if (this.#modelRoleLayerOwns(this.#overrides, role)) return "runtime";
+		if (this.#modelRoleLayerOwns(this.#session, role)) return "session";
 		if (this.#modelRoleLayerOwns(this.#configOverlay, role)) return "overlay";
 		if (this.#modelRoleLayerOwns(projectLayerForMerge(this.#project), role)) return "project";
 		if (this.#modelRoleLayerOwns(this.#global, role)) return "global";
@@ -5020,7 +5180,7 @@ export class Settings {
 		// TOML is folded into each mutable scope at read time, before setters run.
 		let merged = this.#deepMerge(this.#deepMerge({}, layers.global), projectLayerForMerge(layers.project));
 		merged = this.#deepMerge(merged, layers.configOverlay);
-		return this.#deepMerge(merged, layers.overrides);
+		return this.#deepMerge(this.#deepMerge(merged, this.#session), layers.overrides);
 	}
 
 	/** `own` merged over an overlay parent's current view (itself for a root instance). */

@@ -64,12 +64,13 @@ import {
 import { resolveAdvisorRoleSelection, resolveModelRoleValue } from "../../config/model-resolver";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import { getRoleInfo, setRoleDescription } from "../../config/model-roles";
-import { settings } from "../../config/settings";
+import { settings, type SettingsScope } from "../../config/settings";
 import { cfgModelFactsEnabled, cfgModelFactsSources, cfgModelFactsOverrides } from "../../config/model-facts";
 import { ModelFactEditorComponent } from "../components/model-fact-editor";
 import type { AnySetting } from "../../config/registry";
 import type { StatusLineSettings } from "@oh-my-pi/pi-tui/status-line/types";
 import { createSettingsHost } from "../../config/settings-ui";
+import { cfgSettingsDefaultScope } from "../settings";
 import { createPluginSettingsHost } from "../../extensibility/plugins/settings-host";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
 import {
@@ -647,9 +648,9 @@ export class SelectorController {
 		);
 	}
 
-	showSettingsSelector(): void {
+	showSettingsSelector(scope: SettingsScope = cfgSettingsDefaultScope.get(this.ctx.settings)): void {
 		if (this.#focusOpenMenu("settings")) return;
-		const menu = this.#claimMenu("settings", () => this.showSettingsSelector());
+		const menu = this.#claimMenu("settings", () => this.showSettingsSelector(scope));
 		getAvailableThemes()
 			.then(availableThemes => {
 				// Fullscreen settings editor on the alternate screen: the overlay
@@ -669,7 +670,7 @@ export class SelectorController {
 						providers: [...new Set(this.ctx.session.getAvailableModels().map(model => model.provider))].sort(
 							(a, b) => a.localeCompare(b),
 						),
-						settings: createSettingsHost(this.ctx.settings),
+						settings: createSettingsHost(this.ctx.settings, scope),
 						plugins: createPluginSettingsHost(getProjectDir()),
 						model: this.ctx.session.model,
 						imageBudget: this.ctx.ui.imageBudget,
