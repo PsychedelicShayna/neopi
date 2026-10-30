@@ -266,6 +266,51 @@ describe("AgentSession advisor toggle", () => {
 		)).toHaveLength(1);
 	});
 
+	it("holds on-yield notes through a successor run queued after the final poll", async () => {
+		const advisor = enableAdvisor();
+		vi.spyOn(advisor, "prompt").mockResolvedValue(undefined);
+		const advise = adviseToolFor(advisor);
+		cfgAdvisorContinueSeverity.set(session.settings, "blocker");
+		const note = "Hold this note through the late-queued successor.";
+		const cards = () => session.messages.filter(message =>
+			message.role === "custom" && String(message.content).includes(note),
+		);
+		let candidateYields = 0;
+		session.agent.setOnBeforeYield(async () => {
+			if (++candidateYields !== 1) return;
+			await advise.execute("held-late-continuation", { note });
+		});
+		let agentEnds = 0;
+		const unsubscribe = session.agent.subscribe(event => {
+			if (event.type !== "agent_end" || ++agentEnds !== 1) return;
+			// Core has already made its final queue poll. The session must drain
+			// this steer in a new run while the owning prompt unwinds.
+			session.agent.steer({
+				role: "user",
+				content: "Continue from the late agent_end steer.",
+				timestamp: Date.now(),
+			});
+		});
+		const cardsAtProvider: number[] = [];
+		const mock = createMockModel({ handler: () => {
+			cardsAtProvider.push(cards().length);
+			return { content: ["done"] };
+		} });
+		session.agent.streamFn = mock.stream;
+		try {
+			await session.prompt("Finish before the late steer arrives");
+			await session.waitForIdle();
+		} finally {
+			unsubscribe();
+		}
+		expect(agentEnds).toBe(2);
+		expect(mock.calls).toHaveLength(2);
+		expect(JSON.stringify(mock.calls[1].context.messages)).toContain("Continue from the late agent_end steer.");
+		expect(JSON.stringify(mock.calls[1].context.messages)).not.toContain(note);
+		expect(cardsAtProvider).toEqual([0, 0]);
+		expect(cards()).toHaveLength(1);
+	});
+
 	it("releases live timing edits without rebuilding reviewers or duplicating admitted notes", async () => {
 		cfgAdvisorDeliveryConcern.set(session.settings, "on-yield");
 		const advisor = enableAdvisor();

@@ -6347,10 +6347,11 @@ export class AgentSession implements SettingsScope {
 		const willContinue = options?.willContinue === true;
 		const awaitingAsyncWork = willContinue && options.awaitingAsyncWork === true;
 		// A completed assistant step is not a yield: maintenance, queued input,
-		// and advisor continuations can still extend it. Release held advice only
-		// at the actual run settle, after those continuation decisions.
+		// and advisor continuations can still extend it. Ignore this prompt's
+		// own in-flight bracket when checking input queued after the final poll;
+		// that bracket drops before the queued-message drain starts its successor.
 		const queuedContinuation = !this.#queuedMessageDrainBlocked &&
-			this.#canAutoContinueForFollowUp() && this.agent.hasQueuedMessages();
+			this.#canAutoContinueForFollowUp(true) && this.agent.hasQueuedMessages();
 		if (!willContinue && !this.agent.state.isStreaming && !queuedContinuation) {
 			this.#advisors.onPrimaryAgentEnd();
 		}
@@ -10775,8 +10776,10 @@ export class AgentSession implements SettingsScope {
 
 	/**
 	 * Gate for idle-path queued-message auto-continue (see `#scheduleQueuedMessageDrain`).
+	 * Settle may ignore its own prompt bracket to forecast a continuation;
+	 * dispatch callers must still wait for every in-flight prompt to unwind.
 	 */
-	#canAutoContinueForFollowUp(): boolean {
+	#canAutoContinueForFollowUp(ignorePromptInFlight = false): boolean {
 		if (this.isRetrying) return false;
 		// An ACP client that defers agent-initiated turns owns turn
 		// lifecycle, and a queued steer/follow-up may only resume while a
@@ -10797,7 +10800,7 @@ export class AgentSession implements SettingsScope {
 		) {
 			return false;
 		}
-		if (this.isStreaming) return false;
+		if (this.agent.state.isStreaming || (!ignorePromptInFlight && this.#promptInFlightCount > 0)) return false;
 		// A queued steer resumes from ANY tail: Agent.continue() runs #runLoop(undefined),
 		// whose initial steering poll injects the steer before the first provider call, so the
 		// request tail becomes the steer (valid) regardless of any injected custom / bashExecution
