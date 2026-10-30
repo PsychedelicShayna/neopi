@@ -5,6 +5,7 @@
 ### Added
 
 - Added read-only `countSessionMessages` for complete journal counts without constructing message bodies or acquiring writer leases ([#555](https://github.com/PsychedelicShayna/neopi/issues/555)).
+- Added synchronous Git status queries for build identity in synchronous SDK hosts.
 
 ### Fixed
 
