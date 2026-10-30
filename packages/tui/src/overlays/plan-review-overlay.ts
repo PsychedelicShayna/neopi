@@ -65,6 +65,7 @@ import { col, item, keyed, md, node, row as rowNode, span, text } from "../nativ
 import { leafKey, type NativeChild, type NativeNode, type NativeScroll, type NativeUiEvent } from "../native/node";
 import { actionButton, actionHint, hintsRow, itemIndex, type NativeHint, selectList } from "../native/overlay";
 import { getKeybindings } from "../keybindings";
+import { MenuHelp, menuHintLines } from "../components/menu-hints";
 
 /** Title shown in the overlay's top border. */
 const OVERLAY_TITLE = "Plan Review";
@@ -269,6 +270,10 @@ export class PlanReviewOverlay implements Component {
 	#mdTheme: MarkdownTheme;
 	#scrollView: ScrollView;
 	readonly #keys = new MenuKeyReader();
+	readonly #help = new MenuHelp(
+		undefined,
+		"h/l switch panes. The focused region controls whether j/k select actions, sections, or scroll the plan.",
+	);
 	readonly #tocMenu = new MenuSelection<number>([], {
 		getKey: String,
 		getSearchText: index => this.#sections[index]?.title ?? "",
@@ -676,6 +681,7 @@ export class PlanReviewOverlay implements Component {
 			else this.#editor.handleInput(keyData);
 			return;
 		}
+		if (this.#help.handleInput(keyData)) return;
 		if (this.#focus === "actions" && (matchesKey(keyData, "shift+left") || matchesKey(keyData, "shift+right"))) {
 			this.#moveSlider(matchesKey(keyData, "shift+left") ? -1 : 1);
 			return;
@@ -1155,7 +1161,6 @@ export class PlanReviewOverlay implements Component {
 					`${upDown} scroll`,
 					`${formatKeyHint("shift")} faster`,
 					formatKeyHints(["pageUp", "pageDown"]),
-					"gg/G ends · Ctrl-u/d half · Ctrl-e/y view",
 					`${formatKeyHint("a")} annotate`,
 					`${formatKeyHint("e")} edit`,
 					`${formatKeyHint("u")} undo`,
@@ -1163,9 +1168,10 @@ export class PlanReviewOverlay implements Component {
 				break;
 		}
 		if (this.callbacks.onCopyPlan) parts.push(`${formatKeyHint("c")} copy`);
-		parts.push("h/l panes", `${formatKeyHint("tab")} regions`);
+		parts.push(`${formatKeyHint("tab")} regions`);
 		if (this.#externalEditorLabel && this.#focus !== "toc") parts.push(`${this.#externalEditorLabel} editor`);
 		parts.push(this.#helpSuffix ?? `${editorKey("tui.select.cancel")} cancel`);
+		parts.push("? help");
 		return parts.join(sep);
 	}
 
@@ -1404,9 +1410,13 @@ export class PlanReviewOverlay implements Component {
 			if (this.#externalEditorLabel) hintParts.push(`${this.#externalEditorLabel} editor`);
 			this.#editor.setMaxHeight(Math.max(1, Math.min(MAX_ANNOTATION_EDITOR_ROWS, (process.stdout.rows || 40) - 12)));
 			this.#editor.focused = true;
-			return [caption, ...this.#editor.render(innerWidth), theme.fg("dim", hintParts.join(" · "))];
+			return [
+				caption,
+				...this.#editor.render(innerWidth),
+				...menuHintLines(hintParts.join(" · "), innerWidth, "").map(line => theme.fg("dim", line)),
+			];
 		}
-		return [theme.fg("dim", this.#buildHelp())];
+		return menuHintLines(this.#buildHelp(), innerWidth).map(line => theme.fg("dim", line));
 	}
 
 	/** The native sheet: large glass, titled by the plan's own title heading (the body never repeats it). */
@@ -1423,6 +1433,7 @@ export class PlanReviewOverlay implements Component {
 	}
 
 	describe(): NativeNode {
+		if (this.#help.open) return this.#help.describe();
 		// The terminal lays out the sidebar; it is shown whenever the Contents has
 		// enough entries, which is also what Tab cycling consults.
 		this.#sidebarShown = this.#toc.length >= SIDEBAR_MIN_HEADINGS;
@@ -1547,6 +1558,10 @@ export class PlanReviewOverlay implements Component {
 	}
 
 	handleNativeEvent(event: NativeUiEvent): void {
+		if (this.#help.open) {
+			if (event.type === "action") this.#help.handleInput("\x1b");
+			return;
+		}
 		if (this.#committed) return;
 		this.#keys.reset();
 		if (event.type === "action") {
@@ -1749,7 +1764,6 @@ export class PlanReviewOverlay implements Component {
 					upDown("scroll"),
 					key("shift", "faster"),
 					key(["pageUp", "pageDown"], "page"),
-					{ keys: [], label: "gg/G ends · Ctrl-u/d half · Ctrl-e/y view" },
 					key("a", "annotate"),
 					key("e", "edit"),
 					key("u", "undo"),
@@ -1757,8 +1771,9 @@ export class PlanReviewOverlay implements Component {
 				break;
 		}
 		// Copy and the external editor are head buttons with their keycaps; the hints skip them.
-		hints.push(key(["h", "l"], "panes"), key("tab", "regions"));
+		hints.push(key("tab", "regions"));
 		hints.push(this.#helpSuffix ? { keys: [], label: this.#helpSuffix } : actionHint("tui.select.cancel", "cancel"));
+		hints.push({ keys: ["?"], label: "help" }, { keys: [], label: "hjkl gg/G C-u d e y" });
 		return hints;
 	}
 
@@ -1836,6 +1851,6 @@ export class PlanReviewOverlay implements Component {
 		out.push(divider(width));
 		for (const line of footerLines) out.push(row(line, width));
 		out.push(bottomBorder(width));
-		return out;
+		return this.#help.render(out, width);
 	}
 }

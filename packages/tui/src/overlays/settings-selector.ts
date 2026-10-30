@@ -1,3 +1,4 @@
+import { provenanceSuffix } from "../theme/provenance";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Effort } from "@oh-my-pi/pi-ai";
 import {
@@ -20,6 +21,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "../index";
+import { MenuHelp, menuHintLines } from "../components/menu-hints";
 import type { ShapeTarget } from "@oh-my-pi/snapcompact";
 import type {
 	ContextLineMode,
@@ -801,6 +803,8 @@ export interface SettingsCallbacks {
 	onCancel: () => void;
 	/** Edit the persisted settings file, then re-read it before resolving. */
 	onOpenConfigFile?: () => Promise<void>;
+	/** Persist and apply the selected scope to other sessions through the host's reload mechanism. */
+	onApply?: (scope: "global" | "project" | "session") => Promise<string>;
 }
 
 /**
@@ -836,7 +840,10 @@ export class SettingsSelectorComponent implements Component {
 	#textInputActive = false;
 	#restoringNavigation = false;
 	#externalEditPending = false;
+	#applyPending = false;
+	#applyFeedback = "";
 	readonly #menuKeys = new MenuKeyReader();
+	readonly #help = new MenuHelp();
 	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
 	#hasSectionJump = false;
 	// Frame geometry from the last render, for mouse hit-testing (the
@@ -906,22 +913,29 @@ export class SettingsSelectorComponent implements Component {
 		const confirm = editorKey("tui.select.confirm");
 		const cancel = editorKey("tui.select.cancel");
 		const tab = formatKeyHint("tab");
-		const switchTabs = "h/l switch tabs";
 		if (this.#searchList) {
 			return this.#search.focused
 				? `${confirm} confirm search · ${cancel} clear search`
-				: `j/k select · Ctrl-u/d half · PgUp/PgDn page · gg/G ends · / search · ${tab} jump tabs · ${cancel} clear search`;
+				: `/ search · ${tab} jump tabs · ${cancel} clear search · ? help`;
 		}
 		if (this.#currentTabId === "plugins") {
 			return this.#pluginComponent?.atRoot
-				? `${switchTabs} · ${tab} switch tabs · / search · ${cancel} close`
-				: `h parent / l open · ${tab} switch tabs · / search · ${cancel} back`;
+				? `${tab} tabs · / search · ${cancel} close · ? help`
+				: `${tab} tabs · / search · ${cancel} back · ? help`;
 		}
 		if (this.#currentList?.sectionFocused) {
-			return `${editorKeys("tui.select.up", "tui.select.down")} to jump sections · ${tab}/${confirm} to settings · ${switchTabs} · ${cancel} to close`;
+			return `${tab}/${confirm} settings · ${cancel} close · ? help`;
 		}
-		const nav = this.#hasSectionJump ? `${tab} to jump sections · ${switchTabs}` : `${tab} to switch tabs`;
-		return `${confirm}/${formatKeyHint("space")} to change · ${nav} · / search · ${cancel} to close${this.#callbacks.onOpenConfigFile ? " · Ctrl+G config file" : ""}`;
+		const nav = this.#hasSectionJump ? `${tab} sections` : `${tab} tabs`;
+		return `${confirm}/${formatKeyHint("space")} change · ${nav} · Ctrl+S scope${this.#callbacks.onApply ? " · F6 Apply" : ""} · / search · ${cancel} close${this.#callbacks.onOpenConfigFile ? " · Ctrl+G config file" : ""} · ? help${this.#applyFeedback ? ` · ${this.#applyFeedback}` : ""}`;
+	}
+
+	#scopeTitle(styled = false): string {
+		const active = this.#context.settings.scope ?? "global";
+		const scopes = ["global", "project", "session"].map(scope => scope === active
+			? styled ? theme.bold(theme.fg("accent", `[${scope.toUpperCase()}]`)) : `[${scope.toUpperCase()}]`
+			: scope);
+		return `Settings · ${scopes.join(" / ")} · Ctrl+S cycle scope`;
 	}
 
 	/** Single-line search banner: accent icon, editable query with live cursor, right-aligned match count. */
@@ -937,6 +951,14 @@ export class SettingsSelectorComponent implements Component {
 		return truncateToWidth(`${prefix}${theme.bold(inputLine)} ${count} `, width);
 	}
 
+	get #hasSearchResults(): boolean {
+		return this.#searchList !== null && this.#searchQuery.length > 0 && this.#search.value.length > 0;
+	}
+
+	get #displayList(): SettingsList | null {
+		return this.#hasSearchResults ? this.#searchList : this.#currentList;
+	}
+
 	/**
 	 * Fullscreen frame: title border, tab row, divider, optional search banner,
 	 * the active content sized to fill the terminal, the appearance preview,
@@ -945,17 +967,23 @@ export class SettingsSelectorComponent implements Component {
 	render(width: number): readonly string[] {
 		const height = Math.max(14, process.stdout.rows || 40);
 		const innerWidth = Math.max(1, width - 4);
+		const hints = menuHintLines(
+			this.#footerHintText(),
+			innerWidth,
+			this.#search.focused || this.#textInputActive ? "" : undefined,
+		);
 
 		const tabLines = this.#tabBar.render(innerWidth);
-		const searching = this.#searchList !== null;
+		const searching = this.#hasSearchResults;
+		const showSearch = searching || this.#search.focused;
 		const showPreview = !searching && this.#currentTabId === "appearance";
 		const previewLines = showPreview ? ["", theme.fg("muted", "Preview:"), this.#getStatusPreviewString()] : [];
 
 		// Fixed chrome: top border, tabs, divider, [search row], divider, hint, bottom border.
-		const fixedRows = 1 + tabLines.length + 1 + (searching ? 1 : 0) + 1 + 1 + 1;
+		const fixedRows = 1 + tabLines.length + 1 + (showSearch ? 1 : 0) + 1 + hints.length + 1;
 		const contentRows = Math.max(7, height - fixedRows - previewLines.length);
 
-		const list = this.#searchList ?? this.#currentList;
+		const list = this.#displayList;
 		let contentLines: readonly string[];
 		if (list) {
 			// SettingsList pads itself to viewport + blank + 3 description rows.
@@ -968,14 +996,14 @@ export class SettingsSelectorComponent implements Component {
 		}
 
 		const out: string[] = [];
-		out.push(topBorder(width, "Settings"));
+		out.push(topBorder(width, this.#scopeTitle(true)));
 		this.#tabRowStart = out.length;
 		this.#tabRowCount = tabLines.length;
 		for (const line of tabLines) {
 			out.push(row(line, width));
 		}
 		out.push(divider(width));
-		if (searching) {
+		if (showSearch) {
 			out.push(row(this.#renderSearchBanner(innerWidth), width));
 		}
 		this.#contentRowStart = out.length;
@@ -987,9 +1015,9 @@ export class SettingsSelectorComponent implements Component {
 			out.push(row(line, width));
 		}
 		out.push(divider(width));
-		out.push(row(theme.fg("dim", this.#footerHintText()), width));
+		for (const hint of hints) out.push(row(theme.fg("dim", hint), width));
 		out.push(bottomBorder(width));
-		return out;
+		return this.#help.render(out, width);
 	}
 
 	/**
@@ -1007,6 +1035,7 @@ export class SettingsSelectorComponent implements Component {
 	 * root card of today's generic composition.
 	 */
 	describe(cx: DescribeContext): NativeNode {
+		if (this.#help.open) return this.#help.describe();
 		return cx.supports("prefs") ? this.#describePrefs() : this.#describeCard();
 	}
 
@@ -1019,8 +1048,8 @@ export class SettingsSelectorComponent implements Component {
 	 */
 	#describePrefs(): NativeNode {
 		const memo = this.#native;
-		const searching = this.#searchList !== null;
-		const list = this.#searchList ?? this.#currentList;
+		const searching = this.#hasSearchResults;
+		const list = this.#displayList;
 		const entries = this.#context.settings.entries;
 		const plugins = this.#currentTabId === "plugins" ? this.#pluginComponent : null;
 		const pluginPage = plugins?.prefsPage();
@@ -1086,14 +1115,17 @@ export class SettingsSelectorComponent implements Component {
 
 		const searchError = searching ? compileMenuRegex(this.#searchQuery)?.error : undefined;
 		const props: TspPrefsProps = {
-			title: "omp settings",
+			title: this.#scopeTitle(),
 			pages,
 			page: searching ? this.#preSearchTabId : this.#currentTabId,
-			lead: searchError
-				? `Invalid regex: ${searchError}`
-				: searching ? undefined : (pluginPage?.lead ?? (tab ? TAB_LEADS[tab] : undefined)),
-			query: searching ? this.#search.value : pluginPage?.query,
-			cursor: searching ? this.#search.input.getCursor() : pluginPage?.cursor,
+			lead: [
+				searchError ? `Invalid regex: ${searchError}`
+					: searching ? undefined : (pluginPage?.lead ?? (tab ? TAB_LEADS[tab] : undefined)),
+				`Ctrl+S cycle scope${this.#callbacks.onApply ? " · F6 Apply" : ""}`,
+				this.#applyFeedback,
+			].filter(Boolean).join(" · "),
+			query: searching || this.#search.focused ? this.#search.value : pluginPage?.query,
+			cursor: searching || this.#search.focused ? this.#search.input.getCursor() : pluginPage?.cursor,
 			sections,
 			focus,
 			editing,
@@ -1360,7 +1392,7 @@ export class SettingsSelectorComponent implements Component {
 	 */
 	#describeCard(): NativeNode {
 		const memo = this.#native;
-		const searching = this.#searchList !== null;
+		const searching = this.#hasSearchResults;
 		const children: NativeChild[] = [];
 
 		const active = this.#tabBar.getActiveTab()?.id;
@@ -1369,7 +1401,7 @@ export class SettingsSelectorComponent implements Component {
 		}
 		children.push(memo.tabs.node);
 
-		if (searching) {
+		if (searching || this.#search.focused) {
 			const count = this.#searchMatchCount;
 			if (memo.search?.input !== this.#search.input || memo.search.count !== count) {
 				const countText = count === 1 ? "1 match" : `${count} matches`;
@@ -1391,7 +1423,7 @@ export class SettingsSelectorComponent implements Component {
 			children.push(memo.search.node);
 		}
 
-		const content = this.#searchList ?? this.#currentList ?? this.#pluginComponent;
+		const content = this.#displayList ?? this.#pluginComponent;
 		if (content) children.push(content);
 
 		if (!searching && this.#currentTabId === "appearance") {
@@ -1460,7 +1492,7 @@ export class SettingsSelectorComponent implements Component {
 	}
 
 	#routeMouseEvent(event: SgrMouseEvent): boolean {
-		const list = this.#searchList ?? this.#currentList;
+		const list = this.#displayList;
 		// row() insets content by the border column plus a space.
 		const contentColInset = 2;
 		const innerCol = event.col - contentColInset;
@@ -1538,7 +1570,10 @@ export class SettingsSelectorComponent implements Component {
 		);
 		// Keep the footer tab highlight on the tab owning the selected result.
 		list.onSelectionChange = item => this.#syncTabBarToSelection(item);
+		const currentList = this.#currentList;
 		this.#setContent(() => {
+			// Empty drafts show the original sectioned list, not all global results.
+			this.#currentList = currentList;
 			this.#searchList = list;
 		});
 		this.#setSearchQuery(initialQuery);
@@ -1597,12 +1632,17 @@ export class SettingsSelectorComponent implements Component {
 
 		this.#searchList.setItems(items);
 		this.#searchMatchCount = total;
-		this.#tabs = this.#buildSearchTabs(
-			counts,
-			tabResults.map(result => result.tab),
-		);
-		this.#tabBar.setTabs(this.#tabs);
-		this.#syncTabBarToSelection(this.#searchList.getSelectedItem());
+		if (this.#hasSearchResults) {
+			this.#tabs = this.#buildSearchTabs(
+				counts,
+				tabResults.map(result => result.tab),
+			);
+			this.#tabBar.setTabs(this.#tabs);
+			this.#syncTabBarToSelection(this.#searchList.getSelectedItem());
+		} else {
+			this.#tabs = getSettingsTabs();
+			this.#tabBar.setTabs(this.#tabs, this.#preSearchTabId);
+		}
 	}
 
 	/**
@@ -1663,7 +1703,7 @@ export class SettingsSelectorComponent implements Component {
 	}
 
 	#syncTabBarToSelection(item: SettingItem | undefined): void {
-		if (!this.#searchList || !item) return;
+		if (!this.#hasSearchResults || !item) return;
 		const def = getSettingDef(this.#context.settings.entries, item.id);
 		if (def) this.#tabBar.setActiveById(def.tab);
 	}
@@ -1703,8 +1743,8 @@ export class SettingsSelectorComponent implements Component {
 		const changed = this.#isChanged(def, currentValue);
 		const item = {
 			id: def.path,
-			label: def.label,
-			description: def.description,
+			label: `${this.#context.settings.details?.(def.path).shadowed ? "󰈉 " : ""}${def.label}${provenanceSuffix(def.provenance)}`,
+			description: [def.description, this.#context.settings.details?.(def.path).description].filter(Boolean).join("\n"),
 			warning: def.warning,
 			changed,
 			defaultLabel: changed ? this.#defaultLabel(def) : undefined,
@@ -1829,7 +1869,7 @@ export class SettingsSelectorComponent implements Component {
 		const activeThemeBeforePreview = getCurrentThemeName() ?? currentValue;
 		if (def.path === "theme.dark" || def.path === "theme.light") {
 			onPreview = value => {
-				return this.#callbacks.onThemePreview?.(value);
+				if (!this.#context.settings.details?.(def.path).shadowed) return this.#callbacks.onThemePreview?.(value);
 			};
 			onPreviewCancel = () => {
 				this.#callbacks.onThemePreview?.(activeThemeBeforePreview);
@@ -2163,6 +2203,21 @@ export class SettingsSelectorComponent implements Component {
 	}
 
 	handleInput(data: string): void {
+		if (
+			(this.#help.open ||
+				(!this.#search.focused &&
+					!this.#textInputActive &&
+					!this.#pluginComponent?.filterFocused &&
+					!this.#displayList?.filterFocused)) &&
+			this.#help.handleInput(data)
+		)
+			return;
+		if (matchesKey(data, "ctrl+s") && !this.#textInputActive) {
+			this.#context.settings.cycleScope?.();
+			this.#refreshItems();
+			this.#context.requestRender?.();
+			return;
+		}
 		if (matchesKey(data, "ctrl+g") && !this.#menuKeys.read(data) && this.#callbacks.onOpenConfigFile) {
 			if (!this.#externalEditPending) {
 				this.#externalEditPending = true;
@@ -2212,7 +2267,23 @@ export class SettingsSelectorComponent implements Component {
 			activeList.handleInput(data);
 			return;
 		}
-
+		if (matchesKey(data, "f6") && this.#callbacks.onApply) {
+			if (!this.#applyPending) {
+				this.#applyPending = true;
+				this.#applyFeedback = "Applying…";
+				void this.#callbacks.onApply(this.#context.settings.scope ?? "global")
+					.then(message => { this.#applyFeedback = message; })
+					.catch((error: unknown) => {
+						this.#applyFeedback = `Apply failed: ${error instanceof Error ? error.message : String(error)}`;
+					})
+					.finally(() => {
+						this.#applyPending = false;
+						this.#context.requestRender?.();
+					});
+				this.#context.requestRender?.();
+			}
+			return;
+		}
 
 		const action = this.#menuKeys.read(data);
 		if (action === "pending") return;
@@ -2243,6 +2314,7 @@ export class SettingsSelectorComponent implements Component {
 	}
 
 	#handleSearchModeInput(data: string, list: SettingsList): void {
+		const hadPattern = this.#search.value.length > 0;
 		const field = this.#search.handleInput(data);
 		if (field !== "pass") {
 			this.#menuKeys.reset();
@@ -2250,7 +2322,8 @@ export class SettingsSelectorComponent implements Component {
 				this.#endSearch(false);
 				return;
 			}
-			if (this.#search.query !== this.#searchQuery) this.#setSearchQuery(this.#search.query);
+			if (this.#search.query !== this.#searchQuery || hadPattern !== this.#search.value.length > 0)
+				this.#setSearchQuery(this.#search.query);
 			return;
 		}
 		const action = this.#menuKeys.read(data);
@@ -2312,6 +2385,7 @@ export class SettingsSelectorComponent implements Component {
 
 	leaveMenu(): void {
 		this.#search.focused = false;
+		if (this.#searchList && this.#search.query !== this.#searchQuery) this.#setSearchQuery(this.#search.query);
 		(this.#searchList ?? this.#currentList)?.leaveMenu();
 		if (isMenuHistoryLeaver(this.#pluginComponent)) this.#pluginComponent.leaveMenu();
 	}

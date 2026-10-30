@@ -2,8 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Share individual broker-backed accounts with NeoProxy through an authenticated, secret-free account catalogue and credential-pinned inference that refreshes the selected account without rotating to siblings.
+
 ### Fixed
 
+- Recover from a broker access token rejected immediately after refresh, coalescing concurrent retries without rotating sibling accounts ([#625](https://github.com/PsychedelicShayna/neopi/issues/625)).
+- Share a broker expiry refresh between usage checks and delayed concurrent consumers instead of rotating a fresh token again ([#625](https://github.com/PsychedelicShayna/neopi/issues/625)).
 - Auth broker credentials, account policies and usage reserves now honor main-settings TOML overrides and explicit clears ([#34](https://github.com/PsychedelicShayna/neopi/issues/34)).
 - Auto judgments now honor an allowed `off` selection by disabling reasoning in their requests ([#498](https://github.com/PsychedelicShayna/neopi/issues/498)).
 - Omit unsupported top-K, min-P and penalty parameters on first-party OpenAI endpoints while preserving supported sampling options and compatible-proxy extensions ([#53](https://github.com/PsychedelicShayna/neopi/issues/53)).

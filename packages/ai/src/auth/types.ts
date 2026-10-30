@@ -349,7 +349,7 @@ export interface CredentialDisabledEvent {
 }
 
 /** Why a delegated OAuth refresh was requested. */
-export type OAuthRefreshReason = "auth-recovery";
+export type OAuthRefreshReason = "auth-recovery" | "expiry";
 
 /** Configuration supplied when constructing credential storage. */
 export type AuthStorageOptions = {
@@ -380,8 +380,10 @@ export type AuthStorageOptions = {
 	 * per-provider local refresh function. Receives the credential id so the
 	 * implementation can address remote credentials.
 	 *
-	 * `reason` is `"auth-recovery"` only for a provider-auth retry; generic and
-	 * managed MCP force-refresh calls leave it unset.
+	 * `reason` is `"auth-recovery"` for a provider-auth retry or `"expiry"` for
+	 * an expired-token refresh; generic and MCP force-refresh calls leave it unset.
+	 * `rejectedAccess` identifies the OAuth access token the provider rejected,
+	 * so a delegate must not return that same token as a cached recovery.
 	 *
 	 * Must return updated {@link OAuthCredentials} with at least `access` and
 	 * `expires`. `refresh` may be an opaque sentinel (e.g. `"__remote__"`) when
@@ -393,6 +395,7 @@ export type AuthStorageOptions = {
 		credential: OAuthCredential,
 		signal?: AbortSignal,
 		reason?: OAuthRefreshReason,
+		rejectedAccess?: string,
 	) => Promise<OAuthCredentials>;
 	/**
 	 * Set when {@link refreshOAuthCredential} exchanges the refresh token with the
@@ -1002,6 +1005,8 @@ export interface KeysApi {
 			modelId?: string;
 			signal?: AbortSignal;
 			forceRefresh?: boolean;
+			refreshReason?: OAuthRefreshReason;
+			rejectedAccessToken?: string;
 		},
 	): Promise<string | undefined>;
 	/**
@@ -1099,9 +1104,9 @@ export interface OAuthRefreshByIdOptions {
 	 */
 	reuseRecentMint?: boolean;
 	/**
-	 * Provider-401 recovery intent. Forwarded to a delegated refresh (an auth
-	 * broker), which may then return a token it minted in the last five minutes.
-	 * Local reuse still requires {@link reuseRecentMint}.
+	 * Provider-401 recovery or ordinary expiry intent. Forwarded to a delegated
+	 * refresh (an auth broker), which may return a usable token it minted in the
+	 * last five minutes. Local reuse still requires {@link reuseRecentMint}.
 	 */
 	reason?: OAuthRefreshReason;
 	/** The access token a provider 401 rejected; see {@link AuthApiKeyOptions.rejectedAccessToken}. */
@@ -1277,6 +1282,12 @@ export interface SessionsApi {
 
 /** Usage reporting, observation, and provider configuration. */
 export interface UsageApi {
+	/** Fetch the best available native report for exactly one stored credential, never a sibling. */
+	report(
+		provider: Provider,
+		credential: AuthCredential,
+		options?: { baseUrl?: string; timeoutMs?: number; signal?: AbortSignal },
+	): Promise<UsageReport | null>;
 	/** Fetch usage reports for configured providers, optionally restricted to one provider. */
 	reports(options?: {
 		provider?: Provider;

@@ -2,6 +2,7 @@
  * `npi chronicle index` and `npi chronicle recall`: build the derived temporal
  * view over every session's committed atoms, and query it.
  */
+import * as path from "node:path";
 import { getAgentDir, getProjectDir } from "@oh-my-pi/pi-utils";
 import { CliUsageError } from "@oh-my-pi/pi-utils/cli";
 import { cfgChroniclerIndexDiagnosticLimit, cfgChroniclerRecallRanker } from "../chronicler/settings";
@@ -19,6 +20,7 @@ import { formatRecallResult } from "../chronicler/temporal/format";
 import { type IndexReport, indexChronicle } from "../chronicler/temporal/indexer";
 import { resolveChronicleModelClient } from "../chronicler/temporal/model";
 import { recallChronicle } from "../chronicler/temporal/recall";
+import { parseKeywords, type RecallScope, resolveRecallSessions } from "../chronicler/temporal/prefilter";
 import { createSummarizer } from "../chronicler/temporal/summarize";
 import { RESOLUTION_LEVELS, type Resolution } from "../chronicler/temporal/tree";
 import { ModelRegistry } from "../config/model-registry";
@@ -40,6 +42,10 @@ export interface ChronicleRecallFlags {
 	to?: string;
 	project?: string;
 	session?: string;
+	scope?: RecallScope;
+	sessions?: string[];
+	keywords?: string;
+	keywordCaseSensitive?: boolean;
 	hint?: string;
 	resolution?: string;
 	node?: string;
@@ -147,6 +153,12 @@ export async function runChronicleRecall(flags: ChronicleRecallFlags): Promise<n
 	const defaults = recallDefaultsFromSettings(settings);
 	const from = bound(flags.from, "from");
 	const to = bound(flags.to, "to");
+	if (flags.keywords !== undefined) parseKeywords(flags.keywords);
+	const sessions = resolveRecallSessions({
+		...flags,
+		scope: flags.scope ?? "all",
+		currentSessionId: process.env.PI_SESSION_ID,
+	});
 	const run = async (registry: ModelRegistry | undefined) =>
 		recallChronicle({
 			root: resolveViewRoot(settings, agentDir),
@@ -154,7 +166,10 @@ export async function runChronicleRecall(flags: ChronicleRecallFlags): Promise<n
 			from,
 			to,
 			project: flags.project,
-			session: flags.session,
+			sessions,
+			keywords: flags.keywords,
+			keywordCaseSensitive: flags.keywordCaseSensitive,
+			sessionsDir: path.join(agentDir, "sessions"),
 			hint: flags.hint,
 			resolution: flags.resolution as Resolution | undefined,
 			node: flags.node,

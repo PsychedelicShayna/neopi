@@ -46,7 +46,7 @@ export class DebugViewerFrame implements Component {
 	readonly #footer = new PanelRows();
 	readonly #panel: OverlayPanel;
 	readonly #headerRows: number;
-	readonly #footerRows: number;
+	#footerRows: number;
 	readonly #minimumBodyRows: number;
 	readonly #supportsFollowTail: boolean;
 	#followTail: boolean;
@@ -157,12 +157,15 @@ export class DebugViewerFrame implements Component {
 	render(width: number): readonly string[] {
 		if (this.#disposed) return EMPTY_LINES;
 		const frameWidth = Number.isFinite(width) ? Math.max(0, Math.trunc(width)) : 0;
-		const bodyHeight = this.getBodyHeight();
+		let bodyHeight = this.getBodyHeight();
 		const context: DebugViewerFrameContext = {
 			contentWidth: Math.max(1, frameWidth - 5),
 			bodyHeight,
 		};
 		const frame = this.#options.frame(context);
+		this.#footerRows = Math.max(this.#options.footerRows, frame.footer.length);
+		this.#footer.setHeight(this.#footerRows);
+		bodyHeight = this.getBodyHeight();
 		this.#header.setLines(frame.header);
 		this.#footer.setLines(frame.footer);
 		this.#viewport.setHeight(bodyHeight);

@@ -71,8 +71,8 @@ export class ModelOverridesPanel {
 		if (this.#pending) return "Saving…";
 		if (this.#identity || this.#fields?.input) return "Enter accept · Esc leave field";
 		return this.#draft
-			? "j/k fields · Enter edit · x unset/remove · t type · s save · / search · Esc back/discard · Tab pane"
-			: "j/k entries · Enter fields · x delete · / search · Esc sidebar · Tab pane";
+			? "Enter edit · x unset/remove · t type · s save · / search · Esc back/discard · Tab pane"
+			: "Enter fields · x delete · / search · Esc sidebar · Tab pane";
 	}
 
 	reload(): void {

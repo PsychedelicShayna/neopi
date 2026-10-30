@@ -1,6 +1,21 @@
-import { describe, expect, it } from "bun:test";
-import { MenuKeyReader, MenuSearchField, MenuViewport } from "../src/components/menu-navigation";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import {
+	getMenuSearchVimMode,
+	MenuKeyReader,
+	MenuSearchField,
+	MenuViewport,
+	setMenuSearchVimMode,
+} from "../src/components/menu-navigation";
 import { getKeybindings, KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "../src/keybindings";
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
+});
 
 describe("menu keybinding ownership", () => {
 	it("honors an injected registry while default readers follow global changes", () => {
@@ -25,7 +40,7 @@ describe("menu keybinding ownership", () => {
 });
 
 describe("literal menu field typing", () => {
-	it("keeps printable bindings literal while preserving word undo and Escape", () => {
+	it("keeps printable bindings literal while sharing editor undo and modal Escape", () => {
 		const previous = getKeybindings();
 		try {
 			setKeybindings(
@@ -42,7 +57,8 @@ describe("literal menu field typing", () => {
 			expect(field.value).toBe("jklg/");
 			expect(field.focused).toBe(true);
 			expect(field.handleInput("\x1a")).toBe("edited");
-			expect(field.value).toBe("");
+			expect(field.value).toBe("jklg");
+			expect(field.handleInput("\x1b")).toBe("edited");
 			expect(field.handleInput("\x1b")).toBe("exited");
 			expect(field.focused).toBe(false);
 		} finally {

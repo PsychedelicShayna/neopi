@@ -1,6 +1,6 @@
 import { extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
 import type { AuthStorage } from "../auth-storage";
-import { seedApiKeyResolver, type ApiKeyResolver, type ResolvedApiKey } from "../auth-retry";
+import { createOAuthProvenance, seedApiKeyResolver, type ApiKeyResolver, type ResolvedApiKey } from "../auth-retry";
 import { fingerprintCredential } from "../auth/credential-binding";
 import * as AIError from "../error";
 import { isUsageLimitOutcome } from "../error/rate-limit";
@@ -15,18 +15,26 @@ export async function pinnedCredential(
 	signal: AbortSignal,
 ): Promise<{ initial: string; resolver: ApiKeyResolver } | undefined> {
 	const options = { expectedProvider: binding.provider, expectedFingerprint: binding.fingerprint, modelId, signal };
+	const provenance = createOAuthProvenance();
 	const resolvePinned = async (
 		attemptSignal: AbortSignal,
-		forceRefresh = false,
+		error?: unknown,
+		previousKey?: string,
 	): Promise<ResolvedApiKey | undefined> => {
 		const apiKey = await storage.keys.getPinned(binding.credentialId, sessionId, {
 			...options,
 			signal: attemptSignal,
-			forceRefresh,
+			forceRefresh: error !== undefined,
+			refreshReason: error !== undefined && AIError.status(error) === 401 ? "auth-recovery" : undefined,
+			rejectedAccessToken: error !== undefined ? provenance.accessFor(previousKey) : undefined,
 		});
 		if (apiKey === undefined) return undefined;
 		const row = storage.credentials.list(binding.provider).find(entry => entry.id === binding.credentialId);
 		if (!row || fingerprintCredential(row, apiKey) !== binding.fingerprint) return undefined;
+		provenance.record({
+			apiKey,
+			oauthAccess: row.credential.type === "oauth" ? row.credential.access : undefined,
+		});
 		return {
 			apiKey,
 			credentialId: binding.credentialId,
@@ -41,11 +49,9 @@ export async function pinnedCredential(
 	const selected = await resolvePinned(signal);
 	if (!selected) return undefined;
 	const initial = selected.apiKey;
-	const resolver: ApiKeyResolver = async ({ error, lastChance, signal: attemptSignal }) => {
+	const resolver: ApiKeyResolver = async ({ error, lastChance, signal: attemptSignal, previousKey }) => {
 		if (error === undefined) return selected;
-		if (!lastChance) {
-			return resolvePinned(attemptSignal ?? signal, true);
-		}
+		if (!lastChance) return resolvePinned(attemptSignal ?? signal, error, previousKey);
 		if (AIError.isUsageLimit(error) || isUsageLimitOutcome(extractHttpStatusFromError(error), String(error))) {
 			await storage.limits.markReached(binding.provider, sessionId, {
 				modelId,

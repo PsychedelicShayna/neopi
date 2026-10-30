@@ -50,16 +50,20 @@ The report also lists canonical problems without touching atoms: malformed batch
 ## Recall
 
 ```
-npi chronicle recall "<query>" [--from D] [--to D] [--project P] [--session S] [--hint EVENT]
+npi chronicle recall "<query>" [--scope all|current|session|sessions] [--session S] [--sessions S ...]
+                               [--keywords EXPR] [--keyword-case-sensitive]
+                               [--from D] [--to D] [--project P] [--hint EVENT]
                                [--resolution year|month|week|day|hour|atom] [--node KEY]
                                [--budget N] [--beam N] [--ranker model|lexical] [--json]
 ```
 
-The `chronicle_recall` tool takes the same inputs (without `beam`/`ranker`); see `docs/tools/chronicle_recall.md`.
+The `chronicle_recall` tool takes the same inputs (without `beam`/`ranker`); see `docs/tools/chronicle_recall.md`. **The tool defaults to the current session.** `scope: "all"` widens it; explicit `session`, `sessions`, or `keywords` also select beyond the current session. `scope: "current"` with `keywords` keeps matching local. The standalone CLI retains its all-session default; `--scope current` uses the calling harness's `PI_SESSION_ID` and errors when no current session is available.
 
 Recall descends coarse to fine. At each node it ranks the in-scope children's descriptions against the query, keeps the best `beam` of them (plus near-ties) as alternatives, and expands the most relevant candidate next. When a branch's best child or atom scores far below the branch itself, the branch has collapsed and the search moves to the strongest retained alternative; the trace records both. Terminal buckets rank their atoms directly.
 
-- **Scope**: `from`/`to`, `project` (path substring), and `session` (id prefix) apply to every step, including adjacency and neighbors.
+- **Scope**: `from`/`to` (atom event times), `project` (case-insensitive path substring), and selected session id prefixes apply to every step, including adjacency, canonical evidence, and neighbors. `session` selects one id/prefix; `sessions` selects a union of ids/prefixes (CLI: repeat `--sessions ID`). An empty list selects nothing. Combine `scope: "all"` with dates or project to search across sessions.
+- **Transcript prefilter**: `keywords` searches raw `<agentDir>/sessions/<project>/*.jsonl` transcripts using native grep before any ranking. `AND` binds before `OR`; parentheses override precedence; quoted phrases preserve spaces. Operators are case-insensitive; matching is case-insensitive unless `keywordCaseSensitive` / `--keyword-case-sensitive` is true. Terms are literal substrings, not regexes, and may appear on different lines in the same transcript. Example: `--keywords '(daemon AND tmux) OR "session hub"'`. Matched session ids constrain every recall hop; no hits never falls back to all sessions. Results report candidate session ids in JSON and their count in text. A candidate without captured/indexed atoms yields no recall evidence.
+- **Index freshness**: the index is already cross-session, not per-session. `npi chronicle index` enumerates every session's committed beats; recall does not backfill or reindex implicitly. “Index incomplete or partial” means index generation did not finish; “view stale” means canonical data or derived nodes drifted. Refresh explicitly with `npi chronicle index`; use `npi chronicle backfill` first for transcripts that have no captured beats.
 - **Adjacent event**: `hint` describes something remembered from around the same time. Recall searches for the query and hint concurrently, sharing a limit of two in-flight ranking requests. It then ranks the atoms within `chronicler.recall.neighborhoodMinutes` of the hint's event, across sessions, so a poorly described target next to a well described event is still found.
 - **Step-by-step narrowing**: `--resolution month` returns ranked candidate periods; call again with `--node <key> --resolution week`, and so on down to atoms.
 - **Uncertainty**: when no atom is confident, or when an atom in another period ties the chosen one, the result says so, lists the best candidate periods, and names the follow-up that would discriminate best (a time range or an adjacent event).

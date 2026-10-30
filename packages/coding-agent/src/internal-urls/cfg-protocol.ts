@@ -67,6 +67,7 @@ const TREE_COMMENT_MAX_CHARS = 120;
 const PROVENANCE_LABELS: Record<SettingProvenance, string> = {
 	env: "environment variable",
 	runtime: "session override",
+	session: "session override",
 	role: "active role",
 	overlay: "--config overlay",
 	project: "project config",
@@ -291,7 +292,7 @@ function saveShadowingLayer(
 /** Only an environment variable outranks a session override. */
 const ABOVE_SESSION: readonly SettingProvenance[] = ["env"];
 /** Every layer that outranks the global config.yml a `/save` writes. */
-const ABOVE_GLOBAL: readonly SettingProvenance[] = ["env", "runtime", "role", "overlay", "project"];
+const ABOVE_GLOBAL: readonly SettingProvenance[] = ["env", "runtime", "session", "role", "overlay", "project"];
 
 function callerSession(context: ResolveContext | WriteContext | undefined): ToolSession {
 	const session = context?.session;
@@ -456,7 +457,7 @@ export class CfgProtocolHandler implements ProtocolHandler {
 		if (answer === "deny") return finish("declined");
 
 		if (!save) {
-			leaf.override(settings, value);
+			settings.writeScopeValue(leaf, value, "session");
 			host.applied({ path: leaf.id, value: leaf.get(settings), settings, save });
 			// A non-fallback env var outranks runtime overrides; report it instead of claiming the change.
 			const layer = shadowingLayer(leaf, settings, value, ABOVE_SESSION);
@@ -469,6 +470,7 @@ export class CfgProtocolHandler implements ProtocolHandler {
 		// takes effect; a separate instance never reloads from disk, so mirror it.
 		if (settings === persistent) {
 			leaf.clearOverride(settings);
+			settings.writeScopeValue(leaf, undefined, "session");
 		} else {
 			leaf.override(settings, value);
 			host.applied({ path: leaf.id, value: leaf.get(persistent), settings: persistent, save });

@@ -26,21 +26,27 @@ import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { thinkingLevelGlyph } from "@oh-my-pi/pi-tui/render/render-utils";
 
 import { getKnownRoleIds, getRoleInfo, setRoleDescription } from "@oh-my-pi/pi-coding-agent/config/model-roles";
-import { cfgCycleOrder, cfgModelPresets } from "@oh-my-pi/pi-coding-agent/config/model-settings";
+import { cfgCycleOrder, cfgModelPresets, cfgModelRoles } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { cfgEffortRules, cfgFallbackEffortSelections } from "@oh-my-pi/pi-coding-agent/config/effort-policy";
 import { cfgContextRules } from "../src/config/context-policy";
 import { parseCompactionPointInput } from "../src/config/compaction-threshold";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import type { HubEffortSelection } from "@oh-my-pi/pi-tui/overlays/model-hub";
 import { cfgRetryFallbackChains } from "@oh-my-pi/pi-coding-agent/session/settings";
+import { cfgCompactionThresholdTokens } from "../src/session/context-settings";
+import { cfgRoleSettings } from "../src/config/role-settings";
+import { createSettingsHost } from "../src/config/settings-ui";
 
 function normalize(lines: readonly string[]): string {
 	return stripVTControlCharacters(lines.join("\n").replaceAll(CURSOR_MARKER, "")).replace(/\s+/g, " ").trim();
 }
 
-/** The footer row (hint line or an active chip strip) of a rendered frame. */
+/** First footer row: the active strip, or the first action-hint row when browsing. */
 function footerLine(lines: readonly string[]): string {
-	return stripVTControlCharacters((lines[lines.length - 2] ?? "").replaceAll(CURSOR_MARKER, ""));
+	const plain = lines.map(line => stripVTControlCharacters(line.replaceAll(CURSOR_MARKER, "")));
+	const divider = plain.findLastIndex(line => line.startsWith("├") && line.endsWith("┤"));
+	if (divider < 0) throw new Error("Expected a rendered ModelHub footer divider");
+	return plain[divider + 1] ?? "";
 }
 
 function makeModel(
@@ -131,6 +137,7 @@ const openHubs: ModelHubComponent[] = [];
 function createHub(options: {
 	models: Model[] | (() => Model[]);
 	scoped?: boolean;
+	scope?: "session" | "project" | "global";
 	settings?: Settings;
 	registry?: RegistryOverrides;
 	hub?: ModelHubOptions;
@@ -174,7 +181,7 @@ function createHub(options: {
 	);
 	const hub = new ModelHubComponent(
 		ui,
-		createModelBrowserSource(settings),
+		createModelBrowserSource(settings, undefined, options.scope),
 		registry,
 		options.scoped ? modelsFn().map(model => ({ model })) : [],
 		{
@@ -221,6 +228,9 @@ function createHub(options: {
 			onRoleDescriptionChange:
 				options.callbacks?.onRoleDescriptionChange ??
 				((role, description) => setRoleDescription(role, description, settings)),
+			onRoleTokenBudgetChange:
+				options.callbacks?.onRoleTokenBudgetChange ??
+				((role, value) => settings.setRoleSetting(role, cfgCompactionThresholdTokens, value)),
 			onEffortRulesChange:
 				options.callbacks?.onEffortRulesChange ?? (rules => cfgEffortRules.override(settings, rules)),
 			onContextRulesChange:
@@ -263,6 +273,50 @@ describe("ModelHub", () => {
 		if (!testTheme) {
 			throw new Error("Failed to load dark theme for ModelHub tests");
 		}
+	});
+
+	test.each(["session", "project", "global"] as const)(
+		"Models %s edits its own assignment and shows higher-scope shadowing",
+		scope => {
+			const settings = Settings.isolated({});
+			settings.writeScopeValue(cfgModelRoles, { default: "test/global" }, "global");
+			settings.writeScopeValue(cfgModelRoles, { default: "test/project" }, "project");
+			settings.writeScopeValue(cfgModelRoles, { default: "test/session" }, "session");
+			const models = ["global", "project", "session"].map(id => makeModel("test", id));
+			const source = createModelBrowserSource(settings, undefined, scope);
+			expect(source.getModelRole("default")).toBe(`test/${scope}`);
+			expect(settings.getModelRole("default")).toBe("test/session");
+			const { hub, onUnassign } = createHub({ models, settings, scoped: true, scope });
+			for (const key of [UP, "\n"]) hub.handleInput(key);
+			const rendered = normalize(hub.render(220));
+			if (scope !== "session") expect(rendered).toContain("shadowed by session: test/session");
+			hub.handleInput("x");
+			expect(onUnassign).toHaveBeenCalledWith("default", scope);
+		},
+	);
+
+	test("role token budgets are editable in Models without changing stored keys", () => {
+		const settings = Settings.isolated();
+		settings.writeScopeValue(cfgRoleSettings, { default: { "compaction.thresholdTokens": 120000 } }, "global");
+		const { hub } = createHub({ models: [makeModel("test", "model")], settings, scoped: true });
+		for (const key of [UP, "\n", "b"]) hub.handleInput(key);
+		expect(normalize(hub.render(220))).toContain("default token budget");
+		for (const key of ["\x01", "\x0b", ..."64000", "\n"]) hub.handleInput(key);
+		expect(cfgRoleSettings.get(settings).default).toEqual({ "compaction.thresholdTokens": 64000 });
+		expect(normalize(hub.render(220))).toContain("budget 64,000");
+		for (const key of ["b", "\x01", "\x0b", "\n"]) hub.handleInput(key);
+		expect(settings.getRoleSetting("default", cfgCompactionThresholdTokens)).toBeUndefined();
+		expect(createSettingsHost(settings).entries.some(entry => entry.path.startsWith("roleSettings."))).toBe(false);
+	});
+
+	test("invalid role budget edits retain the field and saved budget", () => {
+		const settings = Settings.isolated({ roleSettings: { default: { "compaction.thresholdTokens": 32000 } } });
+		const { hub } = createHub({ models: [makeModel("test", "model")], settings, scoped: true });
+		for (const key of [UP, "\n", "b", "\x01", "\x0b", ..."-3", "\n"]) hub.handleInput(key);
+		expect(hub.navigationSnapshot().strip?.kind).toBe("name");
+		expect(settings.getRoleSetting("default", cfgCompactionThresholdTokens)).toBe(32000);
+		hub.handleInput("\x1b");
+		expect(settings.getRoleSetting("default", cfgCompactionThresholdTokens)).toBe(32000);
 	});
 
 	test("roles marked hidden remain listed and D edits the selected description", () => {
@@ -351,10 +405,16 @@ describe("ModelHub", () => {
 			hub.handleInput(".");
 			hub.handleInput("\n");
 			const footer = footerLine(hub.render(320));
-			expect(footer).toContain("gg/G ends");
-			expect(footer).toContain("Ctrl-u/d half");
+			expect(footer).toContain("hjkl gg/G C-u d e y");
+			expect(footer).toContain("? help");
 			expect(footer).toContain("model facts");
 			expect(footer).toContain("Ctrl+G config file");
+			expect(footer.indexOf("model facts")).toBeLessThan(footer.indexOf("hjkl"));
+			hub.handleInput("?");
+			const help = normalize(hub.render(320));
+			expect(help).toContain("gg / G: first / last item");
+			expect(help).toContain("Ctrl-u / Ctrl-d: half page up / down");
+			hub.handleInput(ESC);
 			hub.handleInput("\x1b[17~");
 			expect(facts).toHaveBeenCalledTimes(1);
 			hub.handleInput("\x07");
@@ -947,7 +1007,12 @@ describe("ModelHub", () => {
 			// Roles owns its own search rather than switching to the model catalog.
 			hub.handleInput("/");
 			hub.handleInput("t");
-			expect(hub.navigationSnapshot()).toMatchObject({ entry: "roles", rolesQuery: "", rolesValue: "t", focus: "list" });
+			expect(hub.navigationSnapshot()).toMatchObject({
+				entry: "roles",
+				rolesQuery: "t",
+				rolesValue: "t",
+				focus: "list",
+			});
 			expect(footerLine(hub.render(220))).toContain("Search · Enter confirm · Esc clear");
 			hub.handleInput(ESC);
 			expect(hub.navigationSnapshot().filterFocused).toBe(false);
@@ -2650,8 +2715,10 @@ describe("ModelHub", () => {
 			query => {
 				const { hub, onAssign } = createHub({
 					models: [
-						makeModel("test", "live"), makeModel("test", "voice"),
-						makeModel("test", "lively"), makeModel("test", "voicemail"),
+						makeModel("test", "live"),
+						makeModel("test", "voice"),
+						makeModel("test", "lively"),
+						makeModel("test", "voicemail"),
 					],
 					scoped: true,
 				});
@@ -2660,8 +2727,8 @@ describe("ModelHub", () => {
 				const rendered = normalize(hub.render(220));
 				expect(rendered).toContain("test/live");
 				expect(rendered).toContain("test/voice");
-				expect(rendered).toContain("lively");
-				expect(rendered).toContain("voicemail");
+				expect(rendered).not.toContain("lively");
+				expect(rendered).not.toContain("voicemail");
 				for (const key of [DOWN, UP, "\x1b[5~", "\x1b[6~", "\t"]) hub.handleInput(key);
 				expect(hub.navigationSnapshot().filterFocused).toBe(true);
 				expect(hub.navigationSnapshot().strip).toBeNull();
@@ -2676,18 +2743,19 @@ describe("ModelHub", () => {
 			},
 		);
 
-		test.each(["/(", "re:("])("models reports invalid regex %s with no selectable rows", query => {
+		test.each(["/(", "re:("])("models reports invalid regex %s while retaining the last valid results", query => {
 			const { hub, onAssign } = createHub({ models: [makeModel("test", "live")], scoped: true });
 			hub.handleInput("/");
 			for (const ch of query) hub.handleInput(ch);
 			hub.handleInput("\n");
 			const rendered = normalize(hub.render(220));
 			expect(rendered).toMatch(/invalid.*(?:regex|pattern)|(?:regex|pattern).*error/i);
-			expect(rendered).toContain("No matching models");
-			expect(rendered).not.toContain("test/live");
+			expect(rendered).not.toContain("No matching models");
+			expect(rendered).toContain("test/live");
 			hub.handleInput("\n");
 			expect(onAssign).not.toHaveBeenCalled();
 			expect(hub.navigationSnapshot().strip).toBeNull();
+			expect(hub.navigationSnapshot().filterFocused).toBe(true);
 		});
 
 		test("search inside a provider scope keeps that provider's model (#4522)", () => {
@@ -2781,7 +2849,7 @@ describe("ModelHub", () => {
 
 			hub.handleInput("/");
 			for (const ch of "target") hub.handleInput(ch);
-			expect(sidebarIndexOf("aaa-provider")).toBeLessThan(sidebarIndexOf("zzz-provider"));
+			expect(sidebarIndexOf("zzz-provider")).toBeLessThan(sidebarIndexOf("aaa-provider"));
 
 			// Enter returns to normal mode without clearing the query.
 			hub.handleInput("\n");

@@ -126,7 +126,7 @@ function createDelayedSession(
 			messages.push(finalMessage);
 			return true;
 		},
-		disableStopTimeTodoReminders: () => {},
+		prepareForPrintMode: () => {},
 		prepareForHeadlessAdvisorDrain: () => {
 			advisorDrainPrepared = true;
 		},
@@ -319,7 +319,7 @@ describe("print mode working indicator", () => {
 				messages.push(message);
 				return true;
 			},
-			disableStopTimeTodoReminders: () => {},
+			prepareForPrintMode: () => {},
 			prepareForHeadlessAdvisorDrain: () => {},
 			waitForIdle: async () => {},
 			waitForAdvisorCatchup: async (timeoutMs: number) => {
@@ -382,7 +382,7 @@ describe("print mode working indicator", () => {
 				return true;
 			},
 			setTextOutputCommitted: () => {},
-			disableStopTimeTodoReminders: () => {},
+			prepareForPrintMode: () => {},
 			prepareForHeadlessAdvisorDrain: () => {},
 			waitForIdle: async () => {},
 			waitForAdvisorCatchup: async (timeoutMs: number) => {
@@ -406,7 +406,7 @@ describe("print mode working indicator", () => {
 		expect(stderrOutput.join("")).toContain("primary request failed");
 	});
 
-	it("returns exit code 1 for a terminal failure in JSON mode without writing to stderr", async () => {
+	it("returns exit code 1 and a source diagnostic for a terminal failure in JSON mode", async () => {
 		const message = makeAssistantMessage("");
 		message.stopReason = "error";
 		message.errorMessage = "primary request failed";
@@ -429,7 +429,7 @@ describe("print mode working indicator", () => {
 				messages.push(message);
 				return true;
 			},
-			disableStopTimeTodoReminders: () => {},
+			prepareForPrintMode: () => {},
 			prepareForHeadlessAdvisorDrain: () => {},
 			waitForIdle: async () => {},
 			waitForAdvisorCatchup: async () => true,
@@ -438,10 +438,11 @@ describe("print mode working indicator", () => {
 			},
 		} as unknown as AgentSession;
 
-		// JSON mode carries the error in the event stream, not on stderr; the exit
-		// code is what tells automation the turn failed (issue #11498).
+		// Structured stdout remains JSON-only; stderr also names the failing source.
 		expect(await runPrintMode(session, { mode: "json", initialMessage: "hello" })).toBe(1);
 		expect(disposed).toBe(true);
-		expect(stderrOutput.join("")).toBe("");
+		expect(stderrOutput.join("")).toBe(
+			"Error: anthropic/claude-sonnet-4-5 after 1 attempt: primary request failed\n",
+		);
 	});
 });

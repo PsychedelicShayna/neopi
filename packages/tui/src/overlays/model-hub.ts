@@ -1,3 +1,4 @@
+import { uiProvenanceSuffix } from "../theme/provenance";
 import { parseModelString, splitUpstreamRouting } from "./model-selector";
 /**
  * Fullscreen /models hub, shown on the alternate screen like /settings.
@@ -87,6 +88,7 @@ import {
 import { renderSegmentTrack } from "../chrome/segment-track";
 import { EffortToggle } from "./effort-toggle";
 import { ModelOverridesPanel, type ModelOverridesHost } from "./model-overrides";
+import { MenuHelp, menuHintLines } from "../components/menu-hints";
 
 export type HubEffortSelection =
 	| { mode: "inherit" }
@@ -162,7 +164,7 @@ function patternStripHint(value: string): string {
 }
 
 const MODEL_HUB_BODY_MIN_WIDTH = 28;
-const MODEL_SCOPE_HINT = "h/l pane · j/k providers · ⏎ models · / search · Alt+←/→ kind · ⎋ close";
+const MODEL_SCOPE_HINT = "⏎ models · / search · Alt+←/→ kind · ⎋ close";
 
 /**
  * A row of the Roles view: a role, a model/wildcard chain-key header, one of a
@@ -194,6 +196,10 @@ export interface ModelHubSource extends ModelBrowserSource {
 	readonly disabledProviders: readonly string[];
 	readonly fallbackChains: Record<string, string[]>;
 	readonly modelRoleStorage: "global" | "project";
+	/** Fixed authoring scope selected by /models; absent retains the embedding host's scope picker. */
+	readonly editingScope?: ModelRoleSelectionScope;
+	getSessionModelRole?(role: string): string | undefined;
+	getRoleScopeNote?(role: string): string;
 	readonly cycleOrder: readonly string[];
 	getProjectModelRole(role: string): string | undefined;
 	getGlobalModelRole(role: string): string | undefined;
@@ -205,6 +211,8 @@ export interface ModelHubSource extends ModelBrowserSource {
 	getProjectRoleEffortSelection(role: string): HubEffortSelection | undefined;
 	getGlobalRoleEffortSelection(role: string): HubEffortSelection | undefined;
 	getRoleEffortSelection(role: string): HubEffortSelection | undefined;
+	/** Explicit role context budget; undefined inherits the ordinary context limit. */
+	getRoleTokenBudget?(role: string): number | undefined;
 	getFallbackEffortSelection(role: string, selector: string): HubEffortSelection | undefined;
 	/** Serialize a resolved role model, retaining any host-specific upstream route. */
 	formatModelSelector(model: Model): string;
@@ -243,7 +251,7 @@ export interface ScopedModelItem {
 	thinkingLevel?: string;
 }
 
-export type ModelRoleSelectionScope = "global" | "project";
+export type ModelRoleSelectionScope = "global" | "project" | "session";
 
 export interface ModelHubCallbacks {
 	/** Select a model without authoring a role or changing saved preferences. */
@@ -267,6 +275,8 @@ export interface ModelHubCallbacks {
 	onUnassign: (role: string, scope?: ModelRoleSelectionScope) => void;
 	/** Persist the selected role's description. Return false to retain its draft. */
 	onRoleDescriptionChange?: (role: string, description: string) => boolean | void;
+	/** Edit the existing roleSettings.<role>["compaction.thresholdTokens"] value. */
+	onRoleTokenBudgetChange?: (role: string, value: number | undefined) => boolean | void;
 	/** Persist a chain and its per-entry effort selections as one mutation. */
 	onFallbackChainChange?: (
 		role: string,
@@ -390,7 +400,7 @@ type StripState =
 	  }
 	| {
 			kind: "name";
-			purpose: "description";
+			purpose: "description" | "roleBudget";
 			role: string;
 			input: Input;
 	  }
@@ -489,6 +499,7 @@ type RolesAction =
 	| "thinking"
 	| "compaction"
 	| "description"
+	| "budget"
 	| "save"
 	| "nextPreset"
 	| "prevPreset";
@@ -499,6 +510,7 @@ const ROLES_ACTION_KEYS: Record<string, RolesAction> = {
 	f: "fallback",
 	c: "cycle",
 	D: "description",
+	b: "budget",
 	"[": "earlier",
 	"]": "later",
 	n: "new",
@@ -514,6 +526,7 @@ const ROLE_PICKER_COLUMNS: readonly TspPickerColumn[] = [
 	{ id: "model", head: "Model", format: "text", priority: 2 },
 	{ id: "thinking", head: "Thinking", format: "dim", priority: 1 },
 	{ id: "compaction", head: "Compaction", format: "dim", priority: 1 },
+	{ id: "budget", head: "Role budget", format: "dim", priority: 1 },
 ];
 
 /** Kind tab labels (sentence case; acronyms stay upper). */
@@ -631,6 +644,7 @@ export class ModelHubComponent implements Component {
 	#configError: string | undefined;
 	#effortIndex = 0;
 	#keys = new MenuKeyReader();
+	readonly #help = new MenuHelp();
 	#rolesSearch = new MenuSearchField();
 	#effortSearch = new MenuSearchField();
 	#roleViewport = new MenuViewport();
@@ -1495,6 +1509,7 @@ export class ModelHubComponent implements Component {
 				rows.push({ kind: "role", role });
 				const chain = chains[role] ?? [];
 				for (let i = 0; i < chain.length; i++) {
+					if (query && !matchesText(chain[i])) continue;
 					rows.push({ kind: "fallback", role, chainIndex: i, selector: chain[i] });
 				}
 			}
@@ -1519,6 +1534,7 @@ export class ModelHubComponent implements Component {
 			const chain = chains[key] ?? [];
 			rows.push({ kind: "chainKey", role: key });
 			for (let i = 0; i < chain.length; i++) {
+				if (query && !matchesText(chain[i])) continue;
 				rows.push({ kind: "fallback", role: key, chainIndex: i, selector: chain[i] });
 			}
 		}
@@ -1815,7 +1831,9 @@ export class ModelHubComponent implements Component {
 
 	#roleForScope(role: string, scope: ModelRoleSelectionScope): ResolvedModelRoleValue {
 		const roleValue =
-			scope === "project" ? this.#settings.getProjectModelRole(role) : this.#settings.getGlobalModelRole(role);
+			scope === "session"
+				? this.#settings.getSessionModelRole?.(role)
+				: scope === "project" ? this.#settings.getProjectModelRole(role) : this.#settings.getGlobalModelRole(role);
 		const allModels =
 			this.#scopedModels.length > 0
 				? scopedRolePool(
@@ -1825,6 +1843,9 @@ export class ModelHubComponent implements Component {
 				: this.#registry.getAll("all");
 		const roleLookup: ModelRoleLookup = {
 			getModelRole: scopedRole =>
+				scope === "session"
+					? (this.#settings.getSessionModelRole?.(scopedRole) ?? this.#settings.getProjectModelRole(scopedRole) ?? this.#settings.getGlobalModelRole(scopedRole))
+					:
 				scope === "project"
 					? (this.#settings.getProjectModelRole(scopedRole) ?? this.#settings.getGlobalModelRole(scopedRole))
 					: this.#settings.getGlobalModelRole(scopedRole),
@@ -1860,6 +1881,7 @@ export class ModelHubComponent implements Component {
 
 	/** Stage a reasoning model and scope; cancel before choosing effort leaves the assignment unchanged. */
 	#assignRole(item: ModelBrowserItem, role: string, returnToRoles: boolean, scope?: ModelRoleSelectionScope): void {
+		scope = this.#settings.editingScope ?? scope;
 		if (this.#settings.modelRoleStorage === "project" && scope === undefined) {
 			this.#openScopeStrip(item, role, returnToRoles);
 			return;
@@ -1881,7 +1903,9 @@ export class ModelHubComponent implements Component {
 	#unassignRole(role: string): void {
 		const assignment = this.#roles[role];
 		if (!assignment || assignment.autoSelected) return;
-		if (this.#settings.modelRoleStorage === "project") {
+		if (this.#settings.editingScope) {
+			this.#callbacks.onUnassign(role, this.#settings.editingScope);
+		} else if (this.#settings.modelRoleStorage === "project") {
 			const source = this.#settings.getModelRoleSource(role);
 			this.#callbacks.onUnassign(role, source === "default" ? undefined : source);
 		} else {
@@ -1916,7 +1940,7 @@ export class ModelHubComponent implements Component {
 		if (!assignment) return undefined;
 		const source =
 			this.#settings.modelRoleStorage === "project" ? this.#settings.getModelRoleSource(role) : "default";
-		const scope = source === "project" || source === "global" ? source : undefined;
+		const scope = this.#settings.editingScope ?? (source === "project" || source === "global" ? source : undefined);
 		const model = scope ? this.#roleForScope(role, scope).model : assignment.model;
 		if (!model || this.#thinkingOptionsFor(model).length === 0) return undefined;
 		const storedSelector =
@@ -1939,7 +1963,9 @@ export class ModelHubComponent implements Component {
 	#openRoleStrip(item: ModelBrowserItem): void {
 		const chips: StripChip[] = [];
 		const scopedStorage = this.#settings.modelRoleStorage === "project";
-		const scopes: readonly ModelRoleSelectionScope[] = scopedStorage ? ["global", "project"] : ["global"];
+		const scopes: readonly ModelRoleSelectionScope[] = this.#settings.editingScope
+			? [this.#settings.editingScope]
+			: scopedStorage ? ["global", "project"] : ["global"];
 		for (const role of this.#visibleRoleIds()) {
 			const info = this.#settings.getRoleInfo(role);
 			if (!info.accepts(item.model)) continue;
@@ -1952,7 +1978,7 @@ export class ModelHubComponent implements Component {
 						: undefined;
 				const assignedHere =
 					!!scopedModel && scopedModel.provider === item.model.provider && scopedModel.id === item.model.id;
-				const roleLabel = (info.tag ?? info.name ?? role).toLowerCase();
+				const roleLabel = (info.tag ?? info.name ?? role).toLowerCase() + uiProvenanceSuffix("roles", role);
 				const label = scopedStorage ? `${scope} ${roleLabel}` : roleLabel;
 				chips.push({
 					label,
@@ -2003,9 +2029,11 @@ export class ModelHubComponent implements Component {
 	): void {
 		const scoped = scope ?? "global";
 		const saved =
-			scoped === "project"
-				? this.#settings.getProjectRoleEffortSelection(role)
-				: this.#settings.getGlobalRoleEffortSelection(role);
+			this.#settings.editingScope
+				? this.#settings.getRoleEffortSelection(role)
+				: scoped === "project"
+					? this.#settings.getProjectRoleEffortSelection(role)
+					: this.#settings.getGlobalRoleEffortSelection(role);
 		const selection =
 			saved?.mode === "auto" && saved.selector && saved.selector !== item.selector ? undefined : saved;
 		const options = this.#thinkingOptionsFor(item.model, role);
@@ -2901,6 +2929,15 @@ export class ModelHubComponent implements Component {
 		this.#strip = { kind: "name", purpose: "description", role, input };
 	}
 
+	#openRoleBudgetStrip(role: string): void {
+		if (!this.#callbacks.onRoleTokenBudgetChange) return;
+		const input = new Input();
+		input.focused = true;
+		const value = this.#settings.getRoleTokenBudget?.(role);
+		input.setValue(value === undefined ? "" : String(value));
+		this.#strip = { kind: "name", purpose: "roleBudget", role, input };
+	}
+
 	/** The model a Roles row resolves to (assigned role or fallback), whose compaction point `m` edits. */
 	#roleRowModel(): Model | undefined {
 		const row = this.#rolesRows[this.#roleIndex];
@@ -2937,6 +2974,20 @@ export class ModelHubComponent implements Component {
 				: Math.min(this.#effortIndex, rules.length);
 			this.#strip = null;
 			this.#assigning = null;
+			this.#frame.chipRanges = [];
+			this.#refreshAfterMutation();
+			return;
+		}
+		if (strip.purpose === "roleBudget") {
+			const draft = strip.input.getValue().trim();
+			const value = draft === "" ? undefined : Number(draft);
+			if (value !== undefined && (!Number.isSafeInteger(value) || value < 1)) {
+				this.#configError = "Role token budget must be a positive integer; empty inherits.";
+				return;
+			}
+			if (this.#callbacks.onRoleTokenBudgetChange?.(strip.role, value) === false) return;
+			this.#configError = undefined;
+			this.#strip = null;
 			this.#frame.chipRanges = [];
 			this.#refreshAfterMutation();
 			return;
@@ -3081,6 +3132,12 @@ export class ModelHubComponent implements Component {
 			this.#filterEditing || ((strip?.kind === "name" || strip?.kind === "pattern") && strip.input.focused);
 		if (this.#filterEditing || (fieldFocused && extractPrintableText(rawData) !== undefined)) {
 			this.#handleInput(rawData);
+			return;
+		}
+		const overridesEditing =
+			this.#activeEntry().kind === "overrides" && this.#assigning === null && this.#overrides().editing;
+		if (!fieldFocused && !overridesEditing && this.#help.handleInput(rawData)) {
+			this.#requestRender();
 			return;
 		}
 		this.#withNavigationVisit(() => this.#handleInput(rawData));
@@ -3656,6 +3713,9 @@ export class ModelHubComponent implements Component {
 			case "description":
 				if (role) this.#openDescriptionStrip(role);
 				return;
+			case "budget":
+				if (role) this.#openRoleBudgetStrip(role);
+				return;
 			case "clear":
 				if (role) this.#unassignRole(role);
 				else if (row?.kind === "fallback") this.#removeFallback(row);
@@ -4047,7 +4107,10 @@ export class ModelHubComponent implements Component {
 		for (const rowDef of this.#rolesRows) {
 			if (rowDef.kind !== "role") continue;
 			const info = this.#settings.getRoleInfo(rowDef.role);
-			tagWidth = Math.max(tagWidth, visibleWidth(info.tag ?? info.name ?? rowDef.role));
+			tagWidth = Math.max(
+				tagWidth,
+				visibleWidth((info.tag ?? info.name ?? rowDef.role) + uiProvenanceSuffix("roles", rowDef.role)),
+			);
 		}
 
 		const cycleOrder = this.#cycleOrder();
@@ -4125,7 +4188,8 @@ export class ModelHubComponent implements Component {
 			const role = rowDef.role;
 			const info = this.#settings.getRoleInfo(role);
 			const assignment = this.#roles[role];
-			const tag = (info.tag ?? info.name ?? role).padEnd(tagWidth);
+			const roleTag = (info.tag ?? info.name ?? role) + uiProvenanceSuffix("roles", role);
+			const tag = roleTag + " ".repeat(Math.max(0, tagWidth - visibleWidth(roleTag)));
 
 			let dot: string;
 			let tagStyled: string;
@@ -4137,9 +4201,11 @@ export class ModelHubComponent implements Component {
 				value = `${theme.fg("dim", `${assignment.model.provider}/`)}${selected ? theme.fg("accent", assignment.model.id) : assignment.model.id}`;
 				const source = this.#settings.getModelRoleSource(role);
 				const policy =
-					source === "project"
-						? this.#settings.getProjectRoleEffortSelection(role)
-						: this.#settings.getGlobalRoleEffortSelection(role);
+					this.#settings.editingScope
+						? this.#settings.getRoleEffortSelection(role)
+						: source === "project"
+							? this.#settings.getProjectRoleEffortSelection(role)
+							: this.#settings.getGlobalRoleEffortSelection(role);
 				const effective =
 					policy?.mode === "auto"
 						? AUTO_THINKING
@@ -4171,7 +4237,11 @@ export class ModelHubComponent implements Component {
 			const limit = assignment && this.#settings.compactionPointFor?.(assignment.model)?.limit;
 			const compactionStyled = limit ? theme.fg("dim", `compact ${limit}`) : "";
 			let line = ` ${cursor} ${dot} ${tagStyled}  ${value}`;
-			const right = [levelStyled, compactionStyled, cycleStyled].filter(part => part.length > 0).join("  ");
+			const scopeNote = this.#settings.getRoleScopeNote?.(role);
+			if (scopeNote) line += theme.fg("dim", `  [${scopeNote}]`);
+			const budget = this.#settings.getRoleTokenBudget?.(role);
+			const budgetStyled = budget === undefined ? "" : theme.fg("dim", `budget ${budget.toLocaleString("en-US")}`);
+			const right = [budgetStyled, levelStyled, compactionStyled, cycleStyled].filter(part => part.length > 0).join("  ");
 			const rightWidth = visibleWidth(right);
 			const lineWidth = visibleWidth(line);
 			if (rightWidth > 0 && lineWidth + rightWidth + 2 <= width) {
@@ -4280,25 +4350,13 @@ export class ModelHubComponent implements Component {
 			return `${MODEL_SCOPE_HINT}${facts}${configFile}`;
 		const detail = this.#surfaceFooterHint();
 		if (this.#strip || this.#filterEditing) return detail;
-		const query =
-			this.#assigning === null && entry.kind === "roles"
-				? this.#rolesSearch.query
-				: this.#assigning === null && entry.kind === "effort"
-					? this.#effortSearch.query
-					: this.#browser.query;
-		const motions =
-			this.#focus === "list" &&
-			query &&
-			(this.#isBrowserView(entry) || entry.kind === "roles" || entry.kind === "effort")
-				? "gg/G ends · Ctrl-u/d half · "
-				: "";
-		return `h/l pane · / search · ${motions}${detail}${facts}${configFile}`;
+		return `/ search · ${detail}${facts}${configFile}`;
 	}
 
 	#surfaceFooterHint(): string {
 		const enter = formatKeyHint("enter");
 		const cancel = editorKey("tui.select.cancel");
-		const upDown = `j/k ${editorKeys("tui.select.up", "tui.select.down")}`;
+		const upDown = editorKeys("tui.select.up", "tui.select.down");
 		const left = formatKeyHint("left");
 		const leftRight = formatKeyHints(["left", "right"]);
 		const enterRight = formatKeyHints(["enter", "right"]);
@@ -4306,8 +4364,9 @@ export class ModelHubComponent implements Component {
 		const strip = this.#strip;
 		if (strip) {
 			if (strip.kind === "name") {
-				if (!strip.input.focused) return `/ edit · ${enter} set · ${cancel} parent · h/l pane`;
+				if (!strip.input.focused) return `/ edit · ${enter} set · ${cancel} parent`;
 				if (strip.purpose === "description") return `${enter} save description · ${cancel} leave field`;
+				if (strip.purpose === "roleBudget") return `${enter} save token budget · empty inherits · ${cancel} leave field`;
 				if (strip.purpose === "compaction") {
 					return `${enter} ${compactionConfirmPending(strip) ? "accept" : "set"} compaction point · ${cancel} leave field`;
 				}
@@ -4320,16 +4379,15 @@ export class ModelHubComponent implements Component {
 			if (strip.kind === "pattern")
 				return strip.input.focused
 					? `${enter} continue to ${strip.target === "rule" && this.#contextRulesView() ? "limit" : "effort"} · ${cancel} leave field`
-					: `/ edit · ${enter} continue · ${cancel} parent · h/l pane`;
+					: `/ edit · ${enter} continue · ${cancel} parent`;
 			if (strip.kind === "effortLevels")
-				return `h/l ${leftRight} effort · ${formatKeyHint("space")} toggle · ${enter} save · ${cancel} discard`;
+				return `${leftRight} effort · ${formatKeyHint("space")} toggle · ${enter} save · ${cancel} discard`;
 			if (strip.kind === "selectorChoice")
-				return `j/k choose exact/pattern · ${enter}/Space set · h/l pane · Tab context · ${cancel} cancel`;
-			if (strip.kind === "role")
-				return `j/k choose role · ${enter} assign/clear · h/l pane · Tab context · ${cancel} cancel`;
+				return `${upDown} exact/pattern · ${enter}/Space set · Tab context · ${cancel} cancel`;
+			if (strip.kind === "role") return `${upDown} role · ${enter} assign/clear · Tab context · ${cancel} cancel`;
 			if (strip.kind === "scope")
-				return `j/k save scope · ${enter}/Space set · h/l pane · Tab context · ${cancel} cancel`;
-			return `h/l ${leftRight} effort · ${enter}/Space apply · ${cancel} keep`;
+				return `${upDown} save scope · ${enter}/Space set · Tab context · ${cancel} cancel`;
+			return `${leftRight} effort · ${enter}/Space apply · ${cancel} keep`;
 		}
 		if (this.#filterEditing) return "Search · Enter confirm · Esc clear";
 		if (this.#sessionOnly && this.#isBrowserView(this.#activeEntry())) {
@@ -4418,10 +4476,10 @@ export class ModelHubComponent implements Component {
 									? "Enter set · Esc leave field"
 									: "/ edit · Esc parent"
 								: strip.kind === "effortLevels"
-									? "h/l effort · Space toggle"
+									? "←/→ effort · Space toggle"
 									: strip.kind === "thinking" || strip.kind === "patternEffort"
-										? "h/l effort · Enter set"
-										: "j/k choose · Enter set · h/l pane";
+										? "←/→ effort · Enter set"
+										: "↑/↓ choose · Enter set";
 						const hint = truncateToWidth(label, Math.max(0, width - 36));
 						const columns = Math.max(1, width - visibleWidth(hint) - (hint ? 3 : 0));
 						const line = this.#renderStrip(columns, strip);
@@ -4436,7 +4494,9 @@ export class ModelHubComponent implements Component {
 	#renderStrip(width: number, strip: StripState): string {
 		if (strip.kind === "name") {
 			const labelText =
-				strip.purpose === "compaction"
+				strip.purpose === "roleBudget"
+					? `${strip.role} token budget:`
+					: strip.purpose === "compaction"
 					? `${strip.model.id} limit:`
 					: strip.purpose === "contextRule"
 						? `${strip.selector} limit:`
@@ -4459,6 +4519,8 @@ export class ModelHubComponent implements Component {
 				hint = theme.fg("dim", "400k base · f400k fixed · 80% · empty resets");
 			} else if (strip.purpose === "description") {
 				hint = "";
+			} else if (strip.purpose === "roleBudget") {
+				hint = theme.fg("dim", "positive tokens · empty inherits");
 			} else {
 				hint = theme.fg("dim", "(letters, digits, - and _)");
 			}
@@ -4539,7 +4601,20 @@ export class ModelHubComponent implements Component {
 
 	render(width: number): readonly string[] {
 		const height = Math.max(16, this.#tui.terminal?.rows || process.stdout.rows || 40);
-		return this.#frame.render(width, height, this.#entries, this.#renderFooter(width - 4));
+		const innerWidth = Math.max(1, width - 4);
+		const strip = this.#strip;
+		const textFocused =
+			this.#filterEditing ||
+			((strip?.kind === "name" || strip?.kind === "pattern") && strip.input.focused) ||
+			(this.#activeEntry().kind === "overrides" && this.#assigning === null && this.#overrides().editing);
+		const footer = menuHintLines(
+			`${this.#footerHint()}${textFocused ? "" : " · ? help"}`,
+			innerWidth,
+			textFocused ? "" : undefined,
+		).map(line => theme.fg("dim", line));
+		if (strip) footer.unshift(this.#renderFooter(innerWidth));
+		else this.#frame.chipRanges = [];
+		return this.#help.render(this.#frame.render(width, height, this.#entries, footer), width);
 	}
 
 	// ═══════════════════════════════════════════════════════════════════════
@@ -4552,6 +4627,7 @@ export class ModelHubComponent implements Component {
 	}
 
 	describe(cx: DescribeContext): NativeNode {
+		if (this.#help.open) return this.#help.describe();
 		const usePicker = this.nativeSheet(cx);
 		const cached = this.#nativeCache;
 		if (cached?.version === this.#nativeVersion && cached.picker === usePicker) return cached.node;
@@ -4576,6 +4652,11 @@ export class ModelHubComponent implements Component {
 	}
 
 	handleNativeEvent(event: NativeUiEvent): void {
+		if (this.#help.open) {
+			if (event.type === "action") this.#help.handleInput("\x1b");
+			this.#requestRender();
+			return;
+		}
 		this.#withNavigationVisit(() => this.#handleNativeEvent(event));
 	}
 
@@ -4880,7 +4961,7 @@ export class ModelHubComponent implements Component {
 		const role = rowDef.role;
 		const info = this.#settings.getRoleInfo(role);
 		const assignment = this.#roles[role];
-		const tag = info.tag ?? info.name ?? role;
+		const tag = (info.tag ?? info.name ?? role) + uiProvenanceSuffix("roles", role);
 		let label: TspSpan[];
 		let detail: TspSpan[];
 		const value: TspSpan[] = [];
@@ -5007,14 +5088,16 @@ export class ModelHubComponent implements Component {
 				? this.#surfaceFooterHint()
 				: this.#focus === "scope"
 					? this.#footerHint()
-					: "j/k rows · h/l pane · / search · gg/G ends · Ctrl-u/d half";
+					: "/ search · ? help";
 		const queryError = compileMenuRegex(
 			entry.kind === "effort" && this.#assigning === null
 				? this.#effortSearch.value
-				: rolesView ? this.#rolesSearch.value : this.#browser.query,
+				: rolesView
+					? this.#rolesSearch.value
+					: this.#browser.query,
 		)?.error;
 		const props: TspPickerProps = {
-			title: this.#sessionOnly ? "Session model" : "Models",
+			title: this.#sessionOnly ? "Session model" : this.#settings.editingScope ? `Models · ${this.#settings.editingScope}` : "Models",
 			subtitle: [
 				...(queryError ? [span(queryError, "error")] : []),
 				...(typeof subtitle === "string" ? [span(subtitle)] : (subtitle ?? [])),
@@ -5062,18 +5145,19 @@ export class ModelHubComponent implements Component {
 					order: indices.map(index => `effort:${index}`),
 					selected: this.#effortIndex < 0 ? null : `effort:${this.#effortIndex}`,
 					total: rules.length,
-					actions: this.#strip || this.#filterEditing
-						? props.actions
-						: compact([
-								this.#effortIndex >= 0
-									? pickerAction("effort:edit", "Edit / add", "enter", { primary: true })
-									: undefined,
-								this.#effortIndex >= 0 && this.#effortIndex < rules.length
-									? pickerAction("effort:remove", "Remove", "x")
-									: undefined,
-								this.#effortSearch.value ? pickerAction("clear", "Clear search") : undefined,
-								this.#pickerCancelAction(),
-							]),
+					actions:
+						this.#strip || this.#filterEditing
+							? props.actions
+							: compact([
+									this.#effortIndex >= 0
+										? pickerAction("effort:edit", "Edit / add", "enter", { primary: true })
+										: undefined,
+									this.#effortIndex >= 0 && this.#effortIndex < rules.length
+										? pickerAction("effort:remove", "Remove", "x")
+										: undefined,
+									this.#effortSearch.value ? pickerAction("clear", "Clear search") : undefined,
+									this.#pickerCancelAction(),
+								]),
 				},
 				[],
 			);
@@ -5153,6 +5237,7 @@ export class ModelHubComponent implements Component {
 	#pickerSubtitle(entry: SidebarEntry, rolesView: boolean): TspPickerProps["subtitle"] {
 		if (this.#assignmentPending) return "Applying model…";
 		if (this.#sessionOnly) return "Current session only";
+		if (rolesView && this.#settings.editingScope) return `Editing ${this.#settings.editingScope} · session > project > global`;
 		const assigning = this.#assigning;
 		if (assigning !== null) {
 			if (assigning.kind === "fallbackKey") return "New fallback chain — pick the model it protects";
@@ -5338,16 +5423,18 @@ export class ModelHubComponent implements Component {
 								{ primary: true },
 							)
 						: pickerAction(
-								strip.purpose === "description"
+								strip.purpose === "description" || strip.purpose === "roleBudget"
 									? "roleDescription"
 									: strip.purpose === "preset"
 										? "presetName"
 										: "roleName",
 								strip.purpose === "description"
 									? "Save description"
-									: strip.purpose === "preset"
-										? "Save preset"
-										: "Create role",
+									: strip.purpose === "roleBudget"
+										? "Save token budget"
+										: strip.purpose === "preset"
+											? "Save preset"
+											: "Create role",
 								"enter",
 								{ primary: true },
 							)
@@ -5412,6 +5499,7 @@ export class ModelHubComponent implements Component {
 						this.#callbacks.onRoleDescriptionChange
 							? roleAction("description", "Description", "shift+d")
 							: undefined,
+						this.#callbacks.onRoleTokenBudgetChange ? roleAction("budget", "Token budget", "b") : undefined,
 						roleAction("fallback", "Add fallback", "f"),
 						assigned && !assigned.autoSelected ? roleAction("clear", "Clear", "x") : undefined,
 						this.#roleThinkingTarget(row.role) ? roleAction("thinking", "Thinking", "t") : undefined,
@@ -5496,6 +5584,8 @@ export class ModelHubComponent implements Component {
 						strip.kind === "name"
 							? strip.purpose === "contextRule"
 								? `${strip.selector} limit `
+								: strip.purpose === "roleBudget"
+									? `${strip.role} token budget `
 								: strip.purpose === "description"
 									? `${strip.role} description `
 									: strip.purpose === "preset"
@@ -5617,9 +5707,11 @@ export class ModelHubComponent implements Component {
 					break;
 			}
 			const info = this.#settings.getRoleInfo(row.role);
-			const tag = info.tag ?? info.name ?? row.role;
+			const tag = (info.tag ?? info.name ?? row.role) + uiProvenanceSuffix("roles", row.role);
 			const assignment = this.#roles[row.role];
 			const facts: Record<string, string> = {};
+			const budget = this.#settings.getRoleTokenBudget?.(row.role);
+			if (budget !== undefined) facts.budget = String(budget);
 			if (assignment) {
 				const selector = `${assignment.model.provider}/${assignment.model.id}`;
 				facts.model = assignment.autoSelected ? `auto → ${selector}` : selector;
@@ -5635,7 +5727,7 @@ export class ModelHubComponent implements Component {
 			items.push({
 				id,
 				label: tag,
-				...(info.name && info.name !== tag ? { detail: info.name } : {}),
+				detail: [info.name && info.name !== (info.tag ?? info.name ?? row.role) ? info.name : "", this.#settings.getRoleScopeNote?.(row.role) ?? ""].filter(Boolean).join(" · "),
 				facts,
 				...(assignment && !assignment.autoSelected ? {} : { tone: "muted" as const }),
 				...(cycleIndex >= 0
@@ -5803,8 +5895,7 @@ export class ModelHubComponent implements Component {
 		if (this.#filterEditing) {
 			if (
 				event.kind === "activate" ||
-				(event.kind === "action" &&
-					["searchConfirm", "assign", "roles:pick", "effort:edit"].includes(event.act))
+				(event.kind === "action" && ["searchConfirm", "assign", "roles:pick", "effort:edit"].includes(event.act))
 			) {
 				this.#handleInput("\r");
 			}
@@ -5989,6 +6080,13 @@ export class ModelHubComponent implements Component {
 					],
 					"compactionPoint",
 				);
+			}
+			if (strip.purpose === "roleBudget") {
+				return row([
+					text([span(`${strip.role} token budget:`, "accent")]),
+					col([strip.input], { grow: 1 }),
+					text([span("Positive tokens; empty inherits", "dim")]),
+				]);
 			}
 			if (strip.purpose === "description") {
 				return row([text([span(`${strip.role} description:`, "accent")]), col([strip.input], { grow: 1 })]);

@@ -1,0 +1,57 @@
+{
+	"fork": {
+		"keybindings": [
+			"app.dictation.toggle",
+			"app.irc.viewer",
+			"app.live.destination.cycle",
+			"app.live.mute",
+			"app.message.chain",
+			"app.navigation.back",
+			"app.navigation.forward",
+			"app.repl.execute",
+			"app.repl.toggle",
+			"app.sidebar.scrollDown",
+			"app.sidebar.scrollUp",
+			"app.sidebar.toggle",
+			"tui.select.first",
+			"tui.select.halfPageDown",
+			"tui.select.halfPageUp",
+			"tui.select.last",
+			"tui.select.left",
+			"tui.select.nextContext",
+			"tui.select.prevContext",
+			"tui.select.right",
+			"tui.select.scrollDown",
+			"tui.select.scrollUp",
+			"tui.select.search",
+			"tui.select.toggle"
+		],
+		"statusSegments": ["context_bar", "live"],
+		"roles": [
+			"agent-author",
+			"chronicler",
+			"chronicler-recall",
+			"chronicler-summary",
+			"classifier",
+			"compaction",
+			"deck-inbox",
+			"effort",
+			"issues",
+			"prose",
+			"title"
+		],
+		"composerShapes": []
+	},
+	"newUpstream": {
+		"keybindings": [
+			"app.approval.approve",
+			"app.links.hint",
+			"app.local.open",
+			"app.session.pin",
+			"app.session.unpin"
+		],
+		"statusSegments": [],
+		"roles": ["widget"],
+		"composerShapes": []
+	}
+}

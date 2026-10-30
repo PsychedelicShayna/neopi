@@ -107,6 +107,24 @@ export const cfgModelRoleStorage = register({
 	},
 });
 
+export const cfgModelsDefaultScope = register({
+	id: "models.defaultScope",
+	type: "enum",
+	values: ["session", "project", "global"] as const,
+	default: "global",
+	ui: {
+		tab: "model",
+		group: "Prompt",
+		label: "Models default scope",
+		description: "Scope edited by /models without an explicit session, project, or global argument",
+		options: [
+			{ value: "session", label: "Session", description: "Only this conversation" },
+			{ value: "project", label: "Project", description: "This project's configuration" },
+			{ value: "global", label: "Global", description: "The active profile's defaults" },
+		],
+	},
+});
+
 export const cfgModelRoles = register({ id: "modelRoles", type: "record", default: EMPTY_STRING_RECORD });
 
 /** Named model presets; no settings-panel UI — managed by `/modelpreset` and the model hub. */

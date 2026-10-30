@@ -972,7 +972,15 @@ export class OAuthRefresher {
 				signal,
 				// `refreshStored` owns the caller budget and the exchange backstop.
 				refresh: (current, refreshSignal) =>
-					this.#requestOAuthCredentialRefresh(provider, current, credentialId, refreshSignal, reason, undefined),
+					this.#requestOAuthCredentialRefresh(
+						provider,
+						current,
+						credentialId,
+						refreshSignal,
+						reason,
+						undefined,
+						rejectedAccess,
+					),
 				isDefinitiveFailure: error => AIError.isDefinitiveOAuthFailure(String(error)),
 				disabledCause: error => `oauth refresh failed: ${String(error)}`,
 			});
@@ -1010,6 +1018,7 @@ export class OAuthRefresher {
 			signal,
 			reason,
 			DEFAULT_OAUTH_REFRESH_TIMEOUT_MS,
+			rejectedAccess,
 		);
 	}
 
@@ -1020,6 +1029,7 @@ export class OAuthRefresher {
 		signal: AbortSignal | undefined,
 		reason: OAuthRefreshReason | undefined,
 		timeoutMs: number | undefined,
+		rejectedAccess: string | undefined,
 	): Promise<OAuthCredentials> {
 		let refreshPromise: Promise<OAuthCredentials>;
 		// Caller override > store-level hook > local per-provider refresh.
@@ -1028,7 +1038,7 @@ export class OAuthRefresher {
 		const storeRefresh = this.#deps.store.refreshOAuthCredential?.bind(this.#deps.store);
 		const overrideRefresh = this.#deps.override ?? storeRefresh;
 		if (overrideRefresh && credentialId !== undefined) {
-			refreshPromise = overrideRefresh(provider, credentialId, credential, signal, reason);
+			refreshPromise = overrideRefresh(provider, credentialId, credential, signal, reason, rejectedAccess);
 		} else {
 			const customProvider = getOAuthProvider(provider);
 			if (customProvider) {

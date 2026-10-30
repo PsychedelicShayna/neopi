@@ -31,6 +31,7 @@ import { formatAbsoluteOnlyAmount } from "../prompt/usage-amounts";
 import { truncateMiddleToWidth } from "../render/render-utils";
 import { sanitizeDisplayLine } from "./extensions/display-text";
 import { MenuKeyReader } from "../components/menu-navigation";
+import { MenuHelp, menuHintLines } from "../components/menu-hints";
 import { OverlayPanel, PanelDivider, PanelRows } from "../chrome/overlay-box";
 import { editorKey } from "../chrome/keybinding-hints";
 import type { TspSpan, TspTableColumn, TspText, TspTone } from "@oh-my-pi/pi-wire";
@@ -696,6 +697,7 @@ export class UsageDashboardComponent implements Component {
 	readonly #header: PanelRows;
 	readonly #body: PanelRows;
 	readonly #footer: PanelRows;
+	readonly #help = new MenuHelp();
 	readonly #closeController = new AbortController();
 	#nativeCache: { revision: number; meter: boolean; chart: boolean; node: NativeNode } | undefined;
 
@@ -710,7 +712,6 @@ export class UsageDashboardComponent implements Component {
 		this.#header.setHeight(1);
 		this.#body = new PanelRows();
 		this.#footer = new PanelRows();
-		this.#footer.setHeight(1);
 		this.#panel.addChild(this.#header);
 		this.#panel.addChild(this.#body);
 		this.#panel.addChild(new PanelDivider());
@@ -1036,10 +1037,15 @@ export class UsageDashboardComponent implements Component {
 	render(width: number): readonly string[] {
 		const height = Math.max(14, process.stdout.rows || 40);
 		const innerWidth = Math.max(20, width - 4);
+		const refreshHint = this.#options.refresh ? "r refresh · " : "";
+		const footer = menuHintLines(
+			`Tab next view · Enter/d details · ${refreshHint}${editorKey("tui.select.cancel")}/q close · ? help`,
+			Math.max(1, width - 4),
+		);
 
 		const contentSource = this.#view === "detail" ? this.#detailLines(innerWidth) : this.#overviewLines(innerWidth);
 		// Fixed chrome: top border, blank, content…, divider, hint, bottom border.
-		const contentRows = Math.max(5, height - 5);
+		const contentRows = Math.max(5, height - 4 - footer.length);
 		this.#lastViewportRows = contentRows;
 		const maxScroll = Math.max(0, contentSource.length - contentRows);
 		this.#maxScroll = maxScroll;
@@ -1053,15 +1059,12 @@ export class UsageDashboardComponent implements Component {
 				: "";
 		const title = this.#view === "detail" ? "Usage · Details" : "Usage";
 
-		const scrollHint = maxScroll > 0 ? "j/k scroll · " : "";
-		const refreshHint = this.#options.refresh ? "r refresh · " : "";
-		const hint = `${scrollHint}h/l views · Tab next view · ${refreshHint}${editorKey("tui.select.cancel")} close`;
 		this.#panel.title = title;
 		this.#header.setLines([checkedText ? theme.fg("dim", checkedText) : ""]);
 		this.#body.setLines(contentSource.slice(this.#scroll, this.#scroll + contentRows));
 		this.#body.setHeight(contentRows);
-		this.#footer.setLines([theme.fg("dim", hint)]);
-		return this.#panel.render(width);
+		this.#footer.setLines(footer.map(line => theme.fg("dim", line)));
+		return this.#help.render(this.#panel.render(width), width);
 	}
 
 	// ---------------------------------------------------------------------------
@@ -1077,6 +1080,7 @@ export class UsageDashboardComponent implements Component {
 	 * terminals without them. Rebuilt only when its inputs change.
 	 */
 	describe(cx: DescribeContext): NativeNode {
+		if (this.#help.open) return this.#help.describe();
 		const meter = cx.supports("meter");
 		const chart = cx.supports("chart");
 		const cache = this.#nativeCache;
@@ -1099,6 +1103,11 @@ export class UsageDashboardComponent implements Component {
 
 	/** Views are contexts, not history visits; Refresh is always an explicit action. */
 	handleNativeEvent(event: NativeUiEvent): void {
+		if (this.#help.open) {
+			if (event.type === "action") this.#help.handleInput("\x1b");
+			this.#options.requestRender();
+			return;
+		}
 		if (event.type === "action") {
 			if (event.act === "refresh") void this.#refresh();
 			else if (event.act === "close") this.#close();
@@ -1801,6 +1810,10 @@ export class UsageDashboardComponent implements Component {
 	}
 
 	handleInput(data: string): void {
+		if (this.#help.handleInput(data)) {
+			this.#options.requestRender();
+			return;
+		}
 		if (
 			routeSgrMouseInput(data, event => {
 				if (event.wheel === null) return false;

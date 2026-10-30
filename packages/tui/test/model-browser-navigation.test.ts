@@ -1,7 +1,17 @@
-import { beforeAll, expect, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { buildBrowserItems, ModelBrowser, type ModelBrowserSource } from "../src/overlays/model-browser";
 import { initTheme } from "../src/theme";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "../src/components/menu-navigation";
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
+});
 
 const source: ModelBrowserSource = {
 	revision: 0,
@@ -54,7 +64,9 @@ test("model browser starts in navigation and slash alone focuses literal search"
 	menu.handleInput("/");
 	for (const key of "hjklg/G ") menu.handleInput(key);
 	expect(menu.value).toBe("hjklg/G ");
-	expect(menu.query).toBe("");
+	expect(menu.query).toBe("hjklg/G ");
+	menu.handleInput("\x1b");
+	expect(menu.filterFocused).toBe(true);
 	menu.handleInput("\x1b");
 	expect(menu.filterFocused).toBe(false);
 	expect(menu.value).toBe("");
@@ -105,6 +117,8 @@ test("focused model search retains editing keys and Esc does not close", () => {
 	menu.handleInput("\x1b");
 	expect(closed).toBe(0);
 	menu.handleInput("\x1b");
+	expect(closed).toBe(0);
+	menu.handleInput("\x1b");
 	expect(closed).toBe(1);
 });
 
@@ -123,7 +137,7 @@ test("model navigation restores query, caret, selection, focus and viewport", ()
 	expect(reopened.navigationSnapshot()).toEqual(saved);
 });
 
-test("model browser restores an unconfirmed draft without filtering or moving its selection", () => {
+test("model browser restores an unconfirmed live preview without activation", () => {
 	const menu = browser();
 	menu.setQuery("model-0");
 	menu.handleInput("j");
@@ -134,10 +148,10 @@ test("model browser restores an unconfirmed draft without filtering or moving it
 	const reopened = browser();
 	reopened.restoreNavigation(saved);
 	expect(reopened.navigationSnapshot()).toEqual(saved);
-	expect(reopened.query).toBe("model-0");
+	expect(reopened.query).toBe("model-09");
 	expect(reopened.value).toBe("model-09");
 	expect(reopened.getSelected()?.selector).toBe(saved.selected);
-	expect(reopened.pickerOrder({ providers: false, rest: null }).count).toBe(10);
+	expect(reopened.pickerOrder({ providers: false, rest: null }).count).toBe(1);
 	reopened.handleInput("\r");
 	expect(reopened.filterFocused).toBe(false);
 	expect(reopened.query).toBe("model-09");
@@ -155,10 +169,10 @@ test("focused model search owns arrows, Tab and control keys until Enter confirm
 	for (const key of ["\x1b[A", "\x1b[B", "\t", "\x04"]) menu.handleInput(key);
 	expect(menu.filterFocused).toBe(true);
 	expect(menu.value).toBe("model-09");
-	expect(menu.query).toBe("");
-	expect(menu.getSelected()?.id).toBe("model-00");
-	expect(menu.pickerOrder({ providers: false, rest: null }).count).toBe(30);
-	expect(queries).toEqual([]);
+	expect(menu.query).toBe("model-09");
+	expect(menu.getSelected()?.id).toBe("model-09");
+	expect(menu.pickerOrder({ providers: false, rest: null }).count).toBe(1);
+	expect(queries.at(-1)).toBe("model-09");
 	menu.handleInput("\x1b[D");
 	expect(menu.cursor).toBe(7);
 	menu.handleInput("\x1b[C");
@@ -167,17 +181,19 @@ test("focused model search owns arrows, Tab and control keys until Enter confirm
 	expect(menu.filterFocused).toBe(false);
 	expect(menu.query).toBe("model-09");
 	expect(menu.pickerOrder({ providers: false, rest: null }).order).toEqual(["test/model-09"]);
-	expect(queries).toEqual(["model-09"]);
+	expect(queries.at(-1)).toBe("model-09");
 	expect(picked).toEqual([]);
 	menu.handleInput("\r");
 	expect(picked).toEqual(["model-09"]);
 	menu.handleInput("/");
 	menu.handleInput("x");
 	menu.handleInput("\x1b");
+	expect(menu.filterFocused).toBe(true);
+	menu.handleInput("\x1b");
 	expect(menu.filterFocused).toBe(false);
-	expect(menu.value).toBe("");
-	expect(menu.query).toBe("");
-	expect(menu.pickerOrder({ providers: false, rest: null }).count).toBe(30);
+	expect(menu.value).toBe("model-09");
+	expect(menu.query).toBe("model-09");
+	expect(menu.pickerOrder({ providers: false, rest: null }).count).toBe(1);
 });
 
 test("Space activates a single model without creating preview state", () => {

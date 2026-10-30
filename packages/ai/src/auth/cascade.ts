@@ -376,6 +376,8 @@ export class KeyCascade implements KeysApi {
 			modelId?: string;
 			signal?: AbortSignal;
 			forceRefresh?: boolean;
+			refreshReason?: AuthApiKeyOptions["refreshReason"];
+			rejectedAccessToken?: string;
 		},
 	): Promise<string | undefined> {
 		if (options.signal?.aborted) return undefined;
@@ -421,6 +423,8 @@ export class KeyCascade implements KeysApi {
 			modelId: options.modelId,
 			signal: options.signal,
 			forceRefresh: options.forceRefresh,
+			refreshReason: options.refreshReason,
+			rejectedAccessToken: options.rejectedAccessToken,
 		});
 		if (!selected || selected.credentialId !== credentialId || options.signal?.aborted) return undefined;
 		await this.#deps.pool.adoptExternalChanges();

@@ -9,10 +9,17 @@
 
 ### Added
 
+- Changed: `chronicle_recall` searches the current session by default; pass `scope: "all"`, `sessions`, or `keywords` to widen. Added literal boolean transcript prefiltering (AND, OR, parentheses, quoted phrases; case-insensitive by default) before existing recall ranking, with matching session counts and equivalent CLI flags. The standalone CLI keeps its all-session default (implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).
+
+- Settings, slash-command suggestions, hotkey help, model roles and status-line widgets mark fork additions with a crescent and the latest upstream release's additions with a star, while retaining command type icons.
+- Edit role models and token budgets in `/models session`, `/models project`, or `/models global`; role rows explain higher-scope shadowing and `models.defaultScope` selects the scope opened by plain `/models`.
+- Edit global, project, or session settings with `/settings global|project|session`; Ctrl+S cycles scopes, F6 applies durable edits to other running sessions, and session overrides follow the saved session across directory changes.
+- Keep live settings synchronized after dropped notifications or a replaced settings directory, and explicitly refresh other updated sessions through the control socket. Already-running older builds must restart on an updated binary to receive these fixes or Apply notifications.
+
 - Choose advisor delivery timing independently for nits, concerns, and blockers in Settings → Model → Advisor; nits wait for the actual run end by default, while concerns and blockers arrive at safe tool boundaries without cancelling work.
 - Explicitly revive killed subagents from their saved transcripts in the Agent Hub; opening a transcript, focusing an agent, or sending ordinary IRC/chat no longer undoes a kill.
-- Connect to NeoProxy through `npi login neoproxy --url URL` or `/login` using only the server URL and an existing administrator-assigned API key in a masked prompt; keys stay in the normal credential store and granted models are discovered automatically ([#600](https://github.com/PsychedelicShayna/neopi/issues/600), implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).
-- Confirm NeoProxy server and private-CA fingerprints before entering a key; provider-local trust stays with the credential and is reused for verified discovery and inference without changing global certificate trust.
+- Connect to NeoProxy through `npi login neoproxy --url URL`, `/login`, or a fresh RPC client using only the server URL and an existing administrator-assigned API key in a masked prompt; keys stay in the normal credential store and granted models are discovered automatically ([#647](https://github.com/PsychedelicShayna/neopi/pull/647), implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).
+- Confirm NeoProxy server and private-CA fingerprints before entering a key; provider-local trust stays with the credential and is reused for verified discovery and inference without changing global certificate trust ([#647](https://github.com/PsychedelicShayna/neopi/pull/647), implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).
 
 - RPC clients can edit role fallbacks and descriptions, delete custom role definitions, and explicitly save project assignments without changing the global storage preference ([#595](https://github.com/PsychedelicShayna/neopi/issues/595)).
 - RPC clients can inspect native login-method and device-code metadata, read model descriptions, and activate a stored OAuth account for one session without exposing credentials ([#595](https://github.com/PsychedelicShayna/neopi/issues/595), implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).
@@ -122,6 +129,8 @@
 ### Fixed
 
 - Reconnecting an existing API key immediately adopts its newly confirmed CA and origin restrictions instead of retaining stale trust until restart.
+- Print mode exits non-zero with the HTTP status, source model, and attempt count after its configured retry budget, without hidden HTTP retries or renewed budgets on fallback ([#627](https://github.com/PsychedelicShayna/neopi/issues/627)).
+- Live effort alerts accept the operator catalog's relative 0–1 fractional ratings without disabling recommendation lookup.
 - Print-mode runs can read screenshots inside their workspace without getting stuck when speculative reads are enabled ([#606](https://github.com/PsychedelicShayna/neopi/issues/606)).
 - Ctrl+Space speech input keeps priority while picking link hints, including enhanced-terminal repeats and key releases.
 - Aborting or replacing a session during deferred extension startup now drops the waiting submission instead of sending it afterwards.
@@ -224,6 +233,7 @@
 
 ### Changed
 
+- Model Hub regression tests now cover the shipped compact navigation hints, separate assignment strips, and live search previews; runtime behavior is unchanged.
 - HTML exports include the shared transcript and trace views with the current Markdown parser, while remaining self-contained and usable offline.
 - The `tts` tool now tells agents it exports a file rather than speaking the reply; using it for a conversation already covered by `speech.enabled` wastes a second synthesis. Speech documentation distinguishes this path from `omp say` playback and session-local `/voice` ([#573](https://github.com/PsychedelicShayna/neopi/issues/573)).
 

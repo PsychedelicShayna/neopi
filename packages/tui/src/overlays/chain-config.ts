@@ -41,6 +41,7 @@ import { SplitPane } from "../components/layout/split-pane";
 import { Stack } from "../components/layout/stack";
 import type { ChainConfig, ChainConfigScope, ChainsConfigDoc, ChainStep } from "./chain-types";
 import { MenuKeyReader, isMenuHistoryParticipant, type MenuNavAction } from "../components/menu-navigation";
+import { MenuHelp, menuHintLines } from "../components/menu-hints";
 import type { SelectListNavigationState } from "../components/select-list";
 
 /** Host callbacks: all disk + live-runtime effects flow through these. */
@@ -170,6 +171,7 @@ export class ChainConfigOverlayComponent implements Component {
 	#previewMaxScroll = 0;
 	#previousNavigationSnapshot: ChainNavigationSnapshot | undefined;
 	readonly #keys = new MenuKeyReader();
+	readonly #help = new MenuHelp();
 	#chainIndex: number | undefined;
 	#stepIndex: number | undefined;
 	#thinking: ChainNavigationContext["thinking"];
@@ -216,7 +218,7 @@ export class ChainConfigOverlayComponent implements Component {
 			{ content: this.#frameTop, height: 1 },
 			{ content: this.#split, grow: 1 },
 			{ content: this.#frameDivider, height: 1 },
-			{ content: this.#frameFooter, height: 1 },
+			{ content: this.#frameFooter },
 			{ content: this.#frameBottom, height: 1 },
 		],
 	});
@@ -243,7 +245,13 @@ export class ChainConfigOverlayComponent implements Component {
 
 	render(width: number): readonly string[] {
 		const height = Math.max(14, process.stdout.rows || 40);
-		const bodyRows = Math.max(3, height - 4);
+		const editing = this.#active instanceof Input || this.#active instanceof HookEditorComponent;
+		const hints = menuHintLines(
+			`${this.#footerHint}${editing ? "" : " · / filter · ? help"}`,
+			Math.max(1, width - 4),
+			editing ? "" : undefined,
+		);
+		const bodyRows = Math.max(3, height - 3 - hints.length);
 		this.#bodyRowsLast = bodyRows;
 		const title = `Chain configuration · ${this.#scope}${this.#dirty ? "  ● unsaved" : ""}${this.#screen === "list" && this.#previewFocused ? " · Preview" : ""}`;
 		this.#split.setNarrowPane(this.#screen === "list" ? undefined : "left");
@@ -254,10 +262,10 @@ export class ChainConfigOverlayComponent implements Component {
 		const leftWidth = geometry.left?.width ?? 0;
 		this.#frameTop.setLines([isSplit ? topBorderSplit(width, title, leftWidth) : topBorder(width, title)]);
 		this.#frameDivider.setLines([isSplit ? dividerSplit(width, leftWidth) : divider(width)]);
-		this.#frameFooter.setLines([row(theme.fg("dim", this.#footerHint), width)]);
+		this.#frameFooter.setLines(hints.map(line => row(theme.fg("dim", line), width)));
 		this.#frameBottom.setLines([bottomBorder(width)]);
-		this.#frame.setHeight(bodyRows + 4);
-		return this.#frame.render(width);
+		this.#frame.setHeight(bodyRows + 3 + hints.length);
+		return this.#help.render(this.#frame.render(width), width);
 	}
 
 	// ───────────────────────────── input ─────────────────────────────
@@ -278,6 +286,11 @@ export class ChainConfigOverlayComponent implements Component {
 			const printable = active instanceof Input ? extractPrintableText(data) : undefined;
 			if (active instanceof Input && printable !== undefined) active.insertText(printable);
 			else active.handleInput?.(data);
+			return;
+		}
+		if (this.#help.handleInput(data)) {
+			this.#keys.reset();
+			this.#cb.requestRender();
 			return;
 		}
 		let cancelledDelete = false;
@@ -631,7 +644,7 @@ export class ChainConfigOverlayComponent implements Component {
 			list,
 			this.#pendingDeleteChain !== null
 				? "Delete again to confirm removal · any other key cancels"
-				: "j/k move · Enter/Space edit · Del×2 removes · Esc close",
+				: "Enter/Space edit · Del×2 removes · Esc close",
 			selectedValue,
 		);
 	}

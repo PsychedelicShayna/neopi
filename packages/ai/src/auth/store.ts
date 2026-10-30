@@ -187,8 +187,9 @@ export interface CredentialUpstream {
 	 * `signal` propagates the agent's cancel (ESC, request abort, …) all the
 	 * way to the broker fetch so a hung connection can't strand the caller
 	 * for `timeoutMs * (maxRetries + 1)`.
-	 * `reason` distinguishes provider-auth recovery from generic/MCP refreshes
-	 * that must always mint a new access token.
+	 * `reason` distinguishes provider-auth recovery and ordinary expiry from
+	 * generic/MCP force-refreshes that must always mint a new access token.
+	 * `rejectedAccess` names the rejected OAuth token, not a provider-wrapped API key.
 	 */
 	refreshOAuthCredential(
 		provider: Provider,
@@ -196,6 +197,7 @@ export interface CredentialUpstream {
 		credential: OAuthCredential,
 		signal?: AbortSignal,
 		reason?: OAuthRefreshReason,
+		rejectedAccess?: string,
 	): Promise<OAuthCredentials>;
 	/**
 	 * Optional async pre-read hook invoked after AuthStorage selects a stored

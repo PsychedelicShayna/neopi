@@ -131,7 +131,7 @@ async function createHarness(): Promise<ShutdownHarness> {
 		getAllToolNames: () => [],
 		validateRetryFallbackChains: () => {},
 		getLastAssistantMessage: () => undefined,
-		disableStopTimeTodoReminders: () => {},
+		prepareForPrintMode: () => {},
 		prepareForHeadlessAdvisorDrain: () => {},
 		waitForIdle: async () => {},
 		setTextOutputCommitted: () => {},

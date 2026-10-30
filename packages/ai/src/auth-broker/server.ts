@@ -48,11 +48,11 @@ import {
 	credentialBlockDeleteRequestSchema,
 	credentialBlockRequestSchema,
 	credentialDisableRequestSchema,
+	credentialRefreshRequestSchema,
 	credentialUploadRequestSchema,
 } from "./wire-schemas";
 
 const DEFAULT_EXTERNAL_CHANGE_POLL_MS = 250;
-const AUTH_RECOVERY_REFRESH_OPTIONS = { reuseRecentMint: true } as const;
 const TEXT_ENCODER = new TextEncoder();
 const SSE_KEEPALIVE = TEXT_ENCODER.encode(": keepalive\n\n");
 
@@ -935,13 +935,16 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
 				const refreshMatch = req.method === "POST" ? pathname.match(REFRESH_ROUTE) : null;
 				if (refreshMatch) {
 					const id = Number.parseInt(refreshMatch[1], 10);
-					const authRecovery = url.searchParams.get("reason") === "auth-recovery";
+					const reason = url.searchParams.get("reason");
+					const refreshReason = reason === "auth-recovery" || reason === "expiry" ? reason : undefined;
+					const parsed = await parseBody(req, credentialRefreshRequestSchema, { allowEmpty: true });
+					if (!parsed.ok) return parsed.response;
 					try {
-						const entry = await opts.storage.oauth.refresh(
-							id,
-							req.signal,
-							authRecovery ? AUTH_RECOVERY_REFRESH_OPTIONS : undefined,
-						);
+						const entry = await opts.storage.oauth.refresh(id, req.signal, {
+							reuseRecentMint: refreshReason !== undefined,
+							reason: refreshReason,
+							rejectedAccess: parsed.data.rejectedAccess,
+						});
 						const body: CredentialRefreshResponse = { entry };
 						logger.info("auth-broker credential refreshed", {
 							id,

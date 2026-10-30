@@ -841,7 +841,7 @@ export class CredentialSelector {
 						refreshTarget,
 						credentialId,
 						options?.signal,
-						force ? options?.refreshReason : undefined,
+						force ? options?.refreshReason : "expiry",
 						rejectedAccess,
 					);
 					const beforeRefresh = candidate.selection.credential;
@@ -1141,6 +1141,7 @@ export class CredentialSelector {
 					selection.credential,
 					credentialId,
 					options?.signal,
+					"expiry",
 				);
 				const apiKey = customProvider.getApiKey
 					? customProvider.getApiKey(refreshedCredentials)
@@ -1157,6 +1158,7 @@ export class CredentialSelector {
 					selection.credential,
 					credentialId,
 					options?.signal,
+					"expiry",
 				);
 				const oauthCreds: Record<string, OAuthCredentials> = {
 					[provider]: refreshedCredentials,
@@ -1258,6 +1260,27 @@ export class CredentialSelector {
 		options: AuthApiKeyOptions,
 	): Promise<OAuthResolutionResult | undefined> {
 		await this.#deps.pool.adoptExternalChanges();
+		if (options.forceRefresh) {
+			const target = this.#deps.pool.entries(provider).find(row => row.id === credentialId);
+			if (target?.credential.type !== "oauth") return undefined;
+			const refreshed = await this.#deps.refresher.refresh(
+				provider,
+				{ ...target.credential, expires: 0 },
+				credentialId,
+				options.signal,
+				options.refreshReason,
+				options.rejectedAccessToken,
+			);
+			if (
+				this.#deps.pool.replaceById(
+					provider,
+					credentialId,
+					mergeRefreshedCredential(target.credential, refreshed),
+				) < 0
+			) {
+				return undefined;
+			}
+		}
 		const index = this.#deps.pool
 			.entries(provider)
 			.findIndex(row => row.id === credentialId && row.credential.type === "oauth");

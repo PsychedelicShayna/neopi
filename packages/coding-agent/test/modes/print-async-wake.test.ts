@@ -62,7 +62,7 @@ function sessionWithJobs(
 			onPersistenceError: () => () => {},
 			onPersistenceNotice: () => () => {},
 		},
-		disableStopTimeTodoReminders: () => {},
+		prepareForPrintMode: () => {},
 		prepareForHeadlessAdvisorDrain: () => events.push("advisor-drain"),
 		waitForIdle,
 		setTextOutputCommitted: () => {},

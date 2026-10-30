@@ -4,6 +4,19 @@ This document describes how the coding-agent currently loads models, applies ove
 
 ## Editing models in the TUI
 
+Use `/models session`, `/models project`, or `/models global` to edit role
+assignments in that scope. Session values override project values, which override
+global defaults. Role rows show the scope being edited and identify a higher
+scope when it shadows the saved assignment. Plain `/models` uses
+`models.defaultScope` (Global by default); that preference itself follows the
+same scope precedence.
+
+In **Roles**, select a role and press `b` or choose **Token budget** to edit its
+absolute context budget. Enter a positive token count, or clear the field to
+inherit the ordinary context limit. These controls replace the per-role budget
+rows in Settings and keep the existing
+`roleSettings.<role>["compaction.thresholdTokens"]` keys and stored values.
+
 Open `/models` and choose **Model overrides**, beside Effort rules and Context
 rules. This lists every explicit override and custom model in the active models
 config, including entries that are not in the current catalog.

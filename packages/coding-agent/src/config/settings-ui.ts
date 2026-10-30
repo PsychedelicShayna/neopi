@@ -1,11 +1,10 @@
+import { entryProvenance } from "./entry-provenance";
 import { TERMINAL } from "@oh-my-pi/pi-tui";
 import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 import { SETTING_TABS, type SettingsDisplayEntry, type SettingsHost } from "@oh-my-pi/pi-tui/overlays/settings-defs";
-import { isSettingsInitialized, Settings, settings } from "./settings";
+import { isSettingsInitialized, Settings, settings, type SettingsScope } from "./settings";
 import { orderedSettings } from "./all-settings";
 import { type AnySetting, lookup } from "./registry";
-import { getKnownRoleIds } from "./model-roles";
-import { cfgRoleSettings } from "./role-settings";
 
 import { cfgPlanAutosave, cfgPlanEnabled } from "../plan-mode/settings";
 import {
@@ -19,8 +18,6 @@ import { cfgMemoryBackend } from "../memory-backend/settings";
 import { cfgTuiVimMode } from "../modes/settings";
 import { cfgAdvisorEnabled } from "../advisor/settings";
 import { cfgEffortPolicyMode } from "./effort-policy";
-import { cfgContextFilesExtra, cfgCompactionThresholdTokens } from "../session/context-settings";
-import { cfgToolsRestrictedFolders } from "../tools/settings";
 
 /** Condition over the global settings; hidden (false) until they are initialized. */
 function whenSettings(test: (settings: Settings) => boolean): () => boolean {
@@ -41,9 +38,6 @@ const CONDITIONS: Record<string, () => boolean> = {
 	usageAwareFallbackEnabled: whenSettings(s => cfgRetryUsageAwareFallback.get(s) === true),
 	planModeEnabled: whenSettings(s => cfgPlanEnabled.get(s)),
 	planAutosaveEnabled: whenSettings(s => cfgPlanEnabled.get(s) && cfgPlanAutosave.get(s)),
-	// These editors write the global layer; hide them so a project-supplied list is never promoted to global.
-	contextFilesExtraNotProject: whenSettings(s => cfgContextFilesExtra.provenance(s) !== "project"),
-	restrictedFoldersNotProject: whenSettings(s => cfgToolsRestrictedFolders.provenance(s) !== "project"),
 };
 
 /** Description suffix telling the panel user that an environment variable is in play. */
@@ -59,10 +53,8 @@ function envNote(setting: AnySetting): string {
  * edits the value of the settings layers, never an environment-supplied one (so an env credential
  * is never pre-filled or written to config); descriptions note an active environment variable.
  */
-export function createSettingsHost(scope: Settings = settings): SettingsHost {
-	// Global rows edit the ordinary layers, not whichever role happens to be active.
-	const globalView = scope.overlay();
-	globalView.setActiveRole(undefined);
+export function createSettingsHost(scope: Settings = settings, initialScope: SettingsScope = "global"): SettingsHost {
+	let editingScope = initialScope;
 	const entries: SettingsDisplayEntry[] = [];
 	for (const tab of SETTING_TABS) {
 		for (const setting of orderedSettings()) {
@@ -73,34 +65,12 @@ export function createSettingsHost(scope: Settings = settings): SettingsHost {
 				path: setting.id,
 				type: setting.type,
 				defaultValue: setting.default,
-				ui: note ? { ...ui, description: `${ui.description}${note}` } : ui,
+				ui: { ...ui, provenance: entryProvenance("settings", setting.id), description: `${ui.description}${note}` },
 				enumValues: setting.enumValues,
 				credential: setting.isCredential,
 				condition: ui.condition ? CONDITIONS[ui.condition] : undefined,
 			});
 		}
-	}
-	const rolePaths = new Map<string, string>();
-	for (const role of new Set([...getKnownRoleIds(scope), ...Object.keys(cfgRoleSettings.get(scope))])) {
-		const path = `roleSettings.${encodeURIComponent(role)}.compaction.thresholdTokens`;
-		rolePaths.set(path, role);
-		const ui = cfgCompactionThresholdTokens.ui!;
-		const options = Array.isArray(ui.options) ? ui.options : [];
-		entries.push({
-			path,
-			type: "number",
-			defaultValue: -1,
-			ui: {
-				...ui,
-				label: `${role} token budget`,
-				description: `Absolute context budget while role "${role}" is active. Clear to inherit the global token limit.`,
-				options: options.map(option =>
-					option.value === "default"
-						? { value: "default", label: "Inherit", description: "Use the global token limit" }
-						: option,
-				),
-			},
-		});
 	}
 	const resolve = (path: string): AnySetting => {
 		const setting = lookup(path);
@@ -109,25 +79,26 @@ export function createSettingsHost(scope: Settings = settings): SettingsHost {
 	};
 	return {
 		entries,
+		get scope() { return editingScope; },
+		cycleScope: () => {
+			const scopes: SettingsScope[] = ["global", "project", "session"];
+			editingScope = scopes[(scopes.indexOf(editingScope) + 1) % scopes.length];
+		},
 		get: path => {
-			const role = rolePaths.get(path);
-			return role === undefined
-				? lookup(path)?.layered(globalView)
-				: (scope.getRoleSetting(role, cfgCompactionThresholdTokens) ?? -1);
+			const setting = resolve(path);
+			return scope.readScopeValue(setting, editingScope) ?? setting.default;
 		},
-		set: (path, value) => {
-			const role = rolePaths.get(path);
-			if (role === undefined) resolve(path).set(scope, value);
-			else {
-				if (typeof value !== "number") throw new Error("Role token budget must be a number");
-				scope.setRoleSetting(role, cfgCompactionThresholdTokens, value === -1 ? undefined : value);
-			}
+		details: path => {
+			const setting = resolve(path);
+			const details = scope.getScopeDetails(setting, editingScope);
+			const format = (value: unknown) => setting.isCredential ? (value === undefined ? "inherit" : "[redacted]") : (JSON.stringify(value) ?? "inherit");
+			return {
+				shadowed: details.shadowed,
+				description: `${details.shadowed ? `󰈉 Shadowed by ${details.winner}: ${format(details.effective)}. ` : ""}Global: ${format(details.global)} · Project: ${format(details.project)} · Session: ${format(details.session)} · Effective: ${format(details.effective)} (${details.winner})`,
+			};
 		},
-		unset: path => {
-			const role = rolePaths.get(path);
-			if (role === undefined) resolve(path).unset(scope);
-			else scope.setRoleSetting(role, cfgCompactionThresholdTokens, undefined);
-		},
+		set: (path, value) => scope.writeScopeValue(resolve(path), value, editingScope),
+		unset: path => scope.writeScopeValue(resolve(path), undefined, editingScope),
 		normalizeProviderLimits: normalizeProviderMaxInFlightRequests,
 		validateProviderLimits: validateProviderMaxInFlightRequests,
 	};

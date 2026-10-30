@@ -43,6 +43,7 @@ import {
 	wrapTextWithAnsi,
 } from "@oh-my-pi/pi-tui";
 import type { TerminalAppearanceRequestToken } from "@oh-my-pi/pi-tui/terminal";
+import { setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { runWithoutDetachedDraft } from "@oh-my-pi/pi-tui/draft-scope";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
 import { col, compact, kbd, keyed, node, row, span, text } from "@oh-my-pi/pi-tui/native/describe";
@@ -88,7 +89,8 @@ import type { CollabHost } from "../collab/host";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { appKey, editorKey, rawKeyHint } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
 import { formatModelString, type ResolvedModelRoleValue } from "../config/model-resolver";
-import { isSettingsInitialized, Settings, settings } from "../config/settings";
+import { isSettingsInitialized, Settings, settings, type SettingsScope } from "../config/settings";
+import { settleSessionSettingsOnQuit } from "../config/session-settings-quit";
 import { clearClaudePluginRootsCache } from "../discovery/helpers";
 import type {
 	AutocompleteProviderFactory,
@@ -6543,6 +6545,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** Apply the `tui.vimMode` setting to an editor and route Visual-mode yanks to the clipboard. */
 	#applyVimMode(editor: CustomEditor): void {
 		editor.setVimMode(cfgTuiVimMode.get(settings));
+		setMenuSearchVimMode(cfgTuiVimMode.get(settings));
 		editor.onYank = text => {
 			void this.#copyYankToClipboard(text);
 		};
@@ -8244,6 +8247,18 @@ export class InteractiveMode implements InteractiveModeContext {
 			await this.#quitHostOwned(130);
 			return;
 		}
+		try {
+			const proceed = await settleSessionSettingsOnQuit(
+				this.settings,
+				choices => this.#extensionUiController.showCollabAwareSelector(
+					"Session settings changed — Esc keeps them in the session directory and quits", [...choices],
+				),
+				() => this.sessionManager.ensureOnDisk(),
+			);
+			if (!proceed) return;
+		} catch (error) {
+			this.showWarning(`Could not save session settings: ${error instanceof Error ? error.message : String(error)}`);
+		}
 		this.#beginClose();
 		const worktreePlan = await this.#planOwnedWorktreeExit();
 		try {
@@ -9617,8 +9632,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#selectorController.openMenu(kind, reopen);
 	}
 
-	showSettingsSelector(): void {
-		this.#selectorController.showSettingsSelector();
+	showSettingsSelector(scope?: SettingsScope): void {
+		this.#selectorController.showSettingsSelector(scope);
 	}
 
 	showUsageDashboard(reports: UsageReport[]): void {
@@ -9678,7 +9693,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		void this.#selectorController.showGitTui(revision);
 	}
 
-	showModelSelector(options?: { temporaryOnly?: boolean; sessionOnly?: boolean; selectOnly?: SelectOnlyModelSelectorOptions }): void {
+	showModelSelector(options?: {
+		temporaryOnly?: boolean;
+		sessionOnly?: boolean;
+		scope?: SettingsScope;
+		selectOnly?: SelectOnlyModelSelectorOptions;
+	}): void {
 		this.#selectorController.showModelSelector(options);
 	}
 

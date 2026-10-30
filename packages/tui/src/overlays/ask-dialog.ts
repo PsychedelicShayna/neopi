@@ -83,6 +83,7 @@ import { getMarkdownTheme, highlightCode, theme } from "../theme/theme";
 import { matchesAppToolsExpand, matchesSelectCancel } from "../keybinding-matchers";
 import { extractPrintableText } from "../keys";
 import { MenuKeyReader, menuScrollBy, type MenuNavAction } from "../components/menu-navigation";
+import { MenuHelp, menuHintLines } from "../components/menu-hints";
 import { optionMarker } from "../tools/ask";
 import { CountdownTimer } from "../chrome/countdown-timer";
 import { editorKey, editorKeys } from "../chrome/keybinding-hints";
@@ -607,6 +608,7 @@ export class AskDialogComponent implements Component {
 	#bodyRows = MIN_BODY_ROWS;
 	#questionCanPage = false;
 	#keys = new MenuKeyReader();
+	readonly #help = new MenuHelp();
 	#questionLayout: QuestionLayout | undefined;
 	#submitView: ScrollView | undefined;
 	#submitLayoutDirty = true;
@@ -693,7 +695,6 @@ export class AskDialogComponent implements Component {
 		this.#headerRegion = new PanelRows();
 		this.#bodyRegion = new PanelRows();
 		this.#footerRegion = new PanelRows();
-		this.#footerRegion.setHeight(1);
 		this.#panel.addChild(this.#headerRegion);
 		this.#panel.addChild(new PanelDivider());
 		this.#panel.addChild(this.#bodyRegion);
@@ -756,6 +757,11 @@ export class AskDialogComponent implements Component {
 		if (inputGuard && (this.#guardBlocks() || this.#hidden) && extractPrintableText(keyData) !== undefined) {
 			this.#keys.reset();
 			inputGuard.handleInput(keyData);
+			this.#requestRender();
+			return;
+		}
+		if (!this.#guardBlocks() && !this.#hidden && this.#help.handleInput(keyData)) {
+			this.#keys.reset();
 			this.#requestRender();
 			return;
 		}
@@ -837,7 +843,8 @@ export class AskDialogComponent implements Component {
 		// border (1) = N + 5 fixed rows outside the body. Without the bottom
 		// border term the dialog overflowed the viewport by one row
 		// (PRRT_kwDOQxs0bc6OFbDY).
-		const fixedRows = 1 + headerLines.length + 1 + 1 + 1 + 1;
+		const hintRows = menuHintLines(this.#footerHintText(""), innerWidth, this.#guardBlocks() ? "" : undefined).length;
+		const fixedRows = 1 + headerLines.length + 1 + 1 + hintRows + 1;
 		const bodyRows = Math.max(MIN_BODY_ROWS, totalRows - fixedRows);
 		this.#bodyRows = bodyRows;
 		const bodyLines = this.#isSubmitTab()
@@ -848,8 +855,10 @@ export class AskDialogComponent implements Component {
 		this.#headerRegion.setLines(headerLines);
 		this.#bodyRegion.setLines(bodyLines.lines);
 		this.#bodyRegion.setHeight(bodyRows);
-		this.#footerRegion.setLines([theme.fg("dim", footer)]);
-		return this.#panel.render(width);
+		this.#footerRegion.setLines(
+			menuHintLines(footer, innerWidth, this.#guardBlocks() ? "" : undefined).map(line => theme.fg("dim", line)),
+		);
+		return this.#help.render(this.#panel.render(width), width);
 	}
 
 	/**
@@ -865,6 +874,7 @@ export class AskDialogComponent implements Component {
 	 * countdown, Hide, then Note, Skip and the primary Submit/Next).
 	 */
 	describe(cx: DescribeContext): NativeNode {
+		if (this.#help.open) return this.#help.describe();
 		const contentWidth = Math.max(1, cx.cols - 4);
 		if (contentWidth !== this.#contentWidth) {
 			this.#contentWidth = contentWidth;
@@ -1445,12 +1455,12 @@ export class AskDialogComponent implements Component {
 		const hideKey = editorKey("app.ask.hide");
 		const cancel = `${editorKey("tui.select.cancel")} cancel${hideKey ? ` · ${hideKey} hide` : ""}`;
 		const enter = formatKeyHint("enter");
-		const upDown = `j/k, ${editorKeys("tui.select.up", "tui.select.down")}`;
+		const upDown = editorKeys("tui.select.up", "tui.select.down");
 		const inputGuard = this.options.inputGuard;
 		if (inputGuard && this.#guardBlocks()) return `${this.#guardHint(inputGuard)}${this.#expandHint()} · ${cancel}`;
 		if (this.#isSubmitTab()) {
 			const scroll = indicator ? ` ${indicator} scroll ·` : "";
-			return `${enter} submit · ${cancel} · ${upDown}, Ctrl+E/Y scroll ·${scroll} PgUp/Dn page · gg/G bounds`;
+			return `${enter} submit · ${cancel} · ${upDown} scroll ·${scroll} PgUp/Dn page · ? help`;
 		}
 		const question = this.#questions[this.#currentQuestionIndex()];
 		// Enter advances in multi-question dialogs and submits single-question ones.
@@ -1458,14 +1468,14 @@ export class AskDialogComponent implements Component {
 		const action = question?.multi
 			? `${formatKeyHint("space")} toggle · ${enter} ${enterAction}`
 			: `${enter} select · ${formatKeyHint("n")} note`;
-		const tabs = this.#hasSubmitTab() ? ` · h/l, ${formatKeyHints(["tab", "left", "right"])} question` : "";
+		const tabs = this.#hasSubmitTab() ? ` · ${formatKeyHints(["tab", "left", "right"])} question` : "";
 		const expand = this.#expandHint();
 		if (this.#questionCanPage && indicator) {
 			const pageKeys = editorKeys("tui.select.pageUp", "tui.select.pageDown");
-			return `${action} · ${upDown}${tabs} · ${cancel}${expand} · ${pageKeys} ${indicator} · Ctrl+E/Y scroll`;
+			return `${action} · ${upDown}${tabs} · ${cancel}${expand} · ${pageKeys} ${indicator} · ? help`;
 		}
 		const scroll = indicator ? ` ${indicator} scroll ·` : "";
-		return `${action} · ${upDown} move${tabs} ·${scroll} ${cancel}${expand}`;
+		return `${action} · ${upDown} move${tabs} ·${scroll} ${cancel}${expand} · ? help`;
 	}
 
 	#questionRows(question: ExtensionAskDialogQuestion): QuestionRow[] {

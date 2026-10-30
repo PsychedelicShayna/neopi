@@ -32,6 +32,7 @@ import {
 	menuScrollBy,
 } from "../components/menu-navigation";
 import { MenuSelection, getMenuWindow } from "../components/menu-selection";
+import { MenuHelp, MenuHints } from "../components/menu-hints";
 import type { KeyName } from "../key-hint-format";
 import { node, span } from "../native/describe";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
@@ -224,6 +225,7 @@ export class HookSelectorComponent extends OverlayPanel {
 	#menu: MenuSelection<FilteredOption>;
 	#search = new MenuSearchField();
 	#keys = new MenuKeyReader();
+	readonly #help = new MenuHelp();
 	#viewport = new MenuViewport();
 	#nativeScroll: NativeNode["scroll"];
 	#disabledIndices: Set<number>;
@@ -347,8 +349,8 @@ export class HookSelectorComponent extends OverlayPanel {
 		this.addChild(new Spacer(1));
 		const controlsHint =
 			opts?.helpText ??
-			`j/k, ${editorKeys("tui.select.up", "tui.select.down")} navigate · Ctrl+U/D half page · PgUp/Dn page · gg/G bounds · Ctrl+E/Y scroll · ${formatKeyHint("enter")} select · ${editorKey("tui.select.cancel")} cancel${this.#selectionMarker === "checkbox" ? " · Space toggle option" : ""}${this.#slider ? " · h/l, Tab tier" : this.#onLeftCallback || this.#onRightCallback ? " · h/l, Tab question" : ""}`;
-		this.addChild(new Text(theme.fg("dim", controlsHint), 0, 0));
+			`${editorKeys("tui.select.up", "tui.select.down")} navigate · PgUp/Dn page · ${formatKeyHint("enter")} select · ${editorKey("tui.select.cancel")} cancel${this.#selectionMarker === "checkbox" ? " · Space toggle option" : ""}${this.#slider ? " · Tab tier" : this.#onLeftCallback || this.#onRightCallback ? " · Tab question" : ""}${this.#isSearchEnabled() ? " · / search" : ""}`;
+		this.addChild(new MenuHints(`${controlsHint} · ? help`, text => theme.fg("dim", text)));
 		this.addChild(new Spacer(1));
 
 		this.#updateList();
@@ -645,6 +647,10 @@ export class HookSelectorComponent extends OverlayPanel {
 			else this.#updateList();
 			return;
 		}
+		if (this.#help.handleInput(rawData)) {
+			this.#keys.reset();
+			return;
+		}
 		if (!this.#search.focused && this.#handleQuickSelect(rawData)) {
 			this.#keys.reset();
 			return;
@@ -697,7 +703,7 @@ export class HookSelectorComponent extends OverlayPanel {
 			this.#lastRenderWidth = renderWidth;
 			this.#updateList(renderWidth);
 		}
-		return super.render(width);
+		return this.#help.render(super.render(width), width);
 	}
 
 	override dispose(): void {
@@ -732,7 +738,9 @@ export class HookSelectorComponent extends OverlayPanel {
 		const checkbox = this.#selectionMarker === "checkbox";
 		const result = dockedPicker({
 			title: fixed.title,
-			subtitle: compileMenuRegex(query)?.error ?? (this.#detailLines.length > 0 ? plainText(this.#detailLines.join("\n")) : undefined),
+			subtitle:
+				compileMenuRegex(query)?.error ??
+				(this.#detailLines.length > 0 ? plainText(this.#detailLines.join("\n")) : undefined),
 			noun: "options",
 			size: "md",
 			layout: "rows",
@@ -761,6 +769,7 @@ export class HookSelectorComponent extends OverlayPanel {
 	 * and the key hints.
 	 */
 	override describe(cx: DescribeContext): NativeNode {
+		if (this.#help.open) return this.#help.describe();
 		const renderWidth = Math.max(1, cx.cols - 4);
 		if (renderWidth !== this.#lastRenderWidth) {
 			this.#lastRenderWidth = renderWidth;

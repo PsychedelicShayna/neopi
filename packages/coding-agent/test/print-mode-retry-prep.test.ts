@@ -61,7 +61,7 @@ function createMockSession(): { session: AgentSession; spies: RetryPrepSpies } {
 		retry: spies.retry,
 		refreshMCPTools: spies.refreshMCPTools,
 		waitForIdle: spies.waitForIdle,
-		disableStopTimeTodoReminders: () => {},
+		prepareForPrintMode: () => {},
 		prepareForHeadlessAdvisorDrain: () => {},
 		setTextOutputCommitted: () => {},
 		waitForAdvisorCatchup: async () => true,

@@ -11,6 +11,7 @@ import {
 import { initTheme } from "../src/theme";
 import { getComposerStyle, getKeybindings, setKeybindings, visibleWidth } from "../src/index";
 import { getComposerShapeOptions, installExtensionComposerShape } from "../src/overlays/composer-shape-registry";
+import { theme } from "../src/theme/theme";
 
 beforeAll(async () => {
 	await initTheme();
@@ -90,6 +91,11 @@ function setup(overrides: Partial<StatusLineConfigCallbacks> = {}, active: Statu
 		text: () => Bun.stripANSI(overlay.render(160).join("\n")),
 	};
 }
+
+it("status widget catalog marks fork segments without changing their identifiers", () => {
+	const { text } = setup();
+	expect(text()).toContain(`Context bar ${theme.symbol("provenance.fork")}`);
+});
 
 describe("status-line editor list", () => {
 	it("toggles widgets in place: the row and the selection stay put", async () => {

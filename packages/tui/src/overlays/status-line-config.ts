@@ -1,9 +1,11 @@
+import { uiProvenanceSuffix } from "../theme/provenance";
 import type { UsageReport } from "@oh-my-pi/pi-ai/usage";
 import { bottomBorder, dividerSplit, PanelRows, row, topBorderSplit } from "../chrome/overlay-box";
 import { sanitizeStatusText } from "../chrome/shared";
 import { Input } from "../components/input";
 import { compileMenuRegex } from "../menu-search";
 import { MenuKeyReader, MenuSearchField, MenuViewport } from "../components/menu-navigation";
+import { MenuHelp, menuHintLines } from "../components/menu-hints";
 import type { MenuWindow } from "../components/menu-selection";
 import { SplitPane } from "../components/layout/split-pane";
 import { Stack } from "../components/layout/stack";
@@ -119,7 +121,7 @@ const SEGMENT_DESCRIPTIONS: Record<BuiltinStatusLineSegmentId, string> = {
 	vim: "Vim editing mode and pending keys.",
 };
 const LIST_HINTS =
-	"j/k select · h/l move · Space toggle · </> composer · Tab template · / search · s apply · R reset · Esc close";
+	"←/→ move · Space toggle · </> composer · Tab template · / search · s apply · R reset · Esc close · ? help";
 const TEMPLATE_HINTS = "Type the template · Enter/Tab/Esc back to the list";
 const SEARCH_HINTS = "Type to filter · Enter apply · Esc clear and return to the list";
 const PROMPT_HINTS = "Apply pending changes?  y apply · n keep draft, close · Esc/c stay";
@@ -313,6 +315,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 	readonly #titleRow = new PanelRows();
 	readonly #divider = new PanelRows();
 	readonly #footer = new PanelRows();
+	readonly #help = new MenuHelp(undefined, "h/l move the selected widget within the layout.");
 	readonly #bottom = new PanelRows();
 	readonly #split = new SplitPane({
 		left: (width, height) => this.#renderList(width, height ?? this.#bodyRows),
@@ -327,7 +330,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 			{ content: this.#titleRow, height: 1 },
 			{ content: this.#split, grow: 1 },
 			{ content: this.#divider, height: 1 },
-			{ content: this.#footer, height: 1 },
+			{ content: this.#footer },
 			{ content: this.#bottom, height: 1 },
 		],
 	});
@@ -746,6 +749,10 @@ export class StatusLineConfigOverlayComponent implements Component {
 			this.#handleSearchInput(data);
 			return;
 		}
+		if (this.#help.handleInput(data)) {
+			this.#cb.requestRender();
+			return;
+		}
 		const action = this.#reader.read(data);
 		if (action === "pending") return;
 		switch (action?.kind) {
@@ -907,7 +914,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 				const { id, enabled } = line.row;
 				const templated = this.#templates[id] !== undefined ? " ✎" : "";
 				return style(
-					`[${enabled ? "x" : " "}] ${segmentLabel(id)} · ${sanitizeStatusText(id)}${templated}`,
+					`[${enabled ? "x" : " "}] ${segmentLabel(id)}${uiProvenanceSuffix("statusSegments", parseUsageBarSegmentId(id) ? "usage" : id)} · ${sanitizeStatusText(id)}${templated}`,
 					!enabled,
 				);
 			}
@@ -998,9 +1005,16 @@ export class StatusLineConfigOverlayComponent implements Component {
 			: this.#prompt
 				? theme.fg("warning", this.#hints())
 				: theme.fg("dim", this.#hints());
-		this.#footer.setLines([row(footer, width)]);
+		const footerLines = menuHintLines(
+			footer,
+			Math.max(1, width - 4),
+			this.#focus === "list" && !this.#prompt ? undefined : "",
+		);
+		this.#footer.setLines(footerLines.map(line => row(line, width)));
+		this.#bodyRows = Math.max(3, (process.stdout.rows || 40) - 3 - footerLines.length);
+		this.#split.setHeight(this.#bodyRows);
 		this.#bottom.setLines([bottomBorder(width)]);
-		this.#frame.setHeight(this.#bodyRows + 4);
-		return this.#frame.render(width);
+		this.#frame.setHeight(this.#bodyRows + 3 + footerLines.length);
+		return this.#help.render(this.#frame.render(width), width);
 	}
 }

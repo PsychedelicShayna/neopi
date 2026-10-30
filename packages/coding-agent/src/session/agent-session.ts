@@ -7594,9 +7594,13 @@ export class AgentSession implements SettingsScope {
 			}
 		}
 	}
-	/** Stop todo reminders from starting extra turns in a single-shot print run. */
-	disableStopTimeTodoReminders(): void {
+	/** Prepare a single-shot run: no reminder turns or nested HTTP retry budgets. */
+	prepareForPrintMode(): void {
 		this.#stopTimeTodoRemindersEnabled = false;
+		this.#recovery.boundRetriesForPrintMode();
+		const streamFn = this.agent.streamFn;
+		this.agent.streamFn = (model, context, options) =>
+			streamFn(model, context, { ...options, maxHttpAttempts: 1 });
 	}
 
 	/**
@@ -12476,6 +12480,7 @@ export class AgentSession implements SettingsScope {
 					...options,
 					additionalDirectories: cfgWorkspaceAdditionalDirectories.get(this.settings),
 				});
+				await this.settings.attachSessionFile(this.sessionManager.getSessionFile());
 				this.#bash.markSessionTransition(bashTransition);
 				// The new session owns the transcript from here, so the previous
 				// conversation's advisor spend is retired with it. Clearing at the commit
@@ -12623,6 +12628,7 @@ export class AgentSession implements SettingsScope {
 		}
 
 		await this.flushToDisk();
+		await this.settings.saveSessionSettings();
 		// Work admitted during the hook or flush awaits would be copied mid-flight.
 		if (requireIdleFor) this.#assertIdleForSnapshot(requireIdleFor);
 		let advisorRecordersDetached = false;
@@ -12649,6 +12655,7 @@ export class AgentSession implements SettingsScope {
 				this.#bash.finishSessionTransition(bashTransition, false);
 				return false;
 			}
+			await this.settings.attachSessionFile(this.sessionManager.getSessionFile());
 			this.#bash.markSessionTransition(bashTransition);
 			this.#bash.finishSessionTransition(bashTransition, true);
 			// The fork clones the transcript and keeps this recovery state running
@@ -14419,6 +14426,7 @@ export class AgentSession implements SettingsScope {
 			// switch rolled back via restoreState); re-read it on the next model call either way.
 			this.#sessionInit = undefined;
 			await this.sessionManager.setSessionFile(sessionPath);
+			await this.settings.attachSessionFile(this.sessionManager.getSessionFile());
 			this.#bash.markSessionTransition(bashTransition);
 			const newCwd = this.sessionManager.getCwd();
 			const recordedCwd = this.sessionManager.getRecordedCwd() ?? previousSessionState.cwd;
@@ -14649,6 +14657,7 @@ export class AgentSession implements SettingsScope {
 			}
 		} catch (error) {
 			this.sessionManager.restoreState(previousSessionState);
+			await this.settings.attachSessionFile(this.sessionManager.getSessionFile());
 			this.settings.setActiveRole(previousActiveRole);
 			this.#freshProviderSessionId = previousFreshProviderSessionId;
 			this.#syncAgentSessionId(previousSessionState.sessionId, false);
