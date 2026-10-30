@@ -232,9 +232,7 @@ export class AgentsHubComponent implements Component {
 	#renderBodyPane = (width: number, height: number | undefined): readonly string[] => {
 		const rows = Math.max(1, Math.floor(height ?? 10));
 		const lines: string[] = [this.#statusRow(width)];
-		if (this.#createActive) {
-			lines.push(...this.#renderCreate(width, rows - 1));
-		} else if (this.#assigning) {
+		if (this.#assigning) {
 			this.#browser.setMaxVisible(rows - 1 - 5);
 			this.#browser.setFocused(true);
 			lines.push(...this.#browser.render(width));
@@ -1524,9 +1522,7 @@ export class AgentsHubComponent implements Component {
 		const children: NativeChild[] = [
 			node("text", { spans: this.#statusSpans(), truncate: "end" }, undefined, "status"),
 		];
-		if (this.#createActive) {
-			children.push(...this.#describeCreate());
-		} else if (this.#assigning) {
+		if (this.#assigning) {
 			this.#browser.setFocused(true);
 			children.push(this.#browser);
 		} else {
