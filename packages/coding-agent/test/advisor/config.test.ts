@@ -53,7 +53,7 @@ describe("discoverAdvisorConfigs", () => {
 		expect([...result.sources]).toEqual([
 			["user", { path: userFile, scope: "user" }],
 			["shared", { path: leafFile, scope: "project" }],
-			["native", { path: nativeFile, scope: "project" }],
+			["native", { path: nativeFile, scope: "project-omp" }],
 			["ancestor", { path: rootFile, scope: "project" }],
 		]);
 	});

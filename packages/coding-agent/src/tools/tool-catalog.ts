@@ -1,6 +1,8 @@
 import { normalizeTools } from "@oh-my-pi/pi-agent-core";
 import { toolWireSchema } from "@oh-my-pi/pi-ai";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
+import { getPromptAsset } from "../prompts/catalog";
+import { BUILTIN_TOOL_NAMES, HIDDEN_TOOL_NAMES } from "./builtin-names";
 import { editDistance } from "../utils/edit-distance";
 import type { Tool, ToolSession } from "./index";
 import { cfgToolsIntentTracing } from "./settings";
@@ -10,6 +12,19 @@ export type ToolCatalogSession = Pick<
 	ToolSession,
 	"toolRegistry" | "xdev" | "getEnabledToolNames" | "isToolActive" | "settings"
 >;
+
+/** Definition authoring includes dormant built-ins without constructing gated tool instances. */
+export function listAgentDefinitionTools(
+	registry: readonly (Pick<Tool, "name" | "description"> & Partial<Pick<Tool, "summary" | "label">>)[],
+): { name: string; description: string }[] {
+	const entries = new Map(registry.map(tool => [tool.name, { name: tool.name, description: toolSummary(tool) }]));
+	for (const name of [...BUILTIN_TOOL_NAMES, ...HIDDEN_TOOL_NAMES]) {
+		if (entries.has(name)) continue;
+		const asset = getPromptAsset(`tools/${name.replaceAll("_", "-")}.md`);
+		entries.set(name, { name, description: asset ? toolSummary({ name, description: asset.bundled }) : name });
+	}
+	return [...entries.values()];
+}
 
 /** Shared catalog for URL and command consumers. Never instantiates or executes tools. */
 export function listEnabledTools(session: ToolCatalogSession): Tool[] {
