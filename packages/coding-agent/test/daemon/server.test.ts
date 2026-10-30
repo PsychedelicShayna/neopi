@@ -123,6 +123,7 @@ describe("SessionDaemon", () => {
 		// Second turn, prompted by A; C attaches after the first word.
 		await a.request({ type: "prompt", message: "again" });
 		await until(() => deltas(aFrames).length === 4);
+		const aBeforeC = aFrames.length;
 		const c = await connect(d);
 		const cFrames = collect(c);
 		await c.attach(id);
@@ -130,8 +131,9 @@ describe("SessionDaemon", () => {
 		const snapshot = cFrames.find(f => f.type === "message_start" && f.snapshot === true) as { message: { text: string } };
 		// Snapshot text + live tail reassemble the reply exactly once.
 		expect(snapshot.message.text + deltas(cFrames).join("")).toBe("alpha beta gamma");
-		// A saw no snapshot frames from C's attach.
-		expect(aFrames.some(f => f.snapshot === true || f.reason === "snapshot")).toBe(false);
+		// A saw no snapshot frames from C's attach (its own attach snapshot came earlier).
+		expect(aFrames.slice(aBeforeC).some(f => f.snapshot === true || f.reason === "snapshot")).toBe(false);
+		expect(deltas(aFrames)).toEqual(["alpha ", "beta ", "gamma", "alpha ", "beta ", "gamma"]);
 	});
 
 	it("keeps the session running with no viewers; reattaching shows the completed reply", async () => {
