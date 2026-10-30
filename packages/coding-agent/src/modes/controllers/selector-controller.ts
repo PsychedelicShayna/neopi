@@ -1565,12 +1565,12 @@ export class SelectorController {
 		const taskOverride = cfgTaskAgentModelOverrides.get(this.ctx.settings).task;
 		const taskSelector = (Array.isArray(taskOverride) ? taskOverride[0] : taskOverride) ?? currentSelector;
 		let closed = false;
-		let closeTracked: (() => void) | undefined;
+		const tracked: { close?: () => void } = {};
 		const menu = this.#claimMenu(menuKind, () => this.#showModelPicker({ selectOnly }));
 		const done = () => {
 			if (closed || this.#openMenus.get(menuKind) !== menu) return;
 			closed = true;
-			closeTracked?.();
+			tracked.close?.();
 			menu.handle?.hide();
 			this.#releaseMenu(menuKind, menu);
 			this.focusActiveEditorArea();
@@ -1660,7 +1660,7 @@ export class SelectorController {
 			title: "Model",
 			cancel: done,
 		});
-		closeTracked = closePicker;
+		tracked.close = closePicker;
 		this.ctx.ui.requestRender();
 	}
 
