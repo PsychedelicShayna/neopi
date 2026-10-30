@@ -510,12 +510,15 @@ describe("settings as a native prefs page", () => {
 
 	it("reserves Ctrl+A for search text and F6 for Apply outside input", () => {
 		const scopes: string[] = [];
-		const { selector } = harness({}, {
-			onApply: async scope => {
-				scopes.push(scope);
-				return "Applied";
+		const { selector } = harness(
+			{},
+			{
+				onApply: async scope => {
+					scopes.push(scope);
+					return "Applied";
+				},
 			},
-		});
+		);
 		for (const key of ["/", "theme", "\x01", "x", "\x1b[17~"]) selector.handleInput(key);
 		expect(prefs(selector).props).toMatchObject({ query: "xtheme", cursor: 1 });
 		expect(scopes).toEqual([]);
@@ -526,13 +529,16 @@ describe("settings as a native prefs page", () => {
 
 	it("keeps plugin search text and Apply separate", async () => {
 		const scopes: string[] = [];
-		const h = harness({}, {
-			plugins: pluginHost([PLUGIN]),
-			onApply: async scope => {
-				scopes.push(scope);
-				return "Applied";
+		const h = harness(
+			{},
+			{
+				plugins: pluginHost([PLUGIN]),
+				onApply: async scope => {
+					scopes.push(scope);
+					return "Applied";
+				},
 			},
-		});
+		);
 		send(h.selector, { type: "action", key: "", act: "page", value: "plugins", mods: [] });
 		await h.whenRendered(props => props.sections.some(section => section.id === "installed"));
 		for (const key of ["/", "hj", "\x01", "x", "\x1b[17~"]) h.selector.handleInput(key);
@@ -592,7 +598,9 @@ describe("settings as a native prefs page", () => {
 		for (const key of "/^dark/") selector.handleInput(key);
 		expect(prefs(selector).props.sections.flatMap(section => section.rows).length).toBeGreaterThan(1);
 		selector.handleInput(ENTER);
-		expect(prefs(selector).props.sections.flatMap(section => section.rows.map(row => row.id))).toEqual(["theme.dark"]);
+		expect(prefs(selector).props.sections.flatMap(section => section.rows.map(row => row.id))).toEqual([
+			"theme.dark",
+		]);
 		selector.handleInput("\x1b");
 		expect(prefs(selector).props.query).toBeUndefined();
 		expect(row(prefs(selector).props, "display.colorBlind")).toBeDefined();
@@ -667,11 +675,14 @@ describe("settings as a native prefs page", () => {
 
 	it("restores headings live when a search draft is deleted, and Escape leaves only the composer", () => {
 		let closed = 0;
-		const { selector, changes } = harness({}, {
-			onCancel: () => {
-				closed++;
+		const { selector, changes } = harness(
+			{},
+			{
+				onCancel: () => {
+					closed++;
+				},
 			},
-		});
+		);
 		const before = prefs(selector).props;
 		const beforeRows = selector.render(180).map(line => Bun.stripANSI(line));
 		for (const key of ["/", "color", ENTER, "/", "\x01", "\x0b"]) selector.handleInput(key);
