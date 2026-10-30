@@ -55,6 +55,49 @@ function assistant(content: AssistantMessage["content"], stopReason: AssistantMe
 }
 
 describe("enabled speculative local reads", () => {
+	it("falls back to an ordinary screenshot read when evidence capture vetoes a claimed candidate", async () => {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "speculative-image-"));
+		temporaryDirectories.push(directory);
+		const imagePath = path.join(directory, "screenshot.png");
+		await Bun.write(
+			imagePath,
+			Buffer.from(
+				"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+				"base64",
+			),
+		);
+		const session = createSession(directory);
+		const tool = new ReadTool(session);
+		const host = new CodingAgentSpeculativeExecutionHost(session.settings, session, { hasHandlers: () => false });
+		const model = createMockModel({
+			responses: [
+				{ content: [{ type: "toolCall", name: "read", arguments: { path: imagePath } }] },
+				{ content: ["IMAGE_READ_OK"] },
+			],
+		});
+		const messages = await agentLoop(
+			[{ role: "user", content: "Read the screenshot", timestamp: Date.now() }],
+			{ systemPrompt: [""], messages: [], tools: [tool] },
+			{
+				model: model.model,
+				convertToLlm: identityConverter,
+				beforeToolCall: () => undefined,
+				speculativeToolExecution: { enabled: true, host },
+			},
+			undefined,
+			model.stream,
+		).result();
+
+		const results = messages.filter(message => message.role === "toolResult");
+		expect(results).toHaveLength(1);
+		expect(results[0]?.content).toContainEqual({
+			type: "image",
+			data: (await Bun.file(imagePath).bytes()).toBase64(),
+			mimeType: "image/png",
+		});
+		expect(messages.at(-1)?.content).toEqual([{ type: "text", text: "IMAGE_READ_OK" }]);
+	});
+
 	it("starts the physical read before provider completion and commits one normal result", async () => {
 		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "speculative-read-"));
 		temporaryDirectories.push(directory);
