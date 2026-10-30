@@ -30,7 +30,7 @@ test("every Apply reaches all receivers repeatedly, project targets are isolated
 	dir = await fs.mkdtemp(path.join(os.tmpdir(), "settings-reload-"));
 	const registry = path.join(dir, "ctl");
 	const profile = path.join(dir, "profile");
-	const projects = [path.join(dir, "a"), path.join(dir, "a"), path.join(dir, "b")];
+	const projects = [path.join(dir, "a"), path.join(dir, "a"), path.join(dir, "b"), path.join(dir, "a", "sub")];
 	await fs.mkdir(registry, { mode: 0o700 });
 	await Bun.write(path.join(profile, "config.yml"), "theme:\n  dark: titanium\n");
 	previousControlDir = process.env.PI_CONTROL_DIR;
@@ -49,7 +49,7 @@ test("every Apply reaches all receivers repeatedly, project targets are isolated
 	}
 	const deadline = Date.now() + 15000;
 	let entries = await readControlEntries();
-	while (entries.length !== 3) {
+	while (entries.length !== projects.length) {
 		for (const child of children)
 			if (child.exitCode !== null) throw new Error(await new Response(child.stderr).text());
 		if (Date.now() > deadline) throw new Error("Receivers did not publish");
@@ -68,8 +68,8 @@ test("every Apply reaches all receivers repeatedly, project targets are isolated
 	for (const theme of ["anthracite", "dark", "titanium"]) {
 		await Bun.write(path.join(profile, "config.yml.next"), `theme:\n  dark: ${theme}\n`);
 		await fs.rename(path.join(profile, "config.yml.next"), path.join(profile, "config.yml"));
-		expect(await broadcastSettingsReload("global")).toEqual({ notified: 3, failed: 0, unsupported: 0 });
-		expect(await values()).toEqual(Array.from({ length: 3 }, () => ({ path: "theme.dark", value: theme })));
+		expect(await broadcastSettingsReload("global")).toEqual({ notified: 4, failed: 0, unsupported: 0 });
+		expect(await values()).toEqual(Array.from({ length: 4 }, () => ({ path: "theme.dark", value: theme })));
 	}
 	await Bun.write(path.join(projects[0], ".omp/config.yml"), "theme:\n  dark: anthracite\n");
 	const alias = path.join(dir, "alias-a");
@@ -78,12 +78,17 @@ test("every Apply reaches all receivers repeatedly, project targets are isolated
 	for (const [i, value] of (await values()).entries())
 		expect(value).toEqual({
 			path: "theme.dark",
-			value: entries[i].meta.cwd === projects[0] ? "anthracite" : "titanium",
+			// Receiver identity is independent of logical vs physical cwd spelling.
+			value: children.slice(0, 2).some(child => child.pid === entries[i].meta.pid) ? "anthracite" : "titanium",
 		});
 	expect(await broadcastSettingsReload("session")).toEqual({ notified: 0, failed: 0, unsupported: 0 });
-	const mismatched = clients.find((_client, i) => entries[i].meta.cwd === projects[2])!;
+	const mismatched = clients.find((_client, i) => entries[i].meta.pid === children[2].pid)!;
 	expect(
 		(await mismatched.request({ type: "reload_settings", scope: "project", projectDir: projects[0] })).data,
+	).toEqual({ applied: false });
+	const subfolder = clients.find((_client, i) => entries[i].meta.pid === children[3].pid)!;
+	expect(
+		(await subfolder.request({ type: "reload_settings", scope: "project", projectDir: projects[0] })).data,
 	).toEqual({ applied: false });
 	const unsupported = vi.spyOn(ControlClient.prototype, "request").mockResolvedValue({
 		type: "response",
@@ -91,7 +96,7 @@ test("every Apply reaches all receivers repeatedly, project targets are isolated
 		success: false,
 		error: "Unknown command: reload_settings",
 	});
-	expect(await broadcastSettingsReload("global")).toEqual({ notified: 0, failed: 0, unsupported: 3 });
+	expect(await broadcastSettingsReload("global")).toEqual({ notified: 0, failed: 0, unsupported: 4 });
 	unsupported.mockRestore();
 	const sockets: net.Socket[] = [];
 	stalled = await publishControlEndpoint({
@@ -116,7 +121,7 @@ test("every Apply reaches all receivers repeatedly, project targets are isolated
 	const metadata = stalled.metadata();
 	await Bun.write(stalled.metadataPath, JSON.stringify({ ...metadata, pid: process.ppid, procStartTicks: null }));
 	const started = Date.now();
-	expect(await broadcastSettingsReload("global")).toEqual({ notified: 3, failed: 1, unsupported: 0 });
+	expect(await broadcastSettingsReload("global")).toEqual({ notified: 4, failed: 1, unsupported: 0 });
 	expect(Date.now() - started).toBeLessThan(3000);
 	for (const socket of sockets) socket.destroy();
 }, 30000);
