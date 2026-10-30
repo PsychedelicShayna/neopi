@@ -4,6 +4,7 @@
  * Detaching from a session returns to the hub; quitting the hub leaves every
  * hosted session running.
  */
+import { ensureTheme } from "@oh-my-pi/pi-tui/theme";
 import { runAttachView } from "./attach-view";
 import { ensureSessionDaemon, type SessionDaemonClient } from "./client";
 import type { HostedSessionInfo } from "./server";
@@ -37,6 +38,8 @@ async function attachLoop(
 
 /** `npi hub`: list hosted sessions and attach. */
 export async function runHubCommand(cwd: string = process.cwd()): Promise<void> {
+	// `npi hub` is a subcommand: it can run before main() has initialised a theme.
+	await ensureTheme();
 	const client = await ensureSessionDaemon();
 	try {
 		await attachLoop(client, undefined, cwd);
@@ -47,6 +50,7 @@ export async function runHubCommand(cwd: string = process.cwd()): Promise<void> 
 
 /** `npi new [-- launch args]`: create a hosted session and attach to it. */
 export async function runNewCommand(args: string[], cwd: string = process.cwd()): Promise<void> {
+	await ensureTheme();
 	const client = await ensureSessionDaemon();
 	try {
 		await attachLoop(client, await client.create(cwd, args), cwd);
