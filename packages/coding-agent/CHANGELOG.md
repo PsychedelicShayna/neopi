@@ -10,6 +10,8 @@
 ### Added
 
 - Edit global, project, or session settings with `/settings global|project|session`; Ctrl+S cycles scopes, F6 applies durable edits to other running sessions, and session overrides follow the saved session across directory changes.
+- Keep live settings synchronized after dropped notifications or a replaced settings directory, and explicitly refresh other updated sessions through the control socket. Already-running older builds must restart on an updated binary to receive these fixes or Apply notifications.
+
 - Choose advisor delivery timing independently for nits, concerns, and blockers in Settings → Model → Advisor; nits wait for the actual run end by default, while concerns and blockers arrive at safe tool boundaries without cancelling work.
 - Explicitly revive killed subagents from their saved transcripts in the Agent Hub; opening a transcript, focusing an agent, or sending ordinary IRC/chat no longer undoes a kill.
 - Connect to NeoProxy through `npi login neoproxy --url URL` or `/login`, with hidden username/password authentication, an ephemeral dashboard session, current-grant inference keys, explicit owned-pool selection, and automatic live model discovery through the existing provider configuration and model/role pickers ([#600](https://github.com/PsychedelicShayna/neopi/issues/600), implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).
