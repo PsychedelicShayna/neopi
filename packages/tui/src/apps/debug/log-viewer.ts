@@ -7,6 +7,7 @@ import type { DescribeContext, NativeNode, NativeUiEvent } from "../../native/no
 import { CLOSE_ACTION, picker, pickerAction, pickerEvent, pickerHits, pickerQuery } from "../../native/picker";
 import { matchesKey } from "../../keys";
 import { MenuKeyReader, MenuSearchField } from "../../components/menu-navigation";
+import { MenuHelp, menuHintLines } from "../../components/menu-hints";
 import { compileMenuRegex } from "../../menu-search";
 import { routeSgrMouseInput, type SgrMouseEvent } from "../../mouse";
 import { padding, truncateToWidth, visibleWidth } from "../../utils";
@@ -35,7 +36,6 @@ const LOAD_OLDER_CHUNK = 50;
  * current session) are never evicted.
  */
 const MAX_LOG_ENTRIES = 50_000;
-const MIN_LOG_VIEWER_WIDTH = 48;
 /** Picker item id of the "load older entries" row. */
 const OLDER_ITEM = "older";
 /** Status-dot tone of a log level. */
@@ -712,6 +712,10 @@ export class DebugLogViewerComponent implements Component {
 	#rowCacheGeneration = 0;
 	#rowCacheThemeEpoch = -1;
 	readonly #keys = new MenuKeyReader();
+	readonly #help = new MenuHelp(
+		"hjkl gg/G C-u d e y PgUp/PgDn",
+		"h / l: collapse / expand the selected log; Space toggles it.",
+	);
 
 	constructor(options: DebugLogViewerComponentOptions) {
 		this.#deps = options.deps;
@@ -766,6 +770,7 @@ export class DebugLogViewerComponent implements Component {
 	}
 
 	handleInput(keyData: string): void {
+		if (this.#help.open && this.#help.handleInput(keyData)) return;
 		if (routeSgrMouseInput(keyData, event => this.#handleMouse(event))) return;
 		if (!this.#search.focused && matchesKey(keyData, "ctrl+c")) return this.#copySelected();
 		const before = this.#search.query;
@@ -773,6 +778,10 @@ export class DebugLogViewerComponent implements Component {
 		if (search !== "pass") {
 			if (search === "exited") this.#keys.reset();
 			if (this.#search.query !== before) this.#model.setFilterQuery(this.#search.query);
+			return;
+		}
+		if (this.#help.handleInput(keyData)) {
+			this.#keys.reset();
 			return;
 		}
 		if (matchesKey(keyData, "ctrl+p")) {
@@ -893,6 +902,7 @@ export class DebugLogViewerComponent implements Component {
 	 * `picker` kind it falls back to rows.
 	 */
 	describe(cx: DescribeContext): NativeNode | null {
+		if (this.#help.open) return this.#help.describe();
 		if (!cx.supports("picker")) return null;
 		const model = this.#model;
 		const query = this.#filter.getValue();
@@ -1046,7 +1056,7 @@ export class DebugLogViewerComponent implements Component {
 	}
 
 	render(width: number): readonly string[] {
-		return this.#frame.render(Math.max(MIN_LOG_VIEWER_WIDTH, width));
+		return this.#help.render(this.#frame.render(width), width);
 	}
 
 	#buildFrameContent(context: DebugViewerFrameContext): DebugViewerFrameContent {
@@ -1077,7 +1087,12 @@ export class DebugLogViewerComponent implements Component {
 		return {
 			header: [this.#summaryText(), this.#filterText(context.contentWidth)],
 			body: anchor ? { lines, anchor } : { lines },
-			footer: [this.#statusText(), theme.fg("dim", this.#controlsText())],
+			footer: [
+				this.#statusText(),
+				...menuHintLines(this.#controlsText(), context.contentWidth, this.#help.vim).map(line =>
+					theme.fg("dim", line),
+				),
+			],
 		};
 	}
 
@@ -1089,7 +1104,7 @@ export class DebugLogViewerComponent implements Component {
 	}
 
 	#controlsText(): string {
-		return `Esc close · Ctrl-c copy · j/k rows · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · h/l collapse/expand · Space toggle · Shift-↑/↓ select · Ctrl-a all · o older · Ctrl-p pid · / search`;
+		return "Esc close · Ctrl-c copy · Space toggle · Shift-↑/↓ select · Ctrl-a all · o older · Ctrl-p pid · / search · ? help";
 	}
 
 	#filterText(width: number): string {

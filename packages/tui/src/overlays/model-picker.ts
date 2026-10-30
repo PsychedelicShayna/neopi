@@ -25,6 +25,7 @@ import { bottomBorder, row, topBorder } from "../chrome/overlay-box";
 import { resolveSegmentPalette } from "../chrome/segment-track";
 import { formatKeyHint } from "../app-keybindings";
 import { editorKey } from "../chrome/keybinding-hints";
+import { MenuHelp, menuHintLines } from "../components/menu-hints";
 import { card, compact, span, text } from "../native/describe";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
 import { CLOSE_ACTION, picker, pickerAction, pickerEvent } from "../native/picker";
@@ -98,7 +99,7 @@ const SELECT_ONLY_STATUS_HINT = "Selection only — does not change the session 
 
 /** Footer hint for the active mode; keys resolve at render time so theme/keybinding changes apply. */
 function footerHint(mode: "session" | "role" | "task" | "selection"): string {
-	const navigation = "j/k rows · / search · Ctrl-u/d half · gg/G ends";
+	const navigation = "/ search · ? help";
 	const enter = formatKeyHint("enter");
 	const close = `${editorKey("tui.select.cancel")} close`;
 	switch (mode) {
@@ -137,6 +138,7 @@ export class ModelPickerComponent implements Component {
 	#taskModeKey: KeyId | undefined;
 	#taskSelector: string | undefined;
 	#keys = new MenuKeyReader();
+	readonly #help = new MenuHelp("jk gg/G C-u d e y");
 	#selectOnly: boolean;
 	#nativeRoot: { memo: string; node: NativeNode } | undefined;
 	#pickerRoot:
@@ -306,6 +308,10 @@ export class ModelPickerComponent implements Component {
 			this.#browser.handleInput(data);
 			return;
 		}
+		if (this.#help.handleInput(data)) {
+			this.#tui.requestRender();
+			return;
+		}
 		if (this.#taskMatchKeys.size > 0 && !this.#roleMode) {
 			const parsed = parseKey(data);
 			const canonical = parsed !== undefined ? canonicalKeyId(parsed) : undefined;
@@ -369,9 +375,11 @@ export class ModelPickerComponent implements Component {
 		for (const line of this.#browser.render(inner)) {
 			out.push(row(line, width, borderColor));
 		}
-		out.push(row(theme.fg("dim", footer), width, borderColor));
+		for (const line of menuHintLines(footer, inner, this.#browser.filterFocused ? "" : "jk gg/G C-u d e y")) {
+			out.push(row(theme.fg("dim", line), width, borderColor));
+		}
 		out.push(bottomBorder(width, borderColor));
-		return out;
+		return this.#help.render(out, width);
 	}
 
 	/** A `picker` is its own sheet: the backend mounts it in `layer` without an `overlay` wrapper. */
@@ -381,6 +389,11 @@ export class ModelPickerComponent implements Component {
 
 	/** Picker pointer events, each on the path of the key it stands for. */
 	handleNativeEvent(event: NativeUiEvent): void {
+		if (this.#help.open) {
+			if (event.type === "action") this.#help.handleInput("\x1b");
+			this.#tui.requestRender();
+			return;
+		}
 		const picked = pickerEvent(event);
 		if (!picked) return;
 		if (this.#browser.filterFocused) {
@@ -420,6 +433,7 @@ export class ModelPickerComponent implements Component {
 
 	/** The `md` picker sheet, or the fallback card when the terminal lacks the kind. */
 	describe(cx?: DescribeContext): NativeNode {
+		if (this.#help.open) return this.#help.describe();
 		return cx?.supports("picker") ? this.#describePicker() : this.#describeCard();
 	}
 
@@ -467,7 +481,8 @@ export class ModelPickerComponent implements Component {
 				preview: "below",
 				query: value,
 				cursor,
-				placeholder: mode === "task" || mode === "selection" ? "Search models…" : "Search models, @ for quick roles…",
+				placeholder:
+					mode === "task" || mode === "selection" ? "Search models…" : "Search models, @ for quick roles…",
 				columns: MODEL_PICKER_COLUMNS,
 				...catalogue,
 				order: view.order,
@@ -481,11 +496,20 @@ export class ModelPickerComponent implements Component {
 						? pickerAction("searchConfirm", "Search", "enter", { primary: true })
 						: pickerAction(
 								"use",
-								mode === "role" ? "Apply role" : mode === "task" ? "Use for Task subagents" : mode === "selection" ? "Select model" : "Use for session",
+								mode === "role"
+									? "Apply role"
+									: mode === "task"
+										? "Use for Task subagents"
+										: mode === "selection"
+											? "Select model"
+											: "Use for session",
 								"enter",
 								{ primary: true },
 							),
-					!this.#browser.filterFocused && this.#taskModeKey !== undefined && mode !== "role" && mode !== "selection"
+					!this.#browser.filterFocused &&
+					this.#taskModeKey !== undefined &&
+					mode !== "role" &&
+					mode !== "selection"
 						? pickerAction("task", "Task model", this.#taskModeKey, { on: mode === "task" })
 						: undefined,
 					!this.#browser.filterFocused && query.length > 0 ? pickerAction("clear", "Clear search") : undefined,

@@ -41,6 +41,7 @@ import {
 	menuScrollBy,
 	type MenuViewportPosition,
 } from "../components/menu-navigation";
+import { MenuHelp, menuHintLines } from "../components/menu-hints";
 /** Session lifecycle status presented by the picker. */
 export type SessionSelectorStatus = "complete" | "interrupted" | "aborted" | "error" | "pending" | "unknown";
 
@@ -321,7 +322,7 @@ function sessionTextLower(session: SessionSelectorEntry): string {
 
 function sessionTextRaw(session: SessionSelectorEntry): string {
 	const tagged = session as SearchableSessionInfo;
-	return tagged[kSearchTextRaw] ??= sessionSearchText(session);
+	return (tagged[kSearchTextRaw] ??= sessionSearchText(session));
 }
 
 function tokenizeSessionQuery(query: string): string[] {
@@ -635,7 +636,6 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		});
 		this.#selectCurrentSession();
 		this.#searchInput = this.#search.input;
-
 	}
 
 	get filterFocused(): boolean {
@@ -744,8 +744,11 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 			const queryChanged = query !== this.#lastFilterQuery;
 			this.#hadFilterQuery = true;
 			this.#lastFilterQuery = query;
-			this.#fuzzyRanked = rankSessionSearchMatches(this.#allSessions, query)
-				.map((session, index) => ({ session, score: 0, index }));
+			this.#fuzzyRanked = rankSessionSearchMatches(this.#allSessions, query).map((session, index) => ({
+				session,
+				score: 0,
+				index,
+			}));
 			this.#composeFiltered();
 			if (queryChanged) this.#menu.setSelectedIndex(0);
 			this.#scheduleHistoryMerge(query);
@@ -1586,6 +1589,7 @@ export interface SessionSelectorOptions<T extends SessionSelectorEntry = Session
  */
 export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSelectorEntry> extends OverlayPanel {
 	#sessionList: SessionList<T>;
+	readonly #help = new MenuHelp("jk gg/G C-u d e y");
 	#confirmationDialog: HookSelectorComponent | null = null;
 	/** Open rename dialog: an OverlayPanel hosting the rename TextFormField. */
 	#renameDialog: OverlayPanel | null = null;
@@ -2066,7 +2070,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		}
 		this.#footerStart = lines.length;
 		for (const line of footer) lines.push(line);
-		return lines;
+		return this.#help.render(lines, width);
 	}
 
 	/** Persist a pin change, then reorder the list; a failure shows the error and leaves the list as it was. */
@@ -2097,11 +2101,15 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		const cancel = interruptKey();
 		const pin = this.#pinAction();
 		const pinKey = pin && getKeybindings().getKeys(pin.binding)[0];
-		const hint = theme.fg(
-			"muted",
-			`[j/k ↑↓ · Ctrl-u/d half · PgUp/Dn · gg/G · Ctrl-e/y view · / search · ${this.#onDelete ? `${formatKeyHint("delete")} delete (list) · ` : ""}${this.#onRename ? `${formatKeyHint("f2")} rename · ` : ""}${pinKey ? `${formatKeyHint(pinKey)} ${pin.label} · ` : ""}Enter/Space select · ${formatKeyHint("tab")} ${scopeHint} · ${cancel} list/close]`,
-		);
-		return [row("", width), row(hint, width), row("", width), bottomBorder(width)];
+		const hint = `/ search · ${this.#onDelete ? `${formatKeyHint("delete")} delete (list) · ` : ""}${this.#onRename ? `${formatKeyHint("f2")} rename · ` : ""}${pinKey ? `${formatKeyHint(pinKey)} ${pin.label} · ` : ""}Enter/Space select · ${formatKeyHint("tab")} ${scopeHint} · ${cancel} list/close · ? help`;
+		return [
+			row("", width),
+			...menuHintLines(hint, Math.max(1, width - 4), "jk gg/G C-u d e y").map(line =>
+				row(theme.fg("muted", line), width),
+			),
+			row("", width),
+			bottomBorder(width),
+		];
 	}
 
 	/** Scope tabs replace the "(current folder)" title suffix when the scope can toggle. */
@@ -2124,6 +2132,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 	 * the ANSI path — and the key-hint footer.
 	 */
 	override describe(cx: DescribeContext): NativeNode {
+		if (this.#help.open) return this.#help.describe();
 		// The picker kind has no text-input affordance, so a rename would
 		// capture every keystroke into an invisible field. While the rename
 		// editor is open, describe the card path instead (the same fallback
@@ -2154,11 +2163,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 			children.push(dialog);
 		} else {
 			const queryError = compileMenuRegex(this.#sessionList.searchInput.getValue())?.error;
-			children.push(
-				this.#sessionList.searchInput,
-				...(queryError ? [text([span(queryError, "error")])] : []),
-				list,
-			);
+			children.push(this.#sessionList.searchInput, ...(queryError ? [text([span(queryError, "error")])] : []), list);
 		}
 		const hints: (NativeHint | undefined)[] = [];
 		if (this.#onDelete) hints.push({ keys: ["delete"], label: "delete (list)" });
@@ -2280,7 +2285,17 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 			},
 			preview,
 		);
-		this.#pickerMemo = { view, preview, scope: this.#scope, message, errorOpen, choice, rename, focused: list.filterFocused, node: result };
+		this.#pickerMemo = {
+			view,
+			preview,
+			scope: this.#scope,
+			message,
+			errorOpen,
+			choice,
+			rename,
+			focused: list.filterFocused,
+			node: result,
+		};
 		return result;
 	}
 
@@ -2350,6 +2365,11 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 
 	/** Picker events (root keypath); fallback: scope tab → toggle scope, click on a session → resume it, exactly like a mouse click. */
 	handleNativeEvent(event: NativeUiEvent): void {
+		if (this.#help.open) {
+			if (event.type === "action") this.#help.handleInput("\x1b");
+			this.#onRequestRender?.();
+			return;
+		}
 		if (this.#inputLocked || this.#deleting) return;
 		const ev = pickerEvent(event);
 		if (ev) {
@@ -2368,6 +2388,10 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 
 	handleInput(keyData: string): void {
 		if (this.#inputLocked || this.#deleting) return;
+		if (!this.#confirmationDialog && !this.#renameDialog && !this.filterFocused && this.#help.handleInput(keyData)) {
+			this.#onRequestRender?.();
+			return;
+		}
 		this.#pickerErrorOpen = false;
 		if (keyData.startsWith("\x1b[<")) {
 			this.#handleMouse(keyData);

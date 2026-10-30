@@ -7,6 +7,7 @@
 import { formatKeyHint, type KeyId } from "../app-keybindings";
 import { bottomBorder, divider, row, topBorder } from "../chrome/overlay-box";
 import { MenuKeyReader, MenuSearchField, type MenuSearchState } from "../components/menu-navigation";
+import { MenuHelp, menuHintLines } from "../components/menu-hints";
 import { compileMenuRegex } from "../menu-search";
 import { getKeybindings } from "../keybindings";
 import { extractPrintableText, matchesKey } from "../keys";
@@ -66,6 +67,7 @@ export class IrcViewerComponent implements Component {
 	readonly #unsubscribe: () => void;
 	readonly #filter = new MenuSearchField();
 	readonly #keys = new MenuKeyReader();
+	readonly #help = new MenuHelp("jk gg/G C-u d e y", "G follows the newest messages.");
 	/** Index into the filtered entries; the last entry while following. */
 	#selected = 0;
 	/** Stable anchor when an earlier send finishes after the selected message. */
@@ -149,8 +151,9 @@ export class IrcViewerComponent implements Component {
 		const regex = compileMenuRegex(this.#filter.query);
 		if (regex) {
 			return regex.regex
-				? this.#options.source.entries().filter(entry =>
-					[entry.message.from, entry.message.to].some(text => regex.regex!.test(text)))
+				? this.#options.source
+						.entries()
+						.filter(entry => [entry.message.from, entry.message.to].some(text => regex.regex!.test(text)))
 				: [];
 		}
 		const entries = this.#options.source.entries();
@@ -219,6 +222,21 @@ export class IrcViewerComponent implements Component {
 	render(width: number): readonly string[] {
 		const height = Math.max(CHROME_ROWS + 1, this.#options.rows());
 		const inner = Math.max(1, width - 4);
+		const editing = this.#filter.focused || (this.#compose && this.#draft.focused);
+		const hints = menuHintLines(
+			this.#filter.focused
+				? "enter apply · esc clear"
+				: this.#compose
+					? this.#draft.focused
+						? "enter send · Tab view · esc leave field"
+						: "Tab edit reply · esc cancel reply · ? help"
+					: `enter/space expand${this.#options.reply ? " · r reply" : ""} · / filter · G follow · ${[
+							"esc",
+							...this.#options.viewerKeys.map(key => formatKeyHint(key)),
+						].join("/")} close · ? help`,
+			inner,
+			editing ? "" : "jk gg/G C-u d e y",
+		);
 		this.#bodyWidth = inner;
 		const all = this.#options.source.entries();
 		const visible = this.#visible();
@@ -236,7 +254,7 @@ export class IrcViewerComponent implements Component {
 			if (selected) selectedEnd = list.length;
 		});
 
-		this.#listRows = height - CHROME_ROWS;
+		this.#listRows = Math.max(1, height - CHROME_ROWS - hints.length + 1);
 		this.#totalRows = list.length;
 		this.#selectedSpan = { start: selectedStart, end: selectedEnd };
 		if (this.#follow) this.#top = Math.max(0, list.length - this.#listRows);
@@ -284,27 +302,16 @@ export class IrcViewerComponent implements Component {
 						? `${filter}${theme.fg("dim", `  ${visible.length} shown · ${counts}`)}`
 						: theme.fg("dim", counts);
 
-		const hints = this.#filter.focused
-			? "enter apply · esc clear"
-			: this.#compose
-				? this.#draft.focused
-					? "enter send · Tab view · esc leave field"
-					: "j/k select · Tab edit reply · esc cancel reply"
-				: `j/k select · enter/space expand${this.#options.reply ? " · r reply" : ""} · / filter · G follow · ${[
-						"esc",
-						...this.#options.viewerKeys.map(key => formatKeyHint(key)),
-					].join("/")} close`;
-
 		const frame = [
 			topBorder(width, "IRC"),
 			row(status, width),
 			divider(width),
 			...body.map(line => row(truncateToWidth(line, inner, Ellipsis.Unicode), width)),
 			divider(width),
-			row(theme.fg("muted", truncateToWidth(hints, inner, Ellipsis.Unicode)), width),
+			...hints.map(line => row(theme.fg("muted", line), width)),
 			bottomBorder(width),
 		];
-		return frame;
+		return this.#help.render(frame, width);
 	}
 
 	#select(index: number): void {
@@ -398,12 +405,17 @@ export class IrcViewerComponent implements Component {
 		const reply = this.#options.reply;
 		if (!compose || !reply || !this.#draft.focused) return false;
 		const kb = getKeybindings();
-		if (extractPrintableText(data) === undefined
-			&& (kb.matches(data, "tui.select.prevContext") || kb.matches(data, "tui.select.nextContext"))) return false;
+		if (
+			extractPrintableText(data) === undefined &&
+			(kb.matches(data, "tui.select.prevContext") || kb.matches(data, "tui.select.nextContext"))
+		)
+			return false;
 		if (!matchesKey(data, "enter") && data !== "\n") {
 			// Esc leaves the composer field without discarding its draft.
-			if (matchesKey(data, "escape") || (extractPrintableText(data) === undefined
-				&& getKeybindings().matches(data, "tui.select.cancel"))) {
+			if (
+				matchesKey(data, "escape") ||
+				(extractPrintableText(data) === undefined && getKeybindings().matches(data, "tui.select.cancel"))
+			) {
 				this.#blurDraft();
 			} else if (this.#draft.handleInput(data) === "pass") {
 				return false;
@@ -452,8 +464,16 @@ export class IrcViewerComponent implements Component {
 		}
 		if (this.#handleComposeInput(data)) return;
 		this.#notice = undefined;
-		if ((this.#filter.focused || (!this.#compose && this.#filter.value && matchesKey(data, "escape")))
-			&& this.#handleFilterInput(data)) return;
+		if (
+			(this.#filter.focused || (!this.#compose && this.#filter.value && matchesKey(data, "escape"))) &&
+			this.#handleFilterInput(data)
+		)
+			return;
+		if (this.#help.handleInput(data)) {
+			this.#keys.reset();
+			this.#options.requestRender();
+			return;
+		}
 		const action = this.#keys.read(data);
 		if (action === "pending") return;
 		if (action?.kind === "cancel") {

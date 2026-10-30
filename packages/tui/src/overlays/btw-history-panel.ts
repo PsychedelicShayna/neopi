@@ -48,6 +48,7 @@ import {
 	type MenuNavAction,
 } from "../components/menu-navigation";
 import { MenuSelection } from "../components/menu-selection";
+import { MenuHelp, menuHintLines } from "../components/menu-hints";
 import { fuzzyFilter } from "../fuzzy";
 
 /** The turns as shown: a titled topic's opening question displays as its title, e.g. `/sitrep`. */
@@ -164,6 +165,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 	#focus: "list" | "answer" = "list";
 	readonly #listViewport = new MenuViewport();
 	readonly #keys = new MenuKeyReader();
+	readonly #help = new MenuHelp();
 	readonly #search = new MenuSearchField();
 	readonly #selection = new MenuSelection<BtwHistoryRecord>([], {
 		getKey: record => record.id,
@@ -483,7 +485,10 @@ export class BtwHistoryPanel implements Component, Focusable {
 		}
 		input.onEscape = () => {
 			this.#drafts.set(record.id, {
-				value: input.getValue(), cursor: input.getCursor(), notice: composer.notice, images: composer.images,
+				value: input.getValue(),
+				cursor: input.getCursor(),
+				notice: composer.notice,
+				images: composer.images,
 			});
 			composer.abortController.abort();
 			this.#composer = undefined;
@@ -660,6 +665,11 @@ export class BtwHistoryPanel implements Component, Focusable {
 			this.#options.requestRender();
 			return;
 		}
+		if (this.#help.handleInput(data)) {
+			this.#keys.reset();
+			this.#options.requestRender();
+			return;
+		}
 		const record = this.#selected();
 		const running = record !== undefined && getBtwLatestTurn(record).status === "running" ? record : undefined;
 		const hides = this.#options.escapeHides === true;
@@ -736,6 +746,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 	}
 
 	describe(): NativeNode {
+		if (this.#help.open) return this.#help.describe();
 		const record = this.#selected();
 		const records = this.#visibleRecords();
 		const composer = this.#composer;
@@ -1183,7 +1194,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 			: [
 					keyHint("tui.select.cancel", running && !this.#options.escapeHides ? "cancel answer" : "close"),
 					...(running && this.#options.escapeHides ? [rawKeyHint("x", "cancel")] : []),
-					...(this.#records.length > 1 ? [rawKeyHint(["h", "l", "tab", "ctrl+/"], "switch pane")] : []),
+					...(this.#records.length > 1 ? [rawKeyHint(["tab", "ctrl+/"], "switch pane")] : []),
 				];
 		if (!composer) {
 			if (record && this.#canFollowUp(record)) actions.push(rawKeyHint(["f", "enter"], "follow up"));
@@ -1193,8 +1204,9 @@ export class BtwHistoryPanel implements Component, Focusable {
 				else actions.push(rawKeyHint("c", inner < 40 ? "copy" : "copy answer"));
 			}
 		}
-		const actionLines = wrapTextWithAnsi(actions.join(" · "), inner).slice(0, framed ? 2 : 1);
-		const chrome = (framed ? 3 + actionLines.length : height >= 3 ? 2 : 0) + 1;
+		if (!composer) actions.push("/ search · PgUp/PgDn page · ? help");
+		const actionLines = menuHintLines(actions.join(" · "), inner, composer ? "" : undefined);
+		const chrome = (framed ? 3 + actionLines.length : height >= 3 ? 1 + actionLines.length : 0) + 1;
 		const composerLines: string[] = [];
 		if (composer) {
 			const availableRows = Math.max(1, height - chrome - 1);
@@ -1214,20 +1226,9 @@ export class BtwHistoryPanel implements Component, Focusable {
 			composer.input.focused = this.#focused;
 			composerLines.push(...composer.input.render(inner));
 		}
-		let bodyHeight = Math.max(composer ? 0 : 1, height - chrome - composerLines.length);
+		const bodyHeight = Math.max(composer ? 0 : 1, height - chrome - composerLines.length);
 		const detailWidth = wide && geometry?.right ? geometry.right.width : inner;
-		const detailScroll = this.#detail.getScrollOffset();
 		let detail = wide || this.#focus === "answer" ? this.#renderDetail(detailWidth, bodyHeight) : undefined;
-		const showNavigation = framed && !composer && (this.#focus === "list" || this.#detail.getMaxScrollOffset() > 0);
-		if (showNavigation) {
-			bodyHeight = Math.max(1, bodyHeight - 1);
-			if (detail) {
-				// Measuring without a footer can clamp the last row off an End jump.
-				this.#detail.setHeight(bodyHeight);
-				this.#detail.setScrollOffset(detailScroll);
-				detail = this.#detail.render(detailWidth);
-			}
-		}
 		if (detail && this.#followLatest) {
 			this.#detail.scrollToBottom();
 			detail = this.#detail.render(detailWidth);
@@ -1253,19 +1254,15 @@ export class BtwHistoryPanel implements Component, Focusable {
 		}
 		for (const line of composerLines) lines.push(framed ? row(line, width) : line);
 		if (framed) {
-			if (showNavigation) {
-				lines.push(
-					row(
-						theme.fg("dim", "j/k · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · / search"),
-						width,
-					),
-				);
-			}
+			// Harness actions wrap before any optional Vim group is shown.
 			for (const line of actionLines) lines.push(row(line, width));
 			lines.push(bottomBorder(width));
 		} else if (height >= 3) {
-			lines.push(actionLines[0] ?? "");
+			lines.push(...actionLines);
 		}
-		return lines.slice(0, height).map(line => truncateToWidth(line, width));
+		return this.#help.render(
+			lines.map(line => truncateToWidth(line, width)),
+			width,
+		);
 	}
 }

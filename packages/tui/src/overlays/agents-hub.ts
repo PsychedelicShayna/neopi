@@ -39,6 +39,7 @@ import { matchesAppFollowUp, matchesSelectCancel } from "../keybinding-matchers"
 import { extractPrintableText } from "../keys";
 import { formatKeyHint, formatKeyHints } from "../app-keybindings";
 import { boundKeys, editorKey } from "../chrome/keybinding-hints";
+import { MenuHelp, menuHintLines } from "../components/menu-hints";
 import {
 	buildBrowserItems,
 	ModelBrowser,
@@ -275,6 +276,7 @@ export class AgentsHubComponent implements Component {
 	readonly #viewport = new MenuViewport();
 	#rowCounts: number[] = [];
 	readonly #keys = new MenuKeyReader();
+	readonly #help = new MenuHelp();
 	readonly #rowMotion = {
 		move: (delta: number) => this.#moveRow(this.#rowIndex + delta),
 		moveToBoundary: (edge: "first" | "last") => this.#moveRow(edge === "first" ? 0 : this.#rows.length - 1),
@@ -478,8 +480,9 @@ export class AgentsHubComponent implements Component {
 		const query = this.#search.query;
 		let filtered = scoped;
 		if (query) {
-			const tokens = (compileMenuRegex(query) ? [query] : query.trim().split(/\s+/))
-				.map(token => new FuzzyQuery(token));
+			const tokens = (compileMenuRegex(query) ? [query] : query.trim().split(/\s+/)).map(
+				token => new FuzzyQuery(token),
+			);
 			filtered = scoped.filter(agent => matchAgent(agent, tokens));
 		}
 		this.#rows = [...filtered.map(agent => ({ kind: "agent", agent }) as ListRow), { kind: "new" }];
@@ -847,6 +850,15 @@ export class AgentsHubComponent implements Component {
 
 	handleInput(data: string): void {
 		this.#nativeVersion++;
+		const textFocused =
+			this.#strip?.kind === "pattern" ||
+			(this.#createActive && !this.#createSpec) ||
+			(this.#assigning ? this.#browser.filterFocused : !this.#strip && !this.#createActive && this.#search.focused);
+		if (!textFocused && this.#help.handleInput(data)) {
+			this.#keys.reset();
+			this.#requestRender();
+			return;
+		}
 		if (data.startsWith("\x1b[<")) {
 			this.#keys.reset();
 			routeSgrMouseInput(data, event => this.#routeMouseEvent(event));
@@ -1408,34 +1420,39 @@ export class AgentsHubComponent implements Component {
 				const values = property === "model" ? "a model pattern" : '"on", "off", or a model pattern';
 				return `Enter ${values} (role aliases like @smol and :level suffixes work; empty clears) · ${cancel} back`;
 			}
-			return `j/k choose · ${enter}/Space set · h/l pane · Tab context · ${cancel} back`;
+			return `${enter}/Space set · Tab context · ${cancel} back`;
 		}
 		if (this.#search.focused) return "Search · hjkl type literally · Esc back to list";
 		if (this.#assigning) {
-			return `${enter} pick · j/k Pg C-d/u gg/G move · / search · h/${cancel} back`;
+			return `${enter} pick · PgUp/Dn page · / search · ${cancel} back`;
 		}
 		if (this.#createActive) {
 			const tab = formatKeyHint("tab");
-			if (this.#createSpec)
-				return `${enter} save · j/k Pg C-d/u gg/G scroll · ${tab} scope · r regenerate · ${cancel} back`;
+			if (this.#createSpec) return `${enter} save · PgUp/Dn page · ${tab} scope · r regenerate · ${cancel} back`;
 			if (this.#createGenerating) return "Generating…";
 			const generate = formatKeyHints(boundKeys("app.message.followUp", ["ctrl+q", "ctrl+enter"]));
 			return `${generate} generate · ${enter} newline · ${tab} scope · ${cancel} cancel`;
 		}
 		if (this.#focus === "scope") {
-			return `j/k Pg C-d/u gg/G scopes · C-e/y view · l/Enter agents · / search · ${cancel} close`;
+			return `Enter agents · / search · ${cancel} close`;
 		}
 		const edit = this.#deps.openConfigFile ? " · Ctrl-G edit file" : "";
-		return `${enter} configure · Space enable/disable · j/k Pg C-d/u gg/G move · C-e/y view · h/l panes · / search · Ctrl-R reload${edit} · ${cancel} close`;
+		return `${enter} configure · Space enable/disable · / search · Ctrl-R reload${edit} · ${cancel} close`;
 	}
 
-	#renderFooter(width: number): string {
+	#renderFooter(width: number): string[] {
 		const strip = this.#strip;
-		return this.#frame.renderFooter(
+		const editing =
+			strip?.kind === "pattern" ||
+			(this.#createActive && !this.#createSpec) ||
+			(this.#assigning ? this.#browser.filterFocused : this.#search.focused);
+		const lines = menuHintLines(
+			`${this.#footerHint()}${editing ? "" : " · ? help"}`,
 			width,
-			this.#footerHint(),
-			strip ? () => this.#renderStrip(width, strip) : undefined,
-		);
+			editing ? "" : undefined,
+		).map(line => theme.fg("dim", line));
+		const stripLine = this.#frame.renderFooter(width, "", strip ? () => this.#renderStrip(width, strip) : undefined);
+		return strip ? [stripLine, ...lines] : lines;
 	}
 
 	#renderStrip(width: number, strip: StripState): string {
@@ -1484,6 +1501,7 @@ export class AgentsHubComponent implements Component {
 	}
 
 	describe(cx: DescribeContext): NativeNode {
+		if (this.#help.open) return this.#help.describe();
 		const sheet = this.nativeSheet(cx);
 		const cached = this.#nativeCache;
 		if (cached?.version === this.#nativeVersion && cached.sheet === sheet) return cached.node;
@@ -2212,6 +2230,9 @@ export class AgentsHubComponent implements Component {
 	}
 
 	render(width: number): readonly string[] {
-		return this.#frame.render(width, this.#terminalRows(), this.#entries, this.#renderFooter(width - 4));
+		return this.#help.render(
+			this.#frame.render(width, this.#terminalRows(), this.#entries, this.#renderFooter(width - 4)),
+			width,
+		);
 	}
 }

@@ -3,6 +3,7 @@ import { matchesKey } from "../keys";
 import { replaceTabs, truncateToWidth, visibleWidth } from "../utils";
 import { ScrollView } from "../components/scroll-view";
 import { MenuKeyReader, menuScrollBy } from "../components/menu-navigation";
+import { MenuHelp, menuHintLines } from "../components/menu-hints";
 import { renderTableRow, type TableCell, type TableColumn } from "../components/table";
 import { Text } from "../components/text";
 import type { Component } from "../tui";
@@ -153,6 +154,7 @@ export function createDashboardController(): DashboardController {
 					let scroll: NativeScroll | undefined;
 					const native = new Memo();
 					const keys = new MenuKeyReader();
+					const help = new MenuHelp("jk gg/G C-u d e y PgUp/PgDn");
 					let pendingNavigation: unknown;
 					return {
 						/** A glass sheet titled by the experiment; what it is follows, muted. */
@@ -160,6 +162,7 @@ export function createDashboardController(): DashboardController {
 							return { role: "omp.overlay.autoresearch", head: describeSheetHead(runtime), size: "lg" as const };
 						},
 						describe(cx: DescribeContext): NativeNode {
+							if (help.open) return help.describe();
 							const state = runtime.state;
 							const chart = cx.supports("chart");
 							return native.get(
@@ -191,7 +194,8 @@ export function createDashboardController(): DashboardController {
 							if (runtime.runningExperiment) {
 								body.push(renderOverlayRunningLine(runtime, theme, width, spinnerFrame));
 							}
-							const viewportRows = Math.max(4, terminalRows - 4);
+							const footer = renderOverlayFooter(width, theme, help.vim);
+							const viewportRows = Math.max(4, terminalRows - 3 - footer.length);
 							scrollView ??= new ScrollView(body, {
 								height: viewportRows,
 								scrollbar: "auto",
@@ -203,13 +207,18 @@ export function createDashboardController(): DashboardController {
 								scrollView.restoreNavigation(pendingNavigation);
 								pendingNavigation = undefined;
 							}
-							return [header, ...scrollView.render(width), renderOverlayFooter(width, theme)];
+							return help.render([header, ...scrollView.render(width), ...footer], width);
 						},
 						/** The Close button runs Esc's path. */
 						handleNativeEvent(event: NativeUiEvent): void {
 							if (event.type === "action" && event.act === "close") done(undefined);
 						},
 						handleInput(data: string): void {
+							if (help.handleInput(data)) {
+								keys.reset();
+								tui.requestRender();
+								return;
+							}
 							if (matchesKey(data, "escape") || matchesKey(data, "esc") || data === "q") {
 								done(undefined);
 								return;
@@ -1251,13 +1260,8 @@ function renderOverlayRunningLine(
 	);
 }
 
-function renderOverlayFooter(width: number, theme: Theme): string {
-	const hint = theme.fg(
-		"dim",
-		" j/k scroll · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · Esc close ",
-	);
-	const fill = Math.max(0, width - visibleWidth(hint));
-	return theme.fg("borderMuted", "-".repeat(fill)) + hint;
+function renderOverlayFooter(width: number, theme: Theme, vim: string): string[] {
+	return menuHintLines("Esc close · ? help", width, vim).map(line => theme.fg("dim", line));
 }
 
 function renderModeStatus(runtime: AutoresearchDashboardRuntime, state: ExperimentState): string {

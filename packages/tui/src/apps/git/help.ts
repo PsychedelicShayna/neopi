@@ -25,15 +25,15 @@ interface Shortcut {
 
 const GROUPS: readonly { readonly title: string; readonly rows: readonly Shortcut[] }[] = [
 	{
-		title: "Move",
+		title: "Move (Vim navigation)",
 		rows: [
-			{ keys: ["up", "down"], label: "Move the selection" },
+			{ keys: ["j", "k", "up", "down"], label: "Next or previous row" },
 			{ keys: ["h", "l", "left", "right"], label: "Choose the left diff or right changes pane" },
 			{ keys: ["enter"], label: "Open the file in the diff" },
 			{ keys: ["tab"], label: "Switch between the diff and the changes" },
 			{ keys: ["]", "["], label: "Next or previous file" },
 			{ keys: ["alt+down", "alt+up"], label: "Next or previous change" },
-			{ keys: ["g", "shift+g"], label: "gg first row; G last row" },
+			{ keys: ["g", "shift+g", "home", "end"], label: "gg / G: first / last row" },
 			{ keys: ["ctrl+u", "ctrl+d"], label: "Half page up or down" },
 			{ keys: ["pageUp", "pageDown"], label: "Full page up or down" },
 			{ keys: ["ctrl+y", "ctrl+e"], label: "Scroll view without moving selection" },

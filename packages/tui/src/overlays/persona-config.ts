@@ -36,6 +36,7 @@ import { isLayoutMouseRoutable } from "../components/layout/geometry";
 import { SplitPane } from "../components/layout/split-pane";
 import { Stack } from "../components/layout/stack";
 import { MenuKeyReader, isMenuHistoryParticipant, type MenuNavAction } from "../components/menu-navigation";
+import { MenuHelp, menuHintLines } from "../components/menu-hints";
 import type { SelectListNavigationState } from "../components/select-list";
 
 export type PersonaConfigVariant = "persona" | "live";
@@ -206,6 +207,7 @@ export class PersonaConfigOverlayComponent implements Component {
 	#entryIndex: number | undefined;
 	#active: Component = new SelectList([], 1, getSelectListTheme(), { search: "always" });
 	#footerHint = "";
+	readonly #help = new MenuHelp();
 	/** One-shot message (save result, validation error) shown until the next screen change. */
 	#footerNote: { text: string; tone: "success" | "warning" } | undefined;
 	#previewScroll = 0;
@@ -258,7 +260,7 @@ export class PersonaConfigOverlayComponent implements Component {
 			{ content: this.#frameTop, height: 1 },
 			{ content: this.#split, grow: 1 },
 			{ content: this.#frameDivider, height: 1 },
-			{ content: this.#frameFooter, height: 1 },
+			{ content: this.#frameFooter },
 			{ content: this.#frameBottom, height: 1 },
 		],
 	});
@@ -279,7 +281,17 @@ export class PersonaConfigOverlayComponent implements Component {
 
 	render(width: number): readonly string[] {
 		const height = Math.max(14, process.stdout.rows || 40);
-		const bodyRows = Math.max(3, height - 4);
+		const active = this.#active;
+		const textFocused =
+			active instanceof Input ||
+			active instanceof HookEditorComponent ||
+			("filterFocused" in active && active.filterFocused === true);
+		const footerLines = menuHintLines(
+			this.#footerNote?.text ?? `${this.#footerHint}${textFocused ? "" : " · ? help"}`,
+			Math.max(1, width - 4),
+			textFocused ? "" : undefined,
+		);
+		const bodyRows = Math.max(3, height - 3 - footerLines.length);
 		this.#bodyRowsLast = bodyRows;
 		const heading = this.#deps.variant === "live" ? "Live personas" : "Personas";
 		const title = `${heading} · active: ${this.#activeLabel()}${this.#dirty ? "  ● unsaved" : ""}${this.#screen === "list" && this.#previewFocused ? " · Preview" : ""}`;
@@ -291,13 +303,10 @@ export class PersonaConfigOverlayComponent implements Component {
 		const leftWidth = geometry.left?.width ?? 0;
 		this.#frameTop.setLines([isSplit ? topBorderSplit(width, title, leftWidth) : topBorder(width, title)]);
 		this.#frameDivider.setLines([isSplit ? dividerSplit(width, leftWidth) : divider(width)]);
-		const footer = this.#footerNote
-			? theme.fg(this.#footerNote.tone, this.#footerNote.text)
-			: theme.fg("dim", this.#footerHint);
-		this.#frameFooter.setLines([row(footer, width)]);
+		this.#frameFooter.setLines(footerLines.map(line => row(theme.fg(this.#footerNote?.tone ?? "dim", line), width)));
 		this.#frameBottom.setLines([bottomBorder(width)]);
-		this.#frame.setHeight(bodyRows + 4);
-		return this.#frame.render(width);
+		this.#frame.setHeight(bodyRows + 3 + footerLines.length);
+		return this.#help.render(this.#frame.render(width), width);
 	}
 
 	#activeLabel(): string {
@@ -333,6 +342,10 @@ export class PersonaConfigOverlayComponent implements Component {
 			const printable = active instanceof Input ? extractPrintableText(data) : undefined;
 			if (active instanceof Input && printable !== undefined) active.insertText(printable);
 			else active.handleInput?.(data);
+			return;
+		}
+		if (this.#help.handleInput(data)) {
+			this.#cb.requestRender();
 			return;
 		}
 		let cancelledDelete = false;
@@ -571,8 +584,7 @@ export class PersonaConfigOverlayComponent implements Component {
 		}
 		this.#screen = screen;
 		this.#active = active;
-		const navigationHint =
-			screen === "list" ? "h/l, Tab panes" : screen === "detail" ? "h parent / l open" : "h parent";
+		const navigationHint = screen === "list" ? "Tab panes" : screen === "detail" ? "← parent / → open" : "← parent";
 		this.#footerHint = active instanceof SelectList ? `${navigationHint} · ${footerHint} · / search` : footerHint;
 		this.#footerNote = undefined;
 		this.#previewScroll = saved?.previewScroll ?? 0;
@@ -731,7 +743,7 @@ export class PersonaConfigOverlayComponent implements Component {
 			list,
 			this.#pendingDelete !== null
 				? "Delete again to confirm removal · any other key cancels"
-				: "j/k move · Enter edit · Space active · Del×2 · s save · Esc close",
+				: "Enter edit · Space active · Del×2 · s save · Esc close",
 		);
 	}
 

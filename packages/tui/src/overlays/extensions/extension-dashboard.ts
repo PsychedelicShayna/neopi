@@ -32,6 +32,7 @@ import { Stack } from "../../components/layout/stack";
 import { ScrollView } from "../../components/scroll-view";
 import { TabBar, type Tab } from "../../components/tab-bar";
 import { MenuKeyReader, menuScrollBy, type MenuNavAction } from "../../components/menu-navigation";
+import { MenuHelp, menuHintLines } from "../../components/menu-hints";
 import { compileMenuRegex } from "../../menu-search";
 import { logger } from "@oh-my-pi/pi-utils";
 import { getTabBarTheme } from "../../chrome/shared";
@@ -85,9 +86,7 @@ export interface ExtensionDashboardOptions {
 
 function extFooter(pane: "list" | "inspector", filtering: boolean): string {
 	if (filtering) return "Search extensions · Enter confirm · Esc clear";
-	return `j/k ${pane === "list" ? "select" : "scroll"} · h/l provider tabs · Tab focus · / search · ${
-		pane === "list" ? "Space toggle · " : ""
-	}${expandKeyHint()} expand · Esc close`;
+	return `Tab focus · / search · ${pane === "list" ? "Space toggle · " : ""}${expandKeyHint()} expand · Esc close · ? help`;
 }
 
 /**
@@ -166,6 +165,7 @@ export class ExtensionDashboard implements Component {
 	#body!: TwoColumnBody;
 	#refreshToken = 0;
 	readonly #keys = new MenuKeyReader();
+	readonly #help = new MenuHelp(undefined, "h/l switch provider tabs; Tab switches list/inspector.");
 	#pane: "list" | "inspector" = "list";
 	#pendingOperations = 0;
 	// Persistent fullscreen frame: top, tabs, divider, body, divider, footer,
@@ -185,7 +185,7 @@ export class ExtensionDashboard implements Component {
 			{ content: this.#frameUpperDivider, height: 1 },
 			{ content: this.#frameBody },
 			{ content: this.#frameLowerDivider, height: 1 },
-			{ content: this.#frameFooter, height: 1 },
+			{ content: this.#frameFooter },
 			{ content: this.#frameBottom, height: 1 },
 		],
 	});
@@ -281,10 +281,15 @@ export class ExtensionDashboard implements Component {
 	render(width: number): readonly string[] {
 		const height = Math.max(14, this.#terminalRows());
 		const innerWidth = Math.max(1, width - 4);
+		const hints = menuHintLines(
+			extFooter(this.#pane, this.#mainList.filterFocused),
+			innerWidth,
+			this.#mainList.filterFocused ? "" : undefined,
+		);
 
 		const tabLines = this.#tabBar.render(innerWidth);
 		// Fixed chrome: top border + tab rows + divider + divider + footer + bottom border.
-		const fixedRows = 1 + tabLines.length + 1 + 1 + 1 + 1;
+		const fixedRows = 1 + tabLines.length + 1 + 1 + hints.length + 1;
 		const contentRows = Math.max(5, height - fixedRows);
 
 		this.#mainList.setMaxVisible(Math.max(3, contentRows - 2));
@@ -298,9 +303,9 @@ export class ExtensionDashboard implements Component {
 		this.#frameUpperDivider.setLines([divider(width)]);
 		this.#frameBody.setLines(this.#body.render(innerWidth).map(line => row(line, width)));
 		this.#frameLowerDivider.setLines([divider(width)]);
-		this.#frameFooter.setLines([row(theme.fg("dim", extFooter(this.#pane, this.#mainList.filterFocused)), width)]);
+		this.#frameFooter.setLines(hints.map(line => row(theme.fg("dim", line), width)));
 		this.#frameBottom.setLines([bottomBorder(width)]);
-		return this.#frame.render(width);
+		return this.#help.render(this.#frame.render(width), width);
 	}
 
 	invalidate(): void {
@@ -643,6 +648,11 @@ export class ExtensionDashboard implements Component {
 			this.#requestRender();
 			return;
 		}
+		if (this.#help.handleInput(data)) {
+			this.#keys.reset();
+			this.#requestRender();
+			return;
+		}
 		const action = this.#keys.read(data);
 		if (action === "pending") return;
 		if (action?.kind === "cancel") {
@@ -702,6 +712,7 @@ export class ExtensionDashboard implements Component {
 	 * changes arrive as render requests, which bump the version).
 	 */
 	describe(cx: DescribeContext): NativeNode {
+		if (this.#help.open) return this.#help.describe();
 		const sheet = this.nativeSheet(cx);
 		const toolFrame = snapshotToolRuntimeSource(this.#toolSource);
 		let tools = "";
@@ -797,7 +808,10 @@ export class ExtensionDashboard implements Component {
 		);
 		const search = text(
 			[
-				span(error ? `Invalid regex: ${error}` : this.#mainList.filterFocused ? "Search: " : "/ search · ", "muted"),
+				span(
+					error ? `Invalid regex: ${error}` : this.#mainList.filterFocused ? "Search: " : "/ search · ",
+					"muted",
+				),
 				span(query, "accent"),
 			],
 			{

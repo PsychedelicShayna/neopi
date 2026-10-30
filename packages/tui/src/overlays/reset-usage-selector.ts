@@ -4,6 +4,7 @@ import { formatDuration, sanitizeText } from "@oh-my-pi/pi-utils";
 import { theme } from "../theme/theme";
 import { OverlayPanel } from "../chrome/overlay-box";
 import { MenuSelection } from "../components/menu-selection";
+import { MenuHelp, MenuHints } from "../components/menu-hints";
 import {
 	applyMenuMotion,
 	MenuKeyReader,
@@ -110,6 +111,7 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 	readonly #keys = new MenuKeyReader();
 	readonly #viewport = new MenuViewport();
 	readonly #search = new MenuSearchField();
+	readonly #help = new MenuHelp("jk gg/G C-u d e y");
 	#onSelectCallback: (account: ResetUsageAccount) => void;
 	#onCancelCallback: () => void;
 	#nativeItems: readonly NativeNode[] | undefined;
@@ -204,13 +206,16 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 		}
 
 		const pending = items.find(item => this.#menu.isPending(item));
-		const hint = pending
-			? theme.fg("warning", oneLine(this.#confirmationMessage(pending)))
-			: theme.fg(
-					"muted",
-					`j/k or ${editorKeys("tui.select.up", "tui.select.down")} select · / search · ${formatKeyHint("enter")} spend a reset · ${editorKey("tui.select.cancel")} cancel`,
-				);
-		this.#listContainer.addChild(new Text(hint, 0, 0));
+		this.#listContainer.addChild(
+			pending
+				? new Text(theme.fg("warning", oneLine(this.#confirmationMessage(pending))), 0, 0)
+				: new MenuHints(
+						() =>
+							`${editorKeys("tui.select.up", "tui.select.down")} select · / search · ${formatKeyHint("enter")} spend a reset · ${editorKey("tui.select.cancel")} cancel · ? help`,
+						text => theme.fg("muted", text),
+						"jk gg/G C-u d e y",
+					),
+		);
 
 		if (this.#statusMessage) {
 			this.#listContainer.addChild(new Spacer(1));
@@ -263,6 +268,10 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 		this.#updateList();
 	}
 
+	override render(width: number): readonly string[] {
+		return this.#help.render(super.render(width), width);
+	}
+
 	handleInput(data: string): void {
 		const before = this.#search.query;
 		const field = this.#search.handleInput(data);
@@ -276,6 +285,7 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 			this.#updateList();
 			return;
 		}
+		if (this.#help.handleInput(data)) return;
 		const action = this.#keys.read(data);
 		if (action === undefined || action === "pending") return;
 		const motion = applyMenuMotion(action, this.#menu, this.#viewport, { wrap: true });
@@ -317,6 +327,7 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 	}
 
 	override describe(cx: DescribeContext): NativeNode {
+		if (this.#help.open) return this.#help.describe();
 		if (cx.supports("picker")) return this.#describePicker();
 		if (this.#nativeRoot) return this.#nativeRoot;
 		this.#nativeItems ??= this.#menu.visibleItems.map(account => {
@@ -427,6 +438,10 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 	 * presses Enter.
 	 */
 	handleNativeEvent(event: NativeUiEvent): void {
+		if (this.#help.open) {
+			if (event.type === "action") this.#help.handleInput("\x1b");
+			return;
+		}
 		const ev = pickerEvent(event, PICKER_KEY);
 		if (ev?.kind === "action") {
 			if (ev.act === "confirm") this.#activateSelection();
