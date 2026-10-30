@@ -6,7 +6,7 @@ import { Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import type { Terminal, TerminalAppearance, TerminalAppearanceRequestToken } from "@oh-my-pi/pi-tui/terminal";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { RenderScheduler } from "@oh-my-pi/pi-tui/tui";
-import { isEnoent, readLines } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger, readLines } from "@oh-my-pi/pi-utils";
 import { VERSION } from "@oh-my-pi/pi-utils/dirs";
 import { Settings } from "../../src/config/settings";
 import { SessionDaemonClient } from "../../src/daemon/client";
@@ -178,6 +178,11 @@ describe("InteractiveMode attached to a real daemon session", () => {
 		// SessionDaemon overlays env onto its parent by default. Keep the real
 		// child-spawn path, but do not forward owner credentials or profile hooks.
 		const envSpy = vi.spyOn(workerClient, "workerEnvFromParent").mockImplementation(overlay => ({ ...env, ...overlay }));
+		const childDiagnostics: string[] = [];
+		const debugSpy = vi.spyOn(logger, "debug").mockImplementation((message, ...details) => {
+			if (message === "session-daemon: hosted stderr")
+				childDiagnostics.push(...details.map(detail => JSON.stringify(detail)));
+		});
 		const settings = Settings.isolated({ "startup.quiet": true, "daemon.enabled": false });
 		const clients: SessionDaemonClient[] = [];
 		const remotes: RemoteAgentSession[] = [];
@@ -267,7 +272,7 @@ describe("InteractiveMode attached to a real daemon session", () => {
 					"--model",
 					"fake/fake-model",
 					"--no-extensions",
-					"--extension",
+					"--trusted-extension",
 					readExtensionFixture,
 					"--no-skills",
 					"--no-rules",
@@ -278,7 +283,11 @@ describe("InteractiveMode attached to a real daemon session", () => {
 			});
 			expect(await daemon.start()).toBe(true);
 			const hosted = await (await connect()).create(project);
-			await until(() => daemon?.list().find(session => session.id === hosted.id)?.model === "fake/fake-model", "rpc-ui child ready");
+			await until(() => {
+				const session = daemon?.list().find(session => session.id === hosted.id);
+				if (session?.status === "exited") throw new Error(`rpc-ui child exited with code ${session.exitCode}`);
+				return session?.model === "fake/fake-model";
+			}, "rpc-ui child ready");
 			const control = await attach(hosted.id);
 			await initTheme(false);
 			if (scenario === "first-prompt-race") {
@@ -406,6 +415,7 @@ describe("InteractiveMode attached to a real daemon session", () => {
 				[
 					error instanceof Error ? error.message : String(error),
 					`Provider stderr:\n${providerErrors}`,
+					`Hosted child stderr:\n${childDiagnostics.join("\n")}`,
 					`Hosted sessions:\n${JSON.stringify(daemon?.list() ?? [], null, 2)}`,
 					`Remote messages:\n${JSON.stringify(remotes.map(remote => remote.messages), null, 2)}`,
 					`Rendered transcripts:\n${outputs.join("\n--- viewer ---\n")}`,
@@ -431,6 +441,7 @@ describe("InteractiveMode attached to a real daemon session", () => {
 						await providerStderr;
 					}
 					envSpy.mockRestore();
+					debugSpy.mockRestore();
 					await fs.rm(root, { recursive: true, force: true });
 				}
 			}
