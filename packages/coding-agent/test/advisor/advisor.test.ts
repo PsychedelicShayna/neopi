@@ -969,11 +969,17 @@ describe("advisor", () => {
 			tool.flushDeferredNotes();
 			expect(onAdvice).toHaveBeenCalledTimes(1);
 			expect(onAdvice).toHaveBeenCalledWith("The write drops the lock.", "concern", undefined);
-			const extra = await tool.execute("extra", { note: "Another lock is missing.", severity: "concern" });
+			// The new concern may displace the still-held, lower-rank nit. The
+			// routed concern keeps its slot, so another concern cannot fit.
+			const replacement = await tool.execute("replacement", { note: "Another lock is missing.", severity: "concern" });
+			expect(JSON.stringify(replacement.content)).toContain("Delivered.");
+			tool.flushDeferredNotes();
+			expect(onAdvice).toHaveBeenCalledTimes(2);
+			const extra = await tool.execute("extra", { note: "A third lock is missing.", severity: "concern" });
 			expect(JSON.stringify(extra.content)).toContain("budget");
 			tool.beginUpdate();
-			await tool.execute("extra-again", { note: "Another lock is missing.", severity: "concern" });
-			expect(onAdvice).toHaveBeenCalledTimes(2);
+			await tool.execute("extra-again", { note: "A third lock is missing.", severity: "concern" });
+			expect(onAdvice).toHaveBeenCalledTimes(3);
 		});
 
 		it("resets pending notes and dedupe together at a conversation change", async () => {

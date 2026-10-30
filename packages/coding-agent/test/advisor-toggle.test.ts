@@ -16,6 +16,7 @@ import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { __resetDirsFromEnvForTests, getProjectAgentDir, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 
@@ -90,6 +91,7 @@ describe("AgentSession advisor toggle", () => {
 				tools: [],
 				messages: [],
 			},
+			convertToLlm,
 		});
 		const settings = Settings.isolated({ "compaction.enabled": false });
 		session = new AgentSession({

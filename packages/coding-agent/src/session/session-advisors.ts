@@ -1976,9 +1976,15 @@ export class SessionAdvisors {
 		// aside would be drained into an extra turn that skips the continuation latch.
 		if (this.#terminalUnwindActive) {
 			this.#advisorBoundaryNotes.push(...notes);
-			// A late review batches all its emissions until its existing drain
-			// becomes idle. Direct callers with no running review flush now.
-			if (!this.#primaryRunActive && advisor.runtime.yielded) this.#flushAdvisorBoundaryNotes();
+			// Managed reviews flush when their drain becomes idle. A direct tool
+			// call has no drain; a directly prompted advisor flushes at agent_end.
+			if (
+				!this.#primaryRunActive &&
+				!advisor.agent.state.isStreaming &&
+				(advisor.runtime.backlog === 0 || advisor.runtime.yielded)
+			) {
+				this.#flushAdvisorBoundaryNotes();
+			}
 			return;
 		}
 		const channel = resolveAdvisorDeliveryChannel({
@@ -2183,6 +2189,16 @@ export class SessionAdvisors {
 	 *  so the re-prime path can mute the feed across an abort-driven reset. */
 	#attachAdvisorRecorderFeed(advisor: ActiveAdvisor): void {
 		advisor.agentUnsubscribe = advisor.agent.subscribe(event => {
+			if (event.type === "agent_end") {
+				// Direct prompts do not enter AdvisorRuntime's drain or notifyIdle.
+				// Keep their notes batched until the advisor finishes, just as a
+				// managed review does, without mistaking a fresh runtime for busy.
+				if (advisor.runtime.backlog === 0 && !this.#primaryRunActive &&
+					this.#terminalUnwindActive && !this.#advisorTerminalBoundaryOpen) {
+					this.#flushAdvisorBoundaryNotes();
+				}
+				return;
+			}
 			if (event.type !== "message_end") return;
 			if (event.message.role === "assistant") this.#recordAdvisorCost(advisor, event.message);
 			advisor.recorder.record(event.message);

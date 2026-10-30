@@ -35,7 +35,11 @@ function textOf(message: Message): string {
 	if (message.role === "assistant") {
 		return message.content.map(block => (block.type === "text" ? block.text : "")).join("");
 	}
-	return typeof message.content === "string" ? message.content : "";
+	if (typeof message.content === "string") return message.content;
+	if (message.role === "user") {
+		return message.content.map(part => (part.type === "text" ? part.text : "")).join("");
+	}
+	return "";
 }
 
 interface SteeredRunOptions {
@@ -132,7 +136,9 @@ describe("agent loop live steering", () => {
 		{ mixed: true, mode: "all" },
 		{ mixed: true, mode: "one-at-a-time" },
 	] as const)("keeps wait notes queue-owned without blocking live user steering ($mode, mixed=$mixed)", async ({ mixed, mode }) => {
-		const mock = createMockModel({ responses: [{ content: ["first"] }, { content: ["second"] }] });
+		const mock = createMockModel({
+			responses: [{ content: ["first"] }, { content: ["second"] }, { content: ["third"] }],
+		});
 		let calls = 0;
 		let agent: Agent;
 		agent = new Agent({
@@ -161,19 +167,34 @@ describe("agent loop live steering", () => {
 					expect(await live.claim(signal)).toBeUndefined();
 					expect(agent.peekSteeringQueue().map(userText)).toEqual(["wait for completed work"]);
 					expect(signal.aborted).toBe(false);
+				} else if (calls === 2 && mixed) {
+					// The accepted live input owns this continuation; held input is
+					// still queue-owned until the following provider boundary.
+					expect(agent.peekSteeringQueue().map(userText)).toEqual(["wait for completed work"]);
 				}
 				return mock.stream(model, context, options);
 			},
 		});
 		await agent.prompt("start");
-		expect(mock.calls).toHaveLength(2);
-		const second = mock.calls[1].context.messages.map(textOf);
-		expect(second.filter(text => text === "wait for completed work")).toHaveLength(1);
+		const contexts = mock.calls.map(call => call.context.messages.map(textOf));
+		const heldBoundary = contexts.find(context => context.includes("wait for completed work"));
 		if (mixed) {
-			expect(second.indexOf("ordinary immediate input")).toBeLessThan(second.indexOf("wait for completed work"));
-			expect(second.indexOf("later immediate input")).toBeLessThan(second.indexOf("wait for completed work"));
-			expect(second.filter(text => text === "later immediate input")).toHaveLength(1);
+			expect(contexts[1]).toEqual(["start", "first", "ordinary immediate input", "later immediate input"]);
+			expect(heldBoundary).toEqual([
+				"start",
+				"first",
+				"ordinary immediate input",
+				"later immediate input",
+				"second",
+				"wait for completed work",
+			]);
+		} else {
+			expect(heldBoundary).toEqual(["start", "first", "wait for completed work"]);
 		}
+		// No further turn is needed after the provider answers the held note.
+		expect(contexts.at(-1)).toBe(heldBoundary);
+		expect(agent.state.messages.filter(message => userText(message) === "wait for completed work")).toHaveLength(1);
+		expect(agent.peekSteeringQueue()).toEqual([]);
 		expect(liveSteeredTexts(agent.state.messages)).toEqual(mixed ? ["ordinary immediate input", "later immediate input"] : []);
 	});
 

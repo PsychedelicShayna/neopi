@@ -223,6 +223,7 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		const agent = new Agent({
 			getApiKey: () => "test-key",
 			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			convertToLlm,
 			streamFn: mock.stream,
 		});
 		const sessionManager = SessionManager.inMemory();
@@ -627,6 +628,48 @@ describe("AgentSession advisor auto-resume suppression", () => {
 			expect(persisted.at(-1)).toContain("Fixture verdict confirmed");
 			expect(advisorMock.calls.length).toBeGreaterThanOrEqual(1);
 			expect(mock.calls.length).toBe(1);
+		},
+	);
+
+	it.each(["blocker", "concern"] as const)(
+		"batches directly prompted late advice into one card at continuation threshold %s",
+		async continueSeverity => {
+			const { session, mock } = await createCompletedAdvisorSession({ continueSeverity });
+			await session.prompt("answer with exactly one line");
+			await session.waitForIdle();
+			expect(session.setAdvisorEnabled(true)).toBe(true);
+			const advisor = session.getAdvisorAgent();
+			if (!advisor) throw new Error("Expected advisor agent to be live");
+			const notes = ["First late regression needs a test.", "Second late regression needs a test."];
+			const advisorMock = createMockModel({
+				responses: [{
+					content: notes.map((note, index) => ({
+						type: "toolCall" as const,
+						id: `late-advice-${index}`,
+						name: "advise",
+						arguments: { note, severity: "concern" },
+					})),
+				}],
+				handler: () => ({ content: [], stopReason: "stop" }),
+			});
+			advisor.streamFn = advisorMock.stream;
+			const persisted = capturePersistedAdvice(session.sessionManager);
+
+			await advisor.prompt("inspect the completed turn");
+			await session.waitForIdle();
+
+			const cards = session.agent.state.messages.filter(isAdvisorCard);
+			expect(cards).toHaveLength(1);
+			expect(persisted).toHaveLength(1);
+			for (const note of notes) {
+				expect(cards[0].content).toContain(note);
+				expect(persisted[0]).toContain(note);
+			}
+			expect(mock.calls).toHaveLength(continueSeverity === "concern" ? 2 : 1);
+			if (continueSeverity === "concern") {
+				const context = JSON.stringify(mock.calls[1].context.messages);
+				for (const note of notes) expect(context).toContain(note);
+			}
 		},
 	);
 
