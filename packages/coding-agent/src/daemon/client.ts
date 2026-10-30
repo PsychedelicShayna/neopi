@@ -33,7 +33,7 @@ export class SessionDaemonClient {
 			reason => {
 				this.#isClosed = true;
 				for (const pending of this.#pending.values())
-					pending.reject(new Error(reason ?? "daemon connection closed"));
+					pending.resolvers.reject(new Error(reason ?? "daemon connection closed"));
 				this.#pending.clear();
 				this.#closed.resolve(reason);
 			},

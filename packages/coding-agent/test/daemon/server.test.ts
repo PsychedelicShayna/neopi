@@ -2,8 +2,10 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { IpcServer } from "@oh-my-pi/pi-natives";
 import { SessionDaemonClient } from "../../src/daemon/client";
 import { SessionDaemon } from "../../src/daemon/server";
+import { sessionDaemonEndpoint } from "../../src/daemon/paths";
 
 /**
  * A scripted stand-in for `npi --mode rpc-ui`: same frame vocabulary, no model.
@@ -101,6 +103,23 @@ afterEach(async () => {
 	await daemon?.shutdown();
 	daemon = undefined;
 	await fs.rm(tmp, { recursive: true, force: true });
+});
+
+describe("SessionDaemonClient request lifetime", () => {
+	it("rejects a pending request when its connection closes", async () => {
+		tmp = await fs.mkdtemp(path.join(process.env.TMPDIR ?? os.tmpdir(), "daemon-disconnect-"));
+		const endpoint = sessionDaemonEndpoint(tmp);
+		const peer = await IpcServer.listen(endpoint, { framing: "lines" }, connection => {
+			connection.start(() => connection.end(), () => {});
+		});
+		try {
+			const client = await SessionDaemonClient.connect(endpoint);
+			clients.push(client);
+			await expect(client.request({ type: "get_state" })).rejects.toThrow(/closed/);
+		} finally {
+			await peer.close();
+		}
+	});
 });
 
 describe("SessionDaemon", () => {
