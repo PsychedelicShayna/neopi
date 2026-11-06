@@ -6,7 +6,7 @@ import * as logger from "./logger";
 import { createSettingsTomlCodec, plainSettingsTomlTable as plainTable } from "./settings-toml-codec";
 export * from "./settings-toml-codec";
 export const { parseSettingsToml, stringifySettingsToml, patchSettingsToml, stringifyTomlValue } =
-	createSettingsTomlCodec(content => Bun.TOML.parse(content));
+	createSettingsTomlCodec(content => Bun.TOML.parse(content) as Record<string, unknown>);
 export const SETTINGS_TOML = "settings.toml";
 export const CONFIG_TOML = "config.toml";
 

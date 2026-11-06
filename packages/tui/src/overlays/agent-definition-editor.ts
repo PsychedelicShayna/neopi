@@ -1262,9 +1262,11 @@ export class AgentDefinitionEditor implements Component {
 				page.index = index;
 				if (picked.kind === "activate") rows[index]?.activate();
 			}
-		} else if (picked.act === "close") this.handleInput("\x1b");
-		else if (picked.act === "generate") this.handleInput("r");
-		else if (picked.act === "comment") this.handleInput("R");
+		} else if (picked.kind === "action") {
+			if (picked.act === "close") this.handleInput("\x1b");
+			else if (picked.act === "generate") this.handleInput("r");
+			else if (picked.act === "comment") this.handleInput("R");
+		}
 		this.#render();
 	}
 }

@@ -190,6 +190,10 @@ metadata is retained for repair and cannot execute as an unannotated card.
 Imports also carry YAML comment text into a TOML comment preamble. The preamble
 explicitly notes that original comment-to-key placement is not retained; exact
 placement and original syntax remain available in the immutable source backup.
+Native raw TOML also supports multiline strings containing standalone `+++`
+lines. A closing fence is recognized only after a complete valid TOML header,
+so those string values are not mistaken for Markdown body boundaries. Raw
+load/save preserves authored comments, header text and body bytes.
 
 KB notes use the same `+++` TOML frontmatter. On first indexing, a legacy
 `note.md` imports to a same-permission `note.toml.md` sibling without changing

@@ -1,10 +1,21 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, watch, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	watch,
+	writeFileSync,
+} from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
 import { broadcastBus, type BroadcastFrame } from "./broadcast-bus.ts";
 import { KbService } from "./kb-service.ts";
+import { withCardProperties } from "./card-properties.ts";
 import { startKbWatcher } from "./kb-watcher.ts";
 
 let root: string;
@@ -49,16 +60,16 @@ describe("KbService with .kbignore", () => {
 	test("tree hides ignored dirs and files but keeps negated ones", async () => {
 		const kb = new KbService({ root });
 		const top = await kb.getTree("");
-		expect(top?.dirs.map((d) => d.name)).toEqual(["archive", "journal", "notes"]);
-		expect((await kb.getTree("archive"))?.files.map((f) => f.name)).toEqual(["kept.md"]);
+		expect(top?.dirs.map(d => d.name)).toEqual(["archive", "journal", "notes"]);
+		expect((await kb.getTree("archive"))?.files.map(f => f.name)).toEqual(["kept.md"]);
 		expect((await kb.getTree("journal"))?.files).toEqual([]);
 		// `/private` is anchored: a nested `private/` is still shown.
-		expect((await kb.getTree("notes"))?.dirs.map((d) => d.name)).toEqual(["private"]);
+		expect((await kb.getTree("notes"))?.dirs.map(d => d.name)).toEqual(["private"]);
 		expect(await kb.getTree("drafts")).toBeUndefined();
 		expect(await kb.getTree("private")).toBeUndefined();
 		// Skip-set dirs stay hidden even when .kbignore negates them.
 		expect(await kb.getTree("node_modules")).toBeUndefined();
-		expect(top?.dirs.find((d) => d.name === "notes")?.mdCount).toBe(2);
+		expect(top?.dirs.find(d => d.name === "notes")?.mdCount).toBe(2);
 	});
 
 	test("ignored files are not readable, writable, searchable or graphed", async () => {
@@ -69,27 +80,27 @@ describe("KbService with .kbignore", () => {
 		expect(await kb.saveFile("drafts/new.md", "# New\n", "create")).toEqual({ kind: "invalid-path" });
 
 		const search = await kb.search("needle", 50);
-		expect(search.results.map((r) => r.path)).toEqual(["notes/hub.md"]);
+		expect(search.results.map(r => r.path)).toEqual(["notes/hub.md"]);
 
 		const graph = await kb.getGraph();
-		expect(graph.nodes.map((n) => n.path).sort()).toEqual([
+		expect(graph.nodes.map(n => n.path).sort()).toEqual([
 			"archive/kept.md",
 			"notes/hub.md",
 			"notes/private/public-after-all.md",
 		]);
 		expect(graph.edges).toEqual([{ source: "notes/hub.md", target: "archive/kept.md" }]);
 		const hub = await kb.getFile("notes/hub.md");
-		expect(hub?.outgoingLinks.filter((l) => l.resolved).map((l) => l.target)).toEqual(["kept"]);
+		expect(hub?.outgoingLinks.filter(l => l.resolved).map(l => l.target)).toEqual(["kept"]);
 	});
 
 	test("an edited .kbignore applies after the index is invalidated", async () => {
 		const kb = new KbService({ root });
-		expect((await kb.getTree(""))?.dirs.map((d) => d.name)).not.toContain("drafts");
+		expect((await kb.getTree(""))?.dirs.map(d => d.name)).not.toContain("drafts");
 		writeFileSync(path.join(root, ".kbignore"), "journal/\n", "utf8");
 		kb.invalidate();
-		const names = (await kb.getTree(""))?.dirs.map((d) => d.name);
+		const names = (await kb.getTree(""))?.dirs.map(d => d.name);
 		expect(names).toEqual(["archive", "drafts", "notes", "private"]);
-		expect((await kb.search("needle", 50)).results.map((r) => r.path)).toContain("drafts/idea.md");
+		expect((await kb.search("needle", 50)).results.map(r => r.path)).toContain("drafts/idea.md");
 	});
 
 	test("parent directory notifications respect directory-only exclusions without hiding replacement files", () => {
@@ -121,7 +132,7 @@ describe("KbService with .kbignore", () => {
 		const kb = new KbService({ root });
 		await kb.ensureIndex();
 		const frames: BroadcastFrame[] = [];
-		const unsubscribe = broadcastBus.subscribe((f) => {
+		const unsubscribe = broadcastBus.subscribe(f => {
 			if (f.type === "kb_changed") frames.push(f);
 		});
 		const dispose = startKbWatcher(kb);
@@ -140,7 +151,7 @@ describe("KbService with .kbignore", () => {
 				ignored: rel !== null && kb.isWatchEventIgnored(rel),
 			});
 		});
-		const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 700));
+		const settle = (): Promise<void> => new Promise(r => setTimeout(r, 700));
 		try {
 			await settle();
 			frames.length = 0;
@@ -157,7 +168,7 @@ describe("KbService with .kbignore", () => {
 			writeFileSync(path.join(root, ".kbignore"), "", "utf8");
 			await settle();
 			expect(frames.length).toBeGreaterThan(0);
-			expect((await kb.getTree(""))?.dirs.map((d) => d.name)).toContain("drafts");
+			expect((await kb.getTree(""))?.dirs.map(d => d.name)).toContain("drafts");
 
 			frames.length = 0;
 			put("drafts/third.md");
@@ -220,27 +231,43 @@ describe("KbService literal full-text search", () => {
 		const first = await kb.search("mixed::needle", 50);
 		expect(first.results).toHaveLength(1);
 		expect(first.results[0]).toMatchObject({
-			path: "notes/alpha.md", title: "Human heading", score: 11, matchKind: "body",
+			path: "notes/alpha.md",
+			title: "Human heading",
+			score: 11,
+			matchKind: "body",
 		});
 		expect(first.results[0]?.snippet).toContain("MiXeD::needle");
 		const second = await kb.search("second/pattern", 50);
-		expect(second.results.map((r) => r.path)).toEqual(["notes/beta.md"]);
+		expect(second.results.map(r => r.path)).toEqual(["notes/beta.md"]);
 		expect(second.results[0]?.snippet).toContain("second/pattern");
 		expect((await kb.search("human heading", 50)).results[0]).toMatchObject({
-			path: "notes/alpha.md", title: "Human heading", score: 70, matchKind: "title",
+			path: "notes/alpha.md",
+			title: "Human heading",
+			score: 70,
+			matchKind: "title",
 		});
 		expect((await kb.search("topic", 50)).results[0]).toMatchObject({
-			path: "notes/alpha.md", score: 60, matchKind: "tag",
+			path: "notes/alpha.md",
+			score: 60,
+			matchKind: "tag",
 		});
 		expect((await kb.search("alpha", 50)).results[0]).toMatchObject({
-			path: "notes/alpha.md", score: 100, matchKind: "stem",
+			path: "notes/alpha.md",
+			score: 100,
+			matchKind: "stem",
 		});
 	});
 
 	test("short, Unicode and repeated substrings keep literal occurrence semantics", async () => {
 		put("notes/literals.md", "§§§ Ω😀 punctuation/@! " + "zz ".repeat(25));
 		const kb = new KbService({ root });
-		for (const [query, score] of [["§", 12], ["§§", 10], ["Ω😀", 10], ["/@!", 10], ["zz", 30]] as const) {
+		for (const [query, score] of [
+			["§", 12],
+			["§§", 10],
+			["Ω😀", 10],
+			["/@!", 10],
+			["zz", 30],
+		] as const) {
 			const response = await kb.search(query, 50);
 			expect(response.results).toHaveLength(1);
 			expect(response.results[0]).toMatchObject({ path: "notes/literals.md", matchKind: "body", score });
@@ -256,23 +283,29 @@ describe("KbService literal full-text search", () => {
 		put("notes/source.md", "New-unique marker [[hub]]\n");
 		kb.invalidate();
 		const [oldHits, newHits, backlinks] = await Promise.all([
-			pending, kb.search("new-unique", 50), kb.getBacklinks("notes/hub.md"),
+			pending,
+			kb.search("new-unique", 50),
+			kb.getBacklinks("notes/hub.md"),
 		]);
 		expect(oldHits.totalMatches).toBe(0);
-		expect(newHits.results.map((r) => r.path)).toEqual(["notes/source.md"]);
-		expect(backlinks?.backlinks.map((b) => b.source)).toEqual(["notes/source.md"]);
+		expect(newHits.results.map(r => r.path)).toEqual(["notes/source.md"]);
+		expect(backlinks?.backlinks.map(b => b.source)).toEqual(["notes/source.md"]);
 		put("notes/source.md", "Replacement marker [[kept]]\n");
 		kb.invalidate();
 		expect((await kb.search("new-unique", 50)).totalMatches).toBe(0);
-		expect((await kb.search("replacement marker", 50)).results.map((r) => r.path)).toEqual(["notes/source.md"]);
+		expect((await kb.search("replacement marker", 50)).results.map(r => r.path)).toEqual(["notes/source.md"]);
 		expect((await kb.getBacklinks("notes/hub.md"))?.backlinks).toEqual([]);
-		expect((await kb.getBacklinks("archive/kept.md"))?.backlinks.map((b) => b.source).sort()).toEqual(["notes/hub.md", "notes/source.md"]);
+		expect((await kb.getBacklinks("archive/kept.md"))?.backlinks.map(b => b.source).sort()).toEqual([
+			"notes/hub.md",
+			"notes/source.md",
+		]);
 	});
 });
 
 describe("native TOML frontmatter and non-destructive YAML import", () => {
 	test("imports a same-mode sibling once, retains exact YAML and indexes one logical note", async () => {
-		const legacy = "---\n# exact YAML comment\nname: Human title # inline title comment\ntags: [entry, topic]\ncustom:\n  # nested KB comment\n  empty: null\n---\nUnique native search text\n[[kept]]\n";
+		const legacy =
+			"---\n# exact YAML comment\nname: Human title # inline title comment\ntags: [entry, topic]\ncustom:\n  # nested KB comment\n  empty: null\n---\nUnique native search text\n[[kept]]\n";
 		put("notes/imported.md", legacy);
 		chmodSync(path.join(root, "notes/imported.md"), 0o640);
 		const kb = new KbService({ root });
@@ -285,11 +318,17 @@ describe("native TOML frontmatter and non-destructive YAML import", () => {
 		expect(note.absolutePath).toBe(path.join(root, "notes/imported.toml.md"));
 		expect(readFileSync(path.join(root, "notes/imported.md"), "utf8")).toBe(legacy);
 		expect(statSync(note.absolutePath).mode & 0o777).toBe(0o640);
-		expect((await kb.getTree("notes"))!.files.filter(file => file.name.startsWith("imported")).map(file => file.path)).toEqual(["notes/imported.md"]);
+		expect(
+			(await kb.getTree("notes"))!.files.filter(file => file.name.startsWith("imported")).map(file => file.path),
+		).toEqual(["notes/imported.md"]);
 		const graph = await kb.getGraph();
-		expect(graph.nodes.filter(node => node.path.includes("imported")).map(node => node.path)).toEqual(["notes/imported.md"]);
+		expect(graph.nodes.filter(node => node.path.includes("imported")).map(node => node.path)).toEqual([
+			"notes/imported.md",
+		]);
 		expect(graph.edges).toContainEqual({ source: "notes/imported.md", target: "archive/kept.md" });
-		expect((await kb.search("Unique native search", 20)).results.map(result => result.path)).toEqual(["notes/imported.md"]);
+		expect((await kb.search("Unique native search", 20)).results.map(result => result.path)).toEqual([
+			"notes/imported.md",
+		]);
 		const edited = note.rawContent.replace("Human title", "Edited title");
 		expect((await kb.saveFile("notes/imported.md", edited, "update")).kind).toBe("ok");
 		const restarted = new KbService({ root });
@@ -317,8 +356,12 @@ describe("native TOML frontmatter and non-destructive YAML import", () => {
 		const raw = "+++\n# keep\nname = 'Native'\n[custom]\n# nested comment\ntags = ['one', 'two']\n+++\nBody\n";
 		expect((await kb.saveFile("notes/new.md", raw, "create")).kind).toBe("ok");
 		expect((await kb.getFile("notes/new.md"))?.rawContent).toBe(raw);
-		expect((await kb.saveFile("notes/new.md", "---\nname: Legacy\n---\nBody", "update")).kind).toBe("invalid-frontmatter");
-		expect((await kb.saveFile("notes/new.md", "+++\nname = [broken\n+++\nBody", "update")).kind).toBe("invalid-frontmatter");
+		expect((await kb.saveFile("notes/new.md", "---\nname: Legacy\n---\nBody", "update")).kind).toBe(
+			"invalid-frontmatter",
+		);
+		expect((await kb.saveFile("notes/new.md", "+++\nname = [broken\n+++\nBody", "update")).kind).toBe(
+			"invalid-frontmatter",
+		);
 		expect((await kb.getFile("notes/new.md"))?.rawContent).toBe(raw);
 	});
 
@@ -332,5 +375,31 @@ describe("native TOML frontmatter and non-destructive YAML import", () => {
 		expect(skill.rawContent).toBe(raw);
 		expect(readFileSync(path.join(root, "notes/example/SKILL.md"), "utf8")).toBe(raw);
 		expect(existsSync(path.join(root, "notes/example/SKILL.toml.md"))).toBe(false);
+	});
+});
+
+test("raw and rich KB writes retain multiline +++ metadata and exact Markdown boundaries", async () => {
+	const raw =
+		"+++\n# preserve exact comment  \nname = \"\"\"Human\n+++\nTitle\"\"\"\nnotes = '''first\n+++\nlast'''\n+++\nBody\n+++\nProse fence\n";
+	const kb = new KbService({ root });
+	expect((await kb.saveFile("notes/multiline.md", raw, "create")).kind).toBe("ok");
+	const note = (await kb.getFile("notes/multiline.md"))!;
+	expect(note.rawContent).toBe(raw);
+	expect(note.body).toBe("Body\n+++\nProse fence\n");
+	expect(note.frontmatter).toEqual({ name: "Human\n+++\nTitle", notes: "first\n+++\nlast" });
+	expect((await kb.getGraph()).nodes.find(node => node.path === "notes/multiline.md")?.title).toBe(
+		"Human\n+++\nTitle",
+	);
+	const edited = raw.replace("Prose fence", "Edited prose");
+	expect((await kb.saveFile("notes/multiline.md", edited, "update")).kind).toBe("ok");
+	expect((await kb.getFile("notes/multiline.md"))?.rawContent).toBe(edited);
+	const rich = withCardProperties("Rich body\n", {
+		notes: "before\n+++\nafter",
+		custom: { details: "first\n+++\nlast" },
+	});
+	expect((await kb.saveFile("notes/rich.md", rich, "create")).kind).toBe("ok");
+	expect((await kb.getFile("notes/rich.md"))?.frontmatter).toEqual({
+		notes: "before\n+++\nafter",
+		custom: { details: "first\n+++\nlast" },
 	});
 });

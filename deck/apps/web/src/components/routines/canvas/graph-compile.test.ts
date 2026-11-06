@@ -38,11 +38,11 @@ function specWith(steps: RoutineStep[], edges?: Array<{ from: string; to: string
 		steps,
 		...(edges
 			? {
-				layout: {
-					version: 1,
-					edges: edges.map((e) => ({ from: e.from, to: e.to, kind: "success" as const })),
-				},
-			}
+					layout: {
+						version: 1,
+						edges: edges.map(e => ({ from: e.from, to: e.to, kind: "success" as const })),
+					},
+				}
 			: {}),
 	};
 }
@@ -52,7 +52,7 @@ describe("compileGraph — linear short-circuit", () => {
 		const spec = specWith([wait("a"), wait("b"), wait("c")]);
 		const { steps, errors } = compileGraph(spec);
 		expect(errors).toEqual([]);
-		expect(steps.map((s) => s.id)).toEqual(["a", "b", "c"]);
+		expect(steps.map(s => s.id)).toEqual(["a", "b", "c"]);
 	});
 
 	test("empty `layout.edges` is the same as missing layout", () => {
@@ -64,7 +64,7 @@ describe("compileGraph — linear short-circuit", () => {
 		};
 		const { steps, errors } = compileGraph(spec);
 		expect(errors).toEqual([]);
-		expect(steps.map((s) => s.id)).toEqual(["a", "b"]);
+		expect(steps.map(s => s.id)).toEqual(["a", "b"]);
 	});
 });
 
@@ -79,7 +79,7 @@ describe("compileGraph — explicit edges", () => {
 		);
 		const { steps, errors } = compileGraph(spec);
 		expect(errors).toEqual([]);
-		expect(steps.map((s) => s.id)).toEqual(["a", "b", "c"]);
+		expect(steps.map(s => s.id)).toEqual(["a", "b", "c"]);
 	});
 
 	test("user-wired reverse edge swaps the array order on save", () => {
@@ -87,7 +87,7 @@ describe("compileGraph — explicit edges", () => {
 		const spec = specWith([wait("a"), wait("b")], [{ from: "b", to: "a" }]);
 		const { steps, errors } = compileGraph(spec);
 		expect(errors).toEqual([]);
-		expect(steps.map((s) => s.id)).toEqual(["b", "a"]);
+		expect(steps.map(s => s.id)).toEqual(["b", "a"]);
 	});
 
 	test("diamond (branch + merge) produces a valid topo order", () => {
@@ -103,7 +103,7 @@ describe("compileGraph — explicit edges", () => {
 		);
 		const { steps, errors } = compileGraph(spec);
 		expect(errors).toEqual([]);
-		const ids = steps.map((s) => s.id);
+		const ids = steps.map(s => s.id);
 		// a must precede both b and c; both must precede d.
 		expect(ids.indexOf("a")).toBeLessThan(ids.indexOf("b"));
 		expect(ids.indexOf("a")).toBeLessThan(ids.indexOf("c"));
@@ -129,7 +129,7 @@ describe("compileGraph — explicit edges", () => {
 		};
 		const { steps, errors } = compileGraph(spec);
 		expect(errors).toEqual([]);
-		expect(steps.map((s) => s.id)).toEqual(["a", "b"]);
+		expect(steps.map(s => s.id)).toEqual(["a", "b"]);
 	});
 });
 
@@ -149,7 +149,7 @@ describe("compileGraph — stable tie-breaking", () => {
 		// the implementation pops the lowest index from `ready` each step, so
 		// after a's emission b becomes ready (index 1), then c (index 2) is
 		// still ready from the initial set. Expected: [a, b, c, d].
-		expect(steps.map((s) => s.id)).toEqual(["a", "b", "c", "d"]);
+		expect(steps.map(s => s.id)).toEqual(["a", "b", "c", "d"]);
 	});
 });
 
@@ -180,7 +180,7 @@ describe("compileGraph — errors", () => {
 			],
 		);
 		const { errors } = compileGraph(spec);
-		const cycle = errors.find((e) => e.code === "cycle");
+		const cycle = errors.find(e => e.code === "cycle");
 		expect(cycle).toBeDefined();
 		expect(cycle!.nodeIds.sort()).toEqual(["a", "b", "c"]);
 	});
@@ -196,25 +196,28 @@ describe("compileGraph — errors", () => {
 			},
 		};
 		const { errors } = compileGraph(spec);
-		const missing = errors.find((e) => e.code === "missing-target");
+		const missing = errors.find(e => e.code === "missing-target");
 		expect(missing).toBeDefined();
 		expect(missing!.nodeIds).toEqual(["ghost"]);
 		expect(missing!.message).toContain("ghost");
 	});
 
 	test("self-loop A→A is its own error code, NOT cycle", () => {
-		const spec = specWith([wait("a"), wait("b")], [
-			{ from: "a", to: "a" },
-			{ from: "a", to: "b" },
-		]);
+		const spec = specWith(
+			[wait("a"), wait("b")],
+			[
+				{ from: "a", to: "a" },
+				{ from: "a", to: "b" },
+			],
+		);
 		const { steps, errors } = compileGraph(spec);
-		const selfLoop = errors.find((e) => e.code === "self-loop");
+		const selfLoop = errors.find(e => e.code === "self-loop");
 		expect(selfLoop).toBeDefined();
 		expect(selfLoop!.nodeIds).toEqual(["a"]);
 		// Self-loop is dropped from adjacency so cycle detection does not also fire.
-		expect(errors.find((e) => e.code === "cycle")).toBeUndefined();
+		expect(errors.find(e => e.code === "cycle")).toBeUndefined();
 		// And the rest of the graph still topo-sorts (a → b is honored).
-		expect(steps.map((s) => s.id)).toEqual(["a", "b"]);
+		expect(steps.map(s => s.id)).toEqual(["a", "b"]);
 	});
 
 	test("duplicate step ids surface as duplicate-id errors", () => {
@@ -226,7 +229,7 @@ describe("compileGraph — errors", () => {
 			layout: { version: 1, edges: [{ from: "a", to: "b", kind: "success" }] },
 		};
 		const { errors } = compileGraph(spec);
-		const dup = errors.find((e) => e.code === "duplicate-id");
+		const dup = errors.find(e => e.code === "duplicate-id");
 		expect(dup).toBeDefined();
 		expect(dup!.nodeIds).toEqual(["a"]);
 		expect(dup!.message).toContain("2×");
@@ -243,7 +246,7 @@ describe("compileGraph — return shape on errors", () => {
 			],
 		);
 		const { steps } = compileGraph(spec);
-		expect(steps.map((s) => s.id)).toEqual(["a", "b"]);
+		expect(steps.map(s => s.id)).toEqual(["a", "b"]);
 	});
 
 	test("missing-target does NOT block topo of the valid subgraph", () => {
@@ -261,9 +264,9 @@ describe("compileGraph — return shape on errors", () => {
 			},
 		};
 		const { steps, errors } = compileGraph(spec);
-		expect(errors.find((e) => e.code === "missing-target")).toBeDefined();
+		expect(errors.find(e => e.code === "missing-target")).toBeDefined();
 		// Compile still emits a topo order over the known nodes.
-		expect(steps.map((s) => s.id)).toEqual(["a", "b"]);
+		expect(steps.map(s => s.id)).toEqual(["a", "b"]);
 	});
 });
 
@@ -283,7 +286,7 @@ describe("compileGraph — branch (`true`/`false`) edge compilation", () => {
 		};
 		const { steps, errors } = compileGraph(spec);
 		expect(errors).toEqual([]);
-		const act = steps.find((s) => s.id === "act")!;
+		const act = steps.find(s => s.id === "act")!;
 		expect(act.when).toBe("steps.gate.json === true");
 	});
 
@@ -302,7 +305,7 @@ describe("compileGraph — branch (`true`/`false`) edge compilation", () => {
 		};
 		const { steps, errors } = compileGraph(spec);
 		expect(errors).toEqual([]);
-		const fallback = steps.find((s) => s.id === "fallback")!;
+		const fallback = steps.find(s => s.id === "fallback")!;
 		expect(fallback.when).toBe("steps.gate.json === false");
 	});
 
@@ -326,7 +329,7 @@ describe("compileGraph — branch (`true`/`false`) edge compilation", () => {
 		};
 		const { steps, errors } = compileGraph(spec);
 		expect(errors).toEqual([]);
-		const target = steps.find((s) => s.id === "agent_send")!;
+		const target = steps.find(s => s.id === "agent_send")!;
 		expect(target.when).toBe("(state.enabled !== false) && (steps.should_send.json === true)");
 	});
 
@@ -350,7 +353,7 @@ describe("compileGraph — branch (`true`/`false`) edge compilation", () => {
 		};
 		const { steps, errors } = compileGraph(spec);
 		expect(errors).toEqual([]);
-		const target = steps.find((s) => s.id === "target")!;
+		const target = steps.find(s => s.id === "target")!;
 		// Branch clauses appear in edge-array order, each wrapped in parens.
 		expect(target.when).toBe("(steps.gateA.json === true) && (steps.gateB.json === false)");
 	});
@@ -367,7 +370,7 @@ describe("compileGraph — branch (`true`/`false`) edge compilation", () => {
 		};
 		const { steps, errors } = compileGraph(spec);
 		expect(errors).toEqual([]);
-		const b = steps.find((s) => s.id === "b")!;
+		const b = steps.find(s => s.id === "b")!;
 		expect(b.when).toBeUndefined();
 	});
 
@@ -375,11 +378,7 @@ describe("compileGraph — branch (`true`/`false`) edge compilation", () => {
 		const spec: RoutineSpec = {
 			name: "test",
 			trigger: baseTrigger,
-			steps: [
-				{ id: "gate", type: "transform", body: "return true;" },
-				wait("setup"),
-				wait("target"),
-			],
+			steps: [{ id: "gate", type: "transform", body: "return true;" }, wait("setup"), wait("target")],
 			layout: {
 				version: 1,
 				edges: [
@@ -390,10 +389,10 @@ describe("compileGraph — branch (`true`/`false`) edge compilation", () => {
 		};
 		const { steps, errors } = compileGraph(spec);
 		expect(errors).toEqual([]);
-		const target = steps.find((s) => s.id === "target")!;
+		const target = steps.find(s => s.id === "target")!;
 		expect(target.when).toBe("steps.gate.json === true");
 		// Topo: both `gate` and `setup` must come before `target`.
-		const ids = steps.map((s) => s.id);
+		const ids = steps.map(s => s.id);
 		expect(ids.indexOf("gate")).toBeLessThan(ids.indexOf("target"));
 		expect(ids.indexOf("setup")).toBeLessThan(ids.indexOf("target"));
 	});
@@ -413,11 +412,10 @@ describe("compileGraph — branch (`true`/`false`) edge compilation", () => {
 		};
 		const { steps } = compileGraph(spec);
 		// Compiled `act` carries the gate; the original spec.steps[1] does not.
-		expect(steps.find((s) => s.id === "act")!.when).toBe("steps.gate.json === true");
+		expect(steps.find(s => s.id === "act")!.when).toBe("steps.gate.json === true");
 		expect(spec.steps[1]!.when).toBeUndefined();
 	});
 });
-
 
 describe("if-node end-to-end (scaffold → wire → compile)", () => {
 	test("scaffolded `if` step is a transform with a boolean placeholder body", () => {
@@ -443,12 +441,12 @@ describe("if-node end-to-end (scaffold → wire → compile)", () => {
 		spec = applyEdgeConnection(spec, ifStep.id, "act_false", "false");
 		const { steps, errors } = compileGraph(spec);
 		expect(errors).toEqual([]);
-		const actTrue = steps.find((s) => s.id === "act_true")!;
-		const actFalse = steps.find((s) => s.id === "act_false")!;
+		const actTrue = steps.find(s => s.id === "act_true")!;
+		const actFalse = steps.find(s => s.id === "act_false")!;
 		expect(actTrue.when).toBe(`steps.${ifStep.id}.json === true`);
 		expect(actFalse.when).toBe(`steps.${ifStep.id}.json === false`);
 		// The if-node runs before both branches.
-		const ids = steps.map((s) => s.id);
+		const ids = steps.map(s => s.id);
 		expect(ids.indexOf(ifStep.id)).toBeLessThan(ids.indexOf("act_true"));
 		expect(ids.indexOf(ifStep.id)).toBeLessThan(ids.indexOf("act_false"));
 	});

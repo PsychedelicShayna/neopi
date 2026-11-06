@@ -11,7 +11,7 @@ describe("lineDiff", () => {
 	it("treats trailing newline as equivalent", () => {
 		const d = lineDiff("a\nb\n", "a\nb");
 		expect(diffIsClean(d)).toBe(true);
-		expect(d.map((l) => l.kind)).toEqual(["same", "same"]);
+		expect(d.map(l => l.kind)).toEqual(["same", "same"]);
 	});
 
 	it("flags pure additions", () => {
@@ -62,10 +62,10 @@ describe("lineDiff", () => {
 			"    when: steps.should_run.json === true",
 		].join("\n");
 		const d = lineDiff(before, after);
-		expect(d.filter((l) => l.kind === "add")).toEqual([
+		expect(d.filter(l => l.kind === "add")).toEqual([
 			{ kind: "add", text: "    when: steps.should_run.json === true" },
 		]);
-		expect(d.filter((l) => l.kind === "del").length).toBe(0);
+		expect(d.filter(l => l.kind === "del").length).toBe(0);
 	});
 
 	it("emits add for empty -> non-empty", () => {
@@ -103,10 +103,10 @@ describe("lineDiff", () => {
 		const d = lineDiff(before, after);
 		// The diff isn't unique; we just assert it's clean enough that adds + dels
 		// account for the rearrangement and at least one line is matched.
-		const adds = d.filter((l) => l.kind === "add").length;
-		const dels = d.filter((l) => l.kind === "del").length;
+		const adds = d.filter(l => l.kind === "add").length;
+		const dels = d.filter(l => l.kind === "del").length;
 		expect(adds).toBeGreaterThan(0);
 		expect(dels).toBeGreaterThan(0);
-		expect(d.filter((l) => l.kind === "same").length).toBeGreaterThan(0);
+		expect(d.filter(l => l.kind === "same").length).toBeGreaterThan(0);
 	});
 });

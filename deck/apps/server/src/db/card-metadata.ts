@@ -5,10 +5,18 @@ import { logger } from "../log.ts";
 const log = logger("card-metadata");
 
 /** Must run inside the same transaction that publishes the canonical card body. */
-export function canonicalCardBody(db: Database, taskId: string, body: string, properties?: Record<string, unknown>): string {
+export function canonicalCardBody(
+	db: Database,
+	taskId: string,
+	body: string,
+	properties?: Record<string, unknown>,
+): string {
 	if (/^---\r?\n/.test(body)) {
-		db.query("INSERT OR IGNORE INTO card_legacy_originals (task_id, body, imported_at) VALUES (?, ?, ?)")
-			.run(taskId, body, new Date().toISOString());
+		db.query("INSERT OR IGNORE INTO card_legacy_originals (task_id, body, imported_at) VALUES (?, ?, ?)").run(
+			taskId,
+			body,
+			new Date().toISOString(),
+		);
 	}
 	const canonical = importLegacyCardBody(body, `tasks/${taskId}`);
 	return withCardProperties(canonical, properties);

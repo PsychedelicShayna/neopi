@@ -122,10 +122,7 @@ export interface AgentBridge {
 	subscribePlanModeFrames(
 		sessionId: string,
 		listener: (
-			frame: Extract<
-				ServerFrame,
-				{ type: "plan_mode_changed" | "plan_proposed" | "plan_proposal_resolved" }
-			>,
+			frame: Extract<ServerFrame, { type: "plan_mode_changed" | "plan_proposed" | "plan_proposal_resolved" }>,
 		) => void,
 	): () => void;
 	/**
@@ -246,11 +243,7 @@ export interface SessionHandle {
 	 * re-enqueues survivors with the edited entry substituted — order
 	 * preserved. Emits a synthetic `queue_state` event on success.
 	 */
-	editQueuedById(
-		id: string,
-		text: string,
-		images?: import("@npi-deck/protocol").ImageAttachment[],
-	): Promise<boolean>;
+	editQueuedById(id: string, text: string, images?: import("@npi-deck/protocol").ImageAttachment[]): Promise<boolean>;
 	abort(): Promise<void>;
 	setName(name: string): Promise<void>;
 	/**
@@ -294,10 +287,7 @@ export interface SessionHandle {
 	 * `"unknown"` when the proposalId does not match the pending entry
 	 * (already resolved by a sibling tab; second clicker gets a 409).
 	 */
-	respondToPlanApproval(
-		proposalId: string,
-		response: PlanApprovalResponse,
-	): Promise<"settled" | "unknown">;
+	respondToPlanApproval(proposalId: string, response: PlanApprovalResponse): Promise<"settled" | "unknown">;
 }
 
 export type SlashDispatchResult =

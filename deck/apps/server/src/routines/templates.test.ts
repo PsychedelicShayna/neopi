@@ -26,7 +26,7 @@ const REQUIRED_SHIPPED = ["daily-briefing", "kb-orphan-census"] as const;
 
 describe("routine templates", () => {
 	test("every required shipped template is in the listing", () => {
-		const slugs = new Set(listTemplates().map((t) => t.slug));
+		const slugs = new Set(listTemplates().map(t => t.slug));
 		for (const required of REQUIRED_SHIPPED) {
 			expect(slugs.has(required)).toBe(true);
 		}
@@ -40,7 +40,7 @@ describe("routine templates", () => {
 			if (!loaded) return;
 			const result = validateRoutineSpec(loaded.spec);
 			if (!result.valid) {
-				const reasons = (result.errors ?? []).map((e) => `  ${e.path}: ${e.message}`).join("\n");
+				const reasons = (result.errors ?? []).map(e => `  ${e.path}: ${e.message}`).join("\n");
 				throw new Error(`${summary.slug} failed validation:\n${reasons}`);
 			}
 		});
@@ -58,7 +58,8 @@ function templateDirectory(): string {
 	return directory;
 }
 
-const legacyTemplate = "# original user source\nname: user-template # user slug comment\ntrigger:\n  - manual: {}\nsteps:\n  - id: state\n    type: set_state\n    state: {cleared: null, nested: [null, false, 0, '']} # nested payload comment\n";
+const legacyTemplate =
+	"# original user source\nname: user-template # user slug comment\ntrigger:\n  - manual: {}\nsteps:\n  - id: state\n    type: set_state\n    state: {cleared: null, nested: [null, false, 0, '']} # nested payload comment\n";
 
 test("YAML-only user templates import once atomically with original permissions and provenance", async () => {
 	const directory = templateDirectory();
@@ -69,22 +70,28 @@ test("YAML-only user templates import once atomically with original permissions 
 	const loaded = loadTemplate("user-template", directory)!;
 	expect(loaded).not.toBeNull();
 	expect(loaded.spec.steps[0]).toMatchObject({ state: { cleared: null, nested: [null, false, 0, ""] } });
-	for (const comment of ["# original user source", "# user slug comment", "# nested payload comment"]) expect(loaded.specToml).toContain(comment);
+	for (const comment of ["# original user source", "# user slug comment", "# nested payload comment"])
+		expect(loaded.specToml).toContain(comment);
 	expect(await Bun.file(legacyPath).text()).toBe(legacyTemplate);
 	expect(await Bun.file(target).text()).toBe(loaded.specToml);
-	if (process.platform !== "win32") expect(fs.statSync(target).mode & 0o777).toBe(fs.statSync(legacyPath).mode & 0o777);
+	if (process.platform !== "win32")
+		expect(fs.statSync(target).mode & 0o777).toBe(fs.statSync(legacyPath).mode & 0o777);
 	expect(fs.readdirSync(directory).sort()).toEqual(["user-template.toml", "user-template.yaml"]);
 	const edited = `${loaded.specToml}\n# native edit wins forever\n`;
 	await Bun.write(target, edited);
 	await Bun.write(legacyPath, "invalid: [");
 	expect(loadTemplate("user-template", directory)?.specToml).toBe(edited);
-	expect(listTemplates(directory).map((template) => template.slug)).toEqual(["user-template"]);
+	expect(listTemplates(directory).map(template => template.slug)).toEqual(["user-template"]);
 	expect(await Bun.file(legacyPath).text()).toBe("invalid: [");
 });
 
 test("existing TOML wins over both legacy suffixes without parsing or replacing them", async () => {
 	const directory = templateDirectory();
-	const spec: RoutineSpec = { name: "native", trigger: [{ manual: {} }], steps: [{ id: "wait", type: "wait", duration_secs: 1 }] };
+	const spec: RoutineSpec = {
+		name: "native",
+		trigger: [{ manual: {} }],
+		steps: [{ id: "wait", type: "wait", duration_secs: 1 }],
+	};
 	const toml = stringifySettingsToml(spec as unknown as Record<string, unknown>);
 	await Bun.write(path.join(directory, "user-template.toml"), toml);
 	await Bun.write(path.join(directory, "user-template.yaml"), "invalid: [");
@@ -99,7 +106,9 @@ test("YML-only templates are imported while unsupported YAML never creates a tar
 	const directory = templateDirectory();
 	await Bun.write(path.join(directory, "user-template.yml"), legacyTemplate);
 	expect(loadTemplate("user-template", directory)?.spec.name).toBe("user-template");
-	expect(parseSettingsToml(await Bun.file(path.join(directory, "user-template.toml")).text()).name).toBe("user-template");
+	expect(parseSettingsToml(await Bun.file(path.join(directory, "user-template.toml")).text()).name).toBe(
+		"user-template",
+	);
 	const invalid = `${legacyTemplate}\nunknown: do-not-drop\n`;
 	await Bun.write(path.join(directory, "invalid.yaml"), invalid);
 	expect(loadTemplate("invalid", directory)).toBeNull();

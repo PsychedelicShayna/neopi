@@ -96,14 +96,15 @@ describe("native TOML builder source", () => {
 		const result = parseSpec(toml);
 		expect(result.ok).toBe(false);
 		expect(result.tomlError).toBeUndefined();
-		expect(result.schemaErrors?.some((error) => error.path === "/steps")).toBe(true);
+		expect(result.schemaErrors?.some(error => error.path === "/steps")).toBe(true);
 	});
 
 	test("direct specs preserve nested actions, expressions and layout", () => {
-		const cardBody = "+++\n# Keep card metadata\nread-only = true\ncustom = {values = [1, 'two']}\n+++\n{{ steps.prepare.stdout }}\n";
+		const cardBody =
+			"+++\n# Keep card metadata\nread-only = true\ncustom = {values = [1, 'two']}\n+++\n{{ steps.prepare.stdout }}\n";
 		const spec: RoutineSpec = {
 			name: "nested-actions",
-			description: "Unicode 🐇 and \"quoted\" source",
+			description: 'Unicode 🐇 and "quoted" source',
 			trigger: [
 				{ manual: { params_schema: { type: "object", properties: { title: { type: "string" } } } } },
 				{ webhook: { path: "/hooks/local-test", secret_env: "TEST_SECRET" } },
@@ -155,7 +156,7 @@ describe("native TOML builder source", () => {
 	});
 
 	test("syntax failures and schema failures remain separate", () => {
-		const syntax = parseSpec('name = [');
+		const syntax = parseSpec("name = [");
 		expect(syntax.ok).toBe(false);
 		expect(syntax.tomlError?.message).toBeTruthy();
 		expect(syntax.tomlError?.line).toBe(1);
@@ -248,7 +249,9 @@ describe("shared native source semantics", () => {
 		const spec: RoutineSpec = {
 			name: "null-state",
 			trigger: [{ manual: {} }],
-			steps: [{ id: "state", type: "set_state", state: { cleared: null, nested: [null, "", false, 0], "a/b~c": null } }],
+			steps: [
+				{ id: "state", type: "set_state", state: { cleared: null, nested: [null, "", false, 0], "a/b~c": null } },
+			],
 		};
 		const source = stringifySpec(spec);
 		expect(source).toContain("__npi");
@@ -256,13 +259,15 @@ describe("shared native source semantics", () => {
 	});
 
 	test("form edits and source re-saves retain unrelated comments and authored text", () => {
-		const source = "# top-level note\nname = 'comments'\n# trigger note\n[[trigger]]\nmanual = {}\n\n[[steps]]\n# step note\nid = 'wait'\ntype = 'wait'\nduration_secs = 1 # timing\n";
+		const source =
+			"# top-level note\nname = 'comments'\n# trigger note\n[[trigger]]\nmanual = {}\n\n[[steps]]\n# step note\nid = 'wait'\ntype = 'wait'\nduration_secs = 1 # timing\n";
 		const parsed = parseSpec(source);
 		expect(parsed.ok).toBe(true);
 		expect(stringifySpec(parsed.spec!, source)).toBe(source);
 		const edited: RoutineSpec = { ...parsed.spec!, steps: [{ id: "wait", type: "wait", duration_secs: 2 }] };
 		const saved = stringifySpec(edited, source);
-		for (const comment of ["# top-level note", "# trigger note", "# step note", "# timing"]) expect(saved).toContain(comment);
+		for (const comment of ["# top-level note", "# trigger note", "# step note", "# timing"])
+			expect(saved).toContain(comment);
 		expect(saved).toContain("name = 'comments'");
 		expect(parseSpec(saved)).toEqual({ ok: true, spec: edited });
 	});
@@ -272,7 +277,16 @@ describe("shared native source semantics", () => {
 			name: "optional",
 			description: undefined,
 			trigger: [{ manual: {} }],
-			steps: [{ id: "request", type: "http", method: "POST", url: "http://127.0.0.1/unused", headers: undefined, body: { cleared: null } }],
+			steps: [
+				{
+					id: "request",
+					type: "http",
+					method: "POST",
+					url: "http://127.0.0.1/unused",
+					headers: undefined,
+					body: { cleared: null },
+				},
+			],
 		});
 		const parsed = parseSpec(source);
 		expect(parsed.ok).toBe(true);
@@ -287,4 +301,3 @@ describe("shared native source semantics", () => {
 		expect(result.tomlError?.message).toBeTruthy();
 	});
 });
-

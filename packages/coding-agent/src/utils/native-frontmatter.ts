@@ -7,6 +7,7 @@ import {
 	stringifySettingsToml,
 } from "@oh-my-pi/pi-utils/settings-toml";
 import { preserveLegacyYamlComments } from "@oh-my-pi/pi-utils/legacy-yaml-import";
+import { splitTomlFrontmatter } from "@oh-my-pi/pi-utils/toml-frontmatter";
 
 export interface NativeMarkdownDocument {
 	frontmatter: Record<string, unknown>;
@@ -25,21 +26,9 @@ export function renderNativeMarkdown(frontmatter: Record<string, unknown>, body:
 
 /** A delimiter inside a TOML multiline string is data, not the closing fence. */
 function parseNativeParts(content: string, filePath?: string): NativeMarkdownDocument & { metadata: string } {
-	const opening = /^\+\+\+\r?\n/.exec(content);
-	if (!opening) throw new Error("Missing +++ native Markdown frontmatter boundary");
-	const rest = content.slice(opening[0].length);
-	let parseError: unknown;
-	for (const closing of rest.matchAll(/^\+\+\+\r?$/gm)) {
-		const metadata = rest.slice(0, closing.index);
-		try {
-			const frontmatter = parseSettingsToml(metadata, filePath);
-			return { metadata, frontmatter, body: rest.slice(closing.index + closing[0].length).replace(/^\r?\n/, "") };
-		} catch (error) {
-			parseError = error;
-		}
-	}
-	if (parseError) throw parseError;
-	throw new Error("Unclosed +++ native Markdown frontmatter");
+	const parts = splitTomlFrontmatter(content, header => parseSettingsToml(header, filePath));
+	if (!parts) throw new Error("Missing +++ native Markdown frontmatter boundary");
+	return { metadata: parts.header, frontmatter: parts.properties, body: parts.content };
 }
 
 function splitFrontmatter(content: string, boundary: "---"): { metadata: string; body: string } {

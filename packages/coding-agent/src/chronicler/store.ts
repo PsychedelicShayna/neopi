@@ -858,7 +858,7 @@ export class ChroniclerStore {
 		listed: { id: string; file: string },
 		file: string,
 	): Promise<BeatRecord> {
-		let document: ChroniclerDocument & { filePath: string };
+		let document: NativeMarkdownDocument & { filePath: string };
 		try {
 			document = await readNativeMarkdown(file, { readOnly: this.#readOnlySnapshot });
 		} catch (error) {

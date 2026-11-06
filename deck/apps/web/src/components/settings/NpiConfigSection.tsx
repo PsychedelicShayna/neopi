@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useState, type ComponentType } from "react";
 import { Link } from "react-router-dom";
 import { ArrowDown, ArrowUp, RotateCcw, Save, Search, X } from "lucide-react";
-import type { NpiConfigPatchResponse, NpiConfigProvenance, NpiConfigResponse, NpiConfigSetting } from "@npi-deck/protocol";
+import type {
+	NpiConfigPatchResponse,
+	NpiConfigProvenance,
+	NpiConfigResponse,
+	NpiConfigSetting,
+} from "@npi-deck/protocol";
 
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -43,10 +48,14 @@ export function NpiConfigSection() {
 			setError(err instanceof Error ? err.message : String(err));
 		}
 	}, []);
-	useEffect(() => { void refresh(); }, [refresh]);
+	useEffect(() => {
+		void refresh();
+	}, [refresh]);
 
 	const replace = useCallback((setting: NpiConfigSetting) => {
-		setData(current => current && { ...current, settings: current.settings.map(s => s.id === setting.id ? setting : s) });
+		setData(
+			current => current && { ...current, settings: current.settings.map(s => (s.id === setting.id ? setting : s)) },
+		);
 	}, []);
 
 	const sections = useMemo(() => {
@@ -56,11 +65,15 @@ export function NpiConfigSection() {
 			[s.id, s.label, s.description, s.group].some(text => text.toLowerCase().includes(needle));
 		return data.tabs
 			.filter(t => needle !== "" || t.id === tab)
-			.flatMap(t => t.groups.map(group => ({
-				key: `${t.id}/${group}`,
-				title: needle ? `${t.label} › ${group}` : group,
-				settings: data.settings.filter(s => s.tab === t.id && s.group === group && (needle === "" || matches(s))),
-			})))
+			.flatMap(t =>
+				t.groups.map(group => ({
+					key: `${t.id}/${group}`,
+					title: needle ? `${t.label} › ${group}` : group,
+					settings: data.settings.filter(
+						s => s.tab === t.id && s.group === group && (needle === "" || matches(s)),
+					),
+				})),
+			)
 			.filter(section => section.settings.length > 0);
 	}, [data, query, tab]);
 
@@ -70,9 +83,8 @@ export function NpiConfigSection() {
 				<div>
 					<h1 className="text-xl font-semibold tracking-tight">NeoPi configuration</h1>
 					<p className="mt-1 max-w-3xl text-sm text-ink-3">
-						Every registered NeoPi setting. Saving writes the global config file and reloads each live
-						chat's settings, so changes apply without a restart. Provenance is resolved for the default
-						workspace.
+						Every registered NeoPi setting. Saving writes the global config file and reloads each live chat's
+						settings, so changes apply without a restart. Provenance is resolved for the default workspace.
 					</p>
 				</div>
 				<Button variant="outline" size="sm" onClick={() => void refresh()}>
@@ -81,7 +93,12 @@ export function NpiConfigSection() {
 				</Button>
 			</div>
 			{error ? (
-				<div role="alert" className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 font-mono text-xs text-danger">{error}</div>
+				<div
+					role="alert"
+					className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 font-mono text-xs text-danger"
+				>
+					{error}
+				</div>
 			) : null}
 			{data ? (
 				<>
@@ -99,7 +116,12 @@ export function NpiConfigSection() {
 							className="h-8 flex-1 bg-transparent text-sm outline-none placeholder:text-ink-4"
 						/>
 						{query ? (
-							<button type="button" aria-label="Clear search" className="text-ink-4 hover:text-ink" onClick={() => setQuery("")}>
+							<button
+								type="button"
+								aria-label="Clear search"
+								className="text-ink-4 hover:text-ink"
+								onClick={() => setQuery("")}
+							>
 								<X className="h-3.5 w-3.5" />
 							</button>
 						) : null}
@@ -118,7 +140,8 @@ export function NpiConfigSection() {
 										tab === t.id ? "bg-accent-soft text-accent" : "text-ink-3 hover:bg-paper-3",
 									)}
 								>
-									{t.label} <span className="text-ink-4">{data.settings.filter(s => s.tab === t.id).length}</span>
+									{t.label}{" "}
+									<span className="text-ink-4">{data.settings.filter(s => s.tab === t.id).length}</span>
 								</button>
 							))}
 						</div>
@@ -137,12 +160,22 @@ export function NpiConfigSection() {
 						</div>
 					))}
 				</>
-			) : error ? null : <div className="text-sm text-ink-3">Loading...</div>}
+			) : error ? null : (
+				<div className="text-sm text-ink-3">Loading...</div>
+			)}
 		</div>
 	);
 }
 
-function SettingRow({ setting, cwd, onSaved }: { setting: NpiConfigSetting; cwd: string; onSaved: (setting: NpiConfigSetting) => void }) {
+function SettingRow({
+	setting,
+	cwd,
+	onSaved,
+}: {
+	setting: NpiConfigSetting;
+	cwd: string;
+	onSaved: (setting: NpiConfigSetting) => void;
+}) {
 	const [draft, setDraft] = useState<Draft>(CLEAN);
 	const [generation, setGeneration] = useState(0);
 	const [busy, setBusy] = useState(false);
@@ -150,7 +183,10 @@ function SettingRow({ setting, cwd, onSaved }: { setting: NpiConfigSetting; cwd:
 	const [status, setStatus] = useState<{ text: string; complete: boolean } | undefined>();
 	const locked = setting.lockedReason !== undefined;
 
-	const discard = () => { setDraft(CLEAN); setGeneration(g => g + 1); };
+	const discard = () => {
+		setDraft(CLEAN);
+		setGeneration(g => g + 1);
+	};
 	// A saved or reloaded setting remounts its editor from the new value.
 	const [shown, setShown] = useState(setting);
 	if (shown !== setting) {
@@ -181,55 +217,93 @@ function SettingRow({ setting, cwd, onSaved }: { setting: NpiConfigSetting; cwd:
 			<div className="min-w-0 space-y-1">
 				<div className="flex flex-wrap items-center gap-1.5">
 					<span className="font-medium text-ink">{setting.label}</span>
-					<Badge tone={provenanceTone(setting.provenance)} title="Layer supplying the effective value">{setting.provenance}</Badge>
+					<Badge tone={provenanceTone(setting.provenance)} title="Layer supplying the effective value">
+						{setting.provenance}
+					</Badge>
 					{setting.secret ? <Badge tone="danger">secret</Badge> : null}
 					{locked ? <Badge tone="warn">locked</Badge> : null}
 				</div>
-				<div className="break-all font-mono text-2xs text-ink-4">{setting.id} · {setting.type}</div>
+				<div className="break-all font-mono text-2xs text-ink-4">
+					{setting.id} · {setting.type}
+				</div>
 				{setting.warning ? <p className="text-xs text-warn">{setting.warning}</p> : null}
 				<p className="text-xs text-ink-3">{setting.description || "Config-file setting without panel metadata."}</p>
-				{notes(setting, cwd).map(note => <p key={note} className="text-xs text-ink-3">{note}</p>)}
+				{notes(setting, cwd).map(note => (
+					<p key={note} className="text-xs text-ink-3">
+						{note}
+					</p>
+				))}
 			</div>
 			<div className="min-w-0 space-y-2">
 				{dedicated ? (
 					<p className="text-xs text-ink-3">
 						Edited per role in{" "}
-						<Link to={`?section=${dedicated.section}`} className="text-accent underline underline-offset-2">Settings → {dedicated.label}</Link>,
-						which changes one key at a time and keeps the rest.
+						<Link to={`?section=${dedicated.section}`} className="text-accent underline underline-offset-2">
+							Settings → {dedicated.label}
+						</Link>
+						, which changes one key at a time and keeps the rest.
 					</p>
 				) : (
 					<>
-					{locked ? <p role="note" className="rounded-md border border-warn/30 bg-warn/10 px-2 py-1 text-xs text-warn">{setting.lockedReason}</p> : null}
-					<Editor key={generation} setting={setting} disabled={locked || busy} onChange={setDraft} />
-					{invalid ? <p className="font-mono text-2xs text-danger">{invalid}</p> : null}
-					{error ? <p role="alert" className="font-mono text-2xs text-danger">{error}</p> : null}
-					{status ? <p role="status" className={cn("text-2xs", status.complete ? "text-success" : "text-warn")}>{status.text}</p> : null}
-					<div className="flex flex-wrap items-center gap-2">
-						<Button
-							variant="primary"
-							size="sm"
-							disabled={locked || busy || !draft.dirty || invalid !== undefined}
-							onClick={() => {
-								if (!draft.dirty || "error" in draft) return;
-								void run(() => "entries" in draft ? npiConfigApi.setEntries(setting.id, draft.entries) : npiConfigApi.set(setting.id, draft.value));
-							}}
-						>
-							<Save className="h-3.5 w-3.5" />
-							Save
-						</Button>
-						{draft.dirty ? <Button variant="ghost" size="sm" disabled={busy} onClick={discard}>Discard</Button> : null}
-						<Button
-							variant="outline"
-							size="sm"
-							disabled={locked || busy || !setting.inGlobalConfig}
-							title={setting.inGlobalConfig ? "Remove this key from config.toml" : "config.toml does not set this key"}
-							onClick={() => void run(() => npiConfigApi.reset(setting.id))}
-						>
-							<RotateCcw className="h-3.5 w-3.5" />
-							Reset to default
-						</Button>
-						{!setting.secret ? <span className="truncate font-mono text-2xs text-ink-4">default {preview(setting.defaultValue)}</span> : null}
-					</div>
+						{locked ? (
+							<p role="note" className="rounded-md border border-warn/30 bg-warn/10 px-2 py-1 text-xs text-warn">
+								{setting.lockedReason}
+							</p>
+						) : null}
+						<Editor key={generation} setting={setting} disabled={locked || busy} onChange={setDraft} />
+						{invalid ? <p className="font-mono text-2xs text-danger">{invalid}</p> : null}
+						{error ? (
+							<p role="alert" className="font-mono text-2xs text-danger">
+								{error}
+							</p>
+						) : null}
+						{status ? (
+							<p role="status" className={cn("text-2xs", status.complete ? "text-success" : "text-warn")}>
+								{status.text}
+							</p>
+						) : null}
+						<div className="flex flex-wrap items-center gap-2">
+							<Button
+								variant="primary"
+								size="sm"
+								disabled={locked || busy || !draft.dirty || invalid !== undefined}
+								onClick={() => {
+									if (!draft.dirty || "error" in draft) return;
+									void run(() =>
+										"entries" in draft
+											? npiConfigApi.setEntries(setting.id, draft.entries)
+											: npiConfigApi.set(setting.id, draft.value),
+									);
+								}}
+							>
+								<Save className="h-3.5 w-3.5" />
+								Save
+							</Button>
+							{draft.dirty ? (
+								<Button variant="ghost" size="sm" disabled={busy} onClick={discard}>
+									Discard
+								</Button>
+							) : null}
+							<Button
+								variant="outline"
+								size="sm"
+								disabled={locked || busy || !setting.inGlobalConfig}
+								title={
+									setting.inGlobalConfig
+										? "Remove this key from config.toml"
+										: "config.toml does not set this key"
+								}
+								onClick={() => void run(() => npiConfigApi.reset(setting.id))}
+							>
+								<RotateCcw className="h-3.5 w-3.5" />
+								Reset to default
+							</Button>
+							{!setting.secret ? (
+								<span className="truncate font-mono text-2xs text-ink-4">
+									default {preview(setting.defaultValue)}
+								</span>
+							) : null}
+						</div>
 					</>
 				)}
 			</div>
@@ -239,14 +313,30 @@ function SettingRow({ setting, cwd, onSaved }: { setting: NpiConfigSetting; cwd:
 
 function notes(setting: NpiConfigSetting, cwd: string): string[] {
 	const out: string[] = [];
-	if (setting.invalidGlobalValue) out.push("config.toml holds a value this setting rejects; NeoPi ignores it and uses the default. Save a valid value or reset.");
+	if (setting.invalidGlobalValue)
+		out.push(
+			"config.toml holds a value this setting rejects; NeoPi ignores it and uses the default. Save a valid value or reset.",
+		);
 	if (setting.provenance === "project" || setting.provenance === "overlay" || setting.provenance === "runtime")
 		out.push(`A ${setting.provenance} layer overrides the global value in ${cwd}.`);
 	if (setting.env?.active && setting.env.fallback)
-		out.push(setting.provenance === "env" ? `Using $${setting.env.name} until a config value is saved.` : `Config overrides $${setting.env.name}.`);
-	if (setting.secret && setting.type === "record") out.push("Values are never shown. Saving merges the fields you send into that entry; other entries and fields are kept.");
-	else if (setting.secret) out.push(setting.configured ? "A value is configured; it is never shown. Saving replaces it." : "No value is configured.");
-	else if (setting.provenance !== "global" && setting.provenance !== "default") out.push(`Effective: ${preview(setting.effectiveValue)}`);
+		out.push(
+			setting.provenance === "env"
+				? `Using $${setting.env.name} until a config value is saved.`
+				: `Config overrides $${setting.env.name}.`,
+		);
+	if (setting.secret && setting.type === "record")
+		out.push(
+			"Values are never shown. Saving merges the fields you send into that entry; other entries and fields are kept.",
+		);
+	else if (setting.secret)
+		out.push(
+			setting.configured
+				? "A value is configured; it is never shown. Saving replaces it."
+				: "No value is configured.",
+		);
+	else if (setting.provenance !== "global" && setting.provenance !== "default")
+		out.push(`Effective: ${preview(setting.effectiveValue)}`);
 	return out;
 }
 
@@ -257,13 +347,17 @@ function liveSummary(result: NpiConfigPatchResponse): { text: string; complete: 
 	const failed = result.live.filter(l => l.reloadFailed);
 	const shadowed = new Map<string, number>();
 	for (const l of result.live) {
-		if (!l.reloadFailed && l.provenance !== "global" && l.provenance !== "default") shadowed.set(l.provenance, (shadowed.get(l.provenance) ?? 0) + 1);
+		if (!l.reloadFailed && l.provenance !== "global" && l.provenance !== "default")
+			shadowed.set(l.provenance, (shadowed.get(l.provenance) ?? 0) + 1);
 	}
 	const held = [...shadowed.values()].reduce((sum, n) => sum + n, 0);
 	const chats = (n: number) => `${n} live chat${n === 1 ? "" : "s"}`;
 	const parts = [`${saved} ${result.live.length - failed.length - held} of ${chats(result.live.length)} now use it.`];
 	for (const [provenance, n] of shadowed) parts.push(`${chats(n)} keep a ${provenance} value.`);
-	if (failed.length) parts.push(`${chats(failed.length)} failed to reload and keep their previous settings; the server log has details.`);
+	if (failed.length)
+		parts.push(
+			`${chats(failed.length)} failed to reload and keep their previous settings; the server log has details.`,
+		);
 	return { text: parts.join(" "), complete: failed.length === 0 && held === 0 };
 }
 
@@ -286,10 +380,14 @@ const isStringList = (value: unknown): value is string[] =>
 
 function editorFor(setting: NpiConfigSetting): ComponentType<EditorProps> {
 	switch (setting.type) {
-		case "boolean": return BooleanEditor;
-		case "enum": return EnumEditor;
-		case "number": return NumberEditor;
-		case "string": return setting.secret ? SecretTextEditor : StringEditor;
+		case "boolean":
+			return BooleanEditor;
+		case "enum":
+			return EnumEditor;
+		case "number":
+			return NumberEditor;
+		case "string":
+			return setting.secret ? SecretTextEditor : StringEditor;
 		case "array":
 			if (setting.options || setting.items) return ChoiceListEditor;
 			return isStringList(setting.value) && isStringList(setting.defaultValue) ? StringListEditor : JsonEditor;
@@ -329,7 +427,11 @@ function EnumEditor({ setting, disabled, onChange }: EditorProps) {
 			}}
 			className="field h-7 w-full px-2 font-mono text-2xs"
 		>
-			{(setting.enumValues ?? []).map(v => <option key={v} value={v}>{labels.get(v) && labels.get(v) !== v ? `${labels.get(v)} (${v})` : v}</option>)}
+			{(setting.enumValues ?? []).map(v => (
+				<option key={v} value={v}>
+					{labels.get(v) && labels.get(v) !== v ? `${labels.get(v)} (${v})` : v}
+				</option>
+			))}
 		</select>
 	);
 }
@@ -370,14 +472,22 @@ function StringEditor({ setting, disabled, onChange }: EditorProps) {
 		onChange(next === initial ? CLEAN : { dirty: true, value: next });
 	};
 	return initial.includes("\n") || initial.length > 120 ? (
-		<textarea value={text} disabled={disabled} rows={4} onChange={e => update(e.target.value)} className="field w-full resize-y px-2 py-1.5 font-mono text-2xs" />
+		<textarea
+			value={text}
+			disabled={disabled}
+			rows={4}
+			onChange={e => update(e.target.value)}
+			className="field w-full resize-y px-2 py-1.5 font-mono text-2xs"
+		/>
 	) : (
 		<>
 			<input
 				value={text}
 				disabled={disabled}
 				list={list}
-				placeholder={setting.value === null ? "unset" : setting.runtimeOptions ? "name provided at runtime" : undefined}
+				placeholder={
+					setting.value === null ? "unset" : setting.runtimeOptions ? "name provided at runtime" : undefined
+				}
 				onChange={e => update(e.target.value)}
 				className="field h-7 w-full px-2 font-mono text-2xs"
 			/>
@@ -390,7 +500,11 @@ function OptionList({ id, setting }: { id: string | undefined; setting: NpiConfi
 	if (!id || !setting.options) return null;
 	return (
 		<datalist id={id}>
-			{setting.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+			{setting.options.map(o => (
+				<option key={o.value} value={o.value}>
+					{o.label}
+				</option>
+			))}
 		</datalist>
 	);
 }
@@ -417,7 +531,8 @@ function SecretTextEditor({ setting, disabled, onChange }: EditorProps) {
 /** Membership among the registry's choices; ordered settings also reorder. */
 function ChoiceListEditor({ setting, disabled, onChange }: EditorProps) {
 	const initial = Array.isArray(setting.value) ? setting.value.map(String) : [];
-	const choices = setting.options ?? (setting.items ?? []).map(value => ({ value, label: value, description: undefined }));
+	const choices =
+		setting.options ?? (setting.items ?? []).map(value => ({ value, label: value, description: undefined }));
 	const [selected, setSelected] = useState(initial);
 	const update = (next: string[]) => {
 		setSelected(next);
@@ -441,20 +556,50 @@ function ChoiceListEditor({ setting, disabled, onChange }: EditorProps) {
 					<div key={value} className="flex items-center gap-1 rounded bg-paper-2 px-1.5 py-0.5 text-2xs">
 						<span className="w-5 font-mono text-ink-4">{index + 1}</span>
 						<span className="flex-1 truncate font-mono">{label(value)}</span>
-						<button type="button" aria-label={`Move ${value} up`} disabled={disabled || index === 0} onClick={() => move(index, -1)} className="text-ink-4 hover:text-ink disabled:opacity-30"><ArrowUp className="h-3 w-3" /></button>
-						<button type="button" aria-label={`Move ${value} down`} disabled={disabled || index === selected.length - 1} onClick={() => move(index, 1)} className="text-ink-4 hover:text-ink disabled:opacity-30"><ArrowDown className="h-3 w-3" /></button>
-						<button type="button" aria-label={`Remove ${value}`} disabled={disabled} onClick={() => update(selected.filter(v => v !== value))} className="text-ink-4 hover:text-danger"><X className="h-3 w-3" /></button>
+						<button
+							type="button"
+							aria-label={`Move ${value} up`}
+							disabled={disabled || index === 0}
+							onClick={() => move(index, -1)}
+							className="text-ink-4 hover:text-ink disabled:opacity-30"
+						>
+							<ArrowUp className="h-3 w-3" />
+						</button>
+						<button
+							type="button"
+							aria-label={`Move ${value} down`}
+							disabled={disabled || index === selected.length - 1}
+							onClick={() => move(index, 1)}
+							className="text-ink-4 hover:text-ink disabled:opacity-30"
+						>
+							<ArrowDown className="h-3 w-3" />
+						</button>
+						<button
+							type="button"
+							aria-label={`Remove ${value}`}
+							disabled={disabled}
+							onClick={() => update(selected.filter(v => v !== value))}
+							className="text-ink-4 hover:text-danger"
+						>
+							<X className="h-3 w-3" />
+						</button>
 					</div>
 				))}
 				{remaining.length > 0 ? (
 					<select
 						value=""
 						disabled={disabled}
-						onChange={e => { if (e.target.value) update([...selected, e.target.value]); }}
+						onChange={e => {
+							if (e.target.value) update([...selected, e.target.value]);
+						}}
 						className="field h-7 w-full px-2 font-mono text-2xs"
 					>
 						<option value="">+ add…</option>
-						{remaining.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+						{remaining.map(c => (
+							<option key={c.value} value={c.value}>
+								{c.label}
+							</option>
+						))}
 					</select>
 				) : null}
 			</div>
@@ -463,20 +608,28 @@ function ChoiceListEditor({ setting, disabled, onChange }: EditorProps) {
 	const unknown = selected.filter(value => !choices.some(c => c.value === value));
 	return (
 		<div className="grid grid-cols-1 gap-x-3 gap-y-1 sm:grid-cols-2">
-			{[...choices, ...unknown.map(value => ({ value, label: `${value} (unknown)`, description: undefined }))].map(choice => (
-				<label key={choice.value} className="flex items-center gap-1.5 text-2xs text-ink-2" title={choice.description}>
-					<input
-						type="checkbox"
-						disabled={disabled}
-						checked={selected.includes(choice.value)}
-						onChange={e => {
-							// Membership changes never reorder: new entries go last.
-							update(e.target.checked ? [...selected, choice.value] : selected.filter(v => v !== choice.value));
-						}}
-					/>
-					<span className="truncate font-mono">{choice.label}</span>
-				</label>
-			))}
+			{[...choices, ...unknown.map(value => ({ value, label: `${value} (unknown)`, description: undefined }))].map(
+				choice => (
+					<label
+						key={choice.value}
+						className="flex items-center gap-1.5 text-2xs text-ink-2"
+						title={choice.description}
+					>
+						<input
+							type="checkbox"
+							disabled={disabled}
+							checked={selected.includes(choice.value)}
+							onChange={e => {
+								// Membership changes never reorder: new entries go last.
+								update(
+									e.target.checked ? [...selected, choice.value] : selected.filter(v => v !== choice.value),
+								);
+							}}
+						/>
+						<span className="truncate font-mono">{choice.label}</span>
+					</label>
+				),
+			)}
 		</div>
 	);
 }
@@ -493,7 +646,10 @@ function StringListEditor({ setting, disabled, onChange }: EditorProps) {
 			placeholder="one entry per line"
 			onChange={e => {
 				setText(e.target.value);
-				const next = e.target.value.split("\n").map(line => line.trim()).filter(Boolean);
+				const next = e.target.value
+					.split("\n")
+					.map(line => line.trim())
+					.filter(Boolean);
 				onChange(same(next, initial) ? CLEAN : { dirty: true, value: next });
 			}}
 			className="field w-full resize-y px-2 py-1.5 font-mono text-2xs"
@@ -510,7 +666,13 @@ function JsonEditor({ setting, disabled, onChange }: EditorProps) {
 			value={text}
 			disabled={disabled}
 			rows={Math.min(14, Math.max(3, initial.split("\n").length))}
-			placeholder={setting.secret ? (setting.configured ? "configured; paste a JSON object to replace it" : "JSON object") : undefined}
+			placeholder={
+				setting.secret
+					? setting.configured
+						? "configured; paste a JSON object to replace it"
+						: "JSON object"
+					: undefined
+			}
 			onChange={e => {
 				setText(e.target.value);
 				if (e.target.value === initial) return onChange(CLEAN);
@@ -524,8 +686,13 @@ function JsonEditor({ setting, disabled, onChange }: EditorProps) {
 
 function parseJsonShape(text: string, shape: "array" | "object"): { value: unknown } | { error: string } {
 	let value: unknown;
-	try { value = JSON.parse(text); } catch (err) { return { error: `Invalid JSON: ${err instanceof Error ? err.message : String(err)}` }; }
-	const ok = shape === "array" ? Array.isArray(value) : typeof value === "object" && value !== null && !Array.isArray(value);
+	try {
+		value = JSON.parse(text);
+	} catch (err) {
+		return { error: `Invalid JSON: ${err instanceof Error ? err.message : String(err)}` };
+	}
+	const ok =
+		shape === "array" ? Array.isArray(value) : typeof value === "object" && value !== null && !Array.isArray(value);
 	return ok ? { value } : { error: shape === "array" ? "Expected a JSON array." : "Expected a JSON object." };
 }
 
@@ -546,7 +713,11 @@ function SecretRecordEditor({ setting, disabled, onChange }: EditorProps) {
 		if (name || nextText.trim()) {
 			if (!name) return onChange({ dirty: true, error: "Name the entry to update." });
 			let value: unknown;
-			try { value = JSON.parse(nextText); } catch { return onChange({ dirty: true, error: `Invalid JSON for ${name}.` }); }
+			try {
+				value = JSON.parse(nextText);
+			} catch {
+				return onChange({ dirty: true, error: `Invalid JSON for ${name}.` });
+			}
 			entries[name] = value;
 		}
 		onChange(Object.keys(entries).length ? { dirty: true, entries } : CLEAN);
@@ -559,7 +730,9 @@ function SecretRecordEditor({ setting, disabled, onChange }: EditorProps) {
 				return (
 					<div key={name} className="flex items-center gap-2 rounded bg-paper-2 px-1.5 py-0.5 text-2xs">
 						<span className={cn("flex-1 truncate font-mono", gone && "text-ink-4 line-through")}>{name}</span>
-						<span className="truncate text-ink-4">{fields.length ? `${fields.join(", ")} (values hidden)` : "value hidden"}</span>
+						<span className="truncate text-ink-4">
+							{fields.length ? `${fields.join(", ")} (values hidden)` : "value hidden"}
+						</span>
 						<button
 							type="button"
 							disabled={disabled}
@@ -580,7 +753,10 @@ function SecretRecordEditor({ setting, disabled, onChange }: EditorProps) {
 					value={key}
 					disabled={disabled}
 					placeholder="entry to add or update"
-					onChange={e => { setKey(e.target.value); report(removed, e.target.value, text); }}
+					onChange={e => {
+						setKey(e.target.value);
+						report(removed, e.target.value, text);
+					}}
 					className="field h-7 w-full px-1.5 font-mono text-2xs"
 				/>
 				<textarea
@@ -588,7 +764,10 @@ function SecretRecordEditor({ setting, disabled, onChange }: EditorProps) {
 					disabled={disabled}
 					rows={2}
 					placeholder='JSON fields to set, e.g. {"token": "…"}; null removes a field'
-					onChange={e => { setText(e.target.value); report(removed, key, e.target.value); }}
+					onChange={e => {
+						setText(e.target.value);
+						report(removed, key, e.target.value);
+					}}
 					className="field w-full resize-y px-1.5 py-1 font-mono text-2xs"
 				/>
 			</div>
@@ -599,7 +778,8 @@ function SecretRecordEditor({ setting, disabled, onChange }: EditorProps) {
 type EntryKind = "text" | "list" | "json";
 type Entry = { key: string; kind: EntryKind; text: string };
 
-const kindOf = (value: unknown): EntryKind => typeof value === "string" ? "text" : isStringList(value) ? "list" : "json";
+const kindOf = (value: unknown): EntryKind =>
+	typeof value === "string" ? "text" : isStringList(value) ? "list" : "json";
 const entryText = (kind: EntryKind, value: unknown) =>
 	kind === "text" ? String(value) : kind === "list" ? (value as string[]).join("\n") : JSON.stringify(value);
 
@@ -618,9 +798,17 @@ function recordOf(entries: Entry[]): { value: Record<string, unknown> } | { erro
 		if (!key) return { error: `Row ${index + 1} needs a key.` };
 		if (key in value) return { error: `Duplicate key: ${key}` };
 		if (entry.kind === "text") value[key] = entry.text;
-		else if (entry.kind === "list") value[key] = entry.text.split("\n").map(line => line.trim()).filter(Boolean);
+		else if (entry.kind === "list")
+			value[key] = entry.text
+				.split("\n")
+				.map(line => line.trim())
+				.filter(Boolean);
 		else {
-			try { value[key] = JSON.parse(entry.text); } catch { return { error: `Invalid JSON for ${key}.` }; }
+			try {
+				value[key] = JSON.parse(entry.text);
+			} catch {
+				return { error: `Invalid JSON for ${key}.` };
+			}
 		}
 	}
 	return { value };
@@ -635,9 +823,19 @@ function RecordEditor({ setting, disabled, onChange }: EditorProps) {
 	const [entries, setEntries] = useState(() => entriesOf(initial));
 	const [json, setJson] = useState<string | null>(null);
 	const report = (result: { value: unknown } | { error: string }) =>
-		onChange("error" in result ? { dirty: true, error: result.error } : same(result.value, initial) ? CLEAN : { dirty: true, value: result.value });
-	const updateEntries = (next: Entry[]) => { setEntries(next); report(recordOf(next)); };
-	const edit = (index: number, patch: Partial<Entry>) => updateEntries(entries.map((e, i) => i === index ? { ...e, ...patch } : e));
+		onChange(
+			"error" in result
+				? { dirty: true, error: result.error }
+				: same(result.value, initial)
+					? CLEAN
+					: { dirty: true, value: result.value },
+		);
+	const updateEntries = (next: Entry[]) => {
+		setEntries(next);
+		report(recordOf(next));
+	};
+	const edit = (index: number, patch: Partial<Entry>) =>
+		updateEntries(entries.map((e, i) => (i === index ? { ...e, ...patch } : e)));
 
 	if (json !== null) {
 		const parsed = parseJsonShape(json, "object");
@@ -647,13 +845,21 @@ function RecordEditor({ setting, disabled, onChange }: EditorProps) {
 					value={json}
 					disabled={disabled}
 					rows={Math.min(14, Math.max(3, json.split("\n").length))}
-					onChange={e => { setJson(e.target.value); report(parseJsonShape(e.target.value, "object")); }}
+					onChange={e => {
+						setJson(e.target.value);
+						report(parseJsonShape(e.target.value, "object"));
+					}}
 					className="field w-full resize-y px-2 py-1.5 font-mono text-2xs"
 				/>
 				<button
 					type="button"
 					disabled={disabled || "error" in parsed}
-					onClick={() => { if ("value" in parsed) { setEntries(entriesOf(parsed.value as Record<string, unknown>)); setJson(null); } }}
+					onClick={() => {
+						if ("value" in parsed) {
+							setEntries(entriesOf(parsed.value as Record<string, unknown>));
+							setJson(null);
+						}
+					}}
 					className="font-mono text-2xs text-ink-3 underline-offset-2 hover:text-ink hover:underline disabled:opacity-40"
 				>
 					edit as rows
@@ -683,7 +889,12 @@ function RecordEditor({ setting, disabled, onChange }: EditorProps) {
 							const parsed = recordOf([entry]);
 							// Carry the value across when it fits the new kind; otherwise start blank.
 							const old = "value" in parsed ? parsed.value[entry.key.trim()] : undefined;
-							const text = old !== undefined && kindOf(old) === kind ? entryText(kind, old) : kind === "json" && old !== undefined ? JSON.stringify(old) : "";
+							const text =
+								old !== undefined && kindOf(old) === kind
+									? entryText(kind, old)
+									: kind === "json" && old !== undefined
+										? JSON.stringify(old)
+										: "";
 							edit(index, { kind, text });
 						}}
 						className="field h-7 px-1 font-mono text-2xs"
@@ -693,7 +904,13 @@ function RecordEditor({ setting, disabled, onChange }: EditorProps) {
 						<option value="json">json</option>
 					</select>
 					{entry.kind === "text" ? (
-						<input value={entry.text} disabled={disabled} placeholder="value" onChange={e => edit(index, { text: e.target.value })} className="field h-7 w-full px-1.5 font-mono text-2xs" />
+						<input
+							value={entry.text}
+							disabled={disabled}
+							placeholder="value"
+							onChange={e => edit(index, { text: e.target.value })}
+							className="field h-7 w-full px-1.5 font-mono text-2xs"
+						/>
 					) : (
 						<textarea
 							value={entry.text}
@@ -704,7 +921,15 @@ function RecordEditor({ setting, disabled, onChange }: EditorProps) {
 							className="field w-full resize-y px-1.5 py-1 font-mono text-2xs"
 						/>
 					)}
-					<button type="button" aria-label="Remove row" disabled={disabled} onClick={() => updateEntries(entries.filter((_, i) => i !== index))} className="btn-ghost h-7 w-7 p-0 text-ink-4 hover:text-danger">×</button>
+					<button
+						type="button"
+						aria-label="Remove row"
+						disabled={disabled}
+						onClick={() => updateEntries(entries.filter((_, i) => i !== index))}
+						className="btn-ghost h-7 w-7 p-0 text-ink-4 hover:text-danger"
+					>
+						×
+					</button>
 				</div>
 			))}
 			<div className="flex gap-3">
@@ -719,7 +944,9 @@ function RecordEditor({ setting, disabled, onChange }: EditorProps) {
 				<button
 					type="button"
 					disabled={disabled || "error" in current}
-					onClick={() => { if ("value" in current) setJson(JSON.stringify(current.value, null, 2)); }}
+					onClick={() => {
+						if ("value" in current) setJson(JSON.stringify(current.value, null, 2));
+					}}
 					className="font-mono text-2xs text-ink-3 underline-offset-2 hover:text-ink hover:underline disabled:opacity-40"
 				>
 					edit as JSON

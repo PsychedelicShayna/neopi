@@ -379,7 +379,14 @@ YAML/YML-only user templates use the same import behavior, publish a
 same-permission TOML sibling atomically, and retain the original unchanged.
 When both formats exist, TOML wins with a warning.
 Invalid specs or values the shared codec cannot preserve losslessly remain
-untouched and produce an explicit error identifying the affected routine.
+untouched. The routine stays visible with `specImportError` and no `specToml`;
+it cannot run or schedule, but does not block listing, startup, inbox writes
+or healthy routines. Run requests return HTTP 409. Open the routine's native
+TOML repair editor, enter a complete valid direct spec, and save to repair the
+same routine ID. No replacement spec is generated automatically. Repair clears
+the import error and restores the normal builder without changing the original
+YAML backup. The same repair is available through `PATCH /api/routines/:id`
+with `specToml`.
 Explicit JSON nulls use shared reserved TOML metadata, not a wrapper around the
 spec: `[__npi]` contains `version = 1` and `null_paths = ["/steps/0/state/cleared"]`.
 Pointers use JSON Pointer escaping. Null object properties are omitted from

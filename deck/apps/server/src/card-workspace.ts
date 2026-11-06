@@ -1,5 +1,14 @@
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, readdirSync, realpathSync, copyFileSync, writeFileSync, rmSync, rmdirSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	realpathSync,
+	copyFileSync,
+	writeFileSync,
+	rmSync,
+	rmdirSync,
+} from "node:fs";
 import * as path from "node:path";
 import { readTomlConfigSync } from "@oh-my-pi/pi-utils/settings-toml";
 import { spawnOwned, spawnOwnedSync, terminateOwned } from "./owned-process.ts";
@@ -7,16 +16,30 @@ import type { CardRunOwnership } from "./db/card-runs.ts";
 
 export async function cardGit(cwd: string, args: string[], signal?: AbortSignal): Promise<string> {
 	if (signal?.aborted) throw new Error("cancelled");
-	const proc = spawnOwned(["git", ...args], { cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1" } });
-	const abort = () => { void terminateOwned(proc); };
+	const proc = spawnOwned(["git", ...args], {
+		cwd,
+		stdin: "ignore",
+		stdout: "pipe",
+		stderr: "pipe",
+		env: { GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1" },
+	});
+	const abort = () => {
+		void terminateOwned(proc);
+	};
 	signal?.addEventListener("abort", abort, { once: true });
 	if (signal?.aborted) abort();
 	try {
-		const [stdout, stderr, exit] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+		const [stdout, stderr, exit] = await Promise.all([
+			new Response(proc.stdout).text(),
+			new Response(proc.stderr).text(),
+			proc.exited,
+		]);
 		if (signal?.aborted) throw new Error("cancelled");
 		if (exit !== 0) throw new Error(`git ${args[0]} failed: ${stderr.trim()}`);
 		return stdout.trim();
-	} finally { signal?.removeEventListener("abort", abort); }
+	} finally {
+		signal?.removeEventListener("abort", abort);
+	}
 }
 
 export async function validateLinkedWorktree(linked: string, signal?: AbortSignal): Promise<string> {
@@ -37,12 +60,21 @@ export async function validateLinkedWorktree(linked: string, signal?: AbortSigna
 export async function cleanupCardWorkspace(ownership: CardRunOwnership): Promise<void> {
 	if (ownership.ownedWorktreePath && ownership.repository) {
 		const result = spawnOwnedSync(["git", "worktree", "remove", "--force", ownership.ownedWorktreePath], {
-			cwd: ownership.repository, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 30_000,
+			cwd: ownership.repository,
+			stdin: "ignore",
+			stdout: "pipe",
+			stderr: "pipe",
+			timeout: 30_000,
 			env: { GIT_TERMINAL_PROMPT: "0" },
 		});
-		if (result.exitCode !== 0 && existsSync(ownership.ownedWorktreePath)) throw new Error(`Owned worktree cleanup failed: ${result.stderr.toString()}`);
+		if (result.exitCode !== 0 && existsSync(ownership.ownedWorktreePath))
+			throw new Error(`Owned worktree cleanup failed: ${result.stderr.toString()}`);
 		// The parent was also allocated by this run; remove it only when empty.
-		try { rmdirSync(path.dirname(ownership.ownedWorktreePath)); } catch { /* nonempty is preserved */ }
+		try {
+			rmdirSync(path.dirname(ownership.ownedWorktreePath));
+		} catch {
+			/* nonempty is preserved */
+		}
 	}
 	if (ownership.runtimePath) rmSync(ownership.runtimePath, { recursive: true, force: true });
 }
@@ -60,9 +92,13 @@ export function snapshotCardAgentState(source: string, target: string): void {
 		if (!entry.isFile()) continue;
 		if (entry.name.endsWith(".db")) {
 			const db = new Database(path.join(source, entry.name), { readonly: true });
-			try { writeFileSync(path.join(target, entry.name), db.serialize(), { mode: 0o600 }); }
-			finally { db.close(); }
-		} else if (["config.toml", "models.toml"].includes(entry.name)) copyFileSync(path.join(source, entry.name), path.join(target, entry.name));
+			try {
+				writeFileSync(path.join(target, entry.name), db.serialize(), { mode: 0o600 });
+			} finally {
+				db.close();
+			}
+		} else if (["config.toml", "models.toml"].includes(entry.name))
+			copyFileSync(path.join(source, entry.name), path.join(target, entry.name));
 	}
 }
 
@@ -74,5 +110,38 @@ export function readonlyCardCommand(command: string[], cwd: string, runtime: str
 	// Bubblewrap creates mount destinations without following symlinked parents.
 	const runtimePath = realpathSync.native(runtime);
 	const worktreePath = realpathSync.native(cwd);
-	return [bwrap, "--unshare-user", "--unshare-pid", "--unshare-ipc", "--unshare-uts", "--die-with-parent", "--new-session", "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/run", "--tmpfs", "/tmp", "--dir", runtimePath, "--bind", runtimePath, runtimePath, "--dir", worktreePath, "--ro-bind", worktreePath, worktreePath, "--chdir", worktreePath, "--", ...command];
+	return [
+		bwrap,
+		"--unshare-user",
+		"--unshare-pid",
+		"--unshare-ipc",
+		"--unshare-uts",
+		"--die-with-parent",
+		"--new-session",
+		"--ro-bind",
+		"/",
+		"/",
+		"--proc",
+		"/proc",
+		"--dev",
+		"/dev",
+		"--tmpfs",
+		"/run",
+		"--tmpfs",
+		"/tmp",
+		"--dir",
+		runtimePath,
+		"--bind",
+		runtimePath,
+		runtimePath,
+		"--dir",
+		worktreePath,
+		"--ro-bind",
+		worktreePath,
+		worktreePath,
+		"--chdir",
+		worktreePath,
+		"--",
+		...command,
+	];
 }

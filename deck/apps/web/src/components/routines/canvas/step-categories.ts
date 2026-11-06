@@ -37,13 +37,11 @@ export interface StepCategory {
 }
 
 function pick(...keys: string[]): StepTemplateDescriptor[] {
-	const byKey = new Map(STEP_TYPE_DESCRIPTIONS.map((d) => [d.key, d]));
-	return keys.map((k) => {
+	const byKey = new Map(STEP_TYPE_DESCRIPTIONS.map(d => [d.key, d]));
+	return keys.map(k => {
 		const found = byKey.get(k);
 		if (!found) {
-			throw new Error(
-				`step-categories: descriptor "${k}" is missing from STEP_TYPE_DESCRIPTIONS`,
-			);
+			throw new Error(`step-categories: descriptor "${k}" is missing from STEP_TYPE_DESCRIPTIONS`);
 		}
 		return found;
 	});
@@ -72,12 +70,7 @@ export const STEP_CATEGORIES: ReadonlyArray<StepCategory> = [
 		key: "deck-write",
 		label: "Deck · Write",
 		tagline: "Mutate tasks and inbox.",
-		entries: pick(
-			"create_inbox_item",
-			"create_task",
-			"move_task",
-			"promote_inbox_item_to_task",
-		),
+		entries: pick("create_inbox_item", "create_task", "move_task", "promote_inbox_item_to_task"),
 	},
 	{
 		key: "file",

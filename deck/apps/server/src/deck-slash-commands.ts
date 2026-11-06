@@ -28,7 +28,9 @@ export interface DeckSlashContext {
 	sessionId?: string;
 }
 
-export type DeckSlashResult = { kind: "consumed"; output: string } | { kind: "rewritten"; output: string; prompt: string };
+export type DeckSlashResult =
+	| { kind: "consumed"; output: string }
+	| { kind: "rewritten"; output: string; prompt: string };
 
 function fmtTask(t: Task): string {
 	const state = getState(t.stateId);
@@ -42,7 +44,11 @@ export const DECK_SLASH_COMMANDS: DeckSlashCommand[] = [
 		argumentHint: "<path>",
 		async handle(args) {
 			if (!args.trim()) throw new Error("Usage: /kb read <path>");
-			return { kind: "rewritten", output: "", prompt: await kbPrompt(`Read this KB section: ${args.trim()}`, [args.trim()]) };
+			return {
+				kind: "rewritten",
+				output: "",
+				prompt: await kbPrompt(`Read this KB section: ${args.trim()}`, [args.trim()]),
+			};
 		},
 	},
 	{
@@ -51,9 +57,13 @@ export const DECK_SLASH_COMMANDS: DeckSlashCommand[] = [
 		argumentHint: "<inbox-id> <path>",
 		async handle(args, ctx) {
 			const match = /^(\S+)\s+(.+)$/.exec(args.trim());
-			if (!match || !ctx.sessionId) throw new Error("Usage in an active project chat: /kb capture <inbox-id> <path>");
-			const note = await writeKb(workflowKb(), { agentId: ctx.sessionId, projectCwd: ctx.cwd, readOnly: false },
-				{ path: match[2]!, captureId: match[1]!, mode: "create", kind: "note" }) as { path: string };
+			if (!match || !ctx.sessionId)
+				throw new Error("Usage in an active project chat: /kb capture <inbox-id> <path>");
+			const note = (await writeKb(
+				workflowKb(),
+				{ agentId: ctx.sessionId, projectCwd: ctx.cwd, readOnly: false },
+				{ path: match[2]!, captureId: match[1]!, mode: "create", kind: "note" },
+			)) as { path: string };
 			return { kind: "consumed", output: `Captured to kb://${note.path}` };
 		},
 	},
@@ -70,7 +80,10 @@ export const DECK_SLASH_COMMANDS: DeckSlashCommand[] = [
 				if (typeof input.title !== "string" || !input.title.trim()) throw new Error("Card title is required");
 			} else {
 				const newline = raw.indexOf("\n");
-				input = { title: newline < 0 ? raw : raw.slice(0, newline).trim(), ...(newline < 0 ? {} : { body: raw.slice(newline + 1) }) };
+				input = {
+					title: newline < 0 ? raw : raw.slice(0, newline).trim(),
+					...(newline < 0 ? {} : { body: raw.slice(newline + 1) }),
+				};
 			}
 			const created = createTask({ ...input, stateId: input.stateId ?? "s_backlog", cwd: input.cwd ?? ctx.cwd });
 			return { kind: "consumed", output: `Created T-${created.displayId}: ${created.title} (backlog)` };
@@ -85,14 +98,16 @@ export const DECK_SLASH_COMMANDS: DeckSlashCommand[] = [
 			const states = listStates();
 			const targetState = trimmed ? findStateByName(trimmed) : undefined;
 			if (trimmed && !targetState) {
-				throw new Error(`No state matches "${trimmed}". Known: ${states.map((s) => s.name).join(", ")}`);
+				throw new Error(`No state matches "${trimmed}". Known: ${states.map(s => s.name).join(", ")}`);
 			}
 			const all = listTasks({});
-			const scoped = all.filter((t) => t.cwd === undefined || t.cwd === ctx.cwd);
-			const visibleStates = targetState ? [targetState] : states.filter((s) => s.name === "active" || s.name === "backlog");
+			const scoped = all.filter(t => t.cwd === undefined || t.cwd === ctx.cwd);
+			const visibleStates = targetState
+				? [targetState]
+				: states.filter(s => s.name === "active" || s.name === "backlog");
 			const lines: string[] = [];
 			for (const state of visibleStates) {
-				const items = scoped.filter((t) => t.stateId === state.id);
+				const items = scoped.filter(t => t.stateId === state.id);
 				if (items.length === 0) continue;
 				lines.push(`${state.name.toUpperCase()}`);
 				for (const t of items) lines.push(`  T-${t.displayId}  ${t.title}`);
@@ -136,7 +151,9 @@ export const DECK_SLASH_COMMANDS: DeckSlashCommand[] = [
 			if (!existing) throw new Error(`No task matches "${ref}".`);
 			const target = findStateByName(stateName!);
 			if (!target) {
-				const names = listStates().map((s) => s.name).join(", ");
+				const names = listStates()
+					.map(s => s.name)
+					.join(", ");
 				throw new Error(`No state matches "${stateName}". Known: ${names}`);
 			}
 			const fromState = getState(existing.stateId);
@@ -149,7 +166,6 @@ export const DECK_SLASH_COMMANDS: DeckSlashCommand[] = [
 		},
 	},
 ];
-
 
 /**
  * Parse the leading slash command from `text` and dispatch via the registry.
@@ -185,7 +201,7 @@ export async function executeDeckSlashCommand(
 
 /** Project the registry into protocol `SlashCommand` rows for the picker. */
 export function deckSlashCommandEntries(): SlashCommand[] {
-	return DECK_SLASH_COMMANDS.map((c) => {
+	return DECK_SLASH_COMMANDS.map(c => {
 		const out: SlashCommand = {
 			name: c.name,
 			scope: "deck",
@@ -195,4 +211,3 @@ export function deckSlashCommandEntries(): SlashCommand[] {
 		return out;
 	});
 }
-

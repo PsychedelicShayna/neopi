@@ -23,15 +23,21 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 		headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
 	});
 	if (!res.ok) {
-		const body = await res.json().catch(() => ({})) as { error?: string; details?: ValidationError[] };
+		const body = (await res.json().catch(() => ({}))) as { error?: string; details?: ValidationError[] };
 		throw new RoutineRequestError(body.error ?? `HTTP ${res.status} ${path}`, res.status, body.details ?? []);
 	}
 	return (await res.json()) as T;
 }
 
 export class RoutineRequestError extends Error {
-	constructor(message: string, readonly status: number, readonly errors: ValidationError[] = []) {
-		super(errors.length ? `${message}: ${errors.map(error => `${error.path} ${error.message}`).join("; ")}` : message);
+	constructor(
+		message: string,
+		readonly status: number,
+		readonly errors: ValidationError[] = [],
+	) {
+		super(
+			errors.length ? `${message}: ${errors.map(error => `${error.path} ${error.message}`).join("; ")}` : message,
+		);
 	}
 }
 
@@ -60,14 +66,19 @@ export const routinesApi = {
 	},
 	async validateGraph(graph: RoutineGraph): Promise<ValidationResult> {
 		const response = await fetch(`${BASE}/routine-graphs/validate`, {
-			method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(graph),
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(graph),
 		});
-		const result = await response.json() as ValidationResult;
+		const result = (await response.json()) as ValidationResult;
 		if ((response.ok || response.status === 400) && typeof result.valid === "boolean") return result;
 		throw new RoutineRequestError(`Graph validation failed (${response.status})`, response.status);
 	},
 	previewGraph(id: string, activation?: GraphActivation): Promise<GraphRunRecord> {
-		return req(`/routines/${encodeURIComponent(id)}/preview`, { method: "POST", body: JSON.stringify(activation ?? {}) });
+		return req(`/routines/${encodeURIComponent(id)}/preview`, {
+			method: "POST",
+			body: JSON.stringify(activation ?? {}),
+		});
 	},
 	run(id: string, runId: string): Promise<RoutineRun> {
 		return req(`/routines/${encodeURIComponent(id)}/runs/${encodeURIComponent(runId)}`);
@@ -93,7 +104,11 @@ export const routinesApi = {
 	remove(id: string): Promise<{ ok: boolean }> {
 		return req(`/routines/${encodeURIComponent(id)}`, { method: "DELETE" });
 	},
-	runNow(id: string, params?: Record<string, unknown>, options?: { dryRun?: boolean }): Promise<{ ok: boolean; queued: boolean }> {
+	runNow(
+		id: string,
+		params?: Record<string, unknown>,
+		options?: { dryRun?: boolean },
+	): Promise<{ ok: boolean; queued: boolean }> {
 		const query = options?.dryRun === undefined ? "" : `?dryRun=${options.dryRun}`;
 		return req(`/routines/${encodeURIComponent(id)}/run${query}`, {
 			method: "POST",
@@ -101,9 +116,7 @@ export const routinesApi = {
 		});
 	},
 	runs(id: string, limit = 10): Promise<ListRoutineRunsResponse> {
-		return req<ListRoutineRunsResponse>(
-			`/routines/${encodeURIComponent(id)}/runs?limit=${limit}`,
-		);
+		return req<ListRoutineRunsResponse>(`/routines/${encodeURIComponent(id)}/runs?limit=${limit}`);
 	},
 	steps(id: string, runId: string): Promise<ListRoutineStepRunsResponse> {
 		return req<ListRoutineStepRunsResponse>(

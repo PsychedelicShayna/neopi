@@ -458,14 +458,24 @@ export interface ModelsConfigSaveResponse extends ModelsConfigResponse {
 
 export interface BackendStatusResponse {
 	workerGeneration: string;
-	running: { id: string | null; path: string; source: "env" | "config"; version: string | null; commit: string | null } | null;
+	running: {
+		id: string | null;
+		path: string;
+		source: "env" | "config";
+		version: string | null;
+		commit: string | null;
+	} | null;
 	desired: string | null;
 	validated: { id: string | null; path: string; commit: string | null; version: string | null } | null;
 	pinned: boolean;
 	reason?: string;
 	backends: Array<{ id: string; kind: "source" | "gateway"; path: string }>;
 }
-export interface BackendSwitchResponse { ok: boolean; message: string; busy?: Array<{ kind: string; id: string }> }
+export interface BackendSwitchResponse {
+	ok: boolean;
+	message: string;
+	busy?: Array<{ kind: string; id: string }>;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Starters (bundled skills and extensions; the maintenance gate's knobs)
@@ -641,11 +651,9 @@ export interface CompleteOnboardingRequest {
 	skipped: boolean;
 }
 
-
 export interface SetSessionModelRequest {
 	model: ModelRef;
 }
-
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Marketplace (SDK plugin catalog browsing + install/uninstall)
@@ -805,18 +813,18 @@ export interface SkillFrontmatter {
  * known set is what the UI styles/labels/sorts by today.
  */
 export type SkillProvider =
-	| "native"           // omp's own — ~/.omp/agent/skills + <cwd>/.omp/skills
-	| "claude-plugins"   // marketplace-installed plugins
-	| "claude"           // shared ~/.claude/skills + .claude/skills
-	| "codex"            // shared ~/.codex/skills + .codex/skills
+	| "native" // omp's own — ~/.omp/agent/skills + <cwd>/.omp/skills
+	| "claude-plugins" // marketplace-installed plugins
+	| "claude" // shared ~/.claude/skills + .claude/skills
+	| "codex" // shared ~/.codex/skills + .codex/skills
 	| "opencode"
 	| "cursor"
 	| "windsurf"
 	| "cline"
 	| "gemini"
-	| "agents"           // shared .agent/skills and .agents/skills directories
-	| "custom"           // custom directories from runtime config
-	| (string & {});     // forward-compat
+	| "agents" // shared .agent/skills and .agents/skills directories
+	| "custom" // custom directories from runtime config
+	| (string & {}); // forward-compat
 
 /**
  * A skill enumerated from any omp provider. `provider` + `level` say where
@@ -1294,7 +1302,13 @@ export type ClientFrame =
 
 /** Server → Client. */
 export type ServerFrame =
-	| { type: "hello"; connectionId: string; workerGeneration: string; backend: BackendStatusResponse["running"]; capabilities: string[] }
+	| {
+			type: "hello";
+			connectionId: string;
+			workerGeneration: string;
+			backend: BackendStatusResponse["running"];
+			capabilities: string[];
+	  }
 	| { type: "pong" }
 	| { type: "subscribed"; sessionId: string; snapshot: SessionSnapshot }
 	| { type: "unsubscribed"; sessionId: string }
@@ -1319,7 +1333,7 @@ export type ServerFrame =
 			provider: string;
 			url: string;
 			instructions?: string;
-		}
+	  }
 	/** OAuth: SDK status update (e.g. "Waiting for browser authentication…"). */
 	| { type: "oauth_progress"; flowId: string; provider: string; message: string }
 	/** OAuth: SDK is asking the user a free-form question (enterprise URL, etc). */
@@ -1330,7 +1344,7 @@ export type ServerFrame =
 			promptId: string;
 			message: string;
 			placeholder?: string;
-		}
+	  }
 	/** OAuth: login resolved successfully; client should refetch providers + models. */
 	| { type: "oauth_complete"; flowId: string; provider: string }
 	/** OAuth: login rejected (timeout, port collision, state mismatch, user cancel). */
@@ -1344,7 +1358,7 @@ export type ServerFrame =
 			runId: string;
 			triggerKind: "cron" | "manual" | "webhook" | "event";
 			startedAt: string;
-		}
+	  }
 	/** V1 routine: a single step transitioned (running -> success/failed/skipped/aborted). */
 	| {
 			type: "routine_step_event";
@@ -1360,7 +1374,7 @@ export type ServerFrame =
 			error?: string;
 			model?: string;
 			tokens?: { in: number; out: number };
-		}
+	  }
 	/** V1 routine: the run finished (or was aborted). Total cost is in USD micro-cents. */
 	| {
 			type: "routine_run_finished";
@@ -1370,7 +1384,7 @@ export type ServerFrame =
 			endedAt: string;
 			durationMs: number;
 			totalCostMicros: number;
-		}
+	  }
 	/**
 	 * An extension UI dialog has opened in the named session. The web client
 	 * renders a modal of the matching shape and replies with
@@ -1571,7 +1585,6 @@ export interface SubagentTranscriptResponse {
 	reset: boolean;
 }
 
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Tasks (kanban)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1696,13 +1709,7 @@ export interface MoveTaskRequest {
 // Inbox
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type InboxKind =
-	| "email"
-	| "ticket"
-	| "idea"
-	| "decision"
-	| "investigation"
-	| "capture";
+export type InboxKind = "email" | "ticket" | "idea" | "decision" | "investigation" | "capture";
 
 export interface InboxItem {
 	id: string;
@@ -1759,7 +1766,7 @@ export type InboxReceipt = {
 	repository?: string;
 	issueNumber?: number;
 	logicalKey?: string;
-}
+};
 
 export interface InboxHistoryEvent {
 	at: string;
@@ -1828,6 +1835,8 @@ export interface Routine {
 	concurrency: RoutineConcurrency;
 	/** Full V1 spec source-of-truth. NULL/undefined for V0 routines. */
 	specToml?: string;
+	/** Isolated legacy conversion failure; visible but never executable. Original source remains stored. */
+	specImportError?: string;
 	/** Native V2 source of truth; never derived from or rendered into TOML. */
 	graph?: RoutineGraph;
 	/** Optional runtime budget caps. */
@@ -1843,9 +1852,23 @@ export type CreateRoutineRequest = {
 	description?: string;
 	enabled?: boolean;
 } & (
-	| { cron: string; actionKind: RoutineActionKind; actionBody: string; actionCwd?: string; specToml?: string; graph?: never }
+	| {
+			cron: string;
+			actionKind: RoutineActionKind;
+			actionBody: string;
+			actionCwd?: string;
+			specToml?: string;
+			graph?: never;
+	  }
 	| { graph: RoutineGraph; cron?: never; actionKind?: never; actionBody?: never; actionCwd?: never; specToml?: never }
-	| { specToml: string; graph?: never; cron?: string; actionKind?: RoutineActionKind; actionBody?: string; actionCwd?: string }
+	| {
+			specToml: string;
+			graph?: never;
+			cron?: string;
+			actionKind?: RoutineActionKind;
+			actionBody?: string;
+			actionCwd?: string;
+	  }
 );
 
 export interface UpdateRoutineRequest {
@@ -1900,14 +1923,9 @@ export interface RoutineRun {
 	stepCountFailed: number;
 }
 
-
 // ─── V1 routine spec (multi-step pipelines, spec_version=1) ──────────────
 
-export type RoutineConcurrency =
-	| "skip"
-	| "queue"
-	| "cancel-previous"
-	| "parallel";
+export type RoutineConcurrency = "skip" | "queue" | "cancel-previous" | "parallel";
 
 export interface RoutineBudget {
 	/** Wall-clock cap across the whole run. */
@@ -1942,7 +1960,6 @@ export type RoutineDeckAction =
 	| "kb_orphan_census"
 	| "kb_read";
 
-
 /** Common fields every step type accepts. */
 export interface RoutineStepCommon {
 	id: string;
@@ -1959,7 +1976,7 @@ export type RoutineStep =
 			type: "run";
 			command: string;
 			cwd?: string;
-		})
+	  })
 	| (RoutineStepCommon & {
 			type: "agent";
 			prompt: string;
@@ -1969,13 +1986,13 @@ export type RoutineStep =
 			mcp_servers_allowed?: string[];
 			/** Explicit requested KB paths only; omitted means no KB context. */
 			kb_inputs?: string[];
-		})
+	  })
 	| (RoutineStepCommon & {
 			type: "write";
 			path: string;
 			content: string;
 			append?: boolean;
-		})
+	  })
 	| (RoutineStepCommon & {
 			type: "http";
 			method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -1984,7 +2001,7 @@ export type RoutineStep =
 			query?: Record<string, string | number | boolean>;
 			body?: unknown;
 			expect_json?: boolean;
-		})
+	  })
 	| (RoutineStepCommon &
 			(
 				| {
@@ -2083,21 +2100,21 @@ export type RoutineStep =
 			server: string;
 			tool: string;
 			args?: Record<string, unknown>;
-		})
+	  })
 	| (RoutineStepCommon & {
 			type: "transform";
 			/** JS expression source. Evaluated in a quickjs sandbox; no network, no fs. */
 			body: string;
-		})
+	  })
 	| (RoutineStepCommon & {
 			type: "wait";
 			duration_secs: number;
-		})
+	  })
 	| (RoutineStepCommon & {
 			type: "set_state";
 			/** Key/value pairs to upsert into routine_state. Values may use template substitution. */
 			state: Record<string, unknown>;
-		});
+	  });
 
 /** Discriminated union over the four trigger kinds. A routine may have multiple. */
 export type RoutineTrigger =
@@ -2165,13 +2182,7 @@ export interface RoutineLayout {
 	edges?: RoutineLayoutEdge[];
 }
 
-export type RoutineStepStatus =
-	| "pending"
-	| "running"
-	| "success"
-	| "skipped"
-	| "failed"
-	| "aborted";
+export type RoutineStepStatus = "pending" | "running" | "success" | "skipped" | "failed" | "aborted";
 
 /** Per-step execution record. One row in routine_step_runs per step per run attempt. */
 export interface RoutineStepRun {

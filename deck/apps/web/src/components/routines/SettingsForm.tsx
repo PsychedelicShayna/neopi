@@ -15,7 +15,11 @@ interface Props {
 const CONCURRENCY_OPTIONS: ReadonlyArray<{ value: RoutineConcurrency; label: string; help: string }> = [
 	{ value: "skip", label: "Skip", help: "Drop new fires while a run is in flight." },
 	{ value: "queue", label: "Queue", help: "Queue new fires; run them after the current one." },
-	{ value: "cancel-previous", label: "Cancel the previous run", help: "Stop the in-flight run and start the new one." },
+	{
+		value: "cancel-previous",
+		label: "Cancel the previous run",
+		help: "Stop the in-flight run and start the new one.",
+	},
 	{ value: "parallel", label: "Run in parallel", help: "Runs overlap. Costs add up." },
 ];
 
@@ -42,12 +46,12 @@ export function SettingsForm({ spec, onChange, errors }: Props) {
 	return (
 		<div className="space-y-4">
 			<Field label="Name" error={errors?.name}>
-				<TextInput value={spec.name} onChange={(v) => patchSpec({ name: v })} placeholder="morning-briefing" mono />
+				<TextInput value={spec.name} onChange={v => patchSpec({ name: v })} placeholder="morning-briefing" mono />
 			</Field>
 			<Field label="Description" optional error={errors?.description}>
 				<TextInput
 					value={spec.description ?? ""}
-					onChange={(v) => {
+					onChange={v => {
 						const next = { ...spec };
 						if (v.trim() === "") delete next.description;
 						else next.description = v;
@@ -56,14 +60,18 @@ export function SettingsForm({ spec, onChange, errors }: Props) {
 					placeholder="What this routine does"
 				/>
 			</Field>
-			<Field label="If it fires while already running" help={CONCURRENCY_OPTIONS.find((o) => o.value === concurrency)?.help} error={errors?.concurrency}>
-				<Select value={concurrency} onChange={(v) => patchSpec({ concurrency: v })} options={CONCURRENCY_OPTIONS} />
+			<Field
+				label="If it fires while already running"
+				help={CONCURRENCY_OPTIONS.find(o => o.value === concurrency)?.help}
+				error={errors?.concurrency}
+			>
+				<Select value={concurrency} onChange={v => patchSpec({ concurrency: v })} options={CONCURRENCY_OPTIONS} />
 			</Field>
 			<div className="grid grid-cols-2 gap-4">
 				<Field label="Timezone" optional help="IANA name, for schedules." error={errors?.timezone}>
 					<TextInput
 						value={spec.timezone ?? ""}
-						onChange={(v) => {
+						onChange={v => {
 							const next = { ...spec };
 							if (v.trim() === "") delete next.timezone;
 							else next.timezone = v;
@@ -76,7 +84,7 @@ export function SettingsForm({ spec, onChange, errors }: Props) {
 				<Field label="Tags" optional>
 					<TagInput
 						values={spec.tags ?? []}
-						onChange={(v) => {
+						onChange={v => {
 							const next = { ...spec };
 							if (v.length === 0) delete next.tags;
 							else next.tags = v;
@@ -93,26 +101,50 @@ export function SettingsForm({ spec, onChange, errors }: Props) {
 				</div>
 				<div className="grid grid-cols-2 gap-4 md:grid-cols-3">
 					<Field label="Max duration" help="Seconds.">
-						<NumInput value={spec.budget?.max_duration_secs} onChange={(v) => patchBudget({ max_duration_secs: v })} placeholder="180" />
+						<NumInput
+							value={spec.budget?.max_duration_secs}
+							onChange={v => patchBudget({ max_duration_secs: v })}
+							placeholder="180"
+						/>
 					</Field>
 					<Field label="Max cost" help="US dollars across all model calls.">
-						<NumInput value={spec.budget?.max_llm_cost_usd} onChange={(v) => patchBudget({ max_llm_cost_usd: v })} placeholder="0.05" />
+						<NumInput
+							value={spec.budget?.max_llm_cost_usd}
+							onChange={v => patchBudget({ max_llm_cost_usd: v })}
+							placeholder="0.05"
+						/>
 					</Field>
 					<Field label="Max steps">
-						<NumInput value={spec.budget?.max_steps_executed} onChange={(v) => patchBudget({ max_steps_executed: v })} placeholder="20" />
+						<NumInput
+							value={spec.budget?.max_steps_executed}
+							onChange={v => patchBudget({ max_steps_executed: v })}
+							placeholder="20"
+						/>
 					</Field>
 					<Field label="Max input tokens">
-						<NumInput value={spec.budget?.max_llm_tokens_input} onChange={(v) => patchBudget({ max_llm_tokens_input: v })} placeholder="50000" />
+						<NumInput
+							value={spec.budget?.max_llm_tokens_input}
+							onChange={v => patchBudget({ max_llm_tokens_input: v })}
+							placeholder="50000"
+						/>
 					</Field>
 					<Field label="Max output tokens">
-						<NumInput value={spec.budget?.max_llm_tokens_output} onChange={(v) => patchBudget({ max_llm_tokens_output: v })} placeholder="8000" />
+						<NumInput
+							value={spec.budget?.max_llm_tokens_output}
+							onChange={v => patchBudget({ max_llm_tokens_output: v })}
+							placeholder="8000"
+						/>
 					</Field>
 				</div>
 			</section>
-			<Field label="State keys this routine uses" optional help="Informational; helps readers of the source know what the routine remembers.">
+			<Field
+				label="State keys this routine uses"
+				optional
+				help="Informational; helps readers of the source know what the routine remembers."
+			>
 				<TagInput
 					values={spec.state?.declared_keys ?? []}
-					onChange={(v) => {
+					onChange={v => {
 						const next = { ...spec };
 						if (v.length === 0) {
 							if (next.state) {

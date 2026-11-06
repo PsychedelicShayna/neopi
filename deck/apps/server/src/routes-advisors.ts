@@ -18,14 +18,20 @@ type AdvisorSession = {
 	/** Apply a rediscovered roster, keeping the session's selection. */
 	applyAdvisorConfigs(config: Discovered): void;
 };
-type AdvisorBridge = AgentBridge & { advisorSession(id: string): AdvisorSession | undefined; liveAdvisorSessions(): AdvisorSession[] };
+type AdvisorBridge = AgentBridge & {
+	advisorSession(id: string): AdvisorSession | undefined;
+	liveAdvisorSessions(): AdvisorSession[];
+};
 const WATCHDOG_NAMES = ["WATCHDOG.toml"];
-const digest = (value: string | null) => createHash("sha256").update(value === null ? "missing\0" : `present\0${value}`).digest("hex");
-const errorText = (err: unknown) => err instanceof Error ? err.message : String(err);
+const digest = (value: string | null) =>
+	createHash("sha256")
+		.update(value === null ? "missing\0" : `present\0${value}`)
+		.digest("hex");
+const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 async function fileSnapshot(file: string): Promise<{ hash: string; text: string | null }> {
 	const entry = Bun.file(file);
-	const text = await entry.exists() ? await entry.text() : null;
+	const text = (await entry.exists()) ? await entry.text() : null;
 	return { hash: digest(text), text };
 }
 
@@ -55,7 +61,13 @@ async function discovery(api: AdvisorSdk, cwd: string) {
 		const document = await api.loadWatchdogConfigFile(candidate.path);
 		for (const advisor of document.advisors) sources.set(api.slugifyAdvisorName(advisor.name), candidate.path);
 	}
-	return { ...merged, advisors: merged.advisors.map((advisor) => ({ ...advisor, source: sources.get(api.slugifyAdvisorName(advisor.name)) ?? null })) };
+	return {
+		...merged,
+		advisors: merged.advisors.map(advisor => ({
+			...advisor,
+			source: sources.get(api.slugifyAdvisorName(advisor.name)) ?? null,
+		})),
+	};
 }
 
 // Serialize WATCHDOG compare-and-save, enabled toggles and session roster
@@ -65,33 +77,50 @@ async function discovery(api: AdvisorSdk, cwd: string) {
 let saveQueue: Promise<void> = Promise.resolve();
 function serialize<T>(run: () => Promise<T>): Promise<T> {
 	const result = saveQueue.then(run);
-	saveQueue = result.then(() => {}, () => {});
+	saveQueue = result.then(
+		() => {},
+		() => {},
+	);
 	return result;
 }
 function validDoc(value: unknown): value is Doc {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
 	const doc = value as Record<string, unknown>;
-	if (!Array.isArray(doc.advisors) || (doc.instructions !== undefined && typeof doc.instructions !== "string") ||
-		(doc.maxNotesPerUpdate !== undefined && (!Number.isInteger(doc.maxNotesPerUpdate) || (doc.maxNotesPerUpdate as number) < 1))) return false;
+	if (
+		!Array.isArray(doc.advisors) ||
+		(doc.instructions !== undefined && typeof doc.instructions !== "string") ||
+		(doc.maxNotesPerUpdate !== undefined &&
+			(!Number.isInteger(doc.maxNotesPerUpdate) || (doc.maxNotesPerUpdate as number) < 1))
+	)
+		return false;
 	return doc.advisors.every((entry: unknown) => {
 		if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
 		const a = entry as Record<string, unknown>;
-		return typeof a.name === "string" && !!a.name.trim() &&
+		return (
+			typeof a.name === "string" &&
+			!!a.name.trim() &&
 			["model", "instructions", "systemPrompt"].every(k => a[k] === undefined || typeof a[k] === "string") &&
 			(a.enabled === undefined || typeof a.enabled === "boolean") &&
-			(a.tools === undefined || (Array.isArray(a.tools) && a.tools.every((tool: unknown) => typeof tool === "string"))) &&
-			(a.maxNotesPerUpdate === undefined || (Number.isInteger(a.maxNotesPerUpdate) && (a.maxNotesPerUpdate as number) >= 1));
+			(a.tools === undefined ||
+				(Array.isArray(a.tools) && a.tools.every((tool: unknown) => typeof tool === "string"))) &&
+			(a.maxNotesPerUpdate === undefined ||
+				(Number.isInteger(a.maxNotesPerUpdate) && (a.maxNotesPerUpdate as number) >= 1))
+		);
 	});
 }
-
 
 export function buildAdvisorsRouter(bridge: AgentBridge, config: import("./config.ts").Config): Hono {
 	const app = new Hono();
 	const sessions = bridge as AdvisorBridge;
 	const cwdFor = async (cwd: string | undefined) => {
 		const saved = await bridge.listSessions({});
-		const allowed = new Set([config.defaultCwd, ...config.extraWorkspaces, ...saved.map(s => s.cwd), ...sessions.liveAdvisorSessions().map(s => s.cwd)]);
-		return cwd ? allowed.has(cwd) ? cwd : undefined : config.defaultCwd;
+		const allowed = new Set([
+			config.defaultCwd,
+			...config.extraWorkspaces,
+			...saved.map(s => s.cwd),
+			...sessions.liveAdvisorSessions().map(s => s.cwd),
+		]);
+		return cwd ? (allowed.has(cwd) ? cwd : undefined) : config.defaultCwd;
 	};
 
 	app.get("/advisors", async c => {
@@ -99,33 +128,63 @@ export function buildAdvisorsRouter(bridge: AgentBridge, config: import("./confi
 			const cwd = await cwdFor(c.req.query("cwd"));
 			if (!cwd) return c.json({ error: "unknown project workspace" }, 400);
 			const api = feature("advisors");
-			const [user, project, merged] = await Promise.all([scopeDoc(api, "user", cwd), scopeDoc(api, "project", cwd), discovery(api, cwd)]);
+			const [user, project, merged] = await Promise.all([
+				scopeDoc(api, "user", cwd),
+				scopeDoc(api, "project", cwd),
+				discovery(api, cwd),
+			]);
 			const settings = await sdk().Settings.loadReadOnly({ cwd, agentDir: sdk().getAgentDir() });
-			return c.json({ cwd, user, project, merged, settings: {
-				enabled: api.cfgAdvisorEnabled.get(settings), syncBacklog: api.cfgAdvisorSyncBacklog.get(settings),
-				maxNotesPerUpdate: api.cfgAdvisorMaxNotesPerUpdate.get(settings),
-				evictStaleResults: api.cfgAdvisorEvictStaleResults.get(settings),
-				model: sdk().cfgModelRoles.get(settings).advisor ?? "",
-			} });
-		} catch (err) { log.warn("read advisor config failed", err); return c.json({ error: errorText(err) }, 500); }
+			return c.json({
+				cwd,
+				user,
+				project,
+				merged,
+				settings: {
+					enabled: api.cfgAdvisorEnabled.get(settings),
+					syncBacklog: api.cfgAdvisorSyncBacklog.get(settings),
+					maxNotesPerUpdate: api.cfgAdvisorMaxNotesPerUpdate.get(settings),
+					evictStaleResults: api.cfgAdvisorEvictStaleResults.get(settings),
+					model: sdk().cfgModelRoles.get(settings).advisor ?? "",
+				},
+			});
+		} catch (err) {
+			log.warn("read advisor config failed", err);
+			return c.json({ error: errorText(err) }, 500);
+		}
 	});
 
 	app.put("/advisors/watchdog", async c => {
 		try {
-			const body = await c.req.json() as { cwd?: string; scope?: string; hash?: string; doc?: unknown };
+			const body = (await c.req.json()) as { cwd?: string; scope?: string; hash?: string; doc?: unknown };
 			const cwd = await cwdFor(body.cwd);
-			if (!cwd || !["user", "project"].includes(body.scope ?? "") || typeof body.hash !== "string" || !validDoc(body.doc))
+			if (
+				!cwd ||
+				!["user", "project"].includes(body.scope ?? "") ||
+				typeof body.hash !== "string" ||
+				!validDoc(body.doc)
+			)
 				return c.json({ error: "known workspace, scope, hash and WATCHDOG document required" }, 400);
 			return await serialize(async () => {
 				const api = feature("advisors");
 				const current = await scopeDoc(api, body.scope as "user" | "project", cwd);
-				if (current.hash !== body.hash) return c.json({ error: "WATCHDOG file changed; reload before saving", current }, 409);
-				if (current.doc.warnings?.length) return c.json({ error: "WATCHDOG contains malformed entries; repair the file before editing", current }, 409);
+				if (current.hash !== body.hash)
+					return c.json({ error: "WATCHDOG file changed; reload before saving", current }, 409);
+				if (current.doc.warnings?.length)
+					return c.json(
+						{ error: "WATCHDOG contains malformed entries; repair the file before editing", current },
+						409,
+					);
 				await api.saveWatchdogConfigFile(current.file, body.doc as Doc);
 				await applyToSessions(sessions, api, cwd);
-				return c.json({ saved: await scopeDoc(api, body.scope as "user" | "project", cwd), merged: await discovery(api, cwd) });
+				return c.json({
+					saved: await scopeDoc(api, body.scope as "user" | "project", cwd),
+					merged: await discovery(api, cwd),
+				});
 			});
-		} catch (err) { log.warn("save watchdog failed", err); return c.json({ error: errorText(err) }, 500); }
+		} catch (err) {
+			log.warn("save watchdog failed", err);
+			return c.json({ error: errorText(err) }, 500);
+		}
 	});
 
 	// Flip one advisor's `enabled:` in the WATCHDOG file its effective entry
@@ -133,7 +192,7 @@ export function buildAdvisorsRouter(bridge: AgentBridge, config: import("./confi
 	// so NeoPi's patch-save keeps comments and every other field.
 	app.patch("/advisors/watchdog/enabled", async c => {
 		try {
-			const body = await c.req.json() as { cwd?: string; name?: unknown; enabled?: unknown };
+			const body = (await c.req.json()) as { cwd?: string; name?: unknown; enabled?: unknown };
 			const cwd = await cwdFor(body.cwd);
 			if (!cwd || typeof body.name !== "string" || !body.name.trim() || typeof body.enabled !== "boolean")
 				return c.json({ error: "known workspace, advisor name and boolean enabled required" }, 400);
@@ -150,8 +209,13 @@ export function buildAdvisorsRouter(bridge: AgentBridge, config: import("./confi
 					const index = doc.advisors.findLastIndex(advisor => api.slugifyAdvisorName(advisor.name) === slug);
 					if (index >= 0) source = { file: candidate.path, doc, index };
 				}
-				if (!source) return c.json({ error: `advisor ${JSON.stringify(name)} is not in this workspace's roster` }, 404);
-				if (source.doc.warnings?.length) return c.json({ error: `${source.file} contains malformed entries; repair the file before editing` }, 409);
+				if (!source)
+					return c.json({ error: `advisor ${JSON.stringify(name)} is not in this workspace's roster` }, 404);
+				if (source.doc.warnings?.length)
+					return c.json(
+						{ error: `${source.file} contains malformed entries; repair the file before editing` },
+						409,
+					);
 				source.doc.advisors[source.index] = { ...source.doc.advisors[source.index]!, enabled };
 				await api.saveWatchdogConfigFile(source.file, source.doc);
 				// A user or ancestor file can feed sessions outside this project.
@@ -161,27 +225,54 @@ export function buildAdvisorsRouter(bridge: AgentBridge, config: import("./confi
 				const merged = await discovery(api, cwd);
 				const winner = merged.advisors.find(advisor => api.slugifyAdvisorName(advisor.name) === slug);
 				if ((winner?.enabled !== false) !== enabled || winner?.source !== source.file)
-					return c.json({ error: `${source.file} changed while saving; ${JSON.stringify(name)} is not ${enabled ? "enabled" : "disabled"}. Reload and try again.`, file: source.file, merged }, 409);
+					return c.json(
+						{
+							error: `${source.file} changed while saving; ${JSON.stringify(name)} is not ${enabled ? "enabled" : "disabled"}. Reload and try again.`,
+							file: source.file,
+							merged,
+						},
+						409,
+					);
 				return c.json({ file: source.file, merged });
 			});
-		} catch (err) { log.warn("toggle watchdog advisor failed", err); return c.json({ error: errorText(err) }, 500); }
+		} catch (err) {
+			log.warn("toggle watchdog advisor failed", err);
+			return c.json({ error: errorText(err) }, 500);
+		}
 	});
 
 	app.patch("/advisors/settings", async c => {
 		try {
-			const body = await c.req.json() as { cwd?: string; enabled?: boolean; syncBacklog?: string; maxNotesPerUpdate?: number; evictStaleResults?: boolean; model?: string };
+			const body = (await c.req.json()) as {
+				cwd?: string;
+				enabled?: boolean;
+				syncBacklog?: string;
+				maxNotesPerUpdate?: number;
+				evictStaleResults?: boolean;
+				model?: string;
+			};
 			const cwd = await cwdFor(body.cwd);
-			if (!cwd || (body.enabled !== undefined && typeof body.enabled !== "boolean") ||
+			if (
+				!cwd ||
+				(body.enabled !== undefined && typeof body.enabled !== "boolean") ||
 				(body.syncBacklog !== undefined && !["off", "1", "3", "5"].includes(body.syncBacklog)) ||
-				(body.maxNotesPerUpdate !== undefined && (!Number.isInteger(body.maxNotesPerUpdate) || body.maxNotesPerUpdate < 1 || body.maxNotesPerUpdate > 32)) ||
+				(body.maxNotesPerUpdate !== undefined &&
+					(!Number.isInteger(body.maxNotesPerUpdate) ||
+						body.maxNotesPerUpdate < 1 ||
+						body.maxNotesPerUpdate > 32)) ||
 				(body.evictStaleResults !== undefined && typeof body.evictStaleResults !== "boolean") ||
-				(body.model !== undefined && typeof body.model !== "string")) return c.json({ error: "invalid advisor settings" }, 400);
+				(body.model !== undefined && typeof body.model !== "string")
+			)
+				return c.json({ error: "invalid advisor settings" }, 400);
 			const api = feature("advisors");
 			const settings = await sdk().Settings.loadIsolated({ cwd, agentDir: sdk().getAgentDir() });
 			if (body.enabled !== undefined) api.cfgAdvisorEnabled.set(settings, body.enabled);
-			if (body.syncBacklog !== undefined) api.cfgAdvisorSyncBacklog.set(settings, body.syncBacklog as "off" | "1" | "3" | "5");
-			if (body.maxNotesPerUpdate !== undefined) api.cfgAdvisorMaxNotesPerUpdate.set(settings, body.maxNotesPerUpdate);
-			if (body.evictStaleResults !== undefined) api.cfgAdvisorEvictStaleResults.set(settings, body.evictStaleResults);
+			if (body.syncBacklog !== undefined)
+				api.cfgAdvisorSyncBacklog.set(settings, body.syncBacklog as "off" | "1" | "3" | "5");
+			if (body.maxNotesPerUpdate !== undefined)
+				api.cfgAdvisorMaxNotesPerUpdate.set(settings, body.maxNotesPerUpdate);
+			if (body.evictStaleResults !== undefined)
+				api.cfgAdvisorEvictStaleResults.set(settings, body.evictStaleResults);
 			if (body.model !== undefined) settings.setModelRole("advisor", body.model.trim() || undefined);
 			await settings.flush();
 			// Reload the persisted layer on each independent live settings instance.
@@ -190,7 +281,10 @@ export function buildAdvisorsRouter(bridge: AgentBridge, config: import("./confi
 			await bridge.reloadLiveSettings();
 			await applyToSessions(sessions, feature("advisors"));
 			return c.json({ ok: true });
-		} catch (err) { log.warn("save advisor settings failed", err); return c.json({ error: errorText(err) }, 409); }
+		} catch (err) {
+			log.warn("save advisor settings failed", err);
+			return c.json({ error: errorText(err) }, 409);
+		}
 	});
 
 	app.get("/sessions/:id/advisors", c => {
@@ -208,12 +302,15 @@ export function buildAdvisorsRouter(bridge: AgentBridge, config: import("./confi
 				advisors: merged.advisors.map(({ name, model, enabled, source }) => ({ name, model, enabled, source })),
 				warnings: merged.warnings,
 			});
-		} catch (err) { log.warn("read session advisor roster failed", err); return c.json({ error: errorText(err) }, 500); }
+		} catch (err) {
+			log.warn("read session advisor roster failed", err);
+			return c.json({ error: errorText(err) }, 500);
+		}
 	});
 	app.put("/sessions/:id/advisors", async c => {
 		const session = sessions.advisorSession(c.req.param("id"));
 		if (!session) return c.json({ error: "live session not found" }, 404);
-		const body = await c.req.json().catch(() => ({})) as { advisors?: unknown };
+		const body = (await c.req.json().catch(() => ({}))) as { advisors?: unknown };
 		const names = body.advisors;
 		if (!Array.isArray(names) || !names.every((name): name is string => typeof name === "string"))
 			return c.json({ error: "advisors must be an array of roster advisor names" }, 400);
@@ -226,7 +323,10 @@ export function buildAdvisorsRouter(bridge: AgentBridge, config: import("./confi
 				session.selectAdvisors(names, discovered);
 				return c.json(session.advisorStatus());
 			});
-		} catch (err) { log.warn("select session advisors failed", err); return c.json({ error: errorText(err) }, 500); }
+		} catch (err) {
+			log.warn("select session advisors failed", err);
+			return c.json({ error: errorText(err) }, 500);
+		}
 	});
 	return app;
 }

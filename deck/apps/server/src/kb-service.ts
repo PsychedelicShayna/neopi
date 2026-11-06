@@ -31,6 +31,7 @@ import { createInterface } from "node:readline";
 
 import { importLegacyYaml, parseSettingsToml, publishTomlImport } from "@oh-my-pi/pi-utils/settings-toml";
 import { importLegacyCardBody } from "./card-properties.ts";
+import { splitTomlFrontmatter } from "@oh-my-pi/pi-utils/toml-frontmatter";
 
 import type {
 	KbBacklink,
@@ -55,11 +56,17 @@ const log = logger("kb");
 
 async function historyGit(root: string, args: string[]): Promise<string> {
 	const proc = spawnOwned(["git", ...args], {
-		cwd: root, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+		cwd: root,
+		stdin: "ignore",
+		stdout: "pipe",
+		stderr: "pipe",
 		env: { GIT_TERMINAL_PROMPT: "0" },
 	});
 	let timedOut = false;
-	const timer = setTimeout(() => { timedOut = true; void terminateOwned(proc); }, 5000);
+	const timer = setTimeout(() => {
+		timedOut = true;
+		void terminateOwned(proc);
+	}, 5000);
 	const readOutput = async (stream: ReadableStream<Uint8Array>): Promise<string> => {
 		const reader = stream.getReader();
 		const decoder = new TextDecoder();
@@ -73,7 +80,9 @@ async function historyGit(root: string, args: string[]): Promise<string> {
 				if (bytes > 1024 * 1024) throw new Error("Git history output exceeds 1 MiB");
 				text += decoder.decode(value, { stream: true });
 			}
-		} finally { reader.releaseLock(); }
+		} finally {
+			reader.releaseLock();
+		}
 	};
 	try {
 		const [stdout, stderr, code] = await Promise.all([readOutput(proc.stdout), readOutput(proc.stderr), proc.exited]);
@@ -120,8 +129,8 @@ function parseExcludeDirsFromEnv(): string[] {
 	if (!raw) return [];
 	return raw
 		.split(",")
-		.map((s) => s.trim())
-		.filter((s) => s.length > 0);
+		.map(s => s.trim())
+		.filter(s => s.length > 0);
 }
 
 // Skill-creator and related .agents/skills dirs we don't want surfaced.
@@ -129,14 +138,7 @@ const SKIP_PATH_FRAGMENTS = [".agents/skills"];
 
 // Ambiguous stems that should never resolve by stem-match alone. Force the
 // author to use a subpath. Mirrors orphan-census.py's `AMBIGUOUS_STEMS`.
-const AMBIGUOUS_STEMS = new Set<string>([
-	"readme",
-	"index",
-	"profile",
-	"skill",
-	"summary",
-	"notes",
-]);
+const AMBIGUOUS_STEMS = new Set<string>(["readme", "index", "profile", "skill", "summary", "notes"]);
 
 // Search match kinds, ranked by precedence. Lower rank = stronger match.
 // Used to pick the "best" kind to show in the result UI when a file
@@ -248,7 +250,7 @@ export class KbService {
 	/** Lazy build on first request; subsequent calls reuse the cache. */
 	async ensureIndex(): Promise<void> {
 		while (!this.indexReady) {
-			const pending = this.indexPromise ??= this.buildIndex();
+			const pending = (this.indexPromise ??= this.buildIndex());
 			try {
 				await pending;
 			} finally {
@@ -306,7 +308,6 @@ export class KbService {
 		};
 	}
 
-
 	/**
 	 * Return a single directory listing. `subpath` is forward-slash relative
 	 * to the kb root; empty / "/" means root. Returns `undefined` if the
@@ -346,7 +347,7 @@ export class KbService {
 
 			if (entry.isDirectory() || entry.isSymbolicLink()) {
 				let isDir = entry.isDirectory();
-				let isSymlink = entry.isSymbolicLink();
+				const isSymlink = entry.isSymbolicLink();
 				if (isSymlink) {
 					try {
 						const st = await stat(abs); // follows
@@ -444,11 +445,26 @@ export class KbService {
 		} catch {
 			return { available: false, entries: [] };
 		}
-		const stdout = await historyGit(this.root, ["--literal-pathspecs", "log", "--follow", "-n", "40", "--format=%H%x00%aI%x00%an%x00%s%x00", "--", path.relative(this.root, file.absolutePath)]);
+		const stdout = await historyGit(this.root, [
+			"--literal-pathspecs",
+			"log",
+			"--follow",
+			"-n",
+			"40",
+			"--format=%H%x00%aI%x00%an%x00%s%x00",
+			"--",
+			path.relative(this.root, file.absolutePath),
+		]);
 		const fields = stdout.split("\0");
 		const entries = [];
 		for (let i = 0; i + 3 < fields.length; i += 4) {
-			entries.push({ id: fields[i]!.trim(), at: fields[i + 1]!, actor: fields[i + 2]!, kind: "committed" as const, text: fields[i + 3]! });
+			entries.push({
+				id: fields[i]!.trim(),
+				at: fields[i + 1]!,
+				actor: fields[i + 2]!,
+				kind: "committed" as const,
+				text: fields[i + 3]!,
+			});
 		}
 		return { available: true, entries };
 	}
@@ -495,7 +511,12 @@ export class KbService {
 		if (mode === "create" && exists) return { kind: "conflict" };
 		let exclusive = mode === "create";
 		// An invalid/unimportable legacy original is still never an update target.
-		if (mode === "update" && !isExternalSkill(abs) && !/\.toml\.md$/i.test(abs) && /^---\r?\n/.test(await readFile(abs, "utf8"))) {
+		if (
+			mode === "update" &&
+			!isExternalSkill(abs) &&
+			!/\.toml\.md$/i.test(abs) &&
+			/^---\r?\n/.test(await readFile(abs, "utf8"))
+		) {
 			abs = abs.replace(/(\.md)$/i, ".toml$1");
 			exclusive = true;
 		}
@@ -581,8 +602,8 @@ export class KbService {
 			outbound.set(edge.source, (outbound.get(edge.source) ?? 0) + 1);
 		}
 		const orphans = graph.nodes
-			.filter((node) => !linked.has(node.path))
-			.map((node) => ({ path: node.path, title: node.title, outbound: outbound.get(node.path) ?? 0 }))
+			.filter(node => !linked.has(node.path))
+			.map(node => ({ path: node.path, title: node.title, outbound: outbound.get(node.path) ?? 0 }))
 			.sort((a, b) => a.path.localeCompare(b.path));
 		return {
 			root: this.root,
@@ -660,7 +681,11 @@ export class KbService {
 				const r = this.byRelPath.get(relPath);
 				if (!r || !(await this.safeExisting(r.absPath))) continue;
 				let raw: string;
-				try { raw = await readFile(r.absPath, "utf8"); } catch { continue; }
+				try {
+					raw = await readFile(r.absPath, "utf8");
+				} catch {
+					continue;
+				}
 				const lc = raw.toLowerCase();
 				const first = lc.indexOf(q);
 				if (first < 0) continue;
@@ -742,9 +767,9 @@ export class KbService {
 		for (let i = 0; i < records.length; i += CHUNK) {
 			const chunk = records.slice(i, i + CHUNK);
 			const reads = await Promise.all(
-				chunk.map((r) =>
+				chunk.map(r =>
 					readFile(r.absPath, "utf8").then(
-						(raw) => ({ r, raw }),
+						raw => ({ r, raw }),
 						() => ({ r, raw: undefined as string | undefined }),
 					),
 				),
@@ -752,39 +777,39 @@ export class KbService {
 			for (const { r, raw } of reads) {
 				if (raw === undefined) continue;
 				bodyFilters.set(r.relPath, indexBody(raw.toLowerCase()));
-			const { frontmatter, body } = parseFrontmatter(raw, r.absPath);
-			const node = nodes.get(r.relPath);
-			if (!node) continue;
-			if (typeof frontmatter.name === "string" && (frontmatter.name as string).trim()) {
-				node.title = (frontmatter.name as string).trim();
-			}
-			if (Array.isArray(frontmatter.tags)) {
-				node.tags = (frontmatter.tags as unknown[]).filter((t): t is string => typeof t === "string");
-			}
-
-			const sourceDir = r.dir;
-			const wikilinks = this.extractWikilinks(body, sourceDir);
-			for (const wl of wikilinks) {
-				if (!wl.resolved) {
-					unresolvedCount += 1;
-					continue;
+				const { frontmatter, body } = parseFrontmatter(raw, r.absPath);
+				const node = nodes.get(r.relPath);
+				if (!node) continue;
+				if (typeof frontmatter.name === "string" && (frontmatter.name as string).trim()) {
+					node.title = (frontmatter.name as string).trim();
 				}
-				const key = `${r.relPath}\0${wl.resolved}`;
-				if (edgeSeen.has(key)) continue;
-				edgeSeen.add(key);
-				edges.push({ source: r.relPath, target: wl.resolved });
-				node.outbound += 1;
-				const targetNode = nodes.get(wl.resolved);
-				if (targetNode) targetNode.inbound += 1;
+				if (Array.isArray(frontmatter.tags)) {
+					node.tags = (frontmatter.tags as unknown[]).filter((t): t is string => typeof t === "string");
+				}
 
-				const list = backlinks.get(wl.resolved) ?? [];
-				list.push({
-					source: r.relPath,
-					label: wl.label,
-					snippet: extractSnippet(body, wl.raw),
-				});
-				backlinks.set(wl.resolved, list);
-			}
+				const sourceDir = r.dir;
+				const wikilinks = this.extractWikilinks(body, sourceDir);
+				for (const wl of wikilinks) {
+					if (!wl.resolved) {
+						unresolvedCount += 1;
+						continue;
+					}
+					const key = `${r.relPath}\0${wl.resolved}`;
+					if (edgeSeen.has(key)) continue;
+					edgeSeen.add(key);
+					edges.push({ source: r.relPath, target: wl.resolved });
+					node.outbound += 1;
+					const targetNode = nodes.get(wl.resolved);
+					if (targetNode) targetNode.inbound += 1;
+
+					const list = backlinks.get(wl.resolved) ?? [];
+					list.push({
+						source: r.relPath,
+						label: wl.label,
+						snippet: extractSnippet(body, wl.raw),
+					});
+					backlinks.set(wl.resolved, list);
+				}
 			}
 		}
 
@@ -806,11 +831,11 @@ export class KbService {
 		for (;;) {
 			await this.ensureIndex();
 			if (this.graphCache) return this.graphCache;
-			const pending = this.graphPromise ??= this.buildGraph();
+			const pending = (this.graphPromise ??= this.buildGraph());
 			try {
 				const graph = await pending;
 				if (graph.generation !== this.generation) continue;
-				return this.graphCache = graph;
+				return (this.graphCache = graph);
 			} finally {
 				if (this.graphPromise === pending) this.graphPromise = undefined;
 			}
@@ -836,8 +861,10 @@ export class KbService {
 			if (!this.resolveAbs(logical)) return false;
 			const root = await realpath(this.root);
 			const target = await realpath(abs);
-			const physical = target === root || target.startsWith(`${root}${path.sep}`)
-				? normalizeRel(path.relative(root, target)) : logical;
+			const physical =
+				target === root || target.startsWith(`${root}${path.sep}`)
+					? normalizeRel(path.relative(root, target))
+					: logical;
 			const directory = (await stat(target)).isDirectory();
 			return !this.pathIsExcluded(logical, directory) && !this.pathIsExcluded(physical, directory);
 		} catch {
@@ -854,7 +881,12 @@ export class KbService {
 
 		if (!existsSync(this.root)) {
 			log.warn(`kb root does not exist: ${this.root}`);
-			if (generation === this.generation) { this.records = records; this.byRelPath = byRelPath; this.byStem = byStem; this.indexReady = true; }
+			if (generation === this.generation) {
+				this.records = records;
+				this.byRelPath = byRelPath;
+				this.byStem = byStem;
+				this.indexReady = true;
+			}
 			return;
 		}
 
@@ -920,7 +952,11 @@ export class KbService {
 			const logicalName = isExternalSkill(candidateName) ? entry.name : candidateName;
 			const logicalRel = relDir ? `${relDir}/${logicalName}` : logicalName;
 			if (this.rules().ignoresEntry(rel, false) || this.pathIsExcluded(logicalRel, false)) continue;
-			if (!isExternalSkill(entry.name) && !/\.toml\.md$/i.test(entry.name) && names.has(entry.name.replace(/(\.md)$/i, ".toml$1"))) {
+			if (
+				!isExternalSkill(entry.name) &&
+				!/\.toml\.md$/i.test(entry.name) &&
+				names.has(entry.name.replace(/(\.md)$/i, ".toml$1"))
+			) {
 				log.warn(`canonical TOML note wins: ${abs.replace(/(\.md)$/i, ".toml$1")}; legacy source: ${abs}`);
 				continue;
 			}
@@ -937,7 +973,9 @@ export class KbService {
 					dir: relDir,
 					stem,
 					title: typeof name === "string" && name.trim() ? name.trim() : stem,
-					tags: Array.isArray(frontmatter.tags) ? frontmatter.tags.filter((tag): tag is string => typeof tag === "string") : [],
+					tags: Array.isArray(frontmatter.tags)
+						? frontmatter.tags.filter((tag): tag is string => typeof tag === "string")
+						: [],
 					size: st.size,
 					mtime: st.mtime,
 				});
@@ -1024,7 +1062,10 @@ export class KbService {
 				target = target.slice(0, hashAt);
 			}
 			target = target.trim();
-			const raw = m[2] !== undefined ? `${target}${anchor ? `#${anchor}` : ""}|${label}` : `${target}${anchor ? `#${anchor}` : ""}`;
+			const raw =
+				m[2] !== undefined
+					? `${target}${anchor ? `#${anchor}` : ""}|${label}`
+					: `${target}${anchor ? `#${anchor}` : ""}`;
 			const link: KbWikilink = {
 				raw,
 				target,
@@ -1131,7 +1172,7 @@ export class KbService {
 
 		// Tiebreaker: prefer same-directory, then nearest-ancestor, then
 		// alphabetical relPath.
-		const sameDir = candidates.find((c) => c.dir === sourceDir);
+		const sameDir = candidates.find(c => c.dir === sourceDir);
 		if (sameDir) return { resolved: sameDir.relPath };
 		const sorted = [...candidates].sort((a, b) => a.relPath.localeCompare(b.relPath));
 		const first = sorted[0];
@@ -1171,7 +1212,10 @@ function bodyCandidates(filters: Map<string, Uint32Array>, query: string): strin
 		let possible = true;
 		for (const hash of hashes) {
 			const bit = hash % width;
-			if (!(bits[bit >>> 5]! & (1 << (bit & 31)))) { possible = false; break; }
+			if (!(bits[bit >>> 5]! & (1 << (bit & 31)))) {
+				possible = false;
+				break;
+			}
 		}
 		if (possible) candidates.push(relPath);
 	}
@@ -1201,15 +1245,27 @@ async function readHeader(abs: string): Promise<{ frontmatter: Record<string, un
 				if (line !== "+++" && line !== "---") return { frontmatter: {}, absPath: abs };
 				fence = line;
 			} else if (line === fence) {
-				if (fence === "---" && isExternalSkill(abs)) return { frontmatter: parseFrontmatter(`${header.join("\n")}\n---\n`, abs).frontmatter, absPath: abs };
+				if (fence === "---" && isExternalSkill(abs))
+					return { frontmatter: parseFrontmatter(`${header.join("\n")}\n---\n`, abs).frontmatter, absPath: abs };
 				if (/\.toml\.md$/i.test(abs) && fence === "---") return { frontmatter: {}, absPath: abs };
-				if (fence === "+++") return { frontmatter: parseFrontmatter(`${header.join("\n")}\n+++\n`).frontmatter, absPath: abs };
+				if (fence === "+++") {
+					try {
+						const parsed = splitTomlFrontmatter(`${header.join("\n")}\n+++\n`, parseSettingsToml)!;
+						return { frontmatter: parsed.properties, absPath: abs };
+					} catch {
+						// A fence-shaped line inside a multiline value leaves an incomplete
+						// TOML prefix. Keep reading until an actual complete header closes.
+						header.push(line);
+						continue;
+					}
+				}
 				// Publish a complete same-mode sibling without ever replacing a winner.
 				const canonical = abs.replace(/(\.md)$/i, ".toml$1");
 				const raw = await readFile(abs, "utf8");
 				let imported: string;
-				try { imported = importLegacyCardBody(raw, abs); }
-				catch {
+				try {
+					imported = importLegacyCardBody(raw, abs);
+				} catch {
 					log.warn(`could not import legacy note metadata: ${abs}`);
 					return { frontmatter: {}, absPath: abs };
 				}
@@ -1231,27 +1287,41 @@ function isExternalSkill(filePath: string): boolean {
 }
 
 /** Owned metadata is TOML; external SKILL.md retains its interoperable YAML. */
-function parseFrontmatter(text: string, filePath?: string): {
+function parseFrontmatter(
+	text: string,
+	filePath?: string,
+): {
 	frontmatter: Record<string, unknown>;
 	frontmatterError?: string;
 	body: string;
 } {
 	if (/^---\r?\n/.test(text)) {
-		if (!filePath || !isExternalSkill(filePath)) return { frontmatter: {}, frontmatterError: "Legacy YAML frontmatter must be imported to a TOML sibling before editing.", body: text };
+		if (!filePath || !isExternalSkill(filePath))
+			return {
+				frontmatter: {},
+				frontmatterError: "Legacy YAML frontmatter must be imported to a TOML sibling before editing.",
+				body: text,
+			};
 		const legacy = /^---\r?\n((?:[\s\S]*?\r?\n)?)---(?:\r?\n|$)/.exec(text);
-		if (!legacy) return { frontmatter: {}, frontmatterError: "Close external skill YAML frontmatter with a --- line.", body: text };
+		if (!legacy)
+			return {
+				frontmatter: {},
+				frontmatterError: "Close external skill YAML frontmatter with a --- line.",
+				body: text,
+			};
 		const body = text.slice(legacy[0].length);
-		try { return { frontmatter: importLegacyYaml(legacy[1]!, filePath), body }; }
-		catch (err) { return { frontmatter: { _raw: legacy[1]! }, frontmatterError: (err as Error).message, body }; }
+		try {
+			return { frontmatter: importLegacyYaml(legacy[1]!, filePath), body };
+		} catch (err) {
+			return { frontmatter: { _raw: legacy[1]! }, frontmatterError: (err as Error).message, body };
+		}
 	}
 	if (!/^\+\+\+\r?\n/.test(text)) return { frontmatter: {}, body: text };
-	const match = /^\+\+\+\r?\n((?:[\s\S]*?\r?\n)?)\+\+\+(?:\r?\n|$)/.exec(text);
-	if (!match) return { frontmatter: {}, frontmatterError: "Close TOML frontmatter with a +++ line.", body: text };
-	const body = text.slice(match[0].length);
 	try {
-		return { frontmatter: parseSettingsToml(match[1]!), body };
+		const parsed = splitTomlFrontmatter(text, parseSettingsToml)!;
+		return { frontmatter: parsed.properties, body: parsed.content };
 	} catch (err) {
-		return { frontmatter: { _raw: match[1]! }, frontmatterError: (err as Error).message, body };
+		return { frontmatter: { _raw: text }, frontmatterError: (err as Error).message, body: text };
 	}
 }
 
@@ -1308,12 +1378,10 @@ function shapeGraphResponse(cache: GraphCache): KbGraphResponse {
 			truncated: false,
 		};
 	}
-	const sortedNodes = [...cache.nodes].sort(
-		(a, b) => b.inbound + b.outbound - (a.inbound + a.outbound),
-	);
-	const keep = new Set(sortedNodes.slice(0, GRAPH_MAX_NODES).map((n) => n.path));
-	const nodes = cache.nodes.filter((n) => keep.has(n.path));
-	const edges = cache.edges.filter((e) => keep.has(e.source) && keep.has(e.target));
+	const sortedNodes = [...cache.nodes].sort((a, b) => b.inbound + b.outbound - (a.inbound + a.outbound));
+	const keep = new Set(sortedNodes.slice(0, GRAPH_MAX_NODES).map(n => n.path));
+	const nodes = cache.nodes.filter(n => keep.has(n.path));
+	const edges = cache.edges.filter(e => keep.has(e.source) && keep.has(e.target));
 	return {
 		nodes,
 		edges,
@@ -1344,7 +1412,6 @@ function extractSnippet(body: string, raw: string): string {
 	const to = Math.min(line.length, lineRelativeIdx + window);
 	return (from > 0 ? "…" : "") + line.slice(from, to) + (to < line.length ? "…" : "");
 }
-
 
 export function resolveKbRoot(): string {
 	const fromEnv = process.env.NPI_DECK_KB_ROOT;

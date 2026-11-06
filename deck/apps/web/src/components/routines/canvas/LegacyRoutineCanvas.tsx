@@ -122,9 +122,7 @@ const WIDE_VIEWPORT_QUERY = "(min-width: 1100px)";
 const TRIGGER_GAP = 96;
 
 function useMediaQuery(query: string): boolean {
-	const [matches, setMatches] = useState(
-		() => typeof window !== "undefined" && window.matchMedia(query).matches,
-	);
+	const [matches, setMatches] = useState(() => typeof window !== "undefined" && window.matchMedia(query).matches);
 	useEffect(() => {
 		if (typeof window === "undefined" || !window.matchMedia) return;
 		const mql = window.matchMedia(query);
@@ -190,7 +188,7 @@ function RoutineCanvasInner({
 	const [ifNodeIds, setIfNodeIds] = useState<ReadonlySet<string>>(() => new Set());
 	useEffect(() => {
 		if (ifNodeIds.size === 0) return;
-		const validIds = new Set(spec.steps.map((s) => s.id));
+		const validIds = new Set(spec.steps.map(s => s.id));
 		let mutated = false;
 		const next = new Set<string>();
 		for (const id of ifNodeIds) {
@@ -231,14 +229,15 @@ function RoutineCanvasInner({
 		triggerSelectedRef.current = triggerSelected;
 	}, [triggerSelected]);
 
-	const triggerProblem = fieldErrors?.top.trigger ?? (spec.trigger.length === 0 ? "Choose how this routine starts." : undefined);
+	const triggerProblem =
+		fieldErrors?.top.trigger ?? (spec.trigger.length === 0 ? "Choose how this routine starts." : undefined);
 
 	// On spec change, error change, if-flag change, or run-overlay change:
 	// reapply selection and stamp `compileError`, `fieldErrors`, `isIfNode`,
 	// `stepRun` onto each node's data, then prepend the trigger node.
 	useEffect(() => {
 		const selId = selectedStepIdRef.current;
-		const stepNodes: StepNodeType[] = imported.nodes.map((n) => {
+		const stepNodes: StepNodeType[] = imported.nodes.map(n => {
 			const data = {
 				...n.data,
 				compileError: errorByStepId.get(n.id),
@@ -264,7 +263,7 @@ function RoutineCanvasInner({
 			connectable: false,
 		};
 		setNodes([triggerNode, ...stepNodes]);
-		const triggerEdges: SequentialEdgeType[] = roots.map((root) => ({
+		const triggerEdges: SequentialEdgeType[] = roots.map(root => ({
 			id: `${TRIGGER_NODE_ID}->${root.id}`,
 			source: TRIGGER_NODE_ID,
 			target: root.id,
@@ -274,14 +273,25 @@ function RoutineCanvasInner({
 			data: { kind: "success", inferred: false },
 		}));
 		setEdges([...triggerEdges, ...imported.edges]);
-	}, [imported, errorByStepId, fieldErrors, isIfNode, stepRunsByStepId, setNodes, setEdges, advanced, allowDelete, spec.trigger, triggerProblem]);
+	}, [
+		imported,
+		errorByStepId,
+		fieldErrors,
+		isIfNode,
+		stepRunsByStepId,
+		setNodes,
+		setEdges,
+		advanced,
+		allowDelete,
+		spec.trigger,
+		triggerProblem,
+	]);
 
 	const handleNodesChange = useCallback(
 		(changes: NodeChange<CanvasNode>[]) => {
 			onNodesChange(changes);
 			const committed = changes.filter(
-				(c): c is NodePositionChange =>
-					c.type === "position" && c.dragging === false && !!c.position,
+				(c): c is NodePositionChange => c.type === "position" && c.dragging === false && !!c.position,
 			);
 			if (committed.length === 0) return;
 			const currentSpec = specRef.current;
@@ -300,10 +310,7 @@ function RoutineCanvasInner({
 			const { source, target, sourceHandle } = conn;
 			if (!source || !target || source === TRIGGER_NODE_ID || target === TRIGGER_NODE_ID) return;
 			const currentSpec = specRef.current;
-			const kind =
-				sourceHandle === "true" || sourceHandle === "false"
-					? sourceHandle
-					: undefined;
+			const kind = sourceHandle === "true" || sourceHandle === "false" ? sourceHandle : undefined;
 			const next = applyEdgeConnection(currentSpec, source, target, kind);
 			if (next !== currentSpec) onChange(next);
 		},
@@ -315,14 +322,14 @@ function RoutineCanvasInner({
 	// rewritten in a single pass instead of two handlers racing on a stale ref.
 	const handleDelete = useCallback(
 		({ nodes: goneNodes, edges: goneEdges }: { nodes: CanvasNode[]; edges: SequentialEdgeType[] }) => {
-			const removed = new Set(goneNodes.filter((n) => n.id !== TRIGGER_NODE_ID).map((n) => n.id));
+			const removed = new Set(goneNodes.filter(n => n.id !== TRIGGER_NODE_ID).map(n => n.id));
 			let nextSpec = specRef.current;
 			for (const edge of goneEdges) {
 				if (edge.source === TRIGGER_NODE_ID || removed.has(edge.source) || removed.has(edge.target)) continue;
 				nextSpec = applyEdgeRemoval(nextSpec, edge.source, edge.target, edge.data?.kind ?? "success");
 			}
 			for (const id of removed) {
-				const idx = nextSpec.steps.findIndex((s) => s.id === id);
+				const idx = nextSpec.steps.findIndex(s => s.id === id);
 				if (idx >= 0) nextSpec = removeStep(nextSpec, idx);
 			}
 			if (removed.has(selectedStepIdRef.current ?? "")) setSelectedStepId(null);
@@ -334,25 +341,22 @@ function RoutineCanvasInner({
 	// Keep canvas-local selection in lockstep with React Flow's view of
 	// what's selected. Exactly one selected step → step inspector; the
 	// trigger alone → trigger inspector; zero or many → nothing.
-	const handleSelectionChange = useCallback(
-		(params: OnSelectionChangeParams) => {
-			const ids = params.nodes
-				.map((n) => (n.type === "step" ? n.id : undefined))
-				.filter((id): id is string => typeof id === "string");
-			const trigger = params.nodes.some((n) => n.type === "trigger");
-			setSelectedStepId(ids.length === 1 && !trigger ? ids[0]! : null);
-			setTriggerSelected(trigger && ids.length === 0);
-		},
-		[],
-	);
+	const handleSelectionChange = useCallback((params: OnSelectionChangeParams) => {
+		const ids = params.nodes
+			.map(n => (n.type === "step" ? n.id : undefined))
+			.filter((id): id is string => typeof id === "string");
+		const trigger = params.nodes.some(n => n.type === "trigger");
+		setSelectedStepId(ids.length === 1 && !trigger ? ids[0]! : null);
+		setTriggerSelected(trigger && ids.length === 0);
+	}, []);
 
 	const selectOnly = useCallback(
 		(target: string | "trigger" | null) => {
 			const stepId = target && target !== "trigger" ? target : null;
 			setSelectedStepId(stepId);
 			setTriggerSelected(target === "trigger");
-			setNodes((prev) =>
-				prev.map((n) => {
+			setNodes(prev =>
+				prev.map(n => {
 					const selected = target === "trigger" ? n.type === "trigger" : n.id === stepId;
 					return n.selected === selected ? n : { ...n, selected };
 				}),
@@ -372,20 +376,16 @@ function RoutineCanvasInner({
 	// Palette → scaffold + insert + stamp a bottom-anchored layout position,
 	// then auto-select the new node so the inspector opens on it.
 	const handleAddStep = useCallback(
-		(
-			type: RoutineStep["type"],
-			presetAction?: RoutineDeckAction,
-			presetKind?: "if",
-		) => {
+		(type: RoutineStep["type"], presetAction?: RoutineDeckAction, presetKind?: "if") => {
 			const currentSpec = specRef.current;
-			const existingIds = currentSpec.steps.map((s) => s.id);
+			const existingIds = currentSpec.steps.map(s => s.id);
 			const newStep = scaffoldStep(type, existingIds, presetAction, presetKind);
 			const next = applyAddNodeAtBottom(currentSpec, newStep);
 			onChange(next);
 			setSelectedStepId(newStep.id);
 			setTriggerSelected(false);
 			if (presetKind === "if") {
-				setIfNodeIds((prev) => {
+				setIfNodeIds(prev => {
 					const next = new Set(prev);
 					next.add(newStep.id);
 					return next;
@@ -401,9 +401,7 @@ function RoutineCanvasInner({
 	const handleInspectorChange = useCallback(
 		(nextStep: RoutineStep) => {
 			const currentSpec = specRef.current;
-			const idx = currentSpec.steps.findIndex(
-				(s) => s.id === selectedStepIdRef.current,
-			);
+			const idx = currentSpec.steps.findIndex(s => s.id === selectedStepIdRef.current);
 			if (idx < 0) return;
 			const nextSpec = replaceStep(currentSpec, idx, nextStep);
 			onChange(nextSpec);
@@ -418,9 +416,7 @@ function RoutineCanvasInner({
 
 	const handleInspectorDelete = useCallback(() => {
 		const currentSpec = specRef.current;
-		const idx = currentSpec.steps.findIndex(
-			(s) => s.id === selectedStepIdRef.current,
-		);
+		const idx = currentSpec.steps.findIndex(s => s.id === selectedStepIdRef.current);
 		if (idx < 0) return;
 		onChange(removeStep(currentSpec, idx));
 		setSelectedStepId(null);
@@ -428,11 +424,11 @@ function RoutineCanvasInner({
 
 	const selectedStep = useMemo(() => {
 		if (!selectedStepId) return null;
-		return spec.steps.find((s) => s.id === selectedStepId) ?? null;
+		return spec.steps.find(s => s.id === selectedStepId) ?? null;
 	}, [spec.steps, selectedStepId]);
 
 	const empty = imported.nodes.length === 0;
-	const existingIds = useMemo(() => spec.steps.map((s) => s.id), [spec.steps]);
+	const existingIds = useMemo(() => spec.steps.map(s => s.id), [spec.steps]);
 
 	// At viewport >= 1100px the inspector becomes a flex sibling of the
 	// canvas, so the React Flow viewport shrinks when it opens and grows back
@@ -507,29 +503,29 @@ function RoutineCanvasInner({
 				/>
 				{allowAdd ? <AddStepPalette onAdd={handleAddStep} advanced={advanced} /> : null}
 				{runs && runs.length > 0 && onSelectRun ? (
-					<RunOverlayPicker
-						runs={runs}
-						selectedRunId={selectedRunId ?? null}
-						onSelect={onSelectRun}
-					/>
+					<RunOverlayPicker runs={runs} selectedRunId={selectedRunId ?? null} onSelect={onSelectRun} />
 				) : null}
 				{compileErrors && compileErrors.length > 0 ? (
 					<button
 						type="button"
 						className="neo-canvas-pill"
 						data-tone="bad"
-						title={compileErrors.map((e) => e.message).join("\n")}
+						title={compileErrors.map(e => e.message).join("\n")}
 						onClick={() => firstCompileTarget && selectOnly(firstCompileTarget)}
 					>
 						<CircleAlert size={13} />
-						{compileErrors.length === 1 ? compileErrors[0]!.message : `${compileErrors.length} problems in the graph`}
+						{compileErrors.length === 1
+							? compileErrors[0]!.message
+							: `${compileErrors.length} problems in the graph`}
 					</button>
 				) : null}
 				{empty ? (
 					<div className="pointer-events-none absolute inset-x-0 top-[calc(50%+48px)] flex justify-center">
 						<div className="neo-empty max-w-[320px] rounded-[var(--r-card)] border border-dashed border-[var(--neo-line-2)] bg-[color-mix(in_srgb,var(--neo-panel)_85%,transparent)] py-6">
 							<div className="neo-empty-title">What should this routine do?</div>
-							<div className="neo-empty-hint">Choose <span className="text-ink">Add action</span> to put the first step on the canvas.</div>
+							<div className="neo-empty-hint">
+								Choose <span className="text-ink">Add action</span> to put the first step on the canvas.
+							</div>
 						</div>
 					</div>
 				) : null}
@@ -537,11 +533,7 @@ function RoutineCanvasInner({
 			{inlineInspectorOpen ? inspector : null}
 			{drawerInspectorOpen ? (
 				<>
-					<div
-						onClick={handleInspectorClose}
-						aria-hidden="true"
-						className="neo-scrim fixed inset-0 z-20"
-					/>
+					<div onClick={handleInspectorClose} aria-hidden="true" className="neo-scrim fixed inset-0 z-20" />
 					{inspector}
 				</>
 			) : null}
@@ -551,8 +543,8 @@ function RoutineCanvasInner({
 
 /** Steps with no incoming edge: where the trigger connects. */
 function rootNodes(nodes: ReadonlyArray<StepNodeType>, edges: ReadonlyArray<SequentialEdgeType>): StepNodeType[] {
-	const targets = new Set(edges.map((e) => e.target));
-	const roots = nodes.filter((n) => !targets.has(n.id));
+	const targets = new Set(edges.map(e => e.target));
+	const roots = nodes.filter(n => !targets.has(n.id));
 	return roots.sort((a, b) => a.position.y - b.position.y || a.position.x - b.position.x);
 }
 
@@ -568,11 +560,8 @@ function rootNodes(nodes: ReadonlyArray<StepNodeType>, edges: ReadonlyArray<Sequ
  *
  * Returns the original spec reference when nothing meaningful changed.
  */
-export function applyPositionCommits(
-	spec: RoutineSpec,
-	commits: ReadonlyArray<NodePositionChange>,
-): RoutineSpec {
-	const validSteps = new Set(spec.steps.map((s) => s.id));
+export function applyPositionCommits(spec: RoutineSpec, commits: ReadonlyArray<NodePositionChange>): RoutineSpec {
+	const validSteps = new Set(spec.steps.map(s => s.id));
 	const prev = spec.layout?.nodes ?? {};
 	const next: Record<string, { x: number; y: number; collapsed?: boolean }> = {};
 
@@ -620,13 +609,13 @@ function RunOverlayPicker({
 			<span className="text-[12px] text-ink-3">Showing run</span>
 			<NeoSelect
 				value={selectedRunId ?? ""}
-				onChange={(e) => onSelect(e.target.value || null)}
+				onChange={e => onSelect(e.target.value || null)}
 				className="neo-input max-w-[220px] truncate"
 				size="sm"
 				mono
 				aria-label="Select run to overlay"
 			>
-				{runs.map((r) => (
+				{runs.map(r => (
 					<option key={r.id} value={r.id}>
 						{formatRunLabel(r)}
 					</option>
@@ -637,13 +626,7 @@ function RunOverlayPicker({
 }
 
 function formatRunLabel(run: RoutineRun): string {
-	const status = !run.endedAt
-		? "running"
-		: run.abortReason
-			? "stopped"
-			: run.exitCode === 0
-				? "ok"
-				: "failed";
+	const status = !run.endedAt ? "running" : run.abortReason ? "stopped" : run.exitCode === 0 ? "ok" : "failed";
 	const date = new Date(run.startedAt);
 	const pad = (n: number): string => n.toString().padStart(2, "0");
 	const stamp = `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;

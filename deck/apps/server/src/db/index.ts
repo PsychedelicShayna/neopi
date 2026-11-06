@@ -187,13 +187,14 @@ function applyMigrations(db: Database): void {
 	`);
 
 	const applied = new Set<string>(
-		(db.query<{ name: string }, []>("SELECT name FROM schema_migrations").all() as { name: string }[])
-			.map((r) => r.name),
+		(db.query<{ name: string }, []>("SELECT name FROM schema_migrations").all() as { name: string }[]).map(
+			r => r.name,
+		),
 	);
 
 	const files = fs
 		.readdirSync(MIGRATIONS_DIR)
-		.filter((f) => f.endsWith(".sql"))
+		.filter(f => f.endsWith(".sql"))
 		.sort();
 
 	const recordStmt = db.query<unknown, [string, string]>(
@@ -220,9 +221,7 @@ function applyMigrations(db: Database): void {
  * never spam a returning user.
  */
 function seedWelcomeTaskIfEmpty(db: Database): void {
-	const count = (db
-		.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM tasks")
-		.get() as { n: number } | null)?.n ?? 0;
+	const count = (db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM tasks").get() as { n: number } | null)?.n ?? 0;
 	if (count > 0) return;
 
 	const taskId = `t_${id().toLowerCase().slice(0, 18)}`;
@@ -232,9 +231,7 @@ function seedWelcomeTaskIfEmpty(db: Database): void {
 
 	db.transaction(() => {
 		const seqRow = db
-			.query<{ value: number }, []>(
-				"UPDATE sequences SET value = value + 1 WHERE name = 'tasks' RETURNING value",
-			)
+			.query<{ value: number }, []>("UPDATE sequences SET value = value + 1 WHERE name = 'tasks' RETURNING value")
 			.get() as { value: number } | null;
 		const displayId = seqRow?.value ?? 1;
 		db.query<unknown, [string, number, string, string, string, number, string | null, string, string]>(

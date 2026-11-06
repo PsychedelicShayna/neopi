@@ -24,9 +24,11 @@ export function importLegacyRoutineYaml(source: string): string {
 }
 
 export function migrateLegacyRoutineSpecs(db: Database): void {
-	const rows = db.query<{ id: string; spec_yaml: string }, []>(
-		"SELECT id, spec_yaml FROM routines WHERE spec_version = 1 AND spec_toml IS NULL AND spec_yaml IS NOT NULL",
-	).all();
+	const rows = db
+		.query<{ id: string; spec_yaml: string }, []>(
+			"SELECT id, spec_yaml FROM routines WHERE spec_version = 1 AND spec_toml IS NULL AND spec_yaml IS NOT NULL",
+		)
+		.all();
 	for (const row of rows) {
 		try {
 			const toml = importLegacyRoutineYaml(row.spec_yaml);

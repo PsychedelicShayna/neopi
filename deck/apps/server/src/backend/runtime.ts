@@ -97,8 +97,15 @@ export function formatDiagnostic(d: ManifestDiagnostic): string {
 	return `${what}${d.file ? ` (${d.file})` : ""}: ${d.reason}`;
 }
 
-export interface BackendEntry { id: string; kind: "source" | "gateway"; path: string }
-interface BackendConfig { backends?: BackendEntry[]; activeBackend?: string | null }
+export interface BackendEntry {
+	id: string;
+	kind: "source" | "gateway";
+	path: string;
+}
+interface BackendConfig {
+	backends?: BackendEntry[];
+	activeBackend?: string | null;
+}
 
 export function readBackendConfig(home = getDataDir()): BackendConfig {
 	try {
@@ -112,8 +119,14 @@ export function listBackends(home = getDataDir()): BackendEntry[] {
 	const config = readBackendConfig(home);
 	if (config.backends === undefined) return [];
 	if (!Array.isArray(config.backends)) throw new BackendConfigError("backends must be a list");
-	return config.backends.map((entry) => {
-		if (!entry || typeof entry.id !== "string" || !entry.id || typeof entry.path !== "string" || !["source", "gateway"].includes(entry.kind))
+	return config.backends.map(entry => {
+		if (
+			!entry ||
+			typeof entry.id !== "string" ||
+			!entry.id ||
+			typeof entry.path !== "string" ||
+			!["source", "gateway"].includes(entry.kind)
+		)
 			throw new BackendConfigError(`invalid backend entry in ${path.join(home, "config.toml")}`);
 		return entry;
 	});
@@ -132,13 +145,17 @@ export function resolveBackendSelection(env: NodeJS.ProcessEnv = process.env): B
 	if (pinned && path.isAbsolute(pinned)) return { id: null, path: pinned, source: "env" };
 	const id = pinned || readBackendConfig(home).activeBackend;
 	if (!id) return undefined;
-	const entry = listBackends(home).find((b) => b.id === id);
-	if (!entry) throw new BackendConfigError(`backend "${id}" is not listed under backends in ${path.join(home, "config.toml")}`);
-	if (entry.kind === "gateway") throw new BackendConfigError(`backend "${id}" has reserved kind gateway; only source backends are supported`);
+	const entry = listBackends(home).find(b => b.id === id);
+	if (!entry)
+		throw new BackendConfigError(`backend "${id}" is not listed under backends in ${path.join(home, "config.toml")}`);
+	if (entry.kind === "gateway")
+		throw new BackendConfigError(`backend "${id}" has reserved kind gateway; only source backends are supported`);
 	return { id, path: path.resolve(entry.path), source: pinned ? "env" : "config" };
 }
 
-type ModuleLoad = { ok: true; file: string; ns: Record<string, unknown> } | { ok: false; file: string | null; reason: string };
+type ModuleLoad =
+	| { ok: true; file: string; ns: Record<string, unknown> }
+	| { ok: false; file: string | null; reason: string };
 
 async function importModule(tree: string, specifier: string): Promise<ModuleLoad> {
 	let file: string;
@@ -177,9 +194,9 @@ export async function resolveManifest(
 	manifest: Readonly<Record<string, FeatureSpec>> = MANIFEST,
 ): Promise<{ features: Record<FeatureName, FeatureStatus>; values: Map<FeatureName, Record<string, unknown>> }> {
 	const specs = Object.entries(manifest) as [FeatureName, FeatureSpec][];
-	const specifiers = new Set(specs.flatMap(([, spec]) => Object.values(spec.exports).map((ref) => ref.module)));
+	const specifiers = new Set(specs.flatMap(([, spec]) => Object.values(spec.exports).map(ref => ref.module)));
 	const loads = new Map<string, ModuleLoad>();
-	await Promise.all([...specifiers].map(async (s) => loads.set(s, await importModule(tree, s))));
+	await Promise.all([...specifiers].map(async s => loads.set(s, await importModule(tree, s))));
 
 	const features = {} as Record<FeatureName, FeatureStatus>;
 	const values = new Map<FeatureName, Record<string, unknown>>();
@@ -200,7 +217,14 @@ export async function resolveManifest(
 		for (const rel of spec.files ?? []) {
 			const file = path.join(tree, rel);
 			if (!existsSync(file)) {
-				diagnostics.push({ feature: name, tier: spec.tier, module: rel, export: null, file, reason: "file missing" });
+				diagnostics.push({
+					feature: name,
+					tier: spec.tier,
+					module: rel,
+					export: null,
+					file,
+					reason: "file missing",
+				});
 			}
 		}
 		features[name] = { tier: spec.tier, available: diagnostics.length === 0, diagnostics };
@@ -217,7 +241,12 @@ let active: { backend: LoadedBackend; values: Map<FeatureName, Record<string, un
  * anything when a required export is missing. Idempotent for the same tree;
  * a second, different tree is refused because module effects can't be undone.
  */
-export async function loadBackend(selection: BackendSelection = resolveBackendSelection() ?? (() => { throw new BackendConfigError("no backend configured"); })()): Promise<LoadedBackend> {
+export async function loadBackend(
+	selection: BackendSelection = resolveBackendSelection() ??
+		(() => {
+			throw new BackendConfigError("no backend configured");
+		})(),
+): Promise<LoadedBackend> {
 	const tree = path.resolve(selection.path);
 	if (active) {
 		if (active.backend.identity.path === tree) return active.backend;
@@ -232,7 +261,7 @@ export async function loadBackend(selection: BackendSelection = resolveBackendSe
 
 	const { features, values } = await resolveManifest(tree);
 
-	const requiredFailures = Object.values(features).flatMap((f) => (f.tier === "required" ? f.diagnostics : []));
+	const requiredFailures = Object.values(features).flatMap(f => (f.tier === "required" ? f.diagnostics : []));
 	if (requiredFailures.length > 0) {
 		throw new BackendLoadError(
 			`backend ${tree} is missing required SDK surface:\n  ${requiredFailures.map(formatDiagnostic).join("\n  ")}`,

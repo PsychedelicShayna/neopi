@@ -111,10 +111,10 @@ describe("abortFlow (issue #5 cleanup helper)", () => {
 		// forever. abortFlow MUST resolve every queued prompt so the SDK's
 		// login promise can settle.
 		const flow = makeFlow();
-		let promptAnswers: string[] = [];
-		flow.promptResolvers.set("p1", (answer) => promptAnswers.push(`p1:${answer}`));
-		flow.promptResolvers.set("p2", (answer) => promptAnswers.push(`p2:${answer}`));
-		flow.promptResolvers.set("p3", (answer) => promptAnswers.push(`p3:${answer}`));
+		const promptAnswers: string[] = [];
+		flow.promptResolvers.set("p1", answer => promptAnswers.push(`p1:${answer}`));
+		flow.promptResolvers.set("p2", answer => promptAnswers.push(`p2:${answer}`));
+		flow.promptResolvers.set("p3", answer => promptAnswers.push(`p3:${answer}`));
 		abortFlow(flow, "cancelled");
 		expect(promptAnswers.sort()).toEqual(["p1:", "p2:", "p3:"]);
 		expect(flow.promptResolvers.size).toBe(0);
@@ -143,7 +143,7 @@ describe("abortFlow (issue #5 cleanup helper)", () => {
 			throw new Error("resolver blew up");
 		});
 		const fineCalls: string[] = [];
-		flow.promptResolvers.set("fine", (answer) => fineCalls.push(answer));
+		flow.promptResolvers.set("fine", answer => fineCalls.push(answer));
 		// Throwing resolver must not prevent the fine one from running.
 		expect(() => abortFlow(flow, "cancelled")).not.toThrow();
 		expect(fineCalls).toEqual([""]);

@@ -1,9 +1,5 @@
 import { useState } from "react";
-import {
-	SortableContext,
-	useSortable,
-	verticalListSortingStrategy,
-} from "@dnd-kit/sortable";
+import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { GripVertical, Plus } from "lucide-react";
 import type { Task, TaskState } from "@npi-deck/protocol";
@@ -34,23 +30,11 @@ interface Props {
  * column name and avoids stealing pointer-down from card drags within the
  * column.
  */
-export function Column({
-	state,
-	tasks,
-	onCreate,
-	onOpen,
-	onRenameRequest,
-	isDraggingColumns,
-}: Props) {
-	const {
-		attributes,
-		listeners,
-		setNodeRef,
-		transform,
-		transition,
-		isDragging,
-		isOver,
-	} = useSortable({ id: state.id, data: { type: "column", stateId: state.id } });
+export function Column({ state, tasks, onCreate, onOpen, onRenameRequest, isDraggingColumns }: Props) {
+	const { attributes, listeners, setNodeRef, transform, transition, isDragging, isOver } = useSortable({
+		id: state.id,
+		data: { type: "column", stateId: state.id },
+	});
 
 	const style: React.CSSProperties = {
 		transform: CSS.Translate.toString(transform),
@@ -133,9 +117,9 @@ export function Column({
 			</div>
 
 			<div className="flex-1 overflow-y-auto px-2 py-2">
-				<SortableContext items={tasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
+				<SortableContext items={tasks.map(t => t.id)} strategy={verticalListSortingStrategy}>
 					<div className="flex flex-col gap-1.5">
-						{tasks.map((t) => (
+						{tasks.map(t => (
 							<TaskCard key={t.id} task={t} onOpen={onOpen} />
 						))}
 					</div>
@@ -148,7 +132,7 @@ export function Column({
 							aria-label="Task title"
 							value={draft}
 							disabled={creating}
-							onChange={(e) => setDraft(e.target.value)}
+							onChange={e => setDraft(e.target.value)}
 							placeholder="Task title"
 							className="w-full bg-transparent text-sm placeholder:text-ink-4 focus:outline-none"
 						/>
@@ -158,12 +142,18 @@ export function Column({
 								rows={7}
 								value={body}
 								disabled={creating}
-								onChange={(e) => setBody(e.target.value)}
-								placeholder={"+++\nread-only = true\nworktree = \"/absolute/path/to/existing-worktree\"\nmodel = \"provider/id\"\nrole = \"default\"\n+++\nTask instructions"}
+								onChange={e => setBody(e.target.value)}
+								placeholder={
+									'+++\nread-only = true\nworktree = "/absolute/path/to/existing-worktree"\nmodel = "provider/id"\nrole = "default"\n+++\nTask instructions'
+								}
 								className="mt-1 w-full resize-y bg-transparent font-mono text-xs placeholder:text-ink-4 focus:outline-none"
 							/>
 						</label>
-						{error ? <p role="alert" className="mt-1 text-xs text-danger">{error}</p> : null}
+						{error ? (
+							<p role="alert" className="mt-1 text-xs text-danger">
+								{error}
+							</p>
+						) : null}
 						<div className="mt-2 flex justify-end gap-2">
 							<button
 								type="button"

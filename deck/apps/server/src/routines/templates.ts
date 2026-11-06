@@ -42,9 +42,12 @@ export interface TemplateSummary {
  */
 export function listTemplates(directory = TEMPLATES_DIR): TemplateSummary[] {
 	if (!fs.existsSync(directory)) return [];
-	const slugs = new Set(fs.readdirSync(directory)
-		.filter((file) => /\.(?:toml|ya?ml)$/.test(file))
-		.map((file) => file.replace(/\.(?:toml|ya?ml)$/, "")));
+	const slugs = new Set(
+		fs
+			.readdirSync(directory)
+			.filter(file => /\.(?:toml|ya?ml)$/.test(file))
+			.map(file => file.replace(/\.(?:toml|ya?ml)$/, "")),
+	);
 	const out: TemplateSummary[] = [];
 	for (const slug of slugs) {
 		const loaded = loadTemplate(slug, directory);
@@ -70,7 +73,7 @@ export function loadTemplate(slug: string, directory = TEMPLATES_DIR): { spec: R
 	try {
 		const source = readTomlConfigSync(target, {
 			legacyPaths: [path.join(directory, `${slug}.yaml`), path.join(directory, `${slug}.yml`)],
-			parseLegacy: (content) => parseSettingsToml(importLegacyRoutineYaml(content)),
+			parseLegacy: content => parseSettingsToml(importLegacyRoutineYaml(content)),
 		});
 		if (!source) return null;
 		return { spec: source.data as unknown as RoutineSpec, specToml: source.content };

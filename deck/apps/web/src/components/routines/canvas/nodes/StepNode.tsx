@@ -39,8 +39,10 @@ export function summarizeStep(step: RoutineStep): Summary {
 			if ("task_ref" in step && step.task_ref) return { text: `Card ${step.task_ref}`, mono: false };
 			if ("inbox_ref" in step && step.inbox_ref) return { text: `Inbox item ${step.inbox_ref}`, mono: false };
 			if ("path" in step && step.path) return { text: step.path, mono: true };
-			if (step.action === "list_tasks") return { text: step.state_ref ? `Cards in ${step.state_ref}` : "All cards", mono: false };
-			if (step.action === "list_inbox") return { text: step.kind ? `${step.kind} items` : "All inbox items", mono: false };
+			if (step.action === "list_tasks")
+				return { text: step.state_ref ? `Cards in ${step.state_ref}` : "All cards", mono: false };
+			if (step.action === "list_inbox")
+				return { text: step.kind ? `${step.kind} items` : "All inbox items", mono: false };
 			return { text: "", mono: false };
 		}
 		case "mcp":
@@ -67,10 +69,7 @@ function stripFrontmatter(text: string): string {
 	}
 }
 
-export const StepNode = memo(function StepNode({
-	data,
-	selected,
-}: NodeProps<StepNodeType>) {
+export const StepNode = memo(function StepNode({ data, selected }: NodeProps<StepNodeType>) {
 	const { step, compileError, fieldErrors, isIfNode, stepRun } = data;
 	const summary = summarizeStep(step);
 	const summaryText = summary.mono ? summary.text : stripFrontmatter(summary.text);
@@ -97,9 +96,20 @@ export const StepNode = memo(function StepNode({
 					<div className="neo-node-title">{stepTitle(step)}</div>
 					<div className="neo-node-kicker">{actionLabel(step)}</div>
 				</div>
-				{stepRun && !problem ? <span className="neo-dot" data-tone={runTone(stepRun)} data-pulse={stepRun.status === "running" || undefined} aria-label={`status: ${stepRun.status}`} /> : null}
+				{stepRun && !problem ? (
+					<span
+						className="neo-dot"
+						data-tone={runTone(stepRun)}
+						data-pulse={stepRun.status === "running" || undefined}
+						aria-label={`status: ${stepRun.status}`}
+					/>
+				) : null}
 			</div>
-			<div className="neo-node-body" data-mono={summary.mono || undefined} data-empty={summaryText ? undefined : "true"}>
+			<div
+				className="neo-node-body"
+				data-mono={summary.mono || undefined}
+				data-empty={summaryText ? undefined : "true"}
+			>
 				{summaryText || "Nothing here yet. Select the step to fill it in."}
 			</div>
 			{problem ? (
@@ -111,7 +121,9 @@ export const StepNode = memo(function StepNode({
 			{!problem && step.when ? (
 				<div className="neo-node-foot" title={step.when}>
 					<GitBranch size={12} />
-					<span className="truncate">Only when <span className="neo-mono">{step.when}</span></span>
+					<span className="truncate">
+						Only when <span className="neo-mono">{step.when}</span>
+					</span>
 				</div>
 			) : null}
 			{stepRun && !problem ? <RunFootline run={stepRun} /> : null}
@@ -135,7 +147,7 @@ function firstFieldProblem(errors: Readonly<Record<string, string>> | undefined)
 	if (!errors) return undefined;
 	const [field, message] = Object.entries(errors)[0] ?? [];
 	if (!field || !message) return undefined;
-	return `${FIELD_WORDS[field] ?? field}: ${message.replace(/\.$/, "").replace(/^./, (c) => c.toLowerCase())}`;
+	return `${FIELD_WORDS[field] ?? field}: ${message.replace(/\.$/, "").replace(/^./, c => c.toLowerCase())}`;
 }
 
 /** Field names as the forms label them, so the node and the inspector agree. */
@@ -179,8 +191,7 @@ function runTone(run: RoutineStepRun): "ok" | "live" | "warn" | "bad" | "accent"
  */
 function RunFootline({ run }: { run: RoutineStepRun }): JSX.Element | null {
 	const tokensTotal = (run.llmTokensIn ?? 0) + (run.llmTokensOut ?? 0);
-	const costUsd =
-		run.llmCostMicros != null ? run.llmCostMicros / 1_000_000 : null;
+	const costUsd = run.llmCostMicros != null ? run.llmCostMicros / 1_000_000 : null;
 	const parts: string[] = [STATUS_WORDS[run.status] ?? run.status];
 	if (run.durationMs != null) parts.push(formatDur(run.durationMs));
 	if (run.model) parts.push(run.model);

@@ -23,7 +23,7 @@ import { logger } from "./log.ts";
 
 const log = logger("routes:npi-config");
 const OTHER_TAB = "other";
-const errorText = (err: unknown) => err instanceof Error ? err.message : String(err);
+const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
 // NeoPi's loader embeds parser errors, which quote the offending config.toml
 // line (possibly a credential). Neither clients nor logs receive that detail.
 const LOAD_FAILED = "NeoPi could not load or save its settings; the deck server log has the details.";
@@ -43,7 +43,9 @@ function registeredSettings(): AnySetting[] {
 }
 
 function lookup(id: string): AnySetting | undefined {
-	return feature("npi-config").allSettings().find(setting => setting.id === id);
+	return feature("npi-config")
+		.allSettings()
+		.find(setting => setting.id === id);
 }
 
 /** The key's value in one raw settings layer; a decoded `null` is NeoPi's unset tombstone. */
@@ -74,7 +76,7 @@ function describe(setting: AnySetting, settings: Settings, globalLayer: RawLayer
 	const definition = setting.definition;
 	const secret = setting.isCredential;
 	// JSON has no undefined; secrets never leave the server.
-	const shown = (value: unknown) => secret || value === undefined ? null : value;
+	const shown = (value: unknown) => (secret || value === undefined ? null : value);
 	const raw = layerValue(globalLayer, setting.segments);
 	const invalidGlobalValue = raw !== undefined && !setting.accepts(raw);
 	const lockedReason = envLock(setting);
@@ -82,7 +84,7 @@ function describe(setting: AnySetting, settings: Settings, globalLayer: RawLayer
 		id: setting.id,
 		type: setting.type,
 		tab: ui?.tab ?? OTHER_TAB,
-		group: ui ? ui.group ?? "General" : setting.segments.length > 1 ? setting.segments[0]! : "General",
+		group: ui ? (ui.group ?? "General") : setting.segments.length > 1 ? setting.segments[0]! : "General",
 		label: ui?.label ?? setting.id,
 		description: ui?.description ?? "",
 		defaultValue: shown(setting.default),
@@ -106,10 +108,18 @@ function describe(setting: AnySetting, settings: Settings, globalLayer: RawLayer
 	if (definition.type === "array" && definition.items) result.items = [...definition.items.values];
 	if (ui?.ordered) result.ordered = true;
 	if (definition.pathScoped) result.pathScoped = true;
-	if (setting.envName) result.env = { name: setting.envName, fallback: setting.envFallback !== false, active: setting.envValue() !== undefined };
+	if (setting.envName)
+		result.env = {
+			name: setting.envName,
+			fallback: setting.envFallback !== false,
+			active: setting.envValue() !== undefined,
+		};
 	// Entry and field names only, so write-only credential records can be edited per field.
 	if (secret && definition.type === "record" && isRecord(raw))
-		result.secretEntries = Object.entries(raw).map(([key, entry]) => ({ key, fields: isRecord(entry) ? Object.keys(entry) : [] }));
+		result.secretEntries = Object.entries(raw).map(([key, entry]) => ({
+			key,
+			fields: isRecord(entry) ? Object.keys(entry) : [],
+		}));
 	if (lockedReason) result.lockedReason = lockedReason;
 	return result;
 }
@@ -125,18 +135,23 @@ function tabsFor(settings: readonly NpiConfigSetting[]): NpiConfigTab[] {
 	}
 	const labels = api.TAB_METADATA as Record<string, { label: string }>;
 	const declared = api.TAB_GROUPS as Record<string, readonly string[]>;
-	const order = [...api.SETTING_TABS, ...[...used.keys()].filter(tab => tab !== OTHER_TAB && !(api.SETTING_TABS as string[]).includes(tab))];
+	const order = [
+		...api.SETTING_TABS,
+		...[...used.keys()].filter(tab => tab !== OTHER_TAB && !(api.SETTING_TABS as string[]).includes(tab)),
+	];
 	if (used.has(OTHER_TAB)) order.push(OTHER_TAB);
 	return order.flatMap(id => {
 		const groups = used.get(id);
 		if (!groups) return [];
 		const known = (declared[id] ?? []).filter(group => groups.includes(group));
 		const extra = groups.filter(group => !known.includes(group));
-		return [{
-			id,
-			label: id === OTHER_TAB ? "Other" : labels[id]?.label ?? id,
-			groups: id === OTHER_TAB ? extra.sort((a, b) => a.localeCompare(b)) : [...known, ...extra],
-		}];
+		return [
+			{
+				id,
+				label: id === OTHER_TAB ? "Other" : (labels[id]?.label ?? id),
+				groups: id === OTHER_TAB ? extra.sort((a, b) => a.localeCompare(b)) : [...known, ...extra],
+			},
+		];
 	});
 }
 
@@ -177,7 +192,10 @@ function requestShapeError(body: NpiConfigPatchRequest | null): string | undefin
 	if (!isRecord(body) || typeof body.id !== "string") return "id required";
 	const modes = [body.value !== undefined, body.unset === true, body.entries !== undefined].filter(Boolean).length;
 	if (modes !== 1) return "exactly one of value, unset: true or entries required";
-	if (body.entries !== undefined && (!isRecord(body.entries) || Object.keys(body.entries).some(key => key.trim() === "")))
+	if (
+		body.entries !== undefined &&
+		(!isRecord(body.entries) || Object.keys(body.entries).some(key => key.trim() === ""))
+	)
 		return "entries must map non-empty keys to values, or null to delete";
 	return undefined;
 }
@@ -187,12 +205,18 @@ function requestShapeError(body: NpiConfigPatchRequest | null): string | undefin
 let saveQueue: Promise<void> = Promise.resolve();
 function serializeSave<T>(run: () => Promise<T>): Promise<T> {
 	const result = saveQueue.then(run);
-	saveQueue = result.then(() => {}, () => {});
+	saveQueue = result.then(
+		() => {},
+		() => {},
+	);
 	return result;
 }
 
 class RequestError extends Error {
-	constructor(message: string, readonly status: 400 | 404 | 409) {
+	constructor(
+		message: string,
+		readonly status: 400 | 404 | 409,
+	) {
 		super(message);
 	}
 }
@@ -221,7 +245,12 @@ function roleValue(layer: RawLayer, role: string): string | null {
  */
 function modelRoles(settings: Settings, registry: Registry): Pick<NpiModelRolesResponse, "roles" | "pools"> {
 	const api = feature("model-roles");
-	const session = { settings, modelRegistry: registry, sessionManager: { getBranch: () => [] }, sessionId: "" } as unknown as RoleCatalogSession;
+	const session = {
+		settings,
+		modelRegistry: registry,
+		sessionManager: { getBranch: () => [] },
+		sessionId: "",
+	} as unknown as RoleCatalogSession;
 	const globalLayer = settings.getGlobalSettings();
 	const available = registry.getAvailable("all");
 	const pools: NpiModelRolePool[] = [];
@@ -231,10 +260,13 @@ function modelRoles(settings: Settings, registry: Registry): Pick<NpiModelRolesR
 		const accepts = api.getRoleInfo(role.id, settings).accepts;
 		let pool = poolFor.get(accepts);
 		if (pool === undefined) {
-			pool = pools.push({
-				models: available.filter(model => accepts(model as RoleModel)).map(model => `${model.provider}/${model.id}`),
-				mixtures: accepts(MIXTURE_SHAPE),
-			}) - 1;
+			pool =
+				pools.push({
+					models: available
+						.filter(model => accepts(model as RoleModel))
+						.map(model => `${model.provider}/${model.id}`),
+					mixtures: accepts(MIXTURE_SHAPE),
+				}) - 1;
 			poolFor.set(accepts, pool);
 		}
 		return {
@@ -253,7 +285,9 @@ function modelRoles(settings: Settings, registry: Registry): Pick<NpiModelRolesR
 						resolved: {
 							provider: role.resolved.provider,
 							modelId: role.resolved.modelId,
-							...(role.resolved.thinkingLevel !== undefined ? { thinkingLevel: String(role.resolved.thinkingLevel) } : {}),
+							...(role.resolved.thinkingLevel !== undefined
+								? { thinkingLevel: String(role.resolved.thinkingLevel) }
+								: {}),
 						},
 					}
 				: {}),
@@ -287,7 +321,12 @@ export function buildNpiConfigRouter(bridge: AgentBridge, config: Config): Hono 
 
 	app.get("/npi-config/model-roles", async c => {
 		if (!hasFeature("model-roles") || !hasFeature("npi-config"))
-			return c.json({ error: "This NeoPi backend does not expose its model-role catalog; edit modelRoles under Settings → NeoPi." }, 501);
+			return c.json(
+				{
+					error: "This NeoPi backend does not expose its model-role catalog; edit modelRoles under Settings → NeoPi.",
+				},
+				501,
+			);
 		try {
 			const cwd = path.resolve(c.req.query("cwd") || config.defaultCwd);
 			const settings = await load(cwd);
@@ -309,56 +348,72 @@ export function buildNpiConfigRouter(bridge: AgentBridge, config: Config): Hono 
 
 	app.patch("/npi-config", async c => {
 		let body: NpiConfigPatchRequest;
-		try { body = await c.req.json() as NpiConfigPatchRequest; }
-		catch { return c.json({ error: "JSON body required" }, 400); }
+		try {
+			body = (await c.req.json()) as NpiConfigPatchRequest;
+		} catch {
+			return c.json({ error: "JSON body required" }, 400);
+		}
 		const shapeError = requestShapeError(body);
 		if (shapeError) return c.json({ error: shapeError }, 400);
 		try {
-			return c.json(await serializeSave(async (): Promise<NpiConfigPatchResponse> => {
-				const setting = lookup(body.id);
-				if (!setting) throw new RequestError(`Unknown setting: ${body.id}`, 404);
-				const locked = envLock(setting);
-				if (locked) throw new RequestError(locked, 409);
-				if (body.entries !== undefined && setting.type !== "record") throw new RequestError(`${setting.id} is not a record; send value instead of entries`, 400);
-				// A writable load moves a malformed config.toml aside; a read-only load
-				// fails first instead, leaving the user's file where it is.
-				await load();
-				const settings = await sdk().Settings.loadIsolated({ cwd: config.defaultCwd, agentDir: sdk().getAgentDir() });
-				if (Object.hasOwn(body, "expectedValue")) {
-					if (setting.isCredential) throw new RequestError("Expected-value checks cannot include secret settings.", 400);
-					const current = describe(setting, settings, settings.getGlobalSettings());
-					if (!sameValue(current.value, body.expectedValue))
-						throw new RequestError(`${setting.id} changed since this page loaded. Reload before saving.`, 409);
-				}
-				try {
-					if (body.unset === true) setting.unset(settings);
-					else setting.set(settings, requestValue(setting, body, settings.getGlobalSettings()));
-				} catch (err) {
-					// Parser and type errors quote the submitted value; never echo a credential.
-					throw new RequestError(setting.isCredential
-						? `Invalid value for ${setting.id} (expected a ${setting.type}); it is not shown because this setting holds credentials.`
-						: errorText(err), 400);
-				}
-				const intended = layerValue(settings.getGlobalSettings(), setting.segments);
-				await settings.flush();
-				const fresh = await load();
-				// NeoPi skips a pending write when another process changed the same key
-				// since it was read, and still resolves the flush.
-				if (!sameValue(layerValue(fresh.getGlobalSettings(), setting.segments), intended))
-					throw new RequestError(`${setting.id} changed in the config file while saving, so NeoPi kept that value. Reload and try again.`, 409);
-				const live = await bridge.reloadLiveSettings();
-				const described = describe(setting, fresh, fresh.getGlobalSettings());
-				return {
-					setting: described,
-					live: live.map(entry => ({
-						sessionId: entry.sessionId,
-						cwd: entry.cwd,
-						provenance: setting.provenance(entry.settings),
-						effectiveValue: described.secret ? null : setting.get(entry.settings) ?? null,
-						...(entry.failed ? { reloadFailed: true as const } : {}),
-					})),
-				};
-			}));
+			return c.json(
+				await serializeSave(async (): Promise<NpiConfigPatchResponse> => {
+					const setting = lookup(body.id);
+					if (!setting) throw new RequestError(`Unknown setting: ${body.id}`, 404);
+					const locked = envLock(setting);
+					if (locked) throw new RequestError(locked, 409);
+					if (body.entries !== undefined && setting.type !== "record")
+						throw new RequestError(`${setting.id} is not a record; send value instead of entries`, 400);
+					// A writable load moves a malformed config.toml aside; a read-only load
+					// fails first instead, leaving the user's file where it is.
+					await load();
+					const settings = await sdk().Settings.loadIsolated({
+						cwd: config.defaultCwd,
+						agentDir: sdk().getAgentDir(),
+					});
+					if (Object.hasOwn(body, "expectedValue")) {
+						if (setting.isCredential)
+							throw new RequestError("Expected-value checks cannot include secret settings.", 400);
+						const current = describe(setting, settings, settings.getGlobalSettings());
+						if (!sameValue(current.value, body.expectedValue))
+							throw new RequestError(`${setting.id} changed since this page loaded. Reload before saving.`, 409);
+					}
+					try {
+						if (body.unset === true) setting.unset(settings);
+						else setting.set(settings, requestValue(setting, body, settings.getGlobalSettings()));
+					} catch (err) {
+						// Parser and type errors quote the submitted value; never echo a credential.
+						throw new RequestError(
+							setting.isCredential
+								? `Invalid value for ${setting.id} (expected a ${setting.type}); it is not shown because this setting holds credentials.`
+								: errorText(err),
+							400,
+						);
+					}
+					const intended = layerValue(settings.getGlobalSettings(), setting.segments);
+					await settings.flush();
+					const fresh = await load();
+					// NeoPi skips a pending write when another process changed the same key
+					// since it was read, and still resolves the flush.
+					if (!sameValue(layerValue(fresh.getGlobalSettings(), setting.segments), intended))
+						throw new RequestError(
+							`${setting.id} changed in the config file while saving, so NeoPi kept that value. Reload and try again.`,
+							409,
+						);
+					const live = await bridge.reloadLiveSettings();
+					const described = describe(setting, fresh, fresh.getGlobalSettings());
+					return {
+						setting: described,
+						live: live.map(entry => ({
+							sessionId: entry.sessionId,
+							cwd: entry.cwd,
+							provenance: setting.provenance(entry.settings),
+							effectiveValue: described.secret ? null : (setting.get(entry.settings) ?? null),
+							...(entry.failed ? { reloadFailed: true as const } : {}),
+						})),
+					};
+				}),
+			);
 		} catch (err) {
 			if (err instanceof RequestError) return c.json({ error: err.message }, err.status);
 			log.warn(`save NeoPi setting ${body.id} failed`);

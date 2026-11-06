@@ -62,7 +62,7 @@ afterEach(async () => {
 	}
 });
 
-const reports = () => listInbox({}).filter((i) => i.source === "routine:kb-orphan-census");
+const reports = () => listInbox({}).filter(i => i.source === "routine:kb-orphan-census");
 
 test("a manual run files one inbox report of the orphans outside .kbignore; cron stays off until enabled", async () => {
 	const id = setup({

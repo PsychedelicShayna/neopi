@@ -76,8 +76,10 @@ function routineToml(row: RoutineRow): string | undefined {
 	if (row.spec_toml !== null) return row.spec_toml;
 	if (row.spec_yaml === null) return undefined;
 	let toml: string;
-	try { toml = importLegacyRoutineYaml(row.spec_yaml); } catch {
-		throw new Error(`Legacy routine ${row.id} cannot be imported losslessly; original spec_yaml is unchanged`);
+	try {
+		toml = importLegacyRoutineYaml(row.spec_yaml);
+	} catch {
+		return undefined;
 	}
 	getDb().query("UPDATE routines SET spec_toml = ? WHERE id = ? AND spec_toml IS NULL").run(toml, row.id);
 	logger("routine-toml-import").info(`Imported legacy routine ${row.id} to spec_toml; spec_yaml preserved`);
@@ -103,7 +105,12 @@ function rowToRoutine(r: RoutineRow): Routine {
 	if (r.action_cwd !== null) out.actionCwd = r.action_cwd;
 	if (r.last_run_at !== null) out.lastRunAt = r.last_run_at;
 	if (r.next_run_at !== null) out.nextRunAt = r.next_run_at;
-	if (specVersion === 1) out.specToml = routineToml(r);
+	if (specVersion === 1) {
+		out.specToml = routineToml(r);
+		if (out.specToml === undefined && r.spec_yaml !== null) {
+			out.specImportError = `Legacy routine ${r.id} cannot be imported losslessly; original spec_yaml is unchanged. Replace its source with valid TOML to repair it.`;
+		}
+	}
 	if (r.graph_json !== null) out.graph = JSON.parse(r.graph_json) as RoutineGraph;
 	if (r.timezone !== null) out.timezone = r.timezone;
 	if (r.budget_json !== null) {
@@ -114,7 +121,10 @@ function rowToRoutine(r: RoutineRow): Routine {
 		}
 	}
 	if (r.tags !== null && r.tags.length > 0) {
-		out.tags = r.tags.split(",").map((t) => t.trim()).filter((t) => t.length > 0);
+		out.tags = r.tags
+			.split(",")
+			.map(t => t.trim())
+			.filter(t => t.length > 0);
 	}
 	return out;
 }
@@ -138,7 +148,8 @@ function rowToRun(r: RunRow): RoutineRun {
 	if (r.trigger_payload !== null) out.triggerPayload = r.trigger_payload;
 	if (r.aborted_at !== null) out.abortedAt = r.aborted_at;
 	if (r.abort_reason !== null) out.abortReason = r.abort_reason;
-	if (r.backend_path !== null) out.backend = { path: r.backend_path, commit: r.backend_commit, version: r.backend_version };
+	if (r.backend_path !== null)
+		out.backend = { path: r.backend_path, commit: r.backend_commit, version: r.backend_version };
 	return out;
 }
 
@@ -178,10 +189,7 @@ export function createRoutine(input: {
 	const routineId = `r_${id().toLowerCase().slice(0, 18)}`;
 	const now = nowIso();
 	getDb()
-		.query<
-			unknown,
-			[string, string, string, string, string, string, string | null, number, string, string]
-		>(
+		.query<unknown, [string, string, string, string, string, string, string | null, number, string, string]>(
 			`INSERT INTO routines
 			   (id, name, description, cron, action_kind, action_body, action_cwd, enabled, created_at, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -218,7 +226,7 @@ export function createV1Routine(input: {
 }): Routine {
 	const routineId = `r_${id().toLowerCase().slice(0, 18)}`;
 	const now = nowIso();
-	const firstCron = input.spec.trigger.find((t) => "cron" in t) as { cron: string } | undefined;
+	const firstCron = input.spec.trigger.find(t => "cron" in t) as { cron: string } | undefined;
 	const cron = firstCron?.cron ?? "";
 	const concurrency = input.spec.concurrency ?? "skip";
 	const budgetJson = input.spec.budget ? JSON.stringify(input.spec.budget) : null;
@@ -295,7 +303,7 @@ export function updateV1Routine(
 	const now = nowIso();
 	if (patch.specToml !== undefined && patch.spec !== undefined) {
 		const spec = patch.spec;
-		const firstCron = spec.trigger.find((t) => "cron" in t) as { cron: string } | undefined;
+		const firstCron = spec.trigger.find(t => "cron" in t) as { cron: string } | undefined;
 		const cron = firstCron?.cron ?? "";
 		const concurrency = spec.concurrency ?? "skip";
 		const budgetJson = spec.budget ? JSON.stringify(spec.budget) : null;
@@ -307,7 +315,19 @@ export function updateV1Routine(
 		getDb()
 			.query<
 				unknown,
-				[string, string, string, string, string, string | null, string | null, string | null, number, string, string]
+				[
+					string,
+					string,
+					string,
+					string,
+					string,
+					string | null,
+					string | null,
+					string | null,
+					number,
+					string,
+					string,
+				]
 			>(
 				`UPDATE routines SET name = ?, description = ?, cron = ?, spec_toml = ?, concurrency = ?,
 				        budget_json = ?, tags = ?, timezone = ?, enabled = ?, updated_at = ?
@@ -350,57 +370,84 @@ function assertValidGraph(graph: RoutineGraph, registry: GraphRoutineValidator):
 }
 
 function graphCron(graph: RoutineGraph): string {
-	const source = graph.nodes.find((node) => node.type === "event.source" && typeof node.config.cron === "string");
-	return source ? source.config.cron as string : "";
+	const source = graph.nodes.find(node => node.type === "event.source" && typeof node.config.cron === "string");
+	return source ? (source.config.cron as string) : "";
 }
 
-export function createGraphRoutine(input: {
-	/** Reserved identity used only when installing a bundled native default. */
-	id?: string;
-	name: string;
-	description?: string;
-	graph: RoutineGraph;
-	enabled?: boolean;
-}, registry: GraphRoutineValidator): Routine {
+export function createGraphRoutine(
+	input: {
+		/** Reserved identity used only when installing a bundled native default. */
+		id?: string;
+		name: string;
+		description?: string;
+		graph: RoutineGraph;
+		enabled?: boolean;
+	},
+	registry: GraphRoutineValidator,
+): Routine {
 	assertValidGraph(input.graph, registry);
 	const routineId = input.id ?? `r_${id().toLowerCase().slice(0, 18)}`;
 	const now = nowIso();
 	const graph = input.graph;
-	getDb().query(
-		`INSERT INTO routines
+	getDb()
+		.query(
+			`INSERT INTO routines
 		 (id, name, description, cron, action_kind, action_body, enabled, created_at, updated_at,
 		  concurrency, budget_json, tags, timezone, spec_version, graph_json)
 		 VALUES (?, ?, ?, ?, 'script', '', ?, ?, ?, ?, ?, ?, ?, 2, ?)`,
-	).run(
-		routineId, input.name, input.description ?? "", graphCron(graph), input.enabled === false ? 0 : 1,
-		now, now, graph.concurrency ?? "skip", graph.budget ? JSON.stringify(graph.budget) : null,
-		graph.tags?.join(",") ?? null, graph.timezone ?? null, JSON.stringify(graph),
-	);
+		)
+		.run(
+			routineId,
+			input.name,
+			input.description ?? "",
+			graphCron(graph),
+			input.enabled === false ? 0 : 1,
+			now,
+			now,
+			graph.concurrency ?? "skip",
+			graph.budget ? JSON.stringify(graph.budget) : null,
+			graph.tags?.join(",") ?? null,
+			graph.timezone ?? null,
+			JSON.stringify(graph),
+		);
 	const routine = getRoutine(routineId);
 	if (!routine) throw new Error("createGraphRoutine failed");
 	return routine;
 }
 
-export function updateGraphRoutine(routineId: string, patch: {
-	name?: string;
-	description?: string;
-	graph?: RoutineGraph;
-	enabled?: boolean;
-}, registry: GraphRoutineValidator): Routine | undefined {
+export function updateGraphRoutine(
+	routineId: string,
+	patch: {
+		name?: string;
+		description?: string;
+		graph?: RoutineGraph;
+		enabled?: boolean;
+	},
+	registry: GraphRoutineValidator,
+): Routine | undefined {
 	const existing = getRoutine(routineId);
 	if (!existing || existing.specVersion !== 2) return undefined;
 	const graph = patch.graph ?? existing.graph;
 	if (!graph) throw new Error(`graph routine ${routineId} has no graph`);
 	assertValidGraph(graph, registry);
-	getDb().query(
-		`UPDATE routines SET name = ?, description = ?, enabled = ?, cron = ?, concurrency = ?,
+	getDb()
+		.query(
+			`UPDATE routines SET name = ?, description = ?, enabled = ?, cron = ?, concurrency = ?,
 		 budget_json = ?, tags = ?, timezone = ?, graph_json = ?, updated_at = ? WHERE id = ?`,
-	).run(
-		patch.name ?? existing.name, patch.description ?? existing.description,
-		(patch.enabled ?? existing.enabled) ? 1 : 0, graphCron(graph), graph.concurrency ?? "skip",
-		graph.budget ? JSON.stringify(graph.budget) : null, graph.tags?.join(",") ?? null,
-		graph.timezone ?? null, JSON.stringify(graph), nowIso(), routineId,
-	);
+		)
+		.run(
+			patch.name ?? existing.name,
+			patch.description ?? existing.description,
+			(patch.enabled ?? existing.enabled) ? 1 : 0,
+			graphCron(graph),
+			graph.concurrency ?? "skip",
+			graph.budget ? JSON.stringify(graph.budget) : null,
+			graph.tags?.join(",") ?? null,
+			graph.timezone ?? null,
+			JSON.stringify(graph),
+			nowIso(),
+			routineId,
+		);
 	return getRoutine(routineId);
 }
 
@@ -420,10 +467,7 @@ export function updateRoutine(
 	if (!existing) return undefined;
 	const next = { ...existing, ...patch };
 	getDb()
-		.query<
-			unknown,
-			[string, string, string, string, string, string | null, number, string, string]
-		>(
+		.query<unknown, [string, string, string, string, string, string | null, number, string, string]>(
 			`UPDATE routines SET name = ?, description = ?, cron = ?, action_kind = ?, action_body = ?,
 			        action_cwd = ?, enabled = ?, updated_at = ?
 			 WHERE id = ?`,
@@ -448,10 +492,7 @@ export function deleteRoutine(routineId: string): boolean {
 	return Number(r.changes ?? 0) > 0;
 }
 
-export function setRoutineSchedule(
-	routineId: string,
-	patch: { lastRunAt?: string; nextRunAt?: string | null },
-): void {
+export function setRoutineSchedule(routineId: string, patch: { lastRunAt?: string; nextRunAt?: string | null }): void {
 	const sets: string[] = [];
 	const args: Array<string | null> = [];
 	if (patch.lastRunAt !== undefined) {
@@ -472,24 +513,39 @@ export function setRoutineSchedule(
 // ─── Runs ──────────────────────────────────────────────────────────────────
 
 /** Record a run's start. The trigger payload is stored through `encodeTriggerPayload`. */
-export function startRun(routineId: string, trigger: RoutineRun["trigger"], triggerPayload?: Record<string, unknown> | unknown[]): RoutineRun {
+export function startRun(
+	routineId: string,
+	trigger: RoutineRun["trigger"],
+	triggerPayload?: Record<string, unknown> | unknown[],
+): RoutineRun {
 	const runId = `run_${id().toLowerCase().slice(0, 18)}`;
 	const startedAt = nowIso();
 	getDb()
 		.query<unknown, [string, string, string, string, string | null]>(
 			"INSERT INTO routine_runs (id, routine_id, started_at, trigger, trigger_payload) VALUES (?, ?, ?, ?, ?)",
 		)
-		.run(runId, routineId, startedAt, trigger, triggerPayload === undefined ? null : encodeTriggerPayload(triggerPayload));
+		.run(
+			runId,
+			routineId,
+			startedAt,
+			trigger,
+			triggerPayload === undefined ? null : encodeTriggerPayload(triggerPayload),
+		);
 	const out = getRun(runId);
 	if (!out) throw new Error("startRun failed");
 	return out;
 }
 
 /** Persist the tree selected for this run before executing its first agent step. */
-export function setRunBackend(runId: string, backend: { path: string; commit: string | null; version: string | null }): void {
-	getDb().query<unknown, [string, string | null, string | null, string]>(
-		"UPDATE routine_runs SET backend_path = ?, backend_commit = ?, backend_version = ? WHERE id = ?",
-	).run(backend.path, backend.commit, backend.version, runId);
+export function setRunBackend(
+	runId: string,
+	backend: { path: string; commit: string | null; version: string | null },
+): void {
+	getDb()
+		.query<unknown, [string, string | null, string | null, string]>(
+			"UPDATE routine_runs SET backend_path = ?, backend_commit = ?, backend_version = ? WHERE id = ?",
+		)
+		.run(backend.path, backend.commit, backend.version, runId);
 }
 
 export function finishRun(
@@ -543,7 +599,9 @@ const MAX_GRAPH_TRACE_BYTES = 8 * 1024 * 1024;
 const MAX_GRAPH_TRACE_DEPTH = 256;
 const MAX_GRAPH_HISTORY_ERROR_CHARS = 8 * 1024;
 class GraphTraceLimitError extends Error {
-	constructor(message = `Graph trace exceeds the ${MAX_GRAPH_TRACE_BYTES}-byte serialization budget`) { super(message); }
+	constructor(message = `Graph trace exceeds the ${MAX_GRAPH_TRACE_BYTES}-byte serialization budget`) {
+		super(message);
+	}
 }
 
 /** Redact user data during serialization, without copying or changing live envelopes. */
@@ -556,12 +614,16 @@ export function encodeGraphTrace(record: GraphRunRecord): string {
 			ancestors.pop();
 			payloadScopes.pop();
 		}
-		if (ancestors.length >= MAX_GRAPH_TRACE_DEPTH) throw new GraphTraceLimitError(`Graph trace exceeds the ${MAX_GRAPH_TRACE_DEPTH}-level serialization depth budget`);
+		if (ancestors.length >= MAX_GRAPH_TRACE_DEPTH)
+			throw new GraphTraceLimitError(
+				`Graph trace exceeds the ${MAX_GRAPH_TRACE_DEPTH}-level serialization depth budget`,
+			);
 		const insidePayload = payloadScopes[payloadScopes.length - 1] ?? false;
 		if (insidePayload) value = redactGraphActionField(key, value);
 		// Charge each occurrence, including shared envelopes, before stringify expands it.
 		// One separator per member is conservative for first members and omitted values.
-		if (key.length > MAX_GRAPH_TRACE_BYTES || (typeof value === "string" && value.length > MAX_GRAPH_TRACE_BYTES)) throw new GraphTraceLimitError();
+		if (key.length > MAX_GRAPH_TRACE_BYTES || (typeof value === "string" && value.length > MAX_GRAPH_TRACE_BYTES))
+			throw new GraphTraceLimitError();
 		if (ancestors.length) bytes += Array.isArray(this) ? 1 : Buffer.byteLength(JSON.stringify(key)) + 2;
 		if (value !== null && typeof value === "object") bytes += 2;
 		else {
@@ -571,7 +633,14 @@ export function encodeGraphTrace(record: GraphRunRecord): string {
 		if (bytes > MAX_GRAPH_TRACE_BYTES) throw new GraphTraceLimitError();
 		if (value !== null && typeof value === "object") {
 			ancestors.push(value);
-			payloadScopes.push(insidePayload || key === "result" || key === "config" || key === "request" || key === "receipt" || (this === record.activation && key === "event"));
+			payloadScopes.push(
+				insidePayload ||
+					key === "result" ||
+					key === "config" ||
+					key === "request" ||
+					key === "receipt" ||
+					(this === record.activation && key === "event"),
+			);
 		}
 		return value;
 	});
@@ -584,14 +653,19 @@ export function finishGraphRun(record: GraphRunRecord, abortReason?: string): vo
 		if (!run || run.routineId !== record.routineId) throw new Error("graph trace run does not match routine");
 		let trace: string | null = null;
 		let traceError: string | undefined;
-		try { trace = encodeGraphTrace(record); }
-		catch (failure) {
-			traceError = failure instanceof GraphTraceLimitError
-				? failure.message
-				: `Graph trace could not be serialized: ${String(failure).slice(0, MAX_GRAPH_HISTORY_ERROR_CHARS)}`;
+		try {
+			trace = encodeGraphTrace(record);
+		} catch (failure) {
+			traceError =
+				failure instanceof GraphTraceLimitError
+					? failure.message
+					: `Graph trace could not be serialized: ${String(failure).slice(0, MAX_GRAPH_HISTORY_ERROR_CHARS)}`;
 		}
 		const historyError = traceError
-			? `${traceError}\n${record.error?.slice(0, MAX_GRAPH_HISTORY_ERROR_CHARS) ?? ""}`.slice(0, MAX_GRAPH_HISTORY_ERROR_CHARS)
+			? `${traceError}\n${record.error?.slice(0, MAX_GRAPH_HISTORY_ERROR_CHARS) ?? ""}`.slice(
+					0,
+					MAX_GRAPH_HISTORY_ERROR_CHARS,
+				)
 			: record.error?.slice(0, MAX_GRAPH_HISTORY_ERROR_CHARS);
 		getDb().query("UPDATE routine_runs SET graph_run_json = ? WHERE id = ?").run(trace, record.id);
 		const mode = record.graph.execution?.mode;
@@ -612,21 +686,35 @@ export function finishGraphRun(record: GraphRunRecord, abortReason?: string): vo
 			let stdout = "";
 			for (const step of steps) {
 				const result = step.diagnostics!.result;
-				const more = result && typeof result === "object" && !Array.isArray(result) && typeof result.stdoutExcerpt === "string" ? result.stdoutExcerpt : "";
+				const more =
+					result &&
+					typeof result === "object" &&
+					!Array.isArray(result) &&
+					typeof result.stdoutExcerpt === "string"
+						? result.stdoutExcerpt
+						: "";
 				const room = MAX_GRAPH_HISTORY_ERROR_CHARS - stdout.length;
 				if (room > 0) stdout += more.length > room ? more.slice(0, room) + "\n…(truncated)" : more;
 			}
-			const reason = abortReason ?? record.abortReason ?? (record.status === "aborted" ? "cancelled" : record.status === "failed" ? "failure" : undefined);
+			const reason =
+				abortReason ??
+				record.abortReason ??
+				(record.status === "aborted" ? "cancelled" : record.status === "failed" ? "failure" : undefined);
 			finalizeRun(record.id, {
 				endedAt: record.endedAt,
 				exitCode: !traceError && record.status === "success" ? 0 : null,
-				stdoutExcerpt: stdout, stderrExcerpt: "",
+				stdoutExcerpt: stdout,
+				stderrExcerpt: "",
 				error: traceError ? historyError : reason ? `aborted: ${reason}` : undefined,
 				...(reason ? { abortedAt: record.endedAt, abortReason: reason } : {}),
 				totalLlmTokens: (record.usage?.llmTokensIn ?? 0) + (record.usage?.llmTokensOut ?? 0),
 				totalLlmCostMicros: record.usage?.llmCostMicros ?? 0,
 				stepCountTotal: steps.length,
-				stepCountFailed: steps.filter((node, index) => (node.status === "failed" || node.status === "aborted") && !(reason === "budget" && index === steps.length - 1)).length,
+				stepCountFailed: steps.filter(
+					(node, index) =>
+						(node.status === "failed" || node.status === "aborted") &&
+						!(reason === "budget" && index === steps.length - 1),
+				).length,
 			});
 			return;
 		}
@@ -634,32 +722,35 @@ export function finishGraphRun(record: GraphRunRecord, abortReason?: string): vo
 			endedAt: record.endedAt,
 			exitCode: !traceError && record.status === "success" ? 0 : 1,
 			error: historyError,
-			...(record.status === "aborted" ? {
-				abortedAt: record.endedAt,
-				abortReason: abortReason ?? record.abortReason ?? "cancelled",
-			} : {}),
+			...(record.status === "aborted"
+				? {
+						abortedAt: record.endedAt,
+						abortReason: abortReason ?? record.abortReason ?? "cancelled",
+					}
+				: {}),
 			totalLlmTokens: (record.usage?.llmTokensIn ?? 0) + (record.usage?.llmTokensOut ?? 0),
 			totalLlmCostMicros: record.usage?.llmCostMicros ?? 0,
-			stepCountTotal: record.nodeRuns.filter((node) => node.status !== "skipped").length,
-			stepCountFailed: record.nodeRuns.filter((node) => node.status === "failed" || node.status === "aborted").length,
+			stepCountTotal: record.nodeRuns.filter(node => node.status !== "skipped").length,
+			stepCountFailed: record.nodeRuns.filter(node => node.status === "failed" || node.status === "aborted").length,
 		});
 	})();
 }
 
 /** Fetch full provenance only on the dedicated trace path, never in run listings. */
 export function getGraphRun(runId: string): GraphRunRecord | undefined {
-	const row = getDb().query<{ graph_run_json: string | null }, [string]>(
-		"SELECT graph_run_json FROM routine_runs WHERE id = ?",
-	).get(runId);
+	const row = getDb()
+		.query<{ graph_run_json: string | null }, [string]>("SELECT graph_run_json FROM routine_runs WHERE id = ?")
+		.get(runId);
 	if (!row?.graph_run_json) return undefined;
 	const record = JSON.parse(row.graph_run_json) as GraphRunRecord;
 	// Late provider confirmations survive cancellation without reactivating the run.
-	if (!record.dryRun) for (const node of record.nodeRuns) {
-		node.effects = node.effects?.map(effect => {
-			if (effect.status !== "uncertain") return effect;
-			const durable = getGraphEffect(effect.logicalKey);
-			return durable ? { ...durable, replayed: effect.replayed } : effect;
-		});
-	}
+	if (!record.dryRun)
+		for (const node of record.nodeRuns) {
+			node.effects = node.effects?.map(effect => {
+				if (effect.status !== "uncertain") return effect;
+				const durable = getGraphEffect(effect.logicalKey);
+				return durable ? { ...durable, replayed: effect.replayed } : effect;
+			});
+		}
 	return record;
 }

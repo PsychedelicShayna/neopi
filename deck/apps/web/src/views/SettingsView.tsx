@@ -81,7 +81,7 @@ export function SettingsView() {
 					</div>
 					<div className="grid min-h-0 flex-1 grid-cols-[220px_1fr] overflow-hidden">
 						<nav className="border-r border-line bg-paper-2/40 p-2">
-							{SECTIONS.map((section) => (
+							{SECTIONS.map(section => (
 								<button
 									key={section.id}
 									type="button"
@@ -91,9 +91,7 @@ export function SettingsView() {
 										selected === section.id ? "bg-accent-soft text-accent" : "hover:bg-paper-3",
 									)}
 								>
-									<div className="font-mono text-xs font-medium uppercase tracking-meta">
-										{section.label}
-									</div>
+									<div className="font-mono text-xs font-medium uppercase tracking-meta">{section.label}</div>
 									<div className="mt-0.5 text-xs text-ink-3">{section.description}</div>
 								</button>
 							))}
@@ -141,37 +139,79 @@ function BackendSection() {
 	const [busy, setBusy] = useState(false);
 	const generation = useStore(s => s.workerGeneration);
 	useEffect(() => {
-		void settingsApi.backendStatus().then(data => { setStatus(data); setSelected(current => current || data.desired || data.backends[0]?.id || ""); }).catch(err => setReport(String(err)));
+		void settingsApi
+			.backendStatus()
+			.then(data => {
+				setStatus(data);
+				setSelected(current => current || data.desired || data.backends[0]?.id || "");
+			})
+			.catch(err => setReport(String(err)));
 	}, [generation]);
 	async function run(force: boolean) {
 		if (!selected) return;
 		setBusy(true);
 		try {
 			const probe = await settingsApi.probeBackend(selected);
-			if (!probe.ok) { setReport(`Preflight refused: ${probe.reason}`); return; }
+			if (!probe.ok) {
+				setReport(`Preflight refused: ${probe.reason}`);
+				return;
+			}
 			const result = await settingsApi.switchBackend(selected, force);
 			setReport(result.message);
 		} catch (err) {
 			const message = String(err);
 			setReport(message.includes("work in progress") ? `${message} — use Force to abort work` : message);
-		} finally { setBusy(false); }
+		} finally {
+			setBusy(false);
+		}
 	}
 	return (
 		<div className="mx-auto max-w-3xl space-y-4">
 			<h1 className="text-xl font-semibold">NeoPi backend</h1>
-			<p className="text-sm text-ink-3">Running: {status?.running ? `${status.running.path} (${status.running.commit?.slice(0, 10) ?? "unknown SHA"}, ${status.running.version ?? "unknown version"})` : "none — SDK-backed routes are unavailable"}</p>
-			{status?.reason ? <p role="alert" className="text-sm text-warn">{status.reason}</p> : null}
-			{status?.pinned ? <p role="alert" className="text-sm text-warn">NPI_DECK_BACKEND pins this launch. Remove it and restart to enable switching.</p> : null}
-			<label className="block text-sm">Backend
-				<select className="mt-1 block w-full rounded border border-line bg-paper p-2" value={selected} onChange={e => setSelected(e.target.value)} disabled={status?.pinned || busy}>
-					{status?.backends.map(b => <option key={b.id} value={b.id}>{b.id} — {b.kind}: {b.path}</option>)}
+			<p className="text-sm text-ink-3">
+				Running:{" "}
+				{status?.running
+					? `${status.running.path} (${status.running.commit?.slice(0, 10) ?? "unknown SHA"}, ${status.running.version ?? "unknown version"})`
+					: "none — SDK-backed routes are unavailable"}
+			</p>
+			{status?.reason ? (
+				<p role="alert" className="text-sm text-warn">
+					{status.reason}
+				</p>
+			) : null}
+			{status?.pinned ? (
+				<p role="alert" className="text-sm text-warn">
+					NPI_DECK_BACKEND pins this launch. Remove it and restart to enable switching.
+				</p>
+			) : null}
+			<label className="block text-sm">
+				Backend
+				<select
+					className="mt-1 block w-full rounded border border-line bg-paper p-2"
+					value={selected}
+					onChange={e => setSelected(e.target.value)}
+					disabled={status?.pinned || busy}
+				>
+					{status?.backends.map(b => (
+						<option key={b.id} value={b.id}>
+							{b.id} — {b.kind}: {b.path}
+						</option>
+					))}
 				</select>
 			</label>
 			<div className="flex gap-2">
-				<Button disabled={!selected || status?.pinned || busy} onClick={() => void run(false)}>Switch</Button>
-				<Button variant="outline" disabled={!selected || status?.pinned || busy} onClick={() => void run(true)}>Force — abort all work</Button>
+				<Button disabled={!selected || status?.pinned || busy} onClick={() => void run(false)}>
+					Switch
+				</Button>
+				<Button variant="outline" disabled={!selected || status?.pinned || busy} onClick={() => void run(true)}>
+					Force — abort all work
+				</Button>
 			</div>
-			{report ? <p role="status" className="break-words text-sm text-ink-3">{report}</p> : null}
+			{report ? (
+				<p role="status" className="break-words text-sm text-ink-3">
+					{report}
+				</p>
+			) : null}
 		</div>
 	);
 }
@@ -202,15 +242,12 @@ function EnvSection() {
 	const grouped = useMemo(() => {
 		const entries = data?.entries ?? [];
 		const isDeckKey = (key: string) =>
-			key.startsWith("NPI_DECK_") ||
-			key === "LOG_LEVEL" ||
-			key === "PI_NO_TITLE" ||
-			key === "OMP_MODEL";
+			key.startsWith("NPI_DECK_") || key === "LOG_LEVEL" || key === "PI_NO_TITLE" || key === "OMP_MODEL";
 		const isMessagingKey = (key: string) => key.startsWith("TELEGRAM_") || key.startsWith("SLACK_");
 		return {
-			deck: entries.filter((e) => isDeckKey(e.key)),
-			messaging: entries.filter((e) => isMessagingKey(e.key)),
-			sdk: entries.filter((e) => !isDeckKey(e.key) && !isMessagingKey(e.key)),
+			deck: entries.filter(e => isDeckKey(e.key)),
+			messaging: entries.filter(e => isMessagingKey(e.key)),
+			sdk: entries.filter(e => !isDeckKey(e.key) && !isMessagingKey(e.key)),
 		};
 	}, [data]);
 
@@ -228,8 +265,8 @@ function EnvSection() {
 			<div>
 				<h1 className="text-xl font-semibold tracking-tight">Environment variables</h1>
 				<p className="mt-1 max-w-3xl text-sm text-ink-3">
-					Edits write to the deck-managed env file only. Variables from the launching process stay
-					higher priority until you remove them from that shell/profile.
+					Edits write to the deck-managed env file only. Variables from the launching process stay higher priority
+					until you remove them from that shell/profile.
 				</p>
 			</div>
 
@@ -272,7 +309,7 @@ function EnvSection() {
 			<EditEnvModal
 				entry={editing}
 				onClose={() => setEditing(null)}
-				onSaved={(next) => {
+				onSaved={next => {
 					setData(next);
 					setEditing(null);
 				}}
@@ -310,16 +347,16 @@ function MessagingSection() {
 	}, []);
 
 	const entries = data?.entries ?? [];
-	const telegramToken = entries.find((entry) => entry.key === "TELEGRAM_BOT_TOKEN");
-	const telegramAllowed = entries.find((entry) => entry.key === "TELEGRAM_ALLOWED_USERS");
-	const telegramDb = entries.find((entry) => entry.key === "TELEGRAM_BRIDGE_DB_PATH");
-	const telegramGroups = entries.find((entry) => entry.key === "TELEGRAM_GROUP_ALLOWED_CHATS");
-	const telegramMention = entries.find((entry) => entry.key === "TELEGRAM_REQUIRE_MENTION");
-	const telegramInfo = bridges.find((b) => b.name === "telegram");
+	const telegramToken = entries.find(entry => entry.key === "TELEGRAM_BOT_TOKEN");
+	const telegramAllowed = entries.find(entry => entry.key === "TELEGRAM_ALLOWED_USERS");
+	const telegramDb = entries.find(entry => entry.key === "TELEGRAM_BRIDGE_DB_PATH");
+	const telegramGroups = entries.find(entry => entry.key === "TELEGRAM_GROUP_ALLOWED_CHATS");
+	const telegramMention = entries.find(entry => entry.key === "TELEGRAM_REQUIRE_MENTION");
+	const telegramInfo = bridges.find(b => b.name === "telegram");
 
 	function applyBridge(next: BridgeInfo): void {
-		setBridges((prev) => {
-			const idx = prev.findIndex((b) => b.name === next.name);
+		setBridges(prev => {
+			const idx = prev.findIndex(b => b.name === next.name);
 			if (idx === -1) return [...prev, next];
 			const out = prev.slice();
 			out[idx] = next;
@@ -332,8 +369,8 @@ function MessagingSection() {
 			<div>
 				<h1 className="text-xl font-semibold tracking-tight">Messaging bridges</h1>
 				<p className="mt-1 max-w-3xl text-sm text-ink-3">
-					Save credentials, then start the bridge. The deck supervises the process; saving a
-					token alone does not bring the integration online.
+					Save credentials, then start the bridge. The deck supervises the process; saving a token alone does not
+					bring the integration online.
 				</p>
 			</div>
 
@@ -353,11 +390,17 @@ function MessagingSection() {
 					{ label: "Allowed users", entry: telegramAllowed },
 					{ label: "Allowed group chats", entry: telegramGroups },
 					{ label: "Require group mention", entry: telegramMention },
-					{ label: "Wake patterns", entry: entries.find((entry) => entry.key === "TELEGRAM_MENTION_PATTERNS") },
-					{ label: "Free-response chats", entry: entries.find((entry) => entry.key === "TELEGRAM_FREE_RESPONSE_CHATS") },
-					{ label: "Free-response topics", entry: entries.find((entry) => entry.key === "TELEGRAM_FREE_RESPONSE_TOPICS") },
-					{ label: "Allowed topics", entry: entries.find((entry) => entry.key === "TELEGRAM_ALLOWED_TOPICS") },
-					{ label: "Ignored topics", entry: entries.find((entry) => entry.key === "TELEGRAM_IGNORED_THREADS") },
+					{ label: "Wake patterns", entry: entries.find(entry => entry.key === "TELEGRAM_MENTION_PATTERNS") },
+					{
+						label: "Free-response chats",
+						entry: entries.find(entry => entry.key === "TELEGRAM_FREE_RESPONSE_CHATS"),
+					},
+					{
+						label: "Free-response topics",
+						entry: entries.find(entry => entry.key === "TELEGRAM_FREE_RESPONSE_TOPICS"),
+					},
+					{ label: "Allowed topics", entry: entries.find(entry => entry.key === "TELEGRAM_ALLOWED_TOPICS") },
+					{ label: "Ignored topics", entry: entries.find(entry => entry.key === "TELEGRAM_IGNORED_THREADS") },
 					{ label: "Mapping DB path", entry: telegramDb },
 				]}
 				onEdit={setEditing}
@@ -365,20 +408,32 @@ function MessagingSection() {
 				onError={setError}
 			/>
 			<div className="rounded-md border border-line bg-paper-2 p-4 text-sm text-ink-3">
-				<p>Create a separate bot with BotFather, save its token and numeric sender IDs, then Start.
-					Do not reuse a token already polled by Hermes or another receiver. Credentials stay masked; never paste tokens into logs.</p>
-				<p className="mt-2">Groups require both an allowed negative chat ID and an allowed sender.
-					By default commands, mentions and replies to this bot invoke it. Optional regex wake patterns and free-response chats/topics
-					also invoke allowed senders. Allowed/ignored topics filter even commands; ignored topics win. DMs are not topic-filtered.</p>
-				<p className="mt-2">Send task text or a checklist to create one or more cards through the inbox.
-					Use /capture to keep an item unprocessed, /chat for agent conversation, /bind to reuse an existing session,
-					and /sessions search or /resume by title, number or ID for retained chat/topic bindings. /title shows the current title.
-					/new clears only the binding, not the running NeoPi instance.</p>
-				<p className="mt-2">Card properties accept leading YAML front matter or /properties defaults:
-					read-only, worktree, model, role and custom keys are retained on every decomposed card.
-					Card creation does not itself execute the card. /help lists all commands.</p>
-				<p className="mt-2">Unsupported attachments are not downloaded or processed; captions can still become tasks or explicit chat,
-					with a warning first. Photos work in /chat, which shows typing while the bound session works.</p>
+				<p>
+					Create a separate bot with BotFather, save its token and numeric sender IDs, then Start. Do not reuse a
+					token already polled by Hermes or another receiver. Credentials stay masked; never paste tokens into
+					logs.
+				</p>
+				<p className="mt-2">
+					Groups require both an allowed negative chat ID and an allowed sender. By default commands, mentions and
+					replies to this bot invoke it. Optional regex wake patterns and free-response chats/topics also invoke
+					allowed senders. Allowed/ignored topics filter even commands; ignored topics win. DMs are not
+					topic-filtered.
+				</p>
+				<p className="mt-2">
+					Send task text or a checklist to create one or more cards through the inbox. Use /capture to keep an item
+					unprocessed, /chat for agent conversation, /bind to reuse an existing session, and /sessions search or
+					/resume by title, number or ID for retained chat/topic bindings. /title shows the current title. /new
+					clears only the binding, not the running NeoPi instance.
+				</p>
+				<p className="mt-2">
+					Card properties accept leading YAML front matter or /properties defaults: read-only, worktree, model,
+					role and custom keys are retained on every decomposed card. Card creation does not itself execute the
+					card. /help lists all commands.
+				</p>
+				<p className="mt-2">
+					Unsupported attachments are not downloaded or processed; captions can still become tasks or explicit
+					chat, with a warning first. Photos work in /chat, which shows typing while the bound session works.
+				</p>
 			</div>
 
 			<div className="rounded-md border border-dashed border-line bg-paper-2 p-4">
@@ -391,7 +446,7 @@ function MessagingSection() {
 			<EditEnvModal
 				entry={editing}
 				onClose={() => setEditing(null)}
-				onSaved={(next) => {
+				onSaved={next => {
 					setData(next);
 					setEditing(null);
 					void refresh();
@@ -453,8 +508,8 @@ function BridgeCard({
 			<div className="space-y-3 p-3">
 				{missing.length > 0 ? (
 					<div className="rounded-md border border-warn/30 bg-warn/10 px-3 py-2 text-xs text-warn">
-						Missing required env: <span className="font-mono">{missing.join(", ")}</span>. Set
-						these below before starting the bridge.
+						Missing required env: <span className="font-mono">{missing.join(", ")}</span>. Set these below before
+						starting the bridge.
 					</div>
 				) : null}
 				{info?.lastError ? (
@@ -493,7 +548,7 @@ function BridgeCard({
 					{info ? <BridgeMeta info={info} /> : null}
 				</div>
 				<div className="divide-y divide-line rounded-md border border-line">
-					{credentialRows.map((row) => (
+					{credentialRows.map(row => (
 						<MessagingCredentialRow key={row.label} label={row.label} entry={row.entry} onEdit={onEdit} />
 					))}
 				</div>
@@ -548,7 +603,7 @@ function BridgeLogsPanel({ name }: { name: BridgeName }) {
 			<button
 				type="button"
 				className="flex w-full items-center justify-between px-3 py-2 text-left text-xs text-ink-2 hover:bg-paper-3"
-				onClick={() => setOpen((v) => !v)}
+				onClick={() => setOpen(v => !v)}
 			>
 				<span>Bridge logs</span>
 				<span className="font-mono text-2xs text-ink-3">{open ? "hide" : "show"}</span>
@@ -617,7 +672,7 @@ function EnvTable({
 				<div className="meta">{title}</div>
 			</div>
 			<div className="divide-y divide-line">
-				{entries.map((entry) => (
+				{entries.map(entry => (
 					<div key={entry.key} className="grid grid-cols-[220px_1fr_120px_100px] gap-3 px-3 py-2 text-sm">
 						<div className="min-w-0">
 							<div className="truncate font-mono text-xs font-medium text-ink">{entry.key}</div>
@@ -692,13 +747,17 @@ function EditEnvModal({
 				<div className="flex flex-wrap gap-1.5">
 					<Badge tone={sourceTone(entry.source)}>{sourceLabel(entry.source)}</Badge>
 					{entry.sensitive ? <Badge tone="danger">secret</Badge> : null}
-					{entry.restartRequired ? <Badge tone="warn">restart required</Badge> : <Badge tone="success">hot apply</Badge>}
+					{entry.restartRequired ? (
+						<Badge tone="warn">restart required</Badge>
+					) : (
+						<Badge tone="success">hot apply</Badge>
+					)}
 				</div>
 				<p className="text-sm text-ink-3">{entry.description}</p>
 				{entry.source === "process-env" ? (
 					<div className="rounded-md border border-warn/30 bg-warn/10 px-3 py-2 text-xs text-warn">
-						This key is currently supplied by the launching process. Replacing it here writes the
-						managed env file, but process env remains higher priority until removed upstream.
+						This key is currently supplied by the launching process. Replacing it here writes the managed env
+						file, but process env remains higher priority until removed upstream.
 					</div>
 				) : null}
 				<label className="block">
@@ -707,13 +766,11 @@ function EditEnvModal({
 						className="field h-9 w-full px-2 font-mono text-sm"
 						type={entry.sensitive ? "password" : "text"}
 						value={value}
-						onChange={(e) => setValue(e.target.value)}
-						placeholder={entry.sensitive ? "Paste replacement value" : entry.defaultValue ?? "Unset"}
+						onChange={e => setValue(e.target.value)}
+						placeholder={entry.sensitive ? "Paste replacement value" : (entry.defaultValue ?? "Unset")}
 					/>
 				</label>
-				{entry.options ? (
-					<div className="text-xs text-ink-3">Allowed: {entry.options.join(", ")}</div>
-				) : null}
+				{entry.options ? <div className="text-xs text-ink-3">Allowed: {entry.options.join(", ")}</div> : null}
 				{error ? (
 					<div className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 font-mono text-xs text-danger">
 						{error}
@@ -745,13 +802,13 @@ function AppearanceSection() {
 			<div>
 				<h1 className="text-xl font-semibold tracking-tight">Appearance</h1>
 				<p className="mt-1 max-w-3xl text-sm text-ink-3">
-					Themes swap the entire palette and font stack at runtime. Your choice is stored in this
-					browser; clearing it falls back to the system color preference.
+					Themes swap the entire palette and font stack at runtime. Your choice is stored in this browser; clearing
+					it falls back to the system color preference.
 				</p>
 			</div>
 
 			<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-				{THEMES.map((def) => (
+				{THEMES.map(def => (
 					<ThemeCard
 						key={def.id}
 						definition={def}
@@ -771,12 +828,7 @@ function AppearanceSection() {
 							: `Pinned to ${theme.stored}. The OS currently prefers ${theme.systemPreferred}.`}
 					</div>
 				</div>
-				<Button
-					variant="outline"
-					size="sm"
-					disabled={theme.usingSystem}
-					onClick={() => theme.clear()}
-				>
+				<Button variant="outline" size="sm" disabled={theme.usingSystem} onClick={() => theme.clear()}>
 					Match system
 				</Button>
 			</div>
@@ -796,7 +848,7 @@ function AppearanceSection() {
 					<div>
 						<div className="meta mb-1">Mono</div>
 						<div className="rounded-md border border-line bg-paper-code px-3 py-2 font-mono text-xs text-ink-2">
-							{"const status = await bridgesApi.start(\"telegram\");"}
+							{'const status = await bridgesApi.start("telegram");'}
 						</div>
 					</div>
 				</div>
@@ -811,48 +863,33 @@ function AppearanceSection() {
  * the permission banner), then the in-memory log of recent ones.
  */
 function NotificationsSection() {
-	const {
-		permission,
-		requestPermission,
-		audioEnabled,
-		setAudioEnabled,
-		bannerDismissed,
-	} = useNotificationPermission();
-	const notifications = useStore((s) => s.notifications);
-	const dismissNotification = useStore((s) => s.dismissNotification);
+	const { permission, requestPermission, audioEnabled, setAudioEnabled, bannerDismissed } =
+		useNotificationPermission();
+	const notifications = useStore(s => s.notifications);
+	const dismissNotification = useStore(s => s.dismissNotification);
 
 	// Show the freshest notifications first; cap to keep the panel tidy.
 	// We don't filter by `dismissed` here on purpose — the user dismissed
 	// the toast, not the historical record.
-	const recent = useMemo(
-		() => notifications.slice().reverse().slice(0, 20),
-		[notifications],
-	);
+	const recent = useMemo(() => notifications.slice().reverse().slice(0, 20), [notifications]);
 
 	return (
 		<div className="mx-auto max-w-3xl space-y-4">
 			<div>
 				<h1 className="text-xl font-semibold tracking-tight">Notifications</h1>
 				<p className="mt-1 text-sm text-ink-3">
-					The deck server sends a notification when one of the events below happens. It appears as a
-					toast in every open deck tab, as an OS notification once this browser allows them, and with
-					an audio cue for warnings, errors and shipped tasks while audio is on. Switching a source off
-					stops the server sending it to every browser. Permission, audio and the banner below apply to
-					this browser only.
+					The deck server sends a notification when one of the events below happens. It appears as a toast in every
+					open deck tab, as an OS notification once this browser allows them, and with an audio cue for warnings,
+					errors and shipped tasks while audio is on. Switching a source off stops the server sending it to every
+					browser. Permission, audio and the banner below apply to this browser only.
 				</p>
 			</div>
 
 			<NotificationSourcesCard />
 
-			<PermissionCard
-				permission={permission}
-				onRequest={() => void requestPermission()}
-			/>
+			<PermissionCard permission={permission} onRequest={() => void requestPermission()} />
 
-			<AudioCard
-				audioEnabled={audioEnabled}
-				onToggle={setAudioEnabled}
-			/>
+			<AudioCard audioEnabled={audioEnabled} onToggle={setAudioEnabled} />
 
 			<BannerResetCard
 				bannerDismissed={bannerDismissed}
@@ -870,10 +907,7 @@ function NotificationsSection() {
 				}}
 			/>
 
-			<RecentNotificationsCard
-				items={recent}
-				onDismiss={(id) => dismissNotification(id)}
-			/>
+			<RecentNotificationsCard items={recent} onDismiss={id => dismissNotification(id)} />
 		</div>
 	);
 }
@@ -916,18 +950,18 @@ function PermissionCard({
 			<div className="mt-3 text-xs text-ink-3">
 				{permission === "default" ? (
 					<>
-						Permission has not been requested yet. The deck will only emit OS notifications
-						after you grant access.
+						Permission has not been requested yet. The deck will only emit OS notifications after you grant
+						access.
 					</>
 				) : permission === "granted" ? (
 					<>
-						The OS shows a notification for every source switched on above, including while
-						the deck tab is in the background.
+						The OS shows a notification for every source switched on above, including while the deck tab is in the
+						background.
 					</>
 				) : permission === "denied" ? (
 					<>
-						The browser is blocking notifications for this site. Re-enable from the site
-						settings — usually the lock icon next to the address bar — then reload.
+						The browser is blocking notifications for this site. Re-enable from the site settings — usually the
+						lock icon next to the address bar — then reload.
 					</>
 				) : (
 					<>This browser doesn't expose the Notifications API.</>
@@ -944,13 +978,7 @@ function PermissionCard({
 	);
 }
 
-function AudioCard({
-	audioEnabled,
-	onToggle,
-}: {
-	audioEnabled: boolean;
-	onToggle: (enabled: boolean) => void;
-}) {
+function AudioCard({ audioEnabled, onToggle }: { audioEnabled: boolean; onToggle: (enabled: boolean) => void }) {
 	const levels: NotificationLevel[] = ["info", "warn", "error", "critical"];
 	return (
 		<div className="rounded-md border border-line bg-paper-2 p-4">
@@ -958,21 +986,17 @@ function AudioCard({
 				<div className="min-w-0">
 					<div className="meta">Audio cues</div>
 					<div className="mt-0.5 text-sm text-ink">
-						Synthesized tones layered on top of OS notifications. Each level has
-						a distinct sequence — info is short, critical is loud.
+						Synthesized tones layered on top of OS notifications. Each level has a distinct sequence — info is
+						short, critical is loud.
 					</div>
 				</div>
 				<label className="flex items-center gap-2 text-xs text-ink-2">
-					<input
-						type="checkbox"
-						checked={audioEnabled}
-						onChange={(e) => onToggle(e.target.checked)}
-					/>
+					<input type="checkbox" checked={audioEnabled} onChange={e => onToggle(e.target.checked)} />
 					<span>{audioEnabled ? "Enabled" : "Muted"}</span>
 				</label>
 			</div>
 			<div className="mt-3 flex flex-wrap gap-2">
-				{levels.map((level) => (
+				{levels.map(level => (
 					<Button
 						key={level}
 						size="sm"
@@ -985,9 +1009,7 @@ function AudioCard({
 					</Button>
 				))}
 			</div>
-			{!audioEnabled ? (
-				<div className="mt-2 text-xs text-ink-3">Enable audio to preview tones.</div>
-			) : null}
+			{!audioEnabled ? <div className="mt-2 text-xs text-ink-3">Enable audio to preview tones.</div> : null}
 		</div>
 	);
 }
@@ -1020,12 +1042,7 @@ function BannerResetCard({
 								: "Banner is currently visible."}
 					</div>
 				</div>
-				<Button
-					size="sm"
-					variant="outline"
-					disabled={!canReset}
-					onClick={onReset}
-				>
+				<Button size="sm" variant="outline" disabled={!canReset} onClick={onReset}>
 					<RotateCcw className="mr-1 h-3 w-3" />
 					Reset banner
 				</Button>
@@ -1041,14 +1058,12 @@ function NotificationSourcesCard() {
 	const [error, setError] = useState<string | undefined>();
 
 	useEffect(() => {
-		settingsApi.getNotifications().then(setData, (err) => setError(apiErrorText(err)));
+		settingsApi.getNotifications().then(setData, err => setError(apiErrorText(err)));
 	}, []);
 
 	async function toggle(kind: NotificationKind, enabled: boolean): Promise<void> {
 		if (!data) return;
-		const disabled = data.sources
-			.filter((s) => (s.kind === kind ? !enabled : !s.enabled))
-			.map((s) => s.kind);
+		const disabled = data.sources.filter(s => (s.kind === kind ? !enabled : !s.enabled)).map(s => s.kind);
 		setBusy(true);
 		try {
 			setData(await settingsApi.putNotifications(disabled));
@@ -1069,19 +1084,22 @@ function NotificationSourcesCard() {
 				</div>
 			</div>
 			{error ? (
-				<div role="alert" className="border-b border-danger/30 bg-danger/10 px-3 py-2 font-mono text-xs text-danger">
+				<div
+					role="alert"
+					className="border-b border-danger/30 bg-danger/10 px-3 py-2 font-mono text-xs text-danger"
+				>
 					{error}
 				</div>
 			) : null}
 			{data && !data.setting.editable ? (
 				<div role="note" className="border-b border-warn/30 bg-warn/10 px-3 py-2 text-xs text-warn">
-					The shell that launched the deck exports <span className="font-mono">{data.setting.key}</span>, and
-					that value overrides the deck&rsquo;s .env. Unset it there and restart the deck to change these here.
+					The shell that launched the deck exports <span className="font-mono">{data.setting.key}</span>, and that
+					value overrides the deck&rsquo;s .env. Unset it there and restart the deck to change these here.
 				</div>
 			) : null}
 			{data ? (
 				<ul className="divide-y divide-line">
-					{data.sources.map((source) => (
+					{data.sources.map(source => (
 						<li key={source.kind} className="flex items-start gap-3 px-3 py-3">
 							<input
 								id={`notification-source-${source.kind}`}
@@ -1089,7 +1107,7 @@ function NotificationSourcesCard() {
 								className="mt-1"
 								checked={source.enabled}
 								disabled={busy || !data.setting.editable}
-								onChange={(e) => void toggle(source.kind, e.target.checked)}
+								onChange={e => void toggle(source.kind, e.target.checked)}
 							/>
 							<label htmlFor={`notification-source-${source.kind}`} className="min-w-0 flex-1">
 								<div className="flex items-center gap-2 text-sm font-medium text-ink">
@@ -1121,30 +1139,23 @@ function RecentNotificationsCard({
 			<div className="border-b border-line bg-paper-2 px-3 py-2">
 				<div className="meta">Recent activity</div>
 				<div className="mt-0.5 text-xs text-ink-3">
-					Notifications this tab has received since it loaded, newest first. The tab keeps
-					the latest 50 and lists 20.
+					Notifications this tab has received since it loaded, newest first. The tab keeps the latest 50 and lists
+					20.
 				</div>
 			</div>
 			{items.length === 0 ? (
-				<div className="px-3 py-6 text-center text-xs text-ink-3">
-					No notifications yet.
-				</div>
+				<div className="px-3 py-6 text-center text-xs text-ink-3">No notifications yet.</div>
 			) : (
 				<ul className="divide-y divide-line">
-					{items.map((item) => (
+					{items.map(item => (
 						<li
 							key={item.id}
-							className={cn(
-								"flex items-start gap-3 px-3 py-2 text-sm",
-								item.dismissed && "opacity-60",
-							)}
+							className={cn("flex items-start gap-3 px-3 py-2 text-sm", item.dismissed && "opacity-60")}
 						>
 							<Badge tone={notificationLevelTone(item.level)}>{item.level}</Badge>
 							<div className="min-w-0 flex-1">
 								<div className="truncate font-medium text-ink">{item.title}</div>
-								{item.body ? (
-									<div className="mt-0.5 text-xs text-ink-2">{item.body}</div>
-								) : null}
+								{item.body ? <div className="mt-0.5 text-xs text-ink-2">{item.body}</div> : null}
 								<div className="mt-1 font-mono text-2xs text-ink-3">
 									{new Date(item.timestamp).toLocaleString()}
 									{` · ${item.kind}`}
@@ -1232,15 +1243,10 @@ function ThemeSwatchStrip({ definition }: { definition: (typeof THEMES)[number] 
 			data-theme={definition.id}
 			className="grid grid-cols-4 gap-1.5 rounded-md border border-line/60 bg-paper p-1.5"
 		>
-			{definition.swatchTokens.map((s) => (
+			{definition.swatchTokens.map(s => (
 				<div key={s.token} className="flex flex-col items-stretch gap-1">
-					<div
-						className="h-8 w-full rounded"
-						style={{ backgroundColor: `rgb(var(--${s.token}))` }}
-					/>
-					<div className="text-center font-mono text-2xs uppercase tracking-meta text-ink-3">
-						{s.label}
-					</div>
+					<div className="h-8 w-full rounded" style={{ backgroundColor: `rgb(var(--${s.token}))` }} />
+					<div className="text-center font-mono text-2xs uppercase tracking-meta text-ink-3">{s.label}</div>
 				</div>
 			))}
 		</div>
@@ -1258,7 +1264,7 @@ function StartersSection() {
 	const [error, setError] = useState<string | undefined>();
 
 	useEffect(() => {
-		startersApi.list().then(setData, (err) => setError(apiErrorText(err)));
+		startersApi.list().then(setData, err => setError(apiErrorText(err)));
 	}, []);
 
 	async function setOptedIn(item: StarterItem, optedIn: boolean): Promise<void> {
@@ -1279,23 +1285,24 @@ function StartersSection() {
 				<h1 className="text-xl font-semibold tracking-tight">Starters</h1>
 				<div className="mt-1 max-w-3xl space-y-2 text-sm text-ink-3">
 					<p>
-						Starters are skills and extensions that ship with the deck, so NeoPi can have them without a trip
-						to the marketplace. A skill is a set of instructions the agent loads when a task calls for it,
-						or when you ask for it by name, such as <span className="font-mono">/skill:handoff</span>. An
-						extension is code NeoPi runs inside every session, in the deck and in the terminal alike.
+						Starters are skills and extensions that ship with the deck, so NeoPi can have them without a trip to
+						the marketplace. A skill is a set of instructions the agent loads when a task calls for it, or when
+						you ask for it by name, such as <span className="font-mono">/skill:handoff</span>. An extension is
+						code NeoPi runs inside every session, in the deck and in the terminal alike.
 					</p>
 					<p>
-						The deck installs none of them on its own. Opt a starter in and the deck copies it into your
-						NeoPi agent directory right away, and again at launch if it goes missing. It never overwrites a
-						copy that is already there, so once installed, a starter is yours to edit. Opting out stops the
-						copying and leaves an installed copy where it is; delete it yourself to remove it.
+						The deck installs none of them on its own. Opt a starter in and the deck copies it into your NeoPi
+						agent directory right away, and again at launch if it goes missing. It never overwrites a copy that is
+						already there, so once installed, a starter is yours to edit. Opting out stops the copying and leaves
+						an installed copy where it is; delete it yourself to remove it.
 					</p>
 				</div>
 				{data ? (
 					<div className="mt-2 text-xs text-ink-3">
 						{data.setting.editable ? (
 							<>
-								Opt-ins are saved as <span className="font-mono">{data.setting.key}</span> in the deck&rsquo;s .env.
+								Opt-ins are saved as <span className="font-mono">{data.setting.key}</span> in the deck&rsquo;s
+								.env.
 							</>
 						) : (
 							<>
@@ -1307,7 +1314,10 @@ function StartersSection() {
 				) : null}
 			</div>
 			{error ? (
-				<div role="alert" className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 font-mono text-xs text-danger">
+				<div
+					role="alert"
+					className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 font-mono text-xs text-danger"
+				>
 					{error}
 				</div>
 			) : null}
@@ -1361,7 +1371,7 @@ function StarterGroupCard({
 				<div className="px-3 py-4 text-xs text-ink-3">This deck bundles none.</div>
 			) : (
 				<ul className="divide-y divide-line">
-					{group.items.map((item) => {
+					{group.items.map(item => {
 						const inputId = `starter-opt-in-${item.kind}-${item.name}`;
 						return (
 							<li key={item.name} className="px-3 py-2">
@@ -1372,7 +1382,7 @@ function StarterGroupCard({
 										className="mt-1"
 										checked={item.optedIn}
 										disabled={busy || !editable}
-										onChange={(e) => onToggle(item, e.target.checked)}
+										onChange={e => onToggle(item, e.target.checked)}
 									/>
 									<div className="min-w-0 flex-1">
 										<label htmlFor={inputId} className="font-mono text-sm text-ink">
@@ -1381,14 +1391,18 @@ function StarterGroupCard({
 										<div className="mt-0.5 font-mono text-2xs text-ink-3">
 											source: {item.origin ?? "untagged"}
 										</div>
-										{item.description ? <div className="mt-0.5 text-xs text-ink-3">{item.description}</div> : null}
+										{item.description ? (
+											<div className="mt-0.5 text-xs text-ink-3">{item.description}</div>
+										) : null}
 									</div>
 									{item.installed ? (
 										<Badge tone={item.optedIn ? "success" : "default"} title={item.installedPath}>
 											{item.optedIn ? "installed" : "installed, not opted in"}
 										</Badge>
 									) : (
-										<Badge tone="muted" title={item.installedPath}>not installed</Badge>
+										<Badge tone="muted" title={item.installedPath}>
+											not installed
+										</Badge>
 									)}
 								</div>
 								{item.kind === "extensions" && item.name === "maintenance-gate" ? (
@@ -1441,7 +1455,7 @@ function MaintenanceGateCard({ starter }: { starter: StarterItem }) {
 	// Opting in or out moves NPI_DECK_ORG_ROOT: re-read the state then, keeping unsaved knob edits.
 	useEffect(() => {
 		if (!data) void refresh();
-		else startersApi.getMaintenanceGate().then(setData, (e) => setError(String(e)));
+		else startersApi.getMaintenanceGate().then(setData, e => setError(String(e)));
 	}, [starter.optedIn]);
 
 	function parseKnob(value: string): number | null {
@@ -1485,11 +1499,8 @@ function MaintenanceGateCard({ starter }: { starter: StarterItem }) {
 		}
 	}
 
-	const profile: "deck" | "flat-file" | "inactive" = !data || !starter.installed || !data.enabled
-		? "inactive"
-		: data.orgRoot
-			? "deck"
-			: "flat-file";
+	const profile: "deck" | "flat-file" | "inactive" =
+		!data || !starter.installed || !data.enabled ? "inactive" : data.orgRoot ? "deck" : "flat-file";
 
 	return (
 		<div className="overflow-hidden rounded-md border border-line bg-paper">
@@ -1501,20 +1512,23 @@ function MaintenanceGateCard({ starter }: { starter: StarterItem }) {
 					{profile === "inactive" ? <Badge tone="muted">inactive</Badge> : null}
 				</div>
 				<p className="mt-1 text-xs text-ink-3">
-					When the agent finishes a turn, this extension reminds it to save anything worth keeping
-					(an insight, a decision, a task) before the conversation moves on. It reminds at most once
-					until the agent saves something or says nothing needs saving, and only after all three
-					thresholds below have passed. Switching it off silences it in new sessions, even when the
-					extension is installed.
+					When the agent finishes a turn, this extension reminds it to save anything worth keeping (an insight, a
+					decision, a task) before the conversation moves on. It reminds at most once until the agent saves
+					something or says nothing needs saving, and only after all three thresholds below have passed. Switching
+					it off silences it in new sessions, even when the extension is installed.
 				</p>
 				<div className="mt-1 space-y-0.5 font-mono text-2xs text-ink-3">
-					<div>NPI_DECK_ORG_ROOT: {data?.orgRoot ?? "(unset)"} ({data?.orgRootSource ?? ""})</div>
+					<div>
+						NPI_DECK_ORG_ROOT: {data?.orgRoot ?? "(unset)"} ({data?.orgRootSource ?? ""})
+					</div>
 				</div>
 				{!starter.optedIn ? (
 					<p className="mt-1 text-xs text-ink-3">
 						Not opted in, so the deck does not set NPI_DECK_ORG_ROOT for its sessions
-						{starter.installed ? "; the installed copy runs with cwd-based detection only" : " and the extension is not installed"}.
-						These settings apply once it runs.
+						{starter.installed
+							? "; the installed copy runs with cwd-based detection only"
+							: " and the extension is not installed"}
+						. These settings apply once it runs.
 					</p>
 				) : null}
 			</div>
@@ -1537,7 +1551,7 @@ function MaintenanceGateCard({ starter }: { starter: StarterItem }) {
 							<input
 								type="checkbox"
 								checked={draft.enabled}
-								onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })}
+								onChange={e => setDraft({ ...draft, enabled: e.target.checked })}
 							/>
 							<span>Enabled</span>
 							<span className="ml-2 font-mono text-2xs text-ink-3">
@@ -1551,21 +1565,21 @@ function MaintenanceGateCard({ starter }: { starter: StarterItem }) {
 								help="Operator messages since last release"
 								knob={data.knobs.minOpMsgs}
 								value={draft.minOpMsgs}
-								onChange={(v) => setDraft({ ...draft, minOpMsgs: v })}
+								onChange={v => setDraft({ ...draft, minOpMsgs: v })}
 							/>
 							<GateKnobInput
 								label="minReleaseAgeMs"
 								help="Wall-clock ms since last release"
 								knob={data.knobs.minReleaseAgeMs}
 								value={draft.minReleaseAgeMs}
-								onChange={(v) => setDraft({ ...draft, minReleaseAgeMs: v })}
+								onChange={v => setDraft({ ...draft, minReleaseAgeMs: v })}
 							/>
 							<GateKnobInput
 								label="fireFloorMs"
 								help="Wall-clock ms between fires (cross-session)"
 								knob={data.knobs.fireFloorMs}
 								value={draft.fireFloorMs}
-								onChange={(v) => setDraft({ ...draft, fireFloorMs: v })}
+								onChange={v => setDraft({ ...draft, fireFloorMs: v })}
 							/>
 						</div>
 
@@ -1631,13 +1645,11 @@ function GateKnobInput({
 				type="text"
 				inputMode="numeric"
 				value={value}
-				onChange={(e) => onChange(e.target.value)}
+				onChange={e => onChange(e.target.value)}
 				placeholder={String(knob.default)}
 				className="block w-full rounded-md border border-line bg-paper-2 px-2 py-1 font-mono text-xs text-ink"
 			/>
-			<div className="font-mono text-2xs text-ink-3">
-				{help}
-			</div>
+			<div className="font-mono text-2xs text-ink-3">{help}</div>
 			<div className="font-mono text-2xs text-ink-3">
 				effective {knob.value} · default {knob.default} · source {knob.source}
 			</div>
@@ -1653,13 +1665,16 @@ function SettingsInspector() {
 	return (
 		<div className="space-y-2 p-3 text-xs text-ink-3">
 			<div className="meta">Settings notes</div>
-			<p>Secrets are masked in list responses. Replace values here; do not reveal unless using the loopback API directly.</p>
+			<p>
+				Secrets are masked in list responses. Replace values here; do not reveal unless using the loopback API
+				directly.
+			</p>
 		</div>
 	);
 }
 
 function normalizeSection(raw: string | null): SectionId {
-	return SECTIONS.some((s) => s.id === raw) ? (raw as SectionId) : "env";
+	return SECTIONS.some(s => s.id === raw) ? (raw as SectionId) : "env";
 }
 
 function sourceLabel(source: EnvEntry["source"]): string {
@@ -1744,11 +1759,7 @@ function ProvidersSection() {
 		return <div className="font-mono text-2xs text-ink-3">Loading providers…</div>;
 	}
 	if (error) {
-		return (
-			<div className="rounded border border-danger/40 bg-danger/5 p-3 text-xs text-danger">
-				{error}
-			</div>
-		);
+		return <div className="rounded border border-danger/40 bg-danger/5 p-3 text-xs text-danger">{error}</div>;
 	}
 	if (!providers) return null;
 
@@ -1757,12 +1768,12 @@ function ProvidersSection() {
 			<div>
 				<h2 className="meta">Providers</h2>
 				<p className="mt-1 text-xs text-ink-3">
-					OAuth sign-in to subscription providers (Claude Pro/Max, ChatGPT Plus/Pro, etc.).
-					API keys live under <strong>Env</strong> — this surface is for browser-flow auth.
+					OAuth sign-in to subscription providers (Claude Pro/Max, ChatGPT Plus/Pro, etc.). API keys live under{" "}
+					<strong>Env</strong> — this surface is for browser-flow auth.
 				</p>
 			</div>
 			<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-				{providers.map((p) => (
+				{providers.map(p => (
 					<ProviderCard
 						key={p.id}
 						info={p}
@@ -1783,13 +1794,10 @@ function ProvidersSection() {
 			/>
 			<Modal open={confirmRevoke !== null} onClose={() => setConfirmRevoke(null)} widthClass="max-w-md">
 				<div className="flex flex-col gap-3 p-5">
-					<h2 className="text-base font-semibold text-ink">
-						Sign out of {confirmRevoke?.name}?
-					</h2>
+					<h2 className="text-base font-semibold text-ink">Sign out of {confirmRevoke?.name}?</h2>
 					<p className="text-xs text-ink-3">
-						The stored credentials will be deleted from <code>auth.db</code>. Token refresh
-						will fail until you log in again. Other deck instances sharing the same
-						agent dir will lose access too.
+						The stored credentials will be deleted from <code>auth.db</code>. Token refresh will fail until you
+						log in again. Other deck instances sharing the same agent dir will lose access too.
 					</p>
 					<div className="flex justify-end gap-2 border-t border-line pt-3">
 						<Button variant="ghost" onClick={() => setConfirmRevoke(null)} disabled={revoking}>
@@ -1805,15 +1813,7 @@ function ProvidersSection() {
 	);
 }
 
-function ProviderCard({
-	info,
-	onLogin,
-	onRevoke,
-}: {
-	info: ProviderInfo;
-	onLogin: () => void;
-	onRevoke: () => void;
-}) {
+function ProviderCard({ info, onLogin, onRevoke }: { info: ProviderInfo; onLogin: () => void; onRevoke: () => void }) {
 	const tone =
 		info.state === "oauth"
 			? "border-success/40 bg-success/5"

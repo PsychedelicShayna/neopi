@@ -21,18 +21,9 @@
  * Inferred edges are NOT persisted. Only `layout.edges` round-trips through
  * TOML; everything else is recomputed from `spec.steps` on every import.
  */
-import type {
-	RoutineLayoutEdge,
-	RoutineLayoutEdgeKind,
-	RoutineSpec,
-} from "@npi-deck/protocol";
+import type { RoutineLayoutEdge, RoutineLayoutEdgeKind, RoutineSpec } from "@npi-deck/protocol";
 
-import {
-	CANVAS_DEFAULT_X,
-	CANVAS_NODE_VERTICAL_GAP,
-	type SequentialEdge,
-	type StepNode,
-} from "./legacy-graph-types";
+import { CANVAS_DEFAULT_X, CANVAS_NODE_VERTICAL_GAP, type SequentialEdge, type StepNode } from "./legacy-graph-types";
 
 export interface ImportedGraph {
 	nodes: StepNode[];
@@ -52,9 +43,7 @@ const STEPS_REFERENCE_RE = /\bsteps\.([a-z][a-z0-9_-]*)\b/g;
 export function importFromSpec(spec: RoutineSpec): ImportedGraph {
 	const nodes = buildNodes(spec);
 
-	const explicit = spec.layout?.edges?.length
-		? buildExplicitEdges(spec, spec.layout.edges)
-		: [];
+	const explicit = spec.layout?.edges?.length ? buildExplicitEdges(spec, spec.layout.edges) : [];
 
 	const sequential = explicit.length === 0 ? buildSequentialInferred(spec) : [];
 
@@ -94,11 +83,8 @@ function buildNodes(spec: RoutineSpec): StepNode[] {
  * Explicit edges are `deletable: true` (the user can remove them via React
  * Flow's keyboard / context menu / programmatic removal).
  */
-function buildExplicitEdges(
-	spec: RoutineSpec,
-	layoutEdges: readonly RoutineLayoutEdge[],
-): SequentialEdge[] {
-	const knownIds = new Set(spec.steps.map((s) => s.id));
+function buildExplicitEdges(spec: RoutineSpec, layoutEdges: readonly RoutineLayoutEdge[]): SequentialEdge[] {
+	const knownIds = new Set(spec.steps.map(s => s.id));
 	const edges: SequentialEdge[] = [];
 	for (let i = 0; i < layoutEdges.length; i++) {
 		const e = layoutEdges[i];
@@ -150,12 +136,9 @@ function buildSequentialInferred(spec: RoutineSpec): SequentialEdge[] {
  * `from->to` strings already covered by another edge layer; matching pairs
  * are skipped to avoid double-drawing.
  */
-function buildWhenInferred(
-	spec: RoutineSpec,
-	drawnPairs: ReadonlySet<string>,
-): SequentialEdge[] {
+function buildWhenInferred(spec: RoutineSpec, drawnPairs: ReadonlySet<string>): SequentialEdge[] {
 	const edges: SequentialEdge[] = [];
-	const stepIds = new Set(spec.steps.map((s) => s.id));
+	const stepIds = new Set(spec.steps.map(s => s.id));
 	for (let i = 0; i < spec.steps.length; i++) {
 		const step = spec.steps[i];
 		if (!step?.when) continue;

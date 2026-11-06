@@ -14,12 +14,7 @@
  * regardless of which mix of saved/inferred nodes the spec currently has.
  */
 
-import type {
-	RoutineLayout,
-	RoutineLayoutNode,
-	RoutineSpec,
-	RoutineStep,
-} from "@npi-deck/protocol";
+import type { RoutineLayout, RoutineLayoutNode, RoutineSpec, RoutineStep } from "@npi-deck/protocol";
 
 import { insertStep } from "../spec-toml";
 import { CANVAS_DEFAULT_X, CANVAS_NODE_VERTICAL_GAP } from "./legacy-graph-types";
@@ -79,9 +74,7 @@ export function applyAddNodeAtBottom(
 	const layout: RoutineLayout = {
 		version: 1,
 		nodes,
-		...(withStep.layout?.edges?.length
-			? { edges: withStep.layout.edges }
-			: {}),
+		...(withStep.layout?.edges?.length ? { edges: withStep.layout.edges } : {}),
 	};
 	return { ...withStep, layout };
 }

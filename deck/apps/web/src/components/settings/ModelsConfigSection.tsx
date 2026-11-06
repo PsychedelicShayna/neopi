@@ -45,23 +45,35 @@ export function ModelsConfigSection() {
 			setLoadError(err instanceof Error ? err.message : String(err));
 		}
 	}, [adopt]);
-	useEffect(() => { void reload(); }, [reload]);
+	useEffect(() => {
+		void reload();
+	}, [reload]);
 
 	const baseline = data?.raw ?? "";
 	const dirty = data !== null && text !== baseline;
 
 	// NeoPi judges every edit; only the latest request's answer is shown.
 	useEffect(() => {
-		if (!dirty) { setCheck({ state: "idle" }); return; }
+		if (!dirty) {
+			setCheck({ state: "idle" });
+			return;
+		}
 		let current = true;
 		setCheck({ state: "checking" });
 		const timer = setTimeout(() => {
 			modelsConfigApi.validate(text).then(
-				result => { if (current) setCheck({ state: "valid", providers: result.providers }); },
-				(err: unknown) => { if (current) setCheck({ state: "invalid", error: err instanceof Error ? err.message : String(err) }); },
+				result => {
+					if (current) setCheck({ state: "valid", providers: result.providers });
+				},
+				(err: unknown) => {
+					if (current) setCheck({ state: "invalid", error: err instanceof Error ? err.message : String(err) });
+				},
 			);
 		}, VALIDATE_DELAY_MS);
-		return () => { current = false; clearTimeout(timer); };
+		return () => {
+			current = false;
+			clearTimeout(timer);
+		};
 	}, [text, dirty]);
 
 	async function save() {
@@ -101,12 +113,20 @@ export function ModelsConfigSection() {
 			{data ? (
 				<>
 					<div className="rounded-md border border-line bg-paper-2 px-3 py-2 font-mono text-2xs text-ink-3">
-						<div>file: {data.path}{data.exists ? "" : " (not created yet)"}</div>
-						<div>{data.maskedSecrets} credential{data.maskedSecrets === 1 ? "" : "s"} masked · revision {data.revision.slice(0, 12)}</div>
+						<div>
+							file: {data.path}
+							{data.exists ? "" : " (not created yet)"}
+						</div>
+						<div>
+							{data.maskedSecrets} credential{data.maskedSecrets === 1 ? "" : "s"} masked · revision{" "}
+							{data.revision.slice(0, 12)}
+						</div>
 					</div>
 					{data.error ? (
 						<Alert tone="warn">
-							<div className="mb-1 font-sans font-medium">NeoPi rejects this file and ignores it, so no custom provider from it is in effect:</div>
+							<div className="mb-1 font-sans font-medium">
+								NeoPi rejects this file and ignores it, so no custom provider from it is in effect:
+							</div>
 							<div className="whitespace-pre-wrap">{data.error}</div>
 						</Alert>
 					) : null}
@@ -119,16 +139,19 @@ export function ModelsConfigSection() {
 						<div className="space-y-2 p-3">
 							{data.raw === null ? <Alert tone="warn">{data.rawUnavailable}</Alert> : null}
 							<p className="text-xs text-ink-3">
-								Credentials appear as <code className="font-mono text-2xs">&lt;npi-deck-masked:…&gt;</code>. Base URLs are hidden the
-								same way, since a host, path or query can carry a key: every <code className="font-mono text-2xs">baseUrl</code> is a
-								placeholder here and the provider list shows only its scheme. Leave a baseUrl placeholder as it is to keep the stored
-								URL; typing a new URL in its place replaces the stored one. A placeholder that is the whole value of an{" "}
-								<code className="font-mono text-2xs">apiKey</code>, a header or a requestMetadata entry keeps the stored value on save
-								(it may be moved or copied between those); a baseUrl placeholder does so only as a whole baseUrl. Anywhere else a save
-								is refused: replace it with the full value, a new key, an environment variable name or a{" "}
-								<code className="font-mono text-2xs">!command</code>, or delete it. Comments are never shown: each appears as{" "}
-								<code className="font-mono text-2xs"># &lt;npi-deck-comment:…&gt;</code> and is saved back verbatim if left exactly as
-								it is. Delete one to remove it; a comment you write, or write in place of one, is saved as typed.
+								Credentials appear as <code className="font-mono text-2xs">&lt;npi-deck-masked:…&gt;</code>.
+								Base URLs are hidden the same way, since a host, path or query can carry a key: every{" "}
+								<code className="font-mono text-2xs">baseUrl</code> is a placeholder here and the provider list
+								shows only its scheme. Leave a baseUrl placeholder as it is to keep the stored URL; typing a new
+								URL in its place replaces the stored one. A placeholder that is the whole value of an{" "}
+								<code className="font-mono text-2xs">apiKey</code>, a header or a requestMetadata entry keeps
+								the stored value on save (it may be moved or copied between those); a baseUrl placeholder does
+								so only as a whole baseUrl. Anywhere else a save is refused: replace it with the full value, a
+								new key, an environment variable name or a <code className="font-mono text-2xs">!command</code>,
+								or delete it. Comments are never shown: each appears as{" "}
+								<code className="font-mono text-2xs"># &lt;npi-deck-comment:…&gt;</code> and is saved back
+								verbatim if left exactly as it is. Delete one to remove it; a comment you write, or write in
+								place of one, is saved as typed.
 							</p>
 							<textarea
 								aria-label="models.toml document"
@@ -138,9 +161,14 @@ export function ModelsConfigSection() {
 								rows={Math.min(40, Math.max(12, text.split("\n").length + 2))}
 								onChange={e => setText(e.target.value)}
 								onKeyDown={e => {
-									if ((e.metaKey || e.ctrlKey) && e.key === "s") { e.preventDefault(); if (canSave) void save(); }
+									if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+										e.preventDefault();
+										if (canSave) void save();
+									}
 								}}
-								placeholder={"providers:\n  my-provider:\n    baseUrl: https://…/v1\n    api: openai-completions\n    apiKey: MY_PROVIDER_API_KEY\n    models:\n      - id: my-model"}
+								placeholder={
+									"providers:\n  my-provider:\n    baseUrl: https://…/v1\n    api: openai-completions\n    apiKey: MY_PROVIDER_API_KEY\n    models:\n      - id: my-model"
+								}
 								className="field w-full resize-y px-2 py-1.5 font-mono text-xs leading-5"
 							/>
 							{check.state === "invalid" ? <Alert tone="danger">{check.error}</Alert> : null}
@@ -151,12 +179,18 @@ export function ModelsConfigSection() {
 									<Save className="h-3.5 w-3.5" />
 									{saving ? "Saving…" : "Save"}
 								</Button>
-								{dirty ? <Button variant="ghost" size="sm" disabled={saving} onClick={() => setText(baseline)}>Discard</Button> : null}
+								{dirty ? (
+									<Button variant="ghost" size="sm" disabled={saving} onClick={() => setText(baseline)}>
+										Discard
+									</Button>
+								) : null}
 							</div>
 						</div>
 					</div>
 				</>
-			) : loadError ? null : <div className="text-sm text-ink-3">Loading...</div>}
+			) : loadError ? null : (
+				<div className="text-sm text-ink-3">Loading...</div>
+			)}
 		</div>
 	);
 }
@@ -179,13 +213,15 @@ function Alert({ tone, children }: { tone: "danger" | "warn" | "success"; childr
 
 function CheckStatus({ check, dirty }: { check: Check; dirty: boolean }) {
 	if (!dirty) return <span className="text-2xs text-ink-4">No unsaved changes</span>;
-	if (check.state === "checking" || check.state === "idle") return <span className="text-2xs text-ink-3">Checking with NeoPi…</span>;
+	if (check.state === "checking" || check.state === "idle")
+		return <span className="text-2xs text-ink-3">Checking with NeoPi…</span>;
 	if (check.state === "invalid") return <Badge tone="danger">rejected by NeoPi</Badge>;
 	const models = check.providers.reduce((sum, p) => sum + p.models.length, 0);
 	return (
 		<span className="inline-flex items-center gap-1 text-2xs text-success">
 			<CheckCircle2 className="h-3.5 w-3.5" />
-			Valid · {check.providers.length} provider{check.providers.length === 1 ? "" : "s"}, {models} model{models === 1 ? "" : "s"}
+			Valid · {check.providers.length} provider{check.providers.length === 1 ? "" : "s"}, {models} model
+			{models === 1 ? "" : "s"}
 		</span>
 	);
 }
@@ -195,28 +231,52 @@ function SaveReport({ report }: { report: ModelsConfigSaveResponse }) {
 	const lines = [`Saved ${report.path}.${report.backupPath ? ` Previous file kept at ${report.backupPath}.` : ""}`];
 	if (registry.refreshed) lines.push("The model picker and every chat now use the new models.");
 	if (registry.error) lines.push(registry.error);
-	if (registry.missingModels.length) lines.push(`Not listed by the model registry: ${registry.missingModels.join(", ")}.`);
-	if (registry.discovering.length) lines.push(`Discovering models for ${registry.discovering.join(", ")} in the background; they appear in the picker when it finishes.`);
+	if (registry.missingModels.length)
+		lines.push(`Not listed by the model registry: ${registry.missingModels.join(", ")}.`);
+	if (registry.discovering.length)
+		lines.push(
+			`Discovering models for ${registry.discovering.join(", ")} in the background; they appear in the picker when it finishes.`,
+		);
 	const complete = registry.refreshed && !registry.error && registry.missingModels.length === 0;
-	return <Alert tone={complete ? "success" : "warn"}>{lines.map(line => <div key={line}>{line}</div>)}</Alert>;
+	return (
+		<Alert tone={complete ? "success" : "warn"}>
+			{lines.map(line => (
+				<div key={line}>{line}</div>
+			))}
+		</Alert>
+	);
 }
 
-function ProvidersView({ providers, exists, invalid }: { providers: ModelsConfigProviderSummary[]; exists: boolean; invalid: boolean }) {
+function ProvidersView({
+	providers,
+	exists,
+	invalid,
+}: {
+	providers: ModelsConfigProviderSummary[];
+	exists: boolean;
+	invalid: boolean;
+}) {
 	if (invalid) return null;
 	if (providers.length === 0) {
 		return (
 			<div className="rounded-md border border-dashed border-line bg-paper-2 px-3 py-3 text-sm text-ink-3">
-				{exists ? "models.toml defines no providers." : "No models.toml yet. Write one below to add custom providers and models."}
+				{exists
+					? "models.toml defines no providers."
+					: "No models.toml yet. Write one below to add custom providers and models."}
 			</div>
 		);
 	}
 	return (
 		<div className="overflow-hidden rounded-md border border-line bg-paper">
 			<div className="border-b border-line bg-paper-2 px-3 py-2">
-				<div className="meta">In effect · {providers.length} provider{providers.length === 1 ? "" : "s"}</div>
+				<div className="meta">
+					In effect · {providers.length} provider{providers.length === 1 ? "" : "s"}
+				</div>
 			</div>
 			<div className="divide-y divide-line">
-				{providers.map(provider => <ProviderRow key={provider.name} provider={provider} />)}
+				{providers.map(provider => (
+					<ProviderRow key={provider.name} provider={provider} />
+				))}
 			</div>
 		</div>
 	);
@@ -239,7 +299,11 @@ function ProviderRow({ provider }: { provider: ModelsConfigProviderSummary }) {
 			</div>
 			<div className="space-y-0.5 font-mono text-2xs text-ink-3">
 				{provider.baseUrl ? <div className="break-all">baseUrl {provider.baseUrl}</div> : null}
-				{provider.headers.length ? <div>headers {provider.headers.join(", ")} <span className="text-ink-4">(values hidden)</span></div> : null}
+				{provider.headers.length ? (
+					<div>
+						headers {provider.headers.join(", ")} <span className="text-ink-4">(values hidden)</span>
+					</div>
+				) : null}
 				{provider.modelOverrides.length ? <div>overrides {provider.modelOverrides.join(", ")}</div> : null}
 			</div>
 			{provider.models.length ? (
@@ -257,7 +321,8 @@ function ProviderRow({ provider }: { provider: ModelsConfigProviderSummary }) {
 						{provider.models.map(model => (
 							<tr key={model.id} className="border-t border-line/60">
 								<td className="truncate py-0.5" title={model.name ?? model.id}>
-									{model.id}{model.name ? <span className="text-ink-4"> · {model.name}</span> : null}
+									{model.id}
+									{model.name ? <span className="text-ink-4"> · {model.name}</span> : null}
 								</td>
 								<td className="py-0.5">{model.api ?? provider.api ?? "—"}</td>
 								<td className="py-0.5">{model.contextWindow?.toLocaleString() ?? "—"}</td>

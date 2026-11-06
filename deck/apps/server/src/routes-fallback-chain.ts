@@ -15,7 +15,8 @@ export function buildFallbackChainRouter(bridge: AgentBridge): Hono {
 	const app = new Hono();
 
 	app.get("/sessions/:id/fallback-chain", async c => {
-		if (!hasFeature("fallback-chains")) return c.json({ error: "This NeoPi backend cannot resolve fallback chains." }, 501);
+		if (!hasFeature("fallback-chains"))
+			return c.json({ error: "This NeoPi backend cannot resolve fallback chains." }, 501);
 		try {
 			const body = await bridge.fallbackChain(c.req.param("id"));
 			if (!body) return c.json({ error: "session not found, not active, or without a model" }, 404);

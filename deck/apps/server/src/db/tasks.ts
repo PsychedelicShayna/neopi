@@ -95,9 +95,7 @@ export function listStates(): TaskState[] {
 
 export function getState(stateId: string): TaskState | undefined {
 	const row = getDb()
-		.query<StateRow, [string]>(
-			"SELECT id, name, color, position, is_default FROM task_states WHERE id = ?",
-		)
+		.query<StateRow, [string]>("SELECT id, name, color, position, is_default FROM task_states WHERE id = ?")
 		.get(stateId) as StateRow | null;
 	return row ? rowToState(row) : undefined;
 }
@@ -121,17 +119,15 @@ export function getDefaultState(): TaskState {
 	return rowToState(row);
 }
 
-export function createState(input: {
-	name: string;
-	color?: string;
-	position?: number;
-}): TaskState {
+export function createState(input: { name: string; color?: string; position?: number }): TaskState {
 	const db = getDb();
 	const nextPos =
 		input.position ??
-		((db.query<{ max: number | null }, []>("SELECT MAX(position) AS max FROM task_states").get() as
-			| { max: number | null }
-			| null)?.max ?? 0) + 100;
+		((
+			db.query<{ max: number | null }, []>("SELECT MAX(position) AS max FROM task_states").get() as {
+				max: number | null;
+			} | null
+		)?.max ?? 0) + 100;
 	const stateId = `s_${id().toLowerCase().slice(0, 12)}`;
 	db.query<unknown, [string, string, string, number]>(
 		"INSERT INTO task_states (id, name, color, position) VALUES (?, ?, ?, ?)",
@@ -171,12 +167,10 @@ export function updateState(
 export function reorderStates(orderedIds: string[]): TaskState[] {
 	const db = getDb();
 	const current = listStates();
-	const knownIds = new Set(current.map((s) => s.id));
+	const knownIds = new Set(current.map(s => s.id));
 
 	if (orderedIds.length !== current.length) {
-		throw new Error(
-			`reorderStates: expected ${current.length} ids, got ${orderedIds.length}`,
-		);
+		throw new Error(`reorderStates: expected ${current.length} ids, got ${orderedIds.length}`);
 	}
 	const seen = new Set<string>();
 	for (const sid of orderedIds) {
@@ -186,9 +180,7 @@ export function reorderStates(orderedIds: string[]): TaskState[] {
 	}
 
 	db.transaction(() => {
-		const update = db.query<unknown, [number, string]>(
-			"UPDATE task_states SET position = ? WHERE id = ?",
-		);
+		const update = db.query<unknown, [number, string]>("UPDATE task_states SET position = ? WHERE id = ?");
 		for (let i = 0; i < orderedIds.length; i++) {
 			update.run((i + 1) * 100, orderedIds[i]!);
 		}
@@ -213,12 +205,11 @@ export function deleteState(stateId: string): { reassigned: number } {
 	db.transaction(() => {
 		const moved = db.query<{ id: string }, [string]>("SELECT id FROM tasks WHERE state_id = ?").all(stateId);
 		const result = db
-			.query<unknown, [string, string, string]>(
-				"UPDATE tasks SET state_id = ?, updated_at = ? WHERE state_id = ?",
-			)
+			.query<unknown, [string, string, string]>("UPDATE tasks SET state_id = ?, updated_at = ? WHERE state_id = ?")
 			.run(fallback.id, nowIso(), stateId);
 		reassigned = Number(result.changes ?? 0);
-		for (const task of moved) recordTaskEvent(task.id, `Moved to ${fallback.name} because ${target.name} was removed`);
+		for (const task of moved)
+			recordTaskEvent(task.id, `Moved to ${fallback.name} because ${target.name} was removed`);
 		// Renumber the fallback column to keep ordering stable.
 		renumberColumn(fallback.id);
 		db.query<unknown, [string]>("DELETE FROM task_states WHERE id = ?").run(stateId);
@@ -271,14 +262,16 @@ export function listTasks(opts: { includeArchived?: boolean; cwd?: string | null
  * unassigned bucket. Independent of any board filter so the filter can offer
  * projects other than the one being viewed.
  */
-export function listTaskProjects(opts: { includeArchived?: boolean } = {}): { cwd: string | null; taskCount: number }[] {
+export function listTaskProjects(
+	opts: { includeArchived?: boolean } = {},
+): { cwd: string | null; taskCount: number }[] {
 	const where = opts.includeArchived ? "" : "WHERE archived_at IS NULL";
 	const rows = getDb()
 		.query<{ cwd: string | null; task_count: number }, []>(
 			`SELECT ${CWD_EXPR} AS cwd, COUNT(*) AS task_count FROM tasks ${where} GROUP BY 1`,
 		)
 		.all() as { cwd: string | null; task_count: number }[];
-	return rows.map((r) => ({ cwd: r.cwd, taskCount: Number(r.task_count) }));
+	return rows.map(r => ({ cwd: r.cwd, taskCount: Number(r.task_count) }));
 }
 
 /** Collapse missing, empty, and whitespace-only cwds to null. Other values are kept verbatim. */
@@ -308,27 +301,37 @@ export function createTask(input: {
 	const state = input.stateId ? getState(input.stateId) : getDefaultState();
 	if (!state) throw new Error(`unknown state: ${input.stateId}`);
 
-	const maxOrder = (db
-		.query<{ max: number | null }, [string]>(
-			"SELECT MAX(order_in_state) AS max FROM tasks WHERE state_id = ?",
-		)
-		.get(state.id) as { max: number | null } | null)?.max ?? 0;
+	const maxOrder =
+		(
+			db
+				.query<{ max: number | null }, [string]>("SELECT MAX(order_in_state) AS max FROM tasks WHERE state_id = ?")
+				.get(state.id) as { max: number | null } | null
+		)?.max ?? 0;
 
 	const taskId = `t_${id().toLowerCase().slice(0, 18)}`;
 	const now = nowIso();
 	let displayId = 0;
 	db.transaction(() => {
 		const seqRow = db
-			.query<{ value: number }, []>(
-				"UPDATE sequences SET value = value + 1 WHERE name = 'tasks' RETURNING value",
-			)
+			.query<{ value: number }, []>("UPDATE sequences SET value = value + 1 WHERE name = 'tasks' RETURNING value")
 			.get() as { value: number } | null;
 		if (!seqRow) throw new Error("tasks sequence missing — migration 002 not applied");
 		displayId = seqRow.value;
 		db.query<unknown, [string, number, string, string, string, number, string | null, string, string, string]>(
 			`INSERT INTO tasks (id, display_id, title, body, state_id, order_in_state, cwd, created_at, updated_at, state_entered_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		).run(taskId, displayId, input.title, canonicalCardBody(db, taskId, input.body ?? "", input.properties), state.id, maxOrder + 1000, normalizeCwd(input.cwd), now, now, now);
+		).run(
+			taskId,
+			displayId,
+			input.title,
+			canonicalCardBody(db, taskId, input.body ?? "", input.properties),
+			state.id,
+			maxOrder + 1000,
+			normalizeCwd(input.cwd),
+			now,
+			now,
+			now,
+		);
 		recordTaskEvent(taskId, "Entered " + state.name);
 	})();
 	const out = getTask(taskId);
@@ -355,17 +358,14 @@ export function updateTask(
 	const db = getDb();
 	const next = { ...existing, ...patch };
 	const archivedAt =
-		patch.archived === true ? nowIso() : patch.archived === false ? null : existing.archivedAt ?? null;
+		patch.archived === true ? nowIso() : patch.archived === false ? null : (existing.archivedAt ?? null);
 	// State change via patch (rare — UI normally uses moveTask) is the only
 	// case where updateTask should bump state_entered_at. Title / body / cwd
 	// edits must NOT reset the per-column recency sort.
 	const stateChanged = patch.stateId !== undefined && patch.stateId !== existing.stateId;
 	const stateEnteredAt = stateChanged ? nowIso() : existing.stateEnteredAt;
 	db.transaction(() => {
-		db.query<
-			unknown,
-			[string, string, string, number, string | null, string, string, string | null, string]
-		>(
+		db.query<unknown, [string, string, string, number, string | null, string, string, string | null, string]>(
 			`UPDATE tasks
 			   SET title = ?, body = ?, state_id = ?, order_in_state = ?, cwd = ?,
 			       updated_at = ?, state_entered_at = ?, archived_at = ?
@@ -382,9 +382,12 @@ export function updateTask(
 			taskId,
 		);
 		if (stateChanged) recordTaskEvent(taskId, `Moved to ${getState(next.stateId)?.name ?? next.stateId}`);
-		if (patch.archived !== undefined && Boolean(existing.archivedAt) !== patch.archived) recordTaskEvent(taskId, patch.archived ? "Archived" : "Restored");
-		if (patch.title !== undefined && patch.title !== existing.title) recordTaskEvent(taskId, `Renamed to ${patch.title}`);
-		if (patch.body !== undefined && patch.body !== existing.body || patch.properties !== undefined) recordTaskEvent(taskId, "Updated the card's instructions or properties");
+		if (patch.archived !== undefined && Boolean(existing.archivedAt) !== patch.archived)
+			recordTaskEvent(taskId, patch.archived ? "Archived" : "Restored");
+		if (patch.title !== undefined && patch.title !== existing.title)
+			recordTaskEvent(taskId, `Renamed to ${patch.title}`);
+		if ((patch.body !== undefined && patch.body !== existing.body) || patch.properties !== undefined)
+			recordTaskEvent(taskId, "Updated the card's instructions or properties");
 	})();
 	notifyTasksChanged();
 	return getTask(taskId);
@@ -422,7 +425,7 @@ export function moveTask(taskId: string, stateId: string, index: number): Task |
 			)
 			.all(stateId, taskId) as { id: string }[];
 
-		const ids: string[] = peers.map((p) => p.id);
+		const ids: string[] = peers.map(p => p.id);
 		const clampedIndex = Math.max(0, Math.min(index, ids.length));
 		ids.splice(clampedIndex, 0, taskId);
 
@@ -436,10 +439,11 @@ export function moveTask(taskId: string, stateId: string, index: number): Task |
 		}
 
 		if (crossColumn) {
-			db.query<unknown, [string, string]>(
-				"UPDATE tasks SET state_entered_at = ? WHERE id = ?",
-			).run(now, taskId);
-			recordTaskEvent(taskId, `Moved from ${getState(existing.stateId)?.name ?? existing.stateId} to ${targetState.name}`);
+			db.query<unknown, [string, string]>("UPDATE tasks SET state_entered_at = ? WHERE id = ?").run(now, taskId);
+			recordTaskEvent(
+				taskId,
+				`Moved from ${getState(existing.stateId)?.name ?? existing.stateId} to ${targetState.name}`,
+			);
 		}
 	})();
 
@@ -450,13 +454,9 @@ export function moveTask(taskId: string, stateId: string, index: number): Task |
 function renumberColumn(stateId: string): void {
 	const db = getDb();
 	const peers = db
-		.query<{ id: string }, [string]>(
-			"SELECT id FROM tasks WHERE state_id = ? ORDER BY order_in_state ASC",
-		)
+		.query<{ id: string }, [string]>("SELECT id FROM tasks WHERE state_id = ? ORDER BY order_in_state ASC")
 		.all(stateId) as { id: string }[];
-	const update = db.query<unknown, [number, string]>(
-		"UPDATE tasks SET order_in_state = ? WHERE id = ?",
-	);
+	const update = db.query<unknown, [number, string]>("UPDATE tasks SET order_in_state = ? WHERE id = ?");
 	for (let i = 0; i < peers.length; i++) {
 		update.run((i + 1) * 1000, peers[i]!.id);
 	}
@@ -493,12 +493,12 @@ export function findStateByName(needle: string): TaskState | undefined {
 	const trimmed = needle.trim().toLowerCase();
 	if (!trimmed) return undefined;
 	const all = listStates();
-	const exact = all.find((s) => s.name.toLowerCase() === trimmed);
+	const exact = all.find(s => s.name.toLowerCase() === trimmed);
 	if (exact) return exact;
-	const matches = all.filter((s) => s.name.toLowerCase().includes(trimmed));
+	const matches = all.filter(s => s.name.toLowerCase().includes(trimmed));
 	if (matches.length === 1) return matches[0];
 	if (matches.length > 1) {
-		const names = matches.map((m) => m.name).join(", ");
+		const names = matches.map(m => m.name).join(", ");
 		throw new Error(`ambiguous state "${needle}" — matches: ${names}`);
 	}
 	return undefined;

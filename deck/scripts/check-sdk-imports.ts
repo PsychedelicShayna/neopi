@@ -1,26 +1,37 @@
 #!/usr/bin/env bun
 /**
  * Fail when any deck source outside apps/server/src/backend/ imports a
- * *value* from `@oh-my-pi/*`. Type-only forms stay allowed everywhere:
- * `import type`, `import { type X }` (when every specifier is type-only),
+ * *value* from `@oh-my-pi/*`, except the exact shared configuration libraries
+ * declared as workspace dependencies. Browser code may use only pure codec/framing modules.
+ * Type-only forms stay allowed everywhere: `import type`,
+ * `import { type X }` (when every specifier is type-only),
  * `export type … from`, and `typeof import("…")` type queries.
  *
- * SDK values must come from backend/runtime.ts, which loads the manifest from
- * the selected NeoPi tree by absolute path; the deck's node_modules has no
- * `@oh-my-pi`, so a stray value import would fail at runtime anyway, but only
- * on the path that reaches it.
+ * Runtime SDK values must still come from backend/runtime.ts, which loads the
+ * manifest from the selected NeoPi tree by absolute path. Shared static config
+ * helpers do not select or load a runtime SDK.
  *
  *   bun scripts/check-sdk-imports.ts [dir…]    default: apps packages scripts
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import * as path from "node:path";
-import ts from "typescript";
+import { ts } from "ts-morph";
 
 const DECK_ROOT = path.resolve(import.meta.dir, "..");
 const ALLOWED_DIR = path.join(DECK_ROOT, "apps/server/src/backend") + path.sep;
+const BROWSER_DIR = path.join(DECK_ROOT, "apps/web") + path.sep;
 const SKIP_DIRS = new Set(["node_modules", "dist", ".git"]);
 const EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]);
 const SDK = /^@oh-my-pi(\/|$)/;
+const BROWSER_CONFIG_LIBRARIES = new Set([
+	"@oh-my-pi/pi-utils/settings-toml-codec",
+	"@oh-my-pi/pi-utils/toml-frontmatter",
+]);
+const SHARED_CONFIG_LIBRARIES = new Set([
+	"@oh-my-pi/pi-utils/settings-toml",
+	...BROWSER_CONFIG_LIBRARIES,
+	"@oh-my-pi/pi-utils/legacy-yaml-import",
+]);
 
 function* sourceFiles(dir: string): Generator<string> {
 	for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -43,14 +54,14 @@ function importIsTypeOnly(clause: ts.ImportClause | undefined): boolean {
 	const bindings = clause.namedBindings;
 	if (!bindings) return true;
 	if (ts.isNamespaceImport(bindings)) return false;
-	return bindings.elements.length > 0 && bindings.elements.every((e) => e.isTypeOnly);
+	return bindings.elements.length > 0 && bindings.elements.every(e => e.isTypeOnly);
 }
 
 function exportIsTypeOnly(node: ts.ExportDeclaration): boolean {
 	if (node.isTypeOnly) return true;
 	const clause = node.exportClause;
 	if (!clause || ts.isNamespaceExport(clause)) return false;
-	return clause.elements.length > 0 && clause.elements.every((e) => e.isTypeOnly);
+	return clause.elements.length > 0 && clause.elements.every(e => e.isTypeOnly);
 }
 
 interface Violation {
@@ -60,11 +71,13 @@ interface Violation {
 	form: string;
 }
 
-function scanSource(file: string, text: string): Violation[] {
+export function scanSource(file: string, text: string): Violation[] {
 	const kind = file.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
 	const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, kind);
+	const browser = path.resolve(file).startsWith(BROWSER_DIR);
 	const out: Violation[] = [];
 	const report = (node: ts.Node, spec: ts.StringLiteralLike, form: string) => {
+		if (SHARED_CONFIG_LIBRARIES.has(spec.text) && (!browser || BROWSER_CONFIG_LIBRARIES.has(spec.text))) return;
 		const { line } = source.getLineAndCharacterOfPosition(node.getStart(source));
 		out.push({ file, line: line + 1, specifier: spec.text, form });
 	};
@@ -92,7 +105,7 @@ function scanSource(file: string, text: string): Violation[] {
 }
 
 if (import.meta.main) {
-	const roots = (process.argv.length > 2 ? process.argv.slice(2) : ["apps", "packages", "scripts"]).map((r) =>
+	const roots = (process.argv.length > 2 ? process.argv.slice(2) : ["apps", "packages", "scripts"]).map(r =>
 		path.resolve(DECK_ROOT, r),
 	);
 	const violations: Violation[] = [];

@@ -36,8 +36,8 @@ export function lineDiff(before: string, after: string): DiffLine[] {
 	const b = splitLines(after);
 
 	if (a.length === 0 && b.length === 0) return [];
-	if (a.length === 0) return b.map((text) => ({ kind: "add" as const, text }));
-	if (b.length === 0) return a.map((text) => ({ kind: "del" as const, text }));
+	if (a.length === 0) return b.map(text => ({ kind: "add" as const, text }));
+	if (b.length === 0) return a.map(text => ({ kind: "del" as const, text }));
 
 	// LCS length table. dp[i][j] = length of LCS of a[0..i) and b[0..j).
 	const n = a.length;

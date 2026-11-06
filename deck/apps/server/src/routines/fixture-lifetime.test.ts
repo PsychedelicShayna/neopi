@@ -5,7 +5,8 @@ import * as path from "node:path";
 import { runIsolatedCase } from "../test-isolation.ts";
 
 const moduleUrl = (relative: string) => JSON.stringify(new URL(relative, import.meta.url).href);
-const agentSource = 'const message = {role:"assistant", timestamp:1, model:"test", content:[{type:"text",text:"answer"}], usage:{input:10, output:5, cacheRead:0, cacheWrite:0, cost:{total:0.001}}}; process.stdout.write(JSON.stringify({type:"message_end",message}) + "\\n" + JSON.stringify({type:"agent_end",messages:[message]}) + "\\n");';
+const agentSource =
+	'const message = {role:"assistant", timestamp:1, model:"test", content:[{type:"text",text:"answer"}], usage:{input:10, output:5, cacheRead:0, cacheWrite:0, cost:{total:0.001}}}; process.stdout.write(JSON.stringify({type:"message_end",message}) + "\\n" + JSON.stringify({type:"agent_end",messages:[message]}) + "\\n");';
 
 test("an expired routine teardown is joined before its private worker releases a successor", () => {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "deck-fixture-lifetime-"));
@@ -13,7 +14,9 @@ test("an expired routine teardown is joined before its private worker releases a
 	const file = path.join(alias, "lifetime.test.ts");
 	try {
 		fs.symlinkSync(root, alias, process.platform === "win32" ? "junction" : "dir");
-		fs.writeFileSync(file, `
+		fs.writeFileSync(
+			file,
+			`
 import { afterAll, afterEach, expect } from "bun:test";
 import { stringifySettingsToml as stringifyToml } from ${moduleUrl("../../../../../packages/utils/src/settings-toml.ts")};
 import * as fs from "node:fs";
@@ -87,14 +90,20 @@ test("successor persists a real routine after old teardown", async () => {
   expect(listStepRuns(runs[0].id)).toEqual(steps);
   fs.writeFileSync(receipt("persisted"), "persisted");
 });
-`);
-		const old = runIsolatedCase(file, "old fixture expires its cleanup", { FIXTURE_RECEIPTS: root, FIXTURE_EXPIRE: "yes" });
+`,
+		);
+		const old = runIsolatedCase(file, "old fixture expires its cleanup", {
+			FIXTURE_RECEIPTS: root,
+			FIXTURE_EXPIRE: "yes",
+		});
 		expect(old.exitCode).not.toBe(0);
 		expect(old.output).toContain("a beforeEach/afterEach hook timed out");
 		expect(fs.readFileSync(path.join(root, "hook-expired"), "utf8")).toBe("expired");
 		expect(fs.existsSync(path.join(root, "old-cleaned"))).toBe(true);
 		expect(fs.existsSync(old.root)).toBe(false);
-		const successor = runIsolatedCase(file, "successor persists a real routine after old teardown", { FIXTURE_RECEIPTS: root });
+		const successor = runIsolatedCase(file, "successor persists a real routine after old teardown", {
+			FIXTURE_RECEIPTS: root,
+		});
 		if (successor.exitCode !== 0) throw new Error(successor.output);
 		expect(successor.output).toMatch(/^\s*1 pass\s*$/m);
 		expect(successor.output).toMatch(/^\s*0 fail\s*$/m);

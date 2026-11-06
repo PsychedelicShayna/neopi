@@ -229,7 +229,9 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				await runtime.ctx.settings.clearScope(scope);
 				runtime.ctx.showStatus(`Cleared ${scope} settings overrides.`);
 			} else {
-				runtime.ctx.showSettingsSelector(scope || undefined);
+				runtime.ctx.showSettingsSelector(
+					scope === "session" || scope === "project" || scope === "global" ? scope : undefined,
+				);
 			}
 			clearSubmittedText(runtime);
 		},

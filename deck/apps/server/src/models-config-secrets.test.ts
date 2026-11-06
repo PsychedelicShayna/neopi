@@ -27,7 +27,15 @@ headers.X-Second = "second-secret-12345"
 X-Override = "override-secret-12345"
 `;
 	const result = masked(source);
-	for (const secret of [SECRET, "header-secret-54321", "model-secret-12345", "second-secret-12345", "override-secret-12345", "retired token", "preserve spacing"]) {
+	for (const secret of [
+		SECRET,
+		"header-secret-54321",
+		"model-secret-12345",
+		"second-secret-12345",
+		"override-secret-12345",
+		"retired token",
+		"preserve spacing",
+	]) {
 		expect(result.masked).not.toContain(secret);
 	}
 	const restored = restoreModelsToml(result.masked, result.secrets, result.comments);
@@ -76,6 +84,11 @@ test("short credentials, malformed TOML and forged placeholders fail closed", ()
 	expect(maskModelsToml(`[providers.local]\napiKey = "${SECRET}\n`).ok).toBe(false);
 	const result = masked(`[providers.local]\napiKey = "${SECRET}"\n`);
 	const forged = result.masked.replace(/<npi-deck-masked:[0-9a-f]{16}>/, "<npi-deck-masked:0000000000000000>");
-	try { restoreModelsToml(forged, result.secrets, result.comments); throw new Error("Expected stale placeholder"); }
-	catch (error) { expect(error).toBeInstanceOf(PlaceholderError); expect((error as PlaceholderError).status).toBe(409); }
+	try {
+		restoreModelsToml(forged, result.secrets, result.comments);
+		throw new Error("Expected stale placeholder");
+	} catch (error) {
+		expect(error).toBeInstanceOf(PlaceholderError);
+		expect((error as PlaceholderError).status).toBe(409);
+	}
 });

@@ -47,7 +47,9 @@ interface Conversation {
 }
 
 /** Tool-free authoring: the only model tool submits data to the calling editor. */
-export function createDefinitionGenerator<T extends object>(options: DefinitionGeneratorOptions<T>): DefinitionGenerator<T> {
+export function createDefinitionGenerator<T extends object>(
+	options: DefinitionGeneratorOptions<T>,
+): DefinitionGenerator<T> {
 	const conversations = new Map<string, Conversation>();
 	let disposed = false;
 	const forget = (id: string): void => {
@@ -83,18 +85,23 @@ export function createDefinitionGenerator<T extends object>(options: DefinitionG
 			if (!isRecord(schema.properties)) throw new Error("Definition schema must declare editable properties.");
 			const properties = schema.properties;
 			const keys = request.target === "all" ? Object.keys(properties) : [request.target];
-			if (keys.some(key => !Object.hasOwn(properties, key))) throw new Error(`Unknown definition field: ${request.target}`);
+			if (keys.some(key => !Object.hasOwn(properties, key)))
+				throw new Error(`Unknown definition field: ${request.target}`);
 			// Starting from references fills gaps instead of overwriting the operator's choices.
 			const preservePreset = request.target === "all" && (request.baseDefinitions?.length ?? 0) > 0;
 			const preset = Object.fromEntries(
-				Object.entries(request.definition).filter(([key, value]) =>
-					Object.hasOwn(properties, key) && value !== undefined && value !== null && value !== "",
+				Object.entries(request.definition).filter(
+					([key, value]) =>
+						Object.hasOwn(properties, key) && value !== undefined && value !== null && value !== "",
 				),
 			);
 			const generatedKeys = preservePreset ? keys.filter(key => !Object.hasOwn(preset, key)) : keys;
-			const required = request.target === "all"
-				? Array.isArray(schema.required) ? schema.required.filter(key => generatedKeys.includes(key)) : []
-				: generatedKeys;
+			const required =
+				request.target === "all"
+					? Array.isArray(schema.required)
+						? schema.required.filter(key => generatedKeys.includes(key))
+						: []
+					: generatedKeys;
 			const responseSchema = {
 				...schema,
 				properties: Object.fromEntries(generatedKeys.map(key => [key, properties[key]])),
@@ -123,25 +130,31 @@ export function createDefinitionGenerator<T extends object>(options: DefinitionG
 				{ role: "user", content: prompt, timestamp: Date.now() },
 			];
 			request.signal?.throwIfAborted();
-			const response = await completeSimple(model, {
-				systemPrompt: [systemPrompt],
-				messages,
-				tools: [{
-					name: "submit_definition",
-					description: "Return the requested definition fields to the editor.",
-					parameters: responseSchema,
-					strict: false,
-				}],
-			}, {
-				apiKey: options.modelRegistry.resolver(model, conversationId),
-				sessionId: conversationId,
-				signal: request.signal,
-				reasoning: toReasoningEffort(thinking),
-				disableReasoning: shouldDisableReasoning(thinking),
-				toolChoice: { type: "tool", name: "submit_definition" },
-				maxTokens: Math.min(16_384, model.maxTokens),
-				cacheRetention: "long",
-			});
+			const response = await completeSimple(
+				model,
+				{
+					systemPrompt: [systemPrompt],
+					messages,
+					tools: [
+						{
+							name: "submit_definition",
+							description: "Return the requested definition fields to the editor.",
+							parameters: responseSchema,
+							strict: false,
+						},
+					],
+				},
+				{
+					apiKey: options.modelRegistry.resolver(model, conversationId),
+					sessionId: conversationId,
+					signal: request.signal,
+					reasoning: toReasoningEffort(thinking),
+					disableReasoning: shouldDisableReasoning(thinking),
+					toolChoice: { type: "tool", name: "submit_definition" },
+					maxTokens: model.maxTokens === null ? 16_384 : Math.min(16_384, model.maxTokens),
+					cacheRetention: "long",
+				},
+			);
 			request.signal?.throwIfAborted();
 			if (disposed) throw new Error("Definition generator has been disposed.");
 			if (response.stopReason === "error" || response.stopReason === "aborted")
@@ -157,7 +170,9 @@ export function createDefinitionGenerator<T extends object>(options: DefinitionG
 			);
 			const validation = validateJsonSchemaValue(responseSchema, fields);
 			if (!validation.success)
-				throw new Error(`Invalid generated definition: ${validation.issues.map(issue => `${issue.path.join(".")}: ${issue.message}`).join("; ")}`);
+				throw new Error(
+					`Invalid generated definition: ${validation.issues.map(issue => `${issue.path.join(".")}: ${issue.message}`).join("; ")}`,
+				);
 			const result = (preservePreset ? { ...fields, ...preset } : fields) as Partial<T>;
 			options.validateFields?.(result);
 			const currentTtl = cfgDefinitionGenerationConversationTtlMs.get(options.settings);
@@ -165,14 +180,18 @@ export function createDefinitionGenerator<T extends object>(options: DefinitionG
 				forget(conversationId);
 				const timer = scheduleExpiry(conversationId, currentTtl);
 				conversations.set(conversationId, {
-					messages: [...messages, structuredClone(response), {
-						role: "toolResult",
-						toolCallId: call.id,
-						toolName: call.name,
-						content: [{ type: "text", text: JSON.stringify(result) }],
-						isError: false,
-						timestamp: Date.now(),
-					}],
+					messages: [
+						...messages,
+						structuredClone(response),
+						{
+							role: "toolResult",
+							toolCallId: call.id,
+							toolName: call.name,
+							content: [{ type: "text", text: JSON.stringify(result) }],
+							isError: false,
+							timestamp: Date.now(),
+						},
+					],
 					updatedAt: Date.now(),
 					timer,
 				});

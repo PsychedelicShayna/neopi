@@ -57,7 +57,7 @@ export function TextInput({
 	return (
 		<input
 			value={value}
-			onChange={(e) => onChange(e.target.value)}
+			onChange={e => onChange(e.target.value)}
 			placeholder={placeholder}
 			aria-label={ariaLabel}
 			className="neo-input w-full"
@@ -84,7 +84,7 @@ export function TextArea({
 	return (
 		<textarea
 			value={value}
-			onChange={(e) => onChange(e.target.value)}
+			onChange={e => onChange(e.target.value)}
 			rows={rows}
 			placeholder={placeholder}
 			aria-label={ariaLabel}
@@ -101,7 +101,16 @@ export function hasAdvancedContent(value: string): boolean {
 
 /** Never replace a stored expression with a basic-mode placeholder value. */
 export function ActionTextField({
-	label, value, onChange, advanced, placeholder, rows, mono, error, help, optional,
+	label,
+	value,
+	onChange,
+	advanced,
+	placeholder,
+	rows,
+	mono,
+	error,
+	help,
+	optional,
 }: {
 	label: string;
 	value: string;
@@ -122,7 +131,14 @@ export function ActionTextField({
 					<AdvancedNotice>This field uses templates. Turn on Advanced to edit it.</AdvancedNotice>
 				</div>
 			) : rows !== undefined ? (
-				<TextArea value={value} onChange={onChange} placeholder={placeholder} rows={rows} mono={mono} ariaLabel={label} />
+				<TextArea
+					value={value}
+					onChange={onChange}
+					placeholder={placeholder}
+					rows={rows}
+					mono={mono}
+					ariaLabel={label}
+				/>
 			) : (
 				<TextInput value={value} onChange={onChange} placeholder={placeholder} mono={mono} ariaLabel={label} />
 			)}
@@ -154,7 +170,7 @@ export function NumInput({
 		<input
 			type="number"
 			value={value ?? ""}
-			onChange={(e) => {
+			onChange={e => {
 				const raw = e.target.value;
 				if (raw === "") onChange(undefined);
 				else {
@@ -185,11 +201,11 @@ export function Select<T extends string>({
 	return (
 		<NeoSelect
 			value={value}
-			onChange={(e) => onChange(e.target.value as T)}
+			onChange={e => onChange(e.target.value as T)}
 			aria-label={ariaLabel ?? fieldLabel}
 			className="neo-input w-full"
 		>
-			{options.map((o) => (
+			{options.map(o => (
 				<option key={o.value} value={o.value}>
 					{o.label}
 				</option>
@@ -198,10 +214,18 @@ export function Select<T extends string>({
 	);
 }
 
-export function Checkbox({ checked, onChange, children }: { checked: boolean; onChange: (next: boolean) => void; children: ReactNode }) {
+export function Checkbox({
+	checked,
+	onChange,
+	children,
+}: {
+	checked: boolean;
+	onChange: (next: boolean) => void;
+	children: ReactNode;
+}) {
 	return (
 		<label className="neo-check">
-			<input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+			<input type="checkbox" checked={checked} onChange={e => onChange(e.target.checked)} />
 			<span>{children}</span>
 		</label>
 	);
@@ -248,7 +272,7 @@ export function TagInput({
 			<input
 				placeholder={placeholder ?? "add…"}
 				className="min-w-[8ch] flex-1 bg-transparent px-1 py-0 text-[12.5px] text-ink outline-none placeholder:text-ink-3"
-				onKeyDown={(e) => {
+				onKeyDown={e => {
 					if (e.key === "Enter" || e.key === ",") {
 						e.preventDefault();
 						add((e.target as HTMLInputElement).value);
@@ -257,7 +281,7 @@ export function TagInput({
 						remove(values.length - 1);
 					}
 				}}
-				onBlur={(e) => {
+				onBlur={e => {
 					add(e.target.value);
 					e.target.value = "";
 				}}
@@ -297,7 +321,7 @@ export function KeyValueEditor({
 				<div key={idx} className="grid grid-cols-[1fr_1fr_auto] gap-1.5">
 					<input
 						value={k}
-						onChange={(e) => setEntry(idx, e.target.value, v)}
+						onChange={e => setEntry(idx, e.target.value, v)}
 						placeholder={keyPlaceholder ?? "key"}
 						className="neo-input w-full"
 						data-size="sm"
@@ -305,7 +329,7 @@ export function KeyValueEditor({
 					/>
 					<input
 						value={v}
-						onChange={(e) => setEntry(idx, k, e.target.value)}
+						onChange={e => setEntry(idx, k, e.target.value)}
 						placeholder={valuePlaceholder ?? "value"}
 						className="neo-input w-full"
 						data-size="sm"

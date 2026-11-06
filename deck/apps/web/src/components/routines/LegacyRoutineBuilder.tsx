@@ -34,11 +34,7 @@ import {
 	reconcileStepRenderKeys,
 	removeStepRenderKey,
 } from "./step-render-keys";
-import {
-	fieldErrorsForSpec,
-	type RoutineFieldErrors,
-	summarizeRoutineValidationErrors,
-} from "./routine-validation";
+import { fieldErrorsForSpec, type RoutineFieldErrors, summarizeRoutineValidationErrors } from "./routine-validation";
 import {
 	emptyV1Spec,
 	insertStep,
@@ -55,7 +51,88 @@ import type { RoutineBuilderProps } from "./RoutineBuilder";
 
 type Tab = "steps" | "canvas" | "triggers" | "settings" | "spec";
 
-export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view, editorRef, onStateChange }: RoutineBuilderProps) {
+export function LegacyRoutineBuilder(props: RoutineBuilderProps) {
+	if (props.routine?.specImportError)
+		return <RoutineImportRepair key={props.routine.id} {...props} routine={props.routine} />;
+	return <EditableLegacyRoutineBuilder {...props} />;
+}
+
+function RoutineImportRepair({
+	routine,
+	onSaved,
+	onError,
+	editorRef,
+	onStateChange,
+}: RoutineBuilderProps & { routine: Routine }) {
+	const [source, setSource] = useState("");
+	const [busy, setBusy] = useState(false);
+	const validation = useMemo(() => parseSpec(source), [source]);
+	const canSave = !busy && validation.ok;
+	const dirty = source.length > 0;
+
+	async function save(): Promise<void> {
+		if (busy) return;
+		if (!validation.ok || !validation.spec) {
+			onError("Enter a complete valid TOML spec before saving the replacement.");
+			return;
+		}
+		setBusy(true);
+		try {
+			onSaved(await routinesApi.update(routine.id, { name: validation.spec.name, specToml: source }));
+		} catch (error) {
+			onError(String(error));
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	useImperativeHandle(editorRef, () => ({
+		save,
+		updateMetadata: () => onError("Save a valid TOML replacement before editing routine metadata."),
+		updateSpec: () => onError("Save a valid TOML replacement before form editing."),
+	}));
+	useEffect(() => {
+		onStateChange?.({ name: routine.name, description: routine.description, dirty, canSave });
+	}, [routine.name, routine.description, dirty, canSave, onStateChange]);
+
+	return (
+		<section className="flex min-h-0 flex-1 flex-col gap-3">
+			<div role="alert" className="neo-source-problems">
+				{routine.specImportError}
+			</div>
+			<p>
+				Execution and form editing are unavailable. Enter a complete TOML replacement to repair this routine. Its
+				original YAML remains stored unchanged.
+			</p>
+			<textarea
+				aria-label="Routine TOML repair source"
+				className="neo-input min-h-64 flex-1 font-mono"
+				spellCheck={false}
+				value={source}
+				onChange={event => setSource(event.target.value)}
+			/>
+			{source && !validation.ok ? (
+				<div role="status">
+					{validation.tomlError?.message ??
+						validation.schemaErrors?.map(error => `${error.path}: ${error.message}`).join("; ")}
+				</div>
+			) : null}
+			<button type="button" className="neo-btn" disabled={!canSave} onClick={() => void save()}>
+				{busy ? "Saving…" : "Save TOML replacement"}
+			</button>
+		</section>
+	);
+}
+
+function EditableLegacyRoutineBuilder({
+	routine,
+	onSaved,
+	onError,
+	embedded,
+	view,
+	editorRef,
+	onStateChange,
+}: RoutineBuilderProps) {
 	const legacy = routine?.specVersion === 0;
 	const initialSpec = useMemo<RoutineSpec>(() => {
 		if (routine?.specVersion === 0) {
@@ -63,9 +140,11 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 				name: routine.name,
 				description: routine.description,
 				trigger: routine.cron ? [{ cron: routine.cron }] : [{ manual: {} }],
-				steps: [routine.actionKind === "prompt"
-					? { id: "action", type: "agent", prompt: routine.actionBody }
-					: { id: "action", type: "run", command: routine.actionBody, cwd: routine.actionCwd }],
+				steps: [
+					routine.actionKind === "prompt"
+						? { id: "action", type: "agent", prompt: routine.actionBody }
+						: { id: "action", type: "run", command: routine.actionBody, cwd: routine.actionCwd },
+				],
 			};
 		}
 		if (routine?.specToml) {
@@ -85,15 +164,13 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 		return makeStepRenderKeys(count, nextStepKey);
 	}
 	function reconcileStepKeys(next: RoutineSpec): void {
-		setStepKeys((prev) => reconcileStepRenderKeys(prev, next.steps.length, nextStepKey));
+		setStepKeys(prev => reconcileStepRenderKeys(prev, next.steps.length, nextStepKey));
 	}
 
 	const [spec, setSpec] = useState<RoutineSpec>(initialSpec);
 	const persistedSpec = useRef(initialSpec);
 	const [stepKeys, setStepKeys] = useState<string[]>(() => makeStepKeys(initialSpec.steps.length));
-	const [tomlBuffer, setTomlBuffer] = useState<string>(() =>
-		routine?.specToml ?? stringifySpec(initialSpec),
-	);
+	const [tomlBuffer, setTomlBuffer] = useState<string>(() => routine?.specToml ?? stringifySpec(initialSpec));
 	const [tomlDirty, setTomlDirty] = useState(false);
 	const [tomlError, setTomlError] = useState<string | undefined>();
 	const [schemaErrors, setSchemaErrors] = useState<ValidationError[] | undefined>();
@@ -141,7 +218,7 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 
 	useEffect(() => {
 		if (!routine) return;
-		void routinesApi.runs(routine.id, 10).then((r) => setRuns(r.runs));
+		void routinesApi.runs(routine.id, 10).then(r => setRuns(r.runs));
 	}, [routine]);
 
 	// Form -> TOML sync. Step cards use render-only keys that are deliberately
@@ -162,7 +239,10 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 	function applyToml(): RoutineSpec | undefined {
 		const result = parseSpec(tomlBuffer);
 		if (!result.ok) {
-			if (result.tomlError) setTomlError(`${result.tomlError.message}${result.tomlError.line ? ` (line ${result.tomlError.line})` : ""}`);
+			if (result.tomlError)
+				setTomlError(
+					`${result.tomlError.message}${result.tomlError.line ? ` (line ${result.tomlError.line})` : ""}`,
+				);
 			else setTomlError(undefined);
 			if (result.schemaErrors) setSchemaErrors(result.schemaErrors);
 			else setSchemaErrors(undefined);
@@ -192,19 +272,19 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 			if (tab === "spec" && tomlDirty && !applyToml()) return;
 			setTab("canvas");
 		}
-		setAdvanced((value) => !value);
+		setAdvanced(value => !value);
 	}
 
 	const specValidation = useMemo(() => validateRoutineSpec(spec), [spec]);
 	const fieldErrors = useMemo<RoutineFieldErrors>(
-		() => legacy ? { top: {}, steps: new Map(), count: 0 } : fieldErrorsForSpec(specValidation.errors, spec),
+		() => (legacy ? { top: {}, steps: new Map(), count: 0 } : fieldErrorsForSpec(specValidation.errors, spec)),
 		[specValidation.errors, spec, legacy],
 	);
 	// Compile the canvas graph on every spec change. In the linear short-circuit
 	// path (no `layout.edges`), this is the identity function; it only does work
 	// when the user has wired explicit edges via the canvas. Errors gate Save
 	// and feed the canvas's node marks + pill.
-	const compile = useMemo(() => legacy ? { steps: spec.steps, errors: [] } : compileGraph(spec), [spec, legacy]);
+	const compile = useMemo(() => (legacy ? { steps: spec.steps, errors: [] } : compileGraph(spec)), [spec, legacy]);
 
 	// Run-status overlay state. Shared between the canvas (node marks + last-
 	// run picker) and the inspector (per-step output preview).
@@ -222,7 +302,9 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 		}
 		const validation = validateRoutineSpec(currentSpec);
 		if (!validation.valid) {
-			onError(`Cannot save: ${summarizeRoutineValidationErrors(validation.errors, currentSpec)[0]?.message ?? "Routine is invalid"}`);
+			onError(
+				`Cannot save: ${summarizeRoutineValidationErrors(validation.errors, currentSpec)[0]?.message ?? "Routine is invalid"}`,
+			);
 			return;
 		}
 		// An untouched loaded routine keeps its exact authored source and step
@@ -234,23 +316,20 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 		const finalCompile = compileGraph(currentSpec);
 		if (finalCompile.errors.length > 0) {
 			const first = finalCompile.errors[0]!;
-			onError(`Cannot save: ${first.message}${finalCompile.errors.length > 1 ? ` (+${finalCompile.errors.length - 1} more)` : ""}`);
+			onError(
+				`Cannot save: ${first.message}${finalCompile.errors.length > 1 ? ` (+${finalCompile.errors.length - 1} more)` : ""}`,
+			);
 			return;
 		}
 		// Apply the topo-sorted step order so the runtime engine walks the graph
 		// the user drew. No-op when compile was the identity.
-		const specToSave: RoutineSpec = finalCompile.steps === currentSpec.steps
-			? currentSpec
-			: { ...currentSpec, steps: finalCompile.steps };
+		const specToSave: RoutineSpec =
+			finalCompile.steps === currentSpec.steps ? currentSpec : { ...currentSpec, steps: finalCompile.steps };
 		const specToml = stringifySpec(specToSave, tomlBuffer);
 
 		// Source review is optional, never part of the normal create/save path.
 		const previewable =
-			tab === "spec" &&
-			!embedded &&
-			!legacy &&
-			!shouldSkipSavePreview() &&
-			specToml !== (routine?.specToml ?? "");
+			tab === "spec" && !embedded && !legacy && !shouldSkipSavePreview() && specToml !== (routine?.specToml ?? "");
 		if (previewable) {
 			setPendingSave({ specToSave, specToml });
 			return;
@@ -263,13 +342,14 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 		try {
 			if (routine && legacy) {
 				const action = specToSave.steps[0]!;
-				const cron = specToSave.trigger.find((trigger) => "cron" in trigger);
+				const cron = specToSave.trigger.find(trigger => "cron" in trigger);
 				const updated = await routinesApi.update(routine.id, {
 					name: specToSave.name,
 					description: specToSave.description ?? "",
 					cron: cron && "cron" in cron ? cron.cron : "",
 					actionKind: legacyKind,
-					actionBody: action.type === "agent" ? action.prompt : action.type === "run" ? action.command : routine.actionBody,
+					actionBody:
+						action.type === "agent" ? action.prompt : action.type === "run" ? action.command : routine.actionBody,
 					actionCwd: legacyCwd,
 					enabled,
 				});
@@ -306,7 +386,7 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 		if (!routine) return;
 		try {
 			await routinesApi.runNow(routine.id);
-			await new Promise((r) => setTimeout(r, 600));
+			await new Promise(r => setTimeout(r, 600));
 			const r = await routinesApi.runs(routine.id, 10);
 			setRuns(r.runs);
 			setShowRuns(true);
@@ -317,7 +397,7 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 
 	// ─── Step helpers ───────────────────────────────────────────────────────
 
-	const existingStepIds = spec.steps.map((s) => s.id);
+	const existingStepIds = spec.steps.map(s => s.id);
 	function onAddStep(type: RoutineStep["type"], presetAction?: RoutineDeckAction): void {
 		updateSpec(
 			insertStep(spec, scaffoldStep(type, existingStepIds, presetAction)),
@@ -353,10 +433,11 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 		spec.steps.length > 0 &&
 		(legacy
 			? (legacyAction?.type === "agent"
-				? legacyAction.prompt
-				: legacyAction?.type === "run"
-					? legacyAction.command
-					: routine?.actionBody ?? "").trim().length > 0
+					? legacyAction.prompt
+					: legacyAction?.type === "run"
+						? legacyAction.command
+						: (routine?.actionBody ?? "")
+				).trim().length > 0
 			: specValidation.valid && fieldErrors.count === 0) &&
 		compile.errors.length === 0 &&
 		!busy;
@@ -364,7 +445,7 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 	useImperativeHandle(editorRef, () => ({
 		save,
 		updateSpec,
-		updateMetadata: (value) => updateSpec({ ...spec, ...value }),
+		updateMetadata: value => updateSpec({ ...spec, ...value }),
 	}));
 	useEffect(() => {
 		onStateChange?.({ name: spec.name, spec, dirty, canSave });
@@ -375,9 +456,12 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 		if (legacy) return null;
 		const items: Array<{ label: string; target?: string | "trigger" }> = [];
 		for (const [stepId, fields] of fieldErrors.steps) {
-			const step = spec.steps.find((s) => s.id === stepId);
+			const step = spec.steps.find(s => s.id === stepId);
 			const title = step ? stepTitle(step) : stepId;
-			items.push({ label: `${title}: ${Object.keys(fields).length === 1 ? "one field" : `${Object.keys(fields).length} fields`}`, target: stepId });
+			items.push({
+				label: `${title}: ${Object.keys(fields).length === 1 ? "one field" : `${Object.keys(fields).length} fields`}`,
+				target: stepId,
+			});
 		}
 		if (spec.trigger.length === 0 || fieldErrors.top.trigger) items.push({ label: "No trigger", target: "trigger" });
 		for (const err of compile.errors) {
@@ -411,19 +495,42 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 					: "mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col overflow-hidden"
 			}
 		>
-			{!embedded ? <div className="flex shrink-0 flex-wrap items-start gap-3 px-1 pb-3">
-				<div className="min-w-0 flex-1">
-					<Field label="Name" error={nameError}>
-						<TextInput value={spec.name} onChange={(v) => updateSpec({ ...spec, name: v })} placeholder="morning-briefing" mono ariaLabel="Routine name" />
-					</Field>
+			{!embedded ? (
+				<div className="flex shrink-0 flex-wrap items-start gap-3 px-1 pb-3">
+					<div className="min-w-0 flex-1">
+						<Field label="Name" error={nameError}>
+							<TextInput
+								value={spec.name}
+								onChange={v => updateSpec({ ...spec, name: v })}
+								placeholder="morning-briefing"
+								mono
+								ariaLabel="Routine name"
+							/>
+						</Field>
+					</div>
+					<div className="pt-[22px]">
+						<button
+							type="button"
+							aria-expanded={advanced}
+							onClick={toggleAdvanced}
+							className="neo-btn"
+							data-variant="ghost"
+							data-on={advanced || undefined}
+						>
+							{advanced ? "Hide advanced" : "Advanced"}
+						</button>
+					</div>
 				</div>
-				<div className="pt-[22px]">
-					<button type="button" aria-expanded={advanced} onClick={toggleAdvanced} className="neo-btn" data-variant="ghost" data-on={advanced || undefined}>
-						{advanced ? "Hide advanced" : "Advanced"}
-					</button>
-				</div>
-			</div> : null}
-			{advanced || embedded ? <TabBar tab={tab} onChange={switchTab} stepCount={spec.steps.length} triggerCount={spec.trigger.length} legacy={legacy} /> : null}
+			) : null}
+			{advanced || embedded ? (
+				<TabBar
+					tab={tab}
+					onChange={switchTab}
+					stepCount={spec.steps.length}
+					triggerCount={spec.trigger.length}
+					legacy={legacy}
+				/>
+			) : null}
 			<div
 				className={
 					tab === "canvas"
@@ -449,7 +556,7 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 									total={spec.steps.length}
 									existingIds={existingStepIds}
 									errors={fieldErrors.steps.get(step.id)}
-									onChange={(n) => onChangeStep(idx, n)}
+									onChange={n => onChangeStep(idx, n)}
 									onRemove={() => onRemoveStep(idx)}
 									onMoveUp={() => onMoveUp(idx)}
 									onMoveDown={() => onMoveDown(idx)}
@@ -489,32 +596,74 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 						{legacy ? (
 							<div className="space-y-4">
 								<Field label="Description" optional>
-									<TextArea mono={false} ariaLabel="Routine description" value={spec.description ?? ""} onChange={(v) => updateSpec({ ...spec, description: v })} rows={3} />
+									<TextArea
+										mono={false}
+										ariaLabel="Routine description"
+										value={spec.description ?? ""}
+										onChange={v => updateSpec({ ...spec, description: v })}
+										rows={3}
+									/>
 								</Field>
 								<Field label="Schedule" optional help="Cron expression; empty runs on demand.">
-									<TextInput mono ariaLabel="Routine schedule" value={spec.trigger.flatMap((trigger) => "cron" in trigger ? [trigger.cron] : [])[0] ?? ""} onChange={(v) => updateSpec({ ...spec, trigger: v ? [{ cron: v }] : [{ manual: {} }] })} />
+									<TextInput
+										mono
+										ariaLabel="Routine schedule"
+										value={
+											spec.trigger.flatMap(trigger => ("cron" in trigger ? [trigger.cron] : []))[0] ?? ""
+										}
+										onChange={v => updateSpec({ ...spec, trigger: v ? [{ cron: v }] : [{ manual: {} }] })}
+									/>
 								</Field>
 								<Field label="Action">
-									<Select ariaLabel="Legacy action kind" value={legacyKind} onChange={(kind) => {
-										const action = spec.steps[0]!;
-										const body = action.type === "agent" ? action.prompt : action.type === "run" ? action.command : "";
-										setLegacyKind(kind);
-										updateSpec({ ...spec, steps: [kind === "prompt" ? { id: "action", type: "agent", prompt: body } : { id: "action", type: "run", command: body, cwd: action.type === "run" ? action.cwd : legacyCwd }] });
-									}} options={[
-										{ value: "bash", label: "Shell command" },
-										{ value: "script", label: "Script" },
-										{ value: "prompt", label: "Ask an agent" },
-									]} />
+									<Select
+										ariaLabel="Legacy action kind"
+										value={legacyKind}
+										onChange={kind => {
+											const action = spec.steps[0]!;
+											const body =
+												action.type === "agent"
+													? action.prompt
+													: action.type === "run"
+														? action.command
+														: "";
+											setLegacyKind(kind);
+											updateSpec({
+												...spec,
+												steps: [
+													kind === "prompt"
+														? { id: "action", type: "agent", prompt: body }
+														: {
+																id: "action",
+																type: "run",
+																command: body,
+																cwd: action.type === "run" ? action.cwd : legacyCwd,
+															},
+												],
+											});
+										}}
+										options={[
+											{ value: "bash", label: "Shell command" },
+											{ value: "script", label: "Script" },
+											{ value: "prompt", label: "Ask an agent" },
+										]}
+									/>
 								</Field>
 								<Field label="Working directory" optional>
-									<TextInput mono ariaLabel="Working directory" value={legacyCwd} onChange={(cwd) => {
-										const action = spec.steps[0];
-										if (action?.type === "run") updateSpec({ ...spec, steps: [{ ...action, cwd }] });
-										else setLegacyCwd(cwd);
-									}} />
+									<TextInput
+										mono
+										ariaLabel="Working directory"
+										value={legacyCwd}
+										onChange={cwd => {
+											const action = spec.steps[0];
+											if (action?.type === "run") updateSpec({ ...spec, steps: [{ ...action, cwd }] });
+											else setLegacyCwd(cwd);
+										}}
+									/>
 								</Field>
 							</div>
-						) : <SettingsForm spec={spec} onChange={updateSpec} errors={fieldErrors.top} />}
+						) : (
+							<SettingsForm spec={spec} onChange={updateSpec} errors={fieldErrors.top} />
+						)}
 						{routine && !legacy ? (
 							<WebhookSecretPanel routineId={routine.id} refreshKey={routine.updatedAt} onError={onError} />
 						) : null}
@@ -527,22 +676,22 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 							<span>Source</span>
 							<span className="neo-mono text-ink-4">TOML</span>
 							<span className="ml-auto">
-								{tomlDirty ? <span className="neo-badge" data-tone="warn">Not applied yet</span> : <span className="text-ink-4">Matches the canvas</span>}
+								{tomlDirty ? (
+									<span className="neo-badge" data-tone="warn">
+										Not applied yet
+									</span>
+								) : (
+									<span className="text-ink-4">Matches the canvas</span>
+								)}
 							</span>
-							<button
-								type="button"
-								onClick={applyToml}
-								disabled={!tomlDirty}
-								className="neo-btn"
-								data-size="sm"
-							>
+							<button type="button" onClick={applyToml} disabled={!tomlDirty} className="neo-btn" data-size="sm">
 								Apply to canvas
 							</button>
 						</div>
 						<textarea
 							value={tomlBuffer}
 							aria-label="Routine source"
-							onChange={(e) => {
+							onChange={e => {
 								setTomlBuffer(e.target.value);
 								setTomlDirty(true);
 							}}
@@ -566,7 +715,7 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 					<div className="mt-4 border-t border-[var(--neo-line-1)] pt-3">
 						<button
 							type="button"
-							onClick={() => setShowRuns((s) => !s)}
+							onClick={() => setShowRuns(s => !s)}
 							className="flex w-full items-center gap-1 text-left text-[12.5px] text-ink-3 hover:text-ink"
 						>
 							<span>Recent runs ({runs.length})</span>
@@ -576,18 +725,20 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 					</div>
 				) : null}
 			</div>
-			{!embedded ? <Footer
-				routine={routine}
-				canSave={canSave}
-				busy={busy}
-				dirty={dirty}
-				enabled={enabled}
-				setEnabled={setEnabled}
-				attention={attention}
-				onShowProblem={showFirstProblem}
-				onSave={() => void save()}
-				onRunNow={() => void runNow()}
-			/> : null}
+			{!embedded ? (
+				<Footer
+					routine={routine}
+					canSave={canSave}
+					busy={busy}
+					dirty={dirty}
+					enabled={enabled}
+					setEnabled={setEnabled}
+					attention={attention}
+					onShowProblem={showFirstProblem}
+					onSave={() => void save()}
+					onRunNow={() => void runNow()}
+				/>
+			) : null}
 			{pendingSave ? (
 				<SavePreviewDialog
 					currentToml={routine?.specToml ?? ""}
@@ -619,17 +770,20 @@ function TabBar({
 	legacy: boolean;
 }) {
 	const tabs: ReadonlyArray<{ id: Tab; label: string; badge?: number }> = legacy
-		? [{ id: "canvas", label: "Canvas" }, { id: "settings", label: "Options" }]
+		? [
+				{ id: "canvas", label: "Canvas" },
+				{ id: "settings", label: "Options" },
+			]
 		: [
-			{ id: "canvas", label: "Canvas" },
-			{ id: "steps", label: "Steps", badge: stepCount },
-			{ id: "triggers", label: "Triggers", badge: triggerCount },
-			{ id: "settings", label: "Options" },
-			{ id: "spec", label: "Source" },
-		];
+				{ id: "canvas", label: "Canvas" },
+				{ id: "steps", label: "Steps", badge: stepCount },
+				{ id: "triggers", label: "Triggers", badge: triggerCount },
+				{ id: "settings", label: "Options" },
+				{ id: "spec", label: "Source" },
+			];
 	return (
 		<div className="neo-tabs mb-3 shrink-0">
-			{tabs.map((t) => (
+			{tabs.map(t => (
 				<button
 					key={t.id}
 					type="button"
@@ -638,7 +792,11 @@ function TabBar({
 					data-active={tab === t.id}
 				>
 					{t.label}
-					{t.badge !== undefined ? <span className="neo-badge" data-mono="true">{t.badge}</span> : null}
+					{t.badge !== undefined ? (
+						<span className="neo-badge" data-mono="true">
+							{t.badge}
+						</span>
+					) : null}
 				</button>
 			))}
 		</div>
@@ -669,14 +827,22 @@ function Footer({
 	onRunNow: () => void;
 }) {
 	return (
-		<div className="flex shrink-0 flex-wrap items-center gap-3 border-t border-[var(--neo-line-1)] px-1 pt-3" data-testid="routine-save-bar">
+		<div
+			className="flex shrink-0 flex-wrap items-center gap-3 border-t border-[var(--neo-line-1)] px-1 pt-3"
+			data-testid="routine-save-bar"
+		>
 			<label className="neo-check">
-				<input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+				<input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} />
 				<span>Enabled</span>
 			</label>
 			<div className="min-w-0 flex-1 text-[12.5px] text-ink-3">
 				{attention ? (
-					<button type="button" onClick={onShowProblem} className="inline-flex max-w-full items-center gap-1.5 text-left text-danger hover:underline" title={attention.map((a) => a.label).join("\n")}>
+					<button
+						type="button"
+						onClick={onShowProblem}
+						className="inline-flex max-w-full items-center gap-1.5 text-left text-danger hover:underline"
+						title={attention.map(a => a.label).join("\n")}
+					>
 						<CircleAlert size={13} />
 						<span className="truncate">
 							{attention.length === 1 ? attention[0]!.label : `${attention.length} things need attention`}
@@ -696,13 +862,7 @@ function Footer({
 						Run now
 					</button>
 				) : null}
-				<button
-					type="button"
-					onClick={onSave}
-					disabled={!canSave}
-					className="neo-btn"
-					data-variant="primary"
-				>
+				<button type="button" onClick={onSave} disabled={!canSave} className="neo-btn" data-variant="primary">
 					<Save size={13} />
 					{busy ? "Saving…" : routine ? "Save routine" : "Create routine"}
 				</button>
@@ -717,7 +877,7 @@ function RunList({ routine, runs }: { routine: Routine; runs: RoutineRun[] }) {
 			{runs.length === 0 ? (
 				<li className="text-[12.5px] text-ink-3">No runs yet.</li>
 			) : (
-				runs.map((r) => {
+				runs.map(r => {
 					const dur =
 						r.endedAt && r.startedAt
 							? new Date(r.endedAt).getTime() - new Date(r.startedAt).getTime()

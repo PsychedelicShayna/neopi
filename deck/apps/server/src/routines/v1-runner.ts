@@ -25,11 +25,7 @@ import { parseSettingsToml as parseToml } from "@oh-my-pi/pi-utils/settings-toml
 import { mkdir } from "node:fs/promises";
 import * as path from "node:path";
 
-import type {
-	Routine,
-	RoutineSpec,
-	RoutineStep,
-} from "@npi-deck/protocol";
+import type { Routine, RoutineSpec, RoutineStep } from "@npi-deck/protocol";
 
 import { broadcastBus } from "../broadcast-bus.ts";
 import { activeBackend } from "../backend/runtime.ts";
@@ -133,9 +129,7 @@ export async function runV1Pipeline(input: {
 		const suffix = path.join("packages", "coding-agent", "src", "cli.ts");
 		const backendPath = cliPath.endsWith(path.sep + suffix) ? cliPath.slice(0, -suffix.length - 1) : cliPath;
 		const active = activeBackend()?.identity;
-		setRunBackend(runId, active?.path === backendPath
-			? active
-			: { path: backendPath, commit: null, version: null });
+		setRunBackend(runId, active?.path === backendPath ? active : { path: backendPath, commit: null, version: null });
 		pinnedAgentCommand = command;
 		return command;
 	};
@@ -225,17 +219,38 @@ export async function runV1Pipeline(input: {
 			abortSignal.addEventListener("abort", onAbort, { once: true });
 			if (abortSignal.aborted) stepAbort.abort();
 			const stepMs = (step.timeout_secs ?? (step.type === "agent" ? 600 : 60)) * 1000;
-			const remainingMs = spec.budget?.max_duration_secs == null
-				? stepMs : Math.min(stepMs, spec.budget.max_duration_secs * 1000 - (Date.now() - startedMs));
+			const remainingMs =
+				spec.budget?.max_duration_secs == null
+					? stepMs
+					: Math.min(stepMs, spec.budget.max_duration_secs * 1000 - (Date.now() - startedMs));
 			let result: StepResult;
 			if (remainingMs <= 0) {
 				timedOut = true;
-				result = { status: "aborted", stdoutExcerpt: "", stderrExcerpt: "", error: "step timed out", durationMs: 0 };
+				result = {
+					status: "aborted",
+					stdoutExcerpt: "",
+					stderrExcerpt: "",
+					error: "step timed out",
+					durationMs: 0,
+				};
 			} else {
 				const releaseStep = workRegistry.admit("routine-step", `${runId}:${step.id}:${attempt}`);
-				const timer = setTimeout(() => { timedOut = true; stepAbort.abort(); }, remainingMs);
+				const timer = setTimeout(() => {
+					timedOut = true;
+					stepAbort.abort();
+				}, remainingMs);
 				try {
-					result = await dispatchStep(step, context, stepAbort.signal, defaultCwd, stepCwd, runId, routine.id, ensureAgentSandbox, agentCommandForRun);
+					result = await dispatchStep(
+						step,
+						context,
+						stepAbort.signal,
+						defaultCwd,
+						stepCwd,
+						runId,
+						routine.id,
+						ensureAgentSandbox,
+						agentCommandForRun,
+					);
 				} finally {
 					clearTimeout(timer);
 					abortSignal.removeEventListener("abort", onAbort);
@@ -271,10 +286,7 @@ export async function runV1Pipeline(input: {
 				outputJson: result.json,
 				error: result.error,
 				model: result.model,
-				tokens:
-					result.llmTokensIn != null
-						? { in: result.llmTokensIn, out: result.llmTokensOut ?? 0 }
-						: undefined,
+				tokens: result.llmTokensIn != null ? { in: result.llmTokensIn, out: result.llmTokensOut ?? 0 } : undefined,
 			});
 
 			// Failed attempts and aborts can still incur real provider charges.
@@ -284,16 +296,15 @@ export async function runV1Pipeline(input: {
 			if (timedOut || abortSignal.aborted || result.status === "aborted") break;
 			const exceededAttempt = checkBudget(budget, spec.budget, () => Date.now());
 			if (exceededAttempt) {
-				log.info(`run ${runId} hit budget limit ${exceededAttempt.limit} (${exceededAttempt.value} > ${exceededAttempt.cap})`);
+				log.info(
+					`run ${runId} hit budget limit ${exceededAttempt.limit} (${exceededAttempt.value} > ${exceededAttempt.cap})`,
+				);
 				abortReason = "budget";
 				break;
 			}
 			if (result.status === "success") break;
 			if (attempt < attemptCap) {
-				const delaySecs = Math.min(
-					backoff === "exponential" ? Math.pow(2, attempt - 1) : attempt,
-					maxDelaySecs,
-				);
+				const delaySecs = Math.min(backoff === "exponential" ? Math.pow(2, attempt - 1) : attempt, maxDelaySecs);
 				await sleep(delaySecs * 1000, abortSignal);
 			}
 		}
@@ -332,7 +343,11 @@ export async function runV1Pipeline(input: {
 			const afterRetry = step.retry?.after_retry ?? "abort";
 			const effective = onFailure === "retry" ? afterRetry : onFailure;
 			if (effective === "abort" || finalResult.status === "aborted" || abortSignal.aborted) {
-				abortReason = timedOut ? "timeout" : abortSignal.aborted || finalResult.status === "aborted" ? "cancelled" : "failure";
+				abortReason = timedOut
+					? "timeout"
+					: abortSignal.aborted || finalResult.status === "aborted"
+						? "cancelled"
+						: "failure";
 				break;
 			}
 			// continue: fall through to next step
@@ -374,20 +389,19 @@ export async function runV1Pipeline(input: {
 	// purpose — successful unattended routines should not buzz the user.
 	if (finalStatus !== "success") {
 		const level: "warn" | "error" = abortReason === "budget" ? "warn" : "error";
-		const reasonLabel = abortReason === "budget"
-			? "budget cap"
-			: abortReason === "cancelled"
-			? "cancelled"
-			: abortReason === "timeout"
-			? "timed out"
-			: abortReason ?? "failed";
+		const reasonLabel =
+			abortReason === "budget"
+				? "budget cap"
+				: abortReason === "cancelled"
+					? "cancelled"
+					: abortReason === "timeout"
+						? "timed out"
+						: (abortReason ?? "failed");
 		void notificationService.notify({
 			kind: "routine_failed",
 			level,
 			title: `routine "${routine.name}" ${reasonLabel}`,
-			body: stepCountFailed > 0
-				? `${stepCountFailed} step(s) failed out of ${stepCountTotal}`
-				: undefined,
+			body: stepCountFailed > 0 ? `${stepCountFailed} step(s) failed out of ${stepCountTotal}` : undefined,
 			source: `routine:${routine.id}/run:${runId}`,
 			actionUrl: `/routines/${routine.id}/runs/${runId}`,
 		});
@@ -479,10 +493,13 @@ function appendClipped(acc: string, more: string): string {
 
 async function sleep(ms: number, signal: AbortSignal): Promise<void> {
 	if (signal.aborted) return;
-	await new Promise<void>((resolve) => {
-		const finish = () => { clearTimeout(timer); signal.removeEventListener("abort", finish); resolve(); };
+	await new Promise<void>(resolve => {
+		const finish = () => {
+			clearTimeout(timer);
+			signal.removeEventListener("abort", finish);
+			resolve();
+		};
 		const timer = setTimeout(finish, ms);
 		signal.addEventListener("abort", finish, { once: true });
 	});
 }
-

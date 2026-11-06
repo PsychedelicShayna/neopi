@@ -63,7 +63,10 @@ const RESTORED_REJECTED =
 	"NeoPi rejects the document once its masked credentials are restored; the message is withheld because it may quote one. The deck server log has the details.";
 
 class RequestError extends Error {
-	constructor(message: string, readonly status: 400 | 409) {
+	constructor(
+		message: string,
+		readonly status: 400 | 409,
+	) {
 		super(message);
 	}
 }
@@ -97,7 +100,10 @@ function validateWithNeoPi(text: string): Validation {
 		writeFileSync(file, text, { mode: 0o600 });
 		const result = feature("models-config").ModelsConfigFile.relocate(file).tryLoad();
 		if (result.status === "ok") return { ok: true, config: result.value };
-		const message = result.error instanceof Error ? result.error.message : String(result.error ?? "models.toml could not be loaded");
+		const message =
+			result.error instanceof Error
+				? result.error.message
+				: String(result.error ?? "models.toml could not be loaded");
 		return { ok: false, message };
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
@@ -158,7 +164,8 @@ function describe(file: string, text: string | null): { response: ModelsConfigRe
 	const shown = validateWithNeoPi(mask.masked);
 	const error = disk.ok ? undefined : safeMessage(shown.ok ? WITHHELD_MESSAGE : shown.message, mask.known);
 	const providers = disk.ok && shown.ok ? summarize(shown.config, mask.secrets) : [];
-	if (leaksSecret({ providers, error }, mask.known)) return { response: withheld(disk.ok ? undefined : WITHHELD_MESSAGE), known: mask.known };
+	if (leaksSecret({ providers, error }, mask.known))
+		return { response: withheld(disk.ok ? undefined : WITHHELD_MESSAGE), known: mask.known };
 	return {
 		response: {
 			...base,
@@ -178,7 +185,10 @@ function describe(file: string, text: string | null): { response: ModelsConfigRe
  * is returned; a rejection that appears only once credentials are restored is
  * withheld, since it could quote one.
  */
-function prepare(raw: string, diskText: string | null): { text: string; config: ModelsConfig; secrets: Map<string, Secret> } {
+function prepare(
+	raw: string,
+	diskText: string | null,
+): { text: string; config: ModelsConfig; secrets: Map<string, Secret> } {
 	const disk = diskText === null ? undefined : maskModelsToml(diskText);
 	const secrets: Map<string, Secret> = disk?.ok ? disk.secrets : new Map();
 	const commentSources: Map<string, string> = disk?.ok ? disk.comments : new Map();
@@ -192,7 +202,8 @@ function prepare(raw: string, diskText: string | null): { text: string; config: 
 	const incoming = maskModelsToml(raw);
 	const known = [...(disk?.known ?? []), ...incoming.known];
 	const submitted = validateWithNeoPi(raw);
-	if (!submitted.ok) throw new RequestError(incoming.ok ? safeMessage(submitted.message, known) : WITHHELD_MESSAGE, 400);
+	if (!submitted.ok)
+		throw new RequestError(incoming.ok ? safeMessage(submitted.message, known) : WITHHELD_MESSAGE, 400);
 	if (leaksSecret({ providers: summarize(submitted.config, secrets) }, known))
 		throw new RequestError("The document cannot be summarized without revealing a credential.", 400);
 	if (text !== raw) {
@@ -252,7 +263,11 @@ export function replaceModelsFile(file: string, text: string, before: string | n
 		renameSync(next, target);
 		temps.splice(temps.indexOf(next), 1);
 		const dirFd = openSync(dir, "r");
-		try { fsyncSync(dirFd); } finally { closeSync(dirFd); }
+		try {
+			fsyncSync(dirFd);
+		} finally {
+			closeSync(dirFd);
+		}
 		return backup;
 	} finally {
 		for (const temp of temps) rmSync(temp, { force: true });
@@ -284,7 +299,9 @@ async function refreshRegistry(config: ModelsConfig, known: readonly string[]): 
 		}
 		if (provider.discovery) {
 			discovering.push(name);
-			void registry.refreshProvider(name, "online").catch(() => log.warn(`model discovery for ${name} after models.toml save failed`));
+			void registry
+				.refreshProvider(name, "online")
+				.catch(() => log.warn(`model discovery for ${name} after models.toml save failed`));
 		}
 	}
 	return {
@@ -299,16 +316,28 @@ async function refreshRegistry(config: ModelsConfig, known: readonly string[]): 
 let saveQueue: Promise<void> = Promise.resolve();
 function serializeSave<T>(run: () => Promise<T>): Promise<T> {
 	const result = saveQueue.then(run);
-	saveQueue = result.then(() => {}, () => {});
+	saveQueue = result.then(
+		() => {},
+		() => {},
+	);
 	return result;
 }
 
-async function documentRequest(c: { req: { json: () => Promise<unknown> } }, needsRevision: boolean): Promise<ModelsConfigDocumentRequest | string> {
+async function documentRequest(
+	c: { req: { json: () => Promise<unknown> } },
+	needsRevision: boolean,
+): Promise<ModelsConfigDocumentRequest | string> {
 	let body: unknown;
-	try { body = await c.req.json(); } catch { return "JSON body required"; }
+	try {
+		body = await c.req.json();
+	} catch {
+		return "JSON body required";
+	}
 	const request = body as Partial<ModelsConfigDocumentRequest> | null;
-	if (typeof request !== "object" || request === null || typeof request.raw !== "string") return "raw must be the document text";
-	if (needsRevision && typeof request.revision !== "string") return "revision must be the revision the edit started from";
+	if (typeof request !== "object" || request === null || typeof request.raw !== "string")
+		return "raw must be the document text";
+	if (needsRevision && typeof request.revision !== "string")
+		return "revision must be the revision the edit started from";
 	return request as ModelsConfigDocumentRequest;
 }
 
@@ -343,18 +372,20 @@ export function buildModelsConfigRouter(): Hono {
 		const body = await documentRequest(c, true);
 		if (typeof body === "string") return c.json({ error: body }, 400);
 		try {
-			return c.json(await serializeSave(async (): Promise<ModelsConfigSaveResponse> => {
-				const file = modelsFile();
-				const before = readModelsFile(file);
-				if (revisionOf(before) !== body.revision) throw new RequestError(STALE, 409);
-				const { text, config } = prepare(body.raw, before);
-				const backupPath = replaceModelsFile(file, text, before);
-				const written = readModelsFile(file);
-				if (written !== text) throw new Error(`models.toml read back differently after the write (${file})`);
-				const { response, known } = describe(modelsFile(), written);
-				const registry = await refreshRegistry(config, known);
-				return { ...response, backupPath, registry };
-			}));
+			return c.json(
+				await serializeSave(async (): Promise<ModelsConfigSaveResponse> => {
+					const file = modelsFile();
+					const before = readModelsFile(file);
+					if (revisionOf(before) !== body.revision) throw new RequestError(STALE, 409);
+					const { text, config } = prepare(body.raw, before);
+					const backupPath = replaceModelsFile(file, text, before);
+					const written = readModelsFile(file);
+					if (written !== text) throw new Error(`models.toml read back differently after the write (${file})`);
+					const { response, known } = describe(modelsFile(), written);
+					const registry = await refreshRegistry(config, known);
+					return { ...response, backupPath, registry };
+				}),
+			);
 		} catch (err) {
 			if (err instanceof RequestError) return c.json({ error: err.message }, err.status);
 			log.warn("save models.toml failed");

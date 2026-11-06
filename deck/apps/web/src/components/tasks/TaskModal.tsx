@@ -101,10 +101,10 @@ export function TaskModal({
 			<header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-4">
 				<select
 					value={stateId}
-					onChange={(e) => commitState(e.target.value)}
+					onChange={e => commitState(e.target.value)}
 					className="field h-8 px-2 font-mono text-2xs uppercase tracking-meta"
 				>
-					{states.map((s) => (
+					{states.map(s => (
 						<option key={s.id} value={s.id}>
 							{s.name}
 						</option>
@@ -113,8 +113,7 @@ export function TaskModal({
 				<div
 					className="h-2 w-2 rounded-full"
 					style={{
-						backgroundColor:
-							states.find((s) => s.id === stateId)?.color ?? "var(--ink-3, #6e6a62)",
+						backgroundColor: states.find(s => s.id === stateId)?.color ?? "var(--ink-3, #6e6a62)",
 					}}
 				/>
 				<div className="ml-auto flex shrink-0 items-center gap-1">
@@ -140,9 +139,9 @@ export function TaskModal({
 			<div className="shrink-0 border-b border-line px-6 pt-5 pb-3">
 				<input
 					value={title}
-					onChange={(e) => setTitle(e.target.value)}
+					onChange={e => setTitle(e.target.value)}
 					onBlur={commitTitle}
-					onKeyDown={(e) => {
+					onKeyDown={e => {
 						if (e.key === "Enter") (e.target as HTMLInputElement).blur();
 					}}
 					placeholder="Untitled task"
@@ -160,7 +159,7 @@ export function TaskModal({
 					<span className="col-span-3">
 						<input
 							value={cwd}
-							onChange={(e) => setCwd(e.target.value)}
+							onChange={e => setCwd(e.target.value)}
 							onBlur={commitCwd}
 							placeholder="Unassigned"
 							className="w-full bg-transparent font-mono text-2xs text-ink placeholder:text-ink-4 focus:outline-none"
@@ -178,9 +177,7 @@ export function TaskModal({
 			<div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
 				<section className="mb-5 border-b border-line pb-4" aria-label="Card agent">
 					<div className="flex items-center justify-between gap-2">
-						<span className="font-mono text-xs text-ink-3">
-							Agent · {task.run?.status ?? "Not assigned"}
-						</span>
+						<span className="font-mono text-xs text-ink-3">Agent · {task.run?.status ?? "Not assigned"}</span>
 						{runActive ? (
 							<button
 								type="button"
@@ -194,12 +191,16 @@ export function TaskModal({
 							<button
 								type="button"
 								disabled={runPending || !title.trim()}
-								onClick={() => void runAction(() => onAssign({
-									title,
-									body,
-									stateId,
-									cwd: cwd.trim() || null,
-								}))}
+								onClick={() =>
+									void runAction(() =>
+										onAssign({
+											title,
+											body,
+											stateId,
+											cwd: cwd.trim() || null,
+										}),
+									)
+								}
 								className="btn-primary h-8 px-2.5 text-sm"
 							>
 								{runPending ? "Assigning…" : "Assign agent"}
@@ -208,7 +209,8 @@ export function TaskModal({
 					</div>
 					{task.run?.cwd ? (
 						<p className="mt-2 break-all font-mono text-2xs text-ink-3">
-							Run directory · {task.run.cwd}{task.run.ownedWorktree ? " · owned worktree" : ""}
+							Run directory · {task.run.cwd}
+							{task.run.ownedWorktree ? " · owned worktree" : ""}
 						</p>
 					) : null}
 					{task.run?.outcome ? (
@@ -220,13 +222,17 @@ export function TaskModal({
 					{task.run?.error ? (
 						<p className="mt-3 whitespace-pre-wrap break-words text-sm text-danger">{task.run.error}</p>
 					) : null}
-					{runError ? <p role="alert" className="mt-3 text-sm text-danger">{runError}</p> : null}
+					{runError ? (
+						<p role="alert" className="mt-3 text-sm text-danger">
+							{runError}
+						</p>
+					) : null}
 				</section>
 				<div className="mb-3 flex items-center justify-between gap-2">
 					<span className="font-mono text-2xs text-ink-3">Body / TOML properties</span>
 					<button
 						type="button"
-						onClick={() => setRawEditing((current) => !current)}
+						onClick={() => setRawEditing(current => !current)}
 						className="btn-ghost h-7 px-2 text-xs"
 					>
 						{rawEditing ? "Preview" : "Edit raw TOML & body"}
@@ -238,9 +244,11 @@ export function TaskModal({
 							aria-label="Raw TOML and task body"
 							rows={14}
 							value={body}
-							onChange={(e) => setBody(e.target.value)}
+							onChange={e => setBody(e.target.value)}
 							className="field w-full resize-y p-3 font-mono text-xs"
-							placeholder={"+++\nread-only = true\nworktree = \"/absolute/path/to/existing-worktree\"\nmodel = \"provider/id\"\nrole = \"default\"\n+++\nTask instructions"}
+							placeholder={
+								'+++\nread-only = true\nworktree = "/absolute/path/to/existing-worktree"\nmodel = "provider/id"\nrole = "default"\n+++\nTask instructions'
+							}
 						/>
 						<button
 							type="button"
@@ -253,7 +261,7 @@ export function TaskModal({
 				) : (
 					<MarkdownEdit
 						value={body}
-						onChange={(next) => {
+						onChange={next => {
 							setBody(next);
 							onSave({ body: next });
 						}}

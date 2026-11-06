@@ -16,7 +16,7 @@ import { STEP_CATEGORIES } from "./step-categories";
 
 describe("STEP_CATEGORIES", () => {
 	test("category keys are unique", () => {
-		const keys = STEP_CATEGORIES.map((c) => c.key);
+		const keys = STEP_CATEGORIES.map(c => c.key);
 		expect(new Set(keys).size).toBe(keys.length);
 	});
 
@@ -28,7 +28,7 @@ describe("STEP_CATEGORIES", () => {
 			}
 		}
 		// Surface duplicates and missing entries with a precise diff.
-		const expectedKeys = STEP_TYPE_DESCRIPTIONS.map((d) => d.key).sort();
+		const expectedKeys = STEP_TYPE_DESCRIPTIONS.map(d => d.key).sort();
 		const actualKeys = [...seen.keys()].sort();
 		expect(actualKeys).toEqual(expectedKeys);
 		for (const [key, count] of seen) {
@@ -37,7 +37,7 @@ describe("STEP_CATEGORIES", () => {
 	});
 
 	test("no orphan keys reference a missing descriptor", () => {
-		const valid = new Set(STEP_TYPE_DESCRIPTIONS.map((d) => d.key));
+		const valid = new Set(STEP_TYPE_DESCRIPTIONS.map(d => d.key));
 		for (const cat of STEP_CATEGORIES) {
 			for (const entry of cat.entries) {
 				expect(valid.has(entry.key), `${cat.key}.${entry.key}`).toBe(true);
@@ -46,6 +46,6 @@ describe("STEP_CATEGORIES", () => {
 	});
 
 	test("at least one category is non-empty", () => {
-		expect(STEP_CATEGORIES.some((c) => c.entries.length > 0)).toBe(true);
+		expect(STEP_CATEGORIES.some(c => c.entries.length > 0)).toBe(true);
 	});
 });

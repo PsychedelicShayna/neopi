@@ -24,7 +24,8 @@ if (!fixtureRoot) {
 			mkdirSync(home, { recursive: true });
 			const env: Record<string, string> = {};
 			for (const [key, value] of Object.entries(process.env)) {
-				if (value !== undefined && !/(_API_KEY|_TOKEN|_SECRET)$/.test(key) && !/^(PI_|OMP_|NPI_DECK_)/.test(key)) env[key] = value;
+				if (value !== undefined && !/(_API_KEY|_TOKEN|_SECRET)$/.test(key) && !/^(PI_|OMP_|NPI_DECK_)/.test(key))
+					env[key] = value;
 			}
 			Object.assign(env, {
 				HOME: home,
@@ -37,7 +38,11 @@ if (!fixtureRoot) {
 				NPI_DECK_BACKEND: selection.path,
 				NPI_DECK_ADVISOR_SELECTION_ROOT: root,
 			});
-			const child = spawnOwnedSync([process.execPath, "test", import.meta.path], { cwd: root, env, stdout: "pipe", stderr: "pipe" }, { replaceEnv: true });
+			const child = spawnOwnedSync(
+				[process.execPath, "test", import.meta.path],
+				{ cwd: root, env, stdout: "pipe", stderr: "pipe" },
+				{ replaceEnv: true },
+			);
 			const output = `${child.stdout.toString()}${child.stderr.toString()}`;
 			if (child.exitCode !== 0) console.error(output);
 			expect(child.exitCode).toBe(0);
@@ -64,24 +69,52 @@ if (!fixtureRoot) {
 		try {
 			const openModel = { provider: "openrouter", id: "openai/gpt-4o-mini" };
 			let handle = await bridge.createSession({ cwd: project, model: openModel, mcpServersAllowed: [] });
-			const config: Config = { defaultCwd: project, extraWorkspaces: [], host: "127.0.0.1", port: 0, devMode: true, idleTimeoutMs: 0, dbPath: path.join(fixtureRoot, "db"), uploadsRoot: path.join(fixtureRoot, "uploads") };
+			const config: Config = {
+				defaultCwd: project,
+				extraWorkspaces: [],
+				host: "127.0.0.1",
+				port: 0,
+				devMode: true,
+				idleTimeoutMs: 0,
+				dbPath: path.join(fixtureRoot, "db"),
+				uploadsRoot: path.join(fixtureRoot, "uploads"),
+			};
 			const app = buildAdvisorsRouter(bridge, config);
 			const request = (url: string, init?: RequestInit) => app.request(`http://127.0.0.1${url}`, init);
-			const json = (method: string, body: unknown): RequestInit => ({ method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-			type Status = { overview: { configured: boolean; advisors: Array<{ name: string; status: string }> }; stats: { active: boolean }; selection: string[] };
+			const json = (method: string, body: unknown): RequestInit => ({
+				method,
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(body),
+			});
+			type Status = {
+				overview: { configured: boolean; advisors: Array<{ name: string; status: string }> };
+				stats: { active: boolean };
+				selection: string[];
+			};
 			const status = async (response?: Response) => {
-				const res = response ?? await request(`/sessions/${handle.sessionId}/advisors`);
+				const res = response ?? (await request(`/sessions/${handle.sessionId}/advisors`));
 				expect(res.status).toBe(200);
-				const body = await res.json() as Status;
-				return { configured: body.overview.configured, active: body.stats.active, running: body.overview.advisors.filter(a => a.status === "running").map(a => a.name), selection: body.selection };
+				const body = (await res.json()) as Status;
+				return {
+					configured: body.overview.configured,
+					active: body.stats.active,
+					running: body.overview.advisors.filter(a => a.status === "running").map(a => a.name),
+					selection: body.selection,
+				};
 			};
 			const off = (selection: string[]) => ({ configured: false, active: false, running: [], selection });
 			const on = (names: string[]) => ({ configured: true, active: true, running: names, selection: names });
-			const select = (advisors: string[]) => request(`/sessions/${handle.sessionId}/advisors`, json("PUT", { advisors }));
+			const select = (advisors: string[]) =>
+				request(`/sessions/${handle.sessionId}/advisors`, json("PUT", { advisors }));
 			const saveUser = async (update: (advisors: unknown[]) => unknown[]) => {
-				const snapshot = await (await request(`/advisors?cwd=${encodeURIComponent(project)}`)).json() as { user: { hash: string; doc: { advisors: unknown[] } } };
+				const snapshot = (await (await request(`/advisors?cwd=${encodeURIComponent(project)}`)).json()) as {
+					user: { hash: string; doc: { advisors: unknown[] } };
+				};
 				const doc = { advisors: update(snapshot.user.doc.advisors) };
-				const saved = await request("/advisors/watchdog", json("PUT", { cwd: project, scope: "user", hash: snapshot.user.hash, doc }));
+				const saved = await request(
+					"/advisors/watchdog",
+					json("PUT", { cwd: project, scope: "user", hash: snapshot.user.hash, doc }),
+				);
 				expect(saved.status).toBe(200);
 			};
 			// Flip the global switch off and on so the reload is an effective

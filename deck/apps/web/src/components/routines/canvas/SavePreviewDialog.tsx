@@ -57,9 +57,7 @@ export function SavePreviewDialog({
 		>
 			<div className="flex max-h-[90vh] w-[min(820px,100%)] flex-col overflow-hidden rounded-lg border border-line bg-paper shadow-xl">
 				<header className="flex items-center gap-2 border-b border-line bg-paper-2/60 px-3 py-2">
-					<span className="font-mono text-2xs uppercase tracking-meta text-ink-3">
-						Source changes
-					</span>
+					<span className="font-mono text-2xs uppercase tracking-meta text-ink-3">Source changes</span>
 					<span className="font-mono text-2xs text-ink-3">
 						{clean ? (
 							<span className="text-ink-4">no changes</span>
@@ -101,16 +99,9 @@ export function SavePreviewDialog({
 				</div>
 
 				<footer className="flex items-center gap-2 border-t border-line bg-paper-2/60 px-3 py-2">
-					<span className="font-mono text-2xs text-ink-3">
-						Review source changes before saving.
-					</span>
+					<span className="font-mono text-2xs text-ink-3">Review source changes before saving.</span>
 					<div className="ml-auto flex items-center gap-1.5">
-						<button
-							type="button"
-							onClick={onCancel}
-							className="btn-ghost h-7 text-2xs"
-							disabled={busy}
-						>
+						<button type="button" onClick={onCancel} className="btn-ghost h-7 text-2xs" disabled={busy}>
 							Edit canvas
 						</button>
 						<button

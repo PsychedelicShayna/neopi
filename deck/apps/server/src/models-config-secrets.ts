@@ -35,7 +35,16 @@ export const MASK_MARK = "npi-deck-masked";
 export const COMMENT_MARK = "npi-deck-comment";
 const PLACEHOLDER_EXACT = /^<npi-deck-masked:[0-9a-f]{16}>$/;
 const COMMENT_EXACT = /^# <npi-deck-comment:[0-9a-f]{16}>$/;
-const SECRET_KEY_SUFFIXES = ["key", "authorization", "token", "secret", "password", "cookie", "credential", "credentials"];
+const SECRET_KEY_SUFFIXES = [
+	"key",
+	"authorization",
+	"token",
+	"secret",
+	"password",
+	"cookie",
+	"credential",
+	"credentials",
+];
 /** Shorter credentials are not substituted inside other text (the match would be ambiguous); their presence withholds the text. */
 const MIN_REPLACE = 8;
 /** Path segments and host labels are registered for the survival checks only when token-like: this long and holding a digit; see urlParts. */
@@ -74,7 +83,10 @@ export function isCredentialPath(path: readonly PathKey[]): boolean {
 	if (rest.length === 1) return rest[0] === "apiKey";
 	if (rest.length === 2) return rest[0] === "headers" || rest[0] === "requestMetadata";
 	if (rest.length === 4) {
-		return rest[2] === "headers" && ((rest[0] === "models" && typeof rest[1] === "number") || rest[0] === "modelOverrides");
+		return (
+			rest[2] === "headers" &&
+			((rest[0] === "models" && typeof rest[1] === "number") || rest[0] === "modelOverrides")
+		);
 	}
 	return false;
 }
@@ -84,7 +96,11 @@ export function isUrlPath(path: readonly PathKey[]): boolean {
 	if (path[0] !== "providers" || path.length < 3) return false;
 	const rest = path.slice(2);
 	if (rest.length === 1) return rest[0] === "baseUrl";
-	if (rest.length === 3) return rest[2] === "baseUrl" && ((rest[0] === "models" && typeof rest[1] === "number") || rest[0] === "modelOverrides");
+	if (rest.length === 3)
+		return (
+			rest[2] === "baseUrl" &&
+			((rest[0] === "models" && typeof rest[1] === "number") || rest[0] === "modelOverrides")
+		);
 	return false;
 }
 
@@ -96,7 +112,7 @@ const HIDDEN = "••••••";
  */
 export function displayUrl(value: string | undefined, secrets: Map<string, Secret>): string | undefined {
 	if (value === undefined) return undefined;
-	const url = PLACEHOLDER_EXACT.test(value) ? secrets.get(value)?.text ?? "" : value;
+	const url = PLACEHOLDER_EXACT.test(value) ? (secrets.get(value)?.text ?? "") : value;
 	const scheme = /^https?:\/\//i.exec(url)?.[0].toLowerCase() ?? "";
 	return `${scheme}${HIDDEN}`;
 }
@@ -149,9 +165,13 @@ function urlParts(value: string): string[] {
 		if (at >= 0) {
 			const userinfo = authority.slice(0, at);
 			const colon = userinfo.indexOf(":");
-			for (const piece of colon >= 0 ? [userinfo, userinfo.slice(0, colon), userinfo.slice(colon + 1)] : [userinfo]) register(forms(piece), true);
+			for (const piece of colon >= 0 ? [userinfo, userinfo.slice(0, colon), userinfo.slice(colon + 1)] : [userinfo])
+				register(forms(piece), true);
 		}
-		const host = authority.slice(at + 1).replace(/:\d*$/, "").replace(/^\[|\]$/g, "");
+		const host = authority
+			.slice(at + 1)
+			.replace(/:\d*$/, "")
+			.replace(/^\[|\]$/g, "");
 		for (const label of host.split(".")) register(forms(label), false);
 	}
 	for (const segment of (pathPart ?? "").split("/")) register(forms(segment), false);
@@ -196,7 +216,10 @@ export type MaskResult =
 	| { ok: false; known: string[] };
 
 export class PlaceholderError extends Error {
-	constructor(message: string, readonly status: 400 | 409) {
+	constructor(
+		message: string,
+		readonly status: 400 | 409,
+	) {
 		super(message);
 	}
 }
@@ -209,7 +232,8 @@ interface Edit {
 
 function applyEdits(source: string, edits: Edit[]): string {
 	let out = source;
-	for (const edit of [...edits].sort((a, b) => b.start - a.start)) out = out.slice(0, edit.start) + edit.text + out.slice(edit.end);
+	for (const edit of [...edits].sort((a, b) => b.start - a.start))
+		out = out.slice(0, edit.start) + edit.text + out.slice(edit.end);
 	return out;
 }
 
@@ -242,8 +266,12 @@ function parse(text: string): TomlDocument | undefined {
 		let depth = 0;
 		let table: PathKey[] = [];
 		const arrayTables = new Map<string, number>();
-		const fail = (): never => { throw new Error("Unlocatable TOML source"); };
-		const budget = () => { if (++visits > MAX_VISITS) fail(); };
+		const fail = (): never => {
+			throw new Error("Unlocatable TOML source");
+		};
+		const budget = () => {
+			if (++visits > MAX_VISITS) fail();
+		};
 		const comment = () => {
 			const start = at;
 			while (at < text.length && text[at] !== "\n" && text[at] !== "\r") at++;
@@ -261,9 +289,15 @@ function parse(text: string): TomlDocument | undefined {
 			const triple = text.slice(at, at + 3) === quote.repeat(3);
 			at += triple ? 3 : 1;
 			while (at < text.length) {
-				if (quote === '"' && text[at] === "\\") { at += 2; continue; }
+				if (quote === '"' && text[at] === "\\") {
+					at += 2;
+					continue;
+				}
 				if (text[at] === quote) {
-					if (!triple) { at++; return; }
+					if (!triple) {
+						at++;
+						return;
+					}
 					if (text.slice(at, at + 3) === quote.repeat(3)) {
 						at += 3;
 						// TOML allows one or two extra quotes before the terminator.
@@ -297,8 +331,11 @@ function parse(text: string): TomlDocument | undefined {
 			budget();
 			if (++depth > 128) fail();
 			space();
-			const secret = inheritedSecret || isCredentialPath(path) || isUrlPath(path)
-				|| path.some((key, index) => !isNamePosition(path.slice(0, index + 1)) && isSecretKey(key));
+			const secret =
+				inheritedSecret ||
+				isCredentialPath(path) ||
+				isUrlPath(path) ||
+				path.some((key, index) => !isNamePosition(path.slice(0, index + 1)) && isSecretKey(key));
 			if (text[at] === "[") {
 				at++;
 				let index = 0;
@@ -370,7 +407,9 @@ function parse(text: string): TomlDocument | undefined {
 	}
 }
 
-function allScalars(doc: TomlDocument): Scalar[] { return doc.scalars; }
+function allScalars(doc: TomlDocument): Scalar[] {
+	return doc.scalars;
+}
 
 interface Reach {
 	masked: Set<Scalar>;
@@ -409,7 +448,11 @@ function scalarEdit(node: Scalar, _source: string, text: string): Edit {
 function strings(value: unknown, out: string[] = []): string[] {
 	if (typeof value === "string") out.push(value);
 	else if (Array.isArray(value)) for (const item of value) strings(item, out);
-	else if (value && typeof value === "object") for (const [key, item] of Object.entries(value)) { out.push(key); strings(item, out); }
+	else if (value && typeof value === "object")
+		for (const [key, item] of Object.entries(value)) {
+			out.push(key);
+			strings(item, out);
+		}
 	return out;
 }
 
@@ -431,8 +474,7 @@ export function maskModelsToml(text: string): MaskResult {
 	const collect = (value: unknown, path: PathKey[], inherited: boolean): void => {
 		if (++visits > MAX_VISITS || path.length > 128) throw new Error("TOML walk budget exceeded");
 		const url = isUrlPath(path);
-		const secret = inherited || url || isCredentialPath(path)
-			|| (!isNamePosition(path) && isSecretKey(path.at(-1)));
+		const secret = inherited || url || isCredentialPath(path) || (!isNamePosition(path) && isSecretKey(path.at(-1)));
 		if (Array.isArray(value)) value.forEach((item, index) => collect(item, [...path, index], secret));
 		else if (value && typeof value === "object") {
 			for (const [key, item] of Object.entries(value)) collect(item, [...path, key], secret);
@@ -444,8 +486,11 @@ export function maskModelsToml(text: string): MaskResult {
 			if (url && typeof value === "string") for (const part of urlParts(value)) components.add(part);
 		}
 	};
-	try { collect(doc.data, [], false); }
-	catch { return { ok: false, known: [...knownSet, ...components] }; }
+	try {
+		collect(doc.data, [], false);
+	} catch {
+		return { ok: false, known: [...knownSet, ...components] };
+	}
 	// Longest first, so a credential containing another is replaced whole.
 	const replaceable = [...knownSet].filter(secret => secret.length >= MIN_REPLACE).sort((a, b) => b.length - a.length);
 	for (const part of components) knownSet.add(part);
@@ -454,7 +499,8 @@ export function maskModelsToml(text: string): MaskResult {
 	for (const node of allScalars(doc)) {
 		if (!node.range) continue;
 		if (reached.masked.has(node)) {
-			if (knownSet.has(String(node.value))) edits.push(scalarEdit(node, text, scalarSource(placeholderFor(String(node.value)))));
+			if (knownSet.has(String(node.value)))
+				edits.push(scalarEdit(node, text, scalarSource(placeholderFor(String(node.value)))));
 		} else if (typeof node.value === "string") {
 			let value = node.value;
 			for (const secret of replaceable) value = value.split(secret).join(placeholderFor(secret));
@@ -474,7 +520,8 @@ export function maskModelsToml(text: string): MaskResult {
 	// Nothing known may survive: not in the text, not in a decoded (escaped) scalar, not in what NeoPi's parser reads.
 	if (known.some(secret => masked.includes(secret))) return { ok: false, known };
 	const check = parse(masked);
-	if (!check || known.some(secret => allScalars(check).some(node => String(node.value).includes(secret)))) return { ok: false, known };
+	if (!check || known.some(secret => allScalars(check).some(node => String(node.value).includes(secret))))
+		return { ok: false, known };
 	if (!onlyCommentPlaceholders(masked)) return { ok: false, known };
 	try {
 		if (leaksSecret(parseSettingsToml(masked), known)) return { ok: false, known };
@@ -490,7 +537,12 @@ function lineOf(text: string, offset: number): number {
 }
 
 /** Walk NeoPi's parse of the submitted and restored documents together; they may differ only where a placeholder was restored. */
-function sameExceptRestored(submitted: unknown, restored: unknown, path: PathKey[], secrets: Map<string, Secret>): boolean {
+function sameExceptRestored(
+	submitted: unknown,
+	restored: unknown,
+	path: PathKey[],
+	secrets: Map<string, Secret>,
+): boolean {
 	if (typeof submitted === "string" && submitted.includes(COMMENT_MARK)) return false;
 	if (typeof submitted === "string" && submitted.includes(MASK_MARK)) {
 		if (!PLACEHOLDER_EXACT.test(submitted)) return false;
@@ -498,22 +550,34 @@ function sameExceptRestored(submitted: unknown, restored: unknown, path: PathKey
 		return secret !== undefined && restorableAt(path, secret) && Bun.deepEquals(secret.value, restored);
 	}
 	if (Array.isArray(submitted)) {
-		return Array.isArray(restored) && submitted.length === restored.length
-			&& submitted.every((item, index) => sameExceptRestored(item, restored[index], [...path, index], secrets));
+		return (
+			Array.isArray(restored) &&
+			submitted.length === restored.length &&
+			submitted.every((item, index) => sameExceptRestored(item, restored[index], [...path, index], secrets))
+		);
 	}
 	if (submitted && typeof submitted === "object") {
 		if (!restored || typeof restored !== "object" || Array.isArray(restored)) return false;
 		const keys = Object.keys(submitted);
 		const other = restored as Record<string, unknown>;
-		if (keys.length !== Object.keys(other).length || keys.some(key => key.includes(MASK_MARK) || key.includes(COMMENT_MARK) || !(key in other))) return false;
-		return keys.every(key => sameExceptRestored((submitted as Record<string, unknown>)[key], other[key], [...path, key], secrets));
+		if (
+			keys.length !== Object.keys(other).length ||
+			keys.some(key => key.includes(MASK_MARK) || key.includes(COMMENT_MARK) || !(key in other))
+		)
+			return false;
+		return keys.every(key =>
+			sameExceptRestored((submitted as Record<string, unknown>)[key], other[key], [...path, key], secrets),
+		);
 	}
 	return Bun.deepEquals(submitted, restored);
 }
 
-const OUTSIDE_CREDENTIAL = "can only be restored as the whole value of an apiKey, a header or a requestMetadata entry, or a masked base URL as a whole baseUrl. Replace it with the full value, or remove it.";
-const OUTSIDE_COMMENT = "a comment placeholder is restored only as a whole, unchanged comment. Leave it exactly as shown, or delete it and write the comment you want.";
-const STALE_PLACEHOLDER = "does not match the file on disk (it changed, or the deck restarted since the editor loaded). Reload, then reapply your edits.";
+const OUTSIDE_CREDENTIAL =
+	"can only be restored as the whole value of an apiKey, a header or a requestMetadata entry, or a masked base URL as a whole baseUrl. Replace it with the full value, or remove it.";
+const OUTSIDE_COMMENT =
+	"a comment placeholder is restored only as a whole, unchanged comment. Leave it exactly as shown, or delete it and write the comment you want.";
+const STALE_PLACEHOLDER =
+	"does not match the file on disk (it changed, or the deck restarted since the editor loaded). Reload, then reapply your edits.";
 
 /**
  * Put the credentials from `secrets` and the comments from `comments` (the
@@ -525,26 +589,49 @@ const STALE_PLACEHOLDER = "does not match the file on disk (it changed, or the d
  * unchanged comment, and refused with 400 anywhere else. An unknown
  * placeholder of either kind is refused with 409.
  */
-export function restoreModelsToml(raw: string, secrets: Map<string, Secret>, commentSources: Map<string, string>): string {
+export function restoreModelsToml(
+	raw: string,
+	secrets: Map<string, Secret>,
+	commentSources: Map<string, string>,
+): string {
 	if (!raw.includes(MASK_MARK) && !raw.includes(COMMENT_MARK)) return raw;
 	const doc = parse(raw);
 	const reached = doc && reach(doc);
 	if (!doc || !reached) {
-		throw new PlaceholderError("The document holds masked credentials or comments but is not valid TOML, so they cannot be located.", 400);
+		throw new PlaceholderError(
+			"The document holds masked credentials or comments but is not valid TOML, so they cannot be located.",
+			400,
+		);
 	}
 	const edits: Edit[] = [];
 	const ranges: Array<[number, number]> = [];
 	let unknown = false;
 	for (const node of new Set([...reached.credential, ...reached.url])) {
-		if (reached.elsewhere.has(node) || typeof node.value !== "string" || !node.value.includes(MASK_MARK) || !node.range) continue;
+		if (
+			reached.elsewhere.has(node) ||
+			typeof node.value !== "string" ||
+			!node.value.includes(MASK_MARK) ||
+			!node.range
+		)
+			continue;
 		if (!PLACEHOLDER_EXACT.test(node.value)) {
-			throw new PlaceholderError(`Line ${lineOf(raw, node.range[0])}: a masked credential ${OUTSIDE_CREDENTIAL}`, 400);
+			throw new PlaceholderError(
+				`Line ${lineOf(raw, node.range[0])}: a masked credential ${OUTSIDE_CREDENTIAL}`,
+				400,
+			);
 		}
 		ranges.push([node.range[0], node.range[1]]);
 		const secret = secrets.get(node.value);
-		if (!secret) { unknown = true; continue; }
+		if (!secret) {
+			unknown = true;
+			continue;
+		}
 		// A baseUrl takes back only a masked baseUrl: a credential from elsewhere would change where requests go.
-		if (reached.url.has(node) && !secret.fromUrl) throw new PlaceholderError(`Line ${lineOf(raw, node.range[0])}: a masked credential ${OUTSIDE_CREDENTIAL}`, 400);
+		if (reached.url.has(node) && !secret.fromUrl)
+			throw new PlaceholderError(
+				`Line ${lineOf(raw, node.range[0])}: a masked credential ${OUTSIDE_CREDENTIAL}`,
+				400,
+			);
 		edits.push(scalarEdit(node, raw, scalarSource(secret.value)));
 	}
 	const commentRanges: Array<[number, number]> = [];
@@ -556,9 +643,11 @@ export function restoreModelsToml(raw: string, secrets: Map<string, Secret>, com
 		if (original !== undefined) edits.push({ start: comment.offset, end, text: original });
 		else unknown = true;
 	}
-	const inside = (at: number, within: Array<[number, number]>) => within.some(([start, end]) => at >= start && at < end);
+	const inside = (at: number, within: Array<[number, number]>) =>
+		within.some(([start, end]) => at >= start && at < end);
 	for (let at = raw.indexOf(MASK_MARK); at >= 0; at = raw.indexOf(MASK_MARK, at + 1)) {
-		if (!inside(at, ranges)) throw new PlaceholderError(`Line ${lineOf(raw, at)}: a masked credential ${OUTSIDE_CREDENTIAL}`, 400);
+		if (!inside(at, ranges))
+			throw new PlaceholderError(`Line ${lineOf(raw, at)}: a masked credential ${OUTSIDE_CREDENTIAL}`, 400);
 	}
 	for (let at = raw.indexOf(COMMENT_MARK); at >= 0; at = raw.indexOf(COMMENT_MARK, at + 1)) {
 		if (!inside(at, commentRanges)) throw new PlaceholderError(`Line ${lineOf(raw, at)}: ${OUTSIDE_COMMENT}`, 400);
@@ -576,7 +665,10 @@ export function restoreModelsToml(raw: string, secrets: Map<string, Secret>, com
 	try {
 		restoredData = parseSettingsToml(restored);
 	} catch {
-		throw new PlaceholderError("The masked credentials could not be restored unambiguously. Replace them with the full values.", 400);
+		throw new PlaceholderError(
+			"The masked credentials could not be restored unambiguously. Replace them with the full values.",
+			400,
+		);
 	}
 	if (!sameExceptRestored(submittedData, restoredData, [], secrets)) {
 		throw new PlaceholderError(`A masked credential ${OUTSIDE_CREDENTIAL}`, 400);
@@ -584,12 +676,14 @@ export function restoreModelsToml(raw: string, secrets: Map<string, Secret>, com
 	return restored;
 }
 
-const WITHHELD = "NeoPi rejects this document; its message is withheld because it would quote a credential. The deck server log has the details.";
+const WITHHELD =
+	"NeoPi rejects this document; its message is withheld because it would quote a credential. The deck server log has the details.";
 
 /** `message` with known credentials replaced, or a withheld notice when that is ambiguous. */
 export function safeMessage(message: string, known: readonly string[]): string {
 	let out = message;
-	for (const secret of [...known].filter(s => s.length >= MIN_REPLACE).sort((a, b) => b.length - a.length)) out = out.split(secret).join("<masked>");
+	for (const secret of [...known].filter(s => s.length >= MIN_REPLACE).sort((a, b) => b.length - a.length))
+		out = out.split(secret).join("<masked>");
 	return known.some(secret => out.includes(secret)) ? WITHHELD : out;
 }
 

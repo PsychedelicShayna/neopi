@@ -130,8 +130,14 @@ export const MANIFEST = {
 			cfgRetryFallbackChains: op("@oh-my-pi/pi-coding-agent/session/settings", "cfgRetryFallbackChains"),
 			getEnvApiKey: op("@oh-my-pi/pi-ai", "getEnvApiKey"),
 			getOAuthProviders: op("@oh-my-pi/pi-ai", "getOAuthProviders"),
-			runExtensionCompact: op("@oh-my-pi/pi-coding-agent/extensibility/extensions/compact-handler", "runExtensionCompact"),
-			runExtensionSetModel: op("@oh-my-pi/pi-coding-agent/extensibility/extensions/compact-handler", "runExtensionSetModel"),
+			runExtensionCompact: op(
+				"@oh-my-pi/pi-coding-agent/extensibility/extensions/compact-handler",
+				"runExtensionCompact",
+			),
+			runExtensionSetModel: op(
+				"@oh-my-pi/pi-coding-agent/extensibility/extensions/compact-handler",
+				"runExtensionSetModel",
+			),
 			getSessionSlashCommands: op(
 				"@oh-my-pi/pi-coding-agent/extensibility/extensions/get-commands-handler",
 				"getSessionSlashCommands",
@@ -140,7 +146,10 @@ export const MANIFEST = {
 				"@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins",
 				"executeAcpBuiltinSlashCommand",
 			),
-			ACP_BUILTIN_SLASH_COMMANDS: op("@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins", "ACP_BUILTIN_SLASH_COMMANDS"),
+			ACP_BUILTIN_SLASH_COMMANDS: op(
+				"@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins",
+				"ACP_BUILTIN_SLASH_COMMANDS",
+			),
 			BUILTIN_SLASH_COMMAND_DEFS: op(
 				"@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry",
 				"BUILTIN_SLASH_COMMAND_DEFS",
@@ -153,7 +162,10 @@ export const MANIFEST = {
 				"@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace",
 				"getInstalledPluginsRegistryPath",
 			),
-			getMarketplacesCacheDir: op("@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace", "getMarketplacesCacheDir"),
+			getMarketplacesCacheDir: op(
+				"@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace",
+				"getMarketplacesCacheDir",
+			),
 			getMarketplacesRegistryPath: op(
 				"@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace",
 				"getMarketplacesRegistryPath",
@@ -187,7 +199,10 @@ export const MANIFEST = {
 		exports: {
 			AgentRegistry: op("@oh-my-pi/pi-coding-agent/registry/agent-registry", "AgentRegistry"),
 			AgentLifecycleManager: op("@oh-my-pi/pi-coding-agent/registry/agent-lifecycle", "AgentLifecycleManager"),
-			readRpcSubagentTranscript: op("@oh-my-pi/pi-coding-agent/modes/rpc/rpc-subagents", "readRpcSubagentTranscript"),
+			readRpcSubagentTranscript: op(
+				"@oh-my-pi/pi-coding-agent/modes/rpc/rpc-subagents",
+				"readRpcSubagentTranscript",
+			),
 		},
 	},
 	/** W11: WATCHDOG.toml editing, rediscovery and hot apply (`applyAdvisorConfigs` is a session method). */
@@ -253,12 +268,30 @@ export const MANIFEST = {
 		tier: "optional-feature",
 		consumers: ["bridge/in-process.ts", "routes-fallback-chain.ts"],
 		exports: {
-			getRetryFallbackChains: op("@oh-my-pi/pi-coding-agent/session/retry-fallback-chains", "getRetryFallbackChains"),
-			resolveRetryFallbackChainKey: op("@oh-my-pi/pi-coding-agent/session/retry-fallback-chains", "resolveRetryFallbackChainKey"),
-			parseRetryFallbackSelector: op("@oh-my-pi/pi-coding-agent/session/retry-fallback-chains", "parseRetryFallbackSelector"),
-			formatRetryFallbackSelector: op("@oh-my-pi/pi-coding-agent/session/retry-fallback-chains", "formatRetryFallbackSelector"),
-			isRetryFallbackModelKey: op("@oh-my-pi/pi-coding-agent/session/retry-fallback-chains", "isRetryFallbackModelKey"),
-			isRetryFallbackWildcardKey: op("@oh-my-pi/pi-coding-agent/session/retry-fallback-chains", "isRetryFallbackWildcardKey"),
+			getRetryFallbackChains: op(
+				"@oh-my-pi/pi-coding-agent/session/retry-fallback-chains",
+				"getRetryFallbackChains",
+			),
+			resolveRetryFallbackChainKey: op(
+				"@oh-my-pi/pi-coding-agent/session/retry-fallback-chains",
+				"resolveRetryFallbackChainKey",
+			),
+			parseRetryFallbackSelector: op(
+				"@oh-my-pi/pi-coding-agent/session/retry-fallback-chains",
+				"parseRetryFallbackSelector",
+			),
+			formatRetryFallbackSelector: op(
+				"@oh-my-pi/pi-coding-agent/session/retry-fallback-chains",
+				"formatRetryFallbackSelector",
+			),
+			isRetryFallbackModelKey: op(
+				"@oh-my-pi/pi-coding-agent/session/retry-fallback-chains",
+				"isRetryFallbackModelKey",
+			),
+			isRetryFallbackWildcardKey: op(
+				"@oh-my-pi/pi-coding-agent/session/retry-fallback-chains",
+				"isRetryFallbackWildcardKey",
+			),
 		},
 	},
 	/** #86: enumerate, validate and write every registered NeoPi setting from the Settings view. */
@@ -301,7 +334,10 @@ export const MANIFEST = {
 		exports: {
 			getRpcModelSelector: op("@oh-my-pi/pi-coding-agent/modes/rpc/rpc-model-selector", "getRpcModelSelector"),
 			queryModelSelector: op("@oh-my-pi/pi-coding-agent/modes/rpc/rpc-model-selector", "queryModelSelector"),
-			createModelBrowserSource: op("@oh-my-pi/pi-coding-agent/modes/model-browser-source", "createModelBrowserSource"),
+			createModelBrowserSource: op(
+				"@oh-my-pi/pi-coding-agent/modes/model-browser-source",
+				"createModelBrowserSource",
+			),
 		},
 	},
 	/** #90: list, edit and toggle MCP server definitions in the user and project mcp.json files. */
@@ -364,7 +400,10 @@ export const MANIFEST = {
 		tier: "optional-feature",
 		consumers: ["skill-authoring.ts", "skills-service.ts", "skills-watcher.ts"],
 		exports: {
-			validateAgentSkillFrontmatter: op("@oh-my-pi/pi-coding-agent/discovery/agent-plugin-format", "validateAgentSkillFrontmatter"),
+			validateAgentSkillFrontmatter: op(
+				"@oh-my-pi/pi-coding-agent/discovery/agent-plugin-format",
+				"validateAgentSkillFrontmatter",
+			),
 			parseFrontmatter: op("@oh-my-pi/pi-utils", "parseFrontmatter"),
 			clearFsCache: op("@oh-my-pi/pi-coding-agent/capability/fs", "clearCache"),
 		},
@@ -408,7 +447,8 @@ export type OptionalFeatureName = {
 	[F in FeatureName]: Manifest[F]["tier"] extends "optional-feature" ? F : never;
 }[FeatureName];
 
-type ExportValue<R> = R extends ExportRef<infer M, infer E> ? (E extends keyof ModuleTypes[M] ? ModuleTypes[M][E] : never) : never;
+type ExportValue<R> =
+	R extends ExportRef<infer M, infer E> ? (E extends keyof ModuleTypes[M] ? ModuleTypes[M][E] : never) : never;
 
 /** The loaded values of one feature, typed from the in-tree workspace. */
 export type FeatureExports<F extends FeatureName> = {

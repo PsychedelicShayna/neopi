@@ -25,7 +25,8 @@ afterEach(async () => {
 	await stopOwnedProcesses();
 	closeDb();
 	if (home) removeTestPath(home);
-	home = ""; runner = undefined;
+	home = "";
+	runner = undefined;
 });
 
 const nowSecs = () => Math.floor(Date.now() / 1000);
@@ -36,7 +37,11 @@ function signed(body: string, secret = SECRET, timestamp = nowSecs()): Record<st
 	return { "x-routine-signature": `sha256=${mac}`, "x-routine-timestamp": String(timestamp) };
 }
 
-function patchWebhook(routes: { request: (path: string, init: RequestInit) => Response | Promise<Response> }, routineId: string, body: unknown) {
+function patchWebhook(
+	routes: { request: (path: string, init: RequestInit) => Response | Promise<Response> },
+	routineId: string,
+	body: unknown,
+) {
 	return routes.request(`/routines/${routineId}/webhook`, {
 		method: "PATCH",
 		headers: { "content-type": "application/json" },
@@ -73,11 +78,24 @@ function setup(enabled: boolean, registration: "current" | "pre-upgrade" = "curr
 	const hookPath = `/hooks/test-${crypto.randomUUID()}`;
 	const shell = createShellFixture(home);
 	const spec = {
-		name: "hooked", concurrency: "skip",
+		name: "hooked",
+		concurrency: "skip",
 		trigger: [{ webhook: { path: hookPath, secret_env: "HOOK_SECRET" } }],
-		steps: [{ id: "write", type: "run", cwd: shell.cwd, command: shell.command("write", { marker, bytes: "yes", newline: true }) }],
+		steps: [
+			{
+				id: "write",
+				type: "run",
+				cwd: shell.cwd,
+				command: shell.command("write", { marker, bytes: "yes", newline: true }),
+			},
+		],
 	} as RoutineSpec;
-	const routine = createV1Routine({ name: `hooked-${crypto.randomUUID()}`, spec, specToml: stringifyToml(spec), enabled });
+	const routine = createV1Routine({
+		name: `hooked-${crypto.randomUUID()}`,
+		spec,
+		specToml: stringifyToml(spec),
+		enabled,
+	});
 	if (registration === "current") {
 		expect(upsertWebhookSecret({ routineId: routine.id, path: hookPath, secret: SECRET })).toBe(true);
 	} else {
@@ -86,12 +104,13 @@ function setup(enabled: boolean, registration: "current" | "pre-upgrade" = "curr
 	runner = new RoutinesRunner();
 	const app = buildHooksRouter(runner);
 	const routes = buildRoutinesRouter(runner);
-	const deliver = (headers: Record<string, string>, body: string | ReadableStream<Uint8Array> = BODY) => app.request(hookPath, {
-		method: "POST",
-		headers: { "content-type": "application/json", ...headers },
-		body,
-		duplex: "half",
-	} as RequestInit);
+	const deliver = (headers: Record<string, string>, body: string | ReadableStream<Uint8Array> = BODY) =>
+		app.request(hookPath, {
+			method: "POST",
+			headers: { "content-type": "application/json", ...headers },
+			body,
+			duplex: "half",
+		} as RequestInit);
 	return { routine, marker, hookPath, deliver, routes };
 }
 
@@ -104,8 +123,12 @@ const LATE_BODY = JSON.stringify({ key: "late" });
 function gatedBody() {
 	let started!: () => void;
 	let release!: () => void;
-	const reading = new Promise<void>((resolve) => { started = resolve; });
-	const gate = new Promise<void>((resolve) => { release = resolve; });
+	const reading = new Promise<void>(resolve => {
+		started = resolve;
+	});
+	const gate = new Promise<void>(resolve => {
+		release = resolve;
+	});
 	const body = new ReadableStream<Uint8Array>({
 		async pull(controller) {
 			started();
@@ -200,7 +223,7 @@ test("a registration from before the upgrade keeps accepting its bare secret and
 	expect(getWebhookSecretByPath(hookPath)?.last_bare_secret_at).not.toBeNull();
 	expect((await deliver({ "x-routine-signature": "wrong" })).status).toBe(401);
 
-	await waitFor(() => listRuns(routine.id).every((r) => r.endedAt !== undefined));
+	await waitFor(() => listRuns(routine.id).every(r => r.endedAt !== undefined));
 	fs.rmSync(marker);
 	expect((await deliver(signed(BODY))).status).toBe(202);
 	expect(await waitFor(() => fs.existsSync(marker))).toBe(true);
@@ -226,7 +249,12 @@ test("turning off the bare secret on an upgraded registration refuses it and kee
 test("webhook status reports the migration state without the secret or its hash", async () => {
 	const { routine, hookPath, deliver, routes } = setup(true, "pre-upgrade");
 	const before = await (await routes.request(`/routines/${routine.id}/webhook`)).json();
-	expect(before).toMatchObject({ path: hookPath, acceptsBareSecret: true, signingKeyStored: false, lastBareSecretAt: null });
+	expect(before).toMatchObject({
+		path: hookPath,
+		acceptsBareSecret: true,
+		signingKeyStored: false,
+		lastBareSecretAt: null,
+	});
 
 	expect((await deliver({ "x-routine-signature": SECRET })).status).toBe(202);
 	const response = await routes.request(`/routines/${routine.id}/webhook`);
@@ -240,7 +268,9 @@ test("webhook status reports the migration state without the secret or its hash"
 
 test("rotating the secret stops accepting the bare secret and signs with the new one", async () => {
 	const { routine, deliver, routes } = setup(true, "pre-upgrade");
-	const rotated = (await (await routes.request(`/routines/${routine.id}/webhook-secret/rotate`, { method: "POST" })).json()) as { secret: string };
+	const rotated = (await (
+		await routes.request(`/routines/${routine.id}/webhook-secret/rotate`, { method: "POST" })
+	).json()) as { secret: string };
 	expect((await deliver({ "x-routine-signature": SECRET })).status).toBe(401);
 	expect((await deliver({ "x-routine-signature": rotated.secret })).status).toBe(401);
 	expect((await deliver(signed(BODY, SECRET))).status).toBe(401);
@@ -318,7 +348,13 @@ test("a disabled routine still answers a bad signature with 401, not its enabled
 
 test("a rejected webhook's run lists which headers arrived but never a header value", async () => {
 	const { routine, hookPath } = setup(true);
-	const credentials = ["near-miss-hook-secret", "Bearer sender-token", "session=cookie-value", "api-key-value", "ua-embedded-token"];
+	const credentials = [
+		"near-miss-hook-secret",
+		"Bearer sender-token",
+		"session=cookie-value",
+		"api-key-value",
+		"ua-embedded-token",
+	];
 	const response = await buildHooksRouter(runner!).request(hookPath, {
 		method: "POST",
 		headers: {
@@ -333,7 +369,7 @@ test("a rejected webhook's run lists which headers arrived but never a header va
 	});
 	expect(response.status).toBe(401);
 	const runsResponse = await buildRoutinesRouter(runner!).request(`/routines/${routine.id}/runs`);
-	const { runs } = await runsResponse.json() as ListRoutineRunsResponse;
+	const { runs } = (await runsResponse.json()) as ListRoutineRunsResponse;
 	expect(runs).toHaveLength(1);
 	expect(runs[0]!.abortReason).toBe("signature_invalid");
 	for (const credential of credentials) expect(runs[0]!.triggerPayload).not.toContain(credential);
@@ -347,7 +383,9 @@ test("a signed delivery refused after its body arrives also stores header names 
 	const { routine, hookPath, deliver } = setup(true);
 	const headers = { ...signed(BODY), authorization: "Bearer sender-token" };
 	expect((await deliver(headers, JSON.stringify({ key: "tampered" }))).status).toBe(401);
-	const { runs } = await (await buildRoutinesRouter(runner!).request(`/routines/${routine.id}/runs`)).json() as ListRoutineRunsResponse;
+	const { runs } = (await (
+		await buildRoutinesRouter(runner!).request(`/routines/${routine.id}/runs`)
+	).json()) as ListRoutineRunsResponse;
 	expect(runs).toHaveLength(1);
 	for (const value of Object.values(headers)) expect(runs[0]!.triggerPayload).not.toContain(value);
 	expect(JSON.parse(runs[0]!.triggerPayload!)).toEqual({
@@ -358,13 +396,21 @@ test("a signed delivery refused after its body arrives also stores header names 
 
 test("a signed webhook's stored body redacts credential keys at any depth and keeps other values", async () => {
 	const { routine, marker, deliver } = setup(true);
-	const body = JSON.stringify({ access_token: "tok-live-1", key: "value", nested: { Password: "pw-live-2", list: [{ "api-key": "ak-live-3" }] } });
+	const body = JSON.stringify({
+		access_token: "tok-live-1",
+		key: "value",
+		nested: { Password: "pw-live-2", list: [{ "api-key": "ak-live-3" }] },
+	});
 	expect((await deliver(signed(body), body)).status).toBe(202);
 	expect(await waitFor(() => listRuns(routine.id)[0]?.endedAt !== undefined)).toBe(true);
 	expect(fs.existsSync(marker)).toBe(true);
-	const { runs } = await (await buildRoutinesRouter(runner!).request(`/routines/${routine.id}/runs`)).json() as ListRoutineRunsResponse;
+	const { runs } = (await (
+		await buildRoutinesRouter(runner!).request(`/routines/${routine.id}/runs`)
+	).json()) as ListRoutineRunsResponse;
 	expect(JSON.parse(runs[0]!.triggerPayload!)).toEqual({
-		access_token: "[redacted]", key: "value", nested: { Password: "[redacted]", list: [{ "api-key": "[redacted]" }] },
+		access_token: "[redacted]",
+		key: "value",
+		nested: { Password: "[redacted]", list: [{ "api-key": "[redacted]" }] },
 	});
 });
 

@@ -11,13 +11,13 @@ export function provenanceSuffix(provenance: EntryProvenance | undefined): strin
 }
 
 export type UiRegistryKind = keyof typeof uiData.fork;
-const uiFork = {
+const uiFork: Record<UiRegistryKind, Set<string>> = {
 	keybindings: new Set(uiData.fork.keybindings),
 	statusSegments: new Set(uiData.fork.statusSegments),
 	roles: new Set(uiData.fork.roles),
 	composerShapes: new Set(uiData.fork.composerShapes),
 };
-const uiUpstream = {
+const uiUpstream: Record<UiRegistryKind, Set<string>> = {
 	keybindings: new Set(uiData.newUpstream.keybindings),
 	statusSegments: new Set(uiData.newUpstream.statusSegments),
 	roles: new Set(uiData.newUpstream.roles),

@@ -34,12 +34,19 @@ import { syncMaintenanceGateOrgRoot } from "./maintenance-gate.ts";
 import { installOptedInStarters, reportRetiredStarterSwitches } from "./starters.ts";
 import { buildDefaultBridgeSupervisor } from "./bridge-supervisor.ts";
 import { abortOAuthFlows } from "./routes-auth-oauth.ts";
-import { activeBackend, formatDiagnostic, listBackends, loadBackend, readBackendConfig, resolveBackendSelection, sdk, writeActiveBackend, type BackendSelection } from "./backend/runtime.ts";
-import { preflight, type ProbeResult } from "./backend/probe.ts";
 import {
-	BrowserNotificationChannel,
-	notificationService,
-} from "./notifications/index.ts";
+	activeBackend,
+	formatDiagnostic,
+	listBackends,
+	loadBackend,
+	readBackendConfig,
+	resolveBackendSelection,
+	sdk,
+	writeActiveBackend,
+	type BackendSelection,
+} from "./backend/runtime.ts";
+import { preflight, type ProbeResult } from "./backend/probe.ts";
+import { BrowserNotificationChannel, notificationService } from "./notifications/index.ts";
 import type { RestartServerResponse } from "@npi-deck/protocol";
 import type { BackendStatusResponse, BackendSwitchResponse } from "@npi-deck/protocol";
 
@@ -92,18 +99,29 @@ export async function startDeck(opts: StartDeckOptions = {}): Promise<DeckHandle
 	await sweepOwnedProcesses();
 
 	const transactionFile = path.join(getDataDir(), "run", "backend-switch.json");
-	const pending = existsSync(transactionFile) ? JSON.parse(readFileSync(transactionFile, "utf8")) as { previous: string | null; target: string } : null;
-	const bootDeadline = pending ? setTimeout(() => {
-		log.error("backend switch boot timed out; restoring previous selection");
-		try { rollbackFailedBoot(); } catch (err) { log.error("rollback failed", err); }
-		process.exit(RESTART_EXIT_CODE);
-	}, 40_000) : undefined;
+	const pending = existsSync(transactionFile)
+		? (JSON.parse(readFileSync(transactionFile, "utf8")) as { previous: string | null; target: string })
+		: null;
+	const bootDeadline = pending
+		? setTimeout(() => {
+				log.error("backend switch boot timed out; restoring previous selection");
+				try {
+					rollbackFailedBoot();
+				} catch (err) {
+					log.error("rollback failed", err);
+				}
+				process.exit(RESTART_EXIT_CODE);
+			}, 40_000)
+		: undefined;
 	let backendReason: string | undefined;
 	let backendImportFailed = false;
 	let validated: { id: string | null; result: Extract<ProbeResult, { ok: true }> } | null = null;
 	let bootSelection: BackendSelection | undefined;
-	try { bootSelection = resolveBackendSelection(); }
-	catch (err) { backendReason = String(err); }
+	try {
+		bootSelection = resolveBackendSelection();
+	} catch (err) {
+		backendReason = String(err);
+	}
 	if (bootSelection) {
 		const probe = await preflight(bootSelection.path);
 		if (!probe.ok) backendReason = probe.reason;
@@ -113,9 +131,15 @@ export async function startDeck(opts: StartDeckOptions = {}): Promise<DeckHandle
 				const backend = await loadBackend(bootSelection);
 				log.info("NeoPi backend loaded", { ...backend.identity, source: backend.selection.source });
 				for (const [name, status] of Object.entries(backend.features)) {
-					if (!status.available) log.warn(`backend feature ${name} unavailable: ${status.diagnostics.map(formatDiagnostic).join("; ")}`);
+					if (!status.available)
+						log.warn(
+							`backend feature ${name} unavailable: ${status.diagnostics.map(formatDiagnostic).join("; ")}`,
+						);
 				}
-			} catch (err) { backendReason = String(err); backendImportFailed = true; }
+			} catch (err) {
+				backendReason = String(err);
+				backendImportFailed = true;
+			}
 		}
 	}
 	if (!activeBackend() && pending && !process.env.NPI_DECK_BACKEND) {
@@ -124,7 +148,9 @@ export async function startDeck(opts: StartDeckOptions = {}): Promise<DeckHandle
 			rollbackFailedBoot();
 			process.exit(RESTART_EXIT_CODE);
 		}
-		log.warn(`backend switch to ${pending.target} failed: ${backendReason}; restoring ${pending.previous ?? "no backend"}`);
+		log.warn(
+			`backend switch to ${pending.target} failed: ${backendReason}; restoring ${pending.previous ?? "no backend"}`,
+		);
 		writeActiveBackend(pending.previous);
 		if (pending.previous) {
 			try {
@@ -133,8 +159,9 @@ export async function startDeck(opts: StartDeckOptions = {}): Promise<DeckHandle
 					const probe = await preflight(previous.path);
 					if (!probe.ok) throw new Error(probe.reason);
 					validated = { id: previous.id, result: probe };
-					try { await loadBackend(previous); }
-					catch (err) {
+					try {
+						await loadBackend(previous);
+					} catch (err) {
 						writeActiveBackend(null);
 						rmSync(transactionFile, { force: true });
 						log.error(`previous backend import failed; restarting backendless: ${String(err)}`);
@@ -195,14 +222,12 @@ export async function startDeck(opts: StartDeckOptions = {}): Promise<DeckHandle
 	// (telegram, email, push) self-register here without engine changes.
 	notificationService.register(new BrowserNotificationChannel());
 
-
 	const cardAgents = new CardAgentRunner(config);
 	const bridge = new InProcessAgentBridge({
 		idleTimeoutMs: config.idleTimeoutMs,
 	});
 	const routinesRunner = new RoutinesRunner();
 	routinesRunner.start();
-	let server: Server<ConnectionData>;
 	const supervisor = buildDefaultBridgeSupervisor();
 	const marketplaceService = new MarketplaceService();
 	const skillsService = new SkillsService(config, marketplaceService);
@@ -228,11 +253,23 @@ export async function startDeck(opts: StartDeckOptions = {}): Promise<DeckHandle
 		let desired: string | null = null;
 		let backends: BackendStatusResponse["backends"] = [];
 		let configReason: string | undefined;
-		try { desired = readBackendConfig().activeBackend ?? null; backends = listBackends(); }
-		catch (err) { configReason = String(err); }
+		try {
+			desired = readBackendConfig().activeBackend ?? null;
+			backends = listBackends();
+		} catch (err) {
+			configReason = String(err);
+		}
 		return {
 			workerGeneration,
-			running: backend ? { id: selection!.id, path: backend.identity.path, source: selection!.source, version: backend.identity.version, commit: backend.identity.commit } : null,
+			running: backend
+				? {
+						id: selection!.id,
+						path: backend.identity.path,
+						source: selection!.source,
+						version: backend.identity.version,
+						commit: backend.identity.commit,
+					}
+				: null,
 			validated: validated ? { id: validated.id, ...validated.result.identity } : null,
 			desired,
 			pinned: Boolean(process.env.NPI_DECK_BACKEND?.trim()),
@@ -241,13 +278,20 @@ export async function startDeck(opts: StartDeckOptions = {}): Promise<DeckHandle
 		};
 	}
 	async function switchBackend(id: string, force: boolean): Promise<{ code: number; body: BackendSwitchResponse }> {
-		if (process.env.NPI_DECK_BACKEND?.trim()) return { code: 409, body: { ok: false, message: "NPI_DECK_BACKEND pins this launch; remove it before switching" } };
+		if (process.env.NPI_DECK_BACKEND?.trim())
+			return {
+				code: 409,
+				body: { ok: false, message: "NPI_DECK_BACKEND pins this launch; remove it before switching" },
+			};
 		if (switching) return { code: 409, body: { ok: false, message: "backend switch already in progress" } };
-		if (!launcherFromEnv()) return { code: 409, body: { ok: false, message: "backend switch requires the npi-deck launcher" } };
+		if (!launcherFromEnv())
+			return { code: 409, body: { ok: false, message: "backend switch requires the npi-deck launcher" } };
 		const candidate = listBackends().find(b => b.id === id);
 		if (!candidate) return { code: 404, body: { ok: false, message: `unknown backend ${id}` } };
-		if (candidate.kind !== "source") return { code: 400, body: { ok: false, message: "gateway backends are reserved and unsupported" } };
-		if (activeBackend()?.selection.id === id && !backendReason) return { code: 200, body: { ok: true, message: "backend already running" } };
+		if (candidate.kind !== "source")
+			return { code: 400, body: { ok: false, message: "gateway backends are reserved and unsupported" } };
+		if (activeBackend()?.selection.id === id && !backendReason)
+			return { code: 200, body: { ok: true, message: "backend already running" } };
 		switching = true;
 		let committed = false;
 		try {
@@ -264,7 +308,11 @@ export async function startDeck(opts: StartDeckOptions = {}): Promise<DeckHandle
 			}
 			try {
 				mkdirSync(path.dirname(transactionFile), { recursive: true });
-				writeFileSync(transactionFile, JSON.stringify({ previous: readBackendConfig().activeBackend ?? null, target: id }), { mode: 0o600 });
+				writeFileSync(
+					transactionFile,
+					JSON.stringify({ previous: readBackendConfig().activeBackend ?? null, target: id }),
+					{ mode: 0o600 },
+				);
 				writeActiveBackend(id);
 				committed = true;
 			} catch (err) {
@@ -274,11 +322,16 @@ export async function startDeck(opts: StartDeckOptions = {}): Promise<DeckHandle
 				throw err;
 			}
 			setTimeout(() => exitAfterShutdown(stop, "backend switch", RESTART_EXIT_CODE), 50);
-			return { code: 202, body: { ok: true, message: `switching to ${id}${force ? "; aborting active work" : ""}` } };
-		} finally { if (!committed) switching = false; }
+			return {
+				code: 202,
+				body: { ok: true, message: `switching to ${id}${force ? "; aborting active work" : ""}` },
+			};
+		} finally {
+			if (!committed) switching = false;
+		}
 	}
 
-	server = Bun.serve<ConnectionData>({
+	const server: Server<ConnectionData> = Bun.serve<ConnectionData>({
 		hostname: config.host,
 		port: config.port,
 		async fetch(req, srv) {
@@ -297,26 +350,47 @@ export async function startDeck(opts: StartDeckOptions = {}): Promise<DeckHandle
 				// so retain a finite request ceiling above that deadline.
 				if (endpoint === "/github/snapshot" && req.method === "GET") srv.timeout(req, 60);
 				if (endpoint === "/backend" && req.method === "GET") {
-					try { return Response.json(status()); } catch (err) { return Response.json({ error: String(err) }, { status: 500 }); }
+					try {
+						return Response.json(status());
+					} catch (err) {
+						return Response.json({ error: String(err) }, { status: 500 });
+					}
 				}
 				if (endpoint === "/backend/probe" && req.method === "POST") {
-					if (process.env.NPI_DECK_BACKEND?.trim()) return Response.json({ ok: false, reason: "NPI_DECK_BACKEND pins this launch" }, { status: 409 });
-					const body = await req.json().catch(() => ({})) as { id?: unknown };
+					if (process.env.NPI_DECK_BACKEND?.trim())
+						return Response.json({ ok: false, reason: "NPI_DECK_BACKEND pins this launch" }, { status: 409 });
+					const body = (await req.json().catch(() => ({}))) as { id?: unknown };
 					const candidate = listBackends().find(b => b.id === body.id);
 					if (!candidate) return Response.json({ ok: false, reason: "unknown backend" }, { status: 404 });
-					if (candidate.kind !== "source") return Response.json({ ok: false, reason: "gateway backends are reserved and unsupported" }, { status: 400 });
+					if (candidate.kind !== "source")
+						return Response.json(
+							{ ok: false, reason: "gateway backends are reserved and unsupported" },
+							{ status: 400 },
+						);
 					return Response.json(await preflight(candidate.path));
 				}
 				if (endpoint === "/backend/switch" && req.method === "POST") {
-					const body = await req.json().catch(() => ({})) as { id?: unknown; force?: unknown };
-					if (typeof body.id !== "string") return Response.json({ ok: false, message: "backend id required" }, { status: 400 });
+					const body = (await req.json().catch(() => ({}))) as { id?: unknown; force?: unknown };
+					if (typeof body.id !== "string")
+						return Response.json({ ok: false, message: "backend id required" }, { status: 400 });
 					try {
 						const result = await switchBackend(body.id, body.force === true);
 						return Response.json(result.body, { status: result.code });
-					} catch (err) { return Response.json({ ok: false, message: String(err) }, { status: 500 }); }
+					} catch (err) {
+						return Response.json({ ok: false, message: String(err) }, { status: 500 });
+					}
 				}
-				if (!activeBackend() && (/^\/(sessions|workspaces|models|subagents|advisors|auth\/oauth|bridges|skills|marketplace|slash-commands|fs|integrations)(\/|$)/.test(endpoint) || /^\/settings\/(providers|models|auth)(\/|$)/.test(endpoint))) {
-					return Response.json({ error: "backend_unavailable", reason: backendReason ?? "no backend configured" }, { status: 503 });
+				if (
+					!activeBackend() &&
+					(/^\/(sessions|workspaces|models|subagents|advisors|auth\/oauth|bridges|skills|marketplace|slash-commands|fs|integrations)(\/|$)/.test(
+						endpoint,
+					) ||
+						/^\/settings\/(providers|models|auth)(\/|$)/.test(endpoint))
+				) {
+					return Response.json(
+						{ error: "backend_unavailable", reason: backendReason ?? "no backend configured" },
+						{ status: 503 },
+					);
 				}
 				const trimmed = new URL(req.url);
 				trimmed.pathname = endpoint;
@@ -424,14 +498,26 @@ export async function startDeck(opts: StartDeckOptions = {}): Promise<DeckHandle
 }
 
 /** A blocked SDK/routine teardown must never strand the current worker generation. */
-function exitAfterShutdown(stop: (reason: string) => Promise<void>, reason: string, exitCode: number, forcedExitCode = exitCode): void {
+function exitAfterShutdown(
+	stop: (reason: string) => Promise<void>,
+	reason: string,
+	exitCode: number,
+	forcedExitCode = exitCode,
+): void {
 	const deadline = setTimeout(() => {
 		log.error(`${reason} shutdown exceeded ${SHUTDOWN_DEADLINE_MS}ms; forcing worker exit`);
 		process.exit(forcedExitCode);
 	}, SHUTDOWN_DEADLINE_MS);
 	void stop(reason).then(
-		() => { clearTimeout(deadline); process.exit(exitCode); },
-		(error) => { clearTimeout(deadline); log.error(`${reason} shutdown failed`, error); process.exit(1); },
+		() => {
+			clearTimeout(deadline);
+			process.exit(exitCode);
+		},
+		error => {
+			clearTimeout(deadline);
+			log.error(`${reason} shutdown failed`, error);
+			process.exit(1);
+		},
 	);
 }
 
@@ -442,7 +528,10 @@ function exitAfterShutdown(stop: (reason: string) => Promise<void>, reason: stri
  */
 function scheduleRestart(stop: (reason: string) => Promise<void>): RestartServerResponse {
 	if (!launcherFromEnv()) {
-		return { ok: false, message: "Restart needs the npi-deck launcher; this server was started directly. Restart it yourself." };
+		return {
+			ok: false,
+			message: "Restart needs the npi-deck launcher; this server was started directly. Restart it yourself.",
+		};
 	}
 	setTimeout(() => {
 		log.info(`restart requested; exiting with ${RESTART_EXIT_CODE}`);

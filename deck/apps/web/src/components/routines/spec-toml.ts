@@ -36,8 +36,7 @@ export function parseSpec(tomlText: string): ParseResult {
 		const err = e as { message?: string; line?: number };
 		const message = err.message ?? String(e);
 		const line = err.line;
-		const tomlError: ParseResult["tomlError"] =
-			typeof line === "number" ? { message, line } : { message };
+		const tomlError: ParseResult["tomlError"] = typeof line === "number" ? { message, line } : { message };
 		return { ok: false, tomlError };
 	}
 	const result = validateRoutineSpec(raw);
@@ -60,8 +59,11 @@ export function stringifySpec(spec: RoutineSpec, source?: string): string {
 function definedProperties(value: unknown): unknown {
 	if (Array.isArray(value)) return value.map(definedProperties);
 	if (value !== null && typeof value === "object") {
-		return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)
-			.map(([key, entry]) => [key, definedProperties(entry)]));
+		return Object.fromEntries(
+			Object.entries(value)
+				.filter(([, entry]) => entry !== undefined)
+				.map(([key, entry]) => [key, definedProperties(entry)]),
+		);
 	}
 	return value;
 }
@@ -100,7 +102,7 @@ function orderLayout(layout: NonNullable<RoutineSpec["layout"]>): Record<string,
 		out.nodes = nodesOut;
 	}
 	if (layout.edges && layout.edges.length > 0) {
-		out.edges = layout.edges.map((e) => {
+		out.edges = layout.edges.map(e => {
 			const entry: Record<string, unknown> = { from: e.from, to: e.to };
 			if (e.kind) entry.kind = e.kind;
 			if (e.label) entry.label = e.label;
@@ -249,11 +251,7 @@ function pickUniqueId(base: string, existing: string[]): string {
 	return `${base}_${Date.now()}`;
 }
 
-function pickBaseId(
-	type: RoutineStep["type"],
-	presetAction?: RoutineDeckAction,
-	presetKind?: "if",
-): string {
+function pickBaseId(type: RoutineStep["type"], presetAction?: RoutineDeckAction, presetKind?: "if"): string {
 	if (presetKind === "if") return "if";
 	if (type !== "deck") return type;
 	switch (presetAction ?? "create_inbox_item") {
@@ -280,7 +278,6 @@ function pickBaseId(
 	}
 }
 
-
 /**
  * Apply a partial patch to one step inside the spec, returning a new spec.
  *
@@ -291,11 +288,7 @@ function pickBaseId(
  * expressions referencing `steps.<oldId>` are NOT rewritten — those are
  * author code and the renaming author updates them themselves.
  */
-export function replaceStep(
-	spec: RoutineSpec,
-	index: number,
-	next: RoutineStep,
-): RoutineSpec {
+export function replaceStep(spec: RoutineSpec, index: number, next: RoutineStep): RoutineSpec {
 	const prev = spec.steps[index];
 	const steps = spec.steps.slice();
 	steps[index] = next;
@@ -311,13 +304,13 @@ export function replaceStep(
 			nextNodes[id] = entry;
 		}
 	}
-	const nextEdges = spec.layout.edges?.map((e) =>
+	const nextEdges = spec.layout.edges?.map(e =>
 		e.from === prev.id || e.to === prev.id
 			? {
-				...e,
-				from: e.from === prev.id ? next.id : e.from,
-				to: e.to === prev.id ? next.id : e.to,
-			}
+					...e,
+					from: e.from === prev.id ? next.id : e.from,
+					to: e.to === prev.id ? next.id : e.to,
+				}
 			: e,
 	);
 	const layout: RoutineLayout = {
@@ -393,20 +386,101 @@ export const STEP_TYPE_DESCRIPTIONS: ReadonlyArray<StepTemplateDescriptor> = [
 	{ key: "run", value: "run", label: "run", help: "Shell out to a command, capture stdout/stderr." },
 	{ key: "agent", value: "agent", label: "agent", help: "Prompt the omp SDK. Costs LLM tokens." },
 	{ key: "http", value: "http", label: "http", help: "GET/POST against a URL. Internal calls get an HMAC bearer." },
-	{ key: "create_inbox_item", value: "deck", label: "create inbox item", help: "Create a native deck inbox item without hand-rolling /api/inbox.", presetAction: "create_inbox_item" },
-	{ key: "create_task", value: "deck", label: "create task", help: "Create a kanban task using deck-native semantics.", presetAction: "create_task" },
-	{ key: "move_task", value: "deck", label: "move task", help: "Move an existing task to another state by T-id or task id.", presetAction: "move_task" },
-	{ key: "promote_inbox_item_to_task", value: "deck", label: "promote inbox item", help: "Promote an inbox item into a task with the standard provenance footer.", presetAction: "promote_inbox_item_to_task" },
-	{ key: "list_tasks", value: "deck", label: "list tasks", help: "Read tasks from the deck. Filter by state name, recency, archived.", presetAction: "list_tasks" },
-	{ key: "list_inbox", value: "deck", label: "list inbox", help: "Read inbox items. Filter by kind, recency, processed-or-not.", presetAction: "list_inbox" },
-	{ key: "get_task", value: "deck", label: "get task", help: "Fetch a single task by T-N or task id.", presetAction: "get_task" },
-	{ key: "get_inbox_item", value: "deck", label: "get inbox item", help: "Fetch a single inbox item by id.", presetAction: "get_inbox_item" },
-	{ key: "kb_orphan_census", value: "deck", label: "kb orphan census", help: "List the KB notes no other note links to. Honours .kbignore.", presetAction: "kb_orphan_census" },
-	{ key: "kb_read", value: "deck", label: "read KB note", help: "Explicit KB input, available only to downstream wired steps.", presetAction: "kb_read" },
+	{
+		key: "create_inbox_item",
+		value: "deck",
+		label: "create inbox item",
+		help: "Create a native deck inbox item without hand-rolling /api/inbox.",
+		presetAction: "create_inbox_item",
+	},
+	{
+		key: "create_task",
+		value: "deck",
+		label: "create task",
+		help: "Create a kanban task using deck-native semantics.",
+		presetAction: "create_task",
+	},
+	{
+		key: "move_task",
+		value: "deck",
+		label: "move task",
+		help: "Move an existing task to another state by T-id or task id.",
+		presetAction: "move_task",
+	},
+	{
+		key: "promote_inbox_item_to_task",
+		value: "deck",
+		label: "promote inbox item",
+		help: "Promote an inbox item into a task with the standard provenance footer.",
+		presetAction: "promote_inbox_item_to_task",
+	},
+	{
+		key: "list_tasks",
+		value: "deck",
+		label: "list tasks",
+		help: "Read tasks from the deck. Filter by state name, recency, archived.",
+		presetAction: "list_tasks",
+	},
+	{
+		key: "list_inbox",
+		value: "deck",
+		label: "list inbox",
+		help: "Read inbox items. Filter by kind, recency, processed-or-not.",
+		presetAction: "list_inbox",
+	},
+	{
+		key: "get_task",
+		value: "deck",
+		label: "get task",
+		help: "Fetch a single task by T-N or task id.",
+		presetAction: "get_task",
+	},
+	{
+		key: "get_inbox_item",
+		value: "deck",
+		label: "get inbox item",
+		help: "Fetch a single inbox item by id.",
+		presetAction: "get_inbox_item",
+	},
+	{
+		key: "kb_orphan_census",
+		value: "deck",
+		label: "kb orphan census",
+		help: "List the KB notes no other note links to. Honours .kbignore.",
+		presetAction: "kb_orphan_census",
+	},
+	{
+		key: "kb_read",
+		value: "deck",
+		label: "read KB note",
+		help: "Explicit KB input, available only to downstream wired steps.",
+		presetAction: "kb_read",
+	},
 	{ key: "write", value: "write", label: "write", help: "Write a templated string to a file." },
-	{ key: "transform", value: "transform", label: "transform", help: "JS expression in a sandbox; sets context.steps.X.json." },
-	{ key: "set_state", value: "set_state", label: "set_state", help: "Upsert keys into the routine's persistent state." },
+	{
+		key: "transform",
+		value: "transform",
+		label: "transform",
+		help: "JS expression in a sandbox; sets context.steps.X.json.",
+	},
+	{
+		key: "set_state",
+		value: "set_state",
+		label: "set_state",
+		help: "Upsert keys into the routine's persistent state.",
+	},
 	{ key: "wait", value: "wait", label: "wait", help: "Sleep N seconds. Useful between polling steps." },
-	{ key: "mcp", value: "mcp", label: "mcp", help: "Call one MCP server tool directly; args are checked against its input schema." },
-	{ key: "if", value: "transform", label: "if", help: "Branch the graph on a boolean condition. Wire downstream nodes to the true/false outputs.", presetKind: "if" },
+	{
+		key: "mcp",
+		value: "mcp",
+		label: "mcp",
+		help: "Call one MCP server tool directly; args are checked against its input schema.",
+	},
+	{
+		key: "if",
+		value: "transform",
+		label: "if",
+		help: "Branch the graph on a boolean condition. Wire downstream nodes to the true/false outputs.",
+		presetKind: "if",
+	},
 ];

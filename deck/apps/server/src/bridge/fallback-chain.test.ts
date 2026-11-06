@@ -27,7 +27,8 @@ if (!fixtureRoot) {
 			mkdirSync(home, { recursive: true });
 			const env: Record<string, string> = {};
 			for (const [key, value] of Object.entries(process.env)) {
-				if (value !== undefined && !/(_API_KEY|_TOKEN|_SECRET)$/.test(key) && !/^(PI_|OMP_|NPI_DECK_)/.test(key)) env[key] = value;
+				if (value !== undefined && !/(_API_KEY|_TOKEN|_SECRET)$/.test(key) && !/^(PI_|OMP_|NPI_DECK_)/.test(key))
+					env[key] = value;
 			}
 			Object.assign(env, {
 				HOME: home,
@@ -41,7 +42,11 @@ if (!fixtureRoot) {
 				NPI_DECK_BACKEND: selection.path,
 				NPI_DECK_FALLBACK_CHAIN_ROOT: root,
 			});
-			const child = spawnOwnedSync([process.execPath, "test", import.meta.path], { cwd: root, env, stdout: "pipe", stderr: "pipe" }, { replaceEnv: true });
+			const child = spawnOwnedSync(
+				[process.execPath, "test", import.meta.path],
+				{ cwd: root, env, stdout: "pipe", stderr: "pipe" },
+				{ replaceEnv: true },
+			);
 			const output = `${child.stdout.toString()}${child.stderr.toString()}`;
 			if (child.exitCode !== 0) console.error(output);
 			expect(child.exitCode).toBe(0);
@@ -57,13 +62,24 @@ if (!fixtureRoot) {
 	mkdirSync(agentDir, { recursive: true });
 	mkdirSync(project, { recursive: true });
 	await loadBackend(resolveBackendSelection()!);
-	const config: Config = { defaultCwd: project, extraWorkspaces: [], host: "127.0.0.1", port: 0, devMode: true, idleTimeoutMs: 0, dbPath: path.join(fixtureRoot, "db"), uploadsRoot: path.join(fixtureRoot, "uploads") };
+	const config: Config = {
+		defaultCwd: project,
+		extraWorkspaces: [],
+		host: "127.0.0.1",
+		port: 0,
+		devMode: true,
+		idleTimeoutMs: 0,
+		dbPath: path.join(fixtureRoot, "db"),
+		uploadsRoot: path.join(fixtureRoot, "uploads"),
+	};
 
-	const withBridge = async (run: (api: {
-		bridge: InProcessAgentBridge;
-		chain: (sessionId: string) => Promise<SessionFallbackChainResponse>;
-		setEntries: (entries: Record<string, unknown>) => Promise<NpiConfigPatchResponse>;
-	}) => Promise<void>) => {
+	const withBridge = async (
+		run: (api: {
+			bridge: InProcessAgentBridge;
+			chain: (sessionId: string) => Promise<SessionFallbackChainResponse>;
+			setEntries: (entries: Record<string, unknown>) => Promise<NpiConfigPatchResponse>;
+		}) => Promise<void>,
+	) => {
 		const bridge = new InProcessAgentBridge({ idleTimeoutMs: 0 });
 		const chainRoutes = buildFallbackChainRouter(bridge);
 		const configRoutes = buildNpiConfigRouter(bridge, config);
@@ -73,7 +89,7 @@ if (!fixtureRoot) {
 				chain: async sessionId => {
 					const response = await chainRoutes.request(`http://127.0.0.1/sessions/${sessionId}/fallback-chain`);
 					expect(response.status).toBe(200);
-					return await response.json() as SessionFallbackChainResponse;
+					return (await response.json()) as SessionFallbackChainResponse;
 				},
 				setEntries: async entries => {
 					const response = await configRoutes.request("http://127.0.0.1/npi-config", {
@@ -82,7 +98,7 @@ if (!fixtureRoot) {
 						body: JSON.stringify({ id: "retry.fallbackChains", entries }),
 					});
 					expect(response.status).toBe(200);
-					return await response.json() as NpiConfigPatchResponse;
+					return (await response.json()) as NpiConfigPatchResponse;
 				},
 			});
 		} finally {
@@ -94,7 +110,10 @@ if (!fixtureRoot) {
 	const deckFallback = "openrouter/openai/gpt-6-sol:medium";
 
 	test("a new chat's picker chain starts at the deck default and follows config.toml edits live", async () => {
-		await writeFile(configToml, '[retry.fallbackChains]\n"openrouter/openai/gpt-4o-mini" = ["openrouter/openai/gpt-4o"]\n');
+		await writeFile(
+			configToml,
+			'[retry.fallbackChains]\n"openrouter/openai/gpt-4o-mini" = ["openrouter/openai/gpt-4o"]\n',
+		);
 		await withBridge(async ({ bridge, chain, setEntries }) => {
 			const handle = await bridge.createSession({ cwd: project, mcpServersAllowed: [] });
 			expect(await chain(handle.sessionId)).toEqual({
@@ -112,19 +131,34 @@ if (!fixtureRoot) {
 				resolved: { key: opus, chain: ["openrouter/openai/gpt-4o-mini", deckFallback] },
 			});
 			// Other configured chains survived the entry edit, on disk and in the chat.
-			expect(parseSettingsToml(await readFile(configToml, "utf8"))).toMatchObject({ retry: { fallbackChains: { "openrouter/openai/gpt-4o-mini": ["openrouter/openai/gpt-4o"] } } });
-			const liveChains = saved.live.find(entry => entry.sessionId === handle.sessionId)?.effectiveValue as Record<string, string[]>;
+			expect(parseSettingsToml(await readFile(configToml, "utf8"))).toMatchObject({
+				retry: { fallbackChains: { "openrouter/openai/gpt-4o-mini": ["openrouter/openai/gpt-4o"] } },
+			});
+			const liveChains = saved.live.find(entry => entry.sessionId === handle.sessionId)?.effectiveValue as Record<
+				string,
+				string[]
+			>;
 			expect(liveChains["openrouter/openai/gpt-4o-mini"]).toEqual(["openrouter/openai/gpt-4o"]);
 			expect(liveChains.default).toEqual([deckFallback]);
 
 			// Reordering is one write of the whole entry.
 			await setEntries({ [opus]: [deckFallback, "openrouter/openai/gpt-4o-mini"] });
-			expect((await chain(handle.sessionId)).resolved?.chain).toEqual([deckFallback, "openrouter/openai/gpt-4o-mini"]);
+			expect((await chain(handle.sessionId)).resolved?.chain).toEqual([
+				deckFallback,
+				"openrouter/openai/gpt-4o-mini",
+			]);
 
 			// Removing the model's chain hands it back to the deck default.
 			await setEntries({ [opus]: null });
-			expect((await chain(handle.sessionId)).resolved).toEqual({ key: `${opus}:medium`, chain: [deckFallback], deckDefault: true });
-			expect((parseSettingsToml(await readFile(configToml, "utf8")).retry as { fallbackChains: Record<string, unknown> }).fallbackChains).not.toHaveProperty(opus);
+			expect((await chain(handle.sessionId)).resolved).toEqual({
+				key: `${opus}:medium`,
+				chain: [deckFallback],
+				deckDefault: true,
+			});
+			expect(
+				(parseSettingsToml(await readFile(configToml, "utf8")).retry as { fallbackChains: Record<string, unknown> })
+					.fallbackChains,
+			).not.toHaveProperty(opus);
 		});
 	}, 120_000);
 
@@ -138,8 +172,15 @@ if (!fixtureRoot) {
 				resolved: { key: `${opus}:medium`, chain: ["openrouter/openai/gpt-4o"] },
 			});
 			// A chat on a model without a chain of its own reports none and edits `provider/id`.
-			const manual = await bridge.createSession({ cwd: project, model: { provider: "openrouter", id: "openai/gpt-4o-mini" }, mcpServersAllowed: [] });
-			expect(await chain(manual.sessionId)).toEqual({ model: "openrouter/openai/gpt-4o-mini", key: "openrouter/openai/gpt-4o-mini" });
+			const manual = await bridge.createSession({
+				cwd: project,
+				model: { provider: "openrouter", id: "openai/gpt-4o-mini" },
+				mcpServersAllowed: [],
+			});
+			expect(await chain(manual.sessionId)).toEqual({
+				model: "openrouter/openai/gpt-4o-mini",
+				key: "openrouter/openai/gpt-4o-mini",
+			});
 		});
 	}, 120_000);
 }
